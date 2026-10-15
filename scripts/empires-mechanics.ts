@@ -25,13 +25,17 @@
 // 8. Research for the mechanics (TechEffect): shieldDamage hits shields harder (and spends the shot
 //    by what the shields took), aura and auraRadius strengthen and widen a fire-control aura, regrow
 //    and regrowDelay speed a living hull, drain and drainHeal strengthen a drain, and the station's
-//    fleetBuild builds every ship faster. Test research is added to the tables for the check only.
+//    fleetBuild builds every ship faster, and shieldAura (with auraRadius) strengthens and widens a
+//    shield projector. Test research is added to the tables for the check only.
+// 9. A shield-projector aura (UnitType shieldAura): our ships in reach (itself included) recharge
+//    their shields `regen` faster, out of reach and enemies as usual, two auras don't stack (the
+//    best counts), and a projector with all its shield generators shot off projects nothing.
 
 import { MAPS } from '../src/apps/games/empires/maps.ts'
 import { LEVEL_UP, STATIONS, TECH, UNIT, stationType, type TechEffect, type UnitType } from '../src/apps/games/empires/data.ts'
 import { spinal } from '../src/apps/games/empires/data/kit.ts'
 import { buildModel } from '../src/apps/games/empires/models/index.ts'
-import { STEP, auraOf, cmdAttack, cmdBuild, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { STEP, auraOf, cmdAttack, cmdBuild, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldAuraOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { newBrain, think } from '../src/apps/games/empires/ai.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import type { FactionId } from '../src/apps/games/empires/data.ts'
@@ -302,7 +306,8 @@ const bare = (id: string): UnitType => {
 
 // --- 7. Determinism ----------------------------------------------------------------------------------------
 
-/** A battle with every mechanic on at once: living hulls, a drain, fire control, a spinal gun. */
+/** A battle with every mechanic on at once: living hulls, a drain, fire control, a spinal gun, a
+ * shield projector. */
 function mixed(): World {
   const w = empty()
   const { x, y } = mid()
@@ -312,6 +317,7 @@ function mixed(): World {
   const base = UNIT['d-ion']
   put(w, 'd-ion', 1, x + 600, y + 200, Math.PI, { ...base, hardpoints: base.hardpoints.map((h, i) => (i === 0 ? { ...h, weapon: spinal(h.weapon!, 12) } : h)) })
   put(w, 'd-frigate', 1, x + 650, y - 200, Math.PI)
+  put(w, 'r-destroyer', 1, x + 800, y + 100, Math.PI, { ...UNIT['r-destroyer'], shieldAura: { radius: 600, regen: 1 } })
   for (const u of w.units) u.stance = 'roam'
   return w
 }
@@ -443,6 +449,68 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   const gun = q.find((i) => i.unit === 'r-gunship')
   const fig = q.find((i) => i.unit === 'r-fighter')
   check('fleetBuild speeds every ship, added to its own build research', !!gun && !!fig && near(gun.total, UNIT['r-gunship'].build * 0.65, 1e-9) && near(fig.total, UNIT['r-fighter'].build * 0.75, 1e-9), `${gun?.total} and ${fig?.total}`)
+}
+
+// --- 9. A shield-projector aura ----------------------------------------------------------------------------
+
+/** Shield points `u` recharges over `secs`, from empty, kept in the fight (so the out-of-combat
+ * doubling stays off) and with its shields not rebooting. */
+function recharge(w: World, us: Unit[], secs: number): number[] {
+  for (const u of us) {
+    u.shield = 0
+    u.shieldOut = -99
+  }
+  run(w, secs, () => {
+    for (const u of us) u.lastHit = w.time
+  })
+  return us.map((u) => u.shield)
+}
+{
+  const w = empty(['republic', 'droid'])
+  const { x, y } = mid()
+  const projector = (regen: number) => ({ ...unarmed(UNIT['r-destroyer']), shieldAura: { radius: 600, regen } })
+  const inReach = { x: x - 300, y }
+  const away = { x: x - 300, y: y - 2500 }
+  const moveTo = (u: Unit, p: { x: number; y: number }) => ((u.x = u.ax = p.x), (u.y = u.ay = p.y))
+  const sentinel = put(w, 'r-destroyer', 0, inReach.x, inReach.y, 0, projector(1))
+  const lesser = put(w, 'r-destroyer', 0, away.x, away.y, 0, projector(0.5))
+  const ally = put(w, 'r-frigate', 0, x, y, 0, unarmed(UNIT['r-frigate']))
+  const foe = put(w, 'd-frigate', 1, x, y + 250, Math.PI, unarmed(UNIT['d-frigate']))
+  const far = put(w, 'r-frigate', 0, x + 2000, y, 0, unarmed(UNIT['r-frigate']))
+  const base = (u: Unit) => u.t.regen * u.mods.regen * 2
+  const [a1, f1, x1, s1] = recharge(w, [ally, foe, far, sentinel], 2)
+  check('a ship of ours in reach recharges `regen` faster', near(a1, base(ally) * 2, base(ally) * 2 * 0.03), `${a1.toFixed(1)} in 2 s, want ${base(ally) * 2}`)
+  check('the projector itself too', near(s1, base(sentinel) * 2, base(sentinel) * 2 * 0.03), `${s1.toFixed(1)}`)
+  check('an enemy in reach doesn\'t', near(f1, base(foe), base(foe) * 0.03), `${f1.toFixed(1)}, want ${base(foe)}`)
+  check('a ship of ours out of reach doesn\'t', near(x1, base(far), base(far) * 0.03), `${x1.toFixed(1)}`)
+  moveTo(lesser, { x: inReach.x, y: inReach.y + 150 })
+  const [both] = recharge(w, [ally], 2)
+  check('two auras don\'t stack: the best counts', near(both, base(ally) * 2, base(ally) * 2 * 0.03), `${both.toFixed(1)}`)
+  moveTo(sentinel, away)
+  const [weaker] = recharge(w, [ally], 2)
+  check('the weaker aura alone gives its own boost', near(weaker, base(ally) * 1.5, base(ally) * 1.5 * 0.03), `${weaker.toFixed(1)}, want ${base(ally) * 1.5}`)
+  // Its projectors all shot off: nothing.
+  for (let i = 0; i < lesser.t.hardpoints.length; i++) if (lesser.t.hardpoints[i].kind === 'shield') lesser.hps[i].hp = 0
+  const [none] = recharge(w, [ally], 2)
+  check('with every projector shot off it projects nothing', near(none, base(ally), base(ally) * 0.03), `${none.toFixed(1)}, want ${base(ally)}`)
+  lesser.hps[lesser.t.hardpoints.findIndex((h) => h.kind === 'shield')].hp = 50
+  const [one] = recharge(w, [ally], 2)
+  check('one projector standing is enough', near(one, base(ally) * 1.5, base(ally) * 1.5 * 0.03), `${one.toFixed(1)}`)
+  check('the Sentinel destroyer has a projector as written', !!UNIT['r-destroyer'].shieldAura && UNIT['r-destroyer'].hardpoints.some((h) => h.look === 'projector'))
+}
+{
+  // shieldAura and auraRadius research: a stronger, wider shield projector.
+  const w = empty(['republic', 'droid'])
+  const { x, y } = mid()
+  research(w, 0, 'r-destroyer', { shieldAura: 0.5, auraRadius: 0.5 })
+  const ally = put(w, 'r-frigate', 0, x, y, 0, unarmed(UNIT['r-frigate']))
+  // 800 from the ally: out of the written 600, inside the researched 900.
+  const s = put(w, 'r-destroyer', 0, x - 800, y, 0, { ...unarmed(UNIT['r-destroyer']), shieldAura: { radius: 600, regen: 1 } })
+  const a = shieldAuraOf(s)!
+  check('shieldAura research adds to the regen and auraRadius widens the reach', near(a.regen, 1.5, 1e-12) && near(a.radius, 900, 1e-9), `${a.regen}, ${a.radius}`)
+  const [got] = recharge(w, [ally], 2)
+  const want = ally.t.regen * ally.mods.regen * 2 * 2.5
+  check('a ship in the wider reach recharges the researched boost faster', near(got, want, want * 0.03), `${got.toFixed(1)}, want ${want}`)
 }
 
 console.log(failed ? 'FAILED' : 'all passed')
