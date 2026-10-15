@@ -18,15 +18,16 @@
 // (see `reach` and `scaled`), so the numbers below stay the ones to balance against each other.
 
 import { DROID } from './data/droid.ts'
-import { reach, type AbilityId, type Ability, type BaseModule, type Berth, type FactionData, type FactionId, type FactionInfo, type Hardpoint, type Layout, type ModuleId, type StationPlan, type Tech, type Tier, type UnitType, type Weapon, type WeaponKind, type Works } from './data/kit.ts'
+import { ORBITAL_FRAME, reach, type AbilityId, type Ability, type BaseModule, type Berth, type FactionData, type FactionId, type FactionInfo, type Hardpoint, type Layout, type ModuleId, type OrbitalModId, type OrbitalModule, type OrbitalPlan, type StationPlan, type Tech, type Tier, type UnitType, type Weapon, type WeaponKind, type Works } from './data/kit.ts'
 import { REPUBLIC } from './data/republic.ts'
 import { SWARM } from './data/swarm.ts'
 import { sized } from './models/sizes.ts'
 import { SPEED_SCALE, mapDist } from './scale.ts'
 
 export type {
-  Ability, AbilityId, BaseModule, FactionId, FactionInfo, Hardpoint, HardpointKind, ModuleArt, ModuleId, StationModule, StationPlan, Tech, TechEffect, Tier, UnitType, Weapon, WeaponKind, Works,
+  Ability, AbilityId, BaseModule, FactionId, FactionInfo, Hardpoint, HardpointKind, ModuleArt, ModuleId, OrbitalModId, OrbitalModule, OrbitalPlan, OrbitalStage, StationModule, StationPlan, Tech, TechEffect, Tier, UnitType, Weapon, WeaponKind, Works,
 } from './data/kit.ts'
+export { ORBITAL_FRAME, ORBITAL_MODS } from './data/kit.ts'
 
 /** Every faction's data, in the order the menus list them (and their units go into UNITS). */
 const KITS: FactionData[] = [REPUBLIC, DROID, SWARM]
@@ -318,6 +319,79 @@ export function stationType(faction: FactionId, level: number, techs: readonly s
   stationCache.set(id, tough)
   return tough
 }
+
+// --- Orbital defense stations (Galactic conquest) ---------------------------------------------------
+
+/** Each faction's orbital defense station (see OrbitalPlan in data/kit.ts). */
+export const ORBITALS: Record<FactionId, OrbitalPlan> = byFaction((k) => k.orbital)
+/** Defense stations a planet can have, at most: two sites round its Command Station. */
+export const ORBITAL_MAX = 2
+/** The highest level a defense station grows to. */
+export const ORBITAL_TOP = 3
+/** Module slots a defense station has at `level` (1, 2 or 4). */
+export const orbitalSlots = (level: number) => ORBITAL_FRAME.counts[Math.max(1, Math.min(ORBITAL_TOP, level)) - 1]
+/** Faction `f`'s module `id` for a defense station slot. */
+export const orbitalMod = (f: FactionId, id: OrbitalModId): OrbitalModule => ORBITALS[f].modules.find((m) => m.id === id)!
+/** What faction `f`'s defense station is called at `level`: Bastion Watchpost, Guardian Bloom. */
+export const orbitalName = (f: FactionId, level: number) => ORBITALS[f].stages[Math.max(1, Math.min(ORBITAL_TOP, level)) - 1].name
+/** A defense station's look's name, for the queues and cards that know it only by that. */
+export const orbitalSprite = (f: FactionId, level: number) => `${f}-orbital-${Math.max(1, Math.min(ORBITAL_TOP, level))}`
+/** The hardpoint key of a module in a slot: a swapped module is a new part, with its own hull. */
+export const orbitalKey = (slot: number, id: OrbitalModId) => `s${slot}:${id}`
+
+const orbitalCache = new Map<string, UnitType>()
+/**
+ * A defense station as it stands: faction `f`'s at `level`, with module `slots[i]` in each of its
+ * slots (null: empty). Like a grown station, every level and loadout is a type of its own under the
+ * one id (`<prefix>-orbital`, not in UNITS: only Galactic conquest has them), drawn on its level's
+ * box of the shared frame (ORBITAL_FRAME), so a module keeps its place as the station grows. Each
+ * module is a hardpoint of its own that can be shot off: its gun stops, its shields go, its hangar
+ * stops launching. `i`: which of the planet's two defense sites it stands on (for the battle's result).
+ */
+export function orbitalType(f: FactionId, level: number, slots: readonly (OrbitalModId | null)[], i?: number): UnitType {
+  const lv = Math.max(1, Math.min(ORBITAL_TOP, level))
+  const n = orbitalSlots(lv)
+  const have = Array.from({ length: n }, (_, s) => slots[s] ?? null)
+  const key = `${f}:${lv}:${have.map((m) => m ?? '-').join(',')}:${i ?? ''}`
+  const hit = orbitalCache.get(key)
+  if (hit) return hit
+  const plan = ORBITALS[f]
+  const st = plan.stages[lv - 1]
+  const [x0, y0, x1, y1] = ORBITAL_FRAME.boxes[lv - 1]
+  const w = x1 - x0
+  const h = y1 - y0
+  const long = Math.max(w, h)
+  const mods = have.map((id) => (id ? orbitalMod(f, id) : null))
+  const fitted = mods.filter((m): m is OrbitalModule => !!m)
+  const hangars = fitted.filter((m) => m.carrier).length
+  const pools = fitted.filter((m) => m.regrow)
+  const t: UnitType = {
+    id: `${prefixOf(f)}-orbital`, faction: f, tier: 'defense', name: st.name, blurb: plan.blurb, sprite: orbitalSprite(f, lv), aspect: w / h, size: long * ORBITAL_FRAME.perUnit,
+    hull: Math.round(st.hull * (1 + fitted.reduce((s, m) => s + (m.hull ?? 0), 0))),
+    shield: st.shield + fitted.reduce((s, m) => s + (m.shield ?? 0), 0),
+    regen: plan.regen + fitted.reduce((s, m) => s + (m.regen ?? 0), 0),
+    speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1300, weapons: [],
+    hardpoints: mods.flatMap((m, s) => {
+      if (!m) return []
+      const [fx, fy] = ORBITAL_FRAME.slots[s]
+      return [{ kind: m.kind, art: m.art, ...(m.look ? { look: m.look } : {}), key: orbitalKey(s, m.id), hp: m.hp, ...(m.weapon ? { weapon: m.weapon } : {}), x: ((fx - x0) / w) * 10, y: ((fy - y0) / h) * 10, s: (m.r * 2) / long }]
+    }),
+    engines: [],
+    orbital: { level: lv, slots: have, ...(i !== undefined ? { i } : {}) },
+    role: {
+      role: 'Orbital defense',
+      strong: [...(fitted.some((m) => m.id === 'battery' || m.id === 'launcher') ? ['frigates', 'cruisers', 'flagships'] : []), ...(fitted.some((m) => m.id === 'flak' || m.carrier) ? ['fighters', 'bombers'] : [])],
+      weak: [...(fitted.some((m) => m.id === 'flak' || m.carrier) ? [] : ['bombers']), ...(fitted.some((m) => m.id === 'battery' || m.id === 'launcher') ? [] : ['warships']), 'a big fleet on its own'],
+    },
+    ...(hangars ? { carrier: { unit: fitted.find((m) => m.carrier)!.carrier!, every: 30, max: hangars } } : {}),
+    ...(plan.regrow ? { regrow: { rate: plan.regrow.rate * (1 + pools.reduce((s, m) => s + (m.regrow ?? 0), 0)), delay: plan.regrow.delay } } : {}),
+  }
+  const out = finish(t)
+  orbitalCache.set(key, out)
+  return out
+}
+/** Whether a unit type is an orbital defense station. */
+export const isOrbital = (t: UnitType) => !!t.orbital
 
 /** Every unit as written, before TOUGHNESS: each faction's ships, its station, then its structures. */
 const WRITTEN: UnitType[] = KITS.flatMap((k) => [...k.ships, stationType(k.id, 1, []), ...k.structures])

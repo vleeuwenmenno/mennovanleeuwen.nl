@@ -371,4 +371,22 @@ export const DROID: FactionData = {
     'd-capital': DOMINATOR,
     'd-battleship': TYRANT,
   },
+  // The Bulwark defense station (Galactic conquest): an armoured gun hub that grows sponsons on girders.
+  orbital: {
+    name: 'Bulwark defense station',
+    blurb: 'A fortified gun hub in orbit beside the Command Hub, bolted together from the Dominion\'s armoured blocks. Each level adds module slots, and each slot takes the module we pick for it.',
+    regen: 16,
+    stages: [
+      { name: 'Bulwark Gun Post', hull: 2900, shield: 0, cost: 750, time: 40, station: 1 },
+      { name: 'Bulwark Battle Station', hull: 4600, shield: 0, cost: 950, time: 50, station: 2 },
+      { name: 'Bulwark Keep', hull: 6700, shield: 0, cost: 1400, time: 65, station: 3 },
+    ],
+    modules: [
+      { id: 'battery', name: 'Heavy cannon battery', blurb: 'A triple heavy cannon that hits warships hard and early.', cost: 450, time: 22, kind: 'turret', art: 'turbo', look: 'triple', hp: 750, r: 10, weapon: turbo(46, 800, 2.4, 2) },
+      { id: 'flak', name: 'Shredder flak', blurb: 'Rapid flak that tears strike craft apart.', cost: 350, time: 16, kind: 'turret', art: 'flak', hp: 480, r: 8, weapon: flak(8, 420, 0.3) },
+      { id: 'launcher', name: 'Missile battery', blurb: 'A box launcher whose missiles slip past shields to the hull.', cost: 450, time: 22, kind: 'turret', art: 'turbo', look: 'missileBox', hp: 560, r: 9, weapon: missile(32, 700, 4) },
+      { id: 'shield', name: 'Shield generator', blurb: 'Projects 1,100 shields round the station. Shot off, its shields go.', cost: 380, time: 18, kind: 'shield', art: 'shield', hp: 600, r: 9, shield: 1100, regen: 10 },
+      { id: 'hangar', name: 'Talon hangar', blurb: 'Keeps a squadron of Talon interceptors in the air round the station, launching a new one when it is lost.', cost: 550, time: 24, kind: 'hangar', art: 'hangar', hp: 700, r: 10, carrier: 'd-fighter' },
+    ],
+  },
 }

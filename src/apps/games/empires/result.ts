@@ -2,7 +2,7 @@
 // No DOM, so the check scripts can use it.
 
 import { UNIT, isShip } from './data.ts'
-import { rushFromBattle, type BattleResult, type Clash, type RushedShip } from './galaxy.ts'
+import { orbitalsUp, rushFromBattle, type BattleResult, type Clash, type RushedShip } from './galaxy.ts'
 import { baseLeft, type World } from './sim.ts'
 
 /** The battle that's over: who won, what's left on each side, and who jumped out. */
@@ -41,5 +41,5 @@ export function resultOf(w: World, c: Clash, meSide: number, left: boolean): Bat
   })
   const st = w.byId.get(w.players[0].station)
   // The holder's yards still standing, and the expansions not shot off (see applyBattle).
-  return { winner: owners[winSide] ?? c.holder, survivors, escaped, stationLeft: !!st && !st.dead, rushed, ...(c.base ? { base: baseLeft(w, 0, c.base.mods) } : {}) }
+  return { winner: owners[winSide] ?? c.holder, survivors, escaped, stationLeft: !!st && !st.dead, rushed, ...(c.base ? { base: baseLeft(w, 0, c.base.mods, orbitalsUp(c.base).map((x) => x.i)) } : {}) }
 }

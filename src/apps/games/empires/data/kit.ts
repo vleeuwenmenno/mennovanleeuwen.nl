@@ -129,6 +129,9 @@ export type UnitType = {
    * else that speeds them. Auras don't stack: a ship near several gets the best one. A ship with
    * shield generators projects only while one of them stands. Ships without shields gain nothing. */
   shieldAura?: { radius: number; regen: number }
+  /** An orbital defense station (Galactic conquest, see OrbitalPlan): its level, what each of its
+   * slots holds (null: empty), and which of its planet's two defense sites it stands on. */
+  orbital?: { level: number; slots: (OrbitalModId | null)[]; i?: number }
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
@@ -203,6 +206,54 @@ export type ModuleId = 'strikeHangar' | 'sensorArray' | 'shieldCore' | 'secondSl
 export type BaseModule = {
   id: ModuleId; on: Works; name: string; blurb: string; lost: string; cost: number; time: number; level: number; hp: number
   socket: number; s: number; kind: HardpointKind; art: ModuleArt
+}
+
+// --- Orbital defense stations (Galactic conquest) ---------------------------------------------------
+
+/**
+ * What one slot of an orbital defense station can hold: the same five kinds for every faction, each
+ * in its own way (data/<faction>.ts names them, arms them and picks the mount drawn on it). A
+ * battery against warships, flak against strike craft, a launcher whose missiles go through shields,
+ * a shield generator (the Swarm grows a regeneration pool instead: more hull, regrowing faster), and
+ * a hangar that keeps a squadron of the faction's interceptors in the air.
+ */
+export type OrbitalModId = 'battery' | 'flak' | 'launcher' | 'shield' | 'hangar'
+export const ORBITAL_MODS: OrbitalModId[] = ['battery', 'flak', 'launcher', 'shield', 'hangar']
+/**
+ * One slot's module, as a faction has it: price and seconds on the galaxy clock, its hardpoint (kind,
+ * mount art and look, `hp` before TOUGHNESS, `s` its mount's radius in frame units) and what it adds:
+ * a gun (`weapon`), shields (`shield`, with `regen`), hull (`hull`: a share, 0.2 is 20% more), faster
+ * regrowth (`regrow`: a share added to the rate), or a squadron of `carrier` in the air.
+ */
+export type OrbitalModule = {
+  id: OrbitalModId; name: string; blurb: string; cost: number; time: number
+  kind: HardpointKind; art: ModuleArt; look?: MountExtra; hp: number; r: number
+  weapon?: Weapon; shield?: number; regen?: number; hull?: number; regrow?: number; carrier?: string
+}
+/** One level of a defense station: the name it goes by, its hull and shields as built (modules add
+ * to them), and what reaching it costs (built for level 1, an upgrade for 2 and 3), how long it takes
+ * on the galaxy clock and the Command Station level it needs. */
+export type OrbitalStage = { name: string; hull: number; shield: number; cost: number; time: number; station: number }
+/**
+ * A faction's orbital defense station: three levels on one frame (ORBITAL_FRAME), each with more
+ * module slots (1, 2 and 4). `name` is what the station is called whatever its level ("Bastion
+ * defense station"), `regen` its shields' recharge, `regrow` its living hull (the Swarm's).
+ */
+export type OrbitalPlan = {
+  name: string; blurb: string; stages: [OrbitalStage, OrbitalStage, OrbitalStage]; regen: number
+  regrow?: { rate: number; delay: number }; modules: OrbitalModule[]
+}
+/**
+ * The frame every faction's defense station is drawn on, in frame units (the model's units: one is
+ * `perUnit` world units): each level's box round the middle, and where each slot sits, the same at
+ * every level so a module keeps its place as the station grows round it (level 1 has slot 0, level 2
+ * slots 0 and 1, level 3 all four).
+ */
+export const ORBITAL_FRAME = {
+  boxes: [[-22, -22, 22, 22], [-46, -26, 46, 26], [-50, -50, 50, 50]] as [number, number, number, number][],
+  slots: [[0, 0], [-32, 0], [32, 0], [0, -33]] as [number, number][],
+  counts: [1, 2, 4],
+  perUnit: 3.2,
 }
 
 // --- Research ---------------------------------------------------------------------------------------
@@ -341,4 +392,6 @@ export type FactionData = {
   gantries: Record<string, number[]>
   /** Its warships' hardpoints at their size, by unit id (see Layout). */
   layout: Record<string, Layout>
+  /** Its orbital defense station (Galactic conquest). */
+  orbital: OrbitalPlan
 }

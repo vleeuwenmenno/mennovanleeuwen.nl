@@ -1,6 +1,7 @@
 import type { FactionModels } from '../spec.ts'
 import * as base from './base.ts'
 import * as craft from './craft.ts'
+import * as orbital from './orbital.ts'
 import * as warships from './warships.ts'
 
 // The Swarm's models, by unit id (see models/index.ts): its small organisms (craft.ts), its warships
@@ -28,6 +29,7 @@ export const MODELS: FactionModels = {
     's-defense-gun': base.defense,
     's-yard': base.yard,
     's-cyard': base.capitalYard,
+    's-orbital': orbital.orbital,
   },
   expansion: base.expansion,
   // What the Codex calls the parts of a Swarm organism (the longest matching prefix of a part's id).
@@ -44,6 +46,6 @@ export const MODELS: FactionModels = {
     ['stem', 'Stalk'], ['spine', 'Spine array'], ['fringe', 'Tendril'], ['lowLimb', 'Lower limb'], ['hindLimb', 'Hind limb'], ['lowKnuckle', 'Gun knuckle'], ['hindKnuckle', 'Gun knuckle'], ['crownHorn', 'Crown horn'], ['armOut', 'Limb'], ['armSpike', 'Spike'],
     ['root', 'Root tendril'], ['bridge', 'Tissue bridge'], ['pod', 'Feeding pod'], ['knob', 'Turret knob'], ['plate', 'Chitin plate'], ['floor', 'Deck tissue'], ['rib', 'Brood rib'], ['cradle', 'Node cradle'], ['side', 'Side node'], ['hub', 'Hub'], ['spores', 'Spore sacs'], ['spike', 'Spine'], ['stalk', 'Sensory stalk'],
     ['lance', 'Spinal tendril lance'], ['lanceRoot', 'Lance bulb'], ['lanceTip', 'Lance point'], ['barbLow', 'Barb'], ['grip', 'Lance claw'], ['hatch', 'Hatching chamber'], ['hatchLip', 'Hatching lip'], ['hatchAft', 'Hatching chamber'], ['hatchAftLip', 'Hatching lip'],
-    ['bed', 'Birthing pool'], ['wall', 'Chitin wall'], ['spur', 'Wall claw'], ['hornPad', 'Node pad'], ['womb', 'Womb'], ['bud', 'Module bud'], ['sternPad', 'Node pad'],
+    ['bed', 'Birthing pool'], ['wall', 'Chitin wall'], ['spur', 'Wall claw'], ['hornPad', 'Node pad'], ['womb', 'Womb'], ['bud', 'Module bud'], ['sternPad', 'Node pad'], ['lobe', 'Weapon lobe'], ['bridgeN', 'Tissue bridge'], ['sacPod', 'Brood sac'],
   ],
 }
