@@ -13,11 +13,12 @@ export const MP_PATH = '/api/empires/ws'
 /**
  * The version of the battle both sides run. Bump it whenever the sim, the factions' data or the
  * orders change in a way that would make copies from before and after drift apart (version 2: the
- * third faction and the faction mechanics). The server turns away a client of another version,
+ * third faction and the faction mechanics; version 3: the three-faction rework, with the Swarm playable,
+ * its research and the balance pass). The server turns away a client of another version,
  * closing with OUTDATED_CODE, and the game asks the player to reload. Clients from before there was
  * a version send none: they count as version 1.
  */
-export const PROTOCOL = 2
+export const PROTOCOL = 3
 /** WebSocket close code for a client whose PROTOCOL isn't the server's. */
 export const OUTDATED_CODE = 4001
 export const CHAT_MAX = 240

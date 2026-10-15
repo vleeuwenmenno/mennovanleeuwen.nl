@@ -81,6 +81,11 @@ export const MENDABLE: Tier[] = ['gunship', 'frigate', 'cruiser', 'capital', 'st
 /** How each faction looks and sounds outside its models (see FactionInfo): its name, colours,
  * emblem, voices, the letter its ids start with and its usual rival. */
 export const FACTIONS: Record<FactionId, FactionInfo> = byFaction((k) => k.info)
+/** An ability as faction `f` names it (FactionInfo `names`): the same ability under its own words. */
+export function abilityOf(id: AbilityId, f: FactionId): Ability {
+  const own = FACTIONS[f].names?.ability?.[id]
+  return own ? { ...ABILITIES[id], name: own.name, blurb: own.blurb ?? ABILITIES[id].blurb } : ABILITIES[id]
+}
 /** The letter a faction's unit and research ids start with: r-fighter, d-st-guns, s-capital. */
 export const prefixOf = (faction: FactionId) => FACTIONS[faction].prefix
 
@@ -237,7 +242,11 @@ export const RUSH = { min: 0.5, cooldown: 120, slowdown: 0.25 }
 export const RUSH_TECH: Record<FactionId, string> = byFaction((k) => k.rushTech)
 
 /** The expansions a building takes. */
-export const modulesFor = (on: Works) => MODULES.filter((m) => m.on === on)
+/** The expansions faction `f` can fit on building `on`: a Shield core only for a side whose station
+ * has shields to feed (not the Swarm's). */
+export const modulesFor = (on: Works, f: FactionId) => MODULES.filter((m) => m.on === on && (m.id !== 'shieldCore' || STATIONS[f].stages.some((s) => s.shield > 0)))
+/** Whether faction `f` can fit expansion `id` at all (see modulesFor). */
+export const moduleFits = (id: ModuleId, f: FactionId) => !!MODULE[id] && modulesFor(MODULE[id].on, f).some((m) => m.id === id)
 /** Which building a unit type is, for its expansions (null for everything else). */
 export const worksOf = (t: UnitType): Works | null => (t.tier === 'station' ? 'station' : t.tier === 'yard' ? (t.id.endsWith('cyard') ? 'cyard' : 'yard') : null)
 /** The hardpoint key a module goes on. */
@@ -268,6 +277,12 @@ export function yardType(id: string, mods: readonly ModuleId[]): UnitType {
 
 /** Each faction's Command Station, at every level (see StationPlan in data/kit.ts). */
 export const STATIONS: Record<FactionId, StationPlan> = byFaction((k) => k.station)
+
+/** What faction `f`'s station goes by at `level` (StationPlan stages): Hive Seed, Dominion Warbase. */
+export const stageName = (f: FactionId, level: number) => {
+  const st = STATIONS[f].stages
+  return st[Math.max(1, Math.min(st.length, level)) - 1].name
+}
 
 const stationCache = new Map<string, UnitType>()
 /** A station as it stands at `level` with `techs` researched: its stage's look, size and hull, and
@@ -391,6 +406,12 @@ export const SITE_UPGRADES: SiteUpgrade[] = [
   { id: 'armor', name: 'Armour plating', blurb: 'This platform and its parts take 50% more punishment.', levels: 1, cost: [450], time: 25 },
   { id: 'shield', name: 'Shield generator', blurb: 'Fits a shield dome: this platform gets shields that recharge (until the dome is shot off).', levels: 1, cost: [500], time: 30 },
 ]
+/** A mining platform upgrade as faction `f` has it (FactionInfo names `site`): its own name and words. */
+export function siteUpgradeOf(id: SiteUpgradeId, f: FactionId): SiteUpgrade {
+  const up = SITE_UPGRADES.find((x) => x.id === id)!
+  const own = FACTIONS[f].names?.site?.[id]
+  return own ? { ...up, ...own } : up
+}
 /** Output per Deeper drills level, and hull and module health from Armour plating. */
 export const YIELD_PER_LEVEL = 0.3
 export const ARMOR_BONUS = 0.5

@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -610,8 +610,12 @@ function modsFor(p: Player, t: UnitType): Mods {
   if (e.shieldDamage) mods.shieldDamage = 1 + e.shieldDamage
   if (e.aura) mods.aura = e.aura
   if (e.auraRadius) mods.auraRadius = 1 + e.auraRadius
-  if (e.regrow) mods.regrow = 1 + e.regrow
-  if (e.regrowDelay) mods.regrowDelay = Math.max(0, 1 + e.regrowDelay)
+  // Living hulls also take the station's regrowth research, which is for every unit of the side.
+  const st = t.id === stationOf(p) ? {} : techBonus(p, stationOf(p))
+  const regrow = (e.regrow ?? 0) + (st.regrow ?? 0)
+  const regrowDelay = (e.regrowDelay ?? 0) + (st.regrowDelay ?? 0)
+  if (regrow) mods.regrow = 1 + regrow
+  if (regrowDelay) mods.regrowDelay = Math.max(0, 1 + regrowDelay)
   if (e.drain) mods.drain = 1 + e.drain
   if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
   return mods
@@ -1378,7 +1382,7 @@ export function cmdUpgradeSite(w: World, owner: Owner, unitId: number, id: SiteU
   const why = cantUpgradeSite(w, owner, u, id)
   if (why) return why
   const next = siteUpgradeNext(u!, id)!
-  const up = SITE_UPGRADES.find((x) => x.id === id)!
+  const up = siteUpgradeOf(id, w.players[owner].faction)
   spend(w, w.players[owner], next.cost, 'structures', `${up.name}${up.levels > 1 ? ` ${next.level}` : ''}: ${u!.t.name}`)
   u!.upgrading = { id, left: next.time, total: next.time }
   return null
@@ -1388,7 +1392,7 @@ export function cmdUpgradeSite(w: World, owner: Owner, unitId: number, id: SiteU
 export function cmdCancelSiteUpgrade(w: World, owner: Owner, unitId: number): string | null {
   const u = w.byId.get(unitId)
   if (!u || u.dead || u.owner !== owner || !u.upgrading) return 'Nothing to cancel'
-  const up = SITE_UPGRADES.find((x) => x.id === u.upgrading!.id)!
+  const up = siteUpgradeOf(u.upgrading.id, w.players[owner].faction)
   const level = (u.upg[up.id] ?? 0) + 1
   cancelUpgrade(w, w.players[owner], up.cost[level - 1], 'structures', `${up.name}${up.levels > 1 ? ` ${level}` : ''}: ${u.t.name}`)
   u.upgrading = null
@@ -1994,8 +1998,11 @@ function finishResearch(w: World, o: Owner, id: string) {
   const p = w.players[o]
   p.techs.push(id)
   const forId = TECH[id].for
+  // The station's regrowth research reaches every living hull of the side (see modsFor).
+  const fx = TECH[id].effect
+  const wide = forId === stationOf(p) && !!(fx.regrow || fx.regrowDelay)
   for (const u of w.units) {
-    if (u.dead || u.owner !== o || u.t.id !== forId) continue
+    if (u.dead || u.owner !== o || (u.t.id !== forId && !(wide && u.t.regrow))) continue
     remod(w, u)
     if (u.t.tier === 'station') restation(w, u)
   }
@@ -2517,6 +2524,7 @@ export function moduleLock(w: World, owner: Owner, u: Unit | undefined, id: Modu
   const m = MODULE[id]
   if (!w.hybrid || w.fleet) return 'No expansions in this battle'
   if (!m) return 'Unknown expansion'
+  if (!moduleFits(id, w.players[owner].faction)) return `The ${FACTIONS[w.players[owner].faction].name} has no use for it`
   if (!u || u.dead || u.owner !== owner || worksOf(u.t) !== m.on) return `It goes on our ${WORKS_NAME[m.on]}`
   if (u.site || building(u)) return 'Still under construction'
   if (u.xm?.includes(id)) return 'Already built'

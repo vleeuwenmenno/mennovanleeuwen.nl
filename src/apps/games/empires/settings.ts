@@ -110,9 +110,6 @@ export type Settings = {
   ranges: boolean
   /** Galactic conquest's soft tick when a day ends (payday): it comes often, so it can be switched off. */
   daySound: boolean
-  /** The Swarm preview (factions.ts): the Swarm can be picked in the lobbies and for a campaign while
-   * it is still being made. Off for players; the toggle only shows in dev builds. */
-  swarmPreview: boolean
   keys: Record<Action, string>
   /** Control groups: the modifier that sets a group to the selection, and the one that adds to it. */
   groupSet: GroupMod
@@ -120,7 +117,7 @@ export type Settings = {
 }
 
 const KEY = 'mvlos.empires.settings'
-const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, daySound: true, swarmPreview: false, keys: { ...DEFAULT_KEYS }, groupSet: 'ctrl', groupAdd: 'shift' }
+const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, daySound: true, keys: { ...DEFAULT_KEYS }, groupSet: 'ctrl', groupAdd: 'shift' }
 
 function read(): Settings {
   try {
@@ -136,7 +133,7 @@ function read(): Settings {
       lockedShips: v.lockedShips !== false,
       ranges: v.ranges !== false,
       daySound: v.daySound !== false,
-      swarmPreview: v.swarmPreview === true,
+      // A stored `swarmPreview` (from when the Swarm was still being made) is ignored.
       keys: migrateKeys({ ...DEFAULT_KEYS, ...(v.keys && typeof v.keys === 'object' ? v.keys : {}) }),
       ...groupMods(v.groupSet, v.groupAdd),
     }

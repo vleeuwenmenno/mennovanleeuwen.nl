@@ -166,7 +166,8 @@ export type StationPlan = {
   /** World units per frame pixel. */
   perPx: number
   regen: number
-  stages: { box: [number, number, number, number]; hull: number; shield: number }[]
+  /** One per level: `name` is what the station goes by at that level (the HUD and the Codex show it). */
+  stages: { name: string; box: [number, number, number, number]; hull: number; shield: number }[]
   modules: StationModule[]
   /** A station that launches strike craft by itself, as a carrier does (see UnitType `carrier`),
    * once it has grown to `level`. Off when left out. */
@@ -215,8 +216,9 @@ export type BaseModule = {
  * - drain: its drain aura bites this much harder (0.25); drainHeal: it heals this much more of what
  *   it drains (0.5: half as much again).
  * On the station (`for` its station id): mines (the refinery's income), repair (its repair dock),
- * and fleetBuild: every ship of the faction is built this much faster (-0.1: 10%), on top of each
- * ship's own build research.
+ * fleetBuild: every ship of the faction is built this much faster (-0.1: 10%), on top of each
+ * ship's own build research; and regrow and regrowDelay, for every living hull of the side (ships
+ * and structures), on top of each one's own.
  */
 export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines' | 'shieldDamage' | 'aura' | 'auraRadius' | 'regrow' | 'regrowDelay' | 'drain' | 'drainHeal' | 'fleetBuild', number>>
 /**
@@ -256,11 +258,33 @@ export type FactionInfo = {
   /** The side a Galactic Conquest pits it against unless the player picks another. */
   rival: FactionId
   /** How it sounds: how high its heavy guns ring (`turbo`, 1 as written). Everything else about its
-   * sound (its crews' voices, its guns, its hits and deaths) is its sound set, picked by faction id
-   * in sound.ts (SET); `voice` and `blaster` are from before the sets and no longer read. */
-  sound: { voice?: 'crew' | 'droid'; blaster?: 'clone' | 'droid'; turbo: number }
-  /** Still being made: only offered where the Swarm preview is on (see factions.ts). */
-  preview?: boolean
+   * sound is its sound set, picked by faction id in sound.ts: its guns, hits and deaths (SET) and its
+   * crews' voices (VOICE: the Republic's clone radio, the Confederacy's command net of relay clacks
+   * and data bursts, the Swarm's chitter). */
+  sound: { turbo: number }
+  /** What it calls the things every faction shares, where its own name differs (see FactionNames). */
+  names?: FactionNames
+}
+
+/**
+ * A faction's own names for shared things, each falling back to the shared name when left out
+ * (icons.ts hpName, codexInfo.ts weaponName, data.ts abilityOf): only the words change, never what
+ * the thing does.
+ */
+export type FactionNames = {
+  /** Its guns by kind, in the Codex's weapon lists ('Heavy cannons' rather than 'Turbolaser'). */
+  weapon?: Partial<Record<WeaponKind, string>>
+  /** A turret by the gun on it, where the hardpoint has no `look` of its own ('Tendril lance'). */
+  mount?: Partial<Record<WeaponKind, string>>
+  /** Its other hardpoints by kind ('Brood chamber' for a hangar). */
+  part?: Partial<Record<HardpointKind, string>>
+  /** Its extra mount designs (Hardpoint `look`). */
+  look?: Partial<Record<MountExtra, string>>
+  /** Its mining platform's upgrades (data.ts SITE_UPGRADES), where they are something else for it:
+   * the Swarm's "Shield generator" is a hardened carapace (its FactionData shieldedMine). */
+  site?: Partial<Record<'yield' | 'armor' | 'shield', { name: string; blurb: string }>>
+  /** Its abilities' names, and their blurbs where the words differ too. */
+  ability?: Partial<Record<AbilityId, { name: string; blurb?: string }>>
 }
 
 /**

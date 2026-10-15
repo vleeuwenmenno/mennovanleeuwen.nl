@@ -4,7 +4,7 @@ import { along, box, capsule, chamfer, circle, part, rect, sym, thick } from '..
 import { seat } from '../proto.ts'
 import type { ModelDef } from '../spec.ts'
 import type { Detail, Part, Pt, Tone } from '../types.ts'
-import { nacelle } from './craft.ts'
+import { enginePod } from './style.ts'
 
 // The Republic's hybrid bases: its engineer squadron, the Frigate Yard and the Capital Yard, and the
 // expansion modules that bolt onto them and the Command Station (`expansion`, placed by
@@ -46,8 +46,8 @@ export const republicEngineer: ModelDef = () => {
       details: [{ k: 'shape', pts: [[-12, 15], [-35.5, 15], [-35, 21], [-12, 21]], tone: 'trim' }, ...hazard(-15, 15.5, 5), { k: 'line', pts: [[-22, 4], [-22, 26]] }],
     }), { slope: [0.35, 0.05] }),
     ...sym(part('boom', capsule([-7, -20], [-11, -45], 2, 1.5), 'metal', 2, { lift: 0.8, detach: { hull: 0.3 }, details: [{ k: 'lights', pts: [[-11, -45.5]], r: 1.4, tone: 'ember' }] }), { detach: { hull: 0.22 } }),
-    nacelle('engineL', -13.9, 12, 47, 10, 0, 2, { detach: { death: true } }, 'trim'),
-    nacelle('engineR', 13.9, 12, 47, 10, 1, 2, { detach: { death: true } }, 'trim'),
+    enginePod('engineL', -13.9, 12, 47, 10, 0, 2, { detach: { death: true } }, 'trim'),
+    enginePod('engineR', 13.9, 12, 47, 10, 1, 2, { detach: { death: true } }, 'trim'),
     ...sym(part('body', [[0, -36], [-6, -35], [-11, -28], [-12, 8], [-10, 34], [0, 36]], 'hull', 3, {
       slope: [-0.5, 0],
       details: [{ k: 'shape', pts: [[-11.6, -10], [-12, -4], [0, -4], [0, -10]], tone: 'accent' }, { k: 'line', pts: [[-11, 20], [0, 20]] }],

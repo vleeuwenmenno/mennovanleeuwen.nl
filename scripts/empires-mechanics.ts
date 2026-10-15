@@ -107,7 +107,8 @@ const mid = () => ({ x: map.w / 2, y: map.h / 2 })
   const { x, y } = mid()
   const rg = { ...UNIT['s-frigate'], regrow: { rate: 0.05, delay: 5 } }
   const u = put(w, 's-frigate', 0, x, y, 0, rg)
-  const plain = put(w, 's-frigate', 0, x, y + 400, 0)
+  // Swarm ships regrow by default: these test units don't, so each check sees one mechanic only.
+  const plain = put(w, 's-frigate', 0, x, y + 400, 0, { ...UNIT['s-frigate'], regrow: undefined })
   u.hull = u.hullMax * 0.5
   plain.hull = plain.hullMax * 0.5
   u.lastHit = plain.lastHit = w.time
@@ -140,7 +141,7 @@ const mid = () => ({ x: map.w / 2, y: map.h / 2 })
   const { x, y } = mid()
   const drain = { radius: 500, dps: 40, heal: 0.5 }
   const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain })
-  const ally = put(w, 's-frigate', 0, x - 250, y, 0, unarmed(UNIT['s-frigate']))
+  const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
   const far = put(w, 'd-frigate', 1, x + 900, y, Math.PI, unarmed(UNIT['d-frigate']))
   const weak = put(w, 'd-fighter', 1, x, y + 200, 0, unarmed(UNIT['d-fighter']))
@@ -399,7 +400,7 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   const { x, y } = mid()
   research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5 })
   const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5 } })
-  const ally = put(w, 's-frigate', 0, x - 250, y, 0, unarmed(UNIT['s-frigate']))
+  const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
   ally.hull = ally.hullMax * 0.2
   const d = drainOf(leech)!
@@ -410,6 +411,25 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   run(w, 3)
   check('an enemy in reach loses the researched dps', near(f0 - foe.hull, 180, 3), `${(f0 - foe.hull).toFixed(1)}, want 180`)
   check('and our damaged ship gets the researched share', near(ally.hull - a0, 0.75 * (f0 - foe.hull), 1.5), `${(ally.hull - a0).toFixed(1)}`)
+}
+{
+  // The station's regrow research (Rapid regrowth) reaches every living hull of the side, ships
+  // already out included, on top of their own.
+  const w = newWorld(map, [{ faction: 'swarm', team: 0, spawn: 0 }, { faction: 'droid', team: 1, spawn: 1 }], { seed: 3, credits: 99999 })
+  const p = w.players[0]
+  const { x, y } = mid()
+  const out = put(w, 's-frigate', 0, x, y, 0)
+  p.level = 3
+  p.techs.push(...(TECH['s-hv-regrow'].requires ?? []))
+  check('Rapid regrowth can be researched', cmdResearch(w, 0, 's-hv-regrow') === null)
+  run(w, TECH['s-hv-regrow'].time + 2)
+  const g = regrowOf(out)!
+  const st = regrowOf(w.byId.get(p.station)!)!
+  const want = UNIT['s-frigate'].regrow!
+  check('a ship already out regrows faster and sooner', p.techs.includes('s-hv-regrow') && near(g.rate, want.rate * 1.5, 1e-12) && near(g.delay, want.delay * 0.7, 1e-12), `${g.rate}, ${g.delay}`)
+  check('and so does the station itself', near(st.rate, STATIONS.swarm.regrow!.rate * 1.5, 1e-12), `${st.rate}`)
+  const fresh = put(w, 's-cruiser', 0, x, y + 500, 0)
+  check('and a ship grown after it', near(regrowOf(fresh)!.rate, UNIT['s-cruiser'].regrow!.rate * 1.5, 1e-12))
 }
 {
   // fleetBuild on the station: every ship is built faster, on top of its own build research.

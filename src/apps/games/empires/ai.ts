@@ -1,4 +1,4 @@
-import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { ABILITIES, BUILD_RADIUS, moduleFits, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
@@ -569,8 +569,9 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     let v = tierPref(t) * (0.1 + eff.get(t)! / effMax)
     // Ion barely scratches a hull, whatever its numbers say: one ship to strip shields for every
     // few warships, and only against shields.
-    // (A spinal lance is its side's shield breaker of choice: worth a little more.)
-    if (t.kind === 'ion') v *= ((shielded > 0.4 ? 0.6 : 0.15) * (spinalOn(t) ? 1.5 : 1)) / (1 + count(t.id))
+    // (A spinal lance is its side's shield breaker of choice: worth a little more.) Against a side
+    // with next to no shields (the Swarm) it is close to worthless.
+    if (t.kind === 'ion') v *= ((shielded > 0.4 ? 0.6 : shielded > 0.1 ? 0.15 : 0.02) * (spinalOn(t) ? 1.5 : 1)) / (1 + count(t.id))
     if (t.kind === 'bomber') v *= 1 - small * 0.6
     // A fire-control ship makes every warship round it hit harder: worth more the more there are.
     if (t.fireControl) v *= 1 + Math.min(1.5, warships / 6) * t.fireControl.bonus * 4
@@ -639,6 +640,8 @@ function pickTech(w: World, b: Brain, mines: number): Tech | null {
       // Every ship built faster: worth it with a fleet to build, the more so for a side that wins by
       // numbers (DOCTRINE build).
       else if (e.fleetBuild) s = (army.length >= 4 ? 1.6 : 0.5) * Math.abs(e.fleetBuild) * 10 * DOCTRINE[p.faction].build
+      // Every living hull grows back faster: worth it once there is a fleet to mend.
+      else if (e.regrow || e.regrowDelay) s = warships >= 3 ? 1.8 : army.length >= 4 ? 0.8 : 0.2
     } else if (t.id === RUSH_TECH[p.faction]) {
       // Rushed construction is decided on its own (see think): not weighed against the upgrades.
       s = 0
@@ -1528,7 +1531,7 @@ function planModules(w: World, b: Brain, D: Level, S: Style, attacked: boolean):
   const works = w.units.filter((u) => !u.dead && u.owner === o && (u.t.tier === 'station' || u.t.tier === 'yard') && !building(u))
   // One at a time: while one is under way it waits.
   if (works.some((u) => u.xq?.length)) return false
-  const order: ModuleId[] = ['capitalSlip', ...S.modules.filter((id) => id !== 'capitalSlip')]
+  const order: ModuleId[] = ['capitalSlip', ...S.modules.filter((id) => id !== 'capitalSlip' && moduleFits(id, p.faction))]
   // The Capital slip and the first two on its list are worth saving up for once they're within
   // reach (about twenty seconds' income); the rest wait for money to spare.
   const keen = new Set<ModuleId>(['capitalSlip', ...S.modules.slice(0, 2)])

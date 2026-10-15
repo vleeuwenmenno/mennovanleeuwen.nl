@@ -1,4 +1,4 @@
-import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, worksOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { LEVEL_UP, MAX_LEVEL, stageName, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, worksOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import { HP_COLOR } from './icons'
 import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, unitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
@@ -118,10 +118,10 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
           >
             <TechIcon id={r.id} size={34} progress={i === 0 ? 1 - r.left / r.total : 0} status={i === 0 ? 'busy' : 'queued'} />
             <span>
-              <strong>{researchName(r.id, hud.level)}</strong>
+              <strong>{researchName(r.id, hud.level, hud.faction)}</strong>
               <small>{i === 0 ? `${Math.ceil(r.left)}s left` : `Starts in ${Math.ceil(starts)}s`}</small>
             </span>
-            <button className="ew-close" onClick={() => onCancel(i)} data-tip={CANCEL_TIP} aria-label={`Cancel ${researchName(r.id, hud.level)}`}>
+            <button className="ew-close" onClick={() => onCancel(i)} data-tip={CANCEL_TIP} aria-label={`Cancel ${researchName(r.id, hud.level, hud.faction)}`}>
               ✕
             </button>
             {i === 0 && <i style={{ width: `${(1 - r.left / r.total) * 100}%` }} />}
@@ -144,7 +144,7 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
 function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Works; w: World; me: Owner; hud: Hud; faction: FactionId; onExpand: (uid: number, id: ModuleId) => void; onCancel: (uid: number, index: number) => void }) {
   const art = unitArt
   const press = useCancelPress()
-  const mods = modulesFor(kind)
+  const mods = modulesFor(kind, faction)
   const t = kind === 'station' ? unitOf(faction, 'station') : yardOf(faction, kind)
   const u = kind === 'station' ? w.byId.get(w.players[me].station) : w.units.find((x) => !x.dead && x.owner === me && x.t.id === t.id)
   const head = kind === 'station' ? `Level ${hud.level} of ${MAX_LEVEL}` : !u ? (t.level > hud.level ? `Needs station level ${t.level}` : 'Not built yet: engineers build it') : u.site ? 'Going up' : 'Built'
@@ -265,7 +265,7 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
   n: TreeNode; s: NodeState; hud: Hud; faction: FactionId; col: number; lane: number; onResearch: (id: string) => void; onCancel: (index: number) => void
 }) {
   const t = n.level ? null : TECH[n.id]
-  const name = t ? t.name : `Station level ${n.level}`
+  const name = t ? t.name : `Level ${n.level}: ${stageName(faction, n.level!)}`
   const price = t ? { cost: t.cost, time: t.time } : UPGRADES[n.level!]!
   const blurb = t ? t.blurb : levelBlurb(faction, n.level!)
   const queued = s.slot >= 0

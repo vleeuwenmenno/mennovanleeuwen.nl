@@ -1,11 +1,13 @@
 import type { FactionModels } from '../spec.ts'
 import * as base from './base.ts'
 import * as craft from './craft.ts'
+import * as bastion from './station.ts'
 import * as warships from './warships.ts'
 
-// The Republic's models, by unit id (see models/index.ts): its strike craft, station and platforms
-// (craft.ts), its warships at their size (warships.ts), its engineers, yards and expansion modules
-// (base.ts). A station's id covers all its levels: the design grows with the level.
+// The Republic's models, by unit id (see models/index.ts): its strike craft and platforms
+// (craft.ts), its warships at their size (warships.ts), the Bastion Command Station (station.ts), its
+// engineers, yards and expansion modules (base.ts), all built from the kit in style.ts with the
+// turrets in mounts.ts. A station's id covers all its levels: the design grows with the level.
 
 export const MODELS: FactionModels = {
   defs: {
@@ -18,7 +20,7 @@ export const MODELS: FactionModels = {
     'r-frigate': warships.frigate,
     'r-cruiser': warships.cruiser,
     'r-capital': warships.capital,
-    'r-station': craft.station,
+    'r-station': bastion.station,
     'r-mine': craft.mine,
     'r-defense': craft.defense,
     'r-defense-flak': craft.defense,
@@ -29,5 +31,67 @@ export const MODELS: FactionModels = {
   },
   expansion: base.expansion,
   // The station's level-4 frame can be drawn square or octagonal.
-  styles: (t) => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...craft.STATION_FRAMES] : []),
+  styles: (t) => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...bastion.STATION_FRAMES] : []),
+  // What the Codex calls the parts of the kit (style.ts) and the redrawn hulls.
+  partNames: [
+    ['pod', 'Engine pod'],
+    ['pdPod', 'Defense module'],
+    ['pylon', 'Engine pylon'],
+    ['seat', 'Turret seat'],
+    ['rackSeat', 'Torpedo rack seat'],
+    ['barbette', 'Armoured barbette'],
+    ['bridgeFrame', 'Bridge housing'],
+    ['bridge', 'Bridge'],
+    ['canopyFrame', 'Canopy frame'],
+    ['canopy', 'Cockpit canopy'],
+    ['spine', 'Spine block'],
+    ['plate', 'Deck plate'],
+    ['deck', 'Raised deck'],
+    ['tip', 'Wing tip'],
+    ['box', 'Deck box'],
+    ['command', 'Command tower'],
+    ['tier', 'Command tier'],
+    ['tower', 'Command tower'],
+    ['array', 'Sensor array'],
+    ['mast', 'Sensor mast'],
+    ['dish', 'Dish antenna'],
+    ['ring', 'Repair bay ring'],
+    ['well', 'Repair bay'],
+    ['crane', 'Work crane'],
+    ['midWing', 'Mid wing'],
+    ['canard', 'Canard'],
+    ['core', 'Command module'],
+    ['coreRing', 'Core truss ring'],
+    ['hub', 'Command module'],
+    ['arm', 'Truss'],
+    ['stubEnd', 'Docking collar'],
+    ['square', 'Truss frame'],
+    ['frame', 'Truss frame'],
+    ['strut', 'Truss strut'],
+    ['brace', 'Truss strut'],
+    ['spoke', 'Truss'],
+    ['outArm', 'Truss'],
+    ['corner', 'Habitat node'],
+    ['node', 'Habitat node'],
+    ['wing', 'Wing'],
+    ['wingW', 'Habitat'],
+    ['wingE', 'Habitat'],
+    ['shieldDeck', 'Shield habitat'],
+    ['shieldRing', 'Shield module'],
+    ['batteryDeck', 'Battery habitat'],
+    ['arrayDeck', 'Targeting habitat'],
+    ['refineryDeck', 'Refinery habitat'],
+    ['hangarDock', 'Docking module'],
+    ['southDock', 'Docking module'],
+    ['southBar', 'Docking module'],
+    ['side', 'Defense module'],
+    ['rig', 'Drill rig'],
+    ['belt', 'Ore conveyor'],
+    ['neck', 'Truss'],
+    ['marker', 'Marker plate'],
+    ['beacon', 'Command beacon'],
+    ['antenna', 'Antenna'],
+  ],
+  // On the station and the platforms a pod is a defense module, not an engine.
+  partName: (id, t) => (id.startsWith('pod') && !id.startsWith('pdPod') && (t.tier === 'station' || t.tier === 'defense') ? 'Defense module' : undefined),
 }

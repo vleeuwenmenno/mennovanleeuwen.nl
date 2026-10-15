@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { FACTION_IDS, FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, buildWork, cantRushAt, queueShare, rushIntoBattle, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
@@ -8,7 +8,6 @@ import {
   type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
 import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
-import { usePickable } from './factions'
 import { HP_COLOR } from './icons'
 import { resultOf } from './result'
 import { FleetInventory } from './Inventory'
@@ -264,8 +263,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   // The AI's side: picked, or (null) the player's side's usual rival. Never the player's own.
   const [rivalPick, setRival] = useState<FactionId | null>(null)
   const rival = rivalOf({ faction, rival: rivalPick ?? undefined })
-  // The sides to pick from (a preview's only with the preview on, see factions.ts).
-  const sides = usePickable([faction, rival])
+  const sides = FACTION_IDS
   const [difficulty, setDifficulty] = useState<Difficulty>('easy')
   const [credits, setCredits] = useState(3000)
   const [name, setName] = useState('')
@@ -2876,7 +2874,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
     tip: `Rush launch: ${UNIT[p.queue[rushAt].unit].name} joins the fleet in orbit now, ${Math.floor(queueShare(p.queue[rushAt]) * 100)}% built. It fights as that share of a ship: that much hull, no shields, its last turrets in scaffolding (they don't fire). It finishes by itself, in ${Math.ceil(p.queue[rushAt].left)} s, while its fleet is parked at one of our planets with a Capital Yard or a Drydock; not while flying. This planet then can't rush for ${Math.round(RUSH_GC.cooldown)} s, and its next Capital Yard ship builds ${Math.round(RUSH_GC.slowdown * 100)}% slower.`,
   } : undefined
   const yardsUp = YARD_KINDS.filter((k) => p.base.yards[k] === 'up').length
-  const allMods = modulesFor('station').length + modulesFor('yard').length + modulesFor('cyard').length
+  const allMods = modulesFor('station', fac).length + modulesFor('yard', fac).length + modulesFor('cyard', fac).length
   const stationBtn = p.station < 4 && (
     <button className={`ew-gp-up ${upWhy ? 'is-off' : ''}`} onClick={upgrade}
       data-tip={`${p.station ? `Upgrade to level ${p.station + 1}: bigger ships, a tougher station, +${Math.round(STATION_INCOME * 100)}% income` : `Build a station: it defends the planet, builds ships and adds ${Math.round(STATION_INCOME * 100)}% income`}. ${STATION_TIME[p.station + 1]} s.${p.queue.some((q) => q.unit !== 'station') && !upWhy ? ' Starts after the ships in the queue.' : ''}${upWhy ? `\n${upWhy}` : ''}`}>
@@ -3039,7 +3037,7 @@ function PlanetBuildings({ g, p, sound, toast, grid, show }: { g: Galaxy; p: Pla
     s.status === 'built' ? 'It stands.' : s.status === 'busy' || s.status === 'queued' ? 'Click to call it off (refunded).' : s.status === 'ruin' ? `A ruin: click to rebuild it for ${Math.round(REBUILD * 100)}% of the price.${s.why ? `
 ${s.why}` : ''}` : s.status === 'ready' ? 'Click to build it here.' : s.why ?? ''
   const modCards = (on: Works) =>
-    modulesFor(on).map((m) => {
+    modulesFor(on, g.sides[ME].faction).map((m) => {
       const s = workState(g, p, m.id)
       const l = line(s)
       return (

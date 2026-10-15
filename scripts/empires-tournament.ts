@@ -22,7 +22,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { availableParallelism } from 'node:os'
 
 type Job = { i: number; map: string; seed: number; diff: string; profiles: [string, string]; factions: [string, string]; spawns: number[]; minutes: number; dir: string }
-type Side = { profile: string; faction: string; frigate: number; rushTech: number; rushes: number; mods: string[]; wingLost: number; waves: number; techs: number; level: number; worth: number }
+type Side = { profile: string; faction: string; flags: Record<string, number>; frigate: number; rushTech: number; rushes: number; mods: string[]; wingLost: number; waves: number; techs: number; level: number; worth: number }
 type Result = { job: Job; winner: number; time: number; sides: Side[] }
 
 const here = new URL('.', import.meta.url).pathname
@@ -37,7 +37,7 @@ async function play(job: Job): Promise<Result> {
   const factions = job.factions
   const w = newWorld(map, factions.map((f, i) => ({ faction: f, team: i, spawn: job.spawns[i], incomeMul: DIFFICULTY[job.diff].income })), { seed: job.seed })
   const brains = job.profiles.map((p, i) => newBrain(i, job.diff, p))
-  const sides: Side[] = job.profiles.map((p, i) => ({ profile: p, faction: factions[i], frigate: -1, rushTech: -1, rushes: 0, mods: [], wingLost: 0, waves: 0, techs: 0, level: 1, worth: 0 }))
+  const sides: Side[] = job.profiles.map((p, i) => ({ profile: p, faction: factions[i], flags: {}, frigate: -1, rushTech: -1, rushes: 0, mods: [], wingLost: 0, waves: 0, techs: 0, level: 1, worth: 0 }))
   const wings = [new Set<number>(), new Set<number>()]
   const attacking = [false, false]
   const end = Math.round((job.minutes * 60) / STEP)
@@ -48,6 +48,7 @@ async function play(job: Job): Promise<Result> {
       const s = sides[e.owner]
       if (!s) continue
       if (e.k === 'built' && UNIT[e.unit]?.tier === 'frigate' && s.frigate < 0) s.frigate = w.time
+      if (e.k === 'built' && UNIT[e.unit]?.tier === 'capital') s.flags[e.unit] = (s.flags[e.unit] ?? 0) + 1
       if (e.k === 'tech' && /yd-rush/.test(e.id)) s.rushTech = w.time
       if (e.k === 'tech' && !/yd-rush/.test(e.id)) s.techs++
       if (e.k === 'rushed') s.rushes++
@@ -191,6 +192,14 @@ if (!isMainThread) {
         `${p.padEnd(12)} ${mmss(med(ss.map((s) => s.frigate))).padStart(20)}  ${`${pct(ss.filter((s) => s.rushTech >= 0).length, ss.length)} (${mmss(med(ss.map((s) => s.rushTech)))})`.padStart(27)}  ${avg((s) => s.rushes).padStart(11)}  ${avg((s) => s.wingLost).padStart(14)}  ${avg((s) => s.waves).padStart(10)}  ${avg((s) => s.techs).padStart(10)}  ${avg((s) => s.level).padStart(12)}`,
       )
     }
+    // Flagships built, by faction and type: a side with more than one (the Confederacy's) should
+    // field each of them now and then.
+    const flagFs = [...new Set(rs.flatMap((r) => r.sides.map((s) => s.faction)))]
+    console.log(`flagships built (per side and game)\n${flagFs.map((f) => {
+      const ss = rs.flatMap((r) => r.sides.filter((s) => s.faction === f))
+      const all = [...new Set(ss.flatMap((s) => Object.keys(s.flags)))].sort()
+      return `  ${f.padEnd(10)} ${all.map((u) => `${u} ${(ss.reduce((t, s) => t + (s.flags[u] ?? 0), 0) / Math.max(1, ss.length)).toFixed(2)}`).join('  ') || 'none'}`
+    }).join('\n')}`)
     const ids = [...new Set(rs.flatMap((r) => r.sides.flatMap((s) => s.mods)))].sort()
     console.log(`expansions built (share of sides that built each)\n${''.padEnd(12)} ${ids.map((m) => m.padStart(13)).join('')}`)
     for (const p of P) {
