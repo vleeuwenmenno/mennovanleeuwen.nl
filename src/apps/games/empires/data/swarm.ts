@@ -10,11 +10,11 @@
 // from the Leviathan and the fully grown Hive (`carrier`). Players only see it with the Swarm preview
 // on (see factions.ts).
 //
-// Its weapon organs are drawn on the existing turret mounts (models/swarm/mounts.ts): a tendril lance
-// is a turbolaser ('turbo'), an acid sprayer flak ('flak'), a spore cannon a missile launcher on the
-// 'ion' mount (the Swarm has no ion guns), and the brood chambers are hangars.
+// Its weapon organs are its own mount looks (Hardpoint `look`, drawn in models/swarm/mounts.ts): a
+// tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
+// the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -35,8 +35,13 @@ function spore(damage: number, range = 620, cooldown = 3.6): Weapon {
   const { arc: _arc, ...w } = missile(damage, range, cooldown)
   return w
 }
-/** A spore cannon node on a hardpoint: drawn on the 'ion' mount (a violet bulb in chitin claws). */
-const sporeNode = (x: number, y: number, s: number, hp: number, w: Weapon) => M('turret', 'ion', x, y, s, hp, w)
+/** A weapon organ on a hardpoint, in the Swarm's own looks (models/swarm/mounts.ts extras): a
+ * turbolaser is a tendril lance, flak an acid sprayer. */
+const gun = (art: 'turbo' | 'flak', x: number, y: number, s: number, hp: number, w: Weapon): Hardpoint => ({ ...baseGun(art, x, y, s, hp, w), look: art === 'turbo' ? 'lance' : 'acid' })
+/** A spore cannon node: a violet spore bulb in chitin claws (a missile launcher that turns). */
+const sporeNode = (x: number, y: number, s: number, hp: number, w: Weapon): Hardpoint => ({ ...M('turret', 'turbo', x, y, s, hp, w), look: 'spore' })
+/** A brood chamber: the hangar its Stingers spawn from. */
+const broodSac = (x: number, y: number, s: number, hp: number): Hardpoint => ({ ...M('hangar', 'hangar', x, y, s, hp), look: 'broodSac' })
 
 /** The Feeding Node's point defence: one small acid sprayer, tuned like the others' (see data.ts). */
 const MINE_FLAK: Weapon = flak(1.6, 320, 0.4)
@@ -56,7 +61,7 @@ function minePlatform(hardened = false): UnitType {
       { ...M('drill', 'drill', d.wells[0][0], d.wells[0][1], 0.3, 420), key: 'drill1' },
       { ...M('drill', 'drill', d.wells[1][0], d.wells[1][1], 0.3, 420), key: 'drill2' },
       { ...M('refinery', 'refinery', d.core[0], d.core[1], 0.1, 320), key: 'silo' },
-      { ...gun('flak', d.pd[0], d.pd[1], 0.11, 260, MINE_FLAK), key: 'pd' },
+      { ...gun('flak', d.pd[0], d.pd[1], 0.11, 260, MINE_FLAK), look: 'bioturret', key: 'pd' },
     ],
     engines: [],
     regrow: hardened ? { rate: REGROW.structure.rate * 2, delay: REGROW.structure.delay } : REGROW.structure,
@@ -196,7 +201,7 @@ const LEVIATHAN: UnitType = {
     gun('flak', 1.67, 2.6, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 8.33, 2.6, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 0.9, 5.2, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 9.1, 5.2, 0.045, 300, flak(6, 340, 0.9)),
     sporeNode(4.09, 1.8, 0.065, 640, spore(32, 760, 3.8)), sporeNode(5.91, 1.8, 0.065, 640, spore(32, 760, 3.8)),
     P('engine', 5, 9.4, 950),
-    M('hangar', 'hangar', 2.27, 7.8, 0.075, 760), M('hangar', 'hangar', 7.73, 7.8, 0.075, 760),
+    broodSac(2.27, 7.8, 0.075, 760), broodSac(7.73, 7.8, 0.075, 760),
   ],
   engines: [[3.5, 9.6], [5, 9.75], [6.5, 9.6]], ability: 'launchSwarm', carrier: { unit: 's-fighter', every: 18, max: 3 },
   regrow: REGROW.capital,

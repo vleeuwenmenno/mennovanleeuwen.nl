@@ -28,4 +28,19 @@ export const MODELS: FactionModels = {
     's-cyard': base.capitalYard,
   },
   expansion: base.expansion,
+  // What the Codex calls the parts of a Swarm organism (the longest matching prefix of a part's id).
+  partNames: [
+    ['flesh', 'Tissue'], ['under', 'Dark chitin'], ['seg', 'Spine segment'], ['core', 'Violet core'], ['coreBed', 'Core membrane'], ['coreSocket', 'Core socket'],
+    ['claw', 'Claw'], ['clawTip', 'Claw tip'], ['hook', 'Hooked horn'], ['horn', 'Horn'], ['crown', 'Crown spike'], ['mandible', 'Mandible'], ['jaw', 'Mandible'], ['head', 'Head plate'],
+    ['shoulder', 'Shoulder plate'], ['upper', 'Upper claw plate'], ['middle', 'Claw plate'], ['lower', 'Lower claw plate'], ['rim', 'Core rim plate'],
+    ['fore', 'Forward blade'], ['foreTip', 'Blade tip'], ['mid', 'Flank blade'], ['midTip', 'Blade tip'], ['hind', 'Hind blade'], ['tail', 'Tail blade'], ['flank', 'Flank blade'], ['aft', 'Hind blade'],
+    ['wing', 'Claw wing'], ['blade', 'Chitin blade'], ['pincer', 'Pincer'], ['leaf', 'Leaf shell'], ['node', 'Regen node'], ['nodeSocket', 'Regen node socket'], ['heart', 'Healing core'],
+    ['tendril', 'Tendril'], ['whisker', 'Feeler'], ['feeler', 'Feeler'], ['feeder', 'Feeding tendril'], ['limb', 'Limb'], ['leg', 'Leg'], ['membrane', 'Wing membrane'], ['barb', 'Barb'],
+    ['sac', 'Engine sac'], ['sacs', 'Spore sacs'], ['vent', 'Biomass vent'], ['seat', 'Node collar'], ['acid', 'Acid sprayer'], ['turret', 'Bio-turret'], ['mouth', 'Sucker mouth'], ['gullet', 'Gullet'],
+    ['abdomen', 'Abdomen'], ['spinneret', 'Spinneret'], ['eye', 'Eye'], ['body', 'Body'], ['ring', 'Sentinel ring'], ['belly', 'Belly plate'], ['shell', 'Shell plate'], ['arm', 'Limb'],
+    ['petal', 'Chitin petal'], ['nucleus', 'Nucleus'], ['armour', 'Armour plate'], ['web', 'Tissue web'], ['armPad', 'Gun knuckle'], ['knuckle', 'Gun knuckle'], ['sacPod', 'Brood sac'], ['sacStem', 'Sac stalk'],
+    ['stem', 'Stalk'], ['spine', 'Spine array'], ['fringe', 'Tendril'], ['lowLimb', 'Lower limb'], ['hindLimb', 'Hind limb'], ['lowKnuckle', 'Gun knuckle'], ['hindKnuckle', 'Gun knuckle'], ['crownHorn', 'Crown horn'], ['armOut', 'Limb'], ['armSpike', 'Spike'],
+    ['root', 'Root tendril'], ['bridge', 'Tissue bridge'], ['pod', 'Feeding pod'], ['knob', 'Turret knob'], ['plate', 'Chitin plate'], ['floor', 'Deck tissue'], ['rib', 'Brood rib'], ['cradle', 'Node cradle'], ['side', 'Side node'], ['hub', 'Hub'], ['spores', 'Spore sacs'], ['spike', 'Spine'], ['stalk', 'Sensory stalk'],
+    ['bed', 'Birthing pool'], ['wall', 'Chitin wall'], ['spur', 'Wall claw'], ['hornPad', 'Node pad'], ['womb', 'Womb'], ['bud', 'Module bud'], ['sternPad', 'Node pad'],
+  ],
 }

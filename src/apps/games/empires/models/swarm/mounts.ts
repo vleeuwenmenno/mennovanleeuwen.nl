@@ -1,5 +1,5 @@
 import { circle, part, spline, sym, thick, turn } from '../kit.ts'
-import type { MountLook } from '../mounts.ts'
+import type { MountExtras, MountLook } from '../mounts.ts'
 import type { Detail, Part, Pt, Tone } from '../types.ts'
 
 // The Swarm's weapon nodes and organs: what sits on a hardpoint, drawn on a mount of radius 1 with
@@ -210,4 +210,50 @@ export function engineSac(id: string, x: number, y0: number, y1: number, w: numb
   ]
   if (engine !== undefined) details.push({ k: 'lights', pts: [[x, y1 - L * 0.12]], r: h * 0.28, tone: 'aid' })
   return part(id, outline, 'hull2', z, { lift: 0.8, engine, facets: [{ pts: half(-1).concat([[x, y1]]), slope: [-0.5, 0] }], details, ...more })
+}
+
+/**
+ * The Swarm's own looks (Hardpoint `look` in data/swarm.ts), named so the Codex and the hardpoint
+ * list call them what they are. The lance, acid sprayer, spore cannon, brood chamber and regen node
+ * are the common designs above under their own names; the bio-turret, the parasite pod and the spine
+ * are drawn here; an engine sac on a hardpoint is part of the hull (engineSac), so it draws nothing.
+ */
+export const extras: MountExtras = {
+  lance: (broken) => build('turbo', broken),
+  acid: (broken) => build('flak', broken),
+  spore: (broken) => build('ion', broken),
+  broodSac: (broken) => build('hangar', broken),
+  regen: (broken) => build('shield', broken),
+  engineSac: () => [],
+  // Bio-turret: a green core ringed with spines that spit at strike craft, its spines raked forward.
+  bioturret: (broken) => {
+    if (broken) return wreck(circle(0, 0, 0.28, 7), [[-0.3, 0.3], [0.3, -0.2], [0.1, 0.45]])
+    const spines = [-50, -25, 0, 25, 50].map((d, i) =>
+      part(`spine${i}`, turn([[-0.12, -0.35], [0.12, -0.35], [0, -1.05 + Math.abs(d) * 0.004]], (d * Math.PI) / 180), 'hull', 1.2, { slope: [Math.sin((d * Math.PI) / 180) * 0.4, -0.3] }),
+    )
+    return [
+      ...socket('metal', 5),
+      ...spines,
+      part('ring', circle(0, 0.05, 0.5, 14), 'metal', 1.5, { lift: 0.1 }),
+      part('core', circle(0, 0.05, 0.34, 12), 'aid', 2, { sphere: true }),
+    ]
+  },
+  // Parasite pod: a cluster of violet eggs in a chitin cup, ready to launch.
+  parasite: (broken) => {
+    if (broken) return wreck(circle(0, 0, 0.3, 7), [[-0.3, 0.2], [0.35, -0.2], [0.1, 0.4]])
+    return [
+      ...socket('metal', 5),
+      ...sym(part('cup', clawBand([[-0.2, 0.8], [-0.8, 0.3], [-0.7, -0.5], [-0.3, -0.85]], 0.36, 0.08), 'hull', 1, { lift: 0.14, slope: [-0.4, 0] })),
+      ...([[-0.2, -0.1, 0.24], [0.2, -0.05, 0.22], [0, 0.3, 0.24], [0, -0.48, 0.2]] as [number, number, number][]).map(([x, y, r], i) => part(`egg${i}`, circle(x, y, r, 12), 'glow', 2 + i * 0.01, { sphere: true })),
+    ]
+  },
+  // Spine: one long, heavy chitin spike in a ring of claws, for a spinal mount.
+  spine: (broken) => {
+    if (broken) return wreck(turn(thick([[0, 0], [0, -0.7]], 0.24, 0.1), 0.4), [[-0.3, 0.3], [0.3, 0.2]])
+    return [
+      ...socket('metal'),
+      ...sym(part('claw', clawBand([[-0.6, 0.6], [-0.8, -0.1], [-0.4, -0.7]], 0.34, 0.06), 'hull2', 1, { lift: 0.12, slope: [-0.4, 0] })),
+      part('spike', [[0, -1.25], [0.2, -0.4], [0.16, 0.4], [-0.16, 0.4], [-0.2, -0.4]], 'hull', 2, { lift: 0.14, facets: [{ pts: [[0, -1.25], [0, 0.4], [-0.16, 0.4], [-0.2, -0.4]], slope: [-0.5, 0] }] }),
+    ]
+  },
 }

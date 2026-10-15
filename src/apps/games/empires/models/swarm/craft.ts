@@ -33,8 +33,8 @@ export const plate = (id: string, pts: Pt[], tone: Tone, z: number, slope: Pt, m
 export function blade(id: string, pts: Pt[], w: number, tone: Tone, z: number, slope: Pt, more: Partial<Part> = {}, edge = true): Part {
   const curve = spline(pts, 5)
   const seam = curve.slice(1, Math.ceil(curve.length * 0.75))
-  const details: Detail[] = [{ k: 'line', pts: seam }]
-  if (edge) details.push({ k: 'shape', pts: thick(curve.slice(0, Math.ceil(curve.length * 0.85)).map(([x, y]) => [x + slope[0] * w * 0.42, y + slope[1] * w * 0.42] as Pt), w * 0.16, w * 0.03), tone: 'accent' })
+  const details: Detail[] = [{ k: 'line', pts: seam, minPx: 120 }]
+  if (edge) details.push({ k: 'shape', pts: thick(curve.slice(0, Math.ceil(curve.length * 0.85)).map(([x, y]) => [x + slope[0] * w * 0.42, y + slope[1] * w * 0.42] as Pt), w * 0.16, w * 0.03), tone: 'accent', minPx: 70 })
   return part(id, thick(curve, w, w * 0.06), tone, z, { lift: 1.1, slope, ...more, details: [...details, ...(more.details ?? [])] })
 }
 
@@ -55,10 +55,11 @@ export function core(id: string, x: number, y: number, rx: number, ry: number, z
   return out
 }
 
-/** Acid-green glands: small glowing spots in the tissue, the Swarm's secondary light. */
-export const glands = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'aid' })
+/** Acid-green glands: small glowing spots in the tissue, the Swarm's secondary light (only on bitmaps
+ * big enough to show them). */
+export const glands = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'aid', minPx: 140 })
 /** Violet lights. */
-export const sparks = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glow' })
+export const sparks = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glow', minPx: 140 })
 
 /**
  * A segmented spine down the middle: one vertebra per [y, half-width, length] row, each a left and a
@@ -70,7 +71,7 @@ export function spine(id: string, segs: [number, number, number][], tone: Tone, 
   segs.forEach(([y, w, h], i) => {
     const rows: [number, number][] = [[y - h / 2, w * 0.5], [y - h * 0.3, w * 0.95], [y + h * 0.15, w], [y + h / 2, w * 0.62]]
     const details: Detail[] = [{ k: 'line', pts: [[-w * 0.4, y - h * 0.1], [-w * 0.85, y + h * 0.15]] }]
-    if (nodes && i % 2 === 1) details.push({ k: 'shape', pts: circle(-w * 0.18, y, Math.min(w * 0.3, h * 0.22), 8), tone: 'accent' })
+    if (nodes && i % 2 === 1) details.push({ k: 'shape', pts: circle(-w * 0.18, y, Math.min(w * 0.3, h * 0.22), 8), tone: 'accent', minPx: 90 })
     out.push(...sym(part(`${id}${i}`, halfHull(rows), i % 2 ? tone : tone === 'hull' ? 'hull2' : 'hull', z + i * 0.01, { lift: 0.9, slope: [-0.5, 0], details })))
   })
   return out
