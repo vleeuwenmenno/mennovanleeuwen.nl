@@ -1479,6 +1479,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           } else if (e.from === ME) {
             toast(`We lost ${p.name}`, 'bad', { k: 'planet', id: p.id })
             sound.capture(false)
+            sound.galaxyThreat()
           }
         } else if (e.k === 'built' && e.owner === ME) {
           // The new ship joins our fleet at the planet: clicking picks that fleet.
@@ -1494,8 +1495,10 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           toast(`Fleet arrived at ${g.planets[e.planet].name}`, 'info', { k: 'fleet', id: e.fleet, planet: e.planet })
         } else if (e.k === 'battle') {
           const p = g.planets[e.planet]
-          if (!e.auto) sound.alarm(true)
-          else if (e.owners.includes(ME) && e.winner !== undefined) toast(`Battle at ${p.name}: ${e.winner === ME ? 'won' : 'lost'}`, e.winner === ME ? 'good' : 'bad', { k: 'planet', id: p.id })
+          if (!e.auto) {
+            sound.alarm(true)
+            sound.galaxyThreat()
+          } else if (e.owners.includes(ME) && e.winner !== undefined) toast(`Battle at ${p.name}: ${e.winner === ME ? 'won' : 'lost'}`, e.winner === ME ? 'good' : 'bad', { k: 'planet', id: p.id })
         } else if (e.k === 'out') toast(`The ${factionName(g, e.owner)} is beaten`, e.owner === ME ? 'bad' : 'good')
         else if (e.k === 'capturing') {
           const p = g.planets[e.planet]
@@ -1503,6 +1506,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           else if (e.from === ME) {
             toast(`The enemy is taking ${p.name}: ${CAPTURE_TIME} s to stop them`, 'bad', { k: 'planet', id: p.id })
             sound.alarm(false)
+            sound.galaxyThreat()
           }
         } else if (e.k === 'blockaded') {
           const where = g.systems[e.system].name
@@ -1510,6 +1514,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             const f = g.fleets.find((x) => x.id === e.fleet)
             toast(e.by >= 0 ? `Our fleet was pulled out of hyperspace by the blockade at ${where}` : `Our fleet stopped at ${where}: blockades closed every way on`, 'bad', f ? { k: 'fleet', id: f.id, planet: f.planet } : { k: 'system', id: e.system })
             sound.alarm(false)
+            sound.galaxyThreat()
           } else if (e.by === ME) toast(`Our blockade at ${where} stopped an enemy fleet`, 'good', { k: 'system', id: e.system })
         } else if (e.k === 'yardFull' && e.owner === ME) {
           toast(`${g.planets[e.planet].name}: our fleets there are full. The ${UNIT[e.unit].name} waits in the shipyard until one makes room or leaves`, 'bad', { k: 'planet', id: e.planet })

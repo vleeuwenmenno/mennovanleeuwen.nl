@@ -1812,6 +1812,8 @@ their own voice (`VOICE`): the Republic's clone radio beeps, the Confederacy's c
 clack, then bit-crushed data-burst tones, with a servo whine under its big ships), the Swarm's
 chitter. FactionInfo `sound.turbo` still tunes the heavy guns' pitch. Settings → Sound test plays every faction's set.
 
+**Music** ([`music.ts`](src/apps/games/empires/music.ts)): six separate synthesised pieces (no shared bed) — menu fanfare, lobby arpeggios, calm skirmish underscore, skirmish combat (war drums), galactic map, and galaxy alarm. Hard cuts between them. Skirmish flips to combat on fight heat; the galaxy map flips to alarm on a threat. Original motifs, not film themes. Sound test auditions every piece.
+
 **AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
 its fire from further off and sends its fast warships round the flank of a goal where that is
 clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
