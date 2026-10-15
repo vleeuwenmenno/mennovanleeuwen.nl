@@ -1,25 +1,27 @@
 import type { Palette } from '../kit.ts'
 
-// The droid navy's colours: weathered sand and bone with rust-brown and dull blue-grey plating over
-// dark gunmetal, red and amber sensor eyes (its `glass`) and blue-white engines. Shadows lean cool,
-// the way the cartoon shades them. Two roles mark a job rather than a side: `aid` is the green of
-// repair craft, `trim` the gold of a station's own defense wing.
+// The Confederacy's colours (refs/confederacy.yaml): industrial steel plates (#737C86, lit to the
+// brushed #A9AFB5) over gunmetal (#3B414A) and dark charcoal frames (#252B34), recessed panels in
+// near-black steel (#161D27), burnt-orange military markings and capacitors (#F07732), technical
+// teal windows and sensors (#19A6B1, its `glass`), cyan engines (#4BE1EE, its `glow`) and orange
+// plasma (#FF8D39, its `trim`: the Spectre pickets' bands and weapon glows). Near-black outlines.
+// `aid` marks a repair craft's work lights, a green-teal.
 
 /** Three cel tones (lit, base, shadow) for every colour role, and the outline, smoke and debris. */
 export const PALETTE: Palette = {
-  hull: ['#efe4c9', '#cfc09d', '#8f826a'],
-  hull2: ['#aab3ba', '#7f8a93', '#535d68'],
-  accent: ['#cf7d4f', '#9e5434', '#5f3221'],
-  metal: ['#7d7f84', '#57595f', '#37393e'],
-  dark: ['#47484d', '#2e2f34', '#1c1d21'],
-  glass: ['#ffd88f', '#ff5a2e', '#8c2414'],
-  glow: ['#f2f9ff', '#a8dcff', '#5a96cc'],
-  char: ['#4a3d34', '#2e2520', '#1a1411'],
-  ember: ['#ffe29a', '#ff8a3a', '#c4401a'],
-  aid: ['#d6f7a8', '#86cc54', '#41702a'],
-  trim: ['#ffe7a0', '#d8a444', '#8a5e22'],
-  outline: '#16130f',
-  engine: '#a8dcff',
-  smoke: 'rgba(60,56,52,1)',
-  debris: '#cfc09d',
+  hull: ['#a9afb5', '#737c86', '#4c545e'],
+  hull2: ['#59626d', '#3b414a', '#2a2f37'],
+  accent: ['#ff9b5a', '#f07732', '#ad4f1c'],
+  metal: ['#3a414c', '#252b34', '#191e25'],
+  dark: ['#232b36', '#161d27', '#0e131a'],
+  glass: ['#8af0f6', '#19a6b1', '#0f6870'],
+  glow: ['#dcfdff', '#4be1ee', '#2399a6'],
+  char: ['#463d36', '#2b2521', '#171311'],
+  ember: ['#ffe2a6', '#ff8d39', '#c4501a'],
+  aid: ['#a8f5d4', '#33c493', '#1d6e55'],
+  trim: ['#ffc183', '#ff8d39', '#bd5a1c'],
+  outline: '#15191f',
+  engine: '#4be1ee',
+  smoke: 'rgba(52,56,62,1)',
+  debris: '#737c86',
 }

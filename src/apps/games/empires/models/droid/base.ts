@@ -4,19 +4,18 @@ import { along, box, chamfer, circle, part, rect, sym, thick } from '../kit.ts'
 import { seat } from '../proto.ts'
 import type { ModelDef } from '../spec.ts'
 import type { Detail, Part, Pt, Tone } from '../types.ts'
-import { dish, engineBlock, eyes, lamps, mast, rivets } from './craft.ts'
-import { DROID_SEAT } from './warships.ts'
+import { across, ambers, antenna, armour, bridge, cells, mark, recess, seam, windows } from './parts.ts'
+import { CONFED_SEAT } from './warships.ts'
 
-// The droid navy's hybrid bases: its constructor droids, the Frigate Yard and the Capital Yard, and
-// the expansion modules that bolt onto them and the Command Station (`expansion`, placed by
-// models/expansions.ts).
+// The Confederacy's hybrid bases: the Forge Shipyard and the Dominion Shipworks, and the expansion
+// modules that bolt onto them and the Command Hub (`expansion`, placed by models/expansions.ts).
 //
-// The yards are drawn in the calm style of the Big warships (warships.ts): a few big plates, one seat
-// per gun, lights placed sparingly. Each reads as a shipyard from above: an open berth a ship of its
-// class fits in, spanned by arched ring frames with round hubs, a gate at the mouth where the ships
-// leave (the bow, up), a foundry closing the stern. The droid foundries are tan plate over gunmetal
-// trusses, a foundry sphere at the stern as on the Crucible station. Empty module sockets show as
-// ringed ports.
+// The yards are armed private dockyards (refs/confederacy.webp, "Dock arm"): an open berth a ship of
+// its class fits in, walled by angular armour blocks over open charcoal trusses, spanned by box
+// gantry frames with orange work lights (the heavy one carries the construction crane, the yard's
+// hardpoint), angular jaws with gun blocks at the mouth where the ships leave (the bow, up), and a
+// production block closing the stern with the yard's bridge core on it. Empty module sockets show
+// as ringed ports.
 
 /** An empty module port: a ringed plate with a dark well and four lights round it, in the
  * faction's trim, so it reads as a socket waiting for something. */
@@ -32,206 +31,144 @@ function port(id: string, [x, y]: Pt, r: number, z: number): Part {
   })
 }
 
-// --- Engineers ---------------------------------------------------------------------------------------
-
-/**
- * Rivet constructor droid: a spindly droid builder. A ball body with one wide amber eye, two long
- * cutting arms reaching forward with a saw disc each, two folded rear legs, rust hazard bands and an
- * engine block behind.
- */
-export const droidEngineer: ModelDef = () => {
-  const saw = (x: number, y: number): Detail[] => [
-    { k: 'shape', pts: circle(x, y, 3.2, 12), tone: 'metal' },
-    { k: 'lights', pts: circle(x, y, 3.6, 8), r: 0.5, tone: 'ember' },
-  ]
-  const parts: Part[] = [
-    ...sym(part('leg', thick([[-8, 10], [-26, 20], [-36, 38]], 4.2, 2.6), 'metal', 1, { lift: 0.8, details: [rivets([-10, 11], [-26, 20], 4), { k: 'shape', pts: circle(-26, 20, 2.1, 10), tone: 'dark' }] })),
-    ...sym(part('arm', thick([[-8, -8], [-26, -20], [-20, -42]], 4.6, 3), 'hull2', 1.4, {
-      lift: 0.9,
-      detach: { hull: 0.3 },
-      details: [{ k: 'shape', pts: thick([[-10, -9], [-22, -17]], 1.4), tone: 'accent' }, { k: 'shape', pts: circle(-26, -20, 2.4, 10), tone: 'dark' }],
-    }), { detach: { hull: 0.2 } }),
-    ...sym(part('saw', circle(-20, -44, 4.6, 16), 'dark', 1.6, { detach: { hull: 0.3 }, details: saw(-20, -44) }), { detach: { hull: 0.2 } }),
-    engineBlock('engine', 0, 26, 45, 14, 0, 1.6),
-    part('collar', chamfer(0, 14, 20, 16, 4), 'hull', 1.8, { lift: 1, details: [...[-8, -2, 4].map((x): Detail => ({ k: 'shape', pts: [[x, 7], [x + 3, 7], [x + 6, 21], [x + 3, 21]], tone: 'accent' })), rivets([-8, 19], [8, 19], 5)] }),
-    part('ball', circle(0, -4, 15, 24), 'hull', 2.2, { sphere: true, details: [{ k: 'shape', pts: box(0, -4, 30, 3), tone: 'accent' }, rivets([-11, 4], [11, 4], 6)] }),
-    part('visor', box(0, -9, 18, 6), 'dark', 2.6, { details: [eyes(along([-5.5, -9], [5.5, -9], 3), 1.3), lamps([[0, -9]], 1.8)] }),
-  ]
-  return { parts, breakStyle: 'bands' }
-}
-
 // --- Yard parts --------------------------------------------------------------------------------------
 
-/**
- * A berth: the dark bed a ship is built in, `hw` half-wide from y0 (the mouth) to y1, a channel of
- * molten metal down the keel and rivets down the edges.
- */
+/** A berth: the dark bed a ship is built in, `hw` half-wide from y0 (the mouth) to y1, with orange
+ * guide lights down its keel and seams down its edges. */
 function berth(id: string, hw: number, y0: number, y1: number, z: number): Part {
   const n = Math.max(4, Math.round((y1 - y0) / 11))
   const edge = hw - 1.6
   return part(id, rect(-hw, y0, hw * 2, y1 - y0), 'dark', z, {
     details: [
-      { k: 'shape', pts: rect(-2.6, y0 + 3, 5.2, y1 - y0 - 6), tone: 'char' },
-      { k: 'lights', pts: along([0, y0 + 5], [0, y1 - 5], n + 1), r: 0.9, tone: 'ember' },
-      rivets([-edge, y0 + 3], [-edge, y1 - 3], n + 2),
-      rivets([edge, y0 + 3], [edge, y1 - 3], n + 2),
+      { k: 'shape', pts: rect(-2.4, y0 + 3, 4.8, y1 - y0 - 6), tone: 'metal' },
+      ambers(along([0, y0 + 5], [0, y1 - 5], n + 1), 0.8),
+      seam([-edge, y0 + 3], [-edge, y1 - 3]),
+      seam([edge, y0 + 3], [edge, y1 - 3]),
     ],
   })
 }
 
 /**
- * A droid ring frame: an arched hoop spanning a berth at `y`, `wd` wide, out to x1, seen from above
- * as a band whose two ends slope away (lit on one side, in shadow on the other as the yard turns),
- * riveted. A heavy one carries the yard's construction crane (its hardpoint) and a rust band, and
- * has a round hub where each end meets the wall.
+ * A gantry frame spanning a berth at `y`, `wd` deep, out to x1 either side: a box girder seen from
+ * above, lit as two faces, with orange work lights along it. A heavy one carries the yard's
+ * construction crane (its hardpoint), an orange band and an armoured block at each end.
  */
-function hoop(id: string, y: number, wd: number, x1: number, z: number, heavy: boolean, hub = 4.6): Part[] {
+function gantry(id: string, y: number, wd: number, x1: number, z: number, heavy: boolean): Part[] {
   const t = y - wd / 2
   const k = x1 * 0.42
   const out: Part[] = [
     part(id, rect(-x1, t, x1 * 2, wd), heavy ? 'hull' : 'hull2', z, {
       lift: heavy ? 3.6 : 3,
       facets: [{ pts: rect(-x1, t, x1 - k, wd), slope: [-0.5, 0] }, { pts: rect(k, t, x1 - k, wd), slope: [0.5, 0] }],
-      details: [rivets([-x1 + 2, y], [x1 - 2, y], heavy ? 13 : 9), ...(heavy ? [{ k: 'shape' as const, pts: rect(-x1, t + 0.8, x1 * 2, 1.4), tone: 'accent' as const }] : [])],
+      details: [ambers(along([-x1 + 3, y], [x1 - 3, y], heavy ? 7 : 5), 0.55), ...(heavy ? [mark(rect(-x1, t + 0.8, x1 * 2, 1.2))] : [seam([-x1, y], [x1, y])])],
     }),
   ]
-  for (const s of heavy ? [-1, 1] : []) {
-    const c: Pt = [s * (x1 - hub * 0.4), y]
-    out.push(part(`${id}${s < 0 ? 'L' : 'R'}`, circle(c[0], c[1], hub, 18), 'hull2', z + 0.1, {
-      lift: 3.4,
-      facets: [{ pts: circle(c[0], c[1], hub, 18).filter(([x]) => x <= c[0]), slope: [-0.4, 0] }],
-      details: [{ k: 'shape', pts: circle(c[0], c[1], hub * 0.8, 16), tone: 'accent' }, { k: 'shape', pts: circle(c[0], c[1], hub * 0.62, 14), tone: 'hull2' }, eyes([c], hub * 0.13)],
-    }))
-  }
+  if (heavy) out.push(...sym(armour(`${id}End`, -(x1 - 2.6), y, 6.4, wd + 3.6, z + 0.1, { tone: 'hull2', band: false, lift: 3.4 })))
   return out
 }
 
-/** A droid gun pod: a round sand-and-rust pod with a riveted rim, as on the Crucible station. */
-function gunPod(id: string, [x, y]: Pt, r: number, z: number): Part {
-  return part(id, circle(x, y, r, 22), 'hull2', z, {
-    lift: 3.2,
-    facets: [{ pts: circle(x, y, r, 22).filter(([px]) => px <= x), slope: [-0.4, 0] }],
-    details: [{ k: 'shape', pts: circle(x, y, r * 0.86, 20), tone: 'accent' }, { k: 'shape', pts: circle(x, y, r * 0.74, 18), tone: 'hull2' }, rivets([x - r * 0.55, y + r * 0.6], [x + r * 0.55, y + r * 0.6], 4)],
-  })
-}
-
-/** A droid truss: an open gunmetal girder from y0 to y1 between x0 and x1, its bays cut out with a
- * diagonal across each, rivets down one edge. */
+/** A truss: an open charcoal girder from y0 to y1 between x0 and x1, its bays cut out with a
+ * diagonal across each. */
 function truss(id: string, x0: number, x1: number, y0: number, y1: number, z: number): Part {
   const n = Math.max(2, Math.round((y1 - y0) / 11))
   const step = (y1 - y0) / n
   const holes: Pt[][] = []
-  const details: Detail[] = [rivets([x0 + 0.9, y0 + 2], [x0 + 0.9, y1 - 2], n * 2)]
+  const details: Detail[] = []
   for (let i = 0; i < n; i++) {
     const a = y0 + i * step + 1.4
     const b = y0 + (i + 1) * step - 1.4
     holes.push(rect(x0 + 1.4, a, x1 - x0 - 2.8, b - a))
-    details.push({ k: 'line', pts: [[x0 + 1.4, a], [x1 - 1.4, b]] })
+    details.push(seam([x0 + 1.4, a], [x1 - 1.4, b]))
   }
   return part(id, rect(x0, y0, x1 - x0, y1 - y0), 'metal', z, { lift: 2.2, holes, details })
 }
 
-// --- Frigate Yard ------------------------------------------------------------------------------------
+/** A wall along the left of the berth from y0 to y1, x0 to x1 (x0 the outer edge): an armour block
+ * run with its bow corner cut, orange markings at both ends. */
+function wall(id: string, x0: number, x1: number, y0: number, y1: number, z: number): Part[] {
+  const w = x1 - x0
+  return sym(part(id, [[x0, y0 + w * 0.7], [x0 + w * 0.45, y0], [x1, y0], [x1, y1], [x0, y1]], 'hull', z, {
+    lift: 3,
+    facets: [{ pts: [[x0, y0 + w * 0.7], [x0 + w * 0.45, y0], [x0 + w * 0.5, y0], [x0 + w * 0.5, y1], [x0, y1]], slope: [-0.5, 0] }],
+    details: [mark(rect(x0, y0 + (y1 - y0) * 0.3, w, 2.2)), mark(rect(x0, y1 - 6, w, 2.2)), recess(rect(x0 + w * 0.25, y0 + (y1 - y0) * 0.45, w * 0.5, (y1 - y0) * 0.2)), across(x0, x1, (y0 + y1) / 2)],
+  }))
+}
+
+/** A gun block at the mouth: an angular armour block under a point-defence seat. */
+const gunBlock = (id: string, [x, y]: Pt, r: number, z: number): Part => armour(id, x, y, r * 2.1, r * 2.1, z, { tone: 'hull2', band: true, lift: 3.2, cut: r * 0.5 })
+
+// --- Forge Shipyard ----------------------------------------------------------------------------------
 
 /**
- * Crucible frigate yard: a droid foundry slip. Tan plate walls over open gunmetal trusses line a
- * berth glowing with molten metal down its keel; three arched ring frames span it (the middle one
- * carries the construction crane, the yard's hardpoint), a round hub where each meets the wall.
- * Round gun pods with the point defence stand at the mouth behind gunmetal jaws. At the stern an
- * octagonal foundry deck carries the foundry sphere, its red eyes round its crown and the shield
- * generator on top, the droid control tower beside it and a furnace stack on the other side. The
- * flank sockets sit on the walls, the third on the deck's back.
+ * Forge Shipyard: a private-yard slip. Armour-block walls over open charcoal trusses line a berth
+ * lit with orange guide lights down its keel; three gantry frames span it (the middle one heavy,
+ * with the construction crane, the yard's hardpoint). Angular jaws at the mouth, gun blocks with the
+ * point defence behind them. At the stern a production block with three glowing bays carries the
+ * bridge core and the shield generator, a missile-cell rack on one side and a sensor mast on the
+ * other. The flank sockets sit on the walls, the third on the block's back.
  */
-export const droidYard: ModelDef = (c) => {
+export const confedYard: ModelDef = (c) => {
   const [sL, , sS] = YARD_SOCKETS.droid.map((g) => at(g, c.w, c.h))
   const parts: Part[] = [
     berth('bed', 21, -46, 27, 0.4),
-    ...sym(part('wall', [[-31.5, -36], [-27, -44], [-21, -44], [-21, 27], [-31.5, 27]], 'hull', 1.2, {
-      lift: 3,
-      facets: [{ pts: [[-31.5, -36], [-27, -44], [-26, -44], [-26, 27], [-31.5, 27]], slope: [-0.5, 0] }],
-      details: [
-        { k: 'shape', pts: rect(-31.5, -16, 10.5, 2.4), tone: 'accent' },
-        { k: 'shape', pts: rect(-31.5, 20.5, 10.5, 2.4), tone: 'accent' },
-        rivets([-29.6, -30], [-29.6, 2], 5),
-      ],
-    })),
+    ...wall('wall', -31.5, -21, -44, 27, 1.2),
     ...sym(truss('truss', -21, -16, -44, 27, 1)),
-    // The mouth: gunmetal jaws, the point defence on round pods behind them.
-    ...sym(part('jaw', [[-30.5, -38], [-27.5, -46.5], [-21.5, -50.5], [-16.5, -49], [-19, -44.5], [-24, -41.5]], 'metal', 2, { lift: 2.4, details: [eyes([[-21.5, -48.4]], 0.7)] })),
-    ...sym(gunPod('pod', at([1.7, 1.6], c.w, c.h), 5.6, 3)),
-    ...sym(seat('pd', c, 2, 3.5, 3.3, false, DROID_SEAT)),
-    // Ring frames across the berth.
-    ...hoop('hoopF', -25, 4.6, 30, 3.4, false),
-    ...hoop('hoopM', -2, 7.4, 30.6, 3.5, true, 5),
-    ...hoop('hoopA', 22, 4.6, 30, 3.4, false),
-    // The foundry deck at the stern, the foundry sphere on it, the tower and the furnace stack.
-    part('deck', chamfer(0, 37.5, 63, 21, 7), 'hull2', 2, {
+    ...sym(part('jaw', [[-31, -38], [-27, -47], [-21, -51], [-16.5, -49.4], [-19.6, -44.6], [-25, -41.4]], 'hull2', 2, { lift: 2.4, details: [mark([[-26.6, -45], [-21.6, -48.8], [-20.4, -47.6], [-25, -43.6]])] })),
+    ...sym(gunBlock('pod', at([1.7, 1.6], c.w, c.h), 4.6, 3)),
+    ...sym(seat('pd', c, 2, 3.5, 3.3, false, CONFED_SEAT)),
+    ...gantry('frameF', -25, 4.6, 30, 3.4, false),
+    ...gantry('frameM', -2, 7.4, 30.6, 3.5, true),
+    ...gantry('frameA', 22, 4.6, 30, 3.4, false),
+    part('block', chamfer(0, 37.5, 63, 21, 6), 'hull2', 2, {
       lift: 3,
-      facets: [{ pts: [[-31.5, 34], [-24.5, 27], [24.5, 27], [31.5, 34]], slope: [0, -0.45] }],
-      details: [{ k: 'shape', pts: rect(-31.5, 42.4, 63, 2), tone: 'accent' }, rivets([-27, 39.4], [-12, 39.4], 4), rivets([12, 39.4], [27, 39.4], 4)],
+      facets: [{ pts: [[-31.5, 34], [-25.5, 27], [25.5, 27], [31.5, 34]], slope: [0, -0.45] }],
+      details: [mark(rect(-31.5, 42.4, 63, 1.8)), ...[-18, 18].map((x): Detail => recess(rect(x - 4, 36, 8, 5))), ambers([[-18, 39.6], [18, 39.6]], 0.8)],
     }),
-    part('sphere', circle(0, 34.4, 9.6, 32), 'hull', 3, {
-      sphere: true,
-      details: [{ k: 'shape', pts: rect(-9.6, 37.6, 19.2, 1.8), tone: 'accent' }, { k: 'line', pts: [...circle(0, 34.4, 7.4, 24), circle(0, 34.4, 7.4, 24)[0]] }, eyes(along([-5.2, 27.4], [5.2, 27.4], 4), 0.7)],
-    }),
-    part('tower', chamfer(-21, 38, 8.4, 11, 2.2), 'metal', 3.2, { lift: 4, details: [{ k: 'shape', pts: rect(-25.2, 40.6, 8.4, 1.4), tone: 'accent' }, rivets([-23.6, 42.4], [-18.4, 42.4], 3)] }),
-    part('head', circle(-21, 35, 3.6, 16), 'hull', 3.6, { sphere: true, details: [{ k: 'shape', pts: rect(-24, 33, 6, 1.6), tone: 'dark' }, eyes(along([-22.6, 33.8], [-19.4, 33.8], 3), 0.5)] }),
-    part('stack', circle(21, 36.5, 4.4, 16), 'metal', 3.2, { lift: 3.4, details: [{ k: 'shape', pts: circle(21, 36.5, 3, 14), tone: 'dark' }, lamps(circle(21, 36.5, 1.6, 4), 0.55), { k: 'lights', pts: [[21, 36.5]], r: 0.9, tone: 'ember' }] }),
+    bridge('bridge', 0, 34.4, 15, 9, 3),
+    cells('cells', -22, 36.6, 2, 2, 2.2, 3.2),
     port('portL', sL, 5.2, 3.6),
     port('portR', [-sL[0], sL[1]], 5.2, 3.6),
     port('portS', sS, 4.6, 3.8),
-    mast('mast', [-24, 41], [-27.4, 46.6], 1.4, 4, { detach: { hull: 0.5 } }),
-    dish('dish', 25.6, 43, 3, 4, { detach: { hull: 0.4 } }),
+    antenna('mast', [22, 40], [26, 46.6], 1.4, 4, { detach: { hull: 0.5 } }),
+    antenna('mast2', [-26, 41], [-28.4, 46.4], 1.2, 4, { detach: { hull: 0.4 } }),
   ]
   return { parts, breakStyle: 'bands' }
 }
 
-// --- Capital Yard ------------------------------------------------------------------------------------
+// --- Dominion Shipworks ------------------------------------------------------------------------------
 
 /**
- * Leviathan capital foundry: the droid navy's great dock. Massive tan walls over gunmetal trusses
- * line a long berth glowing with molten metal, spanned by four arched ring frames (the second is
- * the heavy one with the construction crane, the yard's hardpoint). Big round gun towers with the
- * cannons stand at the mouth behind gunmetal jaws; at the stern the foundry deck carries a bigger
- * foundry sphere under the shield generator, point defence pods on its corners, a sensor spire and
- * a dish. The flank sockets sit in the walls.
+ * Dominion Shipworks: the Confederacy's armoured war dock. Massive armour-block walls over
+ * trusses line a long berth, spanned by four gantry frames (the second is the heavy one with the
+ * construction crane, the yard's hardpoint). Gun blocks with heavy batteries stand at the mouth
+ * behind angular jaws and a forward prong; at the stern a production block carries the bridge core
+ * under the shield generator, flak blocks on its corners, missile cells and two masts. The flank
+ * sockets sit in the walls.
  */
-export const droidCapitalYard: ModelDef = (c) => {
+export const confedCapitalYard: ModelDef = (c) => {
   const [sL] = CYARD_SOCKETS.droid.map((g) => at(g, c.w, c.h))
   const parts: Part[] = [
     berth('bed', 23, -47, 33, 0.4),
-    ...sym(part('wall', [[-36, -35], [-31, -43], [-23, -43], [-23, 33], [-36, 33]], 'hull', 1.2, {
-      lift: 3.4,
-      facets: [{ pts: [[-36, -35], [-31, -43], [-30, -43], [-30, 33], [-36, 33]], slope: [-0.5, 0] }],
-      details: [
-        { k: 'shape', pts: rect(-36, -17, 13, 2.6), tone: 'accent' },
-        { k: 'shape', pts: rect(-36, 24.4, 13, 2.6), tone: 'accent' },
-        rivets([-33.4, -30], [-33.4, -6], 4),
-        rivets([-33.4, 14], [-33.4, 30], 3),
-      ],
-    })),
+    ...wall('wall', -36, -23, -43, 33, 1.2),
     ...sym(truss('truss', -23, -18, -43, 33, 1)),
-    ...sym(part('jaw', [[-35, -38], [-31.5, -47.5], [-24, -51.5], [-18, -50], [-21, -45], [-27, -42]], 'metal', 2, { lift: 2.6, details: [eyes([[-24, -49.4]], 0.8)] })),
-    ...sym(gunPod('tower', at([1.75, 1.35], c.w, c.h), 7, 3)),
-    ...sym(seat('tl', c, 2, 4.4, 3.3, true, DROID_SEAT)),
-    ...hoop('hoopF', -24, 4.8, 34, 3.4, false, 5),
-    ...hoop('hoopM', -6, 8, 34.6, 3.5, true, 5.4),
-    ...hoop('hoopA', 15, 4.8, 34, 3.4, false, 5),
-    ...hoop('hoopS', 28.4, 4.4, 34, 3.4, false, 4.6),
-    part('deck', chamfer(0, 41, 72, 17, 6), 'hull2', 2, {
+    ...sym(part('jaw', [[-35.4, -38], [-31.6, -48], [-24, -52], [-18, -50.4], [-21, -45.4], [-27, -42]], 'hull2', 2, { lift: 2.6, details: [mark([[-30.4, -46], [-24.4, -50], [-23, -48.6], [-28.6, -44.6]])] })),
+    ...sym(gunBlock('tower', at([1.75, 1.35], c.w, c.h), 5.6, 3)),
+    ...sym(seat('tl', c, 2, 4.4, 3.3, true, CONFED_SEAT)),
+    ...gantry('frameF', -24, 4.8, 34, 3.4, false),
+    ...gantry('frameM', -6, 8, 34.6, 3.5, true),
+    ...gantry('frameA', 15, 4.8, 34, 3.4, false),
+    ...gantry('frameS', 28.4, 4.4, 34, 3.4, false),
+    part('block', chamfer(0, 41, 72, 17, 6), 'hull2', 2, {
       lift: 3,
       facets: [{ pts: [[-36, 38.5], [-30, 32.5], [30, 32.5], [36, 38.5]], slope: [0, -0.45] }],
-      details: [{ k: 'shape', pts: rect(-36, 46, 72, 1.8), tone: 'accent' }, rivets([-33, 43.6], [-28, 43.6], 3), rivets([28, 43.6], [33, 43.6], 3)],
+      details: [mark(rect(-36, 46, 72, 1.8)), ...[-24, 24].map((x): Detail => recess(rect(x - 4, 39, 8, 5))), ambers([[-24, 42.6], [24, 42.6]], 0.8)],
     }),
-    part('sphere', circle(0, 38.6, 10.4, 34), 'hull', 3, {
-      sphere: true,
-      details: [{ k: 'shape', pts: rect(-10.4, 41.8, 20.8, 2), tone: 'accent' }, { k: 'line', pts: [...circle(0, 38.6, 8, 26), circle(0, 38.6, 8, 26)[0]] }, eyes(along([-6, 31], [6, 31], 5), 0.75)],
-    }),
-    ...sym(gunPod('pdPod', at([1.9, 9.1], c.w, c.h), 4, 3.1)),
-    ...sym(seat('pd', c, 4, 3, 3.3, false, DROID_SEAT)),
-    mast('spire', [-14, 39], [-16.6, 47.6], 1.8, 4, { detach: { hull: 0.5 } }),
-    dish('dish', 14.6, 43, 3.2, 4, { detach: { hull: 0.4 } }),
-    part('prong', thick([[0, -45], [0, -50.5]], 2.2, 1), 'metal', 4.2, { detach: { hull: 0.6 }, details: [eyes([[0, -49.4]], 0.7)] }),
+    bridge('bridge', 0, 38.6, 16, 9, 3),
+    ...sym(gunBlock('pdPod', at([1.9, 9.1], c.w, c.h), 3.4, 3.1)),
+    ...sym(seat('pd', c, 4, 3, 3.3, false, CONFED_SEAT)),
+    cells('cells', 14.6, 41.6, 2, 2, 2.2, 3.2),
+    antenna('spire', [-14, 39], [-16.6, 47.6], 1.8, 4, { detach: { hull: 0.5 } }),
+    part('prong', [[-1.6, -45], [-1, -51], [1, -51], [1.6, -45]], 'hull2', 4.2, { detach: { hull: 0.6 }, details: [windows([[0, -49.6]], 0.6)] }),
     port('portL', sL, 5.6, 3.9),
     port('portR', [-sL[0], sL[1]], 5.6, 3.9),
   ]
@@ -240,11 +177,11 @@ export const droidCapitalYard: ModelDef = (c) => {
 
 // --- Expansion modules -------------------------------------------------------------------------------
 
-/** The girder back to the hull's details: rivets down it. */
-const strut = (R: number, reach: number): Detail[] => [rivets([-R * 0.13, R * 0.4], [-R * 0.13, R * 0.2 + reach * 0.9], Math.max(3, Math.round(reach / (R * 0.35))))]
+/** The girder back to the hull's details: a seam down it. */
+const strut = (R: number, reach: number): Detail[] => [seam([-R * 0.13, R * 0.4], [-R * 0.13, R * 0.2 + reach * 0.9])]
 
-/** A running light for a module: the droids' red eyes. */
-const beacon = (pts: Pt[], r: number, _rep: boolean): Detail => eyes(pts, r)
+/** A running light for a module: teal. */
+const beacon = (pts: Pt[], r: number, _rep: boolean): Detail => windows(pts, r)
 
 /**
  * One expansion's own structure, in its local frame: up (-y) is away from the building, +x towards
@@ -252,14 +189,14 @@ const beacon = (pts: Pt[], r: number, _rep: boolean): Detail => eyes(pts, r)
  * building). Kept within about 1.2 R outward, so it stays inside the building's bitmap.
  */
 function modulePod(exp: ModuleId, R: number): Part[] {
-  // Droid modules (the code below once drew both sides' and still reads `rep`).
+  // Confederacy modules (the code below once drew both sides' and still reads `rep`).
   const rep: boolean = false
-  // Sand plate over gunmetal, rust bands, rivets, red eyes.
+  // Steel plate over gunmetal frames, orange bands and teal lights.
   const plate: Tone = 'hull'
   const plate2: Tone = 'hull2'
   const frame: Tone = 'metal'
   const band: Tone = 'accent'
-  const studs = (a: Pt, b: Pt, n: number): Detail[] => [rivets(a, b, n)]
+  const studs = (a: Pt, b: Pt, _n: number): Detail[] => [seam(a, b)]
   switch (exp) {
     case 'secondSlip':
     case 'capitalSlip': {
