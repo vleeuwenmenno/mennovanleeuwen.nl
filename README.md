@@ -70,9 +70,10 @@ Super is Omarchy's key, but the system keeps it, so a web page never sees it; th
 **Alt+1…9** goes to a workspace, **Alt+Shift+1…9** moves the focused window there (and goes with
 it, like Hyprland's `movetoworkspace`), **Ctrl+Alt+← →** steps through them. These work everywhere,
 the terminal included, except that on a Mac a text field keeps Option+digit for typing characters.
-**Ctrl+K** (or Cmd+K) opens Spotlight, and **Ctrl+Space** toggles All apps — also from anywhere,
-including the terminal. Ctrl+Space is best-effort: some OSes and input methods keep that chord, so
-the page never sees it, the same way Super never reaches a web page.
+**Ctrl+Space** opens Spotlight, and **Ctrl+K** (or Cmd+K) opens All apps — also from anywhere,
+including the terminal. Settings → Spotlight can point Ctrl+Space at All apps instead, which gives
+Ctrl+K back to Spotlight. Ctrl+Space is best-effort: some OSes and input methods keep that chord,
+so the page never sees it, the same way Super never reaches a web page.
 
 The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPrefs.ts`](src/os/topbarPrefs.ts))
 holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
@@ -557,7 +558,7 @@ service (API tokens, app passwords, a library's password) is a
 managers to leave alone, with a show/hide button, because browsers fill a saved password into any
 `type="password"` field and ignore `autocomplete="off"` there. Those apps' window menus have *… settings…*
 to jump to their pane.
-Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
+Settings → Spotlight chooses what **Ctrl+Space** toggles (Spotlight, the default, or All apps). All apps gives Ctrl+K (or Cmd+K) back to Spotlight. It also picks what the empty Spotlight shows (favourites, recently visited websites,
 status, apps, your repositories) and how many recent items of each, which kinds of results it searches (your
 contacts among them, and your mail after `mail:`; see *How the apps work together*), whether Enter on an unmatched query searches the
 web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites

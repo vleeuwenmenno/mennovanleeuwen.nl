@@ -21,8 +21,9 @@ import { reboot, shutdown } from './powerState'
 import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
 // The "All apps" launcher, modelled on Omarchy's menu (Super + Alt + Space): a small "Go…" list
-// of categories that open into submenus. Typing searches every entry at once. Ctrl+Space toggles
-// it from the shell (best-effort when the OS/IME does not keep that chord). Ctrl+K's Spotlight is
+// of categories that open into submenus. Typing searches every entry at once. Ctrl+K toggles it
+// from the shell by default. Settings → Spotlight can point Ctrl+Space at All apps instead, in
+// which case that chord toggles it (best-effort when the OS/IME keeps Ctrl+Space). Spotlight is
 // the separate, bigger search for files, maths and status.
 
 type Entry = {

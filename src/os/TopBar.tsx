@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useRecents } from '../data/recents'
+import { useSpotlightPrefs } from '../data/spotlightPrefs'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
 import { tidyMenu, openContextMenu, type MenuItem } from './ContextMenu'
@@ -100,8 +101,9 @@ function WorkspacesWidget() {
 }
 
 function SearchWidget() {
+  const ctrlSpace = useSpotlightPrefs().ctrlSpace
   return (
-    <button className="tb-icon" onClick={() => toggleOverlay('spotlight')} title="Search (Ctrl+K)" aria-label="Search">
+    <button className="tb-icon" onClick={() => toggleOverlay('spotlight')} title={ctrlSpace === 'spotlight' ? 'Search (Ctrl+Space)' : 'Search (Ctrl+K)'} aria-label="Search">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
         <circle cx="11" cy="11" r="7" />
         <path d="M20 20l-3.5-3.5" />
@@ -187,6 +189,7 @@ export function TopBar() {
 
   const mine = wm.windows.filter((w) => wm.shown(w))
   const customized = prefs.order.join() !== DEFAULT_ORDER.join() || prefs.hidden.length > 0
+  const ctrlSpace = useSpotlightPrefs().ctrlSpace
 
   const barMenu = (): MenuItem[] => {
     const widgets: MenuItem[] = TOPBAR_IDS.map((id) => ({
@@ -202,8 +205,8 @@ export function TopBar() {
         ? [{ label: 'Show or hide', submenu: widgets }, ...(customized ? [{ label: 'Reset top bar', onSelect: resetTopbar }] : [])]
         : []),
       { separator: true },
-      { label: 'Search…', shortcut: 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
-      { label: 'All apps', shortcut: 'Ctrl Space', onSelect: () => toggleOverlay('launchpad') },
+      { label: 'Search…', shortcut: ctrlSpace === 'spotlight' ? 'Ctrl Space' : 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
+      { label: 'All apps', shortcut: ctrlSpace === 'spotlight' ? 'Ctrl K' : 'Ctrl Space', onSelect: () => toggleOverlay('launchpad') },
       { label: 'Show desktop', disabled: !mine.some((w) => !w.minimized), onSelect: () => mine.forEach((w) => wm.minimize(w.pid)) },
       { separator: true },
       { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },

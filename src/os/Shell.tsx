@@ -11,6 +11,7 @@ import type { WidgetDef } from '../widgets/types'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
 import { setOverlay, toggleOverlay, useOverlay } from './overlays'
+import { spotlightPrefs } from '../data/spotlightPrefs'
 import { Spotlight } from './Spotlight'
 import { useSnapPreview } from './snapPreview'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs'
@@ -772,18 +773,21 @@ export function Shell() {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [power.phase, wm])
 
-  // Ctrl+K / Cmd+K opens Spotlight; Ctrl+Space toggles All apps. Both from anywhere, including
-  // inside the terminal. Ctrl+Space is best-effort: some OSes and IMEs keep it and the page never
-  // sees it (same idea as Super for workspaces).
+  // By default Ctrl+Space toggles Spotlight and Ctrl+K / Cmd+K toggles All apps. Settings →
+  // Spotlight can point Ctrl+Space at All apps, which gives Ctrl+K back to Spotlight. Both from
+  // anywhere, including the terminal. Ctrl+Space is best-effort: some OSes and IMEs keep it and
+  // the page never sees it (same idea as Super for workspaces). Read when the key arrives, so a
+  // change in Settings applies at once.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (power.phase !== 'up') return
+      const spaceOpensSpotlight = spotlightPrefs().ctrlSpace !== 'launchpad'
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        toggleOverlay('spotlight')
+        toggleOverlay(spaceOpensSpotlight ? 'launchpad' : 'spotlight')
       } else if (e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'Space') {
         e.preventDefault()
-        toggleOverlay('launchpad')
+        toggleOverlay(spaceOpensSpotlight ? 'spotlight' : 'launchpad')
       } else if (e.key === 'Escape' && overlay) setOverlay(null)
     }
     window.addEventListener('keydown', onKey)
