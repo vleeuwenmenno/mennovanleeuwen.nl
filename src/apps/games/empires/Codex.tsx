@@ -47,9 +47,9 @@ const TAU = Math.PI * 2
 /** The unit as the Codex shows it: a station at the level picked, with every module it can have
  * (its expansions too); a yard with every expansion fitted. */
 function shown(t: UnitType, level: number) {
-  if (t.tier === 'yard') return yardType(t.id, modulesFor(worksOf(t)!).map((m) => m.id))
+  if (t.tier === 'yard') return yardType(t.id, modulesFor(worksOf(t)!, t.faction).map((m) => m.id))
   if (t.tier !== 'station') return t
-  return stationType(t.faction, level, TECHS.filter((x) => x.faction === t.faction).map((x) => x.id), modulesFor('station').map((m) => m.id))
+  return stationType(t.faction, level, TECHS.filter((x) => x.faction === t.faction).map((x) => x.id), modulesFor('station', t.faction).map((m) => m.id))
 }
 
 /** Every gun a unit carries, grouped by kind and numbers. */
@@ -232,7 +232,7 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
             In skirmishes the {WORKS_NAME[worksOf(t)!]} builds these onto itself, one at a time, ordered from its panel. Each is a part of it with a hull of its own: shot off, its feature stops until engineers weld it back for {Math.round(REBUILD_MODULE * 100)}% of its price.{worksOf(t) !== 'station' ? ' A yard\'s expansions are lost with it.' : ''}
           </p>
           <ul className="ew-cx-list">
-            {modulesFor(worksOf(t)!).map((m) => (
+            {modulesFor(worksOf(t)!, t.faction).map((m) => (
               <li key={m.id} data-tip={`${m.blurb}\nIf shot off: ${m.lost}`}>
                 <i style={{ background: HP_COLOR[m.kind] }} />
                 <span>{m.name}</span>

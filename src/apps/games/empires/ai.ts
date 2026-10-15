@@ -1,4 +1,4 @@
-import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { ABILITIES, BUILD_RADIUS, moduleFits, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
@@ -1530,7 +1530,7 @@ function planModules(w: World, b: Brain, D: Level, S: Style, attacked: boolean):
   const works = w.units.filter((u) => !u.dead && u.owner === o && (u.t.tier === 'station' || u.t.tier === 'yard') && !building(u))
   // One at a time: while one is under way it waits.
   if (works.some((u) => u.xq?.length)) return false
-  const order: ModuleId[] = ['capitalSlip', ...S.modules.filter((id) => id !== 'capitalSlip')]
+  const order: ModuleId[] = ['capitalSlip', ...S.modules.filter((id) => id !== 'capitalSlip' && moduleFits(id, p.faction))]
   // The Capital slip and the first two on its list are worth saving up for once they're within
   // reach (about twenty seconds' income); the rest wait for money to spare.
   const keen = new Set<ModuleId>(['capitalSlip', ...S.modules.slice(0, 2)])

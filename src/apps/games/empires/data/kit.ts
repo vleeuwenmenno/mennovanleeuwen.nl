@@ -279,6 +279,9 @@ export type FactionNames = {
   part?: Partial<Record<HardpointKind, string>>
   /** Its extra mount designs (Hardpoint `look`). */
   look?: Partial<Record<MountExtra, string>>
+  /** Its mining platform's upgrades (data.ts SITE_UPGRADES), where they are something else for it:
+   * the Swarm's "Shield generator" is a hardened carapace (its FactionData shieldedMine). */
+  site?: Partial<Record<'yield' | 'armor' | 'shield', { name: string; blurb: string }>>
   /** Its abilities' names, and their blurbs where the words differ too. */
   ability?: Partial<Record<AbilityId, { name: string; blurb?: string }>>
 }

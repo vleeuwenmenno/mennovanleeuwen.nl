@@ -7,7 +7,7 @@
 
 import { DOCTRINE, PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
-  FACTIONS, MODULE, MODULE_FX, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
+  FACTIONS, MODULE, MODULE_FX, moduleFits, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
   type FactionId, type ModuleId, type Tier, type UnitType, type Works,
 } from './data.ts'
 import { rng } from './maps.ts'
@@ -1416,6 +1416,7 @@ export function workLock(g: Galaxy, owner: number, planet: number, id: WorkId): 
   if (isYard(id) ? p.base.yards[id] === 'up' : p.base.mods.includes(id)) return 'Already built'
   if (queued(id)) return 'Already being built'
   if (!isYard(id)) {
+    if (!moduleFits(id, g.sides[owner].faction)) return `The ${FACTIONS[g.sides[owner].faction].name} has no use for it`
     const on = MODULE[id].on
     if (!worksUp(p, on)) return queued(on) ? `Needs the ${WORKS_NAME[on]}: wait for it` : `Needs a ${WORKS_NAME[on]} here`
   }

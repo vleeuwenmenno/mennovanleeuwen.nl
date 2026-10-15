@@ -3,7 +3,7 @@ import { battleLayout, type LayoutStore } from './layout'
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
-  abilityOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
@@ -416,7 +416,7 @@ function SiteUpgrades({ w, me, u, onUpgrade, onCancel }: { w: World; me: Owner; 
   return (
     <div className="ew-siteupg">
       <div>
-        {SITE_UPGRADES.map((up) => {
+        {SITE_UPGRADES.map((x) => siteUpgradeOf(x.id, u.t.faction)).map((up) => {
           const have = u.upg[up.id] ?? 0
           const next = siteUpgradeNext(u, up.id)
           const busy = u.upgrading?.id === up.id ? u.upgrading : null
@@ -1220,11 +1220,11 @@ function StationDetail(p: DetailProps & { st: Unit }) {
               { id: 'warships', group: 'units', label: 'Warships', badge: warships.length,
                 tip: w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.' },
               ...(w.hybrid ? [
-                { id: 'expansions', group: 'buildings' as const, label: 'Expansions', badge: `${st.xm?.length ?? 0}/${modulesFor('station').length}`, tip: 'Expansions: modules the Command Station builds onto itself, one at a time: a Strike hangar for bombers, a Sensor array and a Shield core.' },
+                { id: 'expansions', group: 'buildings' as const, label: 'Expansions', badge: `${st.xm?.length ?? 0}/${modulesFor('station', st.t.faction).length}`, tip: `Expansions: modules the Command Station builds onto itself, one at a time (${modulesFor('station', st.t.faction).map((m) => m.name).join(', ')}).` },
               ] : []),
             ]}
-            page={page} onPick={(id) => pick(id as typeof page)} badges={w.hybrid ? { buildings: `${st.xm?.length ?? 0}/${modulesFor('station').length}` } : {}}>
-            <div className="ew-yard" ref={grid} style={cardCols(page === 'expansions' ? modulesFor('station').length : page === 'warships' && w.hybrid && !ships.length ? 4 : ships.length)}>
+            page={page} onPick={(id) => pick(id as typeof page)} badges={w.hybrid ? { buildings: `${st.xm?.length ?? 0}/${modulesFor('station', st.t.faction).length}` } : {}}>
+            <div className="ew-yard" ref={grid} style={cardCols(page === 'expansions' ? modulesFor('station', st.t.faction).length : page === 'warships' && w.hybrid && !ships.length ? 4 : ships.length)}>
                 {/* No warships at the Command Station with hybrid bases: a ghost card points the way. */}
                 {page === 'warships' && w.hybrid && !ships.length && (
                   <GhostCard t={UNIT[unitOf(faction, 'frigate').id]} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
@@ -2233,7 +2233,7 @@ const crewName = (craft: number) => {
 export function YardCard({ w, me, t, crew, onPlace, onSelect, hint }: { w: World; me: Owner; t: UnitType; crew: number; onPlace: (unit: string) => void; onSelect: (id: number) => void; /** How to place one, for the tooltip. */ hint: string }) {
   const { ours, ruin, cost, locked, poor, why, secs } = yardOffer(w, me, t, crew)
   const state = ours ? (building(ours) ? `Going up: ${Math.round((1 - ours.building / ours.t.build) * 100)}%` : 'Built') : null
-  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station's build radius: ${t.build} s for one squadron, more go faster (up to ${ENGINEERS.crew / 3}). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}% (its expansions are lost with it).\nExpansions it takes: ${modulesFor(worksOf(t) ?? 'yard').map((m) => m.name).join(', ')}.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : `\n\n${hint}.`}`
+  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station's build radius: ${t.build} s for one squadron, more go faster (up to ${ENGINEERS.crew / 3}). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}% (its expansions are lost with it).\nExpansions it takes: ${modulesFor(worksOf(t) ?? 'yard', t.faction).map((m) => m.name).join(', ')}.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : `\n\n${hint}.`}`
   const lv = locked && why?.startsWith('Needs station level') ? `Lv ${t.level}` : 'Locked'
   return (
     <button className={`ew-shipcard ew-yardcard ${locked ? 'is-locked' : poor ? 'is-poor' : ''} ${ours ? 'is-built' : ''} ${ruin ? 'is-ruin' : ''}`} onClick={() => (ours ? onSelect(ours.id) : onPlace(t.id))} {...unitTip(t, ownerTag(w, me, me), tip)}>
@@ -2311,7 +2311,7 @@ export function ExpansionCards({ w, me, u, onExpand, onCancel }: { w: World; me:
   if (!kind) return null
   return (
     <>
-      {modulesFor(kind).map((m) => {
+      {modulesFor(kind, u.t.faction).map((m) => {
         const s = moduleState(w, me, u, m.id)
         const line =
           s.status === 'built' ? '✓ Built'
@@ -2431,11 +2431,11 @@ function YardDetail(p: DetailProps & { y: Unit }) {
               tabs={[
                 { id: 'ships', group: 'units', label: 'Warships', badge: ships.length,
                   tip: kind === 'cyard' ? 'Warships: cruisers, and flagships once the Capital slip stands (station level 4).' : 'Warships: frigates and corvettes.' },
-                { id: 'expansions', group: 'buildings', label: 'Expansions', badge: `${y.xm?.length ?? 0}/${modulesFor(kind).length}`,
-                  tip: `Expansions: modules the yard builds onto itself, one at a time (${modulesFor(kind).map((m) => m.name).join(', ')}).` },
+                { id: 'expansions', group: 'buildings', label: 'Expansions', badge: `${y.xm?.length ?? 0}/${modulesFor(kind, y.t.faction).length}`,
+                  tip: `Expansions: modules the yard builds onto itself, one at a time (${modulesFor(kind, y.t.faction).map((m) => m.name).join(', ')}).` },
               ]}
               page={page} onPick={(id) => pick(id as typeof page)}>
-              <div className="ew-yard" style={cardCols(page === 'expansions' ? modulesFor(kind).length : ships.length)}>
+              <div className="ew-yard" style={cardCols(page === 'expansions' ? modulesFor(kind, y.t.faction).length : ships.length)}>
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={y} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {page === 'ships' && ships.map((t) => (
                   <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, y.id)} whyReserve={cantBuild(w, me, t.id, true, y.id)} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}

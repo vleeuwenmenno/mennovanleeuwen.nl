@@ -231,6 +231,11 @@ export const SWARM: FactionData = {
       weapon: { laser: 'Barbs', turbo: 'Tendril lance', flak: 'Acid spray', missile: 'Spores', ion: 'Ion organ' },
       mount: { turbo: 'Tendril lance', flak: 'Acid sprayer', missile: 'Spore cannon', ion: 'Ion organ' },
       part: { turret: 'Tendril lance', shield: 'Membrane', engine: 'Engine sac', hangar: 'Brood chamber', refinery: 'Digestive organ', dock: 'Regeneration pool', sensor: 'Sensory stalk', drill: 'Feeding maw' },
+      site: {
+        yield: { name: 'Deeper maws', blurb: 'This node feeds 30% more per level.' },
+        armor: { name: 'Chitin plating', blurb: 'This node and its organs take 50% more punishment.' },
+        shield: { name: 'Hardened carapace', blurb: 'Grows a thick carapace in place of a shield dome: this node gets 50% more hull, and it grows back twice as fast.' },
+      },
       ability: {
         repairSwarm: { name: 'Frenzied knitting', blurb: 'Its tissue knits furiously: it restores 30% of its hull over 10 s.' },
         tractor: { name: 'Tendril grip', blurb: 'Tendrils seize the enemy ships nearby: they crawl at a third of their speed for 7 s.' },

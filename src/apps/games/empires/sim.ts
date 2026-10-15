@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -1382,7 +1382,7 @@ export function cmdUpgradeSite(w: World, owner: Owner, unitId: number, id: SiteU
   const why = cantUpgradeSite(w, owner, u, id)
   if (why) return why
   const next = siteUpgradeNext(u!, id)!
-  const up = SITE_UPGRADES.find((x) => x.id === id)!
+  const up = siteUpgradeOf(id, w.players[owner].faction)
   spend(w, w.players[owner], next.cost, 'structures', `${up.name}${up.levels > 1 ? ` ${next.level}` : ''}: ${u!.t.name}`)
   u!.upgrading = { id, left: next.time, total: next.time }
   return null
@@ -1392,7 +1392,7 @@ export function cmdUpgradeSite(w: World, owner: Owner, unitId: number, id: SiteU
 export function cmdCancelSiteUpgrade(w: World, owner: Owner, unitId: number): string | null {
   const u = w.byId.get(unitId)
   if (!u || u.dead || u.owner !== owner || !u.upgrading) return 'Nothing to cancel'
-  const up = SITE_UPGRADES.find((x) => x.id === u.upgrading!.id)!
+  const up = siteUpgradeOf(u.upgrading.id, w.players[owner].faction)
   const level = (u.upg[up.id] ?? 0) + 1
   cancelUpgrade(w, w.players[owner], up.cost[level - 1], 'structures', `${up.name}${up.levels > 1 ? ` ${level}` : ''}: ${u.t.name}`)
   u.upgrading = null
@@ -2524,6 +2524,7 @@ export function moduleLock(w: World, owner: Owner, u: Unit | undefined, id: Modu
   const m = MODULE[id]
   if (!w.hybrid || w.fleet) return 'No expansions in this battle'
   if (!m) return 'Unknown expansion'
+  if (!moduleFits(id, w.players[owner].faction)) return `The ${FACTIONS[w.players[owner].faction].name} has no use for it`
   if (!u || u.dead || u.owner !== owner || worksOf(u.t) !== m.on) return `It goes on our ${WORKS_NAME[m.on]}`
   if (u.site || building(u)) return 'Still under construction'
   if (u.xm?.includes(id)) return 'Already built'

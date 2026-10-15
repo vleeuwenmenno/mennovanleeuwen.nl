@@ -144,7 +144,7 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
 function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Works; w: World; me: Owner; hud: Hud; faction: FactionId; onExpand: (uid: number, id: ModuleId) => void; onCancel: (uid: number, index: number) => void }) {
   const art = unitArt
   const press = useCancelPress()
-  const mods = modulesFor(kind)
+  const mods = modulesFor(kind, faction)
   const t = kind === 'station' ? unitOf(faction, 'station') : yardOf(faction, kind)
   const u = kind === 'station' ? w.byId.get(w.players[me].station) : w.units.find((x) => !x.dead && x.owner === me && x.t.id === t.id)
   const head = kind === 'station' ? `Level ${hud.level} of ${MAX_LEVEL}` : !u ? (t.level > hud.level ? `Needs station level ${t.level}` : 'Not built yet: engineers build it') : u.site ? 'Going up' : 'Built'
