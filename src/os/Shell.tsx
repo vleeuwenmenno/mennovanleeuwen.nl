@@ -12,6 +12,7 @@ import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
 import { setOverlay, toggleOverlay, useOverlay } from './overlays'
+import { spotlightPrefs, useSpotlightPrefs } from '../data/spotlightPrefs'
 import { Spotlight } from './Spotlight'
 import { useSnapPreview } from './snapPreview'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs'
@@ -125,6 +126,7 @@ function TopBar() {
   const wm = useWM()
   const recents = useRecents()
   const theme = useTheme()
+  const ctrlSpace = useSpotlightPrefs().ctrlSpace
   // Workspaces, like Omarchy's bar: 1 to 5 always, and any later one that has windows on it.
   const onWs = (n: number) => wm.windows.filter((w) => workspaceOf(w) === n).sort((a, b) => a.pid - b.pid)
   const occupied = new Set(wm.windows.map(workspaceOf).filter((n): n is number => n !== null))
@@ -134,8 +136,8 @@ function TopBar() {
   const mine = wm.windows.filter((w) => wm.shown(w))
   // The bar's own menu, for its background and anything on it without a menu of its own.
   const barMenu = (): MenuItem[] => [
-    { label: 'Search…', shortcut: 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
-    { label: 'All apps', shortcut: 'Ctrl Space', onSelect: () => toggleOverlay('launchpad') },
+    { label: 'Search…', shortcut: ctrlSpace === 'spotlight' ? 'Ctrl Space' : 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
+    { label: 'All apps', shortcut: ctrlSpace === 'spotlight' ? 'Ctrl K' : 'Ctrl Space', onSelect: () => toggleOverlay('launchpad') },
     { label: 'Show desktop', disabled: !mine.some((w) => !w.minimized), onSelect: () => mine.forEach((w) => wm.minimize(w.pid)) },
     { separator: true },
     { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
@@ -186,7 +188,7 @@ function TopBar() {
       </div>
       <ClockWidget />
       <div className="topbar-right">
-        <button className="tb-icon" onClick={() => toggleOverlay('spotlight')} title="Search (Ctrl+K)" aria-label="Search">
+        <button className="tb-icon" onClick={() => toggleOverlay('spotlight')} title={ctrlSpace === 'spotlight' ? 'Search (Ctrl+Space)' : 'Search (Ctrl+K)'} aria-label="Search">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
             <circle cx="11" cy="11" r="7" />
             <path d="M20 20l-3.5-3.5" />
@@ -879,18 +881,21 @@ export function Shell() {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [power.phase, wm])
 
-  // Ctrl+K / Cmd+K opens Spotlight; Ctrl+Space toggles All apps. Both from anywhere, including
-  // inside the terminal. Ctrl+Space is best-effort: some OSes and IMEs keep it and the page never
-  // sees it (same idea as Super for workspaces).
+  // By default Ctrl+Space toggles Spotlight and Ctrl+K / Cmd+K toggles All apps. Settings →
+  // Spotlight can point Ctrl+Space at All apps, which gives Ctrl+K back to Spotlight. Both from
+  // anywhere, including the terminal. Ctrl+Space is best-effort: some OSes and IMEs keep it and
+  // the page never sees it (same idea as Super for workspaces). Read when the key arrives, so a
+  // change in Settings applies at once.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (power.phase !== 'up') return
+      const spaceOpensSpotlight = spotlightPrefs().ctrlSpace !== 'launchpad'
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        toggleOverlay('spotlight')
+        toggleOverlay(spaceOpensSpotlight ? 'launchpad' : 'spotlight')
       } else if (e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'Space') {
         e.preventDefault()
-        toggleOverlay('launchpad')
+        toggleOverlay(spaceOpensSpotlight ? 'spotlight' : 'launchpad')
       } else if (e.key === 'Escape' && overlay) setOverlay(null)
     }
     window.addEventListener('keydown', onKey)

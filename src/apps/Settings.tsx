@@ -9,7 +9,7 @@ import { HOME_CURRENCIES, setHomeCurrency, useHomeCurrency } from '../data/curre
 import { clearVisits, useVisits } from '../data/siteHistory'
 import { clearHits, useRecentHits } from '../data/spotlightRecent'
 import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
-import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { ANSWERS_KEEP, CATEGORIES, CTRL_SPACE, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
 import { clearQuick } from '../data/agents'
 import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, moveLauncher, posixPath, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
@@ -1602,6 +1602,20 @@ function SpotlightSettings() {
   ]
   return (
     <>
+      <SetGroup title="Ctrl+Space opens">
+        <div className="seg set-seg" role="radiogroup" aria-label="Ctrl+Space opens">
+          {CTRL_SPACE.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={prefs.ctrlSpace === id} className={prefs.ctrlSpace === id ? 'is-active' : ''} onClick={() => setSpotlightPrefs({ ctrlSpace: id })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">
+          {prefs.ctrlSpace === 'spotlight'
+            ? 'Ctrl+Space opens Spotlight. Ctrl+K and Cmd+K open All apps.'
+            : 'Ctrl+Space opens All apps. Ctrl+K and Cmd+K open Spotlight.'}
+        </p>
+      </SetGroup>
       <SetGroup title="When Spotlight opens, show">
         {START_SECTIONS.filter(([id]) => agents || id !== 'answers').map(([id, label, hint]) => (
           <label key={id} className="set-check">
@@ -1996,7 +2010,7 @@ const GROUPS: Group[] = [
   },
   {
     panes: [
-      { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
+      { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred ctrl space shortcut keyboard all apps launchpad', blurb: 'What Spotlight shows when it opens, what it searches, what it remembers, and what Ctrl+Space opens.', render: () => <SpotlightSettings /> },
       { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page drag move resize modifier key ctrl alt hyprland corner mouse', blurb: 'What the desktop shows when MvL OS opens again, one workspace per browser tab, and dragging windows with a key.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
       { id: 'language', label: 'Language & region', hue: 'var(--magenta)', icon: svg(<><path d="M4 6h9M8.5 3v3M6 6c.5 3 3 5.5 6 6.5M12 6c-.5 3-3 5.5-6 6.5" /><path d="M13 20l3.5-8 3.5 8M14.3 17h4.4" /></>), keywords: 'language region furigana ruby reading readings kanji japanese hiragana hover show hide size small medium large bigger currency home money exchange rate euro dollar yen', blurb: 'Furigana, the readings above Japanese characters, and your home currency.', render: () => <LanguagePane /> },
