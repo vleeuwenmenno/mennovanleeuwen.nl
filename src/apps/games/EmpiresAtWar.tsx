@@ -4,7 +4,7 @@ import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Bra
 import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
 import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
-import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
+import { BattleMenu, HowToPlay, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type SettingsTab, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
 import { Net, REJOIN_WAIT, awayBattle, battleToRejoin, type NetView } from './empires/net'
@@ -526,7 +526,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts] = useState(() => new ToastStore())
-  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, draw: null as 'line' | 'face' | null, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false, gift: false })
+  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, draw: null as 'line' | 'face' | null, menu: false, panel: null as 'settings' | 'howto' | null, settingsTab: 'sound' as SettingsTab, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false, gift: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -2342,7 +2342,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     setUi((u) => {
       if (!u.menu && !u.panel) pausedBefore.current = paused.current
       paused.current = !online
-      return { ...u, paused: !online, menu: panel ? u.menu : true, panel }
+      // Key bindings are a tab of Settings now; asking for them opens that tab.
+      const settings = panel === 'settings' || panel === 'keys'
+      return { ...u, paused: !online, menu: panel ? u.menu : true, panel: settings ? 'settings' : panel, settingsTab: panel === 'keys' ? 'keys' : panel === 'settings' ? 'sound' : u.settingsTab }
     })
   }
   // Settings → Apps → Games asked for the game's settings or key bindings.
@@ -2788,13 +2790,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest || online ? undefined : onAgain} onExit={exit} campaign={!!conquest} online={!!online} />
         )}
         {ui.panel === 'settings' && (
-          <Modal title="Settings" onClose={closeMenu}>
-            <SettingsPanel sound={sound} />
-          </Modal>
-        )}
-        {ui.panel === 'keys' && (
-          <Modal title="Keybinds" onClose={closeMenu} wide>
-            <KeybindsPanel />
+          <Modal title="Settings" onClose={closeMenu} className="is-settings">
+            <SettingsPanel sound={sound} initial={ui.settingsTab} />
           </Modal>
         )}
         {ui.panel === 'howto' && (

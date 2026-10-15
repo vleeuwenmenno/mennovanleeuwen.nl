@@ -65,6 +65,11 @@
     min-height: 36px;
     padding: 6px 10px;
   }
+  .ew-root.ew-deck .ew-set-tabs button {
+    min-height: 40px;
+    padding: 8px 14px;
+    font-size: 12px;
+  }
 
   /* A browser zooms the page into a box whose text is under 16px when it's focused. */
   .ew-root.ew-deck.ew-lobby select,
@@ -182,11 +187,6 @@
       display: inline;
     }
   }
-}
-
-/* The battle menu without its Keybinds button (fingers have no keys to bind). */
-.ew-root .ew-bm-panels.is-touch {
-  grid-template-columns: 1fr 1fr;
 }
 
 /* The editable map in the lobby, while a finger isn't drawing on it: swipes scroll the page. */

@@ -535,8 +535,8 @@ integration (*Accounts for Calendar are linked in Integrations*, or *Link a cale
 started* when there is none). The Apps panes are Agents, Calendar (which calendars show, which are hidden everywhere, the view it
 opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar, preview pane), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
-camera and a summary of its key bindings, with a button into the game's own key bindings and sound
-mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
+camera and a summary of its key bindings, with a button into the game's Settings on the Keybinds
+tab and another for the sound mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
 night mode), Preview (sidebar) and Terminal. Each pane reads and writes the very store the app uses
 ([`src/data/appPrefs.ts`](src/data/appPrefs.ts), [`src/apps/games/prefs.ts`](src/apps/games/prefs.ts),
 through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this browser), so an open
@@ -2519,8 +2519,8 @@ touch bar: tap to select, double-tap to look, long-press for Set to selection, A
 Clear group, and "+ Group" saves the selection as the next free group.
 - They are the player's own view, never orders: they never go through the lockstep protocol, units
   that die or change hands drop out, and a saved battle keeps them with the selection.
-- The group keys and both modifiers are in Keybinds (Ctrl, Shift or Ctrl+Shift; picking the other's
-  modifier swaps them). Alt is never one: the OS uses Alt+number for workspaces.
+- The group keys and both modifiers are in Settings, on the Keybinds tab (Ctrl, Shift or Ctrl+Shift;
+  picking the other's modifier swaps them). Alt is never one: the OS uses Alt+number for workspaces.
 - Ctrl+number is also the browser's tab switch. The battle takes the key press (`preventDefault`),
   which stops Chromium switching tabs (Firefox on Linux uses Alt+number for tabs, so Ctrl+number
   reaches the page anyway); in the browser's own fullscreen the number keys are also locked to the
@@ -2544,11 +2544,17 @@ pnpm check:empires-groups   # set, add, select, dead units dropping out, the bar
 pnpm check:empires-allies   # the sim's rules and the AI, then a 2 v 2 on a real server: a gift in sync, refusals, a burst, repair orders on enemies refused
 ```
 
+The game's Settings (main menu, and the battle menu) are tabbed: Sound, Controls, Camera, Gameplay,
+Keybinds and Multiplayer. Controls is edge scrolling, Camera is how fast the view scrolls, and
+Gameplay is the battlefield and the shipyard. Key bindings live on the Keybinds tab, not as their
+own item on the main menu. How to play is off the main menu for now; the battle menu still opens it.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),
 and mouse and keyboard play is unchanged: every touch path checks `pointerType === 'touch'` or the
-`(pointer: coarse)` media query.
+`(pointer: coarse)` media query. Settings hides Controls, Camera and Keybinds there: a finger drags
+the view and has no keys to bind.
 - **Gestures:** tap to select, drag to pan, pinch to zoom, and double-tap a ship for all of its
   kind on screen.
 - **Action wheel:** a long press opens a radial wheel of context actions. In battle: move,
@@ -2573,7 +2579,7 @@ signed-in user's GitHub login is theirs alone. The game remembers the last name 
 takes it by itself when you come back, straight to the list of battles; on a device that hasn't
 loaded the account's copy yet, it waits for it rather than asking. If someone online has the name
 right now, the name screen says so, with the name filled in to try again. *Change* in the
-multiplayer header renames you at once; the game's Settings (and Settings → Apps → Empires At War)
+multiplayer header renames you at once; the game's Settings, on the Multiplayer tab (and Settings → Apps → Empires At War)
 show the remembered name, to change it for next time or *Forget* it, so the next visit asks. A
 host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI (with its difficulty and style) or closed); players join from the list, pick their spawn,
