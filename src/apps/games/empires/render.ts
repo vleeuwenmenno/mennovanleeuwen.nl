@@ -1103,11 +1103,14 @@ export class Renderer {
         // Follow the way round the rocks (and fields and nebulas) when there is one, as a smooth
         // curve rather than corners: each waypoint pulls the line towards it, the line passing
         // halfway between them.
-        const route = u.route && u.route.x === o.x && u.route.y === o.y ? u.route.pts : []
-        const pts = [{ x: u.x, y: u.y }, ...route.filter((pt) => pt.x !== o.x || pt.y !== o.y), { x: o.x, y: o.y }]
+        const mine = u.route && u.route.x === o.x && u.route.y === o.y ? u.route : null
+        const route = mine?.pts ?? []
+        // Somewhere rocks wall in: the line ends where the ship will stop, as near as it gets.
+        const end = mine?.short && route.length ? route[route.length - 1] : { x: o.x, y: o.y }
+        const pts = [{ x: u.x, y: u.y }, ...route.filter((pt) => pt.x !== end.x || pt.y !== end.y), end]
         ctx.moveTo(pts[0].x, pts[0].y)
         for (let i = 1; i < pts.length - 1; i++) ctx.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2)
-        ctx.lineTo(o.x, o.y)
+        ctx.lineTo(end.x, end.y)
         ctx.stroke()
         // Its own spot, and a tick the way it will face there.
         ctx.fillStyle = ctx.strokeStyle

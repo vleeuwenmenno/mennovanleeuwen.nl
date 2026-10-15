@@ -38,6 +38,7 @@
     "check:empires-heal": "node scripts/empires-heal.ts",
     "check:empires-groups": "node scripts/empires-groups.ts",
     "check:empires-launch": "node scripts/empires-launch.ts",
+    "check:empires-nav": "node scripts/empires-nav.ts",
     "check:empires-panels": "node scripts/empires-panel-fit.ts",
     "check:empires-gui-fit": "node scripts/empires-gui-fit.ts",
     "check:empires-mechanics": "node scripts/empires-mechanics.ts",
