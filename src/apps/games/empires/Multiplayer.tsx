@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { DIFFICULTY, PROFILES, profileOf } from './ai'
-import { CREDIT_STEPS, FACTIONS } from './data'
-import { usePickable } from './factions'
+import { CREDIT_STEPS, FACTION_IDS, FACTIONS } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
 import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, ReinforceOptions, mapSize, slotColor, type Slot } from './Menus'
@@ -424,8 +423,7 @@ function SlotRow({ s, i, color, me, mine, host, isHost, myTeam, onSlot, onSeat }
   const canFaction = mine || (host && s.kind === 'ai')
   const canTeam = mine || (host && filled)
   const side = s.team === myTeam ? (mine ? 'Your team' : 'Ally') : 'Enemy'
-  // Every faction (bar a preview's, see factions.ts), and the one this seat has, whoever set it.
-  const factions = usePickable([s.faction])
+  const factions = FACTION_IDS
   let who: ReactNode
   if (s.kind === 'human' && (mine || !host)) who = (
       <strong className="ew-slotwho ew-mp-who" title={s.player === me ? `${s.name} (you)` : s.name}>
@@ -460,7 +458,7 @@ function SlotRow({ s, i, color, me, mine, host, isHost, myTeam, onSlot, onSeat }
         <>
           <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
             {factions.map((f) => (
-              <button key={f} className={s.faction === f ? 'is-on' : ''} disabled={!canFaction && s.faction !== f} onClick={() => canFaction && onSlot(i, { faction: f })} data-tip={FACTIONS[f].preview ? `${FACTIONS[f].long} (preview)` : FACTIONS[f].long} aria-label={FACTIONS[f].name} aria-pressed={s.faction === f}>
+              <button key={f} className={s.faction === f ? 'is-on' : ''} disabled={!canFaction && s.faction !== f} onClick={() => canFaction && onSlot(i, { faction: f })} data-tip={FACTIONS[f].long} aria-label={FACTIONS[f].name} aria-pressed={s.faction === f}>
                 <img src={FACTIONS[f].emblem} alt="" />
                 <span>{FACTIONS[f].name}</span>
               </button>

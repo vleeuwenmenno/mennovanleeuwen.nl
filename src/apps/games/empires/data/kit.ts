@@ -259,8 +259,6 @@ export type FactionInfo = {
    * sound (its crews' voices, its guns, its hits and deaths) is its sound set, picked by faction id
    * in sound.ts (SET); `voice` and `blaster` are from before the sets and no longer read. */
   sound: { voice?: 'crew' | 'droid'; blaster?: 'clone' | 'droid'; turbo: number }
-  /** Still being made: only offered where the Swarm preview is on (see factions.ts). */
-  preview?: boolean
 }
 
 /**

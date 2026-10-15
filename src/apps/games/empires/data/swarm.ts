@@ -226,7 +226,6 @@ export const SWARM: FactionData = {
     emblem: '/games/empires/world/emblem-swarm.webp',
     rival: 'republic',
     sound: { voice: 'droid', blaster: 'droid', turbo: 0.8 },
-    preview: true,
   },
   ships: [
     {

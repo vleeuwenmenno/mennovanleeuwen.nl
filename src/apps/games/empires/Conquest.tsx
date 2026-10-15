@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { FACTION_IDS, FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, buildWork, cantRushAt, queueShare, rushIntoBattle, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
@@ -8,7 +8,6 @@ import {
   type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
 import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
-import { usePickable } from './factions'
 import { HP_COLOR } from './icons'
 import { resultOf } from './result'
 import { FleetInventory } from './Inventory'
@@ -264,8 +263,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   // The AI's side: picked, or (null) the player's side's usual rival. Never the player's own.
   const [rivalPick, setRival] = useState<FactionId | null>(null)
   const rival = rivalOf({ faction, rival: rivalPick ?? undefined })
-  // The sides to pick from (a preview's only with the preview on, see factions.ts).
-  const sides = usePickable([faction, rival])
+  const sides = FACTION_IDS
   const [difficulty, setDifficulty] = useState<Difficulty>('easy')
   const [credits, setCredits] = useState(3000)
   const [name, setName] = useState('')

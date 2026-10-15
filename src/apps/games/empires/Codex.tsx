@@ -1,11 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ABILITIES, FACTION_IDS, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, traits, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { clampToViewport, screenArea } from './fit'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
 import { BREAK_WEIGHTS, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
-import { usePickable } from './factions.ts'
 import { ModelFx } from './models/fx.ts'
 import { LIGHT } from './models/kit.ts'
 import { PALETTES } from './models/palettes.ts'
@@ -127,14 +126,12 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
     </div>
   )
   const ship = isShip(t)
-  const preview = !!FACTIONS[t.faction].preview
   return (
     <div className="ew-cx-stats">
       <header>
         <h3 style={{ color: FACTIONS[t.faction].color }}>{t.name}</h3>
         {role && <em>{role.role}</em>}
       </header>
-      {preview && <p className="ew-cx-concept ew-small">{FACTIONS[t.faction].name} preview: still being made. Its numbers are placeholders (the Confederacy unit's in the same slot).</p>}
       {selected && <ModuleCard t={t} model={model} sel={selected} dmg={dmg} onClear={() => onSelect(null)} />}
       <p className="ew-muted">{t.blurb}</p>
       <div className="ew-cx-grid">
@@ -810,11 +807,10 @@ export function Codex({ sound, onClose }: { sound: EmpiresSound; onClose: () => 
 }
 
 function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => void }) {
-  // The tabs: one per faction (the Swarm only with its preview on, see factions.ts).
+  // The tabs: one per faction.
   const [side, setSide] = useState<FactionId>('republic')
-  const sides = usePickable([side])
+  const sides = FACTION_IDS
   const faction: FactionId = side
-  const preview = !!FACTIONS[faction].preview
   const list = useMemo(() => UNITS.filter((u) => u.faction === faction), [faction])
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
@@ -929,9 +925,8 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         <h2>Codex</h2>
         <div className="ew-seg" role="group" aria-label="Side">
           {sides.map((f) => (
-            <button key={f} className={side === f ? 'is-on' : ''} onClick={click(() => setSide(f))} data-tip={FACTIONS[f].preview ? `${FACTIONS[f].name} (preview): still being made, placeholder numbers` : undefined}>
+            <button key={f} className={side === f ? 'is-on' : ''} onClick={click(() => setSide(f))}>
               {FACTIONS[f].name}
-              {FACTIONS[f].preview && <small> (preview)</small>}
             </button>
           ))}
         </div>
@@ -948,11 +943,6 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
       <div className="ew-cx-body">
         {sizes && <SizeStrip faction={faction} onClose={() => setSizes(false)} />}
         <nav className="ew-cx-nav" aria-label="Units">
-          {preview && (
-            <p className="ew-cx-concept ew-small">
-              <b>{FACTIONS[faction].name} (preview)</b> · still being made: placeholder numbers (the Confederacy's), and models from its concept designs where there are any.
-            </p>
-          )}
           {TIER_GROUPS.map((grp) => {
             const units = list.filter((u) => grp.tiers.includes(u.tier))
             if (!units.length) return null
