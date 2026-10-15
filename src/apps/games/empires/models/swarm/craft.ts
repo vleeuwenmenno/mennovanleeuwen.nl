@@ -15,10 +15,10 @@ import { engineSac } from './mounts.ts'
 
 /** A smooth band along a curve through `pts`, `w0` thick at its start tapering to `w1`: a claw, a
  * limb, a tendril, a blade. */
-export const band = (pts: Pt[], w0: number, w1: number, n = 4): Pt[] => thick(spline(pts, n), w0, w1)
+export const band = (pts: Pt[], w0: number, w1: number, n = 3): Pt[] => thick(spline(pts, n), w0, w1)
 
 /** A closed organic outline through control points. */
-export const blobby = (pts: Pt[], n = 4) => spline(pts, n, true)
+export const blobby = (pts: Pt[], n = 3) => spline(pts, n, true)
 
 /** A chitin plate: a raised part lit as it faces, with its outline. */
 export const plate = (id: string, pts: Pt[], tone: Tone, z: number, slope: Pt, more: Partial<Part> = {}): Part =>
@@ -31,7 +31,7 @@ export const plate = (id: string, pts: Pt[], tone: Tone, z: number, slope: Pt, m
  * make the Swarm's layered, claw-like silhouettes.
  */
 export function blade(id: string, pts: Pt[], w: number, tone: Tone, z: number, slope: Pt, more: Partial<Part> = {}, edge = true): Part {
-  const curve = spline(pts, 5)
+  const curve = spline(pts, 3)
   const seam = curve.slice(1, Math.ceil(curve.length * 0.75))
   const details: Detail[] = [{ k: 'line', pts: seam, minPx: 120 }]
   if (edge) details.push({ k: 'shape', pts: thick(curve.slice(0, Math.ceil(curve.length * 0.85)).map(([x, y]) => [x + slope[0] * w * 0.42, y + slope[1] * w * 0.42] as Pt), w * 0.16, w * 0.03), tone: 'accent', minPx: 70 })
