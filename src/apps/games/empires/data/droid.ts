@@ -160,13 +160,13 @@ export const DROID: FactionData = {
   ships: [
     {
       id: 'd-fighter', faction: 'droid', tier: 'fighter', name: 'Talon interceptor', blurb: 'Fork-nosed interceptors, three to a squadron. The fastest strike craft in the sky: hard-hitting cannons and torpedoes, and no shields at all.',
-      sprite: 'droid-fighter', aspect: 0.8, size: 28, hull: 56, shield: 0, regen: 0, speed: 300, turn: 4.6, pop: 1, cost: 250, build: 9, level: 1, squad: 3, sensor: 680,
+      sprite: 'droid-fighter', aspect: 0.8, size: 28, hull: 60, shield: 0, regen: 0, speed: 300, turn: 4.6, pop: 1, cost: 250, build: 9, level: 1, squad: 3, sensor: 680,
       weapons: [laser(7.5, 230, 0.42), torpedo(24, 260)], hardpoints: [], engines: [[5, 9.4]],
     },
     {
       id: 'd-gunship', faction: 'droid', tier: 'gunship', name: 'Raptor gunship', blurb: 'A forward weapon platform: flak against fighters, and a missile rack up front that slips past shields. Fast, thinly shielded.',
-      sprite: 'droid-gunship', aspect: 0.95, size: 64, hull: 330, shield: 60, regen: 4, speed: 188, turn: 2.7, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 800,
-      weapons: [flak(6.5, 290, 0.28), missile(30, 420, 3.6)], hardpoints: [], engines: [[3.6, 9.4], [6.4, 9.4]],
+      sprite: 'droid-gunship', aspect: 0.95, size: 64, hull: 350, shield: 60, regen: 4, speed: 188, turn: 2.7, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 800,
+      weapons: [flak(6.5, 290, 0.28), missile(32, 420, 3.6)], hardpoints: [], engines: [[3.6, 9.4], [6.4, 9.4]],
     },
     {
       id: 'd-corvette', faction: 'droid', tier: 'gunship', kind: 'support', name: 'Reclaimer corvette', blurb: 'A salvage tender: its crane crews patch up nearby ships from scrap. Slower work than a Republic tender, and lightly armed; keep it behind the line.',
@@ -215,7 +215,7 @@ export const DROID: FactionData = {
     },
     {
       id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Lancer frigate', blurb: 'A split-bow escort: a dual cannon on each boom for concentrated fire, flak aft. Overcharge its cannons for a killing broadside.',
-      sprite: 'droid-frigate', aspect: 0.5, size: 135, hull: 950, shield: 380, regen: 8, speed: 84, turn: 1.1, pop: 3, cost: 780, build: 21, level: 2, squad: 1, sensor: 980,
+      sprite: 'droid-frigate', aspect: 0.5, size: 135, hull: 1000, shield: 400, regen: 8, speed: 84, turn: 1.1, pop: 3, cost: 780, build: 21, level: 2, squad: 1, sensor: 980,
       weapons: [],
       hardpoints: [
         gun('turbo', LANCER[0].x, LANCER[0].y, 0.07, 260, turbo(22, 540, 1.8, 2)), gun('turbo', LANCER[1].x, LANCER[1].y, 0.07, 260, turbo(22, 540, 1.8, 2)),
