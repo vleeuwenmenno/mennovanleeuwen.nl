@@ -81,6 +81,11 @@ export const MENDABLE: Tier[] = ['gunship', 'frigate', 'cruiser', 'capital', 'st
 /** How each faction looks and sounds outside its models (see FactionInfo): its name, colours,
  * emblem, voices, the letter its ids start with and its usual rival. */
 export const FACTIONS: Record<FactionId, FactionInfo> = byFaction((k) => k.info)
+/** An ability as faction `f` names it (FactionInfo `names`): the same ability under its own words. */
+export function abilityOf(id: AbilityId, f: FactionId): Ability {
+  const own = FACTIONS[f].names?.ability?.[id]
+  return own ? { ...ABILITIES[id], name: own.name, blurb: own.blurb ?? ABILITIES[id].blurb } : ABILITIES[id]
+}
 /** The letter a faction's unit and research ids start with: r-fighter, d-st-guns, s-capital. */
 export const prefixOf = (faction: FactionId) => FACTIONS[faction].prefix
 
@@ -268,6 +273,12 @@ export function yardType(id: string, mods: readonly ModuleId[]): UnitType {
 
 /** Each faction's Command Station, at every level (see StationPlan in data/kit.ts). */
 export const STATIONS: Record<FactionId, StationPlan> = byFaction((k) => k.station)
+
+/** What faction `f`'s station goes by at `level` (StationPlan stages): Hive Seed, Dominion Warbase. */
+export const stageName = (f: FactionId, level: number) => {
+  const st = STATIONS[f].stages
+  return st[Math.max(1, Math.min(st.length, level)) - 1].name
+}
 
 const stationCache = new Map<string, UnitType>()
 /** A station as it stands at `level` with `techs` researched: its stage's look, size and hull, and

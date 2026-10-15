@@ -3,7 +3,7 @@ import { battleLayout, type LayoutStore } from './layout'
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
-  ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  abilityOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
@@ -30,6 +30,8 @@ export type Hud = {
   income: number
   pop: number
   popCap: number
+  /** Our faction, and our station's level. */
+  faction: FactionId
   level: number
   research: ResearchItem[]
   techs: string[]
@@ -365,7 +367,7 @@ export function Schematic({ u, size = 116, tip }: { u: Unit; size?: number; tip?
               key={i}
               className={`ew-schem-hp ${s.hp <= 0 ? 'is-dead' : ''}`}
               style={{ left: `${p.x * 10}%`, top: `${p.y * 10}%`, ['--c' as string]: HP_COLOR[p.kind], ['--f' as string]: `${(s.hp / s.max) * 360}deg` }}
-              data-tip={`${hpName(p)}: ${s.hp <= 0 ? 'destroyed' : `${fmt(s.hp)} / ${fmt(s.max)}`}`}
+              data-tip={`${hpName(p, t.faction)}: ${s.hp <= 0 ? 'destroyed' : `${fmt(s.hp)} / ${fmt(s.max)}`}`}
             >
               <HpIcon kind={p.kind} size={9} />
             </span>
@@ -459,7 +461,7 @@ function FocusInfo({ w, u, pick, onClear, quiet = false }: { w: World; u: Unit; 
       ) : (
         <span className="ew-muted">Guns choose their own targets. Right-click an enemy to focus them{picked ? '' : '; click one gun first to aim just that one'}.</span>
       )}
-      {picked && <span className="ew-focus-pick">{hpName(picked)} picked: right-click an enemy to aim it.</span>}
+      {picked && <span className="ew-focus-pick">{hpName(picked, u.t.faction)} picked: right-click an enemy to aim it.</span>}
     </div>
   )
 }
@@ -485,11 +487,11 @@ function RepairButton({ w, me, u, onRepair }: { w: World; me: Owner; u: Unit; on
 /** Hardpoints counted by kind: "5/6" next to a turret icon. */
 function HpSummary({ u }: { u: Unit }) {
   // By name, so point defence and turbolasers count apart.
-  const names = [...new Set(u.t.hardpoints.map(hpName))]
+  const names = [...new Set(u.t.hardpoints.map((h) => hpName(h, u.t.faction)))]
   return (
     <div className="ew-hpsum">
       {names.map((n) => {
-        const all = u.t.hardpoints.map((h, i) => (hpName(h) === n ? i : -1)).filter((i) => i >= 0)
+        const all = u.t.hardpoints.map((h, i) => (hpName(h, u.t.faction) === n ? i : -1)).filter((i) => i >= 0)
         const up = all.filter((i) => u.hps[i].hp > 0).length
         const k = u.t.hardpoints[all[0]].kind
         // A rush-launched ship's parts not yet installed.
@@ -634,7 +636,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           )
         })}
         <button className={`ew-top-cell ew-jobbtn ${r ? 'is-busy' : ''}`} onClick={onTechTree} aria-label="Tech tree"
-          data-tip={r ? `Research: ${researchName(r.id, hud.level)}, ${Math.ceil(r.left)} s left${hud.research.length > 1 ? `, ${hud.research.length - 1} more queued` : ''}.\nClick for the tech tree (${keyName(keys.techTree)}).` : `Research idle.\nClick for the tech tree (${keyName(keys.techTree)}).`}>
+          data-tip={r ? `Research: ${researchName(r.id, hud.level, hud.faction)}, ${Math.ceil(r.left)} s left${hud.research.length > 1 ? `, ${hud.research.length - 1} more queued` : ''}.\nClick for the tech tree (${keyName(keys.techTree)}).` : `Research idle.\nClick for the tech tree (${keyName(keys.techTree)}).`}>
           <Icon name="tree" size={18} />
           {hud.research.length > 0 && <em>{hud.research.length}</em>}
           {r && <i style={{ transform: `scaleX(${1 - r.left / r.total})` }} />}
@@ -929,9 +931,9 @@ export function DetailPanel(p: DetailProps) {
   return <GroupDetail {...p} />
 }
 
-export function Pips({ level }: { level: number }) {
+export function Pips({ level, faction }: { level: number; faction?: FactionId }) {
   return (
-    <span className="ew-pips" data-tip={`Station level ${level} of ${MAX_LEVEL}`}>
+    <span className="ew-pips" data-tip={`${faction ? `${stageName(faction, level)}: s` : 'S'}tation level ${level} of ${MAX_LEVEL}`}>
       {Array.from({ length: MAX_LEVEL }, (_, i) => (
         <i key={i} className={i < level ? 'is-on' : ''} />
       ))}
@@ -939,7 +941,8 @@ export function Pips({ level }: { level: number }) {
   )
 }
 
-export const researchName = (id: string, level: number) => (id === LEVEL_UP ? `Station level ${level + 1}` : TECH[id].name)
+/** A piece of research's name; a station level by the name the station goes by there. */
+export const researchName = (id: string, level: number, faction: FactionId) => (id === LEVEL_UP ? `Station level ${level + 1}: ${stageName(faction, level + 1)}` : TECH[id].name)
 
 /** The generated icon for a piece of research (or the one it borrows, Tech `icon`); every station level shares one. */
 export const techIconUrl = (id: string) => `/games/empires/tech/${id === LEVEL_UP ? 'level' : (TECH[id]?.icon ?? id)}.webp`
@@ -947,7 +950,7 @@ export const techIconUrl = (id: string) => `/games/empires/tech/${id === LEVEL_U
 /** What reaching a station level brings, for its tile in the tech tree. */
 export function levelBlurb(faction: FactionId, level: number) {
   const unlocks = buildable(faction).filter((u) => u.level === level)
-  return `More hull and firepower for the station, +4 fleet capacity${unlocks.length ? `, unlocks the ${unlocks.map((u) => u.name).join(', ')}` : ''}.`
+  return `It grows into the ${stageName(faction, level)}: more hull and firepower, +4 fleet capacity${unlocks.length ? `, unlocks the ${unlocks.map((u) => u.name).join(', ')}` : ''}.`
 }
 
 export type TechStatus = 'done' | 'busy' | 'queued' | 'ready' | 'poor' | 'locked'
@@ -1001,10 +1004,10 @@ function TechTile({ id, w, me, hud, onResearch, onCancel }: { id: string; w: Wor
       }}
       {...press.handlers(queued ? () => onCancel(s.slot) : null)}
       disabled={s.status === 'done'}
-      data-tip={`${researchName(id, hud.level)}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : queued ? `\n\n${CANCEL_TIP}` : ''}`}
+      data-tip={`${researchName(id, hud.level, hud.faction)}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : queued ? `\n\n${CANCEL_TIP}` : ''}`}
     >
       <TechIcon id={id} size={30} progress={s.progress} status={s.status} />
-      <strong>{researchName(id, hud.level)}</strong>
+      <strong>{researchName(id, hud.level, hud.faction)}</strong>
       <span>{line}</span>
     </button>
   )
@@ -1019,7 +1022,7 @@ function TechTreeButton({ hud, onOpen }: { hud: Hud; onOpen: () => void }) {
       {r ? <TechIcon id={r.id} size={30} progress={1 - r.left / r.total} status="busy" /> : <Icon name="tree" size={22} />}
       <span>
         <strong>Tech tree</strong>
-        <small>{r ? `${researchName(r.id, hud.level)}, ${Math.ceil(r.left)}s` : 'Nothing researching'}</small>
+        <small>{r ? `${researchName(r.id, hud.level, hud.faction)}, ${Math.ceil(r.left)}s` : 'Nothing researching'}</small>
       </span>
       <b>{hud.research.length}/{MAX_RESEARCH}</b>
       <kbd>{keyName(keys.techTree)}</kbd>
@@ -1194,8 +1197,8 @@ function StationDetail(p: DetailProps & { st: Unit }) {
       <Frame className="ew-detail is-station">
         <div className="ew-detail-side">
           <Schematic u={st} size={96} tip={unitTip(st.t, ownerTag(w, me, st.owner), undefined, st)} />
-          <SideName w={w} me={me} u={st} sub={w.hybrid ? 'Command Station' : 'Production station'} info={`${st.t.blurb}\n\n${GUNS_TIP}`} />
-          <Pips level={hud.level} />
+          <SideName w={w} me={me} u={st} sub={`${stageName(st.t.faction, hud.level)} · ${w.hybrid ? 'Command Station' : 'Production station'}`} info={`${st.t.blurb}\n\n${GUNS_TIP}`} />
+          <Pips level={hud.level} faction={st.t.faction} />
           <Vitals u={st} now={w.time} />
           <HpSummary u={st} />
           <WingInfo w={w} st={st} />
@@ -1936,7 +1939,7 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
   ] as const
   const top = Math.max(1, ...fire.map(([, v]) => v))
   const hull = live ? live.hullMax : t.hull
-  const ab = t.ability ? ABILITIES[t.ability] : null
+  const ab = t.ability ? abilityOf(t.ability, t.faction) : null
   return (
     <div className={`ew-intel is-${rel ?? 'own'}`}>
       <header>
@@ -2025,7 +2028,7 @@ function orderText(w: World, u: Unit) {
   }
   if (o.k === 'attack') {
     const t = w.byId.get(o.id)
-    return t ? `Attacking ${t.t.name}${o.hp >= 0 ? `: ${hpName(t.t.hardpoints[o.hp]).toLowerCase()}` : ''}` : 'Attacking'
+    return t ? `Attacking ${t.t.name}${o.hp >= 0 ? `: ${hpName(t.t.hardpoints[o.hp], t.t.faction).toLowerCase()}` : ''}` : 'Attacking'
   }
   const t = u.target ? w.byId.get(u.target) : undefined
   if (t) return `Engaging ${t.t.name}`
@@ -2589,7 +2592,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick }: {
   const shown = tiles.slice(0, 10)
   const withAb = ships.filter((u) => u.t.ability)
   const ready = withAb.filter((u) => u.abilityCd <= 0)
-  const ab = withAb[0]?.t.ability ? ABILITIES[withAb[0].t.ability] : null
+  const ab = withAb[0]?.t.ability ? abilityOf(withAb[0].t.ability, withAb[0].t.faction) : null
   // The stance button shows the selection's stance (if they share one) and cycles to the next.
   const stance = ships.length && ships.every((u) => u.stance === ships[0].stance) ? ships[0].stance : null
   const armed = mine.some((u) => !isShip(u.t) && u.guns.length > 0)

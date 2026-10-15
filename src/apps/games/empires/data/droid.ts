@@ -156,6 +156,13 @@ export const DROID: FactionData = {
     emblem: '/games/empires/world/emblem-droid.webp',
     rival: 'republic',
     sound: { voice: 'crew', blaster: 'droid', turbo: 0.92 },
+    names: {
+      weapon: { laser: 'Blaster cannons', turbo: 'Plasma cannon', missile: 'Missiles', ion: 'Ion lance' },
+      mount: { turbo: 'Plasma cannon', flak: 'Flak turret', missile: 'Missile turret', ion: 'Ion lance' },
+      part: { dock: 'Salvage crane', sensor: 'Fire-control mast', refinery: 'Strip refinery' },
+      look: { triple: 'Triple battery', missileBox: 'Missile turret', pd: 'Point-defence flak' },
+      ability: { broadside: { name: 'Alpha strike', blurb: 'Overcharged batteries: its guns deal 60% more damage for 10 s.' } },
+    },
   },
   ships: [
     {
@@ -277,10 +284,10 @@ export const DROID: FactionData = {
     regen: 16,
     // Every stage centred on the frame's middle (628, 592); the model is drawn in frame pixels from it.
     stages: [
-      { box: [398, 292, 858, 892], hull: 6600, shield: 0 },
-      { box: [208, 162, 1048, 1022], hull: 7800, shield: 1900 },
-      { box: [108, 32, 1148, 1152], hull: 9000, shield: 2800 },
-      { box: [88, 12, 1168, 1172], hull: 10200, shield: 3500 },
+      { name: 'Dominion Outpost', box: [398, 292, 858, 892], hull: 6600, shield: 0 },
+      { name: 'Dominion Stronghold', box: [208, 162, 1048, 1022], hull: 7800, shield: 1900 },
+      { name: 'Dominion Warbase', box: [108, 32, 1148, 1152], hull: 9000, shield: 2800 },
+      { name: 'Dominion Fortress', box: [88, 12, 1168, 1172], hull: 10200, shield: 3500 },
     ],
     modules: [
       // Level 1, the Outpost: a battery on the north arm, the hangar in the south arm.

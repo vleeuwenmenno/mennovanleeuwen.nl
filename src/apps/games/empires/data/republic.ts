@@ -116,10 +116,7 @@ function capitalYard(): UnitType {
   }
 }
 
-/**
- * The Bastion's stages, each with the name it goes by at that level. (`name` isn't part of the
- * shared StationPlan yet: the HUD and Codex can show it once it is.)
- */
+/** The Bastion's stages, each with the name it goes by at that level. */
 const STAGES = [
   { name: 'Bastion Outpost', box: [419, 417, 834, 833] as [number, number, number, number], hull: 6000, shield: 0 },
   { name: 'Bastion Command Post', box: [278, 276, 975, 974] as [number, number, number, number], hull: 7000, shield: 2400 },
@@ -242,6 +239,8 @@ export const REPUBLIC: FactionData = {
     emblem: '/games/empires/world/emblem-republic.webp',
     rival: 'droid',
     sound: { voice: 'crew', blaster: 'clone', turbo: 1 },
+    // The shared names are the Republic's; only its heavy triple mount has a name of its own.
+    names: { look: { triple: 'Heavy turbolaser' } },
   },
   ships: SHIPS,
   station: {

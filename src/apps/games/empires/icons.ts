@@ -1,4 +1,4 @@
-import { MODULE, type Hardpoint, type HardpointKind } from './data'
+import { FACTIONS, MODULE, type FactionId, type Hardpoint, type HardpointKind } from './data'
 import type { MountExtra } from './data/kit.ts'
 
 // Line icons for hardpoints, as SVG path data on a 24x24 grid. The HUD draws them as inline SVG
@@ -28,7 +28,16 @@ export const HP_COLOR: Record<HardpointKind, string> = { turret: '#ffb347', shie
 /** What a hardpoint with an extra mount design (Hardpoint `look`) is called. */
 export const LOOK_NAME: Record<MountExtra, string> = {
   torpedo: 'Torpedo launcher', pd: 'Point defence', triple: 'Triple turret', missileBox: 'Missile box', strike: 'Strike cannon', railgun: 'Mass driver', beam: 'Beam emitter', quad: 'Quad gun',
-  spore: 'Spore launcher', acid: 'Acid spitter', lance: 'Ion lance', bioturret: 'Bio-turret', parasite: 'Parasite pod', regen: 'Regeneration node', engineSac: 'Engine sac', broodSac: 'Brood sac', spine: 'Spine cannon',
+  spore: 'Spore cannon', acid: 'Acid sprayer', lance: 'Tendril lance', bioturret: 'Bio-turret', parasite: 'Parasite pod', regen: 'Regeneration node', engineSac: 'Engine sac', broodSac: 'Brood chamber', spine: 'Spine battery',
 }
-/** One hardpoint's name: turrets go by the gun they carry (or the mount they have). */
-export const hpName = (h: Hardpoint) => (h.exp ? MODULE[h.exp].name : h.look ? LOOK_NAME[h.look] : h.art === 'flak' ? 'Point defence' : h.art === 'ion' ? 'Ion cannon' : HP_NAME[h.kind])
+/** One hardpoint's name on a unit of faction `f`: turrets go by the gun they carry (or the mount
+ * they have), each in the faction's own words where it has them (FactionInfo `names`). */
+export function hpName(h: Hardpoint, f: FactionId) {
+  const own = FACTIONS[f].names
+  if (h.exp) return MODULE[h.exp].name
+  if (h.look) return own?.look?.[h.look] ?? LOOK_NAME[h.look]
+  if (h.art === 'flak') return own?.mount?.flak ?? 'Point defence'
+  if (h.art === 'ion') return own?.mount?.ion ?? 'Ion cannon'
+  if (h.kind === 'turret' && h.weapon) return own?.mount?.[h.weapon.kind] ?? own?.part?.turret ?? HP_NAME.turret
+  return own?.part?.[h.kind] ?? HP_NAME[h.kind]
+}

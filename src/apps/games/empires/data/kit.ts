@@ -166,7 +166,8 @@ export type StationPlan = {
   /** World units per frame pixel. */
   perPx: number
   regen: number
-  stages: { box: [number, number, number, number]; hull: number; shield: number }[]
+  /** One per level: `name` is what the station goes by at that level (the HUD and the Codex show it). */
+  stages: { name: string; box: [number, number, number, number]; hull: number; shield: number }[]
   modules: StationModule[]
   /** A station that launches strike craft by itself, as a carrier does (see UnitType `carrier`),
    * once it has grown to `level`. Off when left out. */
@@ -260,6 +261,26 @@ export type FactionInfo = {
    * sound (its crews' voices, its guns, its hits and deaths) is its sound set, picked by faction id
    * in sound.ts (SET); `voice` and `blaster` are from before the sets and no longer read. */
   sound: { voice?: 'crew' | 'droid'; blaster?: 'clone' | 'droid'; turbo: number }
+  /** What it calls the things every faction shares, where its own name differs (see FactionNames). */
+  names?: FactionNames
+}
+
+/**
+ * A faction's own names for shared things, each falling back to the shared name when left out
+ * (icons.ts hpName, codexInfo.ts weaponName, data.ts abilityOf): only the words change, never what
+ * the thing does.
+ */
+export type FactionNames = {
+  /** Its guns by kind, in the Codex's weapon lists ('Plasma cannons' rather than 'Turbolaser'). */
+  weapon?: Partial<Record<WeaponKind, string>>
+  /** A turret by the gun on it, where the hardpoint has no `look` of its own ('Tendril lance'). */
+  mount?: Partial<Record<WeaponKind, string>>
+  /** Its other hardpoints by kind ('Brood chamber' for a hangar). */
+  part?: Partial<Record<HardpointKind, string>>
+  /** Its extra mount designs (Hardpoint `look`). */
+  look?: Partial<Record<MountExtra, string>>
+  /** Its abilities' names, and their blurbs where the words differ too. */
+  ability?: Partial<Record<AbilityId, { name: string; blurb?: string }>>
 }
 
 /**

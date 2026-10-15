@@ -353,7 +353,7 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
   return {
     groups: groupInfo(w, me, groups),
     idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && u.stance !== 'hold').length,
-    credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
+    credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
     hybrid: !!w.hybrid,
@@ -871,7 +871,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       } else {
         renderer.current.ping(target.x, target.y, '#ff5a50')
         sound.order('target', myFaction, 'station')
-        const gunName = tp ? hpName(w.byId.get(tp.unit)!.t.hardpoints[tp.hp]) : null
+        const gunUnit = tp ? w.byId.get(tp.unit)! : null
+        const gunName = tp && gunUnit ? hpName(gunUnit.t.hardpoints[tp.hp], gunUnit.t.faction) : null
         toast(gunName ? `${gunName} focusing on the ${target.t.name}` : `Guns focusing on the ${target.t.name}`, 'info')
       }
       if (!ships.length) return

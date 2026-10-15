@@ -1,4 +1,4 @@
-import { MODULE, REBUILD_MODULE, STATIONS, TECH, UNIT, WORKS_NAME, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
+import { FACTIONS, MODULE, REBUILD_MODULE, STATIONS, TECH, UNIT, WORKS_NAME, accuracy, effect, type FactionId, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
 import { hpName } from './icons'
 import { factionModels, type Model } from './models/index.ts'
 
@@ -10,6 +10,11 @@ export type Sel = { hp: number } | { part: number }
 export const sameSel = (a: Sel | null, b: Sel | null) => !!a && !!b && ('hp' in a ? 'hp' in b && a.hp === b.hp : 'part' in b && a.part === b.part)
 
 export const WEAPON_NAME: Record<WeaponKind, string> = { laser: 'Lasers', flak: 'Flak', turbo: 'Turbolaser', missile: 'Torpedoes', ion: 'Ion cannon' }
+/** A gun's name for faction `f` (FactionInfo `names`); `turret`: the turret it is on. */
+export function weaponName(kind: WeaponKind, f: FactionId, turret = false) {
+  const own = FACTIONS[f].names
+  return turret ? own?.mount?.[kind] ?? `${WEAPON_NAME[kind]} turret` : own?.weapon?.[kind] ?? WEAPON_NAME[kind]
+}
 const TIER_NAME: Record<Tier, string> = { fighter: 'fighters', gunship: 'gunships', frigate: 'frigates', cruiser: 'cruisers', capital: 'flagships', station: 'stations', mine: 'mining platforms', defense: 'defense platforms', yard: 'yards' }
 const TIERS = Object.keys(TIER_NAME) as Tier[]
 
@@ -110,7 +115,7 @@ export function partName(m: Model, i: number, t: UnitType) {
 }
 
 export function selName(t: UnitType, m: Model | null, s: Sel) {
-  if ('hp' in s) return `${hpName(t.hardpoints[s.hp])} #${s.hp + 1}`
+  if ('hp' in s) return `${hpName(t.hardpoints[s.hp], t.faction)} #${s.hp + 1}`
   return m ? partName(m, s.part, t) : ''
 }
 
@@ -127,7 +132,7 @@ export function info(t: UnitType, m: Model | null, s: Sel): Info {
       kind: 'Hull part',
       does: p.engine !== undefined ? `Carries engine glow ${p.engine + 1}.` : 'Part of the hull.',
       lost: d ? (p.engine !== undefined ? 'Its engine light goes out with it.' : 'Nothing in the battle: hull parts are for show; the hull points are what count.') : '',
-      off: !d ? 'Stays on: it only goes when the hull breaks up.' : d.hp !== undefined ? `Comes off with ${hpName(t.hardpoints[d.hp])} #${d.hp + 1}.` : d.hull !== undefined ? `Breaks off below ${Math.round(d.hull * 100)}% hull.` : 'Breaks off only when the unit is destroyed.',
+      off: !d ? 'Stays on: it only goes when the hull breaks up.' : d.hp !== undefined ? `Comes off with ${hpName(t.hardpoints[d.hp], t.faction)} #${d.hp + 1}.` : d.hull !== undefined ? `Breaks off below ${Math.round(d.hull * 100)}% hull.` : 'Breaks off only when the unit is destroyed.',
     }
   }
   const h = t.hardpoints[s.hp]
@@ -183,8 +188,8 @@ export function info(t: UnitType, m: Model | null, s: Sel): Info {
   }
   if (station) lost += ' Field repair crews can rebuild it.'
   return {
-    title: `${hpName(h)} #${s.hp + 1}`,
-    kind: h.kind === 'turret' ? `${WEAPON_NAME[h.weapon!.kind]} turret` : hpName(h),
+    title: `${hpName(h, t.faction)} #${s.hp + 1}`,
+    kind: h.kind === 'turret' ? weaponName(h.weapon!.kind, t.faction, true) : hpName(h, t.faction),
     hp: h.hp,
     weapon: h.weapon,
     does,
@@ -197,18 +202,20 @@ export function info(t: UnitType, m: Model | null, s: Sel): Info {
  * the unit cards and their tips show it: a short name, a value, and the whole story for the tip. */
 export type Trait = { name: string; value: string; tip: string }
 const pc = (v: number) => `${Math.round(v * 100)}%`
+/** A small rate as a percentage: one decimal below 10% (0.4%, not 0%). */
+const pc1 = (v: number) => (v < 0.1 ? `${Math.round(v * 1000) / 10}%` : pc(v))
 
 /** What sets a unit apart beyond its numbers: living hull, drain, fire control, a spinal gun, a
  * brood or carrier, no shields. Empty for most units. */
 export function traits(t: UnitType): Trait[] {
   const out: Trait[] = []
-  if (t.regrow) out.push({ name: 'Living hull', value: `+${pc(t.regrow.rate)}/s`, tip: `Living hull: out of the fight for ${t.regrow.delay} s (no enemy has hit it), its hull grows back by ${pc(t.regrow.rate)} of its full hull a second. Shot-off modules don't grow back.` })
+  if (t.regrow) out.push({ name: 'Living hull', value: `+${pc1(t.regrow.rate)}/s`, tip: `Living hull: out of the fight for ${t.regrow.delay} s (no enemy has hit it), its hull grows back by ${pc1(t.regrow.rate)} of its full hull a second. Shot-off modules don't grow back.` })
   if (t.drain) out.push({ name: 'Drain', value: `${Math.round(t.drain.dps)}/s`, tip: `Drain: every enemy it sees within ${Math.round(t.drain.radius)} loses ${Math.round(t.drain.dps)} hull a second, straight past its shields; ${pc(t.drain.heal)} of what it drains mends our damaged ships in reach, shared out.` })
   if (t.fireControl) out.push({ name: 'Fire control', value: `+${pc(t.fireControl.bonus)}`, tip: `Fire control: our ships within ${Math.round(t.fireControl.radius)}, itself included, hit ${pc(t.fireControl.bonus)} harder. Auras don't stack: the best one counts.` })
   const spine = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))].find((x) => x.spinal)
   if (spine) {
     const deg = Math.round(((spine.arc ?? 0) * 180) / Math.PI)
-    out.push({ name: 'Spinal gun', value: `±${deg}°`, tip: `Spinal ${WEAPON_NAME[spine.kind].toLowerCase()}: built along the keel, it only fires within ${deg}° either side of the nose, so the whole ship turns to aim it. It can't answer what is behind it.` })
+    out.push({ name: 'Spinal gun', value: `±${deg}°`, tip: `Spinal ${weaponName(spine.kind, t.faction).toLowerCase()}: built along the keel, it only fires within ${deg}° either side of the nose, so the whole ship turns to aim it. It can't answer what is behind it.` })
   }
   if (t.tier === 'station' && t.carrier) out.push({ name: 'Brood', value: `every ${t.carrier.every} s`, tip: `Brood spawning: the station grows a squadron of ${UNIT[t.carrier.unit]?.name ?? 'strike craft'} every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out, beside its defense wing.` })
   else if (t.carrier) out.push({ name: 'Carrier', value: `every ${t.carrier.every} s`, tip: `Carrier: launches a squadron every ${t.carrier.every} s from its hangars while fewer than ${t.carrier.max} are out; with every hangar shot off it launches no more.` })

@@ -1503,7 +1503,7 @@ export class Renderer {
       const part = hp >= 0 ? hu.t.hardpoints[hp] : null
       const st = hp >= 0 ? hu.hps[hp] : null
       const rel = relColor(w, view.me, hu.owner)
-      const title = part ? hpName(part) : `${rel === OWN ? '' : rel === ALLY ? 'Allied ' : 'Enemy '}${hu.t.name}`
+      const title = part ? hpName(part, hu.t.faction) : `${rel === OWN ? '' : rel === ALLY ? 'Allied ' : 'Enemy '}${hu.t.name}`
       const sub = st ? (st.hp > 0 ? `${Math.ceil(st.hp)} / ${st.max}` : 'Destroyed') : `Hull ${Math.round((hu.hull / hu.hullMax) * 100)}%${hu.t.shield ? ` · Shield ${Math.round((hu.shield / shieldFull(hu)) * 100)}%` : ''}`
       ctx.font = '600 12px system-ui, sans-serif'
       const tw = Math.max(ctx.measureText(title).width, (ctx.font = '11px system-ui, sans-serif', ctx.measureText(sub).width)) + 20
@@ -1771,7 +1771,7 @@ export class Renderer {
       const at = hpPos(u, hp)
       const st = RANGE_STYLE[one.kind]
       // A gun that was shot out reaches nothing: its ring is drawn faint.
-      ring(at.x, at.y, one.range, st.rgb, st.dash, u.hps[hp].hp > 0 ? 0.75 : 0.25, `${hpName(u.t.hardpoints[hp])} #${hp + 1} · ${Math.round(one.range)}`, 0)
+      ring(at.x, at.y, one.range, st.rgb, st.dash, u.hps[hp].hp > 0 ? 0.75 : 0.25, `${hpName(u.t.hardpoints[hp], u.t.faction)} #${hp + 1} · ${Math.round(one.range)}`, 0)
     } else {
       const rings = averageRings(u.t, (i) => u.hps[i].hp > 0, u.mods.range)
       ring(u.x, u.y, sensorOf(u), '200,215,240', [4, 8], 0.22, `Sensors ${Math.round(sensorOf(u))}`, rings.length)

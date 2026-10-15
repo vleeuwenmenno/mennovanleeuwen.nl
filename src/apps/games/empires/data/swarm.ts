@@ -226,6 +226,17 @@ export const SWARM: FactionData = {
     emblem: '/games/empires/world/emblem-swarm.webp',
     rival: 'republic',
     sound: { voice: 'droid', blaster: 'droid', turbo: 0.8 },
+    // Its weapon organs and body parts have names of their own; what they do is the shared guns'.
+    names: {
+      weapon: { laser: 'Barbs', turbo: 'Tendril lance', flak: 'Acid spray', missile: 'Spores', ion: 'Ion organ' },
+      mount: { turbo: 'Tendril lance', flak: 'Acid sprayer', missile: 'Spore cannon', ion: 'Ion organ' },
+      part: { turret: 'Tendril lance', shield: 'Membrane', engine: 'Engine sac', hangar: 'Brood chamber', refinery: 'Digestive organ', dock: 'Regeneration pool', sensor: 'Sensory stalk', drill: 'Feeding maw' },
+      ability: {
+        repairSwarm: { name: 'Frenzied knitting', blurb: 'Its tissue knits furiously: it restores 30% of its hull over 10 s.' },
+        tractor: { name: 'Tendril grip', blurb: 'Tendrils seize the enemy ships nearby: they crawl at a third of their speed for 7 s.' },
+        launchSwarm: { name: 'Brood burst', blurb: 'Empties the brood chambers: two extra broods of its Stingers at once.' },
+      },
+    },
   },
   ships: [
     {
@@ -289,10 +300,10 @@ export const SWARM: FactionData = {
     // Every stage is centred on the same point of the frame (628, 592), from the small Hive Seed to
     // the towering Hive Nexus.
     stages: [
-      { box: [423, 387, 833, 797], hull: 6200, shield: 0 },
-      { box: [303, 267, 953, 917], hull: 8000, shield: 0 },
-      { box: [153, 117, 1103, 1067], hull: 10300, shield: 0 },
-      { box: [88, 18, 1168, 1166], hull: 12300, shield: 0 },
+      { name: 'Hive Seed', box: [423, 387, 833, 797], hull: 6200, shield: 0 },
+      { name: 'Brood Nest', box: [303, 267, 953, 917], hull: 8000, shield: 0 },
+      { name: 'Hive Cluster', box: [153, 117, 1103, 1067], hull: 10300, shield: 0 },
+      { name: 'Hive Nexus', box: [88, 18, 1168, 1166], hull: 12300, shield: 0 },
     ],
     modules: [
       sGun('t1', 'turbo', 628 + 112, 592 + 96, 1),

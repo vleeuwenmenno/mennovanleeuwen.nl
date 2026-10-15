@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTION_IDS, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
-import { info, sameSel, selName, targets, traits, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
+import { abilityOf, FACTION_IDS, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { info, sameSel, selName, targets, traits, weaponLine, weaponName, type Sel } from './codexInfo'
 import { clampToViewport, screenArea } from './fit'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
@@ -92,7 +92,7 @@ function ModuleCard({ t, model, sel, dmg, onClear }: { t: UnitType; model: Model
         <>
           <div className="ew-cx-stat">
             <span>Weapon</span>
-            <b>{WEAPON_NAME[i.weapon.kind]}</b>
+            <b>{weaponName(i.weapon.kind, t.faction)}</b>
           </div>
           <p className="ew-small">{weaponLine(i.weapon)} · its reach is ringed on the model (zoom out for all of it)</p>
           {tg && tg.good.length > 0 && <p className="ew-small"><span className="ew-good">Good against</span> {tg.good.join(', ')}</p>}
@@ -172,8 +172,8 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
                 <i style={{ background: `rgb(${RANGE_RGB[x.kind]})` }} />
                 <span>
                   {x.n > 1 ? `${x.n}× ` : ''}
-                  {WEAPON_NAME[x.kind]}
-                  {x.spinal ? ' (spinal)' : x.turret ? ' turret' : ''}
+                  {x.turret && !x.spinal ? weaponName(x.kind, t.faction, true) : weaponName(x.kind, t.faction)}
+                  {x.spinal ? ' (spinal)' : ''}
                 </span>
                 <small>
                   {x.dmg}
@@ -196,7 +196,7 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
                   <button onClick={() => onSelect(sameSel(s, selected) ? null : s)} onPointerEnter={() => onHover(s)} aria-pressed={sameSel(s, selected)}>
                     <i style={{ background: st && st.hp <= 0 ? '#ff5a50' : HP_COLOR[h.kind] }} />
                     <span>
-                      {hpName(h)} <em className="ew-muted">#{i + 1}</em>
+                      {hpName(h, t.faction)} <em className="ew-muted">#{i + 1}</em>
                     </span>
                     <small>
                       {st && st.hp < st.max ? (st.hp <= 0 ? 'destroyed · ' : `${fmt(st.hp)} / `) : ''}
@@ -221,8 +221,8 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
       )}
       {t.ability && (
         <>
-          <h5>Ability: {ABILITIES[t.ability].name}</h5>
-          <p className="ew-muted">{ABILITIES[t.ability].blurb}</p>
+          <h5>Ability: {abilityOf(t.ability, t.faction).name}</h5>
+          <p className="ew-muted">{abilityOf(t.ability, t.faction).blurb}</p>
         </>
       )}
       {worksOf(t) && (
@@ -470,9 +470,9 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
       const one = gunSel ? moduleRing(t, gunSel.hp) : null
       if (one && gunSel && !boom) {
         const [x, y] = hpAt(gunSel.hp)
-        ring(x, y, one.range, one.kind, `${WEAPON_NAME[one.kind]} #${gunSel.hp + 1} · ${one.range}`)
+        ring(x, y, one.range, one.kind, `${weaponName(one.kind, t.faction)} #${gunSel.hp + 1} · ${one.range}`)
       } else if (show.ranges) {
-        for (const x of averageRings(t, (i) => (dmg.hps[i]?.hp ?? 1) > 0)) ring(0, 0, x.reach, x.kind, `${WEAPON_NAME[x.kind]} ${x.n > 1 ? '· avg ' : ''}${Math.round(x.reach)}`)
+        for (const x of averageRings(t, (i) => (dmg.hps[i]?.hp ?? 1) > 0)) ring(0, 0, x.reach, x.kind, `${weaponName(x.kind, t.faction)} ${x.n > 1 ? '· avg ' : ''}${Math.round(x.reach)}`)
       }
       if (boom && model) {
         fx.drawHulk(g, 1000 + boom.n, zdpr)
@@ -978,7 +978,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
             {hover && !hover.fromList && <HoverTip t={t} model={model} sel={hover.sel} x={hover.x} y={hover.y} dmg={dmg} />}
             {(t.tier === 'station' || styles.length > 0) && (
               <div className="ew-cx-level">
-                {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((_, i) => [i + 1, `Level ${i + 1}`] as [number, string])} onChange={(v) => setLevel(v)} />}
+                {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((s, i) => [i + 1, s.name] as [number, string])} onChange={(v) => setLevel(v)} />}
                 {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, STYLE_NAMES[s] ?? s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>
             )}
