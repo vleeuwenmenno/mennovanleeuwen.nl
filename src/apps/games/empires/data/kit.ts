@@ -17,6 +17,15 @@ export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 /** The mount a module is drawn with (models/mounts.ts). */
 export type ModuleArt = 'turbo' | 'flak' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
+/**
+ * Extra mount designs a faction may draw (models/<faction>/mounts.ts `extras`), picked per hardpoint
+ * with Hardpoint `look` (or per mount by its model's ModelSpec `mount`). A faction that draws no such
+ * design gets the closest common one instead (models/mounts.ts FALLBACK), so data can name them
+ * before every faction has one. Only the looks: what the hardpoint does is still its kind and weapon.
+ */
+export type MountExtra =
+  | 'torpedo' | 'pd' | 'triple' | 'missileBox' | 'strike' | 'railgun' | 'beam' | 'quad'
+  | 'spore' | 'acid' | 'lance' | 'bioturret' | 'parasite' | 'regen' | 'engineSac' | 'broodSac' | 'spine'
 export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair'
 
 export type Weapon = {
@@ -43,6 +52,10 @@ export type Weapon = {
  */
 export type Hardpoint = {
   kind: HardpointKind; x: number; y: number; hp: number; weapon?: Weapon; art?: ModuleArt; s?: number; key?: string
+  /** The mount drawn on it when it is not its `art`'s (see MountExtra): a torpedo launcher rather
+   * than a turbolaser turret, a spore launcher, an engine sac. Its icon and what it does still
+   * follow `kind` and `art`. */
+  look?: MountExtra
   /** An expansion module bolted onto a Command Station or a yard (see MODULES): what it is. Its
    * feature works only while it stands; the kind is only for its icon and mount. */
   exp?: ModuleId
@@ -188,8 +201,24 @@ export type BaseModule = {
 
 // --- Research ---------------------------------------------------------------------------------------
 
-/** What a piece of research changes, as fractions: hull 0.25 is +25% hull, cooldown -0.15 fires 15% faster. */
-export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines', number>>
+/**
+ * What a piece of research changes, as fractions: hull 0.25 is +25% hull, cooldown -0.15 fires 15%
+ * faster. On the unit type it is `for`:
+ * - hull, shield, regen, damage, speed, cooldown, range, build: its own numbers (build -0.2: built 20%
+ *   faster); hangar: one more squadron out (carriers); repair: its repairs (support ships).
+ * - shieldDamage: its guns hit shields this much harder (0.25: +25% against shields; the hull damage
+ *   after the shields go is the same).
+ * - aura: added to its fire-control bonus (0.05: a 15% aura becomes 20%); auraRadius: its reach
+ *   (0.2: 20% further).
+ * - regrow: its living hull grows back this much faster (0.5: half as fast again); regrowDelay: its
+ *   wait out of combat before it does (-0.3: 30% shorter).
+ * - drain: its drain aura bites this much harder (0.25); drainHeal: it heals this much more of what
+ *   it drains (0.5: half as much again).
+ * On the station (`for` its station id): mines (the refinery's income), repair (its repair dock),
+ * and fleetBuild: every ship of the faction is built this much faster (-0.1: 10%), on top of each
+ * ship's own build research.
+ */
+export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines' | 'shieldDamage' | 'aura' | 'auraRadius' | 'regrow' | 'regrowDelay' | 'drain' | 'drainHeal' | 'fleetBuild', number>>
 /**
  * `for` is the unit type it upgrades, or the station (which also covers the economy). `requires`
  * lists research that has to come first, on top of the station level: that is what makes it a
@@ -226,9 +255,10 @@ export type FactionInfo = {
   emblem: string
   /** The side a Galactic Conquest pits it against unless the player picks another. */
   rival: FactionId
-  /** How it sounds (sound.ts): its crews' voices (clone beeps, droid chatter), its blasters, and
-   * how high its turbolasers ring (1 as written). */
-  sound: { voice: 'crew' | 'droid'; blaster: 'clone' | 'droid'; turbo: number }
+  /** How it sounds: how high its heavy guns ring (`turbo`, 1 as written). Everything else about its
+   * sound (its crews' voices, its guns, its hits and deaths) is its sound set, picked by faction id
+   * in sound.ts (SET); `voice` and `blaster` are from before the sets and no longer read. */
+  sound: { voice?: 'crew' | 'droid'; blaster?: 'clone' | 'droid'; turbo: number }
   /** Still being made: only offered where the Swarm preview is on (see factions.ts). */
   preview?: boolean
 }

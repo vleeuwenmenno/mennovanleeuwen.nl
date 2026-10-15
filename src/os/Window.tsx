@@ -665,7 +665,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           <span className="titlebar-pid">pid {win.pid}</span>
           <div className="win-controls">
             <button className="ctl ctl-min" aria-label="Minimize" onClick={() => wm.minimize(win.pid)} />
-            <button className="ctl ctl-max" aria-label="Maximize" onClick={() => wm.toggleMax(win.pid)} />
+            <button className="ctl ctl-max" aria-label={win.maximized ? 'Restore size' : 'Maximize'} onClick={() => wm.toggleMax(win.pid)} />
             <button className="ctl ctl-close" aria-label="Close" onClick={() => wm.close(win.pid)} />
           </div>
         </header>
@@ -676,6 +676,9 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
             ×
           </button>
         </div>
+      )}
+      {chrome === 'default' && win.maximized && (
+        <button className="mobile-window-restore" aria-label="Restore size" title="Restore size" onClick={() => wm.toggleMax(win.pid)}>↙</button>
       )}
       <div className="window-body" ref={bodyRef}>
         <WindowMenuContext.Provider value={(e) => onMenu(e)}>{children}</WindowMenuContext.Provider>

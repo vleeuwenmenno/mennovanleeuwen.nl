@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
-import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
+import { CREDIT_STEPS, FACTION_IDS, FACTIONS, type FactionId } from './data'
 import { pickable, usePickable } from './factions'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
@@ -350,54 +350,51 @@ export function LayoutSection({ store = battleLayout, campaign = false }: { stor
 /** Every sound in the game on a button, to audition them. */
 function SoundTest({ sound }: { sound: EmpiresSound }) {
   const at = { pan: 0, gain: 1 }
+  // Each faction's own set (sound.ts SET): its guns, hits and deaths, and its crews.
+  const side = (f: FactionId): [string, [string, () => void][]][] => [
+    [`${FACTIONS[f].name}: weapons and damage`, [
+      ['Fighter guns', () => sound.fire('laser', at, f, true)],
+      ['Laser cannon', () => sound.fire('laser', at, f)],
+      ['Heavy guns', () => sound.fire('turbo', at, f)],
+      ['Point defence', () => sound.fire('flak', at, f)],
+      ['Torpedoes', () => sound.fire('missile', at, f)],
+      ['Ion weapon', () => sound.fire('ion', at, f)],
+      ['Hull hit', () => sound.hit(false, false, at, f)],
+      ['Heavy hull hit', () => sound.hit(false, true, at, f)],
+      ['Hardpoint destroyed', () => sound.hardpointDown(at, f)],
+      ['Fighter explodes', () => sound.boom(30, at, f)],
+      ['Frigate explodes', () => sound.boom(130, at, f)],
+      ['Capital explodes', () => sound.boom(380, at, f)],
+      ['Fighters launch', () => sound.launch(at, f)],
+    ]],
+    [`${FACTIONS[f].name}: crew`, [
+      ['Select fighter', () => sound.select(f, 'fighter')],
+      ['Select cruiser', () => sound.select(f, 'cruiser')],
+      ['Select flagship', () => sound.select(f, 'capital')],
+      ['Select station', () => sound.select(f, 'station')],
+      ['Move', () => sound.order('move', f)],
+      ['Attack', () => sound.order('attack', f)],
+      ['Attack move', () => sound.order('attackMove', f)],
+      ['Patrol', () => sound.order('patrol', f)],
+      ['Hold', () => sound.order('hold', f)],
+      ['Stop', () => sound.order('stop', f)],
+      ['Rally', () => sound.order('rally', f, 'station')],
+      ['Target hardpoint', () => sound.order('target', f)],
+      ['Ship ready', () => sound.shipReady(f, 'frigate')],
+      ['Flagship ready', () => sound.shipReady(f, 'capital')],
+      ['Repair ability', () => sound.ability('repairSwarm', undefined, f)],
+      ['Launch ability', () => sound.ability('launchSwarm', undefined, f)],
+    ]],
+  ]
   const groups: [string, [string, () => void][]][] = [
-    ['Weapons', [
-      ['Fighter guns (Republic)', () => sound.fire('laser', at, 'republic', true)],
-      ['Fighter guns (droid)', () => sound.fire('laser', at, 'droid', true)],
-      ['Laser cannon (Republic)', () => sound.fire('laser', at, 'republic')],
-      ['Laser cannon (droid)', () => sound.fire('laser', at, 'droid')],
-      ['Turbolaser', () => sound.fire('turbo', at, 'republic')],
-      ['Flak', () => sound.fire('flak', at, 'republic')],
-      ['Missile', () => sound.fire('missile', at, 'republic')],
-      ['Ion cannon', () => sound.fire('ion', at, 'droid')],
-    ]],
-    ['Hits and damage', [
+    ...FACTION_IDS.flatMap(side),
+    ['Shields', [
       ['Shield hit', () => sound.hit(true, false, at)],
-      ['Hull hit', () => sound.hit(false, false, at)],
-      ['Heavy hull hit', () => sound.hit(false, true, at)],
       ['Shields down', () => sound.shieldsDown(at)],
-      ['Hardpoint destroyed', () => sound.hardpointDown(at)],
-      ['Fighter explodes', () => sound.boom(30, at)],
-      ['Frigate explodes', () => sound.boom(130, at)],
-      ['Capital explodes', () => sound.boom(380, at)],
-      ['Fighters launch', () => sound.launch(at)],
-    ]],
-    ['Republic crew', [
-      ['Select fighter', () => sound.select('republic', 'fighter')],
-      ['Select cruiser', () => sound.select('republic', 'cruiser')],
-      ['Select flagship', () => sound.select('republic', 'capital')],
-      ['Move', () => sound.order('move', 'republic')],
-      ['Attack', () => sound.order('attack', 'republic')],
-      ['Attack move', () => sound.order('attackMove', 'republic')],
-      ['Patrol', () => sound.order('patrol', 'republic')],
-      ['Hold', () => sound.order('hold', 'republic')],
-      ['Stop', () => sound.order('stop', 'republic')],
-      ['Rally', () => sound.order('rally', 'republic', 'station')],
-      ['Target hardpoint', () => sound.order('target', 'republic')],
-    ]],
-    ['Droid crew', [
-      ['Select fighter', () => sound.select('droid', 'fighter')],
-      ['Select flagship', () => sound.select('droid', 'capital')],
-      ['Move', () => sound.order('move', 'droid')],
-      ['Attack', () => sound.order('attack', 'droid')],
-      ['Hold', () => sound.order('hold', 'droid')],
-      ['Target hardpoint', () => sound.order('target', 'droid')],
     ]],
     ['Station and economy', [
       ['Queue ship', () => sound.queued()],
       ['Cancel ship', () => sound.unqueued()],
-      ['Ship ready', () => sound.shipReady('republic', 'frigate')],
-      ['Flagship ready', () => sound.shipReady('republic', 'capital')],
       ['Research started', () => sound.researchStarted()],
       ['Research done', () => sound.researchDone()],
       ['Station level up', () => sound.levelUp()],
@@ -412,10 +409,10 @@ function SoundTest({ sound }: { sound: EmpiresSound }) {
     ['Abilities', [
       ['Shield boost', () => sound.ability('shieldBoost')],
       ['Flak barrage', () => sound.ability('flakBarrage')],
-      ['Repair swarm', () => sound.ability('repairSwarm')],
+      ['Damage control', () => sound.ability('repairSwarm')],
       ['Tractor lock', () => sound.ability('tractor')],
       ['Full broadside', () => sound.ability('broadside')],
-      ['Launch swarm', () => sound.ability('launchSwarm')],
+      ['Scramble', () => sound.ability('launchSwarm')],
     ]],
     ['Alerts and interface', [
       ['Under attack', () => sound.alarm(false)],

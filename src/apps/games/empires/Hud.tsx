@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
+import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
   ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
+import { traits } from './codexInfo'
 import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
@@ -145,14 +147,15 @@ export function SelChip({ icon, label, count, title, className = '', onOpen, onC
 /**
  * The game's own tooltips, in place of the browser's: anything inside this screen with a
  * `data-tip` shows it in a game panel after a moment, above it (or below when there's no room),
- * kept inside the screen. The text is read again while it shows, so countdowns and prices stay
+ * kept inside the screen with a margin (fit.ts). The text is read again while it shows, so countdowns and prices stay
  * current. The element is found by where the pointer is, so hints on disabled buttons show too.
  * Put one inside each screen's root.
  */
 export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {}) {
   const anchor = useRef<HTMLSpanElement>(null)
   const box = useRef<HTMLDivElement>(null)
-  const [tip, setTip] = useState<{ text: string; unit?: string; big?: boolean; uid?: number; who?: string; rel?: string; x: number; top: number; bottom: number } | null>(null)
+  // `at`: the element's box on the page, which the tip goes above or below.
+  const [tip, setTip] = useState<{ text: string; unit?: string; big?: boolean; uid?: number; who?: string; rel?: string; at: Box } | null>(null)
   useEffect(() => {
     const root = anchor.current?.parentElement
     if (!root) return
@@ -170,10 +173,9 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
       const unit = cur?.isConnected ? cur.getAttribute('data-tip-unit') : null
       if (!cur || (!text && !unit)) return hide()
       const r = cur.getBoundingClientRect()
-      const rr = root.getBoundingClientRect()
       setTip({
         text: text ?? '', unit: unit ?? undefined, uid: Number(cur.getAttribute('data-tip-uid')) || undefined, who: cur.getAttribute('data-tip-who') ?? undefined, rel: cur.getAttribute('data-tip-rel') ?? undefined,
-        x: r.left + r.width / 2 - rr.left, top: r.top - rr.top, bottom: r.bottom - rr.top,
+        at: { left: r.left, right: r.right, top: r.top, bottom: r.bottom },
       })
     }
     const move = (e: PointerEvent) => {
@@ -243,10 +245,11 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
     const b = box.current
     const root = anchor.current?.parentElement
     if (!b || !root || !tip) return
-    const left = Math.max(6, Math.min(root.clientWidth - b.offsetWidth - 6, tip.x - b.offsetWidth / 2))
-    const above = tip.top - b.offsetHeight - 8
-    b.style.left = `${left}px`
-    b.style.top = `${above >= 6 ? above : Math.min(root.clientHeight - b.offsetHeight - 6, tip.bottom + 8)}px`
+    // Above the element, or below it when that fits better; kept inside the screen (see fit.ts).
+    const rr = root.getBoundingClientRect()
+    const p = placeTip(tip.at, b.offsetWidth, b.offsetHeight, screenArea(root))
+    b.style.left = `${p.x - rr.left + root.scrollLeft}px`
+    b.style.top = `${p.y - rr.top + root.scrollTop}px`
     b.style.visibility = 'visible'
   }, [tip])
   return (
@@ -258,6 +261,17 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
         </div>
       )}
     </>
+  )
+}
+
+/** A plain box (a popover, a hint) kept inside the screen with a margin (fit.ts). */
+export function KeptInside({ children, ...rest }: React.HTMLAttributes<HTMLDivElement> & { 'data-nodrag'?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useKeepInside(ref)
+  return (
+    <div ref={ref} {...rest}>
+      {children}
+    </div>
   )
 }
 
@@ -754,7 +768,7 @@ export function GiftPanel({ credits, allies, onSend, onClose }: {
     if (!why) setAmount(0)
   }
   return (
-    <div className="ew-giftpop" data-nodrag role="dialog" aria-label="Send credits">
+    <KeptInside className="ew-giftpop" data-nodrag role="dialog" aria-label="Send credits">
       <Frame title="Send credits" aside={<button className="ew-giftx" onClick={onClose} aria-label="Close">×</button>}>
         <div className="ew-giftallies" role="radiogroup" aria-label="Ally">
           {allies.map((a) => (
@@ -790,7 +804,7 @@ export function GiftPanel({ credits, allies, onSend, onClose }: {
         </button>
         {note && <small className={note.ok ? 'ew-good' : 'ew-bad'} role="status">{note.text}</small>}
       </Frame>
-    </div>
+    </KeptInside>
   )
 }
 
@@ -1601,13 +1615,20 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
   const box = useRef<HTMLDivElement>(null)
   const pos = drag ?? moved
-  /** A position moved inside the screen, below the top bar. */
+  /** A position (inside the screen's box) moved inside the screen with a margin, below the top
+   * bar: where a drag can take it (see fit.ts). */
   const clamp = (x: number, y: number) => {
     const el = box.current
     const root = el?.parentElement
     if (!el || !root) return { x, y }
-    return { x: Math.max(0, Math.min(root.clientWidth - el.offsetWidth, x)), y: Math.max(50, Math.min(root.clientHeight - Math.min(el.offsetHeight, 40), y)) }
+    const rr = root.getBoundingClientRect()
+    const p = clampToViewport({ x: rr.left + x, y: rr.top + y, w: el.offsetWidth, h: el.offsetHeight }, screenArea(root, undefined, topBarInset(root)))
+    return { x: p.x - rr.left, y: p.y - rr.top }
   }
+  // Wherever it sits (its default spot, or where it was dragged), all of it stays on the screen:
+  // pushed up off the bottom, in from the sides, below the top bar, as the window is resized or
+  // its content grows. Measured before it reports its box below, so that box is where it shows.
+  useKeepInside(box, { root: () => box.current?.parentElement ?? null, top: topBarInset })
   // Tell whoever lays out round it where it is, after every change. Whoever that is may move other
   // panels in turn, so this must settle: only a box that changed by a whole pixel is reported, in
   // the screen's own coordinates (however it got scrolled), and a box that keeps changing as fast as
@@ -1878,11 +1899,17 @@ export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: numbe
     const b = box.current
     const root = b?.parentElement
     if (!b || !root) return
-    // Down and to the right of the cursor; flipped to the other side near the edges.
-    const right = x + 18 + b.offsetWidth > root.clientWidth - 6
-    const below = y + 18 + b.offsetHeight > root.clientHeight - 6
-    b.style.left = `${Math.max(6, right ? x - 18 - b.offsetWidth : x + 18)}px`
-    b.style.top = `${Math.max(6, below ? y - 18 - b.offsetHeight : y + 18)}px`
+    // Down and to the right of the cursor; flipped to the other side near the edges, and kept
+    // inside the screen (fit.ts).
+    const rr = root.getBoundingClientRect()
+    const area = screenArea(root)
+    const px = rr.left + x
+    const py = rr.top + y
+    const right = px + 18 + b.offsetWidth > area.right
+    const below = py + 18 + b.offsetHeight > area.bottom
+    const p = clampToViewport({ x: right ? px - 18 - b.offsetWidth : px + 18, y: below ? py - 18 - b.offsetHeight : py + 18, w: b.offsetWidth, h: b.offsetHeight }, area)
+    b.style.left = `${p.x - rr.left}px`
+    b.style.top = `${p.y - rr.top}px`
     b.style.visibility = 'visible'
   })
   const u = w.byId.get(id)
@@ -1947,6 +1974,7 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
         ))}
       </div>
       {ab && <p className="ew-intel-ab"><b>{ab.name}:</b> {ab.blurb}</p>}
+      {traits(t).map((x) => <p key={x.name} className="ew-intel-ab">{x.tip}</p>)}
       {t.kind === 'wing' && (
         <p className="ew-intel-ab">
           <b>Home defense:</b> weaker away from the station. Within {fmt(DEFENSE_WING.radius)} of it full strength; further out, or once it's gone, {Math.round(DEFENSE_WING.away * 100)}% damage. Free, no fleet space, and rebuilt by the station's hangar when lost.
@@ -1983,6 +2011,10 @@ function orderText(w: World, u: Unit) {
   if (o.k === 'move') return o.attack ? 'Attack-moving' : 'Moving'
   if (u.retreat > 0) return `Charging hyperspace drive: jumping out in ${Math.ceil(u.retreat)} s`
   if (o.k === 'patrol') return 'Patrolling'
+  if (o.k === 'mend') {
+    const t = w.byId.get(o.id)
+    return t ? `Repairing ${t.owner === u.owner ? '' : 'allied '}${t.t.name}` : 'Repairing'
+  }
   if (o.k === 'guard') {
     const g = w.byId.get(o.id)
     return g ? `${escorts(u, g) ? 'Escorting' : 'Guarding'} ${g.t.name}` : 'Guarding'
@@ -2011,8 +2043,11 @@ function unitInfo(w: World, me: Owner, u: Unit, coarse: boolean) {
   const out: string[] = [t.blurb]
   if (u.rush) out.push(rushNote(u)!)
   if (r) out.push(`${r.role}\nStrong vs ${r.strong.join(', ')}\nWeak vs ${r.weak.join(', ')}`)
+  for (const x of traits(t)) out.push(x.tip)
   if (mine && t.tier === 'mine' && !building(u)) out.push(mineEarning(w, me, u).long)
   if (mine && !isShip(t) && u.guns.length > 0) out.push(GUNS_TIP)
+  if (mine && (t.support || t.ability === 'fieldRepair'))
+    out.push(`${coarse ? 'Long-press' : 'Right-click'} a damaged ship of ours or an ally's${t.support ? '' : ' (gunship class or bigger, or a station)'} to repair it: ${t.support ? 'it stays in reach' : 'the crew stays with it, welding whenever Field repair is ready,'} until it is whole, then goes back to what it was guarding or escorting.`)
   if (enemy && u.hps.length > 0) out.push(coarse ? 'Select your ships, then long-press a marker on this one and pick Attack to target that hardpoint.' : 'Select your ships, hover this one and right-click a marker to target that hardpoint.')
   return out.join('\n\n')
 }
@@ -2089,6 +2124,13 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           )}
           {mine && <RetreatIcon ships={squad.filter((x) => x.owner === me)} onRetreat={p.onRetreat} />}
         </header>
+        {/* What sets it apart (faction mechanics): a chip each, the whole story in its tip; given up
+            after the description and the role line when room runs out. */}
+        {traits(t).length > 0 && (
+          <span className="ew-traits" data-fit="3">
+            {traits(t).map((x) => <span key={x.name} className="ew-tag" data-tip={x.tip}>{x.name} {x.value}</span>)}
+          </span>
+        )}
         {/* Given up first when room runs out: the description, then the role line. */}
         <span className="ew-muted ew-small ew-fit-desc" data-fit="1">{t.blurb}</span>
         {r && (
