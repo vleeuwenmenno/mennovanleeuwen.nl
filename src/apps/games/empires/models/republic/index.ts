@@ -1,11 +1,13 @@
 import type { FactionModels } from '../spec.ts'
 import * as base from './base.ts'
 import * as craft from './craft.ts'
+import * as bastion from './station.ts'
 import * as warships from './warships.ts'
 
-// The Republic's models, by unit id (see models/index.ts): its strike craft, station and platforms
-// (craft.ts), its warships at their size (warships.ts), its engineers, yards and expansion modules
-// (base.ts). A station's id covers all its levels: the design grows with the level.
+// The Republic's models, by unit id (see models/index.ts): its strike craft and platforms
+// (craft.ts), its warships at their size (warships.ts), the Bastion Command Station (station.ts), its
+// engineers, yards and expansion modules (base.ts), all built from the kit in style.ts with the
+// turrets in mounts.ts. A station's id covers all its levels: the design grows with the level.
 
 export const MODELS: FactionModels = {
   defs: {
@@ -18,7 +20,7 @@ export const MODELS: FactionModels = {
     'r-frigate': warships.frigate,
     'r-cruiser': warships.cruiser,
     'r-capital': warships.capital,
-    'r-station': craft.station,
+    'r-station': bastion.station,
     'r-mine': craft.mine,
     'r-defense': craft.defense,
     'r-defense-flak': craft.defense,
@@ -29,5 +31,5 @@ export const MODELS: FactionModels = {
   },
   expansion: base.expansion,
   // The station's level-4 frame can be drawn square or octagonal.
-  styles: (t) => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...craft.STATION_FRAMES] : []),
+  styles: (t) => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...bastion.STATION_FRAMES] : []),
 }
