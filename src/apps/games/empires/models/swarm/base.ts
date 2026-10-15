@@ -268,12 +268,10 @@ function bud(id: string, [x, y]: Pt, r: number, z: number): Part {
 /** A yard's chitin wall down one side (the left), from `y0` at the bow horn to `y1`, `x0` to `x1`. */
 function wall(id: string, x0: number, x1: number, y0: number, y1: number, z: number): Part {
   const pts: Pt[] = [[x1, y0 + 6], [x0 + 3, y0 + 2], [x0, y0 + 10], [x0 - 1, (y0 + y1) / 2], [x0, y1 - 4], [x1, y1]]
-  return (
-    plate(id, blobby(pts, 3), 'hull', z, [-0.5, 0], {
-      lift: 3,
-      details: [...along([0, y0 + 14], [0, y1 - 8], 4).map(([, yy]): Detail => ({ k: 'line', pts: [[x0 + 1, yy], [x1 - 1, yy + 3]] })), glands(along([(x0 + x1) / 2, y0 + 18], [(x0 + x1) / 2, y1 - 10], 4), 0.8)],
-    })
-  )
+  return plate(id, blobby(pts, 3), 'hull', z, [-0.5, 0], {
+    lift: 3,
+    details: [...along([0, y0 + 14], [0, y1 - 8], 4).map(([, yy]): Detail => ({ k: 'line', pts: [[x0 + 1, yy], [x1 - 1, yy + 3]] })), glands(along([(x0 + x1) / 2, y0 + 18], [(x0 + x1) / 2, y1 - 10], 4), 0.8)],
+  })
 }
 
 /**
