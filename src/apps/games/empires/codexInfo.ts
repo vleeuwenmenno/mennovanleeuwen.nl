@@ -205,13 +205,14 @@ const pc = (v: number) => `${Math.round(v * 100)}%`
 /** A small rate as a percentage: one decimal below 10% (0.4%, not 0%). */
 const pc1 = (v: number) => (v < 0.1 ? `${Math.round(v * 1000) / 10}%` : pc(v))
 
-/** What sets a unit apart beyond its numbers: living hull, drain, fire control, a spinal gun, a
- * brood or carrier, no shields. Empty for most units. */
+/** What sets a unit apart beyond its numbers: living hull, drain, fire control, a shield projector,
+ * a spinal gun, a brood or carrier, no shields. Empty for most units. */
 export function traits(t: UnitType): Trait[] {
   const out: Trait[] = []
   if (t.regrow) out.push({ name: 'Living hull', value: `+${pc1(t.regrow.rate)}/s`, tip: `Living hull: out of the fight for ${t.regrow.delay} s (no enemy has hit it), its hull grows back by ${pc1(t.regrow.rate)} of its full hull a second. Shot-off modules don't grow back.` })
   if (t.drain) out.push({ name: 'Drain', value: `${Math.round(t.drain.dps)}/s`, tip: `Drain: every enemy it sees within ${Math.round(t.drain.radius)} loses ${Math.round(t.drain.dps)} hull a second, straight past its shields; ${pc(t.drain.heal)} of what it drains mends our damaged ships in reach, shared out.` })
   if (t.fireControl) out.push({ name: 'Fire control', value: `+${pc(t.fireControl.bonus)}`, tip: `Fire control: our ships within ${Math.round(t.fireControl.radius)}, itself included, hit ${pc(t.fireControl.bonus)} harder. Auras don't stack: the best one counts.` })
+  if (t.shieldAura) out.push({ name: 'Shield projector', value: `+${pc(t.shieldAura.regen)}`, tip: `Shield projector: our ships within ${Math.round(t.shieldAura.radius)}, itself included, recharge their shields ${pc(t.shieldAura.regen)} faster.${t.hardpoints.some((h) => h.kind === 'shield') ? ' It projects only while one of its shield projectors stands.' : ''} Auras don't stack: the best one counts.` })
   const spine = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))].find((x) => x.spinal)
   if (spine) {
     const deg = Math.round(((spine.arc ?? 0) * 180) / Math.PI)

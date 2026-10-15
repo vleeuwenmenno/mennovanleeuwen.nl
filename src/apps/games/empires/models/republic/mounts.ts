@@ -18,8 +18,9 @@ import type { Detail, Part, Pt } from '../types.ts'
 // cracks, for a module that was shot up but stays on the hull; and a burnt socket ('crater') for one
 // that was blown clean off.
 //
-// The common designs come from `build`; the Republic's own (the heavy battery, point defence and the
-// torpedo launcher) are its `extras`, picked per hardpoint with `look` in data/republic.ts.
+// The common designs come from `build`; the Republic's own (the heavy battery, point defence, the
+// torpedo launcher and the Sentinel's shield projector) are its `extras`, picked per hardpoint with
+// `look` in data/republic.ts.
 
 /** Ember glints in a broken module's cracks: a part with no body of its own, only its lights. */
 const embers = (pts: Pt[]): Part => part('embers', [], 'ember', 9, { glow: true, noOutline: true, details: [{ k: 'lights', pts, r: 0.07, tone: 'ember' }] })
@@ -142,12 +143,42 @@ const shield = (): Part[] => [
   }),
 ]
 
+/** The Sentinel's shield projector: a white dome banded in red on an octagonal ring, four graphite
+ * emitter vanes round it with blue tips, and a blue lens on its crown (a shield generator that
+ * reaches out). Broken: the dome burnt and split, the vanes gone, embers in the cracks. */
+const projector = (): Part[] => [
+  part('ring', octagon(0, 0, 1), 'metal', 0, { lift: 0.1, details: [{ k: 'line', pts: octagon(0, 0, 0.88) }] }),
+  // The emitter vanes on the diagonals, each with its blue emitter at the tip.
+  ...[0.785, 2.356, 3.927, 5.498].map((a, i) =>
+    part(`vane${i}`, turn([[-0.09, -0.62], [0.09, -0.62], [0.13, -1.02], [-0.13, -1.02]], a), 'dark', 0.6, {
+      lift: 0.08,
+      details: [{ k: 'lights', pts: [[Math.sin(a) * 0.94, -Math.cos(a) * 0.94]], r: 0.075, tone: 'glow' }],
+    }),
+  ),
+  part('dome', circle(0, 0, 0.7, 26), 'hull', 1, {
+    sphere: true,
+    details: [
+      { k: 'shape', pts: box(0, 0.12, 1.5, 0.2), tone: 'accent' },
+      { k: 'line', pts: circle(0, 0, 0.5, 20) },
+    ],
+  }),
+  part('lens', circle(0, -0.06, 0.26, 18), 'glass', 2, { lift: 0.06, details: [{ k: 'shape', pts: circle(-0.07, -0.13, 0.1, 10), tone: 'glow' }] }),
+]
+
+/** A shot-up projector: the dome burnt and split open. */
+const brokenProjector = (): Part[] => [
+  part('ring', octagon(0, 0, 1), 'char', 0, { lift: 0.08 }),
+  part('dome', circle(0, 0, 0.68, 20), 'char', 1, { sphere: true, details: [{ k: 'shape', pts: [[-0.5, -0.3], [-0.05, -0.05], [0.25, -0.55], [0.45, 0], [0.05, 0.3], [-0.3, 0.15]], tone: 'dark' }] }),
+  embers([[-0.25, -0.2], [0.3, -0.3], [0.1, 0.2], [-0.5, 0.35], [0.6, 0.45]]),
+]
+
 /** The Republic's own designs beyond the common ones (models/mounts.ts): the heavy capital
- * battery, point defence and the torpedo launcher. */
+ * battery, point defence, the torpedo launcher and the shield projector. */
 export const extras: MountExtras = {
   triple: (broken) => (broken ? brokenGun(true) : heavy()),
   pd: (broken) => (broken ? brokenGun(false) : pd()),
   torpedo: (broken) => (broken ? brokenGun(false) : torpedo()),
+  projector: (broken) => (broken ? brokenProjector() : projector()),
 }
 
 /** A shot-up gun: the housing burnt dark and cracked, a stub or two of barrel bent askew. */

@@ -83,5 +83,6 @@ export function sized(t: UnitType, layout?: Layout): UnitType {
     ...(t.support ? { support: { ...t.support, range: Math.round(t.support.range * BIG_SPREAD) } } : {}),
     ...(t.drain ? { drain: { ...t.drain, radius: Math.round(t.drain.radius * BIG_SPREAD) } } : {}),
     ...(t.fireControl ? { fireControl: { ...t.fireControl, radius: Math.round(t.fireControl.radius * BIG_SPREAD) } } : {}),
+    ...(t.shieldAura ? { shieldAura: { ...t.shieldAura, radius: Math.round(t.shieldAura.radius * BIG_SPREAD) } } : {}),
   }
 }

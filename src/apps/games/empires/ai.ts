@@ -553,6 +553,9 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
   const tenders = army.filter((u) => u.t.kind === 'support').length
   const menders = army.filter((u) => u.t.kind === 'repair').length / 2
   const warships = army.filter(warship).length
+  // How much of its warships' staying power is shields (0 to 1): what a shield projector works on.
+  const lines = army.filter(warship)
+  const shieldy = lines.length ? lines.reduce((s, u) => s + u.t.shield, 0) / Math.max(1, lines.reduce((s, u) => s + u.t.shield + u.t.hull, 0)) : 0
   // Up the classes: the biggest the station allows are wanted most, the early ones less once
   // there's better, unless they're what counters the enemy.
   const base: Record<string, number> = { fighter: 1, gunship: 1, frigate: 1.6, cruiser: 2.4, capital: 4 }
@@ -575,6 +578,10 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     if (t.kind === 'bomber') v *= 1 - small * 0.6
     // A fire-control ship makes every warship round it hit harder: worth more the more there are.
     if (t.fireControl) v *= 1 + Math.min(1.5, warships / 6) * t.fireControl.bonus * 4
+    // A shield projector speeds the shields of the fleet round it: worth more the more warships it
+    // has and the more of their staying power is shields (nothing to a side without them), one or
+    // two at most.
+    if (t.shieldAura) v *= (0.4 + Math.min(1.5, warships / 4) * shieldy * t.shieldAura.regen * 2.2) / (1 + 0.8 * count(t.id))
     // A drain ship heals the fleet it flies with: worth more with a fleet, one or two at most.
     if (t.drain) v *= (army.length >= 5 ? 1.3 : 0.6) / (1 + 0.6 * count(t.id))
     // Living hulls mend themselves between fights: a little more staying power than the numbers say.
@@ -604,7 +611,7 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
 const EFFECT_WORTH: Record<string, number> = {
   range: 1.4, hull: 1, shield: 0.9, regen: 0.3, damage: 1.1, cooldown: 1.1, speed: 0.35, build: 0.4, hangar: 0.9, repair: 0.7, mines: 0,
   // The faction mechanics' research (see TechEffect): an aura's few points of bonus go a long way.
-  shieldDamage: 0.8, aura: 5, auraRadius: 0.6, regrow: 0.6, regrowDelay: 0.5, drain: 0.8, drainHeal: 0.5,
+  shieldDamage: 0.8, aura: 5, auraRadius: 0.6, regrow: 0.6, regrowDelay: 0.5, drain: 0.8, drainHeal: 0.5, shieldAura: 0.8,
 }
 
 /**
@@ -1001,8 +1008,8 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Scouts: a couple of fast ships keep the beacons ours.
   if (!b.attacking && b.scouts.size < 2 && w.time >= b.scoutWait) {
-    // (A drain ship stays with the fleet: it's no use on its own.)
-    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
+    // (A drain ship or a shield projector stays with the fleet: it's no use on its own.)
+    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !u.t.shieldAura && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
     if (spare) b.scouts.add(spare.id)
   }
   // Early on, before there are spare warships, the starting fighters do the surveying.
@@ -1259,7 +1266,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   let flank: { x: number; y: number } | null = null
   const speeds = troops.filter((u) => u.t.tier !== 'fighter').map((u) => u.t.speed).sort((a, z) => a - z)
   const quick = speeds.length ? speeds[Math.floor(speeds.length / 2)] * 1.15 : Infinity
-  const flanker = (u: Unit) => !!flank && (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && u.t.speed >= quick && d2(u, flank) > sq(mapDist(450))
+  const flanker = (u: Unit) => !!flank && (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !u.t.shieldAura && u.t.speed >= quick && d2(u, flank) > sq(mapDist(450))
   if (Doc.flank && goal !== enemySt && troops.length >= 4) {
     const ax = goal.x - st.x
     const ay = goal.y - st.y

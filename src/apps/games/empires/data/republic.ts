@@ -190,6 +190,27 @@ const SHIPS: UnitType[] = [
     engines: [[3.2, 9.7], [5, 9.75], [6.8, 9.7]],
     ability: 'flakBarrage',
   },
+  // The Sentinel destroyer: the fleet's shield escort, the Republic's second frigate-tier ship (built
+  // at the Frigate Yard like the Warden). Three shield projectors speed the shields of every ship of
+  // ours round it while one of them stands; one turbolaser and four point-defence turrets of its own.
+  {
+    id: 'r-destroyer', faction: 'republic', tier: 'frigate', name: 'Sentinel destroyer', blurb: 'A shield escort. Its three projector domes feed the shields of every ship of ours round it: they recharge twice as fast. Light guns and point defence; shoot its projectors off and the fleet loses the cover.',
+    sprite: 'republic-destroyer', aspect: 0.5, size: 140, hull: 960, shield: 720, regen: 15, speed: 80, turn: 1.0, pop: 3, cost: 850, build: 23, level: 2, squad: 1, sensor: 1050,
+    weapons: [],
+    // A turbolaser on the bow, the three projector domes (two on the flanks, the big one on the
+    // spine), four point-defence turrets and two engine pods.
+    hardpoints: [
+      gun('turbo', 5, 2.5, 0.06, 200, turbo(15, 560, 2.2, 2)),
+      { ...M('shield', 'shield', 2.95, 5.3, 0.085, 230), look: 'projector' }, { ...M('shield', 'shield', 7.05, 5.3, 0.085, 230), look: 'projector' },
+      { ...M('shield', 'shield', 5, 6.65, 0.1, 300), look: 'projector' },
+      { ...gun('flak', 3.75, 3.85, 0.045, 150, flak(6, 340, 0.3)), look: 'pd' }, { ...gun('flak', 6.25, 3.85, 0.045, 150, flak(6, 340, 0.3)), look: 'pd' },
+      { ...gun('flak', 2.2, 7.7, 0.045, 150, flak(6, 340, 0.3)), look: 'pd' }, { ...gun('flak', 7.8, 7.7, 0.045, 150, flak(6, 340, 0.3)), look: 'pd' },
+      P('engine', 3.55, 9.0, 110), P('engine', 6.45, 9.0, 110),
+    ],
+    engines: [[3.55, 9.7], [6.45, 9.7]],
+    shieldAura: { radius: 560, regen: 1 },
+    role: { role: 'Shield escort', strong: ['long fights', 'fighters', 'keeping shields up'], weak: ['ion', 'bombers', 'being caught alone'] },
+  },
   {
     id: 'r-cruiser', faction: 'republic', tier: 'cruiser', name: 'Paladin cruiser', blurb: 'Line warship with heavy turbolasers. Knock out its shield bulbs first.',
     sprite: 'republic-cruiser', aspect: 0.376, size: 220, hull: 2500, shield: 1500, regen: 24, speed: 52, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
@@ -217,6 +238,30 @@ const SHIPS: UnitType[] = [
       P('engine', 2.3, 9.0, 160), P('engine', 3.38, 9.05, 160), P('engine', 5.55, 9.05, 160), P('engine', 6.62, 9.05, 160), P('engine', 7.7, 9.0, 160),
     ],
     engines: [[2.3, 9.7], [3.38, 9.76], [4.45, 9.8], [5.55, 9.8], [6.62, 9.76], [7.7, 9.7]], ability: 'broadside', carrier: { unit: 'r-fighter', every: 28, max: 2 },
+  },
+  // The Resolute battleship: the command carrier. Shares the flagships' tier and their limit of one
+  // (built at the Capital Yard like the Sovereign); fewer and lighter guns than the Sovereign, a
+  // flight deck of Lance squadrons and a command bridge whose fire control makes every gun of ours
+  // round it hit harder.
+  {
+    id: 'r-battleship', faction: 'republic', tier: 'capital', name: 'Resolute battleship', blurb: 'A command carrier. Its flight deck keeps three Lance squadrons in the air, and its command bridge directs the guns of every warship round it: they hit 15% harder. Lighter guns than the Sovereign\'s.',
+    sprite: 'republic-battleship', aspect: 0.56, size: 280, hull: 4600, shield: 2800, regen: 32, speed: 37, turn: 0.38, pop: 9, cost: 3300, build: 60, level: 4, squad: 1, sensor: 1450,
+    weapons: [],
+    // Two heavy turbolasers forward and two lighter ones on the aft flanks, point defence at the bow
+    // and the stern corners, shield bulbs aft, the two flight bays down the deck and four engine pods.
+    hardpoints: [
+      { ...gun('turbo', 3.6, 3.0, 0.06, 640, turbo(50, 740)), look: 'triple' }, { ...gun('turbo', 6.4, 3.0, 0.06, 640, turbo(50, 740)), look: 'triple' },
+      gun('turbo', 2.45, 6.3, 0.05, 420, turbo(30, 700)), gun('turbo', 7.55, 6.3, 0.05, 420, turbo(30, 700)),
+      { ...gun('flak', 4.25, 1.75, 0.035, 280, flak(6, 340, 0.8)), look: 'pd' }, { ...gun('flak', 5.75, 1.75, 0.035, 280, flak(6, 340, 0.8)), look: 'pd' },
+      { ...gun('flak', 1.75, 7.75, 0.04, 280, flak(6, 340, 0.8)), look: 'pd' }, { ...gun('flak', 8.25, 7.75, 0.04, 280, flak(6, 340, 0.8)), look: 'pd' },
+      M('shield', 'shield', 3.3, 7.7, 0.06, 640), M('shield', 'shield', 6.7, 7.7, 0.06, 640),
+      M('hangar', 'hangar', 5, 3.95, 0.07, 700), M('hangar', 'hangar', 5, 5.55, 0.07, 700),
+      P('engine', 2.9, 9.05, 200), P('engine', 4.3, 9.1, 200), P('engine', 5.7, 9.1, 200), P('engine', 7.1, 9.05, 200),
+    ],
+    engines: [[2.9, 9.72], [4.3, 9.78], [5.7, 9.78], [7.1, 9.72]],
+    ability: 'launchSwarm', carrier: { unit: 'r-fighter', every: 20, max: 3 },
+    fireControl: { radius: 650, bonus: 0.15 },
+    role: { role: 'Command carrier', strong: ['fighters', 'frigates', 'cruisers'], weak: ['bombers', 'flagships'] },
   },
 ]
 
@@ -295,6 +340,10 @@ export const REPUBLIC: FactionData = {
     tech('republic', 'r-cruiser', 'r-cr-armour', 'Armour plating', 'Paladins get 25% more hull.', 800, 45, 3, { hull: 0.25 }, ['r-cr-cap']),
     tech('republic', 'r-capital', 'r-ca-range', 'Fleet targeting array', 'Sovereign guns reach 15% further.', 1200, 60, 4, { range: 0.15 }),
     tech('republic', 'r-capital', 'r-ca-bulbs', 'Reinforced shield bulbs', 'Sovereign shields 30% stronger, recharging faster.', 1200, 60, 4, { shield: 0.3, regen: 0.3 }, ['r-ca-range']),
+    tech('republic', 'r-destroyer', 'r-de-proj', 'Projector arrays', 'Sentinel projectors pour more power into the fleet\'s shields: ships in their reach recharge 150% faster instead of 100%.', 650, 40, 2, { shieldAura: 0.5 }),
+    tech('republic', 'r-destroyer', 'r-de-field', 'Wide-field emitters', 'Sentinel projectors reach 25% further, and its own shields are 20% stronger.', 600, 40, 2, { auraRadius: 0.25, shield: 0.2 }, ['r-de-proj']),
+    tech('republic', 'r-battleship', 'r-bs-cmd', 'Fleet command', 'The Resolute\'s command bridge links more of the fleet: its fire control reaches 20% further and adds 5% more damage.', 1100, 55, 4, { aura: 0.05, auraRadius: 0.2 }),
+    tech('republic', 'r-battleship', 'r-bs-deck', 'Flight deck crews', 'Resolutes launch Lance squadrons faster and keep one more squadron out.', 1100, 55, 4, { hangar: 1 }, ['r-bs-cmd']),
     tech('republic', 'r-cyard', 'r-yd-rush', 'Rushed construction', 'Crews trained to launch a warship before it is finished: the Capital Yard can rush out the ship it is building once it is half done (Rush launch). It comes out damaged, with turrets still in scaffolding, and needs repair crews to be finished. Needs a Citadel Capital Yard.', 800, 45, 3, {}),
   ],
   rushTech: 'r-yd-rush',

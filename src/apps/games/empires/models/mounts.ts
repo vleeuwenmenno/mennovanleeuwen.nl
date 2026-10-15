@@ -39,7 +39,7 @@ const MOUNTS = { republic, droid, swarm } as Record<FactionId, FactionMounts>
 /** The common design drawn for an extra a faction hasn't drawn: the nearest in what it is. */
 export const FALLBACK: Record<MountExtra, MountDesign> = {
   torpedo: 'turbo', pd: 'flak', triple: 'turbo', missileBox: 'turbo', strike: 'turbo', railgun: 'turbo', beam: 'turbo', quad: 'flak',
-  spore: 'flak', acid: 'turbo', lance: 'ion', bioturret: 'turbo', parasite: 'flak', regen: 'shield', engineSac: 'engine', broodSac: 'hangar', spine: 'turbo',
+  spore: 'flak', acid: 'turbo', lance: 'ion', bioturret: 'turbo', parasite: 'flak', regen: 'shield', engineSac: 'engine', broodSac: 'hangar', spine: 'turbo', projector: 'shield',
 }
 const isExtra = (d: AnyLook): d is MountExtra => d in FALLBACK
 
