@@ -537,7 +537,7 @@ opens in and where new events go), Contacts (where new contacts go), Files (view
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's Settings on the Keybinds
 tab and another for the sound mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
-night mode), Preview (sidebar) and Terminal. Each pane reads and writes the very store the app uses
+night mode), Preview (sidebar), Terminal and Weather (Celsius or Fahrenheit). Each pane reads and writes the very store the app uses
 ([`src/data/appPrefs.ts`](src/data/appPrefs.ts), [`src/apps/games/prefs.ts`](src/apps/games/prefs.ts),
 through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this browser), so an open
 window follows a change at once and the other way round. Every field for a secret that belongs to another
@@ -1604,9 +1604,22 @@ they had, moved to where you drop them. Add widgets from the desktop's menu (*Ad
 Today there are six: **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
-device), **Agenda** (Google Calendar and CalDAV, see above), **Code inbox**, **Status** (updown.io)
-and **Minecraft server** (up or not, the address to copy, who is on with their heads, and the
-in-game day and time when RCON is set up; a click opens the Minecraft server window).
+device; double-click or the menu opens the full **Weather** app), **Agenda** (Google Calendar and
+CalDAV, see above), **Code inbox**, **Status** (updown.io) and **Minecraft server** (up or not, the
+address to copy, who is on with their heads, and the in-game day and time when RCON is set up; a
+click opens the Minecraft server window).
+
+### Weather
+
+The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a full forecast window in the
+spirit of Apple Weather: current conditions, the next 24 hours (temperature, precipitation or wind),
+a 10-day outlook with temperature-range bars, and detail tiles for UV, feels like, precipitation,
+visibility, humidity, pressure, wind, sunrise/sunset, moon phase and air quality. It uses the same
+Open-Meteo fetch as the widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the
+browser with no API key. On a wide window the layout grows to a multi-column tile grid and an optional
+locations sidebar; on a phone or a narrow pane it stays a single scrolling column with a locations
+sheet. Saved cities and units sync with your account; the browser's own location stays on that device.
+Open it from All apps, Spotlight, the dock, `weather` in the terminal, or from the weather widget.
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
