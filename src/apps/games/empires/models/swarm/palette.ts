@@ -1,24 +1,34 @@
 import type { Palette } from '../kit.ts'
 
-// The Swarm's colours: for now the ones the Confederacy's first designs had (its concept): bone-tan
-// shells with violet accents, glass and engine light. Two roles mark a job rather than a side: `aid`
-// is the green of repair craft, `trim` the gold of a station's own defense wing.
+// The Swarm's colours, from its reference sheet: pale organic chitin plates over dark purple chitin
+// and darker tissue, violet glowing cores and weapon light, acid-green secondary glows and engine
+// sacs, outlined in purple-black. The roles, as the Swarm uses them:
+//   hull    pale chitin armour plates (#B8AAB7)
+//   hull2   desaturated lavender plates and shells (#8E819A)
+//   accent  violet bands and inlays (#B34CDA) on plates and mounts
+//   metal   dark purple chitin, the structure under the plates (#41334F)
+//   dark    dark internal tissue and recesses (#282033, #1B1524)
+//   glass   the bright violet of eyes and weapon emission (#D263F0)
+//   glow    violet biological glow, cores and lights (#B34CDA)
+//   aid     acid-green secondary glow (#A5E55F): vents, sacs, healers
+// Two roles mark a job rather than a side, as every faction's do: `aid` is also the green of repair
+// craft, `trim` the gold of a station's own defense wing.
 
 /** Three cel tones (lit, base, shadow) for every colour role, and the outline, smoke and debris. */
 export const PALETTE: Palette = {
-  hull: ['#f6e7c6', '#d9c095', '#9a8263'],
-  hull2: ['#e5cfa6', '#bea57a', '#7c684d'],
-  accent: ['#c9a0ff', '#8c55d6', '#4c2c7c'],
-  metal: ['#86766a', '#5e5248', '#3a322c'],
-  dark: ['#4e4038', '#332822', '#1e1814'],
-  glass: ['#f0d6ff', '#a070ff', '#4e3290'],
-  glow: ['#f4e2ff', '#c890ff', '#8a50d0'],
-  char: ['#4a3d34', '#2e2520', '#1a1411'],
-  ember: ['#ffe29a', '#ff8a3a', '#c4401a'],
-  aid: ['#d6f7a8', '#86cc54', '#41702a'],
-  trim: ['#ffe7a0', '#d8a444', '#8a5e22'],
-  outline: '#1b130d',
-  engine: '#c890ff',
-  smoke: 'rgba(58,52,48,1)',
-  debris: '#c8b48c',
+  hull: ['#ddd2dc', '#b8aab7', '#81738a'],
+  hull2: ['#aa9db6', '#8e819a', '#5f5470'],
+  accent: ['#d98af2', '#b34cda', '#76299a'],
+  metal: ['#5b4a6c', '#41334f', '#2c2238'],
+  dark: ['#372b45', '#282033', '#1b1524'],
+  glass: ['#f4d4ff', '#d263f0', '#8a32b0'],
+  glow: ['#f2d6ff', '#b34cda', '#7a2c9c'],
+  char: ['#3c3038', '#282027', '#171216'],
+  ember: ['#e6ffb0', '#97ed74', '#4f9a2e'],
+  aid: ['#e2fbb6', '#a5e55f', '#5c962c'],
+  trim: ['#f3e3a4', '#d0b264', '#866d34'],
+  outline: '#211929',
+  engine: '#97ed74',
+  smoke: 'rgba(52,40,60,1)',
+  debris: '#b8aab7',
 }
