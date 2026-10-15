@@ -1,7 +1,7 @@
 // A big mixed battle with the Swarm in it, measured the way `pnpm check:perf` measures its skirmish
 // scenes (headless Chromium, the stepped clock from scripts/perf/harness.js): main-thread ms per
 // frame, canvas draw calls and the bitmap cache, at the default zoom and zoomed right in. The same
-// battle is run with the Republic in the Swarm's place to compare against.
+// battle is run with the Republic, and with the Confederacy (a mirror), in the Swarm's place to compare.
 //
 //   node scripts/empires-swarm-perf.ts [ships]     (default 200)
 
@@ -98,7 +98,7 @@ async function battle(page: Page, url: string, side: string) {
 const { url, server } = await startServer(ROOT)
 const browser = await launch(VW, VH)
 try {
-  for (const side of ['republic', 'swarm']) {
+  for (const side of ['republic', 'swarm', 'droid']) {
     const page = await newPage(browser, VW, VH, HARNESS)
     const r = await battle(page, url, side)
     console.log(`${side} v droid, ${N} ships: default zoom ${r.wide.ms.toFixed(2)} ms/frame, ${r.wide.draws.toFixed(0)} draws; max zoom ${r.close.ms.toFixed(2)} ms/frame, ${r.close.draws.toFixed(0)} draws; cache ${r.mb.toFixed(1)} MB${page.errors.length ? `; page errors: ${page.errors.slice(0, 2).join(' | ')}` : ''}`)
