@@ -21,10 +21,10 @@ const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2
 /** Living hulls: how fast each kind grows its hull back once nothing has hit it for `delay` seconds
  * (a share of its full hull a second). Small things knit fast, the great ones slowly. */
 const REGROW = {
-  craft: { rate: 0.03, delay: 7 },
-  ship: { rate: 0.012, delay: 9 },
-  capital: { rate: 0.007, delay: 10 },
-  structure: { rate: 0.006, delay: 12 },
+  craft: { rate: 0.02, delay: 9 },
+  ship: { rate: 0.008, delay: 11 },
+  capital: { rate: 0.004, delay: 12 },
+  structure: { rate: 0.004, delay: 15 },
 }
 
 /**
@@ -151,11 +151,11 @@ function capitalYard(): UnitType {
  */
 const HARVESTER: UnitType = {
   id: 's-frigate', faction: 'swarm', tier: 'frigate', name: 'Harvester frigate', blurb: 'A multi-limbed war organism: tendril lances on its claws, a spore cannon on its head and acid sprayers that strip fighters off it. When it is badly hurt its tissue knits furiously.',
-  sprite: 'swarm-frigate', aspect: 0.62, size: 135, hull: 1500, shield: 0, regen: 0, speed: 76, turn: 1.0, pop: 3, cost: 680, build: 18, level: 2, squad: 1, sensor: 950,
+  sprite: 'swarm-frigate', aspect: 0.62, size: 135, hull: 1300, shield: 0, regen: 0, speed: 76, turn: 1.0, pop: 3, cost: 710, build: 18, level: 2, squad: 1, sensor: 950,
   weapons: [],
   hardpoints: [
     gun('turbo', 2.58, 2.9, 0.07, 280, turbo(19, 520, 1.4, 1)), gun('turbo', 7.42, 2.9, 0.07, 280, turbo(19, 520, 1.4, 1)),
-    sporeNode(5, 1.6, 0.07, 300, spore(22, 560, 3.4)),
+    sporeNode(5, 1.6, 0.07, 300, spore(16, 560, 3.4)),
     gun('flak', 2.42, 7.2, 0.055, 180, flak(6, 320, 0.33)), gun('flak', 7.58, 7.2, 0.055, 180, flak(6, 320, 0.33)),
   ],
   engines: [[3.6, 9.45], [5, 9.65], [6.4, 9.45]],
@@ -170,12 +170,12 @@ const HARVESTER: UnitType = {
  */
 const DEVOURER: UnitType = {
   id: 's-cruiser', faction: 'swarm', tier: 'cruiser', name: 'Devourer cruiser', blurb: 'A long armoured spine studded with weapon organs: heavy tendril lances, spore cannons, and tendrils that pin ships in place. No shields, a vast regrowing hull.',
-  sprite: 'swarm-cruiser', aspect: 0.5, size: 250, hull: 3500, shield: 0, regen: 0, speed: 50, turn: 0.55, pop: 5, cost: 1400, build: 29, level: 3, squad: 1, sensor: 1200,
+  sprite: 'swarm-cruiser', aspect: 0.5, size: 250, hull: 3100, shield: 0, regen: 0, speed: 50, turn: 0.55, pop: 5, cost: 1450, build: 29, level: 3, squad: 1, sensor: 1200,
   weapons: [],
   hardpoints: [
     gun('turbo', 2.4, 5.8, 0.065, 600, turbo(40)), gun('turbo', 7.6, 5.8, 0.065, 600, turbo(40)),
     gun('turbo', 3.1, 3.0, 0.05, 240, turbo(12, 480, 1.2, 1)), gun('turbo', 6.9, 3.0, 0.05, 240, turbo(12, 480, 1.2, 1)),
-    sporeNode(1.9, 7.3, 0.06, 420, spore(30, 640, 3.6)), sporeNode(8.1, 7.3, 0.06, 420, spore(30, 640, 3.6)),
+    sporeNode(1.9, 7.3, 0.06, 420, spore(24, 640, 3.6)), sporeNode(8.1, 7.3, 0.06, 420, spore(24, 640, 3.6)),
     P('engine', 4, 9.35, 460), P('engine', 6, 9.35, 460),
   ],
   engines: [[4, 9.6], [6, 9.6]], ability: 'tractor',
@@ -189,12 +189,12 @@ const DEVOURER: UnitType = {
  */
 const LEVIATHAN: UnitType = {
   id: 's-capital', faction: 'swarm', tier: 'capital', name: 'Leviathan dreadnought', blurb: 'A living hive vessel round a great violet core. Its brood chambers never stop spawning Stingers, and its hull grows back between battles.',
-  sprite: 'swarm-capital', aspect: 0.66, size: 380, hull: 8200, shield: 0, regen: 0, speed: 31, turn: 0.32, pop: 10, cost: 3600, build: 58, level: 4, squad: 1, sensor: 1500,
+  sprite: 'swarm-capital', aspect: 0.66, size: 380, hull: 7200, shield: 0, regen: 0, speed: 31, turn: 0.32, pop: 10, cost: 3800, build: 60, level: 4, squad: 1, sensor: 1500,
   weapons: [],
   hardpoints: [
     gun('turbo', 3.18, 3.6, 0.07, 720, turbo(50, 720)), gun('turbo', 6.82, 3.6, 0.07, 720, turbo(50, 720)), gun('turbo', 2.88, 6.4, 0.07, 720, turbo(50, 720)), gun('turbo', 7.12, 6.4, 0.07, 720, turbo(50, 720)),
     gun('flak', 1.67, 2.6, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 8.33, 2.6, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 0.9, 5.2, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 9.1, 5.2, 0.045, 300, flak(6, 340, 0.9)),
-    sporeNode(4.09, 1.8, 0.065, 640, spore(40, 760, 3.8)), sporeNode(5.91, 1.8, 0.065, 640, spore(40, 760, 3.8)),
+    sporeNode(4.09, 1.8, 0.065, 640, spore(32, 760, 3.8)), sporeNode(5.91, 1.8, 0.065, 640, spore(32, 760, 3.8)),
     P('engine', 5, 9.4, 950),
     M('hangar', 'hangar', 2.27, 7.8, 0.075, 760), M('hangar', 'hangar', 7.73, 7.8, 0.075, 760),
   ],
@@ -226,19 +226,19 @@ export const SWARM: FactionData = {
   ships: [
     {
       id: 's-fighter', faction: 'swarm', tier: 'fighter', name: 'Stinger interceptor', blurb: 'Five darting predators to a brood. Fragile and cheap, they hatch fast, and their barbs and venom stings add up against big ships.',
-      sprite: 'swarm-fighter', aspect: 0.8, size: 26, hull: 40, shield: 0, regen: 0, speed: 265, turn: 4.5, pop: 1, cost: 200, build: 8, level: 1, squad: 5, sensor: 650,
+      sprite: 'swarm-fighter', aspect: 0.8, size: 26, hull: 38, shield: 0, regen: 0, speed: 265, turn: 4.5, pop: 1, cost: 220, build: 8, level: 1, squad: 5, sensor: 650,
       weapons: [laser(5, 230, 0.45), torpedo(14, 260)], hardpoints: [], engines: [[5, 9.1]],
       regrow: REGROW.craft,
     },
     {
       id: 's-gunship', faction: 'swarm', tier: 'gunship', name: 'Ravager gunship', blurb: 'An elongated hunter with acid sprayers on its forelimbs and a bio-turret of spines on its back: it tears strike craft apart.',
-      sprite: 'swarm-gunship', aspect: 0.75, size: 62, hull: 460, shield: 0, regen: 0, speed: 170, turn: 2.6, pop: 2, cost: 360, build: 11, level: 1, squad: 1, sensor: 780,
+      sprite: 'swarm-gunship', aspect: 0.75, size: 62, hull: 420, shield: 0, regen: 0, speed: 170, turn: 2.6, pop: 2, cost: 390, build: 12, level: 1, squad: 1, sensor: 780,
       weapons: [flak(6, 290, 0.28), laser(12, 320, 1)], hardpoints: [], engines: [[3.9, 9.4], [6.1, 9.4]],
       regrow: REGROW.ship,
     },
     {
       id: 's-bomber', faction: 'swarm', tier: 'fighter', kind: 'bomber', name: 'Brood bomber', blurb: 'Bloated spore carriers, three to a brood. Cheap and fragile; their caustic spore sacs eat through big hulls.',
-      sprite: 'swarm-bomber', aspect: 0.95, size: 34, hull: 90, shield: 0, regen: 0, speed: 180, turn: 3, pop: 2, cost: 360, build: 11, level: 2, squad: 3, sensor: 620,
+      sprite: 'swarm-bomber', aspect: 0.95, size: 34, hull: 85, shield: 0, regen: 0, speed: 180, turn: 3, pop: 2, cost: 390, build: 12, level: 2, squad: 3, sensor: 620,
       weapons: [laser(4, 220, 0.6), torpedo(46, 230, 6)], hardpoints: [], engines: [[5, 9.2]],
       regrow: REGROW.craft,
       role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
@@ -266,9 +266,9 @@ export const SWARM: FactionData = {
     },
     {
       id: 's-corvette', faction: 'swarm', tier: 'gunship', kind: 'support', name: 'Leech corvette', blurb: 'A segmented support hunter. Its feeding tendrils drain the hull of every enemy near it, past their shields, and pass the biomass on to our wounded ships. Lightly armed; keep it close behind the line.',
-      sprite: 'swarm-corvette', aspect: 0.7, size: 84, hull: 680, shield: 0, regen: 0, speed: 140, turn: 1.8, pop: 2, cost: 480, build: 15, level: 2, squad: 1, sensor: 900,
+      sprite: 'swarm-corvette', aspect: 0.7, size: 84, hull: 600, shield: 0, regen: 0, speed: 140, turn: 1.8, pop: 2, cost: 520, build: 16, level: 2, squad: 1, sensor: 900,
       weapons: [laser(5, 260, 0.5)], hardpoints: [], engines: [[3.9, 9.4], [6.1, 9.4]],
-      drain: { radius: 420, dps: 7, heal: 1.6 },
+      drain: { radius: 420, dps: 5, heal: 1.4 },
       regrow: REGROW.ship,
       role: { role: 'Drain support', strong: ['long fights', 'shielded ships'], weak: ['fighters', 'anything that catches it alone'] },
     },
@@ -285,10 +285,10 @@ export const SWARM: FactionData = {
     // Every stage is centred on the same point of the frame (628, 592), from the small Hive Seed to
     // the towering Hive Nexus.
     stages: [
-      { box: [423, 387, 833, 797], hull: 6600, shield: 0 },
-      { box: [303, 267, 953, 917], hull: 8900, shield: 0 },
-      { box: [153, 117, 1103, 1067], hull: 11300, shield: 0 },
-      { box: [88, 18, 1168, 1166], hull: 13800, shield: 0 },
+      { box: [423, 387, 833, 797], hull: 6200, shield: 0 },
+      { box: [303, 267, 953, 917], hull: 8000, shield: 0 },
+      { box: [153, 117, 1103, 1067], hull: 10300, shield: 0 },
+      { box: [88, 18, 1168, 1166], hull: 12300, shield: 0 },
     ],
     modules: [
       sGun('t1', 'turbo', 628 + 112, 592 + 96, 1),
