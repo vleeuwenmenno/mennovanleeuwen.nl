@@ -1,5 +1,5 @@
 import { arcBand, box, chamfer, circle, part, rect, rounded, sym, turn } from '../kit.ts'
-import type { MountLook } from '../mounts.ts'
+import type { MountExtras, MountLook } from '../mounts.ts'
 import type { Detail, Part, Pt } from '../types.ts'
 import { block } from './parts.ts'
 
@@ -14,13 +14,14 @@ import { block } from './parts.ts'
 // broken version: barrels stripped and bent, housing burnt black with embers in the cracks; and a
 // burnt socket ('crater') for one blown clean off.
 //
-// Which design a hardpoint gets: 'turbo' is the triple cannon (heavy batteries), 'flak' the flak
-// turret, 'ion' the missile turret (the Breaker's ion lance is part of its hull, its hardpoint a
-// collar). The dual cannon, point defence and strike launcher are drawn here too (ConfedMount), for
-// when the shared mount designs grow names for them.
+// Which design a hardpoint gets: 'turbo' is the dual cannon (the line's general gun), 'flak' the
+// flak turret, 'ion' an ion emitter; the extras (a hardpoint's `look` in data/droid.ts) are the
+// triple cannon for heavy batteries ('triple'), the missile turret ('missileBox'), the point
+// defence ('pd') and the strike launcher ('strike'). The Breaker's ion lance is part of its hull,
+// its hardpoint a collar.
 
-/** The turret designs drawn here beyond the shared ones. */
-export type ConfedMount = 'dual' | 'pd' | 'launcher' | 'missile'
+/** Every design drawn here, the shared ones and the extras. */
+type Look = MountLook | 'triple' | 'missileBox' | 'pd' | 'strike'
 
 /** Ember glints in a broken module's cracks: a part with no body of its own, only its lights. */
 const embers = (pts: Pt[]): Part => part('embers', [], 'ember', 9, { glow: true, noOutline: true, details: [{ k: 'lights', pts, r: 0.07, tone: 'ember' }] })
@@ -53,7 +54,7 @@ const caps = (x: number, y: number, h: number): Detail[] => [
   { k: 'shape', pts: rect(x - 0.07, y - h / 2, 0.14, h), tone: 'accent' },
 ]
 
-export function build(design: MountLook | ConfedMount, broken: boolean): Part[] {
+function draw(design: Look, broken: boolean): Part[] {
   switch (design) {
     case 'crater':
       return [
@@ -61,7 +62,7 @@ export function build(design: MountLook | ConfedMount, broken: boolean): Part[] 
         part('pit', circle(0.05, 0.05, 0.55, 9), 'dark', 1, { noOutline: true }),
         embers([[-0.3, -0.25], [0.4, 0.1], [-0.1, 0.45], [0.2, -0.45]]),
       ]
-    case 'turbo': {
+    case 'triple': {
       // A. Triple cannon turret: a squat rounded housing across the base, three long barrels.
       if (broken) return wreck(rounded(0, 0.15, 1.3, 0.95, 0.24), turn(box(-0.3, -0.55, 0.18, 0.8), 0.4, -0.3, -0.15))
       return [
@@ -77,7 +78,7 @@ export function build(design: MountLook | ConfedMount, broken: boolean): Part[] 
         ...barrel('barrelR', 0.32, -0.42, -1.12, 0.17),
       ]
     }
-    case 'dual': {
+    case 'turbo': {
       // B. Dual cannon turret: a tall angular housing, two heavy barrels.
       if (broken) return wreck(block(0, 0.12, 1.1, 1.1, 0.3), turn(box(-0.22, -0.55, 0.22, 0.85), 0.35, -0.22, -0.1))
       return [
@@ -107,7 +108,14 @@ export function build(design: MountLook | ConfedMount, broken: boolean): Part[] 
       ]
     }
     case 'ion':
-    case 'missile': {
+      // An ion emitter: a round coil housing with a short cyan-glowing focusing barrel.
+      if (broken) return wreck(circle(0, 0.1, 0.6, 14), turn(box(0, -0.5, 0.3, 0.6), 0.4, 0, -0.2))
+      return [
+        ring(),
+        part('coil', circle(0, 0.08, 0.68, 18), 'hull2', 1, { lift: 0.14, details: [{ k: 'shape', pts: circle(0, 0.08, 0.5, 16), tone: 'accent' }, { k: 'shape', pts: circle(0, 0.08, 0.36, 14), tone: 'dark' }] }),
+        part('barrel', rect(-0.2, -1.05, 0.4, 0.75), 'dark', 2, { details: [{ k: 'lights', pts: [[0, -0.95]], r: 0.12, tone: 'glow' }] }),
+      ]
+    case 'missileBox': {
       // D. Missile turret: a box launcher with a 2x2 block of orange cells, no barrels.
       if (broken) return wreck(block(0, 0, 1.2, 1.2, 0.2), turn(box(0.3, -0.3, 0.3, 0.3), 0.3, 0.3, -0.3))
       const cell = (x: number, y: number): Detail => ({ k: 'shape', pts: rect(x - 0.2, y - 0.2, 0.4, 0.4), tone: 'accent' })
@@ -129,7 +137,7 @@ export function build(design: MountLook | ConfedMount, broken: boolean): Part[] 
         ...barrel('barrel', 0, -0.35, -1.05, 0.16),
       ]
     }
-    case 'launcher': {
+    case 'strike': {
       // F. Strike launcher: an angled rack of three launch rails on a heavy cradle.
       if (broken) return wreck(block(0, 0.2, 1.2, 0.9, 0.2), turn(box(0, -0.4, 0.3, 0.6), 0.5, 0, -0.2))
       return [
@@ -209,4 +217,15 @@ export function build(design: MountLook | ConfedMount, broken: boolean): Part[] 
     case 'engine':
       return []
   }
+}
+
+/** The common designs (see models/mounts.ts). */
+export const build = (design: MountLook, broken: boolean): Part[] => draw(design, broken)
+
+/** The Confederacy's own designs, picked by a hardpoint's `look`. */
+export const extras: MountExtras = {
+  triple: (broken) => draw('triple', broken),
+  missileBox: (broken) => draw('missileBox', broken),
+  pd: (broken) => draw('pd', broken),
+  strike: (broken) => draw('strike', broken),
 }

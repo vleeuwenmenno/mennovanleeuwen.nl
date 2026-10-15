@@ -20,6 +20,10 @@ const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3],
  */
 const MINE_FLAK: Weapon = flak(1.6, 320, 0.4)
 
+/** A missile turret's battery: missiles that slip most of their punch past shields, from a turret
+ * that turns (a fighter's missiles fire only ahead, a turret's anywhere). */
+const cells = (damage: number, range = 500, cooldown = 3.2): Weapon => ({ ...missile(damage, range, cooldown), arc: undefined })
+
 /** The Extraction Rig: two drill rigs and an ore silo, and a small point-defence turret. Each drill
  * earns 40% of the platform's income and the silo 20%; shot-off parts earn nothing until repaired.
  * It comes without shields: the Shield generator upgrade fits a dome on the landing pad. */
@@ -63,7 +67,7 @@ function defensePlatform(kind: DefenseKind): UnitType {
     return {
       ...base, id: 'd-defense-gun', name: 'Siege Battery', blurb: 'A heavy triple battery and two lighter ones that outrange warships. Fighters slip under its guns. No income.',
       hull: 2700, shield: 850, regen: 12, cost: 700, build: 32,
-      hardpoints: [turboAt(c, true, turbo(60, 850, 2.2, 2)), turboAt(bl, false, turbo(33, 760, 2, 2)), turboAt(br, false, turbo(33, 760, 2, 2)), shieldAt(tl, false), shieldAt(tr, false)],
+      hardpoints: [{ ...turboAt(c, true, turbo(60, 850, 2.2, 2)), look: 'triple' }, turboAt(bl, false, turbo(33, 760, 2, 2)), turboAt(br, false, turbo(33, 760, 2, 2)), shieldAt(tl, false), shieldAt(tr, false)],
       role: { role: 'Anti-warship', strong: ['frigates', 'cruisers', 'flagships'], weak: ['fighters', 'bombers'] },
     }
   return {
@@ -107,8 +111,8 @@ function capitalYard(): UnitType {
     hardpoints: [
       { ...M('dock', 'dock', 5, 4.4, 0.11, 1500), key: 'slip' },
       { ...M('shield', 'shield', 5, 8.75, 0.085, 1000), key: 'shield' },
-      { ...gun('turbo', 1.75, 1.35, 0.07, 760, tl), key: 'tl1' },
-      { ...gun('turbo', 8.25, 1.35, 0.07, 760, tl), key: 'tl2' },
+      { ...gun('turbo', 1.75, 1.35, 0.07, 760, tl), key: 'tl1', look: 'triple' },
+      { ...gun('turbo', 8.25, 1.35, 0.07, 760, tl), key: 'tl2', look: 'triple' },
       { ...gun('flak', 1.9, 9.1, 0.05, 340, pd), key: 'pd1' },
       { ...gun('flak', 8.1, 9.1, 0.05, 340, pd), key: 'pd2' },
     ],
@@ -204,7 +208,7 @@ export const DROID: FactionData = {
         gun('turbo', BREAKER[1].x, BREAKER[1].y, 0.075, 260, turbo(18, 540, 1.8, 2)),
         gun('turbo', BREAKER[2].x, BREAKER[2].y, 0.075, 260, turbo(18, 540, 1.8, 2)),
         M('shield', 'shield', BREAKER[3].x, BREAKER[3].y, 0.07, 260),
-        gun('flak', BREAKER[4].x, BREAKER[4].y, 0.055, 160, flak(5, 300, 0.4)),
+        { ...gun('flak', BREAKER[4].x, BREAKER[4].y, 0.055, 160, flak(5, 300, 0.4)), look: 'pd' },
       ],
       engines: [[3.3, 9.6], [6.7, 9.6]],
       role: { role: 'Shield breaker', strong: ['shielded warships', 'stations'], weak: ['fighters', 'being flanked'] },
@@ -222,12 +226,12 @@ export const DROID: FactionData = {
       ability: 'broadside',
     },
     {
-      id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Harrow cruiser', blurb: 'A long armoured spine between two gun pods: heavy triple batteries, a tractor projector that pins ships for the kill, and thin shields. Strike its shield generator first.',
+      id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Harrow cruiser', blurb: 'A long armoured spine between two gun pods: heavy triple batteries, missile turrets that slip past shields, a tractor projector that pins ships for the kill, and thin shields. Strike its shield generator first.',
       sprite: 'droid-cruiser', aspect: 0.5, size: 250, hull: 2400, shield: 850, regen: 14, speed: 56, turn: 0.6, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
       weapons: [],
       hardpoints: [
-        gun('turbo', HARROW[0].x, HARROW[0].y, 0.08, 520, turbo(36)), gun('turbo', HARROW[1].x, HARROW[1].y, 0.08, 520, turbo(36)),
-        gun('turbo', HARROW[2].x, HARROW[2].y, 0.07, 320, turbo(16, 520, 1.4, 2)), gun('turbo', HARROW[3].x, HARROW[3].y, 0.07, 320, turbo(16, 520, 1.4, 2)),
+        ...HARROW.slice(0, 2).map((p) => ({ ...gun('turbo', p.x, p.y, 0.08, 520, turbo(36)), look: 'triple' as const })),
+        ...HARROW.slice(2, 4).map((p) => ({ ...gun('turbo', p.x, p.y, 0.07, 320, cells(24, 520)), look: 'missileBox' as const })),
         gun('flak', HARROW[4].x, HARROW[4].y, 0.055, 200, flak(6, 320, 0.6)), gun('flak', HARROW[5].x, HARROW[5].y, 0.055, 200, flak(6, 320, 0.6)),
         M('shield', 'shield', HARROW[6].x, HARROW[6].y, 0.07, 480),
         P('engine', HARROW[7].x, HARROW[7].y, 420), P('engine', HARROW[8].x, HARROW[8].y, 420),
@@ -239,8 +243,8 @@ export const DROID: FactionData = {
       sprite: 'droid-capital', aspect: 0.62, size: 380, hull: 5800, shield: 2200, regen: 26, speed: 33, turn: 0.32, pop: 10, cost: 4000, build: 68, level: 4, squad: 1, sensor: 1500,
       weapons: [],
       hardpoints: [
-        ...DOMINATOR.slice(0, 6).map((p) => gun('turbo', p.x, p.y, 0.07, 680, turbo(48, 740))),
-        ...DOMINATOR.slice(6, 10).map((p) => gun('flak', p.x, p.y, 0.04, 280, flak(6, 340, 0.8))),
+        ...DOMINATOR.slice(0, 6).map((p) => ({ ...gun('turbo', p.x, p.y, 0.07, 680, turbo(48, 740)), look: 'triple' as const })),
+        ...DOMINATOR.slice(6, 10).map((p, i) => ({ ...gun('flak', p.x, p.y, 0.04, 280, flak(6, 340, 0.8)), ...(i < 2 ? { look: 'pd' as const } : {}) })),
         M('shield', 'shield', DOMINATOR[10].x, DOMINATOR[10].y, 0.06, 760), M('shield', 'shield', DOMINATOR[11].x, DOMINATOR[11].y, 0.06, 760),
         P('engine', DOMINATOR[12].x, DOMINATOR[12].y, 950),
         M('hangar', 'hangar', DOMINATOR[13].x, DOMINATOR[13].y, 0.1, 760),
@@ -255,7 +259,7 @@ export const DROID: FactionData = {
       sprite: 'droid-battleship', aspect: 0.5, size: 270, hull: 4200, shield: 1300, regen: 18, speed: 40, turn: 0.42, pop: 8, cost: 3000, build: 56, level: 4, squad: 1, sensor: 1400,
       weapons: [],
       hardpoints: [
-        ...TYRANT.slice(0, 4).map((p) => gun('turbo', p.x, p.y, 0.065, 600, turbo(40, 700))),
+        ...TYRANT.slice(0, 4).map((p, i) => ({ ...gun('turbo', p.x, p.y, 0.065, 600, turbo(40, 700)), ...(i < 2 ? { look: 'triple' as const } : {}) })),
         ...TYRANT.slice(4, 6).map((p) => gun('flak', p.x, p.y, 0.045, 260, flak(6, 340, 0.7))),
         M('shield', 'shield', TYRANT[6].x, TYRANT[6].y, 0.06, 560), M('shield', 'shield', TYRANT[7].x, TYRANT[7].y, 0.06, 560),
         P('engine', TYRANT[8].x, TYRANT[8].y, 520), P('engine', TYRANT[9].x, TYRANT[9].y, 520),

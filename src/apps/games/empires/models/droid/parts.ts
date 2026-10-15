@@ -9,10 +9,16 @@ import type { Detail, Part, Pt, Tone } from '../types.ts'
 // prongs at the bow, split hulls, booms. Lit from the top left like every model; flat cel tones,
 // the depth coming from raised and recessed layers, not textures.
 //
-// Fine detail is painted only where it shows: panel seams are `line` details, which the painter
-// leaves out of small bitmaps (models/paint.ts draws lines only at 0.9 device pixels per model unit
-// and up), so a strike craft at battle zoom keeps its silhouette and colours, and a flagship zoomed
-// in gets its seams. Lights and inlays always show, so they are kept few on small craft.
+// Fine detail is painted only where it shows (level of detail, `minPx` in models/types.ts): panel
+// seams from SEAM_PX device pixels along the hull, small windows and status lights from LIGHT_PX,
+// recessed panels in armour blocks and missile-cell caps from PANEL_PX. So a strike craft at battle
+// zoom keeps its silhouette, its orange marking and its cyan engine, and a flagship zoomed in gets
+// every seam and light. Engine nozzles always glow.
+
+/** The hull size (device pixels on its long side) from which each grade of detail is painted. */
+export const SEAM_PX = 140
+export const LIGHT_PX = 110
+export const PANEL_PX = 80
 
 // --- Details ----------------------------------------------------------------------------------------
 
@@ -21,11 +27,11 @@ export const mark = (pts: Pt[]): Detail => ({ k: 'shape', pts, tone: 'accent' })
 /** A recessed panel in near-black steel. */
 export const recess = (pts: Pt[]): Detail => ({ k: 'shape', pts, tone: 'dark' })
 /** A panel seam: only drawn on bitmaps big enough to show it. */
-export const seam = (...pts: Pt[]): Detail => ({ k: 'line', pts })
+export const seam = (...pts: Pt[]): Detail => ({ k: 'line', pts, minPx: SEAM_PX })
 /** Orange status lights and capacitor glows. */
-export const ambers = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'trim' })
+export const ambers = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'trim', minPx: LIGHT_PX })
 /** Teal windows and sensor lights. */
-export const windows = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glass' })
+export const windows = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glass', minPx: LIGHT_PX })
 /** Cyan running lights, in the engine colour. */
 export const lamps = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r })
 
@@ -52,7 +58,7 @@ export function block(x: number, y: number, w: number, h: number, cf: number, cb
 export function armour(id: string, x: number, y: number, w: number, h: number, z: number, o: { tone?: Tone; band?: boolean; panel?: boolean; cut?: number; lift?: number } & Partial<Part> = {}): Part {
   const { tone = 'hull', band = true, panel = true, cut = Math.min(w, h) * 0.28, lift = 1, ...more } = o
   const details: Detail[] = []
-  if (panel && w > 3 && h > 3) details.push(recess(block(x, y - h * 0.04, w * 0.5, h * 0.5, cut * 0.4)))
+  if (panel && w > 3 && h > 3) details.push({ ...recess(block(x, y - h * 0.04, w * 0.36, h * 0.46, cut * 0.3)), minPx: PANEL_PX })
   if (band) details.push(mark(rect(x - w / 2 + cut * 0.4, y + h / 2 - Math.max(0.5, h * 0.14), w - cut * 0.8, Math.max(0.5, h * 0.09))))
   details.push(seam([x - w / 2 + cut * 0.6, y - h * 0.22], [x + w / 2 - cut * 0.6, y - h * 0.22]))
   return part(id, block(x, y, w, h, cut, cut * 0.55), tone, z, {
@@ -121,7 +127,7 @@ export function cells(id: string, x: number, y: number, cols: number, rows: numb
     for (let j = 0; j < rows; j++) {
       const cx = x - W / 2 + gap + c / 2 + i * (c + gap)
       const cy = y - H / 2 + gap + c / 2 + j * (c + gap)
-      details.push(mark(rect(cx - c / 2, cy - c / 2, c, c)))
+      details.push({ ...mark(rect(cx - c / 2, cy - c / 2, c, c)), minPx: PANEL_PX })
     }
   return part(id, block(x, y, W, H, gap, gap), 'hull2', z, { lift: 1.2, details, ...more })
 }
