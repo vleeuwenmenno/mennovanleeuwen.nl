@@ -8,7 +8,6 @@ import { HOME } from '../terminal/vfs'
 import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
 import type { WidgetDef } from '../widgets/types'
-import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
 import { setOverlay, toggleOverlay, useOverlay } from './overlays'
@@ -31,15 +30,12 @@ import { startStorageMove } from './storageMove'
 import { startAgentWatch } from './agentWatch'
 import { startPush } from './push'
 import { startNotifyStream } from './notifyStream'
-import { NotificationCenter } from './NotificationCenter'
 import { followLinkSettings, linkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
 import { notify } from './notify'
 import { isDefaultDock, isDockableApp, isLauncherId, pinToDock, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { AppIcon } from './icons'
-import { appearanceMenu } from './appearanceMenu'
-import { toggleMode, useTheme } from './theme'
-import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
+import { TopBar } from './TopBar'
 import { useIsMobile } from './useIsMobile'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { NoteStackSlot, Window } from './Window'
@@ -120,109 +116,6 @@ function stepWorkspace(wm: { workspace: number; elsewhere: number[] }, by: numbe
 
 /** A window's name in menus: its own title when it shows one thing, else its app's dock name. */
 export const winTitle = (w: WinState) => APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock
-
-function TopBar() {
-  const wm = useWM()
-  const recents = useRecents()
-  const theme = useTheme()
-  // Workspaces, like Omarchy's bar: 1 to 5 always, and any later one that has windows on it.
-  const onWs = (n: number) => wm.windows.filter((w) => workspaceOf(w) === n).sort((a, b) => a.pid - b.pid)
-  const occupied = new Set(wm.windows.map(workspaceOf).filter((n): n is number => n !== null))
-  // Workspaces other tabs have (one workspace per tab) show too, marked as theirs.
-  const count = Math.min(WORKSPACES, Math.max(5, wm.workspace, ...occupied, ...wm.elsewhere))
-  const elsewhere = (n: number) => wm.elsewhere.includes(n)
-  const mine = wm.windows.filter((w) => wm.shown(w))
-  // The bar's own menu, for its background and anything on it without a menu of its own.
-  const barMenu = (): MenuItem[] => [
-    { label: 'Search…', shortcut: 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
-    { label: 'All apps', shortcut: 'Ctrl Space', onSelect: () => toggleOverlay('launchpad') },
-    { label: 'Show desktop', disabled: !mine.some((w) => !w.minimized), onSelect: () => mine.forEach((w) => wm.minimize(w.pid)) },
-    { separator: true },
-    { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
-    { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
-  ]
-  // A workspace's menu: its windows to pick from, and bringing the focused window over.
-  const focusedWin = wm.windows.find((w) => w.pid === wm.focusedPid && workspaceOf(w) !== null)
-  const workspaceMenu = (n: number): MenuItem[] => {
-    const wins = onWs(n)
-    return [
-      { label: elsewhere(n) ? `Workspace ${n} · open in another tab` : `Workspace ${n}`, disabled: true },
-      { separator: true },
-      ...(n !== wm.workspace && !elsewhere(n) ? [{ label: 'Go to workspace', shortcut: `Alt ${n}`, onSelect: () => wm.setWorkspace(n) }] : []),
-      ...(focusedWin && workspaceOf(focusedWin) !== n ? [{ label: elsewhere(n) ? `Send ${winTitle(focusedWin)} to that tab` : `Move ${winTitle(focusedWin)} here`, shortcut: `Alt Shift ${n}`, onSelect: () => wm.moveToWorkspace(focusedWin.pid, n) }] : []),
-      ...(wins.length ? [{ separator: true as const }, ...wins.map((w) => ({ label: `${winTitle(w)}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) }))] : [{ label: 'No windows', disabled: true }]),
-      ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Close all ${wins.length} windows` : 'Close its window', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
-    ]
-  }
-  // Scrolling over the numbers walks through the workspaces, as in Waybar, past other tabs' ones.
-  const onWheel = (e: React.WheelEvent) => {
-    const by = Math.sign(e.deltaY || e.deltaX)
-    if (by) wm.setWorkspace(stepWorkspace(wm, by, count))
-  }
-  return (
-    <header className="topbar" onContextMenu={(e) => openContextMenu(e, barMenu())}>
-      <div className="topbar-left">
-        <SystemMenu />
-        {/* Workspaces, like the Omarchy bar: the one on screen underlined, empty ones dimmed.
-            Phones have room for one workspace, so they don't show (styles.css). */}
-        <nav className="workspaces" aria-label="Workspaces" onWheel={onWheel}>
-          {Array.from({ length: count }, (_, i) => i + 1).map((n) => {
-            const wins = onWs(n)
-            return (
-              <button
-                key={n}
-                data-ws={n}
-                className={`ws ${n === wm.workspace ? 'is-active' : ''} ${wins.length ? '' : 'is-empty'} ${elsewhere(n) ? 'is-elsewhere' : ''}`}
-                onClick={() => wm.setWorkspace(n)}
-                onContextMenu={(e) => openContextMenu(e, workspaceMenu(n))}
-                title={elsewhere(n) ? `Workspace ${n} · Open in another tab` : `Workspace ${n} (Alt ${n})${wins.length ? ` · ${[...new Set(wins.map((w) => APP_META[w.app].dock))].join(', ')}` : ' · empty'}`}
-                aria-current={n === wm.workspace ? 'true' : undefined}
-              >
-                {n}
-              </button>
-            )
-          })}
-        </nav>
-      </div>
-      <ClockWidget />
-      <div className="topbar-right">
-        <button className="tb-icon" onClick={() => toggleOverlay('spotlight')} title="Search (Ctrl+K)" aria-label="Search">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-            <circle cx="11" cy="11" r="7" />
-            <path d="M20 20l-3.5-3.5" />
-          </svg>
-        </button>
-        <button className="tb-icon tb-activity" onClick={() => wm.open('recents')} title={recents.live ? 'Activity · GitHub live' : recents.status === 'loading' ? 'Activity · syncing' : 'Activity · offline'} aria-label="Recent activity">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />
-          </svg>
-          <span className={`tb-dot ${recents.live ? 'is-live' : ''}`} />
-        </button>
-        {/* Menno's Minecraft server: his CV page only (src/os/cvMode.ts) */}
-        {cvMode() && <MinecraftWidget />}
-        <button
-          className="tb-icon"
-          title={`${theme.label} · click for ${theme.palette.mode === 'light' ? 'night' : 'day'}, right-click for themes`}
-          aria-label="Toggle light and dark theme"
-          onClick={toggleMode}
-          onContextMenu={(e) => openContextMenu(e, appearanceMenu())}
-        >
-          {theme.palette.mode === 'light' ? (
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
-            </svg>
-          )}
-        </button>
-        <NotificationCenter />
-      </div>
-    </header>
-  )
-}
 
 /** A launcher's dock icon: the site's favicon (or your emoji) on a flat tile like the apps'. */
 function LauncherIcon({ url, glyph, image, size = 48 }: { url: string; glyph?: string; image?: string; size?: number }) {

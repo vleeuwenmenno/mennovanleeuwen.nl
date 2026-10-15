@@ -1978,7 +1978,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, Files' bookmarks, and Weather's units and saved cities; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the top bar, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, Files' bookmarks, and Weather's units and saved cities; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
     </>
   )
 }
