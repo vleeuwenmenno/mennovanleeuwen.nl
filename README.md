@@ -1712,9 +1712,14 @@ down the Confederacy's thin shields.
   Dominator dreadnought (carrier, Alpha strike) and the Tyrant battleship, whose fire-control aura
   makes the guns round it hit harder.
 - **Swarm**: no shields anywhere (more hull instead), living hulls that grow back out of combat,
-  cheap ships that hatch fast, the Leech corvette's drain aura, and broods of Stingers from the
-  Leviathan and the fully grown Hive Nexus. Its mining platform's "Shield generator" upgrade is a
-  Hardened carapace (more hull, faster regrowth), and its station takes no Shield core.
+  cheap ships that hatch fast, the Leech corvette's drain aura, and broods of Stingers from its
+  flagships and the fully grown Hive Nexus. Its frigate-tier ships are the Harvester frigate and
+  the Impaler destroyer, a living spear that turns its whole body to aim a spinal tendril lance at
+  big hulls; its two flagships are the Leviathan dreadnought, the gun flagship (heavy tendril lances
+  and spore cannons, one slow brood), and the Broodmother carrier, which hatches broods of Stingers
+  far faster and keeps four out, with weak guns of its own. Its mining platform's "Shield
+  generator" upgrade is a Hardened carapace (more hull, faster regrowth), and its station takes no
+  Shield core.
 
 Everything that belongs to one faction is in files of its own, so the factions can be worked on
 side by side without touching each other's:
@@ -1761,7 +1766,7 @@ faction's data; all off unless a unit sets them, and none draws a random number)
   `{ unit, every, max, level }`, from that level on), on a clock of its own beside its defense wing.
 - A spinal gun (`spinal(weapon, degrees)` in data/kit.ts): fixed along the keel, it fires only
   within `degrees` either side of the nose, so the whole ship turns to aim it; its mount doesn't
-  turn on the model.
+  turn on the model. The Confederacy's Breaker and the Swarm's Impaler carry one.
 - No shields: `shield: 0` with no shield generators works everywhere (the HUD shows no shield
   bar, ion barely scratches the hull, shield research does nothing).
 
@@ -1788,7 +1793,7 @@ each ship's own `build` research), and `regrow`/`regrowDelay` there reach every 
 side, ships and structures, on top of their own. The AI weighs them like the rest. The research
 that uses them: the Confederacy's Shield breakers (Breaker, `shieldDamage`) and Fire-control net
 (Tyrant, `aura` and `auraRadius`), the Republic's Projector arrays and Wide-field emitters
-(Sentinel, `shieldAura` and `auraRadius`) and Fleet command (Resolute, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm),
+(Sentinel, `shieldAura` and `auraRadius`) and Fleet command (Resolute, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm), Swollen wombs (Broodmother, `regrow`),
 Deeper tendrils (Leech, `drain` and `drainHeal`) and Hive surge (Hive Nexus, `fleetBuild`).
 
 **Names per faction** (FactionInfo `names` in data/kit.ts): its guns by kind (`weapon`, the Codex's
@@ -1813,9 +1818,15 @@ clear; the Swarm leans to small, quickly built ships (and build-time research), 
 Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
 ships in among the enemy with its wave, values fire-control and spinal ships, values a shield
 projector by how many warships it has and how much of their staying power is shields (and keeps it
-with the fleet, never scouting or flanking), and with more than one flagship to choose from (the
-Confederacy's Dominator and Tyrant, the Republic's Sovereign and Resolute) settles on one by what
-its fleet needs, so both appear. A side without shields never orders a Shield core.
+with the fleet, never scouting or flanking). Every side has two flagships, a gun flagship and a
+carrier/support one: the Republic's Sovereign and Resolute (carrier and fire-control aura), the
+Confederacy's Dominator and Tyrant (fire-control aura), the Swarm's Leviathan and Broodmother
+(carrier). A side settles on one only once it is really saving for a flagship (a fleet worth
+guarding it, nothing attacking home, a Capital slip that could build it), not at the start of the
+battle, drawn by what its fleet needs: the support flagship the bigger its own fleet and the more
+strike craft the enemy flies, the gun flagship the more cruisers and flagships the enemy fields.
+It keeps to that pick until the flagship is built, and settles afresh after losing it, so both
+appear. A side without shields never orders a Shield core.
 
 **For a faction's model files** (all additive, no shared file to change):
 
