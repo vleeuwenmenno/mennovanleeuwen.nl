@@ -135,7 +135,7 @@ function TopBar() {
   // The bar's own menu, for its background and anything on it without a menu of its own.
   const barMenu = (): MenuItem[] => [
     { label: 'Search…', shortcut: 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
-    { label: 'All apps', onSelect: () => toggleOverlay('launchpad') },
+    { label: 'All apps', shortcut: 'Ctrl Space', onSelect: () => toggleOverlay('launchpad') },
     { label: 'Show desktop', disabled: !mine.some((w) => !w.minimized), onSelect: () => mine.forEach((w) => wm.minimize(w.pid)) },
     { separator: true },
     { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
@@ -879,13 +879,18 @@ export function Shell() {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [power.phase, wm])
 
-  // Ctrl+K / Cmd+K opens Spotlight from anywhere, including inside the terminal.
+  // Ctrl+K / Cmd+K opens Spotlight; Ctrl+Space toggles All apps. Both from anywhere, including
+  // inside the terminal. Ctrl+Space is best-effort: some OSes and IMEs keep it and the page never
+  // sees it (same idea as Super for workspaces).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (power.phase !== 'up') return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         toggleOverlay('spotlight')
+      } else if (e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'Space') {
+        e.preventDefault()
+        toggleOverlay('launchpad')
       } else if (e.key === 'Escape' && overlay) setOverlay(null)
     }
     window.addEventListener('keydown', onKey)

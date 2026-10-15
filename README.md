@@ -70,6 +70,9 @@ Super is Omarchy's key, but the system keeps it, so a web page never sees it; th
 **Alt+1…9** goes to a workspace, **Alt+Shift+1…9** moves the focused window there (and goes with
 it, like Hyprland's `movetoworkspace`), **Ctrl+Alt+← →** steps through them. These work everywhere,
 the terminal included, except that on a Mac a text field keeps Option+digit for typing characters.
+**Ctrl+K** (or Cmd+K) opens Spotlight, and **Ctrl+Space** toggles All apps — also from anywhere,
+including the terminal. Ctrl+Space is best-effort: some OSes and input methods keep that chord, so
+the page never sees it, the same way Super never reaches a web page.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
 number in the bar moves it there. Each window's workspace is saved with the window layout; which
 workspace is on screen is kept per browser. Phones have room for one workspace, so there the
