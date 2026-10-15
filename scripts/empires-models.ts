@@ -19,7 +19,7 @@
 // hardpoints (its faction's `layout`, data.ts BIG_LAYOUT) and its turrets spread out with room
 // between them. Every faction's units are checked, the Swarm's (still placeholders) too.
 
-import { BIG_LAYOUT, STATIONS, TECHS, UNITS, mineType, modulesFor, stationType, worksOf, yardType, type UnitType } from '../src/apps/games/empires/data.ts'
+import { BIG_LAYOUT, FACTION_IDS, ORBITAL_MODS, ORBITAL_TOP, STATIONS, TECHS, UNITS, mineType, modulesFor, orbitalSlots, orbitalType, stationType, worksOf, yardType, type UnitType } from '../src/apps/games/empires/data.ts'
 import { sizeClass } from '../src/apps/games/empires/models/sizes.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
 import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
@@ -60,7 +60,17 @@ for (const t of UNITS) {
     if (all.length > 1) types.push(yardType(t.id, all))
   }
 }
-console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
+// Galactic conquest's defense stations (not in UNITS: types of their own), every faction's at every
+// level: empty, with every slot filled, and with the slots half filled with each module there is.
+for (const f of FACTION_IDS)
+  for (let lv = 1; lv <= ORBITAL_TOP; lv++) {
+    const n = orbitalSlots(lv)
+    types.push(orbitalType(f, lv, []))
+    for (const m of ORBITAL_MODS) types.push(orbitalType(f, lv, Array.from({ length: n }, (_, s) => (s % 2 ? null : m))))
+    types.push(orbitalType(f, lv, Array.from({ length: n }, (_, s) => ORBITAL_MODS[s % ORBITAL_MODS.length])))
+  }
+for (const f of FACTION_IDS) ok(hasModel(orbitalType(f, 1, [])), `${f}: its defense station has no model`)
+console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')}, and the defense stations)`)
 // Models are cached per look by key: two different types must never share one.
 const keys = new Map<string, UnitType>()
 /** Every look of a unit type: as it is, and its design variants. */

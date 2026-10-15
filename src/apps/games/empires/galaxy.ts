@@ -7,8 +7,8 @@
 
 import { DOCTRINE, PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
-  FACTIONS, MODULE, MODULE_FX, moduleFits, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
-  type FactionId, type ModuleId, type Tier, type UnitType, type Works,
+  FACTIONS, MODULE, MODULE_FX, moduleFits, ORBITAL_MAX, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, dims, needsModule, orbitalMod, orbitalName, orbitalSlots, orbitalType, stationType, unitOf, yardOf, yardType,
+  type FactionId, type ModuleId, type OrbitalModId, type Tier, type UnitType, type Works,
 } from './data.ts'
 import { rng } from './maps.ts'
 import { dpsVs, type RushedIn } from './sim.ts'
@@ -92,16 +92,45 @@ export const YARD_KINDS: YardKind[] = ['yard', 'cyard']
  * Capital slip its flagships; bombers need the station's Strike hangar. Everything is ordered in
  * the planet's queue, with a price and a build time, like a station upgrade.
  */
-export type PlanetBase = { yards: Partial<Record<YardKind, 'up' | 'ruin'>>; mods: ModuleId[] }
+export type PlanetBase = { yards: Partial<Record<YardKind, 'up' | 'ruin'>>; mods: ModuleId[]; /** Its two defense station sites (see OrbitalState); absent: neither built yet. */ orb?: (OrbitalState | null)[] }
+/**
+ * An orbital defense station on one of a planet's two defense sites: its level (1-3, data.ts
+ * ORBITALS) and the module in each of its slots (null: an empty slot), or, with `ruin`, what a battle
+ * left of one: rebuilt at its level (as far as the station allows) for REBUILD of what those levels
+ * cost, its modules lost.
+ */
+export type OrbitalState = { level: number; mods: (OrbitalModId | null)[]; ruin?: true }
 /** A yard or an expansion: what a planet's Buildings tab orders (a station level is 'station'). */
 export type WorkId = YardKind | ModuleId
 export const emptyBase = (): PlanetBase => ({ yards: {}, mods: [] })
-export const copyBase = (b: PlanetBase | undefined): PlanetBase => ({ yards: { ...(b?.yards ?? {}) }, mods: [...(b?.mods ?? [])] })
+export const copyBase = (b: PlanetBase | undefined): PlanetBase => ({
+  yards: { ...(b?.yards ?? {}) }, mods: [...(b?.mods ?? [])],
+  ...(b?.orb ? { orb: b.orb.map((o) => (o ? { ...o, mods: [...o.mods] } : null)) } : {}),
+})
 export const isYard = (id: string): id is YardKind => id === 'yard' || id === 'cyard'
 export const isModule = (id: string): id is ModuleId => Object.hasOwn(MODULE, id)
-/** Whether a queue entry is work on the planet's buildings (a station level, a yard, an expansion)
- * rather than a ship. */
-export const isWork = (unit: string) => unit === 'station' || isYard(unit) || isModule(unit)
+/** Whether a queue entry is work on the planet's buildings (a station level, a yard, an expansion,
+ * a defense station) rather than a ship. */
+export const isWork = (unit: string) => unit === 'station' || isYard(unit) || isModule(unit) || isOrbitalWork(unit)
+
+/**
+ * Work on a defense station, as its queue entry names it: building it (or its ruin rebuilt) on site
+ * `i` ('orb0'), raising it a level ('orbup0'), or fitting module `mod` into its slot `slot`
+ * ('orbm0.2.flak'; a slot that has a module gets the new one in its place once it's done).
+ */
+export type OrbitalWork = { k: 'build'; i: number } | { k: 'up'; i: number } | { k: 'mod'; i: number; slot: number; mod: OrbitalModId }
+export const orbitalWorkId = (w: OrbitalWork) => (w.k === 'build' ? `orb${w.i}` : w.k === 'up' ? `orbup${w.i}` : `orbm${w.i}.${w.slot}.${w.mod}`)
+export function parseOrbital(unit: string): OrbitalWork | null {
+  if (!unit.startsWith('orb')) return null
+  let m = /^orb([01])$/.exec(unit)
+  if (m) return { k: 'build', i: Number(m[1]) }
+  m = /^orbup([01])$/.exec(unit)
+  if (m) return { k: 'up', i: Number(m[1]) }
+  m = /^orbm([01])\.([0-3])\.(\w+)$/.exec(unit)
+  if (m && (ORBITAL_MODS as string[]).includes(m[3])) return { k: 'mod', i: Number(m[1]), slot: Number(m[2]), mod: m[3] as OrbitalModId }
+  return null
+}
+export const isOrbitalWork = (unit: string) => parseOrbital(unit) !== null
 
 export type Planet = {
   id: number
@@ -124,7 +153,10 @@ export type Planet = {
    * first one in progress (the first two ships with a Second slip). A finished ship waits on its
    * slip (`full`) while every fleet here is full and there are MAX_FLEETS of them. `paid`: what a
    * yard or an expansion cost when it was queued (a ruin's rebuild is cheaper), for a refund. */
-  queue: { unit: string; left: number; total: number; full?: boolean; paid?: number; /** Built RUSH_GC.slowdown slower: the ship started after a rush launch. */ slow?: boolean }[]
+  queue: { unit: string; left: number; total: number; full?: boolean; paid?: number; /** Built RUSH_GC.slowdown slower: the ship started after a rush launch. */ slow?: boolean; /** A defense station being built: the level it comes out at (a ruin's). */ lv?: number }[]
+  /** Where its Command Station, yards and defense stations sit round it, as the player placed them
+   * (see StructId and Spot); left out, each at its own spot (AUTO_SPOT). Battles here put them there. */
+  layout?: Partial<Record<StructId, Spot>>
   /** Rush launch: when this planet's Capital Yard may rush a ship again (galaxy time), and a rush
    * with nothing else queued: the next Capital Yard ship it queues goes slower. */
   rushAt?: number
@@ -196,11 +228,13 @@ export type GalaxyEvent =
   | { k: 'capturing'; planet: number; owner: number; from: number }
   | { k: 'yardFull'; planet: number; owner: number; unit: string }
   | { k: 'works'; planet: number; owner: number; what: WorkId }
+  | { k: 'orbital'; planet: number; owner: number; i: number; text: string }
 
 export type Galaxy = {
-  /** 3 since ships can be rush-launched unfinished (Item.rush, Planet.rushAt); 2 since planets have
+  /** 4 since planets have defense stations (PlanetBase.orb) and a layout (Planet.layout); 3 since
+   * ships can be rush-launched unfinished (Item.rush, Planet.rushAt); 2 since planets have
    * buildings (yards and expansions); 1 before (see clean). */
-  v: 3
+  v: 4
   /** The save slot it lives in, and the name the player gave it. */
   save: { id: string; name: string }
   name: string
@@ -409,7 +443,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
   const other = rivalOf(opts)
   const defs = opts.choice.kind === 'rim' ? RIM_WARS.filter((s) => s.tier <= (opts.size === 'short' ? 1 : opts.size === 'standard' ? 2 : 3) && (!s.only || s.only === opts.faction || s.only === other)) : generatedDefs(seed, SIZES[opts.size].systems)
   const g: Galaxy = {
-    v: 3,
+    v: 4,
     save: { id: newSaveId(), name: opts.name?.trim() || `${opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`}, ${FACTIONS[opts.faction].name}` },
     name: opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`,
     seed,
@@ -1462,7 +1496,14 @@ function refund(g: Galaxy, owner: number, p: Planet, q: Planet['queue'][number],
   s.credits += back
   if (isWork(q.unit)) s.spent.stations -= back
   else s.spent.ships -= back
-  book(s, calendar(g.time).day, back, `${why}: ${q.unit === 'station' ? 'station work' : isWork(q.unit) ? workName(q.unit as WorkId) : UNIT[q.unit].name}`)
+  book(s, calendar(g.time).day, back, `${why}: ${queueName(g, owner, p, q)}`)
+}
+/** What a queue entry is, in a few words: a ship, station work, a yard, an expansion, a defense
+ * station's work. */
+export function queueName(g: Galaxy, owner: number, p: Planet, q: Planet['queue'][number]) {
+  const orb = parseOrbital(q.unit)
+  if (orb) return orbitalWorkName(g, owner, p, orb, q.lv)
+  return q.unit === 'station' ? 'station work' : isWork(q.unit) ? workName(q.unit as WorkId) : UNIT[q.unit]?.name ?? q.unit
 }
 /**
  * A base falls with its station: its yards are left as ruins (for whoever holds the planet next to
@@ -1471,15 +1512,274 @@ function refund(g: Galaxy, owner: number, p: Planet, q: Planet['queue'][number],
 function razeBase(p: Planet) {
   for (const k of YARD_KINDS) if (p.base.yards[k] === 'up') p.base.yards[k] = 'ruin'
   p.base.mods = []
+  // Its defense stations too: ruins at their levels, their modules gone.
+  if (p.base.orb) p.base.orb = p.base.orb.map((o) => (o ? { level: o.level, mods: [], ruin: true as const } : null))
 }
-/** Expansions waiting in a planet's queue for a building that is gone now are refunded. */
+/** Expansions waiting in a planet's queue for a building that is gone now are refunded, and so is
+ * work on a defense station that is a ruin now (an upgrade, a module), unless it is being rebuilt. */
 function dropOrphans(g: Galaxy, p: Planet) {
   for (let i = p.queue.length - 1; i >= 0; i--) {
     const u = p.queue[i].unit
+    const w = parseOrbital(u)
+    if (w) {
+      if (w.k === 'build' || orbitalUp(p, w.i) || p.queue.some((q) => q.unit === orbitalWorkId({ k: 'build', i: w.i }))) continue
+      if (p.owner >= 0) refund(g, p.owner, p, p.queue[i], 'Lost with its defense station')
+      p.queue.splice(i, 1)
+      continue
+    }
     if (!isModule(u) || worksUp(p, MODULE[u].on)) continue
     if (p.owner >= 0) refund(g, p.owner, p, p.queue[i], `Lost with its yard`)
     p.queue.splice(i, 1)
   }
+}
+
+// --- Defense stations ------------------------------------------------------------------------------
+//
+// Each planet with a station has two defense sites round it (ORBITAL_MAX), and on each it can build
+// an orbital defense station (data.ts ORBITALS, one design per faction) in its queue, like a yard:
+// paid when queued, refunded in full when called off, built after its time. A defense station has
+// three levels (each upgrade is ordered in the queue too) and 1, 2 or 4 module slots; each slot takes
+// the module the player picks (a battery, flak, a launcher, a shield generator or the Swarm's
+// regeneration pool, a hangar), fitted in the queue, and a module ordered into a slot that has one
+// replaces it. Destroyed in a battle, or lost with the station, it leaves a ruin that is rebuilt at
+// its level (as far as the station allows) for REBUILD of what the levels cost; its modules are lost.
+
+/** What stands on a planet's defense site `i` (null: nothing, or never built). */
+export const orbitalAt = (p: Pick<Planet, 'base'>, i: number): OrbitalState | null => p.base.orb?.[i] ?? null
+/** Whether a defense station stands on site `i` (not a ruin). */
+export const orbitalUp = (p: Pick<Planet, 'base'>, i: number) => { const o = orbitalAt(p, i); return !!o && !o.ruin }
+/** The defense stations standing at a planet, by site. */
+export const orbitalsUp = (b: PlanetBase) => (b.orb ?? []).flatMap((o, i) => (o && !o.ruin ? [{ i, o }] : []))
+/** The level a ruin on site `i` is rebuilt at: its own, as far as the station's level allows. */
+export function rebuildLevel(g: Galaxy, owner: number, p: Planet, i: number) {
+  const o = orbitalAt(p, i)
+  if (!o?.ruin) return 1
+  const st = ORBITALS[g.sides[owner].faction].stages
+  let lv = Math.max(1, Math.min(ORBITAL_TOP, o.level))
+  while (lv > 1 && st[lv - 1].station > p.station) lv--
+  return lv
+}
+/** What a defense station's work costs at a planet: a module its price; an upgrade the next level's;
+ * building one the first level's, and rebuilding a ruin REBUILD of every level it comes back with. */
+export function orbitalCost(g: Galaxy, owner: number, p: Planet, w: OrbitalWork) {
+  const f = g.sides[owner].faction
+  const st = ORBITALS[f].stages
+  if (w.k === 'mod') return orbitalMod(f, w.mod).cost
+  if (w.k === 'up') return st[Math.min(ORBITAL_TOP - 1, orbitalAt(p, w.i)?.level ?? 1)].cost
+  if (!orbitalAt(p, w.i)?.ruin) return st[0].cost
+  const lv = rebuildLevel(g, owner, p, w.i)
+  return Math.round(st.slice(0, lv).reduce((s, x) => s + x.cost, 0) * REBUILD)
+}
+/** Seconds a defense station's work takes on the galaxy clock (a rebuild: half of every level's). */
+export function orbitalTime(g: Galaxy, owner: number, p: Planet, w: OrbitalWork) {
+  const f = g.sides[owner].faction
+  const st = ORBITALS[f].stages
+  if (w.k === 'mod') return orbitalMod(f, w.mod).time
+  if (w.k === 'up') return st[Math.min(ORBITAL_TOP - 1, orbitalAt(p, w.i)?.level ?? 1)].time
+  if (!orbitalAt(p, w.i)?.ruin) return st[0].time
+  return Math.round(st.slice(0, rebuildLevel(g, owner, p, w.i)).reduce((s, x) => s + x.time, 0) * REBUILD)
+}
+/** What a defense station's work is called, for the queue and the ledger. */
+export function orbitalWorkName(g: Galaxy, owner: number, p: Planet, w: OrbitalWork, lv?: number) {
+  const f = g.sides[owner].faction
+  const o = orbitalAt(p, w.i)
+  const site = `defense site ${w.i + 1}`
+  if (w.k === 'mod') return `${orbitalMod(f, w.mod).name} (${site}, slot ${w.slot + 1})`
+  if (w.k === 'up') return `${orbitalName(f, Math.min(ORBITAL_TOP, (o?.level ?? 1) + 1))} (${site})`
+  return `${o?.ruin ? 'Rebuilding the ' : ''}${orbitalName(f, lv ?? rebuildLevel(g, owner, p, w.i))} (${site})`
+}
+/** The level a slot first comes with: slot 0 at level 1, slot 1 at level 2, slots 2 and 3 at 3. */
+export const slotLevel = (slot: number) => (slot < 1 ? 1 : slot < 2 ? 2 : 3)
+/**
+ * What rules a defense station's work out at a planet whatever the credits and the queue, or null:
+ * not ours, no station, building one where one stands or is being built, the station's level too low,
+ * an upgrade or a module for one that isn't there (yet), a slot it doesn't have (yet), a module
+ * that is already in that slot or being fitted there.
+ */
+export function orbitalLock(g: Galaxy, owner: number, planet: number, w: OrbitalWork): string | null {
+  const p = g.planets[planet]
+  if (p.owner !== owner) return 'Not our planet'
+  if (!p.station) return 'Needs a station'
+  if (w.i < 0 || w.i >= ORBITAL_MAX) return 'No such defense site'
+  const st = ORBITALS[g.sides[owner].faction].stages
+  const queued = (x: OrbitalWork) => p.queue.some((q) => q.unit === orbitalWorkId(x))
+  const o = orbitalAt(p, w.i)
+  const needs = (level: number) => (st[level - 1].station > p.station ? (p.queue.some((q) => q.unit === 'station') ? `Needs station level ${st[level - 1].station}: wait for the upgrade` : `Needs station level ${st[level - 1].station}`) : null)
+  if (w.k === 'build') {
+    if (o && !o.ruin) return 'Already built'
+    if (queued(w)) return 'Already being built'
+    return needs(1)
+  }
+  if (!o || o.ruin) return queued({ k: 'build', i: w.i }) ? 'Being built: wait for it' : 'Build the defense station first'
+  if (w.k === 'up') {
+    if (o.level >= ORBITAL_TOP) return 'At its highest level'
+    if (queued(w)) return 'Already being upgraded'
+    return needs(o.level + 1)
+  }
+  if (w.slot < 0 || w.slot >= orbitalSlots(ORBITAL_TOP)) return 'No such slot'
+  if (w.slot >= orbitalSlots(o.level)) return queued({ k: 'up', i: w.i }) && w.slot < orbitalSlots(o.level + 1) ? 'Needs the upgrade: wait for it' : `Needs level ${slotLevel(w.slot)}`
+  if (o.mods[w.slot] === w.mod) return 'Already fitted'
+  if (p.queue.some((q) => { const x = parseOrbital(q.unit); return x?.k === 'mod' && x.i === w.i && x.slot === w.slot })) return 'A module is already being fitted there'
+  return null
+}
+export function cantOrbital(g: Galaxy, owner: number, planet: number, w: OrbitalWork): string | null {
+  const lock = orbitalLock(g, owner, planet, w)
+  if (lock) return lock
+  const p = g.planets[planet]
+  if (p.queue.length >= MAX_YARD) return 'Shipyard queue full'
+  if (g.sides[owner].credits < orbitalCost(g, owner, p, w)) return 'Not enough credits'
+  return null
+}
+/** Order work on a defense station: paid now, done after its time in the planet's queue. */
+export function orderOrbital(g: Galaxy, owner: number, planet: number, w: OrbitalWork): string | null {
+  const why = cantOrbital(g, owner, planet, w)
+  if (why) return why
+  const p = g.planets[planet]
+  const s = g.sides[owner]
+  const cost = orbitalCost(g, owner, p, w)
+  const lv = w.k === 'build' ? rebuildLevel(g, owner, p, w.i) : undefined
+  s.credits -= cost
+  s.spent.stations += cost
+  book(s, calendar(g.time).day, -cost, `${orbitalWorkName(g, owner, p, w, lv)} at ${p.name}`)
+  const time = orbitalTime(g, owner, p, w)
+  p.queue.push({ unit: orbitalWorkId(w), left: time, total: time, paid: cost, ...(lv !== undefined ? { lv } : {}) })
+  return null
+}
+/** A defense station's work, done (or refunded, when what it was for is gone). */
+function finishOrbital(g: Galaxy, p: Planet, q: Planet['queue'][number]) {
+  const w = parseOrbital(q.unit)!
+  const f = g.sides[p.owner].faction
+  const orb = (p.base.orb ??= Array.from({ length: ORBITAL_MAX }, () => null))
+  while (orb.length < ORBITAL_MAX) orb.push(null)
+  const o = orb[w.i]
+  if (w.k === 'build') {
+    const lv = Math.max(1, Math.min(ORBITAL_TOP, q.lv ?? 1))
+    orb[w.i] = { level: lv, mods: Array.from({ length: orbitalSlots(lv) }, () => null) }
+    g.events.push({ k: 'orbital', planet: p.id, owner: p.owner, i: w.i, text: `${orbitalName(f, lv)} built` })
+    return
+  }
+  if (!o || o.ruin) return refund(g, p.owner, p, q, 'Lost with its defense station')
+  if (w.k === 'up') {
+    o.level = Math.min(ORBITAL_TOP, o.level + 1)
+    while (o.mods.length < orbitalSlots(o.level)) o.mods.push(null)
+    g.events.push({ k: 'orbital', planet: p.id, owner: p.owner, i: w.i, text: `${orbitalName(f, o.level)} ready` })
+    return
+  }
+  if (w.slot >= orbitalSlots(o.level)) return refund(g, p.owner, p, q, 'No slot for it')
+  o.mods[w.slot] = w.mod
+  g.events.push({ k: 'orbital', planet: p.id, owner: p.owner, i: w.i, text: `${orbitalMod(f, w.mod).name} fitted` })
+}
+/** What the AI and the auto-resolve reckon a standing defense station is worth, in credits: what was
+ * spent on it (levels and modules). */
+export function orbitalValue(f: FactionId, o: OrbitalState) {
+  if (o.ruin) return 0
+  const plan = ORBITALS[f]
+  return plan.stages.slice(0, o.level).reduce((s, x) => s + x.cost, 0) + o.mods.reduce((s, m) => s + (m ? orbitalMod(f, m).cost : 0), 0)
+}
+
+// --- Where the structures sit round a planet ----------------------------------------------------------
+//
+// In the orbit view each planet's Command Station, its two yards and its two defense sites sit round
+// it at a bearing `a` (radians, screen-wise: 0 to the right, clockwise) and a distance `d` in planet
+// radii from its middle. Each has its own spot by default (AUTO_SPOT); the player can drag one to
+// another within SPOT_D, clear of the planet and of the others (by their size at their biggest,
+// STRUCT_R), and put them all back. A battle at the planet stands them the same way round its station.
+
+/** The structures round a planet: its Command Station, its yards and its two defense sites. */
+export type StructId = 'station' | YardKind | 'def0' | 'def1'
+export const STRUCTS: StructId[] = ['station', 'yard', 'cyard', 'def0', 'def1']
+export type Spot = { a: number; d: number }
+export const AUTO_SPOT: Record<StructId, Spot> = {
+  station: { a: -0.75, d: 2.05 },
+  yard: { a: Math.PI, d: 2.25 },
+  cyard: { a: 0.9, d: 2.3 },
+  def0: { a: -2.25, d: 1.9 },
+  def1: { a: 2.2, d: 1.9 },
+}
+/** How near and how far from the planet's middle a structure may sit, in planet radii. */
+export const SPOT_D = { min: 1.6, max: 2.9 }
+/** How long (planet radii) each kind of structure is drawn round its planet at its biggest: the
+ * Command Station at level 4, the yards, a defense station at level 3 (smaller levels in proportion
+ * to their size). Not to the battle's scale, where a Capital Yard dwarfs the station. */
+export const STRUCT_LONG = { station: 0.95, yard: 0.62, cyard: 0.86, orbital: 0.7 }
+/** How long structure type `t` is drawn round its planet, in planet radii (see STRUCT_LONG). */
+export function structLong(t: UnitType) {
+  if (t.tier === 'station') return STRUCT_LONG.station * Math.min(1, t.size / stationType(t.faction, 4, []).size)
+  if (t.orbital) return STRUCT_LONG.orbital * Math.max(0.55, Math.min(1, t.size / orbitalType(t.faction, ORBITAL_TOP, []).size))
+  if (t.tier === 'yard') return t.id.endsWith('cyard') ? STRUCT_LONG.cyard : STRUCT_LONG.yard
+  return 0.5
+}
+/** How far each structure reaches from its spot (planet radii), at its biggest. Two may not come
+ * closer than the sum, and a gap. */
+export function structR(f: FactionId, id: StructId) {
+  const key = `${f}:${id}`
+  let r = structRs.get(key)
+  if (r === undefined) {
+    const t = id === 'station' ? stationType(f, 4, []) : id === 'yard' || id === 'cyard' ? yardOf(f, id) : orbitalType(f, ORBITAL_TOP, [])
+    const [w, h] = dims(t)
+    // (Half its long side, a little less for the corners of a round or narrow one.)
+    structRs.set(key, (r = (structLong(t) / 2) * (0.75 + 0.15 * (Math.min(w, h) / Math.max(w, h)))))
+  }
+  return r
+}
+const structRs = new Map<string, number>()
+const SPOT_GAP = 0.06
+/** Where a structure sits round planet `p`: where the player put it, else its own spot. */
+export const spotOf = (p: Pick<Planet, 'layout'>, id: StructId): Spot => p.layout?.[id] ?? AUTO_SPOT[id]
+/** Every structure's spot round planet `p`. */
+export const layoutOf = (p: Pick<Planet, 'layout'>) => Object.fromEntries(STRUCTS.map((id) => [id, spotOf(p, id)])) as Record<StructId, Spot>
+const spotXY = (s: Spot) => ({ x: Math.cos(s.a) * s.d, y: Math.sin(s.a) * s.d })
+/** Why structure `id` can't sit at spot `s` round planet `p` (of faction `f`), or null. */
+export function spotProblem(f: FactionId, p: Pick<Planet, 'layout'>, id: StructId, s: Spot): string | null {
+  if (!Number.isFinite(s.a) || !Number.isFinite(s.d)) return 'Not a place'
+  if (s.d < SPOT_D.min - 1e-6) return 'Too close to the planet'
+  if (s.d > SPOT_D.max + 1e-6) return 'Too far out'
+  const q = spotXY(s)
+  for (const other of STRUCTS) {
+    if (other === id) continue
+    const o = spotXY(spotOf(p, other))
+    if (Math.hypot(q.x - o.x, q.y - o.y) < structR(f, id) + structR(f, other) + SPOT_GAP) return 'Too close to another structure'
+  }
+  return null
+}
+/**
+ * Moves structure `id` of planet `planet` (ours) to bearing `a`, `d` planet radii out (kept within
+ * SPOT_D). A spot too close to another is nudged round the planet to the nearest clear one within a
+ * quarter turn; failing that, it stays where it was. Returns why not, or null.
+ */
+export function moveStruct(g: Galaxy, owner: number, planet: number, id: StructId, a: number, d: number): string | null {
+  const p = g.planets[planet]
+  if (!p || p.owner !== owner) return 'Not our planet'
+  if (!STRUCTS.includes(id)) return 'Nothing to move'
+  const f = g.sides[owner].faction
+  const dd = Math.max(SPOT_D.min, Math.min(SPOT_D.max, d))
+  const norm = (x: number) => Math.atan2(Math.sin(x), Math.cos(x))
+  for (let k = 0; k <= 24; k++) {
+    for (const s of k ? [1, -1] : [1]) {
+      const spot = { a: +norm(a + s * k * (Math.PI / 48)).toFixed(4), d: +dd.toFixed(4) }
+      if (spotProblem(f, p, id, spot)) continue
+      p.layout = { ...(p.layout ?? {}), [id]: spot }
+      return null
+    }
+  }
+  return 'Too close to another structure'
+}
+/** Every structure of planet `planet` back on its own spot. */
+export function resetLayout(g: Galaxy, owner: number, planet: number): string | null {
+  const p = g.planets[planet]
+  if (!p || p.owner !== owner) return 'Not our planet'
+  delete p.layout
+  return null
+}
+/** A saved layout made sound: only structures that exist, at spots in reach, else their own spot. */
+function cleanLayout(l: unknown): Planet['layout'] {
+  if (!l || typeof l !== 'object') return undefined
+  const out: Partial<Record<StructId, Spot>> = {}
+  for (const id of STRUCTS) {
+    const s = (l as Record<string, Spot | undefined>)[id]
+    if (s && Number.isFinite(s.a) && Number.isFinite(s.d)) out[id] = { a: s.a, d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, s.d)) }
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 // --- Battles ---------------------------------------------------------------------------------------
@@ -1488,6 +1788,8 @@ function dropOrphans(g: Galaxy, p: Planet) {
  * the part of each side's ships its fleets hold back in the reserve (included in `Ships`). `base`:
  * the holder's yards and expansions round its station (only when it owns the planet and has one). */
 export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[]; base?: PlanetBase
+  /** Where the holder's structures sit round the planet (see Spot), with its base. */
+  spots?: Record<StructId, Spot>
   /** The ships among them rush-launched unfinished (see Rushed), by side. */
   holderRush?: RushedShip[]; attackerRush?: RushedShip[] }
 
@@ -1507,7 +1809,7 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
   const rushed = (o: number): RushedShip[] => here.filter((f) => f.owner === o).flatMap((f) => f.items.flatMap((i) => (i.rush ? [{ unit: i.unit, ...i.rush, ...(i.held ? { held: true } : {}) }] : [])))
   const hr = rushed(holder)
   const ar = rushed(attacker)
-  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base) } : {}), ...(hr.length ? { holderRush: hr } : {}), ...(ar.length ? { attackerRush: ar } : {}) }
+  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base), spots: layoutOf(p) } : {}), ...(hr.length ? { holderRush: hr } : {}), ...(ar.length ? { attackerRush: ar } : {}) }
 }
 
 /** Seconds into an auto-resolved battle before held back ships are called in (sooner when nothing
@@ -1524,7 +1826,10 @@ export const AUTO_YARD = { hull: 0.35, aim: 0.85 }
 /** How a battle ended: the winning side, and what's left of each side. Ships that jumped out are
  * `escaped`: they go back where they came from. `base`: the holder's yards still standing and the
  * expansions not shot off (left out: its buildings came through as they were). */
-export type BattleResult = { winner: number; survivors: Record<number, string[]>; escaped: Record<number, string[]>; stationLeft: boolean; base?: { yards: YardKind[]; mods: ModuleId[] }
+export type BattleResult = { winner: number; survivors: Record<number, string[]>; escaped: Record<number, string[]>; stationLeft: boolean
+  /** `orb`: by defense site, a standing defense station's modules still on it (null in a slot whose
+   * module was shot off), or null where it was destroyed; left out for a site it didn't fight on. */
+  base?: { yards: YardKind[]; mods: ModuleId[]; orb?: ((OrbitalModId | null)[] | null | undefined)[] }
   /** The ships among the survivors and the escaped still unfinished, by side, and how far along
    * (see Rushed). Absent: the fleets' rushed ships are left as they were. */
   rushed?: Record<number, RushedShip[]> }
@@ -1545,7 +1850,7 @@ export type BattleResult = { winner: number; survivors: Record<number, string[]>
  */
 export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const r = rng(Math.floor(seed * 1000) + c.planet)
-  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; yard?: YardKind; late?: boolean; rush?: RushedShip }
+  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; yard?: YardKind; orb?: number; late?: boolean; rush?: RushedShip }
   const mods = c.base?.mods ?? []
   const plate = (o: number, t: UnitType) => (o === c.holder && mods.includes('armourWorks') && (t.tier === 'frigate' || t.kind === 'support') ? 1 + MODULE_FX.armour : 1)
   // A rushed ship counts at its built share: that much hull, no shields, that much of its guns.
@@ -1577,6 +1882,14 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
       const yhp = (y.hull + y.shield) * AUTO_YARD.hull
       us.push({ side: c.holder, id: k, tier: 'station', hp: yhp, max: yhp, dps: (tier) => dpsVs(y, tier), yard: k })
     }
+    // Its defense stations, in orbit beside the station: their whole hull and shields, their guns,
+    // and the squadrons their hangars keep in the air (at a little over half a squadron's worth).
+    for (const { i, o } of orbitalsUp(c.base ?? emptyBase())) {
+      const t = orbitalType(faction, o.level, o.mods)
+      const ohp = t.hull + t.shield
+      const wing = t.carrier ? UNIT[t.carrier.unit] : null
+      us.push({ side: c.holder, id: `orb${i}`, tier: 'defense', hp: ohp, max: ohp, dps: (tier) => dpsVs(t, tier) + (wing ? dpsVs(wing, tier) * wing.squad * t.carrier!.max * 0.6 : 0), orb: i })
+    }
   }
   // Luck: each side fights a little better or worse than on paper this time.
   const luck = { [c.holder]: 0.8 + r() * 0.4, [c.attacker]: 0.8 + r() * 0.4 } as Record<number, number>
@@ -1589,7 +1902,7 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     for (const u of us) if (u.late && (t >= RESERVE_CALL || !us.some((x) => x.side === u.side && !x.late && x.hp > 0))) u.late = false
     const alive = us.filter((u) => u.hp > 0)
     // (The yards don't hold the planet on their own: they fall with the station.)
-    if (!alive.some((u) => u.side === c.holder && !u.yard) || !alive.some((u) => u.side === c.attacker)) break
+    if (!alive.some((u) => u.side === c.holder && !u.yard && u.orb === undefined) || !alive.some((u) => u.side === c.attacker)) break
     const field = alive.filter((u) => !u.late)
     const dmg = new Map<U, number>()
     for (const a of field) {
@@ -1615,12 +1928,12 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
       break
     }
   }
-  const left = (side: number) => us.filter((u) => u.side === side && u.hp > 0 && !u.station && !u.yard).map((u) => u.id)
+  const left = (side: number) => us.filter((u) => u.side === side && u.hp > 0 && !u.station && !u.yard && u.orb === undefined).map((u) => u.id)
   // Rushed ships that came through are still unfinished (nothing is built in a battle played this way);
   // the attacker's that jumped out took their state along (their hp is zeroed at that point).
   const rushedOf = (side: number) => us.filter((u) => u.side === side && u.rush && (u.hp > 0 || (escaped.length && escapedSet.has(u)))).map((u) => ({ unit: u.id, done: u.rush!.done, left: u.rush!.left }))
-  const holderLeft = us.some((u) => u.side === c.holder && u.hp > 0 && !u.yard)
-  if (!holderLeft) for (const u of us) if (u.yard) u.hp = 0
+  const holderLeft = us.some((u) => u.side === c.holder && u.hp > 0 && !u.yard && u.orb === undefined)
+  if (!holderLeft) for (const u of us) if (u.yard || u.orb !== undefined) u.hp = 0
   const stationLeft = us.some((u) => u.station && u.hp > 0)
   const yards = us.filter((u) => u.yard && u.hp > 0).map((u) => u.yard!)
   return {
@@ -1629,9 +1942,12 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     escaped: { [c.holder]: [], [c.attacker]: escaped },
     stationLeft,
     ...(c.holderRush?.length || c.attackerRush?.length ? { rushed: { [c.holder]: rushedOf(c.holder), [c.attacker]: rushedOf(c.attacker) } } : {}),
-    ...(c.base ? { base: { yards, mods: mods.filter((id) => (MODULE[id].on === 'station' ? stationLeft : yards.includes(MODULE[id].on as YardKind))) } } : {}),
+    ...(c.base ? { base: { yards, mods: mods.filter((id) => (MODULE[id].on === 'station' ? stationLeft : yards.includes(MODULE[id].on as YardKind))), ...(c.base.orb ? { orb: orbitalsLeft(c.base, (i) => us.some((u) => u.orb === i && u.hp > 0)) } : {}) } } : {}),
   }
 }
+/** What a battle that doesn't model their modules leaves of a base's defense stations: by site, all
+ * of a survivor's modules, null for one destroyed, nothing for a site that had none standing. */
+const orbitalsLeft = (b: PlanetBase, alive: (i: number) => boolean) => (b.orb ?? []).map((o, i) => (o && !o.ruin ? (alive(i) ? [...o.mods] : null) : undefined))
 
 /** The nearest planet of ours a beaten fleet can fall back to (not `not`), or -1. */
 function fallback(g: Galaxy, owner: number, prefer: number, not: number) {
@@ -1716,6 +2032,16 @@ export function applyBattle(g: Galaxy, c: Clash, res: BattleResult, auto: boolea
   if (c.station && res.base && p.owner === c.holder) {
     for (const k of YARD_KINDS) if (p.base.yards[k] === 'up' && !res.base.yards.includes(k)) p.base.yards[k] = 'ruin'
     p.base.mods = p.base.mods.filter((id) => res.base!.mods.includes(id) && worksUp(p, MODULE[id].on))
+    // A defense station destroyed is a ruin at its level; one that came through loses the modules
+    // shot off it.
+    const orb = res.base.orb
+    if (orb && p.base.orb)
+      p.base.orb = p.base.orb.map((o, i) => {
+        if (!o || o.ruin || orb[i] === undefined) return o
+        const left = orb[i]
+        if (left === null) return { level: o.level, mods: [], ruin: true as const }
+        return { level: o.level, mods: o.mods.map((m, s) => (m && left[s] === m ? m : null)) }
+      })
     dropOrphans(g, p)
   }
   if (c.station && !res.stationLeft) {
@@ -1787,6 +2113,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       } else if (isYard(q.unit)) {
         p.base.yards[q.unit] = 'up'
         g.events.push({ k: 'works', planet: p.id, owner: p.owner, what: q.unit })
+      } else if (isOrbitalWork(q.unit)) {
+        finishOrbital(g, p, q)
       } else if (isModule(q.unit)) {
         const id = q.unit
         if (!worksUp(p, MODULE[id].on)) refund(g, p.owner, p, q, 'Lost with its yard')
@@ -1893,8 +2221,10 @@ export function tickGalaxy(g: Galaxy, dt: number) {
         p.queue = []
         delete p.rushAt
         delete p.slowNext
-        // Its base fell with its station before it could be taken: the new owner finds the ruins.
+        // Its base fell with its station before it could be taken: the new owner finds the ruins
+        // (and lays them out its own way).
         razeBase(p)
+        delete p.layout
         // The side that lost it knows, even if it sees nothing there any more.
         if (from >= 0) note(g, from, p)
         g.events.push({ k: 'captured', planet: p.id, owner: taker.owner, from })
@@ -2124,7 +2454,7 @@ function galaxyAi(g: Galaxy, o: number) {
    * there last (a guess where it never looked); all misjudged a little. */
   const defence = (p: Planet) => {
     const k = known(g, o, p)
-    let v = hostile(k.owner) ? k.station * 1500 + (k.station ? baseGuard(k.base) : 0) : 0
+    let v = hostile(k.owner) ? k.station * 1500 + (k.station ? baseGuard(k.base, g.sides[k.owner].faction) : 0) : 0
     if (k.live) {
       for (const f of seen) if (!f.leg && f.system === p.system) v += fleetValue(f.ships) * (f.planet === p.id ? 1 : 0.5)
     } else v += k.ships < 0 ? (hostile(k.owner) ? FOG_GUESS : 0) : k.value
@@ -2290,7 +2620,7 @@ function galaxyAi(g: Galaxy, o: number) {
       const near = new Set([p.system, ...neighbours(g, p.system)])
       let foe = 0
       for (const f of seen) if (near.has(f.leg ? f.leg.system : f.system)) foe += fleetValue(f.ships)
-      const held = fleetsHere(g, o, p.id).reduce((v, f) => v + fleetValue(f.ships), 0) + baseGuard(p.base)
+      const held = fleetsHere(g, o, p.id).reduce((v, f) => v + fleetValue(f.ships), 0) + baseGuard(p.base, s.faction)
       if (foe > held) order(() => rushLaunch(g, o, p.id))
     }
   }
@@ -2347,7 +2677,38 @@ export const thinkAi = galaxyAi
 /** What the AI reckons a planet's buildings add to its defence, in credits of ships: a yard's
  * hull and guns, and the station's Shield core (as they count in an auto-resolved battle, AUTO_YARD:
  * the whole base a little over a cruiser's worth). */
-const baseGuard = (b: PlanetBase) => (b.yards.yard === 'up' ? 900 : 0) + (b.yards.cyard === 'up' ? 1000 : 0) + (b.mods.includes('shieldCore') ? 250 : 0)
+const baseGuard = (b: PlanetBase, f: FactionId) =>
+  (b.yards.yard === 'up' ? 900 : 0) + (b.yards.cyard === 'up' ? 1000 : 0) + (b.mods.includes('shieldCore') ? 250 : 0) +
+  // Its defense stations: about what was spent on them (they fight in full, in orbit by the station).
+  orbitalsUp(b).reduce((v, { o }) => v + orbitalValue(f, o) * 1.1, 0)
+
+/**
+ * The module the galaxy AI fits next into a defense station, by the enemy fleets it can see (and
+ * what its side last saw of the enemy's planets, failing that): flak against a fleet of strike craft
+ * and gunships, batteries against warships, a launcher against shielded hulls once it has a battery,
+ * then a shield generator (the Swarm's regeneration pool) and, on the fourth slot, a hangar.
+ */
+function pickOrbitalMod(g: Galaxy, o: number, st: OrbitalState): OrbitalModId {
+  let small = 0
+  let big = 0
+  for (const f of g.fleets) {
+    if (f.owner === o || f.owner < 0 || !canSee(g, o, f)) continue
+    for (const id of f.ships) {
+      const t = UNIT[id]
+      if (t.tier === 'fighter' || t.tier === 'gunship') small += t.cost
+      else big += t.cost
+    }
+  }
+  const n = (id: OrbitalModId) => st.mods.filter((m) => m === id).length
+  const shielded = g.sides.some((s, i) => i !== o && s.alive && FACTIONS[s.faction] && unitOf(s.faction, 'cruiser').shield > 0)
+  const fitted = st.mods.filter(Boolean).length
+  if (fitted === 0) return small > big * 1.3 ? 'flak' : 'battery'
+  if (fitted === 3) return 'hangar'
+  if (small > big * 1.3 && n('flak') < 2) return 'flak'
+  if (!n('flak')) return 'flak'
+  if (big >= small && n('battery') + n('launcher') < 2) return shielded && n('battery') ? 'launcher' : 'battery'
+  return n('shield') ? 'battery' : 'shield'
+}
 
 /**
  * The galaxy AI plans its planets' buildings by its profile, one order per look at most, and only
@@ -2362,6 +2723,10 @@ const baseGuard = (b: PlanetBase) => (b.yards.yard === 'up' ? 900 : 0) + (b.yard
  * offensive admiral starts with the Second slip and Strike hangar, a defensive one with the Shield
  * core and Drydock). A ruined yard is rebuilt before anything new, as it costs half. Ships come
  * from the station meanwhile (strike craft and gunships need no yard), so it never stalls.
+ * Defense stations: one at the front once its yards are up, armed by the enemy fleets it sees
+ * (pickOrbitalMod), before the profile's expansions; then one at the forge world, modules for
+ * every one standing, the upgrades, and the second site at the front. A ruined one at either is
+ * rebuilt with the ruined yards.
  */
 function planBase(g: Galaxy, o: number, m: GalaxyMind, yards: Planet[], order: (give: () => string | null) => boolean) {
   const s = g.sides[o]
@@ -2372,19 +2737,42 @@ function planBase(g: Galaxy, o: number, m: GalaxyMind, yards: Planet[], order: (
   const stage = yards.find((p) => p.id === m.stage) ?? yards[0]
   const forge = yards.slice().sort((a, b) => b.station - a.station || far(b) - far(a) || a.id - b.id)[0]
   const sites = forge === stage ? [stage] : [forge, stage]
-  const want: [Planet, WorkId][] = []
-  // Ruins first, then a Frigate Yard where there is none, then the Capital Yard and its slip.
+  const want: [Planet, WorkId | OrbitalWork][] = []
+  // Ruins first (a defense station's too), then a Frigate Yard where there is none, then the Capital
+  // Yard and its slip.
   for (const p of yards) for (const k of YARD_KINDS) if (p.base.yards[k] === 'ruin' && (k === 'yard' || p === forge)) want.push([p, k])
+  for (const p of yards) for (let i = 0; i < ORBITAL_MAX; i++) if (orbitalAt(p, i)?.ruin && (p === stage || p === forge)) want.push([p, { k: 'build', i }])
   for (const p of sites) want.push([p, 'yard'])
   want.push([forge, 'cyard'], [forge, 'capitalSlip'])
+  // The front's first defense station, armed (see pickOrbitalMod).
+  const arm = (p: Planet, i: number) => {
+    const st = orbitalAt(p, i)
+    const slot = st && !st.ruin ? st.mods.findIndex((m) => !m) : -1
+    if (st && slot >= 0) want.push([p, { k: 'mod', i, slot, mod: pickOrbitalMod(g, o, st) }])
+  }
+  want.push([stage, { k: 'build', i: 0 }])
+  arm(stage, 0)
   for (const id of PROFILES[galaxyProfile(g, o)].modules) {
     const on = MODULE[id].on
     const at = on === 'station' ? stage : sites.find((p) => worksUp(p, on)) ?? forge
     want.push([at, id])
   }
+  // Then: the forge world's, modules for every one standing (wherever the front has moved since),
+  // the upgrades, and the second sites.
+  want.push([forge, { k: 'build', i: 0 }])
+  for (const p of yards) arm(p, 0)
+  for (const p of sites) want.push([p, { k: 'up', i: 0 }])
+  want.push([stage, { k: 'build', i: 1 }])
+  for (const p of yards) arm(p, 1)
   // The first it may build now (the rest waits for a later look), if the credits are there.
   const none = !g.planets.some((p) => p.owner === o && p.base.yards.yard === 'up')
   for (const [p, id] of want) {
+    if (typeof id === 'object') {
+      if (orbitalLock(g, o, p.id, id) || p.queue.length >= 2) continue
+      if (s.credits < orbitalCost(g, o, p, id) + 1200) return
+      order(() => orderOrbital(g, o, p.id, id))
+      return
+    }
     if (workLock(g, o, p.id, id) || p.queue.length >= 2) continue
     const cost = workCost(g, o, p, id)
     if (s.credits < cost + (none && id === 'yard' ? 200 : 1200)) return
@@ -2479,13 +2867,24 @@ function cleanBase(b: PlanetBase | undefined): PlanetBase | undefined {
   if (!b || typeof b !== 'object') return undefined
   const yards: PlanetBase['yards'] = {}
   for (const k of YARD_KINDS) if (b.yards?.[k] === 'up' || b.yards?.[k] === 'ruin') yards[k] = b.yards[k]
-  return { yards, mods: Array.isArray(b.mods) ? [...new Set(b.mods.filter((id) => MODULE[id]))] : [] }
+  // Defense stations (version 4): sound levels, a slot for each of the level's slots, known modules.
+  const orb = Array.isArray(b.orb)
+    ? Array.from({ length: ORBITAL_MAX }, (_, i): OrbitalState | null => {
+      const o = b.orb![i]
+      if (!o || typeof o !== 'object' || !Number.isFinite(o.level)) return null
+      const level = Math.max(1, Math.min(ORBITAL_TOP, Math.round(o.level)))
+      if (o.ruin) return { level, mods: [], ruin: true }
+      const mods = Array.from({ length: orbitalSlots(level) }, (_, s) => (Array.isArray(o.mods) && (ORBITAL_MODS as unknown[]).includes(o.mods[s]) ? o.mods[s] : null))
+      return { level, mods }
+    })
+    : null
+  return { yards, mods: Array.isArray(b.mods) ? [...new Set(b.mods.filter((id) => MODULE[id]))] : [], ...(orb && orb.some(Boolean) ? { orb } : {}) }
 }
 
 /** A saved campaign, made fit for this version of the game, or null. */
 function clean(v: Galaxy | null): Galaxy | null {
   const version = (v as { v?: number } | null)?.v
-  if (!v || (version !== 1 && version !== 2 && version !== 3) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
+  if (!v || (version !== 1 && version !== 2 && version !== 3 && version !== 4) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
   // Ships that no longer exist in the game are dropped.
   for (const f of v.fleets) {
     f.ships = (f.ships ?? []).filter((id) => UNIT[id])
@@ -2518,7 +2917,14 @@ function clean(v: Galaxy | null): Galaxy | null {
     p.queue = (Array.isArray(p.queue) ? p.queue : []).filter((q) => q.unit === 'station' || UNIT[q.unit] || isWork(q.unit))
     if (typeof p.rushAt !== 'number') delete p.rushAt
     if (!p.slowNext) delete p.slowNext
-    for (const q of p.queue) if (!q.slow) delete q.slow
+    for (const q of p.queue) {
+      if (!q.slow) delete q.slow
+      if (typeof q.lv !== 'number') delete q.lv
+    }
+    // Saves from before the orbit view (version 4) have no layout: every structure on its own spot.
+    const layout = cleanLayout(p.layout)
+    if (layout) p.layout = layout
+    else delete p.layout
     if (!PLANET_KINDS[p.kind]) p.kind = 'barren'
     // Saves from before planets had their own income.
     p.income ??= PLANET_KINDS[p.kind].income
@@ -2538,7 +2944,7 @@ function clean(v: Galaxy | null): Galaxy | null {
   for (const s of v.sides) if (!Array.isArray(s.intel) || s.intel.length !== v.planets.length) s.intel = chartOf(v)
   // What each side last saw of a planet before there were buildings: what that station level had.
   for (const s of v.sides) for (const i of s.intel!) if (i) i.base = cleanBase(i.base) ?? (version === 1 ? baseOfOld(i.station ?? 0) : emptyBase())
-  v.v = 3
+  v.v = 4
   updateSight(v)
   return v
 }

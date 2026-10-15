@@ -1,6 +1,7 @@
 import type { FactionModels } from '../spec.ts'
 import * as base from './base.ts'
 import * as craft from './craft.ts'
+import * as orbital from './orbital.ts'
 import * as bastion from './station.ts'
 import * as warships from './warships.ts'
 
@@ -30,6 +31,7 @@ export const MODELS: FactionModels = {
     'r-engineer': base.republicEngineer,
     'r-yard': base.republicYard,
     'r-cyard': base.republicCapitalYard,
+    'r-orbital': orbital.orbital,
   },
   expansion: base.expansion,
   // The station's level-4 frame can be drawn square or octagonal.
@@ -38,6 +40,12 @@ export const MODELS: FactionModels = {
   partNames: [
     ['pod', 'Engine pod'],
     ['pdPod', 'Defense module'],
+    ['gunDeck', 'Gun deck'],
+    ['slotPort', 'Empty module slot'],
+    ['orbRing', 'Outer truss ring'],
+    ['radFin', 'Radiator fin'],
+    ['habitat', 'Crew habitat'],
+    ['collar', 'Docking collar'],
     ['pylon', 'Engine pylon'],
     ['seat', 'Turret seat'],
     ['rackSeat', 'Torpedo rack seat'],

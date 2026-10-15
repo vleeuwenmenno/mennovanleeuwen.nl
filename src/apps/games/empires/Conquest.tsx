@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTION_IDS, FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { FACTION_IDS, FACTIONS, MODULE, ORBITAL_MAX, ORBITAL_TOP, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, orbitalName, orbitalSprite, orbitalType, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
+  AUTO_SPOT, moveStruct, orbitalAt, orbitalsUp, parseOrbital, queueName, resetLayout, spotOf,
+  type StructId,
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, buildWork, cantRushAt, queueShare, rushIntoBattle, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   galaxyProfile, rivalOf, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
@@ -21,6 +23,7 @@ import { actionFor, getSettings, keyName, useSettings, type Action } from './set
 import type { FleetSide, World } from './sim'
 import type { EmpiresSound } from './sound'
 import { LongPress, SELPOP_KEEP, TAP_SLOP, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useCoarse, useLongPressWheel, useTapAway, useWheel, type WheelItem, type WheelRequest } from './Touch'
+import { OrbitView, PlanetDefense, orbitThings, type OrbitThing } from './Orbit'
 import './touch-conquest.css'
 
 // Galactic conquest's screens: the setup, then the galaxy map (systems, lanes and fleets), the
@@ -395,6 +398,18 @@ type Cam = { x: number; y: number; k: number }
 const ZOOM_PULL = 0.33
 /** Closest the map zooms in: a planet fills a good part of the view. */
 const K_MAX = 140
+/**
+ * The orbit view (see Orbit.tsx): zooming in past a planet locks the camera onto it, and it can then
+ * go in closer than K_MAX, up to K_ORBIT_MAX. It settles at the zoom where the planet and everything
+ * round it (ORBIT_REACH planet radii out) fills the smaller side of the view; zooming in further than
+ * ORBIT_SNAP of that (or of K_MAX, on a big screen) with the planet under the cursor snaps into it,
+ * and zooming out below ORBIT_LEAVE of it lets go.
+ */
+const K_ORBIT_MAX = 420
+const ORBIT_REACH = 3.05
+const ORBIT_SNAP = 0.85
+const ORBIT_LEAVE = 0.7
+const kOrbit = (p: Planet, size: { w: number; h: number }) => clamp((Math.min(size.w, size.h) * 0.5) / (ORBIT_REACH * planetR(p)), 30, K_ORBIT_MAX)
 const fitK = (w: number, h: number) => Math.min(w / W, h / H) * 0.94
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 /** How far into the systems the view is: 0 shows the galaxy's markers, 1 the planets themselves. */
@@ -423,6 +438,46 @@ function CaptureTag({ g, p }: { g: Galaxy; p: Planet }) {
       <rect x={-w / 2 + 7} y={-9} width={w - 14} height={3} rx={1.5} fill="rgba(255,255,255,0.15)" />
       <rect x={-w / 2 + 7} y={-9} width={(w - 14) * f} height={3} rx={1.5} fill={color(g, p.capture.owner)} />
     </g>
+  )
+}
+
+/** A ring of `n` points `r` out, the first `a0` round from the right: an octagon, a hexagon. */
+const ringPts = (n: number, r: number, a0 = 0) => Array.from({ length: n }, (_, i) => `${+(Math.cos(a0 + (i / n) * Math.PI * 2) * r).toFixed(3)},${+(Math.sin(a0 + (i / n) * Math.PI * 2) * r).toFixed(3)}`).join(' ')
+const OCTAGON = ringPts(8, 9.5, Math.PI / 8)
+const HEXAGON = ringPts(6, 7.5, Math.PI / 6)
+/**
+ * A structure round a planet as a small icon, for the zoom between the system and the orbit view
+ * (drawn in vector, so nothing is painted for it while the map zooms): the Command Station an octagon
+ * with its level, a yard its slipway (the Capital Yard's longer), a defense station a hexagon with its
+ * level, filled once it has a module; a ruin dashed and greyed.
+ */
+function StructIcon({ th, stroke, level, faded }: { th: OrbitThing; stroke: string; level: number; faded: boolean }) {
+  const ruin = th.state === 'ruin'
+  const s = ruin ? 'rgba(170, 176, 190, 0.85)' : stroke
+  const line = { fill: '#0b1226', stroke: s, strokeWidth: 1.5, strokeDasharray: ruin || faded ? '2 2' : undefined, opacity: ruin ? 0.75 : 1 }
+  if (th.id === 'station')
+    return (
+      <>
+        <polygon points={OCTAGON} {...line} />
+        <text y={3.6} className="ew-slv is-small">{level}</text>
+      </>
+    )
+  if (th.id === 'yard' || th.id === 'cyard') {
+    const [w, h] = th.id === 'cyard' ? [11, 19] : [9, 15]
+    return (
+      <>
+        <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={2} {...line} />
+        <path d={`M0 ${n4(-h / 2 + 3)} V${n4(h / 2 - 3)}${th.id === 'cyard' ? ` M-2.5 ${n4(-h / 2 + 4)} V${n4(h / 2 - 4)} M2.5 ${n4(-h / 2 + 4)} V${n4(h / 2 - 4)}` : ''}`} stroke={s} strokeWidth={1} opacity={ruin ? 0.6 : 0.9} />
+      </>
+    )
+  }
+  const o = th.t.orbital
+  const armed = !ruin && !!o?.slots.some(Boolean)
+  return (
+    <>
+      <polygon points={HEXAGON} {...line} fill={armed ? stroke : line.fill} fillOpacity={armed ? 0.35 : 1} />
+      <text y={3.2} className="ew-slv is-small">{o?.level ?? 1}</text>
+    </>
   )
 }
 
@@ -494,9 +549,10 @@ const B_NEAR = 16 // a system takes clicks round its planets, not only its star 
 const B_CAPRING = 32 // a planet being taken shows as a ring round the system (detail < 0.6)
 const B_NAMES = 64 // the planets' names show (zoom > 7)
 const B_GLOW = 128 // the blockade's glow shows (zoom < 6; see glowRings)
+const B_BASE = 256 // what stands round each planet shows as small pictures round it (zoom > 9)
 function zoomBand(k: number) {
   const d = detail(k)
-  return (d > 0 ? B_OPEN : 0) | (d < 1 ? B_DOTS : 0) | (d > 0.3 ? B_BIG : 0) | (d < 0.5 ? B_PARKED : 0) | (d > 0.5 ? B_NEAR : 0) | (d < 0.6 ? B_CAPRING : 0) | (k > 7 ? B_NAMES : 0) | (k < 6 ? B_GLOW : 0)
+  return (d > 0 ? B_OPEN : 0) | (d < 1 ? B_DOTS : 0) | (d > 0.3 ? B_BIG : 0) | (d < 0.5 ? B_PARKED : 0) | (d > 0.5 ? B_NEAR : 0) | (d < 0.6 ? B_CAPRING : 0) | (k > 7 ? B_NAMES : 0) | (k < 6 ? B_GLOW : 0) | (k > 9 ? B_BASE : 0)
 }
 /** The setup's preview: the whole galaxy, at no zoom (and no planet names). */
 const MINI_BAND = zoomBand(1) & ~B_NAMES
@@ -749,11 +805,13 @@ const starGlow = (hex: string, alpha: number) => {
  * boxes (.ew-gunder); over it, the markers and names (.ew-gover); what's well outside the region is
  * left out (`cull`). The fleets in flight glide every frame of the clock (`fly`), between renders.
  */
-function GalaxyView({ g, view, sel, mini = false, on }: {
+function GalaxyView({ g, view, sel, mini = false, orbit = -1, on }: {
   g: Galaxy
   view?: CamView
   sel?: Sel
   mini?: boolean
+  /** The planet the orbit view shows (its structures are drawn there, not here), or -1. */
+  orbit?: number
   on?: {
     planet: (p: Planet, double: boolean) => void
     system: (s: number) => void
@@ -1032,7 +1090,8 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
                       )}
                       {(k.station > 0 || (k.live && p.queue.length > 0)) && over(`st${pid}`, pin(q.x - r * 0.75, q.y - r * 0.75, 0, '', fade), sysAt, (
                         <>
-                          {k.station > 0 && (
+                          {/* (Closer in, the level goes on the station's own picture, below.) */}
+                          {k.station > 0 && !(has(B_BASE) && pid !== orbit && k.owner >= 0) && (
                             <g transform="translate(-10 -10)" opacity={k.live ? 1 : 0.6}>
                               <rect x={-9} y={-9} width={18} height={18} rx={4} fill="#0b1226" stroke={color(g, k.owner)} strokeDasharray={k.live ? undefined : '2 2'} />
                               <text y={4} className="ew-slv">{k.station}</text>
@@ -1041,6 +1100,16 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
                           {k.live && p.queue.length > 0 && <circle cx={k.station ? 6 : -6} cy={-16} r={4} className="ew-sbusy" />}
                         </>
                       ), { ...hit, className: 'ew-splanet' })}
+                      {/* Closer in: what stands round it, as small pictures where each sits (see
+                          Orbit.tsx), at least a little way out past the planet's edge on screen. The
+                          planet the orbit view shows has its real models instead. */}
+                      {has(B_BASE) && pid !== orbit && k.station > 0 && k.owner >= 0 && orbitThings(g.sides[k.owner].faction, k.station, k.base, false).map((th) => {
+                        const s = k.live ? spotOf(p, th.id) : AUTO_SPOT[th.id]
+                        const dist = `max(${n4(s.d * r)}px, calc(${n4(r)}px + var(--ik) * 20px))`
+                        return over(`os${pid}${th.id}`, css({ transform: `translate(calc(${n4(q.x)}px + ${n4(Math.cos(s.a))} * ${dist}), calc(${n4(q.y)}px + ${n4(Math.sin(s.a))} * ${dist})) scale(var(--ik))`, opacity: `calc(var(--d) * ${k.live ? 1 : 0.6})` }), sysAt, (
+                          <StructIcon th={th} stroke={color(g, k.owner)} level={k.station} faded={!k.live} />
+                        ), { ...hit, 'data-tip': `${th.name} at ${p.name}${k.live ? '' : ' (as last seen)'}. Zoom in for the orbit view.`, className: `ew-splanet ew-sbase is-${th.state}` })
+                      })}
                       {has(B_NAMES) && over(`nm${pid}`, pin(q.x, q.y + r, 0, '', { opacity: 'var(--nm)' }), sysAt, <text y={20} className="ew-spname">{p.name}</text>)}
                       {!k.live && has(B_NAMES) && over(`ls${pid}`, pin(q.x, q.y + r, 0, '', { opacity: 'calc(var(--nm) * 0.85)' }), sysAt, <text y={34} className="ew-spseen">{k.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(k.t)}`}{k.ships > 0 ? ` · ${k.ships} ships` : ''}</text>)}
                     </g>
@@ -1314,12 +1383,92 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const kMin = fitK(size.w, size.h)
   const kMinRef = useRef(kMin)
   kMinRef.current = kMin
-  const fix = (c: Cam): Cam => ({ x: clamp(c.x, 0, W), y: clamp(c.y, 0, H), k: clamp(c.k, kMinRef.current, K_MAX) })
+  // The orbit view (see Orbit.tsx): the planet the camera is locked onto (-1: none), and the
+  // structure picked round it.
+  const [orbit, setOrbitState] = useState(-1)
+  const orbitRef = useRef(-1)
+  const [orbitSel, setOrbitSel] = useState<StructId | null>(null)
+  /** The zoom the orbit view of planet `pid` settles at, for the view's size now. */
+  const orbitK = (pid: number) => kOrbit(g.planets[pid], view.size)
+  // Locked onto a planet, the camera may go in closer than K_MAX, and stays round the planet: on its
+  // middle at the orbit view's own zoom, and further in no further from it than what's round it.
+  const fix = (c: Cam): Cam => {
+    const o = orbitRef.current
+    if (o >= 0) {
+      const p = g.planets[o]
+      const q = planetAt(g, p)
+      const k = clamp(c.k, kMinRef.current, K_ORBIT_MAX)
+      const lim = Math.max(0, 1 - orbitK(o) / k) * ORBIT_REACH * planetR(p)
+      const d = Math.hypot(c.x - q.x, c.y - q.y)
+      const s = d > lim ? lim / d : 1
+      return { x: q.x + (c.x - q.x) * s, y: q.y + (c.y - q.y) * s, k }
+    }
+    return { x: clamp(c.x, 0, W), y: clamp(c.y, 0, H), k: clamp(c.k, kMinRef.current, K_MAX) }
+  }
+  /** Into the orbit view of planet `pid`: the camera eases onto it and in, and it's selected. */
+  const enterOrbit = (pid: number) => {
+    const p = g.planets[pid]
+    if (!p) return
+    orbitRef.current = pid
+    setOrbitState(pid)
+    setOrbitSel(null)
+    // The view clears for it: the planet's panels give way to the orbit card of what's picked.
+    setTake({})
+    setSel(null)
+    const q = planetAt(g, p)
+    zoomTo.current = null
+    camGoal.current = { x: q.x, y: q.y, k: orbitK(pid) }
+  }
+  /** Out of the orbit view (the camera lets go where it is; `out`: and pulls back to the system). */
+  const leaveOrbit = (out = false) => {
+    const o = orbitRef.current
+    if (o < 0) return
+    orbitRef.current = -1
+    setOrbitState(-1)
+    setOrbitSel(null)
+    if (!out) return
+    const q = planetAt(g, g.planets[o])
+    zoomTo.current = null
+    camGoal.current = fix({ x: q.x, y: q.y, k: Math.min(K_MAX * 0.4, orbitK(o) * 0.45) })
+  }
+  /** The planet a zoom at world point (x, y) is going into, if any: the nearest within reach of it
+   * (its structures' reach), else the one nearest the middle of the view within that. */
+  const snapPlanet = (x: number, y: number) => {
+    const near = (px: number, py: number) => {
+      let best: Planet | null = null
+      let bd = Infinity
+      for (const p of g.planets) {
+        const q = planetAt(g, p)
+        const d = Math.hypot(q.x - px, q.y - py) / planetR(p)
+        if (d < ORBIT_REACH && d < bd) (best = p), (bd = d)
+      }
+      return best
+    }
+    return near(x, y) ?? near(camRef.current.x, camRef.current.y)
+  }
   const flyTo = (x: number, y: number, k: number) => {
+    // Somewhere else, or out past where the orbit view lets go: the camera is let go first.
+    const o = orbitRef.current
+    if (o >= 0) {
+      const q = planetAt(g, g.planets[o])
+      if (Math.hypot(q.x - x, q.y - y) > planetR(g.planets[o]) * ORBIT_REACH || k < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
+    }
     zoomTo.current = null
     camGoal.current = fix({ x, y, k })
   }
+  /** The zoom keys and buttons: in or out round the middle of the view, snapping into a planet's
+   * orbit view the way the wheel does. */
+  const zoomBy = (f: number) => {
+    const c = camGoal.current ?? camRef.current
+    if (orbitRef.current < 0 && f > 1) {
+      const p = snapPlanet(c.x, c.y)
+      if (p && c.k * f >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) return enterOrbit(p.id)
+    }
+    flyTo(c.x, c.y, c.k * f)
+  }
   const flyOut = () => flyTo(W / 2, H / 2, kMin)
+  // Dev builds can drive the camera from the console (and the browser checks).
+  if (import.meta.env.DEV) (window as unknown as { __gmap: unknown }).__gmap = { enterOrbit, leaveOrbit, flyTo, cam: () => camRef.current }
 
   // The view's size; the first time, the whole galaxy fits.
   const fitted = useRef(false)
@@ -1488,6 +1637,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
         } else if (e.k === 'works' && e.owner === ME) {
           toast(`${g.planets[e.planet].name}: ${workName(e.what)} built`, 'good', { k: 'planet', id: e.planet })
           sound.levelUp()
+        } else if (e.k === 'orbital' && e.owner === ME) {
+          toast(`${g.planets[e.planet].name}: ${e.text}`, 'good', { k: 'planet', id: e.planet })
+          sound.levelUp()
         } else if (e.k === 'station' && e.owner === ME) {
           toast(`${g.planets[e.planet].name}: station level ${e.level}`, 'good', { k: 'planet', id: e.planet })
           sound.levelUp()
@@ -1552,6 +1704,13 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const selFleets = sel?.kind === 'fleets' ? g.fleets.filter((f) => sel.ids.includes(f.id)) : []
   const selPlanet = sel?.kind === 'planet' ? g.planets[sel.id] : undefined
   const selPlanets = sel?.kind === 'planets' ? sel.ids.map((id) => g.planets[id]) : selPlanet ? [selPlanet] : []
+  // The orbit view's planet, as we know it.
+  const orbitP = orbit >= 0 ? g.planets[orbit] : null
+  const orbitKn = orbitP ? known(g, ME, orbitP) : null
+  // Something else selected (a fleet, a planet) lets go of what's picked in the orbit view.
+  useEffect(() => {
+    if (sel) setOrbitSel(null)
+  }, [sel])
   useEffect(() => {
     // Selected fleets that are gone (merged, destroyed) let go.
     if (sel?.kind === 'fleet' && !selFleet) setSel(null)
@@ -1597,8 +1756,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       } else if (k === ' ' || action === 'pause') {
         e.preventDefault()
         setPaused((p) => !p)
-      } else if (action === 'zoomIn' || k === '+') flyTo(c.x, c.y, c.k * 1.8)
-      else if (action === 'zoomOut') flyTo(c.x, c.y, c.k / 1.8)
+      } else if (action === 'zoomIn' || k === '+') zoomBy(1.8)
+      else if (action === 'zoomOut') zoomBy(1 / 1.8)
       else if (g.pending >= 0 && (k === 'backspace' || (action && action in KEY_COMMAND))) {
         // A battle waiting to be fought: it gets settled first.
         e.preventDefault()
@@ -1611,6 +1770,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       } else if (k === 'escape') {
         if (state.current.menu) setMenu(null)
         else if (state.current.mode !== 'normal') setMode('normal')
+        // The orbit view: what's picked in it, then the view itself.
+        else if (orbitSel) setOrbitSel(null)
+        else if (orbitRef.current >= 0) leaveOrbit(true)
         else if (sel) setSel(null)
         else if (c.k > kMin * 1.15) flyOut()
         else setMenu('menu')
@@ -1873,7 +2035,11 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     // Ships the fleets hold back start in the battle's reserve, to be called in from there.
     const sides: FleetSide[] = [
       // The planet's yards and expansions stand round its station (see newFleetBattle).
-      { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, rushed: rushIntoBattle(c.holderRush), station: c.station, ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods] } : {}) },
+      // Its defense stations stand in orbit beside it, and everything stands where the planet has it.
+      {
+        faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, rushed: rushIntoBattle(c.holderRush), station: c.station,
+        ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods], orbitals: orbitalsUp(c.base).map(({ i, o }) => ({ i, level: o.level, mods: [...o.mods] })), ...(c.spots ? { spots: c.spots } : {}) } : {}),
+      },
       { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld, rushed: rushIntoBattle(c.attackerRush) },
     ]
     const meSide = c.holder === ME ? 0 : 1
@@ -1918,7 +2084,17 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const c = camRef.current
       const sx = e.clientX - r.left - el.clientWidth / 2
       const sy = e.clientY - r.top - el.clientHeight / 2
-      const k = clamp((zoomTo.current?.k ?? c.k) * Math.exp(step), kMinRef.current, K_MAX)
+      const raw = (zoomTo.current?.k ?? c.k) * Math.exp(step)
+      const o = orbitRef.current
+      if (o >= 0) {
+        // In the orbit view the zoom goes in closer than anywhere else, out to where it lets go.
+        if (raw < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
+      } else if (step > 0) {
+        // Zooming in past a planet snaps into its orbit view.
+        const p = snapPlanet(c.x + sx / c.k, c.y + sy / c.k)
+        if (p && raw >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) return enterOrbit(p.id)
+      }
+      const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? K_ORBIT_MAX : K_MAX)
       // Zooming in draws the spot under the cursor towards the centre, under a tenth of the way a
       // notch; zooming out keeps it under the cursor.
       const pull = k > c.k && step > 0 ? Math.exp(-step * ZOOM_PULL) : 1
@@ -1997,7 +2173,10 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
         setBox(null)
         // The touch bar's Box mode is for one box; the next drag moves the map again.
         if (finger) setTouchMod('box', false)
-      } else if (!pan && onSpace && !add) setSel(null)
+      } else if (!pan && onSpace && !add) {
+        setSel(null)
+        setOrbitSel(null)
+      }
       // The click that ends a drag isn't a click.
       setTimeout(() => (dragged.current = false), 0)
     }
@@ -2008,10 +2187,12 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   // Touch: one finger drags the map and two pinch-zoom round their middle; a finger that stays put
   // taps (the map's own clicks then select and zoom, as with a mouse) or, held, opens the action
   // wheel. In move mode a tap sends the selected fleets there (a stop, with the sticky Shift).
-  const fingers = useRef<{ at: Map<number, { x: number; y: number }>; grab: { x: number; y: number }; pinch: { d: number; k: number; wx: number; wy: number } | null; moved: boolean; end: () => void } | null>(null)
+  const fingers = useRef<{ at: Map<number, { x: number; y: number }>; grab: { x: number; y: number }; pinch: { d: number; k: number; wx: number; wy: number } | null; moved: boolean; /** Snapped into an orbit view: the rest of this gesture does nothing. */ snapped?: boolean; end: () => void } | null>(null)
   const press = useRef(new LongPress())
   /** Until when the map swallows clicks: the click a browser sends after a finger's gesture. */
   const noClick = useRef(0)
+  /** The last tap on a planet (for a double tap). */
+  const lastTap = useRef<{ pid: number; t: number } | null>(null)
   const startPinch = (st: NonNullable<typeof fingers.current>) => {
     const [a, b] = [...st.at.values()]
     const w = toWorld((a.x + b.x) / 2, (a.y + b.y) / 2)
@@ -2023,7 +2204,21 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const [a, b] = [...st.at.values()]
     const z = st.pinch!
     const r = viewEl.current!.getBoundingClientRect()
-    const k = clamp((z.k * Math.hypot(a.x - b.x, a.y - b.y)) / z.d, kMinRef.current, K_MAX)
+    const raw = (z.k * Math.hypot(a.x - b.x, a.y - b.y)) / z.d
+    const o = orbitRef.current
+    // Pinching in past a planet snaps into its orbit view (the rest of the pinch is let be), and
+    // pinching out of the orbit view far enough lets go.
+    if (o < 0 && raw > z.k) {
+      const p = snapPlanet(z.wx, z.wy)
+      if (p && raw >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) {
+        st.pinch = null
+        st.snapped = true
+        enterOrbit(p.id)
+        return
+      }
+    }
+    if (o >= 0 && raw < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
+    const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? K_ORBIT_MAX : K_MAX)
     const sx = (a.x + b.x) / 2 - r.left - size.w / 2
     const sy = (a.y + b.y) / 2 - r.top - size.h / 2
     camGoal.current = null
@@ -2053,7 +2248,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const move = (m: PointerEvent) => {
       const p = st.at.get(m.pointerId)
       // Once the wheel is open, the finger is choosing on it.
-      if (!p || press.current.fired) return
+      if (!p || press.current.fired || st.snapped) return
       p.x = m.clientX
       p.y = m.clientY
       if (st.pinch) return pinchTo(st)
@@ -2083,7 +2278,23 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           orderAt(target, u.clientX, u.clientY, shift, true)
           if (!shift) setMode('normal')
           noClick.current = performance.now() + 400
-        } else if (!target.closest('.ew-gsys, .ew-gfleet, .ew-splanet') && !shift) setSel(null)
+        } else {
+          // A double tap on a planet: its orbit view.
+          const hit = mapHit(target, u.clientX, u.clientY)
+          const now = performance.now()
+          const pid = hit && 'planet' in hit ? hit.planet.id : -1
+          if (pid >= 0 && lastTap.current?.pid === pid && now - lastTap.current.t < 400) {
+            lastTap.current = null
+            enterOrbit(pid)
+            noClick.current = now + 400
+          } else {
+            lastTap.current = pid >= 0 ? { pid, t: now } : null
+            if (!target.closest('.ew-gsys, .ew-gfleet, .ew-splanet') && !shift) {
+              setSel(null)
+              setOrbitSel(null)
+            }
+          }
+        }
       }
       setTimeout(() => (dragged.current = false), 0)
     }
@@ -2227,7 +2438,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             toast(why, 'bad')
           },
         })
-      items.push({ id: 'zoom', label: 'Zoom in', icon: ic('radar'), run: () => showPlanet(p.id, 70) })
+      items.push({ id: 'zoom', label: 'Orbit view', icon: ic('radar'), run: () => (sound.click(), enterOrbit(p.id)) })
     } else if (hit && 'system' in hit) {
       const sys = g.systems[hit.system]
       title = `${sys.name} · ${sys.planets.length} planet${sys.planets.length > 1 ? 's' : ''}`
@@ -2327,7 +2538,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             {/* The shipyards: a bar filling as the next ship comes off a slip, a badge counting
                 what's queued across every planet; a click looks at the busiest yard. */}
             <button className={`ew-top-cell ew-jobbtn ${nextJob ? 'is-busy' : ''}`} onClick={showYard} aria-label="Shipyards"
-              data-tip={nextJob ? `Shipyards: ${nextJob.q.unit === 'station' ? 'station work' : isWork(nextJob.q.unit) ? workName(nextJob.q.unit as WorkId) : UNIT[nextJob.q.unit].name} at ${nextJob.p.name}, ${Math.ceil(nextJob.q.left)} s left${queued > 1 ? `, ${queued - 1} more queued` : ''}.\nClick to look at the next yard.` : 'Shipyards idle.\nClick to look at a planet with a station.'}>
+              data-tip={nextJob ? `Shipyards: ${queueName(g, ME, nextJob.p, nextJob.q)} at ${nextJob.p.name}, ${Math.ceil(nextJob.q.left)} s left${queued > 1 ? `, ${queued - 1} more queued` : ''}.\nClick to look at the next yard.` : 'Shipyards idle.\nClick to look at a planet with a station.'}>
               <Icon name="yard" size={18} />
               {queued > 0 && <em>{queued}</em>}
               {nextJob && <i style={{ transform: `scaleX(${1 - nextJob.q.left / nextJob.q.total})` }} />}
@@ -2370,6 +2581,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             g={g}
             view={view}
             sel={sel}
+            orbit={orbit}
             on={{
               system: (s) => {
                 if (dragged.current) return
@@ -2380,7 +2592,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
               planet: (p, double) => {
                 if (dragged.current) return
                 sound.click()
-                if (double) showPlanet(p.id, 70)
+                if (double) enterOrbit(p.id)
                 // A finger tapping the planet that is selected puts it away again.
                 else if (compact && sel?.kind === 'planet' && sel.id === p.id) setSel(null)
                 else setSel({ kind: 'planet', id: p.id })
@@ -2397,10 +2609,43 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
               },
             }}
           />
+          {orbitP && orbitKn && (
+            <OrbitView
+              p={orbitP}
+              at={planetAt(g, orbitP)}
+              R={planetR(orbitP)}
+              view={view}
+              kIn={orbitK(orbitP.id)}
+              sel={orbitSel}
+              faction={orbitKn.owner >= 0 ? g.sides[orbitKn.owner].faction : myFaction}
+              live={orbitKn.live}
+              base={orbitKn.base}
+              station={orbitKn.station}
+              onPick={(id) => {
+                sound.click()
+                setOrbitSel(id)
+                if (id && sel) setSel(null)
+              }}
+              onMove={(id, a, d) => {
+                const why = moveStruct(g, ME, orbitP.id, id, a, d)
+                if (why) {
+                  sound.error()
+                  toast(why, 'bad')
+                } else sound.click()
+                setFrame((n) => n + 1)
+              }}
+            />
+          )}
+          {orbitP && (
+            <div className="ew-orbithint" onPointerDown={(e) => e.stopPropagation()}>
+              <span><b>Orbit view</b> · {orbitP.name}{orbitP.owner === ME ? (compact ? ': tap a structure for its orders, drag it to move it' : ': click a structure for its orders, drag it to move it') : ''}</span>
+              <button onClick={() => (sound.click(), leaveOrbit(true))} data-tip="Back out to the system (Esc)">{compact ? 'Leave' : 'Leave · Esc'}</button>
+            </div>
+          )}
           {box && <div className="ew-gbox" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />}
           <div className="ew-gzoom">
-            <button onClick={() => flyTo(camRef.current.x, camRef.current.y, camRef.current.k * 2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
-            <button onClick={() => flyTo(camRef.current.x, camRef.current.y, camRef.current.k / 2)} data-tip={`Zoom out (${keyName(getSettings().keys.zoomOut)} or the wheel)`}>−</button>
+            <button onClick={() => zoomBy(2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
+            <button onClick={() => zoomBy(0.5)} data-tip={`Zoom out (${keyName(getSettings().keys.zoomOut)} or the wheel)`}>−</button>
             <button onClick={flyOut} data-tip="The whole galaxy (Esc)"><Icon name="radar" size={14} /></button>
             {/* Phones and short screens: the galaxy map, hidden there until asked for. */}
             <button className={`ew-gmapbtn ${mapOpen ? 'is-on' : ''}`} onClick={() => (sound.click(), setMapOpen(!mapOpen), mapOpen || setFleetsOpen(false))} aria-pressed={mapOpen} aria-label="Galaxy map" data-tip="Show or hide the galaxy map">
@@ -2445,6 +2690,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           g={g}
           view={view}
           onLook={(x, y) => {
+            leaveOrbit()
             camGoal.current = null
             zoomTo.current = null
             moveCam(fix({ ...camRef.current, x, y }))
@@ -2515,14 +2761,17 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             onClose={() => setInvClosed(invKey)}
           />
         )}
-        {selPlanet && (!compact || sheetOpen) && (
+        {orbitP && orbitSel && (
+          <OrbitCard key={`${orbitP.id}:${orbitSel}`} g={g} p={orbitP} id={orbitSel} sound={sound} toast={toast} onClose={() => (sound.click(), setOrbitSel(null))} />
+        )}
+        {selPlanet && !(orbitSel && orbitP === selPlanet) && (!compact || sheetOpen) && (
           <PlanetDock
             g={g}
             p={selPlanet}
             sound={sound}
             onClose={() => setSel(null)}
             onFleet={pickFleet}
-            onLook={() => showPlanet(selPlanet.id, 70)}
+            onLook={() => enterOrbit(selPlanet.id)}
             toast={toast}
           />
         )}
@@ -2803,7 +3052,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const all = buildable(fac).map((t) => UNIT[t.id]).filter((t) => lockedShips || t.level <= p.station)
   // Strike craft first, as at a battle's Command Station; the page picked last is remembered (shared
   // with the battle's build panel, see storedPage).
-  const [page, setPage] = useState<YardPage>(() => storedPage<YardPage>(['strike', 'warships', 'yards', 'expansions'], 'strike', { buildings: 'yards' }))
+  const [page, setPage] = useState<YardPage>(() => storedPage<YardPage>(['strike', 'warships', 'yards', 'expansions', 'defense'], 'strike', { buildings: 'yards' }))
   const pickPage = (pg: YardPage) => {
     setPage(pg)
     storePage(pg)
@@ -2858,12 +3107,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   }
   const here = seenAt(g, p.id)
   const who = { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }
-  const queue = p.queue.map((q) =>
-    q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' }
-      : isYard(q.unit) ? { ...q, sprite: yardOf(fac, q.unit).sprite, name: WORKS_NAME[q.unit] }
-        : isWork(q.unit) ? { ...q, sprite: moduleLook(fac, q.unit as ModuleId), name: MODULE[q.unit as ModuleId].name }
-          : q,
-  )
+  const queue = planetQueue(g, p)
   // Rush launch: the Capital Yard ship being built, once its planet can rush (a Capital Yard, station level 3).
   const rushAt = rushSlot(p)
   const rush = ours && rushOffered(p) ? {
@@ -2892,7 +3136,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
         {ours && (p.station > 0 || p.queue.length > 0) && <BuildQueue queue={queue} max={MAX_YARD} campaign rush={rush} onCancel={(i) => (cancelBuild(g, ME, p.id, i), sound.unqueued())} />}
         <Frame className={`ew-detail is-station ew-gplanet ${theirs ? 'is-enemy' : ''}`}>
           <div className="ew-detail-side">
-            <button className="ew-gp-look" onClick={onLook} data-tip="Zoom in on it">
+            <button className="ew-gp-look" onClick={onLook} data-tip="Orbit view: zoom right in on it, with its station, yards and defense stations">
               <img src={PLANET_ART(p.kind)} alt="" />
             </button>
             <div className="ew-side-info">
@@ -2950,9 +3194,12 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
                   { id: 'warships', group: 'units', label: 'Warships', badge: warships.length, tip: 'Warships: frigates and corvettes from the Frigate Yard, cruisers and flagships from the Capital Yard.' },
                   { id: 'yards', group: 'buildings', label: 'Yards', badge: `${yardsUp}/2`, tip: "Yards: the Command Station, the Frigate Yard (frigates and corvettes) and the Capital Yard (cruisers and flagships). Built in this planet's queue." },
                   { id: 'expansions', group: 'buildings', label: 'Expansions', badge: `${p.base.mods.length}/${allMods}`, tip: "Expansions: the modules on the station and on each yard. Built in this planet's queue." },
+                  { id: 'defense', group: 'buildings', label: 'Defense', badge: `${orbitalsUp(p.base).length}/${ORBITAL_MAX}`, tip: `Defense stations: up to ${ORBITAL_MAX} in orbit beside the Command Station, each with three levels and its own module slots (1, 2 and 4) we fit as we like. Built in this planet's queue; they fight in every battle here. Zoom right in (or double-click the planet) for the orbit view.` },
                 ]}
-                page={page} onPick={(id) => pickPage(id as YardPage)} badges={{ buildings: `${yardsUp + p.base.mods.length}/${2 + allMods}` }}>
-                {page === 'yards' || page === 'expansions' ? (
+                page={page} onPick={(id) => pickPage(id as YardPage)} badges={{ buildings: `${yardsUp + p.base.mods.length + orbitalsUp(p.base).length}/${2 + allMods + ORBITAL_MAX}` }}>
+                {page === 'defense' ? (
+                  <PlanetDefense g={g} p={p} sound={sound} toast={toast} />
+                ) : page === 'yards' || page === 'expansions' ? (
                   <PlanetBuildings g={g} p={p} sound={sound} toast={toast} grid={grid} show={page} />
                 ) : (
                   <div className="ew-yard" ref={grid}>
@@ -2990,7 +3237,95 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   )
 }
 
-type YardPage = 'strike' | 'warships' | 'yards' | 'expansions'
+/**
+ * The orbit view's card: what the structure picked round the planet is, and (ours) its orders, from
+ * the same pieces as the planet's shipyard: the station's upgrade and expansions, a yard (or its
+ * site, or its ruin) and its expansions, a defense station's levels and module slots; the planet's
+ * queue under them, and putting the layout back.
+ */
+function OrbitCard({ g, p, id, sound, toast, onClose }: { g: Galaxy; p: Planet; id: StructId; sound: EmpiresSound; toast: (t: string, tone?: GToast['tone']) => void; onClose: () => void }) {
+  const ours = p.owner === ME
+  const coarse = useCoarse()
+  const kn = known(g, ME, p)
+  const fac = kn.owner >= 0 ? g.sides[kn.owner].faction : g.sides[ME].faction
+  const th = orbitThings(fac, kn.station, kn.base, ours).find((x) => x.id === id)
+  if (!th) return null
+  const who = ours ? { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' } : { who: FACTIONS[fac].long, rel: 'enemy' }
+  const upWhy = cantUpgradeStation(g, ME, p.id)
+  const upgrade = () => {
+    const why = upgradeStation(g, ME, p.id)
+    if (why) {
+      sound.error()
+      toast(why, 'bad')
+    } else sound.constructing()
+  }
+  const yard = id === 'yard' || id === 'cyard' ? id : null
+  const site = id === 'def0' ? 0 : id === 'def1' ? 1 : -1
+  const reset = () => {
+    resetLayout(g, ME, p.id)
+    sound.click()
+  }
+  return (
+    <Floating id="gOrbit" bare at={{ left: 375, bottom: 6 }} className="ew-gorbitcard" layout={galaxyLayout}>
+      <div className="ew-stationwrap">
+        {ours && p.queue.length > 0 && <BuildQueue queue={planetQueue(g, p)} max={MAX_YARD} campaign onCancel={(i) => (cancelBuild(g, ME, p.id, i), sound.unqueued())} />}
+        <Frame className={`ew-gorbit ${ours ? '' : 'is-enemy'}`}>
+          <header className="ew-yardhead">
+            <h5 className="ew-yardtitle">{th.name}<span className="ew-gp-headname"> · {p.name}</span></h5>
+            {ours && id === 'station' && p.station < 4 && (
+              <button className={`ew-gp-up ${upWhy ? 'is-off' : ''}`} onClick={upgrade} data-tip={`Upgrade to level ${p.station + 1}: bigger ships, a tougher station, +${Math.round(STATION_INCOME * 100)}% income. ${STATION_TIME[p.station + 1]} s.${upWhy ? `\n${upWhy}` : ''}`}>
+                <Icon name="yard" size={13} /> Upgrade <Icon name="credits" size={12} /> {STATION_COST[p.station + 1]}
+              </button>
+            )}
+            <button className="ew-close" onClick={onClose} aria-label="Close">✕</button>
+          </header>
+          <div className="ew-gorbit-body">
+            {!ours ? (
+              <div className="ew-gorbit-info" {...unitTip(th.t, who)}>
+                <ShipArt t={th.t} className={th.state === 'ruin' ? 'is-ruin' : ''} />
+                <p className="ew-gp-note">{kn.live ? 'What stands there now.' : 'As we last saw it: it may have changed since.'} {th.t.blurb}</p>
+              </div>
+            ) : id === 'station' ? (
+              <PlanetBuildings g={g} p={p} sound={sound} toast={toast} show="expansions" only="station" />
+            ) : yard ? (
+              <>
+                <PlanetBuildings g={g} p={p} sound={sound} toast={toast} show="yards" only={yard} />
+                {p.base.yards[yard] === 'up' && <PlanetBuildings g={g} p={p} sound={sound} toast={toast} show="expansions" only={yard} />}
+              </>
+            ) : (
+              <PlanetDefense g={g} p={p} sound={sound} toast={toast} only={site} />
+            )}
+          </div>
+          {ours && (
+            <footer className="ew-gorbit-foot">
+              <small className="ew-muted">{coarse ? 'Drag a structure to move it round the planet.' : 'Drag a structure to move it round the planet; battles here put it there.'}</small>
+              <button className="ew-gp-up" disabled={!p.layout} onClick={reset} data-tip="Put every structure back on its own spot round the planet">Reset layout</button>
+            </footer>
+          )}
+        </Frame>
+      </div>
+    </Floating>
+  )
+}
+
+type YardPage = 'strike' | 'warships' | 'yards' | 'expansions' | 'defense'
+
+/** One of our planets' queue as the build queue shows it: each entry's picture and name (a station
+ * level, a yard, an expansion, a defense station's work, or a ship). */
+function planetQueue(g: Galaxy, p: Planet) {
+  const fac = g.sides[ME].faction
+  return p.queue.map((q) => {
+    const orb = parseOrbital(q.unit)
+    if (orb) {
+      const lv = orb.k === 'build' ? (q.lv ?? 1) : orb.k === 'up' ? Math.min(ORBITAL_TOP, (orbitalAt(p, orb.i)?.level ?? 1) + 1) : (orbitalAt(p, orb.i)?.level ?? 1)
+      return { ...q, sprite: orbitalSprite(fac, lv), name: queueName(g, ME, p, q) }
+    }
+    return q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' }
+      : isYard(q.unit) ? { ...q, sprite: yardOf(fac, q.unit).sprite, name: WORKS_NAME[q.unit] }
+        : isWork(q.unit) ? { ...q, sprite: moduleLook(fac, q.unit as ModuleId), name: MODULE[q.unit as ModuleId].name }
+          : q
+  })
+}
 
 /** Where a yard or an expansion stands at one of our planets: built, being built (with how far),
  * waiting in the queue, a ruin to rebuild, ready to order, held back by credits or a full queue
@@ -3015,7 +3350,7 @@ function workState(g: Galaxy, p: Planet, id: WorkId): WorkState {
  * build it (a ruin: rebuild it, for half), click one in the queue to call it off (refunded); a
  * locked one says what it waits for.
  */
-function PlanetBuildings({ g, p, sound, toast, grid, show }: { g: Galaxy; p: Planet; sound: EmpiresSound; toast: (t: string, tone?: GToast['tone']) => void; grid: React.RefObject<HTMLDivElement | null>; show: 'yards' | 'expansions' }) {
+function PlanetBuildings({ g, p, sound, toast, grid, show, only }: { g: Galaxy; p: Planet; sound: EmpiresSound; toast: (t: string, tone?: GToast['tone']) => void; grid?: React.RefObject<HTMLDivElement | null>; show: 'yards' | 'expansions'; /** One building only (the orbit card's). */ only?: Works }) {
   const fac = g.sides[ME].faction
   const order = (id: WorkId) => {
     const s = workState(g, p, id)
@@ -3084,7 +3419,7 @@ ${what(s)}`)}
   if (show === 'expansions')
     return (
       <div className="ew-yard ew-gbuild is-mods" ref={grid}>
-        {(['station', 'yard', 'cyard'] as Works[]).map((on) => (
+        {(['station', 'yard', 'cyard'] as Works[]).filter((on) => !only || on === only).map((on) => (
           <div key={on} className="ew-gmodgroup" role="group" aria-label={WORKS_NAME[on]}>
             <small className={!worksUp(p, on) ? 'is-off' : ''}>{WORKS_NAME[on]}</small>
             <div>{modCards(on)}</div>
@@ -3094,13 +3429,15 @@ ${what(s)}`)}
     )
   return (
     <div className="ew-yard ew-gbuild" ref={grid}>
-      <div className="ew-shipcard ew-yardcard is-built" {...unitTip(st, { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }, `The Command Station at level ${p.station}: it builds strike craft, gunships and repair craft, and the yards round it build the warships. Upgrade it with the button above.`)}>
-        <ShipArt t={st} />
-        <strong>Command Station</strong>
-        <span className="ew-modline">Level {p.station}</span>
-      </div>
-      {yardCard('yard')}
-      {yardCard('cyard')}
+      {(!only || only === 'station') && (
+        <div className="ew-shipcard ew-yardcard is-built" {...unitTip(st, { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }, `The Command Station at level ${p.station}: it builds strike craft, gunships and repair craft, and the yards round it build the warships. Upgrade it with the button above.`)}>
+          <ShipArt t={st} />
+          <strong>Command Station</strong>
+          <span className="ew-modline">Level {p.station}</span>
+        </div>
+      )}
+      {(!only || only === 'yard') && yardCard('yard')}
+      {(!only || only === 'cyard') && yardCard('cyard')}
     </div>
   )
 }
@@ -3143,6 +3480,11 @@ function KnownBase({ faction, station, base, live }: { faction: FactionId; stati
       {base.mods.map((id) => (
         <span key={id} className="ew-gp-bchip" data-tip={`${MODULE[id].name}: ${MODULE[id].blurb}`}>
           <HpIcon kind={MODULE[id].kind} size={14} /> {MODULE[id].name}
+        </span>
+      ))}
+      {(base.orb ?? []).map((o, i) => o && (
+        <span key={`o${i}`} className={`ew-gp-bchip ${o.ruin ? 'is-ruin' : ''}`} {...(o.ruin ? {} : unitTip(orbitalType(faction, o.level, o.mods), { who: FACTIONS[faction].long, rel: 'enemy' }))}>
+          <ShipArt t={orbitalType(faction, o.level, o.ruin ? [] : o.mods)} /> {orbitalName(faction, o.level)}{o.ruin ? ' (ruin)' : ` · ${o.mods.filter(Boolean).length}/${o.mods.length} modules`}
         </span>
       ))}
     </div>
@@ -3583,6 +3925,11 @@ function BattlePrompt({ g, c, onShow, onFight, onAuto, onRetreat }: { g: Galaxy;
     <div className="ew-gb-side" style={{ borderColor: color(g, o) }}>
       <h5 style={{ color: color(g, o) }}>{o === ME ? 'Our forces' : `${factionName(g, o)} forces`}</h5>
       {station > 0 && <p className="ew-small"><Icon name="yard" size={13} /> Station level {station}</p>}
+      {station > 0 && o === c.holder && c.base && orbitalsUp(c.base).length > 0 && (
+        <p className="ew-small" data-tip="Defense stations in orbit beside the station: they fight in the battle (and count in an auto-resolve), with their modules.">
+          <Icon name="hold" size={13} /> {orbitalsUp(c.base).map(({ o: st }) => `${orbitalName(g.sides[o].faction, st.level)} (${st.mods.filter(Boolean).length} module${st.mods.filter(Boolean).length === 1 ? '' : 's'})`).join(', ')}
+        </p>
+      )}
       <div className="ew-gships">
         {grouped(ships).map(([id, n]) => {
           const h = o === ME ? held.filter((x) => x === id).length : 0

@@ -7079,3 +7079,326 @@ span.ew-teamtag {
   width: 100%;
   min-width: 0;
 }
+
+/* --- Galactic conquest: what stands round a planet, and the orbit view (Orbit.tsx) ------------- */
+
+/* Closer in: a small picture of each structure round its planet, where it sits. */
+.ew-pin.ew-sbase > svg {
+  cursor: pointer;
+}
+.ew-pin.ew-sbase.is-ruin image {
+  filter: grayscale(0.9) brightness(0.5) sepia(0.4);
+}
+/* The orbit view: over the map, under the panels; only its structures take the pointer. */
+.ew-orbit {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+.ew-orbit.is-faint .ew-ostruct {
+  pointer-events: none;
+}
+.ew-orbit-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+/* The reach of the layout: how far out a structure may be moved. */
+.ew-orbit-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--ew-accent) 30%, transparent);
+  pointer-events: none;
+}
+.ew-ostruct {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+.ew-ostruct-in {
+  position: absolute;
+  display: block;
+  cursor: pointer;
+}
+.ew-ostruct.is-ours .ew-ostruct-in {
+  cursor: grab;
+}
+.ew-ostruct-in img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.ew-ostruct.is-ruin img {
+  filter: grayscale(0.9) brightness(0.45) sepia(0.4);
+}
+.ew-ostruct.is-ghost img {
+  opacity: 0.2;
+  filter: grayscale(1) brightness(1.4);
+}
+/* An empty site: a dashed ring with a plus, to order from. */
+.ew-ostruct-ghost {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px dashed color-mix(in srgb, var(--ew-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--ew-accent) 8%, transparent);
+  color: var(--ew-accent);
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: calc(var(--r) * 0.7);
+  font-weight: 700;
+  line-height: 1;
+}
+.ew-ostruct:hover img,
+.ew-ostruct.is-sel img {
+  filter: drop-shadow(0 0 4px var(--ew-accent)) drop-shadow(0 0 1px var(--ew-accent));
+}
+.ew-ostruct.is-sel.is-ruin img {
+  filter: grayscale(0.9) brightness(0.45) sepia(0.4) drop-shadow(0 0 4px var(--ew-accent));
+}
+.ew-ostruct.is-sel .ew-ostruct-ghost {
+  border-style: solid;
+  background: color-mix(in srgb, var(--ew-accent) 18%, transparent);
+}
+.ew-ostruct.is-dragging .ew-ostruct-in {
+  cursor: grabbing;
+  opacity: 0.85;
+}
+.ew-ostruct.is-dragging.is-bad img,
+.ew-ostruct.is-dragging.is-bad .ew-ostruct-ghost {
+  filter: drop-shadow(0 0 5px var(--ew-bad));
+  border-color: var(--ew-bad);
+}
+.ew-ostruct-name {
+  position: absolute;
+  left: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font: 600 11px/1.2 var(--ew-display);
+  color: var(--ew-text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.ew-ostruct:hover .ew-ostruct-name,
+.ew-ostruct.is-sel .ew-ostruct-name,
+.ew-ostruct.is-dragging .ew-ostruct-name {
+  opacity: 1;
+}
+.ew-orbit.is-fog .ew-ostruct img {
+  opacity: 0.6;
+}
+/* The orbit view's card. */
+.ew-gorbitcard {
+  width: max-content;
+  max-width: max(300px, min(600px, calc(100% - 381px - 330px)));
+}
+.ew-gorbit {
+  max-height: min(420px, calc(100vh - 160px));
+  overflow: auto;
+}
+.ew-gorbit-body {
+  display: grid;
+  gap: 6px;
+}
+.ew-gorbit-info {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.ew-gorbit-info .ew-art {
+  width: 72px;
+  height: 72px;
+  flex: none;
+}
+.ew-gorbit-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+/* The Defense page: a group per defense site, its slots and the modules to pick from. */
+.ew-yard.ew-gbuild.ew-gdefs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+.ew-gdef {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 8px;
+  align-items: start;
+  min-width: 0;
+}
+.ew-gdef > small {
+  grid-column: 1 / -1;
+  color: var(--ew-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.ew-deck .ew-gdef .ew-yardcard {
+  margin-left: 0 !important;
+}
+.ew-gdef .ew-art.is-ghost {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+.ew-gdef-up {
+  align-self: start;
+}
+.ew-gdef-slots {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: min(100%, 300px);
+  gap: 4px;
+}
+.ew-deck .ew-gdef-slot {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 5px 4px;
+  min-height: 52px;
+  border: 1px dashed var(--ew-line);
+  border-radius: 6px;
+  background: rgba(10, 16, 32, 0.75);
+  color: var(--ew-text);
+  cursor: pointer;
+}
+.ew-deck .ew-gdef-slot.is-full {
+  border-style: solid;
+}
+.ew-deck .ew-gdef-slot.is-on {
+  border-color: var(--ew-accent);
+  box-shadow: 0 0 0 1px var(--ew-accent) inset;
+}
+.ew-deck .ew-gdef-slot.is-fitting {
+  border-color: var(--ew-gold);
+}
+.ew-deck .ew-gdef-slot.is-locked {
+  opacity: 0.45;
+  cursor: default;
+}
+.ew-gdef-slot small {
+  font-size: 10px;
+  line-height: 1.15;
+  text-align: center;
+}
+.ew-gdef-slot em {
+  font-size: 9px;
+  font-style: normal;
+  color: var(--ew-gold);
+}
+.ew-gdef-empty {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--ew-muted);
+}
+.ew-gdef-pick {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-deck .ew-gdef-slot {
+    min-height: 56px;
+  }
+  .ew-ostruct-name {
+    font-size: 12px;
+  }
+  .ew-gorbitcard {
+    left: 6px !important;
+    right: 6px !important;
+    width: auto !important;
+    max-width: none;
+    translate: none !important;
+  }
+  .ew-gorbit {
+    max-height: 46vh;
+  }
+}
+/* The orbit view's banner: where we are, and the way out. */
+.ew-orbithint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: calc(100% - 24px);
+  padding: 5px 6px 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--ew-accent) 55%, transparent);
+  border-radius: 8px;
+  background: rgba(6, 10, 22, 0.86);
+  color: var(--ew-text);
+  font-size: 12px;
+  pointer-events: auto;
+}
+.ew-orbithint span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-deck .ew-orbithint button {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--ew-line);
+  border-radius: 6px;
+  background: rgba(20, 30, 56, 0.9);
+  color: var(--ew-head);
+  cursor: pointer;
+}
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-orbithint {
+    top: auto;
+    bottom: 64px;
+  }
+  .ew-deck .ew-orbithint button {
+    min-height: 34px;
+  }
+}
+/* A site whose building is under way in the planet's queue. */
+.ew-ostruct.is-building .ew-ostruct-ghost {
+  border-style: solid;
+  border-color: var(--ew-gold);
+  color: var(--ew-gold);
+  animation: ew-orbit-build 1.6s ease-in-out infinite;
+}
+@keyframes ew-orbit-build {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ew-ostruct.is-building .ew-ostruct-ghost {
+    animation: none;
+  }
+}
+.ew-slv.is-small {
+  font-size: 9px;
+}

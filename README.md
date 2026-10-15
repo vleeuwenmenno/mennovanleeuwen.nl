@@ -1726,7 +1726,8 @@ side by side without touching each other's:
 
 - **Its data**, [`data/<faction>.ts`](src/apps/games/empires/data/): its ships, its Command Station
   at every level, its mining and defense platforms and yards, its research, its yards' sockets,
-  berths and gantries, its warships' hardpoint layouts at their size, and how it looks and sounds
+  berths and gantries, its warships' hardpoint layouts at their size, its Galactic conquest
+  defense station (`orbital`: its levels and modules, see below), and how it looks and sounds
   outside its models (`info`: its name, colours, emblem, welding light, id prefix, its usual rival
   in Galactic conquest, and `names`: what it calls the shared things, see below). Its station's
   `stages` each carry the name it goes by at that level (Bastion Outpost … Citadel, Dominion
@@ -1737,7 +1738,8 @@ side by side without touching each other's:
   `STATIONS`, `FACTIONS`, …), toughens, scales and sizes them, and holds what all factions share.
 - **Its models**, [`models/<faction>/`](src/apps/games/empires/models/): `craft.ts` (strike
   craft, station, platforms), `warships.ts` (everything bigger, at its size), `base.ts` (engineers,
-  yards and expansion modules), `mounts.ts` (its turrets and modules), `palette.ts`, and `index.ts`,
+  yards and expansion modules), `orbital.ts` (its defense station, every level), `mounts.ts` (its
+  turrets and modules), `palette.ts`, and `index.ts`,
   which lists its designs by unit id. [`models/index.ts`](src/apps/games/empires/models/index.ts)
   merges them; the geometry ([`kit.ts`](src/apps/games/empires/models/kit.ts)), the warship
   helpers ([`proto.ts`](src/apps/games/empires/models/proto.ts)), painting and break-ups are shared.
@@ -2009,6 +2011,93 @@ grid with a bar of how full it is, and an empty *New fleet* column while there a
 - **Old saves** (stacks without spots): every fleet is laid out on load, biggest ships first, its
   held back ships still held back; what doesn't fit forms another fleet beside it with the same
   orders, and spare fleets then fold in down to 4 where they fit.
+
+## Galactic conquest orbit view and defense stations
+
+Zooming in past a planet on the galaxy map locks the camera onto it: the **orbit view**
+([`Orbit.tsx`](src/apps/games/empires/Orbit.tsx), the camera in
+[`Conquest.tsx`](src/apps/games/empires/Conquest.tsx) `enterOrbit`). The camera eases onto the
+planet at the zoom where it and everything round it fill the view (`kOrbit`), and from there it goes
+in closer than anywhere else on the map (`K_ORBIT_MAX`, three times `K_MAX`), panning only as far as
+what stands round the planet. The wheel snaps into it once it would zoom past the planet under the
+cursor (`ORBIT_SNAP`), and so do a pinch, a double-click or a double tap on a planet, the zoom keys
+and buttons, *Orbit view* on a planet's action wheel and the planet picture in its shipyard.
+Zooming or pinching back out (`ORBIT_LEAVE`), Esc, the banner's *Leave* or a look anywhere else
+lets go.
+
+- **What it shows:** the planet with its Command Station, its Frigate Yard and Capital Yard (ruins
+  greyed) and its two defense stations, each drawn as its real model, modules and all, from the same
+  cached picture as the cards (one painted still per look, `structArt`: nothing is painted per
+  frame). They orbit the planet together, once in twelve minutes (held still while one is picked or
+  dragged, and for *reduce motion*). The camera places and fades the whole view with one transform,
+  as the map's own layer is, so zooming renders nothing. An enemy planet shows what stands there; a
+  hidden one what we last saw, faded.
+- **Closer than the system, not yet in orbit** (zoom over 9, the map's `B_BASE` band): each planet
+  with a station shows a small picture of each structure where it sits round it, at least a little
+  way out past the planet's edge, the station's level on the station's picture.
+- **Orders:** a click or tap on a structure picks it and opens its card, built from the shipyard's
+  own pages: the station's upgrade and expansions, a yard (or the site to build it on, or its ruin to
+  rebuild) and its expansions, a defense station's levels and module slots, with the planet's
+  queue on top. Empty yard and defense sites show as dashed ghost outlines to order from (a site
+  being built pulses). A click on open space, or Esc, puts the card away.
+- **Positions:** each structure sits at its own bearing and distance round the planet by default
+  (galaxy.ts `AUTO_SPOT`, in planet radii). Ours can be dragged (mouse or finger) to another spot,
+  between 1.6 and 2.9 planet radii out (`SPOT_D`), clear of the planet and of the others at their
+  biggest (`structR`); one dropped too close to another is nudged round to the nearest clear spot
+  (`moveStruct`). The card's *Reset layout* puts them all back. The layout is the planet's
+  (`Planet.layout`, saved with the campaign; a captured planet starts its new owner's afresh), and a
+  fleet battle there stands the yards and defense stations the same way round the station
+  (sim.ts `layoutPoint`): turned so the planet lies where the battle's map has it, 700 world units
+  per planet radius, kept inside the build radius, on the nearest clear spot (`clearNear`).
+
+**Defense stations** ([`data/<faction>.ts`](src/apps/games/empires/data/) `orbital`,
+[`data.ts`](src/apps/games/empires/data.ts) `orbitalType`): up to two per planet (`ORBITAL_MAX`),
+on two defense sites round its Command Station, ordered in the planet's queue like a yard (paid when
+queued, refunded in full when called off), and on the shipyard's **Defense** page. Each has three
+levels, each upgrade ordered in the queue too, with 1, 2 and 4 **module slots**; the player picks
+the module for each slot (a module ordered into a full slot replaces what is there once it's done):
+
+| | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
+| --- | --- | --- | --- |
+| Level 1 (station level 1) | Watchpost: 700, 40 s | Gun Post: 750, 40 s | Spore: 600, 34 s |
+| Level 2 (station level 2) | Battle Station: 900, 50 s | Battle Station: 950, 50 s | Bloom: 800, 44 s |
+| Level 3 (station level 3) | Redoubt: 1300, 65 s | Keep: 1400, 65 s | Hive: 1150, 56 s |
+| Battery (against warships) | Turbolaser battery 450 | Heavy cannon battery 450 | Tendril lance 400 |
+| Flak (against strike craft) | Flak battery 350 | Shredder flak 350 | Acid sprayer 300 |
+| Launcher (through shields) | Torpedo launcher 450 | Missile battery 450 | Spore cannon 400 |
+| Shield | Shield generator 400 (+1,400 shields) | Shield generator 380 (+1,100) | Regeneration pool 350 (+20% hull, regrows three times as fast) |
+| Hangar | Hangar bay 550 (Lance squadron) | Talon hangar 550 | Brood chamber 500 (Stingers) |
+
+Prices are credits, times galaxy seconds (modules take 14-24 s). Hulls grow with the level (2,600 to
+6,200 for the Republic, more armour for the Confederacy, more again and a living hull for the
+Swarm); a module is a part of the station that can be shot off (its gun stops, its shields go, its
+hangar stops launching). Each faction's model ([`models/<faction>/orbital.ts`](src/apps/games/empires/models/))
+grows on one shared frame (data/kit.ts `ORBITAL_FRAME`), so a module keeps its place as the station
+grows round it: the Bastion's armoured hub grows truss arms to gun decks and closes an octagonal
+truss ring, the Bulwark's gun hub bolts on sponsons and an armoured frame, the Guardian's chitin
+bulb buds weapon lobes and a ring of petals. Every slot is a deck, sponson or lobe of its own; an
+empty one shows its open port.
+
+- **In battle:** they fight in every fleet battle at their planet, in orbit beside the station
+  where the layout puts them, with their modules, and count in the auto-resolve (their whole hull
+  and shields, their guns, and their hangars' squadrons) and in the battle prompt. Like the yards,
+  they don't hold the planet on their own: they fall with the station.
+- **After a battle:** one destroyed is a ruin; one that came through loses the modules shot off it.
+  With the station lost (or the planet taken), every defense station is a ruin. A ruin is rebuilt
+  at its level (as far as the station's level allows) for `REBUILD` of what its levels cost, its
+  slots empty; work queued for a ruin is refunded.
+- **The galaxy AI** (galaxy.ts `planBase`) builds one at its front planet once its yards are up,
+  armed by the enemy fleets it sees (`pickOrbitalMod`: flak against strike craft, batteries against
+  warships, a launcher against shields, then a shield and a hangar), then one at its forge world,
+  modules for every one standing, the upgrades, and the second site; it rebuilds ruins with its
+  yards. Its estimate of a planet's defence (`defence`, `baseGuard`) counts what was spent on the
+  defense stations it knows of.
+- **Saves:** campaigns are version 4 (`PlanetBase.orb`, `Planet.layout`); older ones load with no
+  defense stations and every structure on its own spot.
+
+```sh
+pnpm check:empires-gc-defense   # ordering, levels and slots, modules, ruins and rebuilds, auto-resolve, battle spawns at the layout, moving structures, the AI, old saves
+```
 
 ## Galactic conquest fog of war
 

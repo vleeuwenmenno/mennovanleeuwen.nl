@@ -437,4 +437,23 @@ export const SWARM: FactionData = {
     's-capital': asWritten(LEVIATHAN),
     's-battleship': asWritten(BROODMOTHER),
   },
+  // The Guardian (Galactic conquest): a living defense organism that grows weapon lobes as it matures.
+  orbital: {
+    name: 'Guardian',
+    blurb: 'A living defense organism anchored in orbit beside the Hive: a chitin bulb round a violet core that grows weapon lobes as it matures. Each level adds module slots, and each slot grows the organ we pick for it. No shields; its hull grows back between attacks.',
+    regen: 0,
+    regrow: { rate: 0.004, delay: 15 },
+    stages: [
+      { name: 'Guardian Spore', hull: 3400, shield: 0, cost: 600, time: 34, station: 1 },
+      { name: 'Guardian Bloom', hull: 5400, shield: 0, cost: 800, time: 44, station: 2 },
+      { name: 'Guardian Hive', hull: 8000, shield: 0, cost: 1150, time: 56, station: 3 },
+    ],
+    modules: [
+      { id: 'battery', name: 'Tendril lance', blurb: 'A great tendril lance that skewers warships at long reach.', cost: 400, time: 20, kind: 'turret', art: 'turbo', look: 'lance', hp: 760, r: 10, weapon: turbo(42, 800, 2.2, 2) },
+      { id: 'flak', name: 'Acid sprayer', blurb: 'Clouds of caustic spray that dissolve strike craft.', cost: 300, time: 14, kind: 'turret', art: 'flak', look: 'acid', hp: 500, r: 8, weapon: flak(8, 420, 0.3) },
+      { id: 'launcher', name: 'Spore cannon', blurb: 'Heavy spores lobbed past shields at warships.', cost: 400, time: 20, kind: 'turret', art: 'turbo', look: 'spore', hp: 600, r: 9, weapon: spore(30, 700, 4) },
+      { id: 'shield', name: 'Regeneration pool', blurb: 'The Swarm grows no shields: a pool of regenerating tissue gives the Guardian 20% more hull, and its hull grows back three times as fast.', cost: 350, time: 16, kind: 'dock', art: 'dock', look: 'regen', hp: 650, r: 9, hull: 0.2, regrow: 2 },
+      { id: 'hangar', name: 'Brood chamber', blurb: 'Keeps a brood of Stingers in the air round the Guardian, hatching a new one when it is lost.', cost: 500, time: 22, kind: 'hangar', art: 'hangar', look: 'broodSac', hp: 720, r: 10, carrier: 's-fighter' },
+    ],
+  },
 }

@@ -310,33 +310,84 @@ const skirmishResume: Scene = {
 
 /** A saved campaign (scripts/perf/fixtures), opened paused; the map zooms in and out with the wheel
  * and is dragged round a circle with the middle button. */
+/** The galaxy map of fixture `which`, its clock stepped and held still. */
+async function openGalaxy(page: Page, url: string, which: 'start' | 'late') {
+  const save = readFileSync(new URL(`galaxy-${which}.json`, FIXTURES), 'utf8')
+  await page.send('Page.navigate', { url: `${url}/play/empires` })
+  await page.waitFor(MENU)
+  await page.eval(`(() => {
+    for (const k of Object.keys(localStorage)) if (k.includes('empires')) localStorage.removeItem(k)
+    for (const [k, v] of Object.entries(${save})) localStorage.setItem(k, v)
+    localStorage.setItem('mvlos.empires.muted', '1')
+    window.__stale = true
+  })()`)
+  await page.send('Page.reload')
+  await page.waitFor(`!window.__stale && ${MENU}`)
+  await press(page, '.ew-menu-btn', 'Single player')
+  await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Galactic conquest'))`)
+  await press(page, '.ew-menu-btn', 'Galactic conquest')
+  await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Continue'))`)
+  // The stepped clock from before the galaxy opens: it never runs on its own.
+  await page.eval(`__perf.manual(41)`)
+  await press(page, '.ew-menu-btn', 'Continue')
+  await settleUntil(page, `!!document.querySelector('.ew-gview svg') && !!document.querySelector('.ew-timectl button')`)
+  await page.eval(`(() => { const b = document.querySelector('.ew-timectl button'); if (b.getAttribute('aria-label') === 'Pause') b.click() })()`)
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2 })
+  await page.eval(`__perf.frames(90)`)
+}
+
+/**
+ * The orbit view (Orbit.tsx) of the late campaign's capital, with both yards and two armed defense
+ * stations round it: wheel zooms in and out inside it, then the slow orbit on its own. Its pictures
+ * are painted once on the way in, so neither paints anything.
+ */
+const galaxyOrbit: Scene = {
+  name: 'galaxy-orbit',
+  about: 'Galaxy map, the orbit view of a planet with all its structures: wheel zoom in it, then the orbit idling',
+  async run(page, url) {
+    await openGalaxy(page, url, 'late')
+    await page.eval(`(() => {
+      const g = window.__galaxy
+      const p = g.planets.filter((x) => x.owner === 0 && x.station > 0).sort((a, b) => b.station - a.station)[0]
+      p.station = 4
+      p.base = { yards: { yard: 'up', cyard: 'up' }, mods: ['secondSlip', 'shieldCore', 'capitalSlip'], orb: [{ level: 3, mods: ['battery', 'flak', 'shield', 'hangar'] }, { level: 2, mods: ['launcher', null] }] }
+      window.__gmap.enterOrbit(p.id)
+    })()`)
+    await page.eval(`__perf.frames(180)`)
+    await page.eval(`(() => {
+      const r = document.querySelector('.ew-gview').getBoundingClientRect()
+      window.__wheel = (notch) => document.querySelector('.ew-gview').dispatchEvent(new WheelEvent('wheel', { deltaY: -notch, deltaMode: 0, clientX: r.left + r.width * 0.4, clientY: r.top + r.height * 0.4, bubbles: true, cancelable: true }))
+    })()`)
+    // In for 60 frames (to the orbit view's closest) and most of the way back out (it stays in it).
+    const zoom = await measure(page, 100, `__wheel(i < 60 ? 12 : -12)`)
+    await page.eval(`__perf.frames(120)`)
+    const idle = await measure(page, 120)
+    const dom = await page.eval<{ all: number; orbit: number; structs: number }>(`(() => ({ all: document.getElementsByTagName('*').length, orbit: document.querySelectorAll('.ew-orbit *').length, structs: document.querySelectorAll('.ew-ostruct').length }))()`)
+    const shot = await pageShot(page, '.ew-gview', '.ew-gview')
+    return {
+      metrics: {
+        'structures shown': strict(dom.structs),
+        'orbit view DOM nodes': count(dom.orbit),
+        'DOM nodes': count(dom.all),
+        'React commits / sim s, zooming': commitsPerSec(zoom, 100),
+        'React commits / sim s, idle': commitsPerSec(idle, 120),
+        'canvas draw calls / frame, zooming': canvasMetrics(zoom, 100)['canvas draw calls / frame'],
+        'new canvases / sim s, zooming': canvasMetrics(zoom, 100)['new canvases / sim s'],
+        'new canvases / sim s, idle': canvasMetrics(idle, 120)['new canvases / sim s'],
+        'main thread ms / frame, zooming': msPerFrame(zoom),
+        'main thread ms / frame, idle': msPerFrame(idle),
+      },
+      shots: { 'galaxy-orbit': shot },
+    }
+  },
+}
+
 function galaxy(which: 'start' | 'late'): Scene {
   return {
     name: `galaxy-${which}`,
     about: `Galaxy map, ${which === 'start' ? 'a new campaign' : 'a late campaign'}: wheel zoom, then a drag pan`,
     async run(page, url) {
-      const save = readFileSync(new URL(`galaxy-${which}.json`, FIXTURES), 'utf8')
-      await page.send('Page.navigate', { url: `${url}/play/empires` })
-      await page.waitFor(MENU)
-      await page.eval(`(() => {
-        for (const k of Object.keys(localStorage)) if (k.includes('empires')) localStorage.removeItem(k)
-        for (const [k, v] of Object.entries(${save})) localStorage.setItem(k, v)
-        localStorage.setItem('mvlos.empires.muted', '1')
-        window.__stale = true
-      })()`)
-      await page.send('Page.reload')
-      await page.waitFor(`!window.__stale && ${MENU}`)
-      await press(page, '.ew-menu-btn', 'Single player')
-      await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Galactic conquest'))`)
-      await press(page, '.ew-menu-btn', 'Galactic conquest')
-      await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Continue'))`)
-      // The stepped clock from before the galaxy opens: it never runs on its own.
-      await page.eval(`__perf.manual(41)`)
-      await press(page, '.ew-menu-btn', 'Continue')
-      await settleUntil(page, `!!document.querySelector('.ew-gview svg') && !!document.querySelector('.ew-timectl button')`)
-      await page.eval(`(() => { const b = document.querySelector('.ew-timectl button'); if (b.getAttribute('aria-label') === 'Pause') b.click() })()`)
-      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2 })
-      await page.eval(`__perf.frames(90)`)
+      await openGalaxy(page, url, which)
       // The cursor on the system nearest the middle of the map, where the wheel zooms.
       await page.eval(`(() => {
         const r = document.querySelector('.ew-gview').getBoundingClientRect()
@@ -454,7 +505,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishResume, galaxy('start'), galaxy('late'), desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishResume, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))

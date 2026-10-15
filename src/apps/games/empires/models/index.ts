@@ -1,4 +1,4 @@
-import { FACTION_IDS, STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
+import { FACTION_IDS, ORBITAL_FRAME, STATIONS, UNITS, dims, orbitalType, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { MODELS as droid } from './droid/index.ts'
 import { expansionParts } from './expansions.ts'
 import { drawnDesign } from './mounts.ts'
@@ -69,6 +69,8 @@ export function unitForSprite(sprite: string): UnitType | null {
 export function typeOfSprite(sprite: string): UnitType | null {
   const st = /^(\w+)-station-(\d)$/.exec(sprite)
   if (st && (FACTION_IDS as string[]).includes(st[1])) return stationType(st[1] as FactionId, Number(st[2]), [])
+  const orb = /^(\w+)-orbital-(\d)$/.exec(sprite)
+  if (orb && (FACTION_IDS as string[]).includes(orb[1])) return orbitalType(orb[1] as FactionId, Number(orb[2]), [])
   return UNITS.find((u) => u.sprite === sprite && u.tier !== 'station') ?? null
 }
 
@@ -87,6 +89,12 @@ export function buildModel(t: UnitType, style?: string): Model {
     // A station is drawn in its frame's pixels, on the box of the stage it has grown to.
     level = Number(/-(\d+)$/.exec(t.sprite)?.[1] ?? 1)
     const [x0, y0, x1, y1] = STATIONS[t.faction].stages[level - 1].box
+    w = x1 - x0
+    h = y1 - y0
+  } else if (t.orbital) {
+    // A defense station is drawn on its level's box of the shared frame, in frame units.
+    level = t.orbital.level
+    const [x0, y0, x1, y1] = ORBITAL_FRAME.boxes[level - 1]
     w = x1 - x0
     h = y1 - y0
   } else {
@@ -120,8 +128,8 @@ export function buildModel(t: UnitType, style?: string): Model {
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...extra, ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted, or a yard with expansions built onto it, is
   // a type of its own with more sockets, so its key names its modules too, as a station's does.
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' || t.tier === 'yard' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
-  const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
+  const key = `${t.tier === 'station' || t.orbital ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' || t.tier === 'yard' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
+  const seed = seedOf(t.tier === 'station' || t.orbital ? `${t.id}:${level}` : t.id)
   return {
     key,
     faction: t.faction,
