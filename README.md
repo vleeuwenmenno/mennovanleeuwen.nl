@@ -514,6 +514,11 @@ Android keyboards that send Backspace without a key event may not reach the prog
 
 ## Notes, launchers and sign-in (home page mode)
 
+On phones, Notebook opens to a full-height searchable note list. Tap a note (or **+ New**) to
+open its editor in a separate view; **← Notes** returns to the list without losing edits or search.
+Trash uses the same list/detail navigation. Links from stickies open the requested note directly.
+Desktop windows retain the side-by-side list and editor.
+
 Anyone can write notes and add launchers: **Notebook** (dock) lists every note in Markdown, and
 each one can sit on the desktop as a sticky (right-click the desktop → *New sticky note*). Stickies
 get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
@@ -1641,6 +1646,12 @@ for a moment and it lifts with a buzz; move the finger then and it drags, to
 the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
 after that closes the menu and drags.
 
+On phones and touch devices, **Maximize** fills all four edges, including after rotation.
+The title bar, OS bar and dock disappear, with no window border, margin or shadow. Notch and
+home-indicator space is padding inside the window; the on-screen keyboard reduces its visible
+height. Tap **Restore size** at the top right to return to the previous window layout. The
+window's saved geometry is retained, including when returning to a larger screen.
+
 ## Games
 
 The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is the arcade: picking a game
@@ -2618,6 +2629,23 @@ worker with this release's files, so installed copies show an "update" notificat
 release; clicking it restarts into the new version. Live data (`/api/*`, other sites) is never
 cached. The worker only registers in production builds; `.claude/launch.json` has a `prod`
 configuration that builds and serves one on port 4180.
+
+Install from the browser's **Install app** or **Add to Home Screen** menu, then launch the saved
+icon. The manifest requests fullscreen by default; browsers that do not support it fall back to
+standalone or a normal browser tab. On iPhone/iPad, use Safari's Share menu → **Add to Home Screen**;
+Apple's web-app metadata allows content beneath the status bar, with safe-area padding protecting
+controls. The browser/OS ultimately decides which system bars remain visible. Theme colour follows
+the selected Omarchy palette.
+
+If installation is unavailable, bookmark the site and use it in a regular tab; mobile maximization
+still fills the available page, but cannot remove browser controls. Offline startup requires a
+successful online visit to a production build and completion of the service worker's shell cache.
+Cached apps can open offline; sign-in, sync and other live services still need a connection.
+Browsers that block service workers or storage require a connection to reopen the site.
+
+Run `pnpm build && pnpm check:pwa-mobile` to check phone Notes navigation, maximize/rotation/restore
+and production offline startup in isolated Chromium. The static test server uses port 5296
+(override with `PWA_CHECK_PORT`) and stops when the check finishes.
 
 ## Releases and hosting
 
