@@ -50,6 +50,7 @@ import { MailPane } from './mail/MailPane'
 import { useContacts } from '../data/contacts'
 import { IntegrationNotice } from '../os/IntegrationNotice'
 import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
+import { WeatherPane } from './Weather'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
@@ -1947,7 +1948,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'language' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'games' | 'mail' | 'amp' | 'pdf' | 'preview' | 'sync' | 'users' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'language' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'games' | 'mail' | 'amp' | 'pdf' | 'preview' | 'weather' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; /** An app's pane (Settings → Apps) shows the app's own dock icon instead */ app?: AppId; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
@@ -1977,7 +1978,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, and Files' bookmarks; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, Files' bookmarks, and Weather's units and saved cities; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
     </>
   )
 }
@@ -2022,6 +2023,7 @@ const GROUPS: Group[] = [
       { id: 'pdf', label: 'PDF', hue: 'var(--red)', icon: null, app: 'pdf', keywords: 'pdf viewer documents night mode dark sidebar thumbnails outline', blurb: 'The PDF viewer: its sidebar and night mode.', render: () => <PdfPane /> },
       { id: 'preview', label: 'Preview', hue: 'var(--blue)', icon: null, app: 'preview', keywords: 'preview pictures images photos viewer sidebar', blurb: 'The picture viewer: its sidebar.', render: () => <PreviewPane /> },
       { id: 'terminal', label: 'Terminal', hue: 'var(--green)', icon: null, app: 'terminal', keywords: 'terminal shell console text size font size zoom phone desktop extra keys touch keyboard esc tab ctrl colours colors theme', blurb: 'Text size on desktops and phones, and the extra keys on touch screens.', render: () => <TerminalPane /> },
+      { id: 'weather', label: 'Weather', hue: 'var(--cyan)', icon: null, app: 'weather', keywords: 'weather forecast temperature celsius fahrenheit units cities location rain wind', blurb: 'Units for the Weather app and widget-linked cities.', render: () => <WeatherPane /> },
     ],
   },
   {
