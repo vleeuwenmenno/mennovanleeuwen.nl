@@ -258,9 +258,10 @@ export type FactionInfo = {
   /** The side a Galactic Conquest pits it against unless the player picks another. */
   rival: FactionId
   /** How it sounds: how high its heavy guns ring (`turbo`, 1 as written). Everything else about its
-   * sound (its crews' voices, its guns, its hits and deaths) is its sound set, picked by faction id
-   * in sound.ts (SET); `voice` and `blaster` are from before the sets and no longer read. */
-  sound: { voice?: 'crew' | 'droid'; blaster?: 'clone' | 'droid'; turbo: number }
+   * sound is its sound set, picked by faction id in sound.ts: its guns, hits and deaths (SET) and its
+   * crews' voices (VOICE: the Republic's clone radio, the Confederacy's command net of relay clacks
+   * and data bursts, the Swarm's chitter). */
+  sound: { turbo: number }
   /** What it calls the things every faction shares, where its own name differs (see FactionNames). */
   names?: FactionNames
 }

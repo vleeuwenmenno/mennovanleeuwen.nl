@@ -225,7 +225,7 @@ export const SWARM: FactionData = {
     debris: '#b8aab7',
     emblem: '/games/empires/world/emblem-swarm.webp',
     rival: 'republic',
-    sound: { voice: 'droid', blaster: 'droid', turbo: 0.8 },
+    sound: { turbo: 0.8 },
     // Its weapon organs and body parts have names of their own; what they do is the shared guns'.
     names: {
       weapon: { laser: 'Barbs', turbo: 'Tendril lance', flak: 'Acid spray', missile: 'Spores', ion: 'Ion organ' },

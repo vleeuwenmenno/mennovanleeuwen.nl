@@ -155,7 +155,7 @@ export const DROID: FactionData = {
     debris: '#737c86',
     emblem: '/games/empires/world/emblem-droid.webp',
     rival: 'republic',
-    sound: { voice: 'crew', blaster: 'droid', turbo: 0.92 },
+    sound: { turbo: 0.92 },
     names: {
       weapon: { laser: 'Blaster cannons', turbo: 'Plasma cannon', missile: 'Missiles', ion: 'Ion lance' },
       mount: { turbo: 'Plasma cannon', flak: 'Flak turret', missile: 'Missile turret', ion: 'Ion lance' },

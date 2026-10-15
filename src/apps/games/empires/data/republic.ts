@@ -238,7 +238,7 @@ export const REPUBLIC: FactionData = {
     debris: '#d8d2c8',
     emblem: '/games/empires/world/emblem-republic.webp',
     rival: 'droid',
-    sound: { voice: 'crew', blaster: 'clone', turbo: 1 },
+    sound: { turbo: 1 },
     // The shared names are the Republic's; only its heavy triple mount has a name of its own.
     names: { look: { triple: 'Heavy turbolaser' } },
   },
