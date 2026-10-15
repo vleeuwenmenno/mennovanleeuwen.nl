@@ -31,6 +31,10 @@ const DEFS: Record<string, ModelDef> = Object.assign({}, ...FACTION_IDS.map((f) 
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
+/** A faction's models file (models/<faction>/index.ts), for what it says about its own models
+ * beyond the designs: its part names (the Codex, codexInfo.ts), its design variants. */
+export const factionModels = (f: FactionId): FactionModels => FACTION_MODELS[f]
+
 const built = new WeakMap<UnitType, Map<string, Model | null>>()
 /** The model for a unit type, built on first use (null if it has none). Every grown station is a
  * type of its own (see stationType), so each level and set of modules gets its own model. `style`

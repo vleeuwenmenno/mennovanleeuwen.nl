@@ -35,4 +35,14 @@ export type FactionModels = {
   expansion: Expansion
   /** The design variants a unit's model can be shown in (the Codex offers them); none when left out. */
   styles?: (t: UnitType) => string[]
+  /**
+   * What the Codex calls this faction's parts, by the start of their id: [prefix, name] pairs, the
+   * longest matching prefix winning (['spineGun', 'Spine cannon'], ['spine', 'Dorsal spine']). Looked
+   * at before the shared names (codexInfo.ts), so a faction's own part ids read well without any
+   * change to shared files; an id matching none falls back to the shared names, then to the id.
+   */
+  partNames?: [string, string][]
+  /** For names that depend on more than the id (the unit, a station's level): the name, or undefined
+   * to fall back to `partNames` and the shared names. */
+  partName?: (id: string, t: UnitType) => string | undefined
 }

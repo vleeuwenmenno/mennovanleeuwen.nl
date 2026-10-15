@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNIT, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
-import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
+import { info, sameSel, selName, targets, traits, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
 import { BREAK_WEIGHTS, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
@@ -157,6 +157,21 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
         {t.fireControl && row('Fire control', `+${pct(t.fireControl.bonus)} damage`, `Our ships within ${fmt(t.fireControl.radius)} hit ${pct(t.fireControl.bonus)} harder (the best of several auras counts)`)}
         {t.tier === 'station' && t.carrier && row('Brood', `${UNIT[t.carrier.unit]?.name ?? t.carrier.unit} every ${t.carrier.every} s`, `Launches a squadron every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out`)}
       </div>
+      {traits(t).length > 0 && (
+        <>
+          <h5>Traits</h5>
+          <ul className="ew-cx-list">
+            {traits(t).map((x) => (
+              <li key={x.name} data-tip={x.tip}>
+                <i style={{ background: FACTIONS[t.faction].color }} />
+                <span>{x.name}</span>
+                <small>{x.value}</small>
+              </li>
+            ))}
+          </ul>
+          <p className="ew-muted ew-small">{traits(t).map((x) => x.tip).join(' ')}</p>
+        </>
+      )}
       {g.length > 0 && (
         <>
           <h5>Weapons</h5>

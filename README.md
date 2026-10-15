@@ -1732,6 +1732,49 @@ Radii are written at the old battlefield scale and stretched like gun ranges (an
 the fleet for the bigger hulls, as repair tenders are). `pnpm check:empires-mechanics` switches
 each one on for a test unit and checks what it does.
 
+The battle shows them (render.ts, in each side's bolt and engine colours): a drain ship's tendrils
+to the enemies it bites and heal sparks off the allies it mends, a fire-control ship's ring (and,
+selected or up close, lines to what its ships fire on), a pulsing glow on a living hull growing
+back, a spinal gun's charge at its muzzle and its shot as a lance of light, and a Swarm brood
+bursting from its sac. The Codex lists them as **Traits** (with "No shields" and carriers), and the
+unit cards and their tips explain them (`traits` in
+[`codexInfo.ts`](src/apps/games/empires/codexInfo.ts)).
+
+**Research for the mechanics** (`TechEffect` in data/kit.ts, applied in sim.ts like the others, as
+fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shields that much
+harder), `aura` (added to its fire-control bonus) and `auraRadius`, `regrow` (faster regrowth) and
+`regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
+station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
+each ship's own `build` research). The AI weighs them like the rest.
+
+**Sound sets** ([`sound.ts`](src/apps/games/empires/sound.ts) `SET`, by faction id): the Republic's
+clone crews and blasters; the Confederacy's machine-shop military (plasma guns, cannons with
+clanking breeches, a command net of relays and pulse tones, no droid chatter); the Swarm's living
+ships (spit, wet pulses, spore thuds, acid hisses, chitters, and the groans of its big ships, which
+also thud wetly when hit and tear rather than shear when they die). FactionInfo `sound.turbo` still
+tunes the heavy guns' pitch. Settings → Sound test plays every faction's set.
+
+**AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
+its fire from further off and sends its fast warships round the flank of a goal where that is
+clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
+Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
+ships in among the enemy with its wave, values fire-control and spinal ships, and with more than one
+flagship to choose from (the Confederacy's Gyre and Tyrant) settles on one by what its fleet needs.
+
+**For a faction's model files** (all additive, no shared file to change):
+
+- *Level of detail*: `minPx` on a part or a detail (`Lod` in models/types.ts) paints it only once
+  the whole hull (or mount) is at least that many device pixels across; see the top of
+  [`models/paint.ts`](src/apps/games/empires/models/paint.ts) for thresholds.
+- *Extra mount designs*: a faction's `mounts.ts` may export `extras: MountExtras` (functions of
+  `broken`, by `MountExtra` name: torpedo, pd, triple, missileBox, strike, railgun, beam, quad,
+  spore, acid, lance, bioturret, parasite, regen, engineSac, broodSac, spine). A hardpoint picks
+  one with `look` in its data (or a model with its `mount` override); a faction without that
+  design draws the nearest common one (`FALLBACK` in models/mounts.ts).
+- *Part names*: a faction's `models/<faction>/index.ts` may give `partNames` ([prefix, name]
+  pairs, longest prefix wins) or `partName(id, t)` on its `MODELS`; the Codex looks there before
+  the shared names.
+
 **The Swarm preview.** Until the Swarm is finished its units are placeholders: the Confederacy's
 numbers in every slot, under Swarm names, drawn with its concept designs (and copies of the
 Confederacy's engineers and yards where there is no concept), its research borrowing the

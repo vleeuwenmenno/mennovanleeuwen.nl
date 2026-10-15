@@ -175,7 +175,7 @@ type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; quick: num
 export const DOCTRINE: Record<FactionId, Doctrine> = {
   republic: { tiers: {}, wave: 1, quick: 0, focus: 1, flank: false, build: 1 },
   droid: { tiers: { cruiser: 1.1, capital: 1.15 }, wave: 1, quick: 0, focus: 1.3, flank: true, build: 1 },
-  swarm: { tiers: { fighter: 1.2, gunship: 1.2, cruiser: 0.9, capital: 0.85 }, wave: 0.85, quick: 0.35, focus: 1, flank: false, build: 2 },
+  swarm: { tiers: { fighter: 1.15, gunship: 1.15 }, wave: 1, quick: 0.25, focus: 1, flank: false, build: 2 },
 }
 const doctrineOf = (w: World, b: Brain) => DOCTRINE[w.players[b.o].faction] ?? DOCTRINE.republic
 
