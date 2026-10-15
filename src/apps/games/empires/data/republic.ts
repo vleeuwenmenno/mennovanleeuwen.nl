@@ -142,7 +142,7 @@ const SHIPS: UnitType[] = [
     // Its flak is the ball turret on the nose; its missiles fly from the two torpedo racks on the
     // wing roots, fixed forward (the gunship turns to aim them), each half of the salvo.
     weapons: [flak(7, 300, 0.3)],
-    hardpoints: [gun('turbo', 2.45, 5.9, 0.13, 60, LAUNCHER), gun('turbo', 7.55, 5.9, 0.13, 60, LAUNCHER)],
+    hardpoints: [gun('turbo', 2.45, 5.9, 0.13, 125, LAUNCHER), gun('turbo', 7.55, 5.9, 0.13, 125, LAUNCHER)],
     engines: [[3.75, 9.7], [5, 9.8], [6.25, 9.7]],
   },
   {
