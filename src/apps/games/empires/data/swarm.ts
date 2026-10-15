@@ -197,11 +197,11 @@ const DEVOURER: UnitType = {
  */
 const IMPALER: UnitType = {
   id: 's-destroyer', faction: 'swarm', tier: 'frigate', name: 'Impaler destroyer', blurb: 'A living spear: a long, narrow organism grown round a spinal tendril lance. It turns its whole body to aim, and each thrust of the lance skewers a big hull. Thin-skinned and slow to deal with strike craft; badly hurt, its tissue knits furiously.',
-  sprite: 'swarm-destroyer', aspect: 0.3, size: 160, hull: 1250, shield: 0, regen: 0, speed: 82, turn: 1.0, pop: 3, cost: 760, build: 20, level: 2, squad: 1, sensor: 1050,
+  sprite: 'swarm-destroyer', aspect: 0.3, size: 160, hull: 1250, shield: 0, regen: 0, speed: 82, turn: 1.0, pop: 3, cost: 720, build: 19, level: 2, squad: 1, sensor: 1050,
   weapons: [],
   hardpoints: [
     { ...gun('turbo', 5, 1.6, 0.09, 380, spinal(turbo(200, 720, 3.2, 1), 10)), look: 'lance' },
-    gun('flak', 3.0, 7.0, 0.06, 170, flak(5.5, 300, 0.4)), gun('flak', 7.0, 7.0, 0.06, 170, flak(5.5, 300, 0.4)),
+    gun('flak', 3.0, 7.0, 0.06, 170, flak(6, 320, 0.33)), gun('flak', 7.0, 7.0, 0.06, 170, flak(6, 320, 0.33)),
   ],
   engines: [[3.6, 9.5], [6.4, 9.5]], ability: 'repairSwarm',
   regrow: REGROW.ship,
