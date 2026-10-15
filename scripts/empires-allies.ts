@@ -8,7 +8,8 @@
 //      copies of the battle.
 //   2. Over the network: it starts the real server and plays a 2 v 2 with four scripted players,
 //      Alpha and Charlie against Bravo and Delta. Alpha sends Charlie credits; gifts to an enemy, of
-//      too much, negative ones and a burst of them are refused by the server (with a reason); and
+//      too much, negative ones and a burst of them are refused by the server (with a reason), as is a
+//      repair order on an enemy's station (one on an ally's goes through); and
 //      every player's battle stays identical to the server's throughout.
 //
 //   node scripts/empires-allies.ts
@@ -133,6 +134,19 @@ for (let i = 0; i < 10; i++) gift(c.me, 10)
 await sleep(2500)
 const landed = ((a.w!.players[a.me].gave ?? 0) - gave0) / 10
 check(`a burst of ten gifts: ${landed} landed, the rest refused (${errors().length - n} refusals)`, landed >= 1 && landed <= 3 && errors().length - n >= 7)
+
+// Repair orders: on an enemy's station refused by the server, saying why; on an ally's, let through
+// (the sim then decides on every copy alike; Alpha has nothing that can repair it).
+await sleep(1200)
+const stationOf = (seat: number) => a.w!.units.find((u) => !u.dead && u.owner === seat && u.t.tier === 'station')!
+const mine = a.w!.units.filter((u) => !u.dead && u.owner === a.me && u.t.tier !== 'station').map((u) => u.id).slice(0, 5)
+n = errors().length
+a.send({ t: 'cmd', c: cmd('mend', mine, stationOf(b.me).id, false) })
+await waitFor('a repair order on an enemy\'s station is refused by the server, saying why', () => errors().slice(n).some((x) => /allies/.test(x)))
+n = errors().length
+a.send({ t: 'cmd', c: cmd('mend', mine, stationOf(c.me).id, false) })
+await sleep(1200)
+check('one on an ally\'s station goes through', errors().length === n)
 
 await sleep(2000)
 busy.forEach((f) => f())

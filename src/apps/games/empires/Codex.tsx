@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNIT, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
+import { clampToViewport, screenArea } from './fit'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
 import { BREAK_WEIGHTS, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
@@ -257,8 +258,25 @@ function HoverTip({ t, model, sel, x, y, dmg }: { t: UnitType; model: Model | nu
   const i = info(t, model, sel)
   const st = 'hp' in sel ? dmg.hps[sel.hp] : null
   const tg = i.weapon ? targets(i.weapon.kind) : null
+  // Down and to the right of the pointer; flipped to its other side near an edge, and kept inside
+  // the screen with a margin (fit.ts).
+  const box = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const b = box.current
+    const root = b?.offsetParent
+    if (!b || !root) return
+    const rr = root.getBoundingClientRect()
+    const area = screenArea(root)
+    const px = rr.left + x
+    const py = rr.top + y
+    const w = b.offsetWidth
+    const h = b.offsetHeight
+    const p = clampToViewport({ x: px + 16 + w > area.right ? px - 16 - w : px + 16, y: py + 14 + h > area.bottom ? py - 14 - h : py + 14, w, h }, area)
+    b.style.left = `${p.x - rr.left}px`
+    b.style.top = `${p.y - rr.top}px`
+  })
   return (
-    <div className="ew-cx-tip" style={{ left: x + 16, top: y + 14 }}>
+    <div ref={box} className="ew-cx-tip" style={{ left: x + 16, top: y + 14 }}>
       <b>{i.title}</b>
       <small className="ew-muted">{i.kind}{i.hp !== undefined ? ` · ${st && st.hp < st.max ? `${fmt(Math.max(0, st.hp))} / ` : ''}${fmt(i.hp)} hp` : ''}</small>
       {i.weapon && <small>{weaponLine(i.weapon)}</small>}

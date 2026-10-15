@@ -22,6 +22,7 @@ const BASE = '/games/empires/'
 const TAG_PATHS = {
   patrol: 'M6 13a10 10 0 0 1 17-5M26 19a10 10 0 0 1-17 5M23 3.5v4.8h-4.8M9 28.5v-4.8h4.8',
   guard: 'M16 4l9 3.5v7c0 6-4 10-9 12.5-5-2.5-9-6.5-9-12.5v-7z',
+  repair: 'M16 3.5a12.5 12.5 0 1 0 0.01 0zM16 9.5v13M9.5 16h13',
 }
 const tagIcons = new Map<string, Path2D>()
 const tagIcon = (k: keyof typeof TAG_PATHS) => {
@@ -94,6 +95,9 @@ export type View = {
   buildRing?: { x: number; y: number; r: number } | null
   /** Guard armed, and the ship under the pointer is one the selection would escort: tagged "Escort". */
   escortHint?: number
+  /** No order armed, and the pointer is over a damaged ship or structure of ours or an ally's that
+   * the selection's repair ships would repair on a right-click: tagged "Repair". */
+  repairHint?: number
 }
 
 type Particle = {
@@ -371,6 +375,8 @@ function starTile(size: number, n: number, seed: number, bright: number) {
 }
 
 export class Renderer {
+  /** The part of the world on screen in the last draw (for labels kept on it). */
+  private seen = { l: 0, t: 0, r: 0, b: 0 }
   private imgs = new Map<string, HTMLImageElement>()
   private cache = new Map<string, HTMLCanvasElement>()
   private parts: Particle[] = []
@@ -612,6 +618,7 @@ export class Renderer {
   }
 
   draw(ctx: CanvasRenderingContext2D, w: World, cam: Camera, vw: number, vh: number, view: View, dt: number) {
+    this.seen = { l: cam.x - vw / 2 / cam.zoom, t: cam.y - vh / 2 / cam.zoom, r: cam.x + vw / 2 / cam.zoom, b: cam.y + vh / 2 / cam.zoom }
     this.step(dt, w)
     const z = cam.zoom
     // Models are followed (see trackModels) on the screen and a margin round it.
@@ -1072,6 +1079,18 @@ export class Renderer {
           ctx.lineTo(o.x + (Math.cos(o.face) * 16) / z, o.y + (Math.sin(o.face) * 16) / z)
           ctx.stroke()
         }
+      } else if (o.k === 'mend') {
+        // A repair order: a dotted green line to the patient.
+        const g = w.byId.get(o.id)
+        if (g && !g.dead) {
+          ctx.strokeStyle = 'rgba(125,255,160,0.4)'
+          ctx.setLineDash([2 / z, 5 / z])
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.lineTo(g.x, g.y)
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
       } else if (o.k === 'guard') {
         const g = w.byId.get(o.id)
         // An escort's tether is drawn over the ships (below): it runs across the hull it rides over.
@@ -1175,6 +1194,9 @@ export class Renderer {
     // Guard armed over a ship the selection would escort: what the click will do.
     const hint = view.escortHint ? w.byId.get(view.escortHint) : undefined
     if (hint && !hint.dead && !guarded.has(hint.id)) tags.push([ctx, hint, Math.hypot(...dims(hint.t)) * 0.5 * z + 10, 'Escort', 'guard', '95,230,208', z])
+    // Repair ships selected over a damaged ship of ours or an ally's: what a right-click will do.
+    const fix = view.repairHint ? w.byId.get(view.repairHint) : undefined
+    if (fix && !fix.dead && !guarded.has(fix.id)) tags.push([ctx, fix, Math.hypot(...dims(fix.t)) * 0.5 * z + 10, 'Repair', 'repair', '125,255,160', z])
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
     // (Engineers weld with beams of their own, see drawWelds.)
@@ -2464,12 +2486,20 @@ export class Renderer {
     ctx.font = `600 ${12 / z}px system-ui, sans-serif`
     ctx.textAlign = 'center'
     const tw = ctx.measureText(label).width + 14 / z
-    const ly = g.y + Math.max(sw, sh) * 0.55 + 10 / z
+    // Under the ghost, or over it near the bottom of the screen; kept on the screen with 8 px to
+    // spare (and below the top bar), as the HUD's floating things are (fit.ts).
+    const v = this.seen
+    const gap = 8 / z
+    const ext = Math.max(sw, sh) * 0.55
+    let ly = g.y + ext + 10 / z
+    if (ly + 20 / z > v.b - gap) ly = g.y - ext - 30 / z
+    ly = Math.max(v.t + 56 / z, Math.min(v.b - gap - 20 / z, ly))
+    const lx = tw + 2 * gap > v.r - v.l ? g.x : Math.max(v.l + gap + tw / 2, Math.min(v.r - gap - tw / 2, g.x))
     ctx.fillStyle = 'rgba(6,10,22,0.85)'
-    ctx.fillRect(g.x - tw / 2, ly, tw, 20 / z)
+    ctx.fillRect(lx - tw / 2, ly, tw, 20 / z)
     ctx.fillStyle = col
     ctx.textBaseline = 'middle'
-    ctx.fillText(label, g.x, ly + 10 / z)
+    ctx.fillText(label, lx, ly + 10 / z)
     ctx.restore()
   }
 
@@ -2807,7 +2837,7 @@ export class Renderer {
 
   /** A small tag under a spot on the map: an order's icon and a word or two, at a fixed size on
    * screen, `below` pixels under it. */
-  tag(ctx: CanvasRenderingContext2D, at: Pt, below: number, text: string, icon: 'patrol' | 'guard', rgb: string, z: number) {
+  tag(ctx: CanvasRenderingContext2D, at: Pt, below: number, text: string, icon: keyof typeof TAG_PATHS, rgb: string, z: number) {
     ctx.save()
     ctx.translate(at.x, at.y)
     ctx.scale(1 / z, 1 / z)
