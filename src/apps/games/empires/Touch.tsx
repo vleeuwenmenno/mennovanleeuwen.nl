@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useMediaQuery } from '../../../os/useMediaQuery'
+import { EDGE, clampToViewport, coverOf, screenArea } from './fit'
 import './touch.css'
 
 // Touch for Empires At War, shared by the battle, the galaxy map and the menus. Every touch path
@@ -232,9 +233,23 @@ function Wheel({ req, onClose }: { req: WheelRequest; onClose: () => void }) {
     const el = layer.current
     if (!el) return
     const r = el.getBoundingClientRect()
-    const pad = RADIUS + ITEM / 2 + 6
+    const pad = RADIUS + ITEM / 2 + EDGE
     setCentre({ x: Math.max(pad, Math.min(r.width - pad, req.x - r.left)), y: Math.max(pad, Math.min(r.height - pad, req.y - r.top)) })
   }, [req])
+  // Then all of it (its title above, the labels under the buttons) is kept on the screen with EDGE
+  // to spare: measured once it's drawn, and moved once if it sticks out (fit.ts). Moved, it fits,
+  // so the next measure leaves it.
+  const wheel = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = wheel.current
+    if (!el || !centre) return
+    const cover = coverOf(el, true)
+    if (!cover) return
+    const to = clampToViewport(cover, screenArea(layer.current))
+    const dx = Math.round(to.x - cover.x)
+    const dy = Math.round(to.y - cover.y)
+    if (dx || dy) setCentre({ x: centre.x + dx, y: centre.y + dy })
+  }, [centre])
   const pick = (i: number | null) => {
     if (i === null) return
     const it = items[i]
@@ -297,7 +312,7 @@ function Wheel({ req, onClose }: { req: WheelRequest; onClose: () => void }) {
       onContextMenu={(e) => e.preventDefault()}
     >
       {centre && (
-        <div className="ew-wheel" style={{ left: centre.x, top: centre.y }}>
+        <div ref={wheel} className="ew-wheel" style={{ left: centre.x, top: centre.y }}>
           <div className="ew-wheel-ring" style={{ width: RADIUS * 2 + ITEM, height: RADIUS * 2 + ITEM }} />
           {req.title && <div className="ew-wheel-title" style={{ top: -RADIUS - ITEM / 2 - 26 }}>{req.title}</div>}
           <button className="ew-wheel-mid" onClick={onClose} aria-label="Close the action wheel">

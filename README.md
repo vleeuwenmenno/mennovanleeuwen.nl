@@ -1818,6 +1818,22 @@ the harder it is), keeps a squadron or two guarding its most valuable warship, a
 its worst-hurt ship or station. Galactic conquest has no research, so there they are built like
 any other ship.
 
+**Repair orders.** With repair ships selected (the Mercy corvette, repair craft), a right-click on a
+damaged ship of ours or an ally's repairs it (`cmdMend` in sim.ts, the `mend` order): the pointer
+turns into a green ring with a cross and the ship is tagged "Repair"; on touch, the action wheel on
+it has *Repair it*. Each repairer takes what it can mend: a Mercy patches the hull of any ship,
+closing to just outside it and keeping it in reach (and patching it before the others round it);
+repair craft mend stations and ships of gunship class or bigger, starting a Field repair run as
+soon as the ability is ready and staying with the patient between runs. They keep at it until the
+patient is whole or lost, then take their next queued order, or go back to the ship or structure
+they were guarding or escorting, or wait where they are. In a mixed selection only the repairers
+take the order; the warships move to the spot as on any friendly. On an undamaged ship the
+right-click is the usual move. Engineers do the same for structures: a right-click on a damaged
+structure of an ally's welds it back too (their sites and rush-launched ships are theirs to finish),
+and whoever welds pays for rebuilding shot-off modules, Field repair crews on an ally's station
+included. Enemies are refused by the sim and, online, by the server referee before the order
+reaches anyone.
+
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
 Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
 fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
@@ -1838,6 +1854,7 @@ card shows "Defense wing 3/5 · next in 12 s". Stations in conquest fleet battle
 
 ```sh
 pnpm check:empires-repair   # Field repair: a station's hangar rebuilt and its wing back, a frigate's lost turret, determinism
+pnpm check:empires-heal     # repair orders: a Mercy on ours and an ally's, back to escorting, refusals, mixed selections, engineers, determinism
 ```
 
 ## Galactic conquest fleets
@@ -1985,7 +2002,9 @@ picks the flagship; a hardpoint marker under a smaller ship gives way to it too.
 
 **Escorts.** Guard (V) on a friendly ship two classes bigger escorts it (`escorts`, `wardOf`,
 `escortSlot`, `keepStation` in sim.ts): each escort takes a slot of its own over the hull, down
-both flanks in turn from bow to stern, handed out by id each tick, so several never stack; the
+both flanks in turn from bow to stern, handed out by id each tick, so several never stack (each
+stands off the spine by a fifth of the big hull's beam plus a fifth of its own radius and 14, so
+the two of a pair keep clear of each other on a narrow hull); the
 slots are fixed to the hull, so the escorts move and turn with it, matching its heading and pace.
 An enemy that comes within reach of an escort's guns of the ship (measured from its hull's edge) is
 engaged, chased at most `ESCORT.leash` further, and then the escort comes back to its slot; a
@@ -2010,6 +2029,24 @@ the camera there and selects what it's about. On the galaxy map that's the plane
 fought over or given a station, our fleet a new ship joined, or a fleet that arrived or was
 stopped by a blockade; in battle it's the ship that was built, promoted or repaired, or the spot
 of an alarm, a beacon, a survey or a salvaged wreck. The × still only puts the message away.
+
+**On the screen, always.** Everything that floats over a battle or the galaxy map stays inside the
+screen ([`fit.ts`](src/apps/games/empires/fit.ts)): tooltips go above their button, or below it
+when that fits better, and are kept 8 px in from every edge; the hover unit card and the Codex's
+part tips flip to the cursor's other side near an edge; the action wheel (and the group wheel) is
+moved in whole, its title and labels included; the docked and dragged panels (the tactical map,
+the unit card and build panel, the selection, the fleet inventory, the economy, the galaxy map's
+dock, fleets and selection), the credits popover and the order hints are pushed back in (up when
+they would clip at the bottom) whenever the window is resized or their content grows, and a dragged
+panel keeps its saved spot, coming back to it once there is room again; the yard placement label
+moves above the ghost near the bottom; and messages that don't fit let the oldest go out of the
+top. A panel already on the screen, flush with an edge or not, stays where it is. The shift is
+written onto the element (CSS `translate`) by measuring it once per change, never through React
+state, so nothing measures, moves and re-measures in a loop.
+
+```sh
+pnpm check:empires-gui-fit http://localhost:5173   # against a running dev server, at four window sizes and a phone: panels on the screen, tooltips near the edges 8 px inside, a map dragged into the corner and the window shrunk, the tech tree, the action wheel in each corner
+```
 
 The AI plays like a person with limited hands, more limited the easier it is:
 - **Galactic conquest** ([`galaxy.ts`](src/apps/games/empires/galaxy.ts) `galaxyAi`, `GALAXY_AI`):
@@ -2412,7 +2449,7 @@ sender a message too, and both see it in the economy panel.
 
 ```sh
 pnpm check:empires-groups   # set, add, select, dead units dropping out, the bar, a double press, the keys
-pnpm check:empires-allies   # the sim's rules and the AI, then a 2 v 2 on a real server: a gift in sync, refusals, a burst
+pnpm check:empires-allies   # the sim's rules and the AI, then a 2 v 2 on a real server: a gift in sync, refusals, a burst, repair orders on enemies refused
 ```
 
 ## Empires At War on touch screens

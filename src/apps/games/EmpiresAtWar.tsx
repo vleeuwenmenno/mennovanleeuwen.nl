@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } 
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
-import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
@@ -21,7 +21,7 @@ import { Renderer, drawRank, relColor, type Camera, type View } from './empires/
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, escorts, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantHeal, closedLoop, isRepairer, cantWarp, escorts, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -703,6 +703,39 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     return g && !g.dead && !foes(world.current, g.owner, me) && mySelection().some((u) => u !== g && escorts(u, g)) ? g.id : undefined
   }
 
+  /** The selected repair ships (tenders and Field repair craft) that a right-click on `unit` would
+   * send to repair it: a damaged ship or station of ours or an ally's that each can mend. Engineers
+   * aren't among them: structures are theirs through the construct order. */
+  const medicsFor = (unit: Unit | undefined) => {
+    const w = world.current
+    if (!unit || unit.dead || foes(w, unit.owner, me)) return []
+    return mySelection().filter((u) => isShip(u.t) && !isEngineer(u.t) && isRepairer(u.t) && !cantHeal(w, me, u, unit))
+  }
+  /** Engineers in the selection that a right-click on `unit` would send to repair it: a damaged
+   * finished structure of ours or an ally's (not a site to build or a ship to finish). */
+  const weldersFor = (unit: Unit | undefined) => {
+    const w = world.current
+    if (!unit || unit.dead || isShip(unit.t) || unit.site || cantConstruct(w, me, unit)) return []
+    return mySelection().filter((u) => isEngineer(u.t))
+  }
+  /** The ship or structure under the pointer to tag "Repair": what a right-click would repair. */
+  const repairHint = (id: number) => {
+    const u = id ? world.current.byId.get(id) : undefined
+    return u && (medicsFor(u).length || weldersFor(u).length) ? u.id : undefined
+  }
+  /** Sends repair ships to repair `unit`; false (and says why) when it can't be done. */
+  const repairOrder = (unit: Unit, medics: Unit[], queued = false) => {
+    const why = order('mend', medics.map((u) => u.id), unit.id, queued)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return false
+    }
+    renderer.current.ping(unit.x, unit.y, '#7dffa0')
+    sound.order('move', myFaction, medics.some((u) => u.t.tier !== 'fighter') ? 'gunship' : 'fighter')
+    return true
+  }
+
   /** Gives an order. In single player it runs at once. Online it goes to the server and runs on
    * everyone's machine at the next tick: it answers null here, and a refusal comes back as a toast
    * when the turn arrives (a tick or two later). */
@@ -783,7 +816,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const command = (sx: number, sy: number, attackMove: boolean, queued = false) => {
     const w = world.current
     const { unit, hp, at } = pick(sx, sy)
-    const ships = mySelection().filter((u) => isShip(u.t))
+    let ships = mySelection().filter((u) => isShip(u.t))
     const stationSel = mySelection().some((u) => u.t.tier === 'station')
     const armed = mySelection().filter((u) => !isShip(u.t) && u.guns.length)
     // The attack key or button on one of our own: friendly fire, on purpose. A plain right-click
@@ -795,13 +828,22 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return
     }
     const target = unit && (foes(w, unit.owner, me) || friendly) ? unit : undefined
+    // Repair ships: a right-click on a damaged ship (or station) of ours or an ally's repairs it, each
+    // one that can; the rest of the selection carries on as usual (on a friendly: moves there).
+    const medics = !attackMove ? medicsFor(unit) : []
+    if (medics.length && unit) {
+      repairOrder(unit, medics, queued)
+      ships = ships.filter((u) => !medics.includes(u))
+      if (!ships.length) return
+    }
     // Engineers: a right-click on one of our structures builds or repairs it (and on a rush-launched
     // warship of ours finishes it), on our ruin of a yard rebuilds it; the rest of the selection
     // carries on as usual.
     const crew = ships.filter((u) => isEngineer(u.t))
     if (crew.length && !attackMove) {
       const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < UNIT[r.unit].size * 0.45)
-      const job = unit && unit.owner === me && (!isShip(unit.t) || unit.rush) ? unit : undefined
+      // (An ally's damaged structure too: they weld it back for them.)
+      const job = unit && unit.owner === me && (!isShip(unit.t) || unit.rush) ? unit : weldersFor(unit).length ? unit : undefined
       if (job || (ruin && !unit)) {
         const why = job ? order('construct', crew.map((u) => u.id), job.id, queued) : order('place', crew.map((u) => u.id), ruin!.unit, ruin!.x, ruin!.y, queued)
         if (why) {
@@ -1160,8 +1202,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         ...info,
       )
     } else if (ships.length && unit && own) {
-      // Engineers selected and this one of our structures needs building or mending.
+      // Engineers selected and this one of our structures needs building or mending; repair ships
+      // selected and this one hurt: they repair it (both, on a station).
       const crew = ships.filter((u) => isEngineer(u.t))
+      const medics = medicsFor(unit)
       if (crew.length && !cantConstruct(w, me, unit))
         items.push(it('construct', unit.site ? 'Build it' : unit.rush ? 'Finish it' : 'Repair it', 'slip', () => {
           const why = order('construct', crew.map((u) => u.id), unit.id, shiftOf())
@@ -1169,11 +1213,25 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
             toast(why, 'bad')
             sound.error()
           } else renderer.current.ping(unit.x, unit.y, '#ffc86e')
+          if (medicsFor(unit).length) repairOrder(unit, medicsFor(unit), shiftOf())
         }))
-      // Repair craft selected and this one hurt: Field repair on it.
-      const menders = ships.filter((u) => u.t.ability === 'fieldRepair')
-      if (menders.length && !cantMend(w, me, unit)) items.push(it('repair', 'Repair it', 'ability', () => useAbility(unit.id), !menders.some((u) => u.abilityCd <= 0) && 'Not ready yet'))
+      else if (medics.length) items.push(it('repair', 'Repair it', 'ability', () => repairOrder(unit, medicsFor(unit), shiftOf())))
       items.push(it('guard', ships.some((u) => escorts(u, unit)) ? 'Escort it' : 'Guard it', 'hold', arm('guard')), it('only', 'Select only this', 'target', only(unit)), it('type', 'Select all of type', 'fleet', () => selectType(unit, shiftOf())), ...info)
+    } else if (ships.length && unit && !enemy && (medicsFor(unit).length || weldersFor(unit).length)) {
+      // An ally's damaged ship or structure, with repair ships or engineers selected: repair it, or
+      // guard it.
+      const medics = medicsFor(unit)
+      const crew = weldersFor(unit)
+      if (medics.length) items.push(it('repair', 'Repair it', 'ability', () => repairOrder(unit, medicsFor(unit), shiftOf())))
+      if (crew.length)
+        items.push(it('construct', 'Repair it', 'slip', () => {
+          const why = order('construct', crew.map((u) => u.id), unit.id, shiftOf())
+          if (why) {
+            toast(why, 'bad')
+            sound.error()
+          } else renderer.current.ping(unit.x, unit.y, '#ffc86e')
+        }))
+      items.push(it('guard', ships.some((u) => escorts(u, unit)) ? 'Escort it' : 'Guard it', 'hold', arm('guard')), it('move', 'Move here', 'move', arm('move')), ...info)
     } else if (ships.length) {
       // Empty space (or an ally). One ship or squadron turns to face the drag; more spread along it,
       // or keep their formation and turn to face it.
@@ -1594,12 +1652,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
         place: placeGhost(),
         escortHint: mode.current === 'guard' ? escortHint(h.unit) : undefined,
+        repairHint: mode.current === 'normal' && !touchLast.current ? repairHint(h.unit) : undefined,
         buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
         })() : null,
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
+      // The repair cursor, over what a right-click would repair (React's className leaves it be
+      // until the mode changes, so it is checked on the element itself).
+      const fixing = v.repairHint !== undefined
+      if (canvas.current && canvas.current.classList.contains('is-repair') !== fixing) canvas.current.classList.toggle('is-repair', fixing)
       sound.ambience(paused.current ? 0 : dt)
       miniT -= dt
       const hideMine = deploying.current && !placed.current ? me : -1
@@ -2519,7 +2582,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
 
         <ToastStack store={toasts} low={ui.paused && !ui.menu && !ui.panel} look={lookRef} />
         {ui.mode !== 'normal' && (
-          <div className="ew-modehint">
+          <KeptInside className="ew-modehint">
             {ui.mode === 'attack' && !mySelection().some((u) => isShip(u.t))
               ? turretPick.current ? `Attack: ${click} an enemy for the picked gun to aim at.` : `Attack: ${click} an enemy for every gun to aim at. ${Click} one gun first to aim just that one.`
               : ui.mode === 'attack' ? touchUi ? 'Attack move: tap where to go. Ships fight whatever they meet; tap one of ours to open fire on it.' : 'Attack move: click where to go. Ships fight whatever they meet. Drag a circle (either button) to attack everything in it; click one of ours to open fire on it.'
@@ -2547,15 +2610,15 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                 </button>
               </div>
             )}
-          </div>
+          </KeptInside>
         )}
         {ui.draw && (
-          <div className="ew-modehint">
+          <KeptInside className="ew-modehint">
             {ui.draw === 'face' || lineGroups(w, me, mySelection().map((u) => u.id)).length === 1
               ? 'Face: drag from where to go towards the way to face.'
               : 'Line: drag a line. The ships spread along it; draw a loop to ring a spot.'}{' '}
             ✕ to cancel.
-          </div>
+          </KeptInside>
         )}
 
         {/* The tactical map floats: it can be dragged anywhere. While it sits in its corner the dock
