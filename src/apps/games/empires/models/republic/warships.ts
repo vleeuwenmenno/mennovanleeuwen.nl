@@ -27,10 +27,6 @@ function pods(c: BuildCtx, hps: number[], y0: number, y1: number | number[], w: 
   })
 }
 
-/** The mount on hardpoint `i` drawn as the torpedo launcher (see mounts.ts: it stands in for 'ion'
- * until the shared mount designs name it). */
-const TORPEDO = { design: 'ion' as const }
-
 // --- Gunship and corvette ------------------------------------------------------------------------------
 
 /**
@@ -77,7 +73,7 @@ export const gunship: ModelDef = (c): ModelSpec => {
     ...seat('rackSeatR', c, 1, 1.18, 1.2, 'oct'),
     ...ballTurret('flak', 0, -10, 3.4, 3),
   ]
-  return { parts, breakStyle: 'bands', mount: () => TORPEDO }
+  return { parts, breakStyle: 'bands' }
 }
 
 /**
@@ -142,7 +138,7 @@ export const corvette: ModelDef = (): ModelSpec => {
  * Warden frigate at 1.4×, after the sheet's capital ship anatomy: a broad triangular hull, red edge
  * bands and red chevrons aft, grey deck plates down its flanks (the forward and aft ones shot off as
  * it is battered). A raised deck down the middle carries the blue bridge at the nose and a spine of
- * raised blocks; six turrets in three pairs (the turbolasers forward, flak amidships and aft) and two
+ * raised blocks; six turrets in three pairs (the turbolasers forward, flak amidships, point defence aft) and two
  * shield bulbs stand on their seats either side; three engine pods at the stern, each shot off with
  * its hardpoint.
  */
@@ -192,7 +188,8 @@ export const frigate: ModelDef = (c): ModelSpec => {
     // Seats: pads for the guns, rings under the shield bulbs.
     ...seat('seatT0', c, 0, 1.24, 1.6),
     ...seat('seatT1', c, 1, 1.24, 1.6),
-    ...[2, 3, 4, 5].flatMap((i) => seat(`seatF${i}`, c, i, 1.26, 1.6)),
+    ...[2, 3].flatMap((i) => seat(`seatF${i}`, c, i, 1.26, 1.6)),
+    ...[4, 5].flatMap((i) => seat(`seatF${i}`, c, i, 1.26, 1.6, 'oct')),
     ...seat('seatS0', c, 6, 1.2, 1.6, 'heavy'),
     ...seat('seatS1', c, 7, 1.2, 1.6, 'heavy'),
     // The pods' pylon under the stern, and the pods.
@@ -258,8 +255,8 @@ export const cruiser: ModelDef = (c): ModelSpec => {
     dish('dish', 3.6, 31.2, 1.7, 3.2, 0.4, [0.3, 0.3]),
     // Seats: barbettes under the turbolasers, pads under the flak, rings under the shield bulbs.
     ...[0, 1, 2, 3].flatMap((i) => seat(`barbette${i}`, c, i, 1.26, 2.2, 'heavy')),
-    ...seat('seatF0', c, 4, 1.3, 2.2),
-    ...seat('seatF1', c, 5, 1.3, 2.2),
+    ...seat('seatF0', c, 4, 1.3, 2.2, 'oct'),
+    ...seat('seatF1', c, 5, 1.3, 2.2, 'oct'),
     ...seat('seatS0', c, 6, 1.18, 2.8),
     ...seat('seatS1', c, 7, 1.18, 2.8),
     part('pylon', chamfer(0, 35, 22, 5, 1.4), 'metal', 0.6, { lift: 0.6 }),
@@ -268,7 +265,7 @@ export const cruiser: ModelDef = (c): ModelSpec => {
   return {
     parts,
     breakStyle: 'bands',
-    // Its flak turrets blow off; the turbolasers and shield bulbs stay on, wrecked.
+    // Its point-defence turrets blow off; the turbolasers and shield bulbs stay on, wrecked.
     mount: (i) => ({ detach: i === 4 || i === 5 }),
   }
 }
@@ -344,7 +341,7 @@ export const capital: ModelDef = (c): ModelSpec => {
     // Seats: armoured barbettes under the heavy batteries, pads under the flak, rings under the
     // shield bulbs, and the hangar's frame.
     ...[0, 1, 2, 3].flatMap((i) => seat(`barbette${i}`, c, i, 1.3, 2.4, 'heavy')),
-    ...[4, 5, 6, 7].flatMap((i) => seat(`seatF${i}`, c, i, 1.3, 2.4)),
+    ...[4, 5, 6, 7].flatMap((i) => seat(`seatF${i}`, c, i, 1.3, 2.4, 'oct')),
     ...seat('seatS0', c, 8, 1.18, 2.4, 'heavy'),
     ...seat('seatS1', c, 9, 1.18, 2.4, 'heavy'),
     part('pylon', chamfer(0, 35, 42, 5, 1.6), 'metal', 0.5, { lift: 0.6, details: [{ k: 'line', pts: [[-20, 35], [20, 35]] }] }),

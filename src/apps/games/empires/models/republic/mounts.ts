@@ -1,5 +1,5 @@
 import { box, chamfer, circle, part, rounded, sym, turn } from '../kit.ts'
-import type { MountLook } from '../mounts.ts'
+import type { MountExtras, MountLook } from '../mounts.ts'
 import type { Detail, Part, Pt } from '../types.ts'
 
 // The Republic's mounts, after the "Turret & module studies" on its reference sheet: off-white
@@ -9,7 +9,7 @@ import type { Detail, Part, Pt } from '../types.ts'
 //
 // Every weapon reads differently at a glance: the flak turret has tall slim twin barrels on a round
 // ring, the turbolaser heavier and shorter twin barrels on a broader housing, the heavy capital
-// turbolaser a great armoured housing with banded barrels and muzzle brakes, point defence short
+// battery ('triple') a great armoured housing with three banded barrels, point defence ('pd') short
 // stubby barrels on an octagonal ring, and the torpedo launcher a boxy rack of four tubes with red
 // warhead caps. The shield generator is a white dome banded in red with a small blue light; engine
 // pods are parts of the hull (an engine hardpoint has no mount of its own).
@@ -18,9 +18,8 @@ import type { Detail, Part, Pt } from '../types.ts'
 // cracks, for a module that was shot up but stays on the hull; and a burnt socket ('crater') for one
 // that was blown clean off.
 //
-// The designs are looked up by name, so a design id the shared MountDesign doesn't have yet ('pd',
-// 'heavy', 'torpedo') is drawn as soon as a hardpoint asks for it. Until then the torpedo launcher
-// stands in for 'ion' (no Republic ship carries an ion cannon), and the other two wait.
+// The common designs come from `build`; the Republic's own (the heavy battery, point defence and the
+// torpedo launcher) are its `extras`, picked per hardpoint with `look` in data/republic.ts.
 
 /** Ember glints in a broken module's cracks: a part with no body of its own, only its lights. */
 const embers = (pts: Pt[]): Part => part('embers', [], 'ember', 9, { glow: true, noOutline: true, details: [{ k: 'lights', pts, r: 0.07, tone: 'ember' }] })
@@ -92,7 +91,10 @@ const heavy = (): Part[] => [
     lift: 0.22,
     details: [{ k: 'shape', pts: box(0, 0.24, 0.26, 0.98), tone: 'accent' }, { k: 'shape', pts: box(0, -0.3, 0.6, 0.08), tone: 'glass' }, { k: 'line', pts: [[-0.42, 0.4], [0.42, 0.4]] }],
   }),
-  ...barrels(0.42, 0.2, -0.44, -1.24, true),
+  ...barrels(0.5, 0.18, -0.44, -1.24, true),
+  part('barrelMid', box(0, -0.86, 0.18, 0.84), 'dark', 3, {}),
+  part('muzzleMid', box(0, -1.2, 0.24, 0.13), 'metal', 3.2, {}),
+  part('barrelMidBand', box(0, -0.98, 0.21, 0.09), 'accent', 3.1, { noOutline: true }),
 ]
 
 const pd = (): Part[] => [
@@ -140,8 +142,13 @@ const shield = (): Part[] => [
   }),
 ]
 
-/** Each working design, by name. */
-const WHOLE: Record<string, () => Part[]> = { flak, turbo, heavy, pd, torpedo, ion: torpedo, shield }
+/** The Republic's own designs beyond the common ones (models/mounts.ts): the heavy capital
+ * battery, point defence and the torpedo launcher. */
+export const extras: MountExtras = {
+  triple: (broken) => (broken ? brokenGun(true) : heavy()),
+  pd: (broken) => (broken ? brokenGun(false) : pd()),
+  torpedo: (broken) => (broken ? brokenGun(false) : torpedo()),
+}
 
 /** A shot-up gun: the housing burnt dark and cracked, a stub or two of barrel bent askew. */
 function brokenGun(round: boolean): Part[] {
@@ -217,11 +224,11 @@ export function build(design: MountLook, broken: boolean): Part[] {
       ]
     case 'engine':
       return []
-    default: {
-      // The guns, by name (see WHOLE): flak, turbolaser, and the designs still to come.
-      const name: string = design
-      if (broken) return brokenGun(name !== 'pd' && name !== 'torpedo' && name !== 'ion')
-      return (WHOLE[name] ?? turbo)()
-    }
+    case 'flak':
+      return broken ? brokenGun(true) : flak()
+    case 'turbo':
+    case 'ion':
+      // (No Republic ship carries an ion cannon: a turbolaser if one ever asks.)
+      return broken ? brokenGun(true) : turbo()
   }
 }

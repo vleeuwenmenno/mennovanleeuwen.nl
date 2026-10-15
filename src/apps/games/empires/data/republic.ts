@@ -34,7 +34,7 @@ function minePlatform(shielded = false): UnitType {
       { ...M('drill', 'drill', d.wells[0][0], d.wells[0][1], 0.3, 400), key: 'drill1' },
       { ...M('drill', 'drill', d.wells[1][0], d.wells[1][1], 0.3, 400), key: 'drill2' },
       { ...M('refinery', 'refinery', d.core[0], d.core[1], 0.1, 300), key: 'silo' },
-      { ...gun('flak', d.pd[0], d.pd[1], 0.11, 250, MINE_FLAK), key: 'pd' },
+      { ...gun('flak', d.pd[0], d.pd[1], 0.11, 250, MINE_FLAK), key: 'pd', look: 'pd' },
       ...(shielded ? [{ ...M('shield', 'shield', d.pad[0], d.pad[1], 0.17, 350), key: 'shield' }] : []),
     ],
     engines: [],
@@ -84,8 +84,8 @@ function frigateYard(): UnitType {
     hardpoints: [
       { ...M('dock', 'dock', 5, 4.6, 0.1, 900), key: 'slip' },
       { ...M('shield', 'shield', 5, 8.35, 0.085, 800), key: 'shield' },
-      { ...gun('flak', 1.55, 1.7, 0.055, 300, pd), key: 'pd1' },
-      { ...gun('flak', 8.45, 1.7, 0.055, 300, pd), key: 'pd2' },
+      { ...gun('flak', 1.55, 1.7, 0.055, 300, pd), key: 'pd1', look: 'pd' },
+      { ...gun('flak', 8.45, 1.7, 0.055, 300, pd), key: 'pd2', look: 'pd' },
     ],
     engines: [],
     role: { role: 'Frigate yard', strong: ['building frigates and corvettes'], weak: ['bombers', 'cruisers', 'being left unguarded'] },
@@ -108,8 +108,8 @@ function capitalYard(): UnitType {
       { ...M('shield', 'shield', 5, 8.7, 0.085, 1100), key: 'shield' },
       { ...gun('turbo', 1.7, 1.3, 0.07, 700, tl), key: 'tl1' },
       { ...gun('turbo', 8.3, 1.3, 0.07, 700, tl), key: 'tl2' },
-      { ...gun('flak', 1.9, 9.1, 0.05, 320, pd), key: 'pd1' },
-      { ...gun('flak', 8.1, 9.1, 0.05, 320, pd), key: 'pd2' },
+      { ...gun('flak', 1.9, 9.1, 0.05, 320, pd), key: 'pd1', look: 'pd' },
+      { ...gun('flak', 8.1, 9.1, 0.05, 320, pd), key: 'pd2', look: 'pd' },
     ],
     engines: [],
     role: { role: 'Capital yard', strong: ['building cruisers and flagships'], weak: ['bombers', 'flagships', 'being left unguarded'] },
@@ -142,7 +142,7 @@ const SHIPS: UnitType[] = [
     // Its flak is the ball turret on the nose; its missiles fly from the two torpedo racks on the
     // wing roots, fixed forward (the gunship turns to aim them), each half of the salvo.
     weapons: [flak(7, 300, 0.3)],
-    hardpoints: [gun('turbo', 2.45, 5.9, 0.13, 125, LAUNCHER), gun('turbo', 7.55, 5.9, 0.13, 125, LAUNCHER)],
+    hardpoints: [{ ...gun('turbo', 2.45, 5.9, 0.13, 125, LAUNCHER), look: 'torpedo' }, { ...gun('turbo', 7.55, 5.9, 0.13, 125, LAUNCHER), look: 'torpedo' }],
     engines: [[3.75, 9.7], [5, 9.8], [6.25, 9.7]],
   },
   {
@@ -186,7 +186,7 @@ const SHIPS: UnitType[] = [
     hardpoints: [
       gun('turbo', 3.65, 3.6, 0.06, 150, turbo(14, 560, 2.2, 1)), gun('turbo', 6.35, 3.6, 0.06, 150, turbo(14, 560, 2.2, 1)),
       gun('flak', 3.35, 6.3, 0.05, 160, flak(6, 340, 0.3)), gun('flak', 6.65, 6.3, 0.05, 160, flak(6, 340, 0.3)),
-      gun('flak', 1.95, 7.9, 0.05, 160, flak(6, 340, 0.3)), gun('flak', 8.05, 7.9, 0.05, 160, flak(6, 340, 0.3)),
+      { ...gun('flak', 1.95, 7.9, 0.05, 160, flak(6, 340, 0.3)), look: 'pd' }, { ...gun('flak', 8.05, 7.9, 0.05, 160, flak(6, 340, 0.3)), look: 'pd' },
       M('shield', 'shield', 2.9, 4.9, 0.065, 160), M('shield', 'shield', 7.1, 4.9, 0.065, 160),
       P('engine', 3.2, 9.0, 80), P('engine', 5, 9.0, 80), P('engine', 6.8, 9.0, 80),
     ],
@@ -201,7 +201,7 @@ const SHIPS: UnitType[] = [
     // bulbs down the spine, and three engine pods sharing what were two engines' strength.
     hardpoints: [
       gun('turbo', 3.75, 3.5, 0.05, 300, turbo(22)), gun('turbo', 6.25, 3.5, 0.05, 300, turbo(22)), gun('turbo', 2.2, 6.0, 0.055, 300, turbo(22)), gun('turbo', 7.8, 6.0, 0.055, 300, turbo(22)),
-      gun('flak', 2.6, 7.75, 0.04, 200, flak(6, 320, 0.8)), gun('flak', 7.4, 7.75, 0.04, 200, flak(6, 320, 0.8)),
+      { ...gun('flak', 2.6, 7.75, 0.04, 200, flak(6, 320, 0.8)), look: 'pd' }, { ...gun('flak', 7.4, 7.75, 0.04, 200, flak(6, 320, 0.8)), look: 'pd' },
       M('shield', 'shield', 5, 4.85, 0.06, 460), M('shield', 'shield', 5, 6.55, 0.06, 460), P('engine', 3.3, 9.05, 280), P('engine', 5, 9.1, 280), P('engine', 6.7, 9.05, 280),
     ],
     engines: [[3.3, 9.72], [5, 9.78], [6.7, 9.72]], ability: 'shieldBoost',
@@ -214,8 +214,8 @@ const SHIPS: UnitType[] = [
     // flanks, shield bulbs aft, the hangar amidships, and six engine pods sharing what was one
     // engine block's strength (appended after the hangar, so the older hardpoints keep their places).
     hardpoints: [
-      gun('turbo', 3.75, 3.65, 0.06, 720, turbo(58, 760)), gun('turbo', 6.25, 3.65, 0.06, 720, turbo(58, 760)), gun('turbo', 3.2, 5.65, 0.06, 720, turbo(58, 760)), gun('turbo', 6.8, 5.65, 0.06, 720, turbo(58, 760)),
-      gun('flak', 4.2, 2.35, 0.04, 300, flak(6, 340, 0.9)), gun('flak', 5.8, 2.35, 0.04, 300, flak(6, 340, 0.9)), gun('flak', 1.95, 7.0, 0.04, 300, flak(6, 340, 0.9)), gun('flak', 8.05, 7.0, 0.04, 300, flak(6, 340, 0.9)),
+      { ...gun('turbo', 3.75, 3.65, 0.06, 720, turbo(58, 760)), look: 'triple' }, { ...gun('turbo', 6.25, 3.65, 0.06, 720, turbo(58, 760)), look: 'triple' }, { ...gun('turbo', 3.2, 5.65, 0.06, 720, turbo(58, 760)), look: 'triple' }, { ...gun('turbo', 6.8, 5.65, 0.06, 720, turbo(58, 760)), look: 'triple' },
+      { ...gun('flak', 4.2, 2.35, 0.04, 300, flak(6, 340, 0.9)), look: 'pd' }, { ...gun('flak', 5.8, 2.35, 0.04, 300, flak(6, 340, 0.9)), look: 'pd' }, { ...gun('flak', 1.95, 7.0, 0.04, 300, flak(6, 340, 0.9)), look: 'pd' }, { ...gun('flak', 8.05, 7.0, 0.04, 300, flak(6, 340, 0.9)), look: 'pd' },
       M('shield', 'shield', 3.05, 7.75, 0.07, 820), M('shield', 'shield', 6.95, 7.75, 0.07, 820), P('engine', 4.45, 9.05, 160), M('hangar', 'hangar', 5, 4.65, 0.08, 760),
       P('engine', 2.3, 9.0, 160), P('engine', 3.38, 9.05, 160), P('engine', 5.55, 9.05, 160), P('engine', 6.62, 9.05, 160), P('engine', 7.7, 9.0, 160),
     ],

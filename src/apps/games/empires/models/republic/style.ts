@@ -7,7 +7,8 @@ import type { Detail, Part, Pt, Tone } from '../types.ts'
 //
 // Fine detail (panel lines) is drawn as 'line' details, which the painter leaves off small bitmaps
 // (models/paint.ts draws them only from about one device pixel per model unit up), so a ship far
-// out keeps its silhouette and colours and the detail comes in as it grows on screen.
+// out keeps its silhouette and colours and the detail comes in as it grows on screen. Windows, masts
+// and dishes carry a `minPx` of their own for the same reason.
 
 /** Where hardpoint `i` sits in model units, or null if the unit type has no such hardpoint (a
  * battle saved before a redesign keeps its old types, with their own hardpoints). */
@@ -67,8 +68,13 @@ export function seat(id: string, c: BuildCtx, i: number, k: number, z: number, l
 /** A red band along the left edge of a hull from its (y, half-width) rows, `d` thick. */
 export const edgeBand = (rows: [number, number][], d: number): Pt[] => [...rows.map(([y, w]) => [-w, y] as Pt), ...rows.map(([y, w]) => [-w + d, y + d * 0.2] as Pt).reverse()]
 
-/** A row of small windows or running lights from a to b. */
-export const windows = (a: Pt, b: Pt, n: number, r: number, tone: Tone = 'glass'): Detail => ({ k: 'lights', pts: along(a, b, n), r, tone })
+/** How big (device pixels, the hull's long side) a hull is drawn before its rows of windows and its
+ * masts and dishes show: below it they would only be specks. */
+const WINDOWS_PX = 130
+const GREEBLE_PX = 90
+
+/** A row of small windows or running lights from a to b (only on a hull drawn big enough). */
+export const windows = (a: Pt, b: Pt, n: number, r: number, tone: Tone = 'glass'): Detail => ({ k: 'lights', pts: along(a, b, n), r, tone, minPx: WINDOWS_PX })
 
 /**
  * One raised block of a superstructure or spine: a chamfered grey block with a red band across it,
@@ -89,11 +95,11 @@ export function block(id: string, x: number, y: number, w: number, h: number, z:
 
 /** A sensor mast: a thin dark spar with a red light at its tip, shot off as the hull is battered. */
 export const mast = (id: string, x: number, y: number, len: number, z: number, at: number, w = 0.8): Part =>
-  part(id, box(x, y, w, len), 'dark', z, { detach: { hull: at }, details: [{ k: 'lights', pts: [[x, y - len / 2 + w * 0.6]], r: w * 0.55, tone: 'accent' }] })
+  part(id, box(x, y, w, len), 'dark', z, { minPx: GREEBLE_PX, detach: { hull: at }, details: [{ k: 'lights', pts: [[x, y - len / 2 + w * 0.6]], r: w * 0.55, tone: 'accent' }] })
 
 /** A small dish antenna, shot off as the hull is battered. */
 export const dish = (id: string, x: number, y: number, r: number, z: number, at: number, slope: Pt = [-0.3, 0.3]): Part =>
-  part(id, circle(x, y, r, 14), 'hull2', z, { lift: r * 0.4, slope, detach: { hull: at }, details: [{ k: 'shape', pts: circle(x + slope[0] * r * 0.4, y + slope[1] * r * 0.4, r * 0.55, 10), tone: 'metal' }, { k: 'shape', pts: circle(x, y, r * 0.22, 8), tone: 'dark' }] })
+  part(id, circle(x, y, r, 14), 'hull2', z, { minPx: GREEBLE_PX, lift: r * 0.4, slope, detach: { hull: at }, details: [{ k: 'shape', pts: circle(x + slope[0] * r * 0.4, y + slope[1] * r * 0.4, r * 0.55, 10), tone: 'metal' }, { k: 'shape', pts: circle(x, y, r * 0.22, 8), tone: 'dark' }] })
 
 // --- Station modules ----------------------------------------------------------------------------------
 //
