@@ -53,9 +53,19 @@ export type Order =
   | { k: 'guard'; id: number }
   /** Engineers: build a construction site of ours, or weld one of our structures back together. */
   | { k: 'construct'; id: number }
+  /** Repair ships (tenders and Field repair craft): repair a damaged ship or station of ours or an
+   * ally's until it is whole or lost (see cmdMend). `back`: the ship or structure it was guarding
+   * (or escorting) when told, which it goes back to afterwards; 0 for none. */
+  | { k: 'mend'; id: number; back: number }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
-export type Mods = { hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number }
+export type Mods = {
+  hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number
+  // From research for the faction mechanics (TechEffect), each a multiplier, there only when some
+  // research changes it (and absent in units saved before them): damage to shields, a fire-control
+  // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal.
+  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number
+}
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
  * `focus` is a target this one gun was told to fire on first. */
@@ -335,6 +345,8 @@ export const SHIELD_REBOOT = 2
 export const SALVAGE_RATE = 30
 export type Shot = {
   x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
+  /** How much harder it hits shields than its damage says (research, TechEffect shieldDamage): 1 when left out. */
+  sh?: number
 }
 
 export type SimEvent =
@@ -593,7 +605,36 @@ function modsFor(p: Player, t: UnitType): Mods {
   const e = techBonus(p, t.id)
   // The Armour works adds its plate to the hull research, rather than multiplying it.
   const plate = p.armour && plated(t) ? MODULE_FX.armour : 0
-  return { hull: 1 + (e.hull ?? 0) + plate, shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
+  const mods: Mods = { hull: 1 + (e.hull ?? 0) + plate, shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
+  // The faction mechanics' research: set only when some research changes them.
+  if (e.shieldDamage) mods.shieldDamage = 1 + e.shieldDamage
+  if (e.aura) mods.aura = e.aura
+  if (e.auraRadius) mods.auraRadius = 1 + e.auraRadius
+  if (e.regrow) mods.regrow = 1 + e.regrow
+  if (e.regrowDelay) mods.regrowDelay = Math.max(0, 1 + e.regrowDelay)
+  if (e.drain) mods.drain = 1 + e.drain
+  if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
+  return mods
+}
+/** A fire-control aura as it stands for `u`: its type's, with its research (TechEffect aura and
+ * auraRadius). Null for a unit without one. */
+export function auraOf(u: Unit): { radius: number; bonus: number } | null {
+  const f = u.t.fireControl
+  if (!f) return null
+  return { radius: f.radius * (u.mods.auraRadius ?? 1), bonus: f.bonus + (u.mods.aura ?? 0) }
+}
+/** A living hull's regrowth as it stands for `u`, with its research (TechEffect regrow and
+ * regrowDelay). Null for a unit without one. */
+export function regrowOf(u: Unit): { rate: number; delay: number } | null {
+  const g = u.t.regrow
+  if (!g) return null
+  return { rate: g.rate * (u.mods.regrow ?? 1), delay: g.delay * (u.mods.regrowDelay ?? 1) }
+}
+/** A drain aura as it stands for `u`, with its research (TechEffect drain and drainHeal). */
+export function drainOf(u: Unit): { radius: number; dps: number; heal: number } | null {
+  const d = u.t.drain
+  if (!d) return null
+  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1) }
 }
 const stationOf = (p: Player) => unitOf(p.faction, 'station').id
 /** Whether one of a unit's own hangars stands (a Strike hangar doesn't count: it only launches bombers). */
@@ -907,7 +948,7 @@ function issue(u: Unit, o: Order, queued = false) {
 export function lastStop(w: World, u: Unit): Pt {
   for (const o of [...u.queue].reverse().concat(u.order)) {
     if (o.k === 'move' || o.k === 'patrol' || o.k === 'area') return { x: o.x, y: o.y }
-    if (o.k === 'guard' || o.k === 'construct') {
+    if (o.k === 'guard' || o.k === 'construct' || o.k === 'mend') {
       const t = w.byId.get(o.id)
       if (t && !t.dead) return { x: t.x, y: t.y }
     }
@@ -1598,7 +1639,8 @@ export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at
   const queue = (queueFor(w, owner, id, at) as { q: QueueItem[] }).q
   const price = shipPrice(w, id, reserve)
   spend(w, p, price, 'ships', reserve && price > t.cost ? `${t.name} (reinforcement)` : t.name)
-  const time = t.build * (1 + (techBonus(p, id).build ?? 0))
+  // Its own research, and the station's that speeds up every ship (TechEffect fleetBuild).
+  const time = t.build * Math.max(0.2, 1 + (techBonus(p, id).build ?? 0) + (techBonus(p, stationOf(p)).fleetBuild ?? 0))
   queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}), ...(price !== t.cost ? { paid: price } : {}) })
   return null
 }
@@ -2124,9 +2166,14 @@ export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, 
 }
 
 /** Why engineers of `owner` can't work on `t`, or null when they can: a construction site of ours,
- * or one of our finished structures with something to mend. */
+ * or one of our (or an ally's) finished structures with something to mend. An ally's sites and
+ * rush-launched ships are theirs to finish. */
 export function cantConstruct(w: World, owner: Owner, t: Unit | undefined): string | null {
-  if (!t || t.dead || t.owner !== owner || w.byId.get(t.id) !== t) return 'Pick one of our structures'
+  if (!t || t.dead || foes(w, t.owner, owner) || w.byId.get(t.id) !== t) return 'Pick one of our structures'
+  if (t.owner !== owner) {
+    if (isShip(t.t) || t.site || building(t)) return 'Pick one of our structures, or a damaged one of an ally\'s'
+    return wear(t) < 0.002 ? 'Nothing to repair' : null
+  }
   // A rush-launched warship: engineers finish it (see finishing).
   if (isShip(t.t)) return t.rush ? null : 'Pick one of our structures'
   if (t.site) return null
@@ -2144,6 +2191,84 @@ export function cmdConstruct(w: World, owner: Owner, ids: number[], id: number, 
   if (!crew.length) return 'Only engineers build and repair structures'
   for (const u of crew) issue(u, { k: 'construct', id }, queued)
   return null
+}
+
+/** Whether a unit type repairs others: a support tender (the Mercy corvette), a Field repair craft
+ * or an engineer. */
+export const isRepairer = (t: UnitType) => !!t.support || t.ability === 'fieldRepair' || isEngineer(t)
+
+/**
+ * Why repair ship `u` of `owner` can't be sent to repair `t`, or null when it can. Tenders patch
+ * the hulls of ships, Field repair craft mend stations and ships of gunship class and up (see
+ * cantMend), engineers structures (see cantConstruct); ours or an ally's, never an enemy's, and only
+ * when there is something to repair.
+ */
+export function cantHeal(w: World, owner: Owner, u: Unit, t: Unit | undefined): string | null {
+  if (!t || t.dead || t === u || w.byId.get(t.id) !== t) return 'Pick one of our ships or an ally\'s'
+  if (foes(w, t.owner, owner)) return 'Only our own and our allies\' ships can be repaired'
+  if (isEngineer(u.t)) return cantConstruct(w, owner, t)
+  if (u.t.ability === 'fieldRepair') return cantMend(w, owner, t)
+  if (u.t.support) {
+    if (!isShip(t.t)) return 'Repair tenders patch up ships, not structures'
+    return t.hull >= hullCap(t) - 0.5 ? 'Nothing to repair' : null
+  }
+  return 'Only repair ships can repair'
+}
+
+/**
+ * Repair one ship or structure of ours or an ally's: the repair ships among `ids` that can mend it
+ * go to it and repair it until it is whole or lost, then go back to what they were guarding or
+ * escorting (or wait where they are; queued orders come first). Engineers take it as a construct
+ * order. A Field repair craft already on a run switches it to the new patient; otherwise it starts
+ * one once its ability is ready, and stays with the patient between runs. Ships that can't repair
+ * it are left alone: the caller gives them their own order. Answers why none could, or null.
+ */
+export function cmdMend(w: World, owner: Owner, ids: number[], id: number, queued = false): string | null {
+  const refused = cantMendOn(w, owner, id)
+  if (refused) return refused
+  const t = w.byId.get(id)!
+  let n = 0
+  let why: string | null = null
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!commandable(u, owner) || !isRepairer(u.t)) continue
+    const no = cantHeal(w, owner, u, t)
+    if (no) {
+      why ??= no
+      continue
+    }
+    n++
+    if (isEngineer(u.t)) {
+      issue(u, { k: 'construct', id }, queued)
+      continue
+    }
+    const back = queued ? 0 : u.order.k === 'guard' ? u.order.id : u.order.k === 'mend' ? u.order.back : 0
+    const run = u.aid && u.abilityOn > 0
+    issue(u, { k: 'mend', id, back }, queued)
+    if (run && u.order.k === 'mend' && u.order.id === id) u.aid = id
+  }
+  return n ? null : why ?? 'Nothing selected can repair it'
+}
+
+/** Why `owner` can't send repair ships to `id` at all: it is gone, or an enemy's (the server
+ * referee refuses those orders before they reach anyone, and the sim again). */
+export function cantMendOn(w: World, owner: Owner, id: number): string | null {
+  const t = w.byId.get(id)
+  if (!t || t.dead) return 'Pick one of our ships or an ally\'s'
+  return foes(w, t.owner, owner) ? 'Only our own and our allies\' ships can be repaired' : null
+}
+
+/** A repair order is done: on to the next queued order, else back to guarding (or escorting) what it
+ * was, else wait where it is. */
+function mendDone(w: World, u: Unit) {
+  const back = u.order.k === 'mend' ? u.order.back : 0
+  const g = back && !u.queue.length ? w.byId.get(back) : undefined
+  if (g && !g.dead && g !== u && !foes(w, g.owner, u.owner)) {
+    u.order = { k: 'guard', id: g.id }
+    u.target = 0
+    return
+  }
+  nextOrder(u, u.x, u.y)
 }
 
 /**
@@ -2233,6 +2358,8 @@ function jobNear(w: World, u: Unit): Unit | undefined {
 function construction(w: World, dt: number) {
   const look = Math.round(w.time / STEP) % Math.round(MEND_LOOK / STEP) === 0
   const crews = new Map<number, number>()
+  // Who is welding each structure (the first crew's owner), who pays for what they rebuild.
+  const payers = new Map<number, Owner>()
   for (const u of w.units) {
     if (u.dead || !isEngineer(u.t)) continue
     u.mending = []
@@ -2249,6 +2376,7 @@ function construction(w: World, dt: number) {
       }
       if (d2(t!.x, t!.y, u.x, u.y) > sq(radius(t!.t) + ENGINEERS.reach)) continue
       crews.set(t!.id, (crews.get(t!.id) ?? 0) + 1)
+      if (!payers.has(t!.id)) payers.set(t!.id, u.owner)
       u.mending.push(t!.id)
       continue
     }
@@ -2273,7 +2401,7 @@ function construction(w: World, dt: number) {
     }
     t.hull = Math.min(t.hullMax, t.hull + (ENGINEERS.flat + ENGINEERS.share * t.hullMax) * k * dt)
     for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * ENGINEERS.share * k * dt)
-    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(w, t, dt)
+    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(w, t, dt, payers.get(id))
   }
 }
 
@@ -2654,7 +2782,7 @@ function alarm(w: World, u: Unit) {
 
 /** One bolt landing. Shields soak it first (missiles slip most of it past), then the hardpoint it
  * was aimed at takes it, with half spilling into the hull; or the hull takes it all. */
-export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0) {
+export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0, shieldMul = 1) {
   if (u.dead) return
   // Shot by our own side (on orders): no alarm, and nobody to shoot back at.
   const own = !foes(w, by, u.owner)
@@ -2666,7 +2794,9 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
   let rest = dmg
   if (u.shield > 0) {
     // Missiles slip most of it past the shields; ion bites twice as deep into them.
-    const onShield = kind === 'missile' ? dmg * 0.35 : kind === 'ion' ? dmg * 2 : dmg
+    // (`shieldMul`: research that hits shields harder, TechEffect shieldDamage.)
+    const per = (kind === 'missile' ? 0.35 : kind === 'ion' ? 2 : 1) * shieldMul
+    const onShield = dmg * per
     const soaked = Math.min(u.shield, onShield)
     u.shield -= soaked
     if (u.shield <= 0) {
@@ -2675,7 +2805,8 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
       if (u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'station' || u.t.tier === 'defense')
         w.events.push({ k: 'shieldsDown', owner: u.owner, x: u.x, y: u.y })
     }
-    rest -= kind === 'ion' ? soaked / 2 : soaked
+    // What the shields took used up that much of the shot (a missile's mostly slips past them).
+    rest -= kind === 'missile' ? soaked : soaked / (per || 1)
     u.shieldHit = w.time
     u.hitAngle = M.atan2(fromY - u.y, fromX - u.x)
   }
@@ -3082,6 +3213,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
   // A defense wing craft with no orders of its own guards its station.
   const home = guarded(u, parent)
   if (home && u.post === undefined) u.post = freePost(w, u, home)
+  // A repair order ends once the patient is whole or lost (or turned enemy).
+  if (u.order.k === 'mend' && cantHeal(w, u.owner, u, w.byId.get(u.order.id))) mendDone(w, u)
   // Escorting a big ship: its slot over the hull is its post (see keepStation).
   const ward = wardOf(w, u)
   if (ward) {
@@ -3162,7 +3295,9 @@ function moveUnit(w: World, u: Unit, dt: number) {
   // On a Field repair run the patient comes first: no chasing anything.
   // So is an engineer's job.
   const job = u.order.k === 'construct' ? w.byId.get(u.order.id) : undefined
-  const mend = mendTarget(w, u) ?? (job && !job.dead ? job : undefined)
+  // A repair order: Field repair craft stay with the patient between runs; tenders keep it in reach.
+  const patient = u.order.k === 'mend' ? w.byId.get(u.order.id) : undefined
+  const mend = mendTarget(w, u) ?? (job && !job.dead ? job : undefined) ?? (patient && t.ability === 'fieldRepair' ? patient : undefined)
   if (mend) u.target = 0
   const tgt = u.target ? w.byId.get(u.target) : undefined
 
@@ -3185,7 +3320,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const R = radius(mend.t) + 60 + (u.id % 3) * 15
     const ang = M.atan2(u.y - mend.y, u.x - mend.x) + 0.7
     steer(u, mend.x + M.cos(ang) * R, mend.y + M.sin(ang) * R, max * 0.8, dt)
-  } else if (fighting && !(ward && u.stance === 'hold')) {
+  } else if (patient && t.support) tendTo(w, u, patient, max, dt)
+  else if (fighting && !(ward && u.stance === 'hold')) {
     const e = tgt!
     if (fighter && e.t.tier !== 'fighter') {
       // Strafing runs on anything bigger: dive in guns-first, pull away past the hull, and fly out
@@ -3385,6 +3521,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
+    ...(u.mods.shieldDamage ? { sh: u.mods.shieldDamage } : {}),
   })
   w.events.push({ k: 'fire', kind: g.w.kind, x: from.x, y: from.y, owner: u.owner, light: u.t.tier === 'fighter' })
 }
@@ -3489,7 +3626,7 @@ function moveShots(w: World, dt: number) {
     const e = w.byId.get(s.target)
     if (!e || e.dead) continue
     const shielded = e.shield > 0
-    damage(w, e, s.dmg, s.kind, s.hp, s.sx, s.sy, s.owner, s.from)
+    damage(w, e, s.dmg, s.kind, s.hp, s.sx, s.sy, s.owner, s.from, s.sh ?? 1)
     w.events.push({ k: 'hit', kind: s.kind, x: s.x, y: s.y, shield: shielded && s.kind !== 'missile', owner: e.owner })
   }
   w.shots = keep
@@ -3872,7 +4009,7 @@ function wings(w: World, dt: number) {
  * anyone else. When the ship is lost, its escorts carry on with their next orders, or wait where they
  * are.
  */
-export const ESCORT = { leash: 300, mend: 0.03 }
+export const ESCORT = { leash: 300, mend: 0.03, out: 0.2, gap: 14 }
 
 /** The ship `u` escorts: the one its guard order is on, while that's a friendly ship it escorts. */
 export function wardOf(w: World, u: Unit): Unit | undefined {
@@ -3906,13 +4043,15 @@ export const escortsOf = (w: World, g: Unit) => w.units.filter((u) => wardOf(w, 
  * Where escort `i` of `n` keeps station over `g`: down both flanks in turn, spread evenly from
  * just ahead of the middle to well aft, close in to the spine (hulls taper towards the bow, and are
  * widest aft), so it rides over the hull. The slots are fixed to the hull, so they move and turn
- * with it, and the escorts re-form round it as it turns.
+ * with it, and the escorts re-form round it as it turns. `er` is the escort's own radius: bigger
+ * escorts sit a little further out from the spine (ESCORT.out of it, plus ESCORT.gap), so the
+ * two of a pair keep clear of each other and of the hull's middle.
  */
-export function escortSlot(g: Unit, i: number, n: number): Pt & { a: number } {
+export function escortSlot(g: Unit, i: number, n: number, er = 0): Pt & { a: number } {
   const [gw, gh] = dims(g.t)
   const rows = Math.ceil(n / 2)
   const row = Math.floor(i / 2)
-  const side = (i % 2 ? -1 : 1) * gw * 0.2
+  const side = (i % 2 ? -1 : 1) * (gw * 0.2 + er * ESCORT.out + ESCORT.gap)
   const fwd = gh * (rows > 1 ? 0.1 - (0.4 * row) / (rows - 1) : -0.05)
   const c = M.cos(g.a)
   const s = M.sin(g.a)
@@ -3924,7 +4063,8 @@ function stationOver(u: Unit, g: Unit) {
   const list = escortGroups.get(g.id)
   const i = list ? list.indexOf(u) : -1
   const n = list?.length ?? 0
-  return i >= 0 ? escortSlot(g, i, n) : escortSlot(g, n, n + 1)
+  const er = radius(u.t)
+  return i >= 0 ? escortSlot(g, i, n, er) : escortSlot(g, n, n + 1, er)
 }
 
 /** How far from the middle of the ship it escorts an escort takes on enemies: its guns' reach from
@@ -3997,6 +4137,29 @@ function keepStation(w: World, u: Unit, g: Unit, max: number, dt: number) {
   steer(u, s.x + ca * (120 + g.v), s.y + sa * (120 + g.v), clamp(g.v + along * 1.5, 0, max), dt)
 }
 
+/**
+ * A tender told to repair `p`: it closes to just outside the patient's hull (well inside its own
+ * reach), from further off round the rocks, and keeps there, moving with the patient when it moves.
+ * Over a hull two classes bigger it may sit over it, as escorts do.
+ */
+function tendTo(w: World, u: Unit, p: Unit, max: number, dt: number) {
+  const t = u.t
+  const want = Math.min(radius(p.t) + radius(t) + 30, t.support!.range * 0.6)
+  const dx = u.x - p.x
+  const dy = u.y - p.y
+  const d = Math.hypot(dx, dy) || 1
+  const sx = p.x + (dx / d) * want
+  const sy = p.y + (dy / d) * want
+  if (d > want + 40) {
+    unsettle(u)
+    const off = Math.hypot(sx - u.x, sy - u.y)
+    const wp = waypoint(w, u, sx, sy)
+    const q = detour(w, u, wp.x, wp.y)
+    steer(u, q.x, q.y, Math.min(max, p.v + off * 0.9 + 12), dt)
+  } else if (p.v > 4) steer(u, sx + M.cos(p.a) * 120, sy + M.sin(p.a) * 120, Math.min(max, p.v), dt)
+  else u.v = Math.max(0, u.v - accOf(t) * dt)
+}
+
 // --- Field repair ------------------------------------------------------------------------------------
 
 /** How much of a ship's hull is missing, plus a little for modules that are hurt but still standing,
@@ -4018,10 +4181,11 @@ function mendNeed(t: Unit) {
  * the shield generators, then the turbolasers, the sensor, refinery and dock, and the flak last,
  * which is the order a station needs them in, without a list of its own to keep up. Equals go by
  * their place on the station, so every machine picks the same one. Progress stays on the module
- * between runs, so a lone craft finishes the job on its next run.
+ * between runs, so a lone craft finishes the job on its next run. Whoever does the welding pays
+ * (`payer`): mending an ally's station costs them nothing.
  */
-function rebuildModule(w: World, t: Unit, dt: number) {
-  const p = w.players[t.owner]
+function rebuildModule(w: World, t: Unit, dt: number, payer: Owner = t.owner) {
+  const p = w.players[payer]
   let pick = -1
   t.hps.forEach((h, i) => {
     if (h.hp > 0) return
@@ -4091,6 +4255,9 @@ export function mendTarget(w: World, u: Unit) {
 export const mendReach = (t: UnitType) => radius(t) + FIELD_REPAIR.reach
 /** Seconds between idle repair crews looking round for someone to mend. */
 const MEND_LOOK = 0.5
+/** How far beyond welding reach a craft told to repair a ship starts its run (the run's clock
+ * starts then, so not from across the map). */
+const MEND_START = 300
 
 /**
  * Field repair: craft on a run weld their patient while in reach (hull, and modules that still
@@ -4115,8 +4282,14 @@ function fieldRepairs(w: World, dt: number) {
       if (t!.rush) t!.rush.work = true
       for (const h of t!.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * FIELD_REPAIR.share * dt)
       // Only the main station gets its shot-off modules rebuilt; ships keep theirs lost for now.
-      if (t!.t.tier === 'station') rebuildModule(w, t!, dt)
+      if (t!.t.tier === 'station') rebuildModule(w, t!, dt, u.owner)
       u.mending.push(t!.id)
+      continue
+    }
+    // Told to repair one: a run on it as soon as the ability is ready and the patient near.
+    if (u.order.k === 'mend') {
+      const p = w.byId.get(u.order.id)
+      if (u.abilityCd <= 0 && !building(u) && p && !cantMend(w, u.owner, p) && d2(p.x, p.y, u.x, u.y) < sq(mendReach(p.t) + MEND_START)) startMend(w, u, p)
       continue
     }
     if (!look || u.abilityCd > 0 || building(u) || (u.order.k !== 'idle' && u.order.k !== 'guard')) continue
@@ -4140,8 +4313,8 @@ function tenders(w: World, dt: number) {
       if (o !== u && !o.dead && isShip(o.t) && w.players[o.owner].team === team && o.hull < hullCap(o)) hurt.push(o)
     })
     hurt.sort((a, b) => a.hull / a.hullMax - b.hull / b.hullMax)
-    // An escort patches the ship it escorts before anyone else.
-    const ward = wardOf(w, u)
+    // A tender told to repair one patches it first; an escort the ship it escorts.
+    const ward = u.order.k === 'mend' ? w.byId.get(u.order.id) : wardOf(w, u)
     const wi = ward ? hurt.indexOf(ward) : -1
     if (wi > 0) hurt.unshift(...hurt.splice(wi, 1))
     const rate = sp.repair * (1 + (techBonus(w.players[u.owner], u.t.id).repair ?? 0)) * dt
@@ -4179,7 +4352,7 @@ function terrain(w: World, u: Unit, dt: number) {
  * `rate` of its full hull a second, as far as it can go (a rush-launched ship's unbuilt hull stays
  * unbuilt). Only the hull: modules are mended as ever. */
 function regrow(w: World, u: Unit, dt: number) {
-  const g = u.t.regrow!
+  const g = regrowOf(u)!
   if (w.time - u.lastHit < g.delay) return
   const cap = hullCap(u)
   if (u.hull < cap) u.hull = Math.min(cap, u.hull + u.hullMax * g.rate * dt)
@@ -4193,7 +4366,7 @@ function regrow(w: World, u: Unit, dt: number) {
  */
 function drains(w: World, dt: number) {
   for (const u of w.units) {
-    const d = u.t.drain
+    const d = u.t.drain ? drainOf(u) : null
     if (!d || u.dead || building(u) || u.site || u.launch) continue
     let took = 0
     near(w, u.x, u.y, d.radius, (e) => {
@@ -4226,7 +4399,7 @@ function controlBonus(w: World, u: Unit) {
   if (!isShip(u.t)) return 0
   let best = 0
   for (const a of fireControl) {
-    const f = a.t.fireControl!
+    const f = auraOf(a)!
     if (f.bonus > best && !a.dead && !foes(w, a.owner, u.owner) && d2(a.x, a.y, u.x, u.y) <= f.radius * f.radius) best = f.bonus
   }
   return best

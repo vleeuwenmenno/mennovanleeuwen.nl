@@ -9194,7 +9194,7 @@ kbd {
     display: none;
   }
   /* With the dock tucked away, app windows reach down to the handle bar. */
-  :root[data-dock-tucked]:not(.keyboard-open) .window:not(.chrome-note) {
+  :root[data-dock-tucked]:not(.keyboard-open) .window:not(.chrome-note):not(.is-max) {
     height: calc(100dvh - var(--top) - 36px - var(--sab)) !important;
   }
   /* Notes go one under the other down the desktop, in the order they were opened, and the
@@ -9270,8 +9270,7 @@ kbd {
     height: min(46dvh, 380px) !important;
     transform: rotate(1deg);
   }
-  .rz,
-  .ctl-max {
+  .rz {
     display: none;
   }
   .titlebar {
@@ -10051,4 +10050,59 @@ kbd {
 }
 .dlg-problem {
   margin: 6px 0 0;
+}
+
+/* Maximization covers the viewport on phones and touch devices, including landscape.
+   Keep the saved window geometry intact: CSS refits on rotation and restores on exit.
+   These rules follow the phone, dock and keyboard rules deliberately. */
+.mobile-window-restore {
+  display: none;
+}
+@media (max-width: 719px), (pointer: coarse) {
+  :root .window.chrome-default.is-max {
+    position: fixed;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: 100dvh !important;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
+    animation: none;
+    padding: var(--sat) env(safe-area-inset-right, 0px) var(--sab) env(safe-area-inset-left, 0px);
+  }
+  :root.keyboard-open .window.chrome-default.is-max {
+    top: var(--vvt, 0px) !important;
+    height: var(--vvh, 100dvh) !important;
+    padding-bottom: 0;
+  }
+  .window.chrome-default.is-max > .titlebar {
+    display: none;
+  }
+  body:has(.window.chrome-default.is-max:not(.is-min):not(.is-away)) :is(.topbar, .dock, .dock-handle) {
+    visibility: hidden;
+  }
+  .window.is-max > .mobile-window-restore {
+    display: grid;
+    place-items: center;
+    position: absolute;
+    top: var(--sat);
+    right: env(safe-area-inset-right, 0px);
+    width: 44px;
+    height: 44px;
+    z-index: 4;
+    border: 0;
+    border-radius: 0;
+    background: var(--bg);
+    color: var(--fg);
+    opacity: 0.75;
+  }
+  .mobile-window-restore:focus-visible,
+  .mobile-window-restore:hover {
+    opacity: 1;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
 }

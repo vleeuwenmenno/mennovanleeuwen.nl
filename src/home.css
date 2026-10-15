@@ -5084,3 +5084,37 @@ button.cal-day.is-picked:not(.is-today) {
   resize: vertical;
   outline: 0;
 }
+
+/* Notebook on phones: list and editor are separate views. Agents shares the base .nb styles. */
+@media (max-width: 719px) {
+  .notebook.nb {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .notebook.is-detail > .nb-side,
+  .notebook.is-list > .nb-main {
+    display: none;
+  }
+  .notebook > .nb-side {
+    border: 0;
+  }
+  .nb-back {
+    flex: none;
+    min-height: 44px;
+    padding: 8px 12px;
+    text-align: left;
+    color: var(--accent);
+    border-bottom: 1px solid var(--line);
+  }
+  .notebook .nb-foot {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .notebook .nb-toolbar {
+    gap: 8px;
+  }
+  .notebook .nb-seg button,
+  .notebook .nb-toolbar > button,
+  .notebook .nb-tabs button {
+    min-height: 44px;
+  }
+}

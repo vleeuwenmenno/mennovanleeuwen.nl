@@ -514,6 +514,11 @@ Android keyboards that send Backspace without a key event may not reach the prog
 
 ## Notes, launchers and sign-in (home page mode)
 
+On phones, Notebook opens to a full-height searchable note list. Tap a note (or **+ New**) to
+open its editor in a separate view; **← Notes** returns to the list without losing edits or search.
+Trash uses the same list/detail navigation. Links from stickies open the requested note directly.
+Desktop windows retain the side-by-side list and editor.
+
 Anyone can write notes and add launchers: **Notebook** (dock) lists every note in Markdown, and
 each one can sit on the desktop as a sticky (right-click the desktop → *New sticky note*). Stickies
 get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
@@ -1641,6 +1646,12 @@ for a moment and it lifts with a buzz; move the finger then and it drags, to
 the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
 after that closes the menu and drags.
 
+On phones and touch devices, **Maximize** fills all four edges, including after rotation.
+The title bar, OS bar and dock disappear, with no window border, margin or shadow. Notch and
+home-indicator space is padding inside the window; the on-screen keyboard reduces its visible
+height. Tap **Restore size** at the top right to return to the previous window layout. The
+window's saved geometry is retained, including when returning to a larger screen.
+
 ## Games
 
 The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is the arcade: picking a game
@@ -1732,6 +1743,49 @@ Radii are written at the old battlefield scale and stretched like gun ranges (an
 the fleet for the bigger hulls, as repair tenders are). `pnpm check:empires-mechanics` switches
 each one on for a test unit and checks what it does.
 
+The battle shows them (render.ts, in each side's bolt and engine colours): a drain ship's tendrils
+to the enemies it bites and heal sparks off the allies it mends, a fire-control ship's ring (and,
+selected or up close, lines to what its ships fire on), a pulsing glow on a living hull growing
+back, a spinal gun's charge at its muzzle and its shot as a lance of light, and a Swarm brood
+bursting from its sac. The Codex lists them as **Traits** (with "No shields" and carriers), and the
+unit cards and their tips explain them (`traits` in
+[`codexInfo.ts`](src/apps/games/empires/codexInfo.ts)).
+
+**Research for the mechanics** (`TechEffect` in data/kit.ts, applied in sim.ts like the others, as
+fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shields that much
+harder), `aura` (added to its fire-control bonus) and `auraRadius`, `regrow` (faster regrowth) and
+`regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
+station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
+each ship's own `build` research). The AI weighs them like the rest.
+
+**Sound sets** ([`sound.ts`](src/apps/games/empires/sound.ts) `SET`, by faction id): the Republic's
+clone crews and blasters; the Confederacy's machine-shop military (plasma guns, cannons with
+clanking breeches, a command net of relays and pulse tones, no droid chatter); the Swarm's living
+ships (spit, wet pulses, spore thuds, acid hisses, chitters, and the groans of its big ships, which
+also thud wetly when hit and tear rather than shear when they die). FactionInfo `sound.turbo` still
+tunes the heavy guns' pitch. Settings → Sound test plays every faction's set.
+
+**AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
+its fire from further off and sends its fast warships round the flank of a goal where that is
+clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
+Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
+ships in among the enemy with its wave, values fire-control and spinal ships, and with more than one
+flagship to choose from (the Confederacy's Gyre and Tyrant) settles on one by what its fleet needs.
+
+**For a faction's model files** (all additive, no shared file to change):
+
+- *Level of detail*: `minPx` on a part or a detail (`Lod` in models/types.ts) paints it only once
+  the whole hull (or mount) is at least that many device pixels across; see the top of
+  [`models/paint.ts`](src/apps/games/empires/models/paint.ts) for thresholds.
+- *Extra mount designs*: a faction's `mounts.ts` may export `extras: MountExtras` (functions of
+  `broken`, by `MountExtra` name: torpedo, pd, triple, missileBox, strike, railgun, beam, quad,
+  spore, acid, lance, bioturret, parasite, regen, engineSac, broodSac, spine). A hardpoint picks
+  one with `look` in its data (or a model with its `mount` override); a faction without that
+  design draws the nearest common one (`FALLBACK` in models/mounts.ts).
+- *Part names*: a faction's `models/<faction>/index.ts` may give `partNames` ([prefix, name]
+  pairs, longest prefix wins) or `partName(id, t)` on its `MODELS`; the Codex looks there before
+  the shared names.
+
 **The Swarm preview.** Until the Swarm is finished its units are placeholders: the Confederacy's
 numbers in every slot, under Swarm names, drawn with its concept designs (and copies of the
 Confederacy's engineers and yards where there is no concept), its research borrowing the
@@ -1807,6 +1861,22 @@ the harder it is), keeps a squadron or two guarding its most valuable warship, a
 its worst-hurt ship or station. Galactic conquest has no research, so there they are built like
 any other ship.
 
+**Repair orders.** With repair ships selected (the Mercy corvette, repair craft), a right-click on a
+damaged ship of ours or an ally's repairs it (`cmdMend` in sim.ts, the `mend` order): the pointer
+turns into a green ring with a cross and the ship is tagged "Repair"; on touch, the action wheel on
+it has *Repair it*. Each repairer takes what it can mend: a Mercy patches the hull of any ship,
+closing to just outside it and keeping it in reach (and patching it before the others round it);
+repair craft mend stations and ships of gunship class or bigger, starting a Field repair run as
+soon as the ability is ready and staying with the patient between runs. They keep at it until the
+patient is whole or lost, then take their next queued order, or go back to the ship or structure
+they were guarding or escorting, or wait where they are. In a mixed selection only the repairers
+take the order; the warships move to the spot as on any friendly. On an undamaged ship the
+right-click is the usual move. Engineers do the same for structures: a right-click on a damaged
+structure of an ally's welds it back too (their sites and rush-launched ships are theirs to finish),
+and whoever welds pays for rebuilding shot-off modules, Field repair crews on an ally's station
+included. Enemies are refused by the sim and, online, by the server referee before the order
+reaches anyone.
+
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
 Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
 fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
@@ -1827,6 +1897,7 @@ card shows "Defense wing 3/5 · next in 12 s". Stations in conquest fleet battle
 
 ```sh
 pnpm check:empires-repair   # Field repair: a station's hangar rebuilt and its wing back, a frigate's lost turret, determinism
+pnpm check:empires-heal     # repair orders: a Mercy on ours and an ally's, back to escorting, refusals, mixed selections, engineers, determinism
 ```
 
 ## Galactic conquest fleets
@@ -1974,7 +2045,9 @@ picks the flagship; a hardpoint marker under a smaller ship gives way to it too.
 
 **Escorts.** Guard (V) on a friendly ship two classes bigger escorts it (`escorts`, `wardOf`,
 `escortSlot`, `keepStation` in sim.ts): each escort takes a slot of its own over the hull, down
-both flanks in turn from bow to stern, handed out by id each tick, so several never stack; the
+both flanks in turn from bow to stern, handed out by id each tick, so several never stack (each
+stands off the spine by a fifth of the big hull's beam plus a fifth of its own radius and 14, so
+the two of a pair keep clear of each other on a narrow hull); the
 slots are fixed to the hull, so the escorts move and turn with it, matching its heading and pace.
 An enemy that comes within reach of an escort's guns of the ship (measured from its hull's edge) is
 engaged, chased at most `ESCORT.leash` further, and then the escort comes back to its slot; a
@@ -1999,6 +2072,24 @@ the camera there and selects what it's about. On the galaxy map that's the plane
 fought over or given a station, our fleet a new ship joined, or a fleet that arrived or was
 stopped by a blockade; in battle it's the ship that was built, promoted or repaired, or the spot
 of an alarm, a beacon, a survey or a salvaged wreck. The × still only puts the message away.
+
+**On the screen, always.** Everything that floats over a battle or the galaxy map stays inside the
+screen ([`fit.ts`](src/apps/games/empires/fit.ts)): tooltips go above their button, or below it
+when that fits better, and are kept 8 px in from every edge; the hover unit card and the Codex's
+part tips flip to the cursor's other side near an edge; the action wheel (and the group wheel) is
+moved in whole, its title and labels included; the docked and dragged panels (the tactical map,
+the unit card and build panel, the selection, the fleet inventory, the economy, the galaxy map's
+dock, fleets and selection), the credits popover and the order hints are pushed back in (up when
+they would clip at the bottom) whenever the window is resized or their content grows, and a dragged
+panel keeps its saved spot, coming back to it once there is room again; the yard placement label
+moves above the ghost near the bottom; and messages that don't fit let the oldest go out of the
+top. A panel already on the screen, flush with an edge or not, stays where it is. The shift is
+written onto the element (CSS `translate`) by measuring it once per change, never through React
+state, so nothing measures, moves and re-measures in a loop.
+
+```sh
+pnpm check:empires-gui-fit http://localhost:5173   # against a running dev server, at four window sizes and a phone: panels on the screen, tooltips near the edges 8 px inside, a map dragged into the corner and the window shrunk, the tech tree, the action wheel in each corner
+```
 
 The AI plays like a person with limited hands, more limited the easier it is:
 - **Galactic conquest** ([`galaxy.ts`](src/apps/games/empires/galaxy.ts) `galaxyAi`, `GALAXY_AI`):
@@ -2351,7 +2442,7 @@ a touch screen the button is held for 0.6 s (a ring fills round it) so a stray t
   craft or engineers work on it (engineers ordered onto it, or idle ones nearby by themselves);
   several of them don't make it faster. Its unbuilt hull fills in and its parts go on one by one
   (whole) as it goes, free of credits. Ordinary repairs (the Drydock's 2.5%/s, repair docks, repair
-  tenders, Field repair, the repair swarm) mend battle damage but never the unbuilt hull
+  tenders, Field repair, Damage control) mend battle damage but never the unbuilt hull
   (`hullCap`), so rushing never gets a ship out finished sooner.
 - The yard can't rush again for `RUSH.cooldown` (120 s), and the next ship it starts takes
   `RUSH.slowdown` (25%) longer. `RUSH` in [`data.ts`](src/apps/games/empires/data.ts) holds the
@@ -2401,7 +2492,7 @@ sender a message too, and both see it in the economy panel.
 
 ```sh
 pnpm check:empires-groups   # set, add, select, dead units dropping out, the bar, a double press, the keys
-pnpm check:empires-allies   # the sim's rules and the AI, then a 2 v 2 on a real server: a gift in sync, refusals, a burst
+pnpm check:empires-allies   # the sim's rules and the AI, then a 2 v 2 on a real server: a gift in sync, refusals, a burst, repair orders on enemies refused
 ```
 
 ## Empires At War on touch screens
@@ -2618,6 +2709,23 @@ worker with this release's files, so installed copies show an "update" notificat
 release; clicking it restarts into the new version. Live data (`/api/*`, other sites) is never
 cached. The worker only registers in production builds; `.claude/launch.json` has a `prod`
 configuration that builds and serves one on port 4180.
+
+Install from the browser's **Install app** or **Add to Home Screen** menu, then launch the saved
+icon. The manifest requests fullscreen by default; browsers that do not support it fall back to
+standalone or a normal browser tab. On iPhone/iPad, use Safari's Share menu → **Add to Home Screen**;
+Apple's web-app metadata allows content beneath the status bar, with safe-area padding protecting
+controls. The browser/OS ultimately decides which system bars remain visible. Theme colour follows
+the selected Omarchy palette.
+
+If installation is unavailable, bookmark the site and use it in a regular tab; mobile maximization
+still fills the available page, but cannot remove browser controls. Offline startup requires a
+successful online visit to a production build and completion of the service worker's shell cache.
+Cached apps can open offline; sign-in, sync and other live services still need a connection.
+Browsers that block service workers or storage require a connection to reopen the site.
+
+Run `pnpm build && pnpm check:pwa-mobile` to check phone Notes navigation, maximize/rotation/restore
+and production offline startup in isolated Chromium. The static test server uses port 5296
+(override with `PWA_CHECK_PORT`) and stops when the check finishes.
 
 ## Releases and hosting
 

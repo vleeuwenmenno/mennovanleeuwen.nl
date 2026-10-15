@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNIT, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
-import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { info, sameSel, selName, targets, traits, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
+import { clampToViewport, screenArea } from './fit'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
 import { BREAK_WEIGHTS, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
@@ -43,8 +44,6 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
 const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
-/** A share as a whole percentage: 0.15 is 15%. */
-const pct = (v: number) => `${Math.round(v * 100)}%`
 
 /** The unit as the Codex shows it: a station at the level picked, with every module it can have
  * (its expansions too); a yard with every expansion fitted. */
@@ -151,12 +150,22 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
         {t.squad > 1 && row('Squadron', `${t.squad} craft`)}
         {dps > 0 && row('Firepower', `${dps.toFixed(1)} dps`, 'Damage a second with every gun firing, before shields, armour and accuracy')}
         {tech && row('Research', tech.name, tech.blurb)}
-        {/* The faction mechanics (sim.ts), where a unit has them. */}
-        {t.regrow && row('Living hull', `+${pct(t.regrow.rate)}/s`, `Out of the fight for ${t.regrow.delay} s, the hull grows back by ${pct(t.regrow.rate)} of its full hull a second`)}
-        {t.drain && row('Drain', `${fmt(t.drain.dps)}/s · ${fmt(t.drain.radius)} reach`, `Drains the hull of every enemy in reach, past their shields; ${pct(t.drain.heal)} of it mends our damaged ships in reach`)}
-        {t.fireControl && row('Fire control', `+${pct(t.fireControl.bonus)} damage`, `Our ships within ${fmt(t.fireControl.radius)} hit ${pct(t.fireControl.bonus)} harder (the best of several auras counts)`)}
-        {t.tier === 'station' && t.carrier && row('Brood', `${UNIT[t.carrier.unit]?.name ?? t.carrier.unit} every ${t.carrier.every} s`, `Launches a squadron every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out`)}
       </div>
+      {traits(t).length > 0 && (
+        <>
+          <h5>Traits</h5>
+          <ul className="ew-cx-list">
+            {traits(t).map((x) => (
+              <li key={x.name} data-tip={x.tip}>
+                <i style={{ background: FACTIONS[t.faction].color }} />
+                <span>{x.name}</span>
+                <small>{x.value}</small>
+              </li>
+            ))}
+          </ul>
+          <p className="ew-muted ew-small">{traits(t).map((x) => x.tip).join(' ')}</p>
+        </>
+      )}
       {g.length > 0 && (
         <>
           <h5>Weapons</h5>
@@ -257,8 +266,25 @@ function HoverTip({ t, model, sel, x, y, dmg }: { t: UnitType; model: Model | nu
   const i = info(t, model, sel)
   const st = 'hp' in sel ? dmg.hps[sel.hp] : null
   const tg = i.weapon ? targets(i.weapon.kind) : null
+  // Down and to the right of the pointer; flipped to its other side near an edge, and kept inside
+  // the screen with a margin (fit.ts).
+  const box = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const b = box.current
+    const root = b?.offsetParent
+    if (!b || !root) return
+    const rr = root.getBoundingClientRect()
+    const area = screenArea(root)
+    const px = rr.left + x
+    const py = rr.top + y
+    const w = b.offsetWidth
+    const h = b.offsetHeight
+    const p = clampToViewport({ x: px + 16 + w > area.right ? px - 16 - w : px + 16, y: py + 14 + h > area.bottom ? py - 14 - h : py + 14, w, h }, area)
+    b.style.left = `${p.x - rr.left}px`
+    b.style.top = `${p.y - rr.top}px`
+  })
   return (
-    <div className="ew-cx-tip" style={{ left: x + 16, top: y + 14 }}>
+    <div ref={box} className="ew-cx-tip" style={{ left: x + 16, top: y + 14 }}>
       <b>{i.title}</b>
       <small className="ew-muted">{i.kind}{i.hp !== undefined ? ` · ${st && st.hp < st.max ? `${fmt(Math.max(0, st.hp))} / ` : ''}${fmt(i.hp)} hp` : ''}</small>
       {i.weapon && <small>{weaponLine(i.weapon)}</small>}

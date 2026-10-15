@@ -22,12 +22,16 @@
 //    laser fire and research, its hull takes the damage, nothing turns NaN, and the AI plays with it.
 // 7. Determinism: the same battle with every mechanic on, run twice, and once frozen to a snapshot
 //    and thawed halfway, ends the same.
+// 8. Research for the mechanics (TechEffect): shieldDamage hits shields harder (and spends the shot
+//    by what the shields took), aura and auraRadius strengthen and widen a fire-control aura, regrow
+//    and regrowDelay speed a living hull, drain and drainHeal strengthen a drain, and the station's
+//    fleetBuild builds every ship faster. Test research is added to the tables for the check only.
 
 import { MAPS } from '../src/apps/games/empires/maps.ts'
-import { LEVEL_UP, STATIONS, UNIT, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
+import { LEVEL_UP, STATIONS, TECH, UNIT, stationType, type TechEffect, type UnitType } from '../src/apps/games/empires/data.ts'
 import { spinal } from '../src/apps/games/empires/data/kit.ts'
 import { buildModel } from '../src/apps/games/empires/models/index.ts'
-import { STEP, cmdAttack, cmdResearch, newWorld, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { STEP, auraOf, cmdAttack, cmdBuild, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { newBrain, think } from '../src/apps/games/empires/ai.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import type { FactionId } from '../src/apps/games/empires/data.ts'
@@ -321,6 +325,104 @@ function mixed(): World {
   check('the same battle twice ends the same', stateHash(a) === stateHash(b), `${stateHash(a)} / ${stateHash(b)}`)
   check('and frozen and thawed halfway too', stateHash(a) === stateHash(c), `${stateHash(c)}`)
   check('something happened in it', a.units.some((u) => u.hull < u.hullMax) || a.units.length < 5)
+}
+
+// --- 8. Research for the mechanics ---------------------------------------------------------------------
+
+/** Test research for unit type `forId`, researched by player `o` of `w` (added to the table for this
+ * check only: no faction has it as written). Units spawned after it carry it. */
+let testTechs = 0
+function research(w: World, o: number, forId: string, effect: TechEffect) {
+  const id = `test-${++testTechs}`
+  TECH[id] = { id, faction: w.players[o].faction, for: forId, name: id, blurb: '', cost: 0, time: 0, level: 1, effect }
+  w.players[o].techs.push(id)
+}
+{
+  // shieldDamage: shields take 50% more, and the shot is spent by what they took.
+  const w = empty(['republic', 'droid'])
+  const { x, y } = mid()
+  research(w, 0, 'r-frigate', { shieldDamage: 0.5 })
+  const gunner = put(w, 'r-frigate', 0, x, y, 0)
+  const plain = put(w, 'r-frigate', 1, x, y + 2000, 0)
+  const target = put(w, 'd-frigate', 1, x + 450, y, Math.PI, { ...unarmed(UNIT['d-frigate']), hull: 1e6, shield: 1e6 })
+  check('shieldDamage research is on the unit', gunner.mods.shieldDamage === 1.5 && plain.mods.shieldDamage === undefined)
+  const shots = shotsBy(w, gunner, 6)
+  check('its shots carry it', shots.length > 0 && shots.every((q) => q.sh === 1.5), `${shots.length} shots`)
+  const v = empty(['republic', 'droid'])
+  const t1 = put(v, 'd-frigate', 1, x, y, 0, unarmed(UNIT['d-frigate']))
+  t1.shield = 1000
+  damage(v, t1, 100, 'laser', -1, x - 100, y, 0, 0, 1.5)
+  check('a shield takes `shieldDamage` more of a bolt', t1.shield === 850, `${t1.shield} left of 1000`)
+  t1.shield = 30
+  const h0 = t1.hull
+  damage(v, t1, 100, 'laser', -1, x - 100, y, 0, 0, 1.5)
+  check('and the hull gets what the shield didn\'t use up', t1.shield === 0 && near(h0 - t1.hull, 80, 1e-9), `${(h0 - t1.hull).toFixed(2)} on the hull, want 80`)
+  t1.shield = 1000
+  damage(v, t1, 100, 'ion', -1, x - 100, y, 0, 0, 1)
+  check('without it, ion still bites twice as deep into shields', t1.shield === 800)
+}
+{
+  // aura and auraRadius: a stronger, wider fire-control aura.
+  const w = empty()
+  const { x, y } = mid()
+  research(w, 0, 'd-battleship', { aura: 0.1, auraRadius: 0.5 })
+  const gunner = put(w, 'd-frigate', 0, x, y, 0)
+  put(w, 'd-defense', 1, x + 450, y, 0, { ...unarmed(UNIT['d-defense']), hull: 1e9 })
+  // 800 from the gunner: out of the written 600, inside the researched 900.
+  const tyrant = put(w, 'd-battleship', 0, x - 800, y, 0, { ...unarmed(UNIT['d-battleship']), fireControl: { radius: 600, bonus: 0.5 } })
+  const a = auraOf(tyrant)!
+  check('aura research adds to the bonus and widens the reach', near(a.bonus, 0.6, 1e-12) && near(a.radius, 900, 1e-9), `${a.bonus}, ${a.radius}`)
+  const on = shotsBy(w, gunner, 8).filter((q) => q.kind === 'turbo').map((q) => q.dmg)
+  tyrant.x = tyrant.ax = x - 800
+  tyrant.y = tyrant.ay = y - 2500
+  const off = shotsBy(w, gunner, 8).filter((q) => q.kind === 'turbo').map((q) => q.dmg)
+  check('a ship in the wider reach hits the researched bonus harder', on.length > 0 && off.length > 0 && near(on[0] / off[0], 1.6, 1e-9), `${on[0]} against ${off[0]}`)
+}
+{
+  // regrow and regrowDelay: grows twice as fast, after half the wait.
+  const w = empty()
+  const { x, y } = mid()
+  research(w, 0, 's-frigate', { regrow: 1, regrowDelay: -0.5 })
+  const u = put(w, 's-frigate', 0, x, y, 0, { ...UNIT['s-frigate'], regrow: { rate: 0.05, delay: 5 } })
+  const g = regrowOf(u)!
+  check('regrow research speeds the regrowth and shortens the wait', near(g.rate, 0.1, 1e-12) && near(g.delay, 2.5, 1e-12), `${g.rate}, ${g.delay}`)
+  u.hull = u.hullMax * 0.5
+  u.lastHit = w.time
+  run(w, 2.3)
+  check('no growth before the shorter wait is out', u.hull === u.hullMax * 0.5)
+  run(w, 1.2)
+  check('then twice the written rate', near(u.hull / u.hullMax, 0.6, 0.012), `${(u.hull / u.hullMax).toFixed(3)}, want 0.6`)
+}
+{
+  // drain and drainHeal: bites harder, heals more of it.
+  const w = empty()
+  const { x, y } = mid()
+  research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5 })
+  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5 } })
+  const ally = put(w, 's-frigate', 0, x - 250, y, 0, unarmed(UNIT['s-frigate']))
+  const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
+  ally.hull = ally.hullMax * 0.2
+  const d = drainOf(leech)!
+  check('drain research strengthens the bite and the heal', d.dps === 60 && near(d.heal, 0.75, 1e-12), `${d.dps}, ${d.heal}`)
+  run(w, 0.3)
+  const f0 = foe.hull
+  const a0 = ally.hull
+  run(w, 3)
+  check('an enemy in reach loses the researched dps', near(f0 - foe.hull, 180, 3), `${(f0 - foe.hull).toFixed(1)}, want 180`)
+  check('and our damaged ship gets the researched share', near(ally.hull - a0, 0.75 * (f0 - foe.hull), 1.5), `${(ally.hull - a0).toFixed(1)}`)
+}
+{
+  // fleetBuild on the station: every ship is built faster, on top of its own build research.
+  const w = newWorld(map, [{ faction: 'republic', team: 0, spawn: 0 }, { faction: 'droid', team: 1, spawn: 1 }], { seed: 3, credits: 99999 })
+  const p = w.players[0]
+  research(w, 0, 'r-station', { fleetBuild: -0.25 })
+  research(w, 0, 'r-gunship', { build: -0.1 })
+  check('a gunship can be ordered', cmdBuild(w, 0, 'r-gunship') === null)
+  check('a fighter squadron can be ordered', cmdBuild(w, 0, 'r-fighter') === null)
+  const q = [...(w.byId.get(p.station)?.yq ?? []), ...p.queue]
+  const gun = q.find((i) => i.unit === 'r-gunship')
+  const fig = q.find((i) => i.unit === 'r-fighter')
+  check('fleetBuild speeds every ship, added to its own build research', !!gun && !!fig && near(gun.total, UNIT['r-gunship'].build * 0.65, 1e-9) && near(fig.total, UNIT['r-fighter'].build * 0.75, 1e-9), `${gun?.total} and ${fig?.total}`)
 }
 
 console.log(failed ? 'FAILED' : 'all passed')
