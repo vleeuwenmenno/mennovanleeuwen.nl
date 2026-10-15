@@ -96,7 +96,7 @@ export const lancer: ModelDef = (c): ModelSpec => {
  */
 export const harrow: ModelDef = (c): ModelSpec => {
   const pod = (s: number): Part[] => {
-    const x = s * 15
+    const x = s * 18
     const id = s < 0 ? 'L' : 'R'
     return [
       part(`pod${id}`, block(x, 1, 12, 46, 3, 2), 'hull', 1.6, {
@@ -116,8 +116,8 @@ export const harrow: ModelDef = (c): ModelSpec => {
     ...pod(-1),
     ...pod(1),
     ...sym(part('prong', [[-5, -30], [-4, -50], [-2.4, -47], [-1.6, -30]], 'hull', 1.8, { lift: 0.8, slope: [-0.4, 0], details: [mark([[-4, -42], [-3, -45], [-2.4, -40], [-3.4, -38]])] })),
-    engineModule('engineL', -6, 36, 49, 7, 0, 2, { detach: { hp: 7 } }),
-    engineModule('engineR', 6, 36, 49, 7, 1, 2, { detach: { hp: 8 } }),
+    engineModule('engineL', -7.1, 36, 49, 7, 0, 2, { detach: { hp: 7 } }),
+    engineModule('engineR', 7.1, 36, 49, 7, 1, 2, { detach: { hp: 8 } }),
     bridge('bridge', 0, 30, 10, 8, 2.4),
     ...seats(c, 2.4, (i) => i < 2),
     antenna('mast', [3, 33], [7, 27], 0.9, 3, { detach: { hull: 0.5 } }),

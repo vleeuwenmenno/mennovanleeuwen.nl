@@ -223,7 +223,7 @@ export const DROID: FactionData = {
     },
     {
       id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Harrow cruiser', blurb: 'A long armoured spine between two gun pods: heavy triple batteries, a tractor projector that pins ships for the kill, and thin shields. Strike its shield generator first.',
-      sprite: 'droid-cruiser', aspect: 0.42, size: 250, hull: 2400, shield: 850, regen: 14, speed: 56, turn: 0.6, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
+      sprite: 'droid-cruiser', aspect: 0.5, size: 250, hull: 2400, shield: 850, regen: 14, speed: 56, turn: 0.6, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
       weapons: [],
       hardpoints: [
         gun('turbo', HARROW[0].x, HARROW[0].y, 0.08, 520, turbo(36)), gun('turbo', HARROW[1].x, HARROW[1].y, 0.08, 520, turbo(36)),
