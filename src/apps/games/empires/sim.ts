@@ -6,7 +6,7 @@ import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
   ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
+  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
 
@@ -749,9 +749,11 @@ const gunsOf = (w: World, t: UnitType): Gun[] =>
     ...g, cd: rand(w) * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0, focus: 0,
   }))
 
-export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
+/** A unit of type `id` (or, for a type of its own that isn't in UNIT, such as a conquest planet's
+ * defense station, that type itself) for `owner` at (x, y), heading `a`. */
+export function spawn(w: World, id: string | UnitType, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
   const p = w.players[owner]
-  const t = UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : UNIT[id]
+  const t = typeof id !== 'string' ? id : UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : UNIT[id]
   const mods = modsFor(p, t)
   const hullMax = t.hull * mods.hull
   const u: Unit = {
@@ -4579,7 +4581,17 @@ function fleetEnd(w: World, dt: number) {
  * fleet's orders: they start in the reserve, to be called in during the battle. `yards` and `exp`:
  * the holder's buildings round its station (a conquest planet's yards and the expansions on them
  * and on the station); given, the battle has hybrid bases (see newFleetBattle). */
-export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; /** Among `ships` and `reserve`, those rush-launched unfinished (see RushedIn); `held`: one of the reserve. */ rushed?: RushedIn[]; station?: number; techs?: string[]; yards?: ('yard' | 'cyard')[]; exp?: ModuleId[] }
+export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; /** Among `ships` and `reserve`, those rush-launched unfinished (see RushedIn); `held`: one of the reserve. */ rushed?: RushedIn[]; station?: number; techs?: string[]; yards?: ('yard' | 'cyard')[]; exp?: ModuleId[]
+  /** The holder's defense stations (a conquest planet's, see galaxy.ts OrbitalState): on which of its
+   * two sites, at what level, with which module in each slot. */
+  orbitals?: { i: number; level: number; mods: (OrbitalModId | null)[] }[]
+  /** Where the holder's structures sit round its planet in the galaxy (galaxy.ts Spot: a bearing and
+   * a distance in planet radii, by structure): its yards and defense stations stand that way round
+   * its station here, turned so the planet lies where this map has it. Left out, the yards stand
+   * away from the attackers (baseSpots). */
+  spots?: Partial<Record<LayoutId, { a: number; d: number }>> }
+/** The structures of a conquest planet's layout (galaxy.ts StructId). */
+export type LayoutId = 'station' | 'yard' | 'cyard' | 'def0' | 'def1'
 
 /**
  * A galactic conquest battle over a planet. The first side holds it: its station (if any) sits at
@@ -4599,7 +4611,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
   const cap = opts.cap ?? FLEET_CAP
   const c = { x: w.w / 2, y: w.h / 2 }
   w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
-  if (sides[0].station && (sides[0].yards || sides[0].exp)) {
+  if (sides[0].station && (sides[0].yards || sides[0].exp || sides[0].orbitals)) {
     w.hybrid = true
     w.ruins = []
   }
@@ -4613,7 +4625,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
       p.station = st.id
       spawnWing(w, st)
-      if (w.hybrid) raiseBase(w, st, s.yards ?? [], s.exp ?? [], map.spawns.slice(1, sides.length))
+      if (w.hybrid) raiseBase(w, st, s.yards ?? [], s.exp ?? [], map.spawns.slice(1, sides.length), s.spots, s.orbitals ?? [])
     }
     // Biggest first onto the field, up to the cap; the rest waits in orbit.
     const order = [...s.ships].sort((a, b) => UNIT[b].pop - UNIT[a].pop)
@@ -4695,35 +4707,123 @@ export function baseSpots(w: World, st: Unit, kinds: ('yard' | 'cyard')[], attac
   return out
 }
 
+/** Battle world units for each planet radius of a conquest planet's layout (galaxy.ts Spot), and how
+ * near and far from the station a structure placed by it stands. */
+export const LAYOUT_SCALE = { unit: mapDist(560), min: mapDist(760), max: BUILD_RADIUS * 0.9 }
+
+/**
+ * Where structure `id` of a conquest planet's layout (FleetSide `spots`) wants to stand in the
+ * battle: where it sits from the station round the planet in the galaxy, turned so the planet lies
+ * the way this map's planet lies from the station (below it on a map without one), LAYOUT_SCALE
+ * world units per planet radius, and kept within reach of the station. Null without a layout.
+ */
+export function layoutPoint(w: World, st: Unit, spots: FleetSide['spots'], id: LayoutId): Pt | null {
+  const S = spots?.station
+  const X = spots?.[id]
+  if (!S || !X) return null
+  const sx = M.cos(S.a) * S.d
+  const sy = M.sin(S.a) * S.d
+  const rx = M.cos(X.a) * X.d - sx
+  const ry = M.sin(X.a) * X.d - sy
+  const pl = w.map.planet
+  const turn = (pl ? M.atan2(pl.y - st.y, pl.x - st.x) : Math.PI / 2) - M.atan2(-sy, -sx)
+  const c = M.cos(turn)
+  const s = M.sin(turn)
+  const len = M.hypot(rx, ry) || 1
+  const d = Math.max(LAYOUT_SCALE.min, Math.min(LAYOUT_SCALE.max, len * LAYOUT_SCALE.unit))
+  return { x: st.x + ((rx * c - ry * s) / len) * d, y: st.y + ((rx * s + ry * c) / len) * d }
+}
+
+/** The clear spot nearest `at` for structure `t` round station `st` (see siteProblem), searched in
+ * rings round it, the same every time; null when there is none within reach. `face`: its heading
+ * there, given where it stands. */
+function clearNear(w: World, st: Unit, t: UnitType, at: Pt, face: (x: number, y: number) => number, others: { x: number; y: number; a: number; t: UnitType }[]): { x: number; y: number; a: number } | null {
+  for (const r of [0, 140, 280, 420, 560, 760, 980]) {
+    const n = r ? 10 : 1
+    for (let k = 0; k < n; k++) {
+      const b = (k / n) * Math.PI * 2
+      const x = at.x + M.cos(b) * r
+      const y = at.y + M.sin(b) * r
+      const a = face(x, y)
+      const { hl, hw } = yardBox(t)
+      if (siteProblem(w, st.owner, t, st, x, y, a) || others.some((q) => boxesNear(x, y, a, hl, hw, q.x, q.y, q.a, yardBox(q.t).hl, yardBox(q.t).hw, 60))) continue
+      return { x, y, a }
+    }
+  }
+  return null
+}
+
 /** A conquest planet's base as it stands when the battle starts: the station's expansions, then each
- * yard at its spot, finished, with its own expansions (and a Fighter wing's squadron). */
-function raiseBase(w: World, st: Unit, yards: ('yard' | 'cyard')[], exp: ModuleId[], attackers: Pt[]) {
+ * yard at its spot, finished, with its own expansions (and a Fighter wing's squadron), then its
+ * defense stations with their modules. With a layout (`spots`) everything stands where the planet
+ * has it (see layoutPoint); without one the yards stand away from the attackers (baseSpots) and the
+ * defense stations either side of the station. */
+function raiseBase(w: World, st: Unit, yards: ('yard' | 'cyard')[], exp: ModuleId[], attackers: Pt[], spots?: FleetSide['spots'], orbitals: NonNullable<FleetSide['orbitals']> = []) {
   const ids = Object.keys(MODULE) as ModuleId[]
   const onStation = ids.filter((id) => exp.includes(id) && MODULE[id].on === 'station')
   if (onStation.length) {
     st.xm = onStation
     restation(w, st)
   }
-  for (const s of baseSpots(w, st, yards, attackers)) {
+  const away = (x: number, y: number) => M.atan2(y - st.y, x - st.x)
+  const raise = (s: { kind: 'yard' | 'cyard'; x: number; y: number; a: number }) => {
     const y = spawn(w, yardOf(st.t.faction, s.kind).id, st.owner, s.x, s.y, s.a)
     // Standing from the start: its queue open, but it says nothing of being built.
     finishSite(w, y)
     w.events.pop()
     const mods = ids.filter((id) => exp.includes(id) && MODULE[id].on === s.kind)
-    if (!mods.length) continue
+    if (!mods.length) return
     y.xm = mods
     retype(w, y, yardType(y.t.id, y.xm))
     if (mods.includes('fighterWing')) spawnWing(w, y)
   }
+  if (spots?.station) {
+    // As the planet lays them out: each where its layout puts it, or the nearest clear spot; one
+    // with no room there stands where it would without a layout. (Raised one by one, so each keeps
+    // clear of the ones before it.)
+    for (const kind of yards) {
+      const want = layoutPoint(w, st, spots, kind)
+      const at = want ? clearNear(w, st, yardOf(st.t.faction, kind), want, away, []) : null
+      const s = at ? { kind, ...at } : baseSpots(w, st, [kind], attackers)[0]
+      if (s) raise(s)
+    }
+  } else for (const s of baseSpots(w, st, yards, attackers)) raise(s)
+  // The defense stations, turned as the station is, each with its modules (and its hangars' squadron).
+  for (const [n, d] of orbitals.entries()) {
+    const t = orbitalType(st.t.faction, d.level, d.mods, d.i)
+    const id: LayoutId = d.i ? 'def1' : 'def0'
+    const fallback = (): Pt => {
+      const from = attackers.length ? attackers[0] : { x: w.w / 2, y: w.h / 2 }
+      const b = M.atan2(st.y - from.y, st.x - from.x) + (n ? -1 : 1) * 1.9
+      return { x: st.x + M.cos(b) * mapDist(1000), y: st.y + M.sin(b) * mapDist(1000) }
+    }
+    const at = clearNear(w, st, t, layoutPoint(w, st, spots, id) ?? fallback(), () => st.a, []) ?? clearNear(w, st, t, fallback(), () => st.a, [])
+    if (!at) continue
+    const u = spawn(w, t, st.owner, at.x, at.y, at.a)
+    u.stance = 'hold'
+  }
 }
 
 /** What of player `o`'s base stands at the end of a battle: its yards, and of the expansions `had`
- * the ones still on a building that stands and not shot off. */
-export function baseLeft(w: World, o: Owner, had: readonly ModuleId[]): { yards: ('yard' | 'cyard')[]; mods: ModuleId[] } {
+ * the ones still on a building that stands and not shot off; and of the defense stations that
+ * fought on the sites `orbs`, by site, each survivor's modules not shot off (null in a slot whose
+ * module was), or null for one destroyed. */
+export function baseLeft(w: World, o: Owner, had: readonly ModuleId[], orbs: readonly number[] = []): { yards: ('yard' | 'cyard')[]; mods: ModuleId[]; orb?: ((OrbitalModId | null)[] | null | undefined)[] } {
   const st = w.byId.get(w.players[o].station)
   const yards = w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !u.site)
   const on = (id: ModuleId) => (MODULE[id].on === 'station' ? [st] : yards.filter((u) => worksOf(u.t) === MODULE[id].on))
-  return { yards: yards.map((u) => worksOf(u.t) as 'yard' | 'cyard'), mods: had.filter((id) => on(id).some((u) => expUp(u, id))) }
+  const out = { yards: yards.map((u) => worksOf(u.t) as 'yard' | 'cyard'), mods: had.filter((id) => on(id).some((u) => expUp(u, id))) }
+  if (!orbs.length) return out
+  const orb = Array.from({ length: Math.max(...orbs) + 1 }, (_, i) => {
+    if (!orbs.includes(i)) return undefined
+    const u = w.units.find((x) => !x.dead && x.owner === o && x.t.orbital?.i === i)
+    if (!u) return null
+    return u.t.orbital!.slots.map((m, s) => {
+      const hp = m ? u.t.hardpoints.findIndex((h) => h.key === orbitalKey(s, m)) : -1
+      return m && hp >= 0 && u.hps[hp].hp > 0 ? m : null
+    })
+  })
+  return { ...out, orb }
 }
 
 /** Ships a player owns, for selection helpers and the AI. */

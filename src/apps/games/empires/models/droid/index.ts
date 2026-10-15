@@ -1,6 +1,7 @@
 import type { FactionModels } from '../spec.ts'
 import * as base from './base.ts'
 import * as craft from './craft.ts'
+import * as orbital from './orbital.ts'
 import * as station from './station.ts'
 import * as warships from './warships.ts'
 
@@ -30,6 +31,7 @@ export const MODELS: FactionModels = {
     'd-defense-gun': station.defense,
     'd-yard': base.confedYard,
     'd-cyard': base.confedCapitalYard,
+    'd-orbital': orbital.orbital,
   },
   expansion: base.expansion,
   // What the Codex calls the parts (the longest matching start of a part's id wins).
@@ -49,6 +51,6 @@ export const MODELS: FactionModels = {
     ['southBlock', 'Shield block'], ['prodHall', 'Production module'], ['prodStrut', 'Module strut'], ['store', 'Storage module'],
     ['storeStrut', 'Module strut'], ['bastion', 'Bastion'], ['spike', 'Antenna spike'], ['conveyor', 'Ore conveyor'], ['frame', 'Rig frame'],
     ['leg', 'Clamp leg'], ['girder', 'Girder'], ['hub', 'Hub'], ['pad', 'Landing pad'], ['gunbox', 'Gun block'], ['wall', 'Dock wall'],
-    ['truss', 'Truss'], ['jaw', 'Mouth jaw'], ['bed', 'Berth'], ['port', 'Module port'], ['pdPod', 'Gun block'],
+    ['truss', 'Truss'], ['jaw', 'Mouth jaw'], ['bed', 'Berth'], ['port', 'Module port'], ['pdPod', 'Gun block'], ['wallFrame', 'Armoured frame'], ['tanks', 'Resource tanks'], ['hangarBlock', 'Hangar block'],
   ],
 }

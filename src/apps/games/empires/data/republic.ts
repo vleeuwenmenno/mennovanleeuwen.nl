@@ -362,4 +362,22 @@ export const REPUBLIC: FactionData = {
     'r-cyard': [-27, -8, 11, 25],
   },
   layout: LAYOUT,
+  // The Bastion defense station (Galactic conquest): a command hub that grows gun decks on truss arms.
+  orbital: {
+    name: 'Bastion defense station',
+    blurb: 'An armoured defense station in orbit beside the Command Station, built from the Bastion\'s standard modules. Each level adds module slots, and each slot takes the module we pick for it.',
+    regen: 20,
+    stages: [
+      { name: 'Bastion Watchpost', hull: 2600, shield: 0, cost: 700, time: 40, station: 1 },
+      { name: 'Bastion Battle Station', hull: 4200, shield: 0, cost: 900, time: 50, station: 2 },
+      { name: 'Bastion Redoubt', hull: 6200, shield: 0, cost: 1300, time: 65, station: 3 },
+    ],
+    modules: [
+      { id: 'battery', name: 'Turbolaser battery', blurb: 'A heavy twin turbolaser that outranges warships.', cost: 450, time: 22, kind: 'turret', art: 'turbo', hp: 700, r: 10, weapon: turbo(40, 820, 2.2, 2) },
+      { id: 'flak', name: 'Flak battery', blurb: 'Quick-firing flak that shreds fighters and bombers.', cost: 350, time: 16, kind: 'turret', art: 'flak', hp: 450, r: 8, weapon: flak(8, 420, 0.3) },
+      { id: 'launcher', name: 'Torpedo launcher', blurb: 'Proton torpedoes that slip through shields to hit the hull.', cost: 450, time: 22, kind: 'turret', art: 'turbo', look: 'torpedo', hp: 550, r: 9, weapon: missile(30, 700, 4) },
+      { id: 'shield', name: 'Shield generator', blurb: 'Projects 1,400 shields round the station, recharging between hits. Shot off, its shields go.', cost: 400, time: 18, kind: 'shield', art: 'shield', hp: 650, r: 9, shield: 1400, regen: 12 },
+      { id: 'hangar', name: 'Hangar bay', blurb: 'Keeps a squadron of Lance interceptors in the air round the station, launching a new one when it is lost.', cost: 550, time: 24, kind: 'hangar', art: 'hangar', hp: 700, r: 10, carrier: 'r-fighter' },
+    ],
+  },
 }

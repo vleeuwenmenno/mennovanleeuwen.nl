@@ -318,7 +318,7 @@ const THUMB_PX = 192
  * for the menus and tiles that only know that: a still of its model, as a data URL (empty for a
  * name nothing has). */
 export function unitArt(sprite: string) {
-  const mod = /^(republic|droid)-x-(\w+)$/.exec(sprite)
+  const mod = /^(republic|droid|swarm)-x-(\w+)$/.exec(sprite)
   if (mod && MODULE[mod[2] as ModuleId]) {
     // A module: on its own, cut from a building that has it.
     const x = MODULE[mod[2] as ModuleId]
