@@ -1888,6 +1888,43 @@ Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battl
 Changing one changes every battle, so the multiplayer hash from `pnpm check:empires` changes too.
 Battles saved before keep the map and ship types they were saved with.
 
+## Empires At War path finding and rocks
+
+Warships find their way round the rocks on a grid of 80-unit cells
+([`nav.ts`](src/apps/games/empires/nav.ts)), one per hull size, built the first time a ship that
+size needs a path and cached on the world (`World.nav`); the path is then pulled tight into
+straight legs. Strike craft fly straight.
+
+- **Rocks** are as big to the ships as 80% of their drawn radius (`ROCK_HIT`: the art is lumpy,
+  its outline at 0.7 to 1.15 of the radius), and a hull may reach into one by 60% of its own radius
+  (`HULL_ROCK` in sim.ts; hulls are longer than wide, so side on that's only the edge of the hull).
+  The path keeps 20 to 40 units more than that (`navClear`). The push that keeps ships out of rocks,
+  the steering round the next rock (`detour`) and where a move order may end (`offRocks`) all use
+  the same sizes, so the path and the physics agree.
+- **Asteroid fields and nebulas** are soft ground, never walls: crossing one costs more than open
+  space (`navCost`): a nebula 1.5 times as much, a field 1.2 (gunships) to 2.5 (frigates), 3
+  (cruisers) and 4 (flagships) times, since the rocks there batter big hulls. So a path goes round
+  one unless that takes far longer. One the ship was sent into, or is in already, costs nothing
+  extra. Pulling a path tight never cuts back across a patch it went round.
+- **Somewhere walled in** (a spot inside the rocks, or in a pocket no hull that size fits into):
+  the path ends at the nearest point the ship can reach (`Path.short`), and the ship stops there
+  (`asNearAsItGets`) and fights from there, instead of flying at the rocks for good. A selected
+  ship's route line ends there too. Each grid knows which pieces of open space connect, so this
+  costs no search of the whole map.
+
+**Scattering the rocks.** Each battle scatters its rocks from its seed (`newWorld`), copied to every
+side by the map's symmetry. They keep clear of ore, beacons, wrecks, the build radius round each
+start, asteroid fields (with room for the biggest flagship to skirt one) and the lanes: from each
+station into the middle and to its neighbours, and from each beacon to the stations nearest it,
+each wide enough for the biggest flagship. A rock is also left out if it would wall the biggest
+flagship off from any station, beacon or ore it could reach before (`rockStamp`, `reachCheck`).
+Without that, rocks piled up in the space left over, walled off whole sides of the four-player maps
+and ringed the beacons, and flagships went the long way round, through the fields, or nowhere.
+
+```sh
+pnpm check:empires-nav   # every faction's biggest hull reaches every spawn, beacon and ore on every map (and generated ones), routes across Twin Reefs, a walled-in spot, path cost
+```
+
 ## Empires At War weapon ranges and repair craft
 
 Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon
