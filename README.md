@@ -74,6 +74,14 @@ the terminal included, except that on a Mac a text field keeps Option+digit for 
 including the terminal. Settings → Spotlight can point Ctrl+Space at All apps instead, which gives
 Ctrl+K back to Spotlight. Ctrl+Space is best-effort: some OSes and input methods keep that chord,
 so the page never sees it, the same way Super never reaches a web page.
+
+The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPrefs.ts`](src/os/topbarPrefs.ts))
+holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
+notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
+the earlier CV-only rule). Right-click the bar to **Unlock the top bar**, then drag a widget
+to reorder it, or use *Show or hide* for each widget; **Lock the top bar** when you are done. A
+click that does not move still activates the widget. The
+layout is kept in this browser, and follows your account when you are signed in.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
 number in the bar moves it there. Each window's workspace is saved with the window layout; which
 workspace is on screen is kept per browser. Phones have room for one workspace, so there the
@@ -563,7 +571,7 @@ favourites* there (or Ctrl+D) keeps it at the top of the empty box
 ([`src/data/spotlightFavourites.ts`](src/data/spotlightFavourites.ts)); Settings → Spotlight reorders
 them. The terminal's `visited` lists the same history (`visited <text>`, `visited open <#>`,
 `visited forget <#>`, `visited clear`).
-Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
+Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order, the top bar and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
 

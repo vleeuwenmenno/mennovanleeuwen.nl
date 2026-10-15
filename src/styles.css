@@ -390,27 +390,57 @@ body.is-resizing iframe {
   inset: 0 0 auto 0;
   height: var(--top);
   z-index: 100000;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
+  gap: 2px;
   /* Under an installed app's status bar the bar grows by the inset and keeps its 28px row. */
   padding: var(--sat) 10px 0;
   background: var(--bg);
   color: var(--fg);
   font-size: 12px;
 }
-.topbar-left,
-.topbar-right {
+.topbar-slot {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-shrink: 0;
   min-width: 0;
 }
-.topbar-right {
-  gap: 2px;
+.topbar-slot[data-id='menu'],
+.topbar-slot[data-id='workspaces'] {
+  gap: 10px;
+  margin-right: 8px;
 }
-.topbar-right {
-  justify-content: flex-end;
+.topbar-slot[data-id='workspaces'] {
+  margin-right: 0;
+}
+.topbar-spacer {
+  flex: 1 1 0;
+  min-width: 4px;
+  align-self: stretch;
+}
+.topbar.is-unlocked .topbar-spacer {
+  min-width: 12px;
+  margin: 0 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.topbar.is-unlocked .topbar-slot,
+.topbar.is-unlocked .topbar-spacer {
+  cursor: grab;
+}
+.topbar.is-unlocked .topbar-slot.is-dragged,
+.topbar.is-unlocked .topbar-spacer.is-dragged {
+  cursor: grabbing;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.topbar.is-unlocked .topbar-slot {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: 1px;
+}
+.topbar.is-reordering .topbar-slot:not(.is-dragged),
+.topbar.is-reordering .topbar-spacer:not(.is-dragged) {
+  transition: transform 0.2s ease;
 }
 .logo {
   display: inline-flex;
@@ -9160,9 +9190,10 @@ kbd {
 
 @media (max-width: 719px) {
   .topbar {
-    grid-template-columns: auto 1fr auto;
     gap: 8px;
   }
+  .topbar-slot[data-id='workspaces'],
+  .topbar-slot[data-id='activity'],
   .workspaces,
   .mc-count,
   .clock-date,
