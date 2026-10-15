@@ -48,7 +48,7 @@ async function play(job: Job): Promise<Result> {
       const s = sides[e.owner]
       if (!s) continue
       if (e.k === 'built' && UNIT[e.unit]?.tier === 'frigate' && s.frigate < 0) s.frigate = w.time
-      if (e.k === 'built' && UNIT[e.unit]?.tier === 'capital') s.flags[e.unit] = (s.flags[e.unit] ?? 0) + 1
+      if (e.k === 'built' && (UNIT[e.unit]?.tier === 'capital' || UNIT[e.unit]?.tier === 'frigate')) s.flags[e.unit] = (s.flags[e.unit] ?? 0) + 1
       if (e.k === 'tech' && /yd-rush/.test(e.id)) s.rushTech = w.time
       if (e.k === 'tech' && !/yd-rush/.test(e.id)) s.techs++
       if (e.k === 'rushed') s.rushes++
@@ -192,10 +192,10 @@ if (!isMainThread) {
         `${p.padEnd(12)} ${mmss(med(ss.map((s) => s.frigate))).padStart(20)}  ${`${pct(ss.filter((s) => s.rushTech >= 0).length, ss.length)} (${mmss(med(ss.map((s) => s.rushTech)))})`.padStart(27)}  ${avg((s) => s.rushes).padStart(11)}  ${avg((s) => s.wingLost).padStart(14)}  ${avg((s) => s.waves).padStart(10)}  ${avg((s) => s.techs).padStart(10)}  ${avg((s) => s.level).padStart(12)}`,
       )
     }
-    // Flagships built, by faction and type: a side with more than one (the Confederacy's) should
-    // field each of them now and then.
+    // Frigate-tier ships and flagships built, by faction and type: a side with more than one of a
+    // tier should field each of them now and then.
     const flagFs = [...new Set(rs.flatMap((r) => r.sides.map((s) => s.faction)))]
-    console.log(`flagships built (per side and game)\n${flagFs.map((f) => {
+    console.log(`frigate-tier ships and flagships built (per side and game)\n${flagFs.map((f) => {
       const ss = rs.flatMap((r) => r.sides.filter((s) => s.faction === f))
       const all = [...new Set(ss.flatMap((s) => Object.keys(s.flags)))].sort()
       return `  ${f.padEnd(10)} ${all.map((u) => `${u} ${(ss.reduce((t, s) => t + (s.flags[u] ?? 0), 0) / Math.max(1, ss.length)).toFixed(2)}`).join('  ') || 'none'}`

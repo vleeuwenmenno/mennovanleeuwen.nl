@@ -384,13 +384,38 @@ const worker = (u: Unit) => u.t.kind === 'repair' || isEngineer(u.t)
 const spinalOn = (t: UnitType) => t.weapons.some((x) => x.spinal) || t.hardpoints.some((h) => h.weapon?.spinal)
 
 /**
- * The flagship it saves for. Most sides have one; where a side has more (the Confederacy's carrier
- * battleship and its fire-control Tyrant), it settles on one when it first wants a flagship, drawn
- * by what suits its fleet (a fire-control ship the more warships it has, a carrier a little more,
- * the cheaper a little more), and keeps to it until one is out. Saving for its side's first
- * flagship alone, the Confederacy never built a Tyrant.
+ * How much of a flagship is fleet support rather than guns: its carrier's launch rate, its
+ * fire-control and shield-projector auras. Compared between a side's flagships, the higher one is
+ * its carrier/support flagship (the Resolute, the Tyrant, the Broodmother) and the lower its gun
+ * flagship (the Sovereign, the Dominator, the Leviathan).
  */
-function flagshipFor(w: World, b: Brain): UnitType {
+const supportOf = (t: UnitType) => (t.carrier ? (t.carrier.max / t.carrier.every) * 10 : 0) + (t.fireControl ? t.fireControl.bonus * 10 : 0) + (t.shieldAura ? t.shieldAura.regen * 2 : 0)
+
+/** A well-mixed 32-bit hash (murmur3's finaliser) of a few integers, as a roll from 0 to 1. */
+function hashRoll(...xs: number[]): number {
+  let h = 0x811c9dc5
+  for (const x of xs) {
+    h = Math.imul(h ^ (x >>> 0), 0x01000193)
+    h ^= h >>> 16
+    h = Math.imul(h, 0x85ebca6b)
+    h ^= h >>> 13
+    h = Math.imul(h, 0xc2b2ae35)
+    h ^= h >>> 16
+  }
+  return (h >>> 0) / 4294967296
+}
+
+/**
+ * The flagship it saves for. Most sides have two: a gun flagship and a carrier/support one (see
+ * supportOf). It settles on one only once it is really saving for a flagship (`settle`: a hybrid
+ * base with a fleet worth guarding it, nothing attacking home, a Capital slip that could build it),
+ * not at the start of the battle, and keeps to it until one is flying or on order; when that one is
+ * lost it settles afresh. The pick is weighed by what the fleet needs: the support flagship the
+ * bigger its own fleet and the more strike craft the enemy flies (its wing and auras work on many
+ * ships, its fighters screen against bombers), the gun flagship the more big warships the enemy
+ * fields. Until it settles it answers with the side's first flagship, to price the saving.
+ */
+function flagshipFor(w: World, b: Brain, settle: boolean): UnitType {
   const p = w.players[b.o]
   const all = buildable(p.faction).filter((t) => t.tier === 'capital' && (!t.tech || p.techs.includes(t.tech)))
   if (all.length <= 1) return all[0] ?? unitOf(p.faction, 'capital')
@@ -402,11 +427,25 @@ function flagshipFor(w: World, b: Brain): UnitType {
   }
   const kept = b.flag ? all.find((t) => t.id === b.flag) : undefined
   if (kept) return kept
+  if (!settle) return all[0]
+  const sup = all.map(supportOf)
+  const lo = Math.min(...sup)
+  const span = Math.max(...sup) - lo
+  // The enemy fleet it has seen: the share of strike craft, and of cruisers and flagships.
+  const mix = foeMix(w, b)
+  const total = mix.reduce((s, [, v]) => s + v, 0) || 1
+  const strike = mix.reduce((s, [t, v]) => s + (t.tier === 'fighter' ? v : 0), 0) / total
+  const big = mix.reduce((s, [t, v]) => s + (t.tier === 'cruiser' || t.tier === 'capital' ? v : 0), 0) / total
   const warships = army.filter(warship).length
-  const weights = all.map((t) => (t.fireControl ? 1 + Math.min(1.5, warships / 5) : 1) * (t.carrier ? 1.2 : 1) * Math.sqrt(4000 / Math.max(1000, t.cost)))
-  // Drawn from a hash of the side and the clock, not the battle's dice: settling on a flagship
-  // leaves every other roll of the battle as it was.
-  const roll = ((Math.imul(b.o + 1, 2654435761) ^ Math.imul(Math.floor(w.time), 40503)) >>> 0) / 4294967296
+  const supportNeed = 1 + Math.min(1.5, warships / 8) + strike * 3
+  const gunNeed = 1 + big * 4
+  const weights = all.map((_, i) => {
+    const s = span > 0 ? (sup[i] - lo) / span : 0.5
+    return s * supportNeed + (1 - s) * gunNeed
+  })
+  // Drawn from a hash of the side, the clock and the battle's dice (read, not rolled): settling on
+  // a flagship leaves every other roll of the battle as it was.
+  const roll = hashRoll(b.o + 1, Math.floor(w.time * 10), w.rs)
   let r = roll * weights.reduce((s, v) => s + v, 0)
   let pick = all[all.length - 1]
   for (let i = 0; i < all.length; i++) {
@@ -553,6 +592,9 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
   const tenders = army.filter((u) => u.t.kind === 'support').length
   const menders = army.filter((u) => u.t.kind === 'repair').length / 2
   const warships = army.filter(warship).length
+  // How much of its warships' staying power is shields (0 to 1): what a shield projector works on.
+  const lines = army.filter(warship)
+  const shieldy = lines.length ? lines.reduce((s, u) => s + u.t.shield, 0) / Math.max(1, lines.reduce((s, u) => s + u.t.shield + u.t.hull, 0)) : 0
   // Up the classes: the biggest the station allows are wanted most, the early ones less once
   // there's better, unless they're what counters the enemy.
   const base: Record<string, number> = { fighter: 1, gunship: 1, frigate: 1.6, cruiser: 2.4, capital: 4 }
@@ -575,6 +617,10 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     if (t.kind === 'bomber') v *= 1 - small * 0.6
     // A fire-control ship makes every warship round it hit harder: worth more the more there are.
     if (t.fireControl) v *= 1 + Math.min(1.5, warships / 6) * t.fireControl.bonus * 4
+    // A shield projector speeds the shields of the fleet round it: worth more the more warships it
+    // has and the more of their staying power is shields (nothing to a side without them), one or
+    // two at most.
+    if (t.shieldAura) v *= (0.4 + Math.min(1.5, warships / 4) * shieldy * t.shieldAura.regen * 2.2) / (1 + 0.8 * count(t.id))
     // A drain ship heals the fleet it flies with: worth more with a fleet, one or two at most.
     if (t.drain) v *= (army.length >= 5 ? 1.3 : 0.6) / (1 + 0.6 * count(t.id))
     // Living hulls mend themselves between fights: a little more staying power than the numbers say.
@@ -604,7 +650,7 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
 const EFFECT_WORTH: Record<string, number> = {
   range: 1.4, hull: 1, shield: 0.9, regen: 0.3, damage: 1.1, cooldown: 1.1, speed: 0.35, build: 0.4, hangar: 0.9, repair: 0.7, mines: 0,
   // The faction mechanics' research (see TechEffect): an aura's few points of bonus go a long way.
-  shieldDamage: 0.8, aura: 5, auraRadius: 0.6, regrow: 0.6, regrowDelay: 0.5, drain: 0.8, drainHeal: 0.5,
+  shieldDamage: 0.8, aura: 5, auraRadius: 0.6, regrow: 0.6, regrowDelay: 0.5, drain: 0.8, drainHeal: 0.5, shieldAura: 0.8,
 }
 
 /**
@@ -855,9 +901,12 @@ export function think(w: World, b: Brain, dt: number) {
   // income, with a fleet worth guarding it and nothing attacking its base). With the fleet at its
   // limit it sends its cheapest warships home through hyperspace (part of their price comes back,
   // those not out with a wave first) to make room for it.
-  const flag = flagshipFor(w, b)
   const full = 'Fleet at its limit: capture beacons or upgrade the station'
-  const flagWhy = w.hybrid && b.alarm < 0 && !saving && !yardSaving && armyValue >= 4000 && p.credits + p.income * 60 >= flag.cost ? cantBuild(w, o, flag.id) : 'no'
+  const flagReady = w.hybrid && b.alarm < 0 && !saving && !yardSaving && armyValue >= 4000
+  // (Which flagship is settled only once it is saving for one and its Capital slip could build it.)
+  const slipWhy = flagReady ? cantBuild(w, o, unitOf(p.faction, 'capital').id) : 'no'
+  const flag = flagshipFor(w, b, slipWhy === null || slipWhy === 'Not enough credits' || slipWhy === full)
+  const flagWhy = flagReady && p.credits + p.income * 60 >= flag.cost ? cantBuild(w, o, flag.id) : 'no'
   const flagship = flagWhy === null || flagWhy === 'Not enough credits' || flagWhy === full
   if (flagship) b.want = flag.id
   if (flagship && flagWhy === full && p.credits >= flag.cost) {
@@ -1001,8 +1050,8 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Scouts: a couple of fast ships keep the beacons ours.
   if (!b.attacking && b.scouts.size < 2 && w.time >= b.scoutWait) {
-    // (A drain ship stays with the fleet: it's no use on its own.)
-    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
+    // (A drain ship or a shield projector stays with the fleet: it's no use on its own.)
+    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !u.t.shieldAura && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
     if (spare) b.scouts.add(spare.id)
   }
   // Early on, before there are spare warships, the starting fighters do the surveying.
@@ -1259,7 +1308,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   let flank: { x: number; y: number } | null = null
   const speeds = troops.filter((u) => u.t.tier !== 'fighter').map((u) => u.t.speed).sort((a, z) => a - z)
   const quick = speeds.length ? speeds[Math.floor(speeds.length / 2)] * 1.15 : Infinity
-  const flanker = (u: Unit) => !!flank && (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && u.t.speed >= quick && d2(u, flank) > sq(mapDist(450))
+  const flanker = (u: Unit) => !!flank && (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !u.t.shieldAura && u.t.speed >= quick && d2(u, flank) > sq(mapDist(450))
   if (Doc.flank && goal !== enemySt && troops.length >= 4) {
     const ax = goal.x - st.x
     const ay = goal.y - st.y

@@ -1,7 +1,7 @@
 import { CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, radius, regrowOf, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, projecting, radius, regrowOf, SALVAGE_RANGE, sensorOf, shieldAuraOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { YARD_BERTHS } from './data'
 import { ModelFx } from './models/fx.ts'
@@ -211,7 +211,7 @@ const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba
  * All drawn only on screen, a few calls per ship that has one, so a big battle (where few ships
  * have them) pays next to nothing.
  */
-const MECH = { tendrils: 6, lines: 8, sparkEvery: 0.18, beamLife: 0.22, chargeFrom: 0.55, minPx: 18 }
+const MECH = { tendrils: 6, lines: 8, links: 8, sparkEvery: 0.18, beamLife: 0.22, chargeFrom: 0.55, minPx: 18 }
 /** Factions whose ships are alive: their launches hatch, with a wet burst instead of a ring. */
 const ORGANIC: Partial<Record<FactionId, true>> = { swarm: true }
 /** A living hull's glow, by faction: its engine colour, rimmed in its bolt colour. */
@@ -1272,8 +1272,9 @@ export class Renderer {
       for (const id of view.selected) if (n++ < 6) this.drawRanges(ctx, w, view, z, id, view.selected.size === 1, view.turretPick?.unit === id ? view.turretPick.hp : -1)
     }
 
-    // Fire-control auras, under the ships.
+    // Fire-control auras and shield projectors, under the ships.
     this.drawAuras(ctx, w, view, z, onScreen)
+    this.drawProjectors(ctx, w, view, z, onScreen)
 
     // Ships and stations, big ones first so smaller ships fly over them (see drawRank), each with a
     // faint shadow on the hull it's over.
@@ -1993,6 +1994,51 @@ export class Renderer {
           ctx.stroke()
         }
       }
+      ctx.restore()
+    }
+  }
+
+  /**
+   * Shield projectors (sim.ts shieldAura): a faint ring at the aura's reach in its side's glow
+   * colour, and a shimmering link from the projector to each ship of ours in reach whose shields it
+   * is speeding (at most MECH.links). Nothing while its projectors are all shot off.
+   */
+  private drawProjectors(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+    const team = w.players[view.me].team
+    for (const u of w.units) {
+      if (!u.t.shieldAura || !projecting(u) || !u.seen[team] || u.owner === view.hideOwner) continue
+      const a = shieldAuraOf(u)!
+      if (!onScreen(u.x, u.y, a.radius)) continue
+      ctx.save()
+      ctx.strokeStyle = FACTIONS[u.t.faction].glow
+      ctx.globalAlpha = 0.12
+      ctx.lineWidth = Math.max(1 / z, 2)
+      ctx.beginPath()
+      ctx.arc(u.x, u.y, a.radius, 0, TAU)
+      ctx.stroke()
+      // The links, to ships whose shields are down some (what it is working on), shimmering.
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.lineCap = 'round'
+      let n = 0
+      near(w, u.x, u.y, a.radius, (o) => {
+        if (o === u || n >= MECH.links || foes(w, o.owner, u.owner) || o.launch || !o.seen[team] || o.t.tier === 'fighter') return
+        const max = shieldMax(o)
+        if (max <= 0 || o.shield >= max) return
+        n++
+        const k = 0.5 + 0.5 * Math.sin(this.clock * 5 + o.id * 1.7)
+        ctx.globalAlpha = 0.12 + 0.16 * k
+        ctx.lineWidth = Math.max(1.5 / z, 3 + 2 * k)
+        ctx.beginPath()
+        ctx.moveTo(u.x, u.y)
+        ctx.lineTo(o.x, o.y)
+        ctx.stroke()
+        // A faint shell round the ship it feeds.
+        ctx.globalAlpha = 0.1 + 0.12 * k
+        ctx.lineWidth = Math.max(1 / z, 1.6)
+        ctx.beginPath()
+        ctx.arc(o.x, o.y, radius(o.t) * 0.85, 0, TAU)
+        ctx.stroke()
+      })
       ctx.restore()
     }
   }

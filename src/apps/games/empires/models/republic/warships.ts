@@ -349,3 +349,179 @@ export const capital: ModelDef = (c): ModelSpec => {
   ]
   return { parts, breakStyle: 'bands', cuts: 3 }
 }
+
+// --- Sentinel destroyer ---------------------------------------------------------------------------------
+
+/**
+ * Sentinel destroyer at 1.4×: the fleet's shield escort, a slim dagger smaller than the Paladin. Red
+ * edge bands and an aft chevron, grey plates down the flanks; a raised spine from the blue bridge at
+ * the nose back past the bow turbolaser to the great projector dome amidships. Its signature is the
+ * three shield projectors (Republic `projector` mounts): two on armoured sponsons on the flanks and
+ * the big one on the spine, joined by glowing power conduits across the deck. Four point-defence
+ * turrets on octagonal pads, a small command block aft and two engine pods.
+ */
+export const sentinel: ModelDef = (c): ModelSpec => {
+  const rows: [number, number][] = [[-50, 0.3], [-42, 3.2], [-30, 7.2], [-15, 11.8], [0, 16.6], [12, 19.6], [24, 22.4], [31, 23.6]]
+  const left: Pt[] = [...halfHull(rows).slice(0, -1), [-24.6, 34], [-20, 35.6], [-11, 35], [0, 35]]
+  const deckRows: [number, number][] = [[-45, 0.8], [-36, 2.4], [-22, 3.6], [-6, 4.4], [10, 5.4], [24, 5.6], [31, 5]]
+  const e = (y: number, d: number) => edgeAt(rows, y, d)
+  const [lx, ly] = hpAt(c, 1) ?? [-10.25, 3]
+  const [, cy] = hpAt(c, 3) ?? [0, 16.5]
+  const parts: Part[] = [
+    ...sym(part('hull', left, 'hull', 0, {
+      slope: [-0.55, 0.05],
+      details: [
+        { k: 'shape', pts: edgeBand(rows.slice(1), 2.2), tone: 'accent' },
+        { k: 'shape', pts: [e(-36, 3.8), e(-34, 4.8), e(-18, 6.4), e(-20, 5.4)], tone: 'accent' },
+        { k: 'shape', pts: [[-20, 28], [-13, 25.6], [-13, 30.4]], tone: 'accent' },
+        edgeLine(rows, -32, 28, 9),
+        ...[-20, 12].map((y): Detail => ({ k: 'line', pts: [e(y, 2.2), e(y, 9)] })),
+        { k: 'lights', pts: [-26, -8, 18].map((y) => e(y, 3.4)), r: 0.38, tone: 'glass' },
+      ],
+    })),
+    // The aft corners, lost as it's battered.
+    ...sym(part('tip', [[-23.6, 29], [-24.4, 32.6], [-23, 34.4], [-20.4, 35.2], [-20.4, 29.6]], 'hull', 0.1, { slope: [-0.55, 0.05], detach: { hull: 0.32 }, details: [{ k: 'shape', pts: [[-23.6, 29], [-24.4, 32.6], [-23, 34.4], [-22.2, 29.4]], tone: 'accent' }] }), { detach: { hull: 0.24 } }),
+    ...sym(plate('plateA', rows, -28, -17, 2.8, 6.4, 0.8, { detach: { hull: 0.4 } }), { detach: { hull: 0.34 } }),
+    ...sym(plate('plateC', rows, 14, 23, 2.8, 6.6, 0.8, { detach: { hull: 0.3 } }), { detach: { hull: 0.26 } }),
+    // The projector sponsons: armoured blocks on the flanks the side domes stand on, banded in red,
+    // a light at each end.
+    ...sym(part('sponson', chamfer(lx, ly, 10.4, 13, 2.6), 'hull2', 1.2, {
+      lift: 1.4,
+      facets: [{ pts: [[lx - 5.2, ly - 3.9], [lx - 2.6, ly - 6.5], [lx - 1.6, ly - 6.5], [lx - 1.6, ly + 6.5], [lx - 2.6, ly + 6.5], [lx - 5.2, ly + 3.9]], slope: [-0.5, 0] }],
+      details: [{ k: 'shape', pts: box(lx, ly + 5.2, 10.4, 1.2), tone: 'accent' }, { k: 'lights', pts: [[lx - 3.8, ly - 4.6], [lx - 3.8, ly + 3.6]], r: 0.35, tone: 'glass' }],
+    })),
+    // The raised spine down the middle.
+    ...sym(part('deck', halfHull(deckRows), 'hull', 1.4, {
+      slope: [-0.45, -0.05],
+      lift: 1.8,
+      details: [{ k: 'shape', pts: [[0, -18], [-0.8, -18], [-0.8, 8], [0, 8]], tone: 'accent' }, { k: 'line', pts: [[-4.4, -4], [0, -4]] }, windows([-2.6, -20], [-3.2, -6], 3, 0.28)],
+    })),
+    // The power conduits: from the spine dome out to each sponson, glowing along their length.
+    ...sym(part('conduit', [[-2, cy - 3], [lx + 2.6, ly + 3.6], [lx + 3.6, ly + 5.4], [-2, cy - 0.6]], 'metal', 1.6, {
+      lift: 0.8,
+      details: [{ k: 'lights', pts: along([-2.6, cy - 2], [lx + 3.4, ly + 4.4], 4), r: 0.4, tone: 'glow' }],
+    })),
+    part('bridgeFrame', [[0, -47], [2.2, -42], [3, -36], [3, -31], [-3, -31], [-3, -36], [-2.2, -42]], 'hull2', 2, { lift: 1.2 }),
+    part('bridge', [[0, -45.4], [1.5, -41.6], [2.1, -36], [2, -33], [-2, -33], [-2.1, -36], [-1.5, -41.6]], 'glass', 2.2, { lift: 0.6, details: [{ k: 'shape', pts: [[-0.4, -43], [-1.1, -39], [-1.3, -35], [-0.6, -35], [-0.4, -39]], tone: 'glow' }] }),
+    block('spine0', 0, -4, 6.4, 7, 2.4),
+    // The command block aft of the big dome, a mast and a dish on it.
+    block('tower', 0, 27, 8.4, 7, 2.6, {}, 'hull'),
+    mast('mast', 2.4, 31.2, 4.4, 3, 0.5),
+    dish('dish', -2.4, 31.4, 1.6, 3, 0.4),
+    // Seats: a pad under the turbolaser, octagonal pads under the point defence, heavy rings under
+    // the projectors.
+    ...seat('seatT0', c, 0, 1.26, 2.6),
+    ...[4, 5, 6, 7].flatMap((i) => seat(`seatF${i}`, c, i, 1.3, 1.6, 'oct')),
+    ...seat('seatS0', c, 1, 1.2, 1.8, 'heavy'),
+    ...seat('seatS1', c, 2, 1.2, 1.8, 'heavy'),
+    ...seat('seatS2', c, 3, 1.2, 2.6, 'heavy'),
+    part('pylon', chamfer(0, 34.4, 22, 4.6, 1.4), 'metal', 0.4, { lift: 0.6 }),
+    ...pods(c, [8, 9], 31, 48.6, 8.4, 1.7),
+  ]
+  return {
+    parts,
+    breakStyle: 'bands',
+    // Its point-defence turrets blow off; the projectors stay on, wrecked.
+    mount: (i) => ({ detach: i >= 4 && i <= 7 }),
+  }
+}
+
+// --- Resolute battleship ------------------------------------------------------------------------------
+
+/**
+ * Resolute battleship at 2.5×: the command carrier, a broad Republic dagger. Red edge bands and
+ * chevrons, grey armour plates down the flanks; down the middle a sunken flight deck with its two
+ * hangar bays, runway lights and red-and-white deck markings, and either side of it an armoured
+ * flight-bay sponson with a dark launch mouth facing forward. A small observation bridge at the nose;
+ * aft, the raised command bridge tower in two tiers, its long blue bridge windows, masts, dishes and
+ * a sensor array. Fewer guns than the Sovereign: two heavy batteries forward, two lighter turbolasers
+ * aft, point defence at the bow and stern, two shield bulbs and four engine pods. It breaks into
+ * three chunks.
+ */
+export const resolute: ModelDef = (c): ModelSpec => {
+  const rows: [number, number][] = [[-50, 0.4], [-40, 5], [-28, 10.5], [-14, 15.6], [0, 20.2], [14, 24], [26, 26.6], [32, 27.4]]
+  const left: Pt[] = [...halfHull(rows).slice(0, -1), [-28, 35.5], [-22, 37], [-12, 36.5], [0, 36.5]]
+  const e = (y: number, d: number) => edgeAt(rows, y, d)
+  // The flight deck, between the batteries and the command tower.
+  const fy0 = -17
+  const fy1 = 13
+  const parts: Part[] = [
+    ...sym(part('hull', left, 'hull', 0, {
+      slope: [-0.55, 0.05],
+      details: [
+        { k: 'shape', pts: edgeBand(rows.slice(1), 2.6), tone: 'accent' },
+        { k: 'shape', pts: [e(-36, 4.2), e(-34, 5.4), e(-10, 7.2), e(-12, 6)], tone: 'accent' },
+        { k: 'shape', pts: [[-24, 29.4], [-15, 26.8], [-15, 32]], tone: 'accent' },
+        edgeLine(rows, -36, 30, 8.6),
+        ...[-24, -8, 20].map((y): Detail => ({ k: 'line', pts: [e(y, 2.6), e(y, 8.6)] })),
+        { k: 'lights', pts: [-28, -16, 0, 14, 26].map((y) => e(y, 4)), r: 0.34, tone: 'glass' },
+      ],
+    })),
+    ...sym(part('tip', [[-27.6, 31], [-28.2, 34], [-27.4, 35.6], [-23.6, 36.6], [-23.6, 31.6]], 'hull', 0.1, { slope: [-0.55, 0.05], detach: { hull: 0.32 }, details: [{ k: 'shape', pts: [[-27.6, 31], [-28.2, 34], [-27.4, 35.6], [-26.2, 31.3]], tone: 'accent' }] }), { detach: { hull: 0.24 } }),
+    ...sym(plate('plateA', rows, -33, -25, 2.8, 5.6, 0.8)),
+    ...sym(plate('plateC', rows, 18, 26, 3, 7.4, 0.8, { detach: { hull: 0.3 } }), { detach: { hull: 0.27 } }),
+    // The flight-bay sponsons: armoured blocks either side of the flight deck, a dark launch mouth
+    // at the front of each with guide lights, a red band across the back.
+    ...sym(part('baySponson', [[-17.6, -12], [-14.2, -15], [-9.6, -15], [-9.6, 11], [-12, 13.4], [-18.6, 13.4], [-19.4, 6]], 'hull2', 1.2, {
+      lift: 1.6,
+      facets: [{ pts: [[-17.6, -12], [-14.2, -15], [-13.2, -15], [-13.2, 13.4], [-18.6, 13.4], [-19.4, 6]], slope: [-0.5, 0] }],
+      details: [
+        { k: 'shape', pts: rect(-18.8, 9.4, 9.2, 1.4), tone: 'accent' },
+        { k: 'line', pts: [[-19, -2], [-9.6, -2]] },
+        windows([-16.6, 1], [-16.6, 7], 3, 0.3),
+      ],
+    })),
+    ...sym(part('bayMouth', [[-16.6, -11.6], [-14.4, -13.6], [-11, -13.6], [-11, -7], [-16.6, -7]], 'dark', 1.4, {
+      details: [{ k: 'lights', pts: along([-15.6, -7.8], [-11.8, -7.8], 3), r: 0.32, tone: 'glow' }, { k: 'lights', pts: [[-13.6, -12.6]], r: 0.3, tone: 'accent' }],
+    })),
+    // The flight deck: sunk between the sponsons, runway lights down both sides, a red-and-white
+    // centre line between the hangar bays.
+    part('flightDeck', rect(-9.6, fy0, 19.2, fy1 - fy0), 'metal', 1, {
+      details: [
+        { k: 'shape', pts: rect(-8.4, fy0 + 1, 16.8, fy1 - fy0 - 2), tone: 'dark' },
+        { k: 'lights', pts: [...along([-8, fy0 + 2], [-8, fy1 - 2], 6), ...along([8, fy0 + 2], [8, fy1 - 2], 6)], r: 0.3, tone: 'glow' },
+        ...[-3.4, -1.6].map((y): Detail => ({ k: 'shape', pts: box(0, y, 1, 1), tone: 'hull' })),
+        { k: 'shape', pts: box(0, -2.5, 0.5, 2.8), tone: 'accent' },
+        { k: 'shape', pts: rect(-8.4, fy1 - 2.2, 16.8, 0.8), tone: 'accent' },
+      ],
+    }),
+    // The bow: a spine from the observation bridge back to the batteries, a red stripe down it.
+    ...sym(part('spine', [[0, -45], [-1.6, -40], [-3.2, -30], [-3.6, fy0], [0, fy0]], 'hull', 2, {
+      slope: [-0.45, -0.05],
+      lift: 1.6,
+      details: [{ k: 'shape', pts: [[0, -30], [-0.8, -30], [-0.8, fy0 - 1], [0, fy0 - 1]], tone: 'accent' }, windows([-2.2, -28], [-2.6, -20], 3, 0.28)],
+    })),
+    part('bridgeFrame', [[0, -47.4], [2, -43.4], [2.6, -38.4], [2.6, -36], [-2.6, -36], [-2.6, -38.4], [-2, -43.4]], 'hull2', 2.4, { lift: 1 }),
+    part('bridge', [[0, -46], [1.3, -43], [1.8, -38.8], [1.6, -37.2], [-1.6, -37.2], [-1.8, -38.8], [-1.3, -43]], 'glass', 2.6, { lift: 0.6, details: [{ k: 'shape', pts: [[-0.4, -44.4], [-1, -41.6], [-1.1, -39], [-0.5, -39], [-0.4, -41.6]], tone: 'glow' }] }),
+    // The aft deck the command tower stands on.
+    part('aftDeck', chamfer(0, 24.4, 22, 20, 4), 'hull', 1.2, {
+      lift: 1.2,
+      facets: [{ pts: [[-11, 18.4], [-7, 14.4], [-5, 14.4], [-5, 34.4], [-7, 34.4], [-11, 30.4]], slope: [-0.5, 0] }, { pts: [[11, 18.4], [7, 14.4], [5, 14.4], [5, 34.4], [7, 34.4], [11, 30.4]], slope: [0.5, 0] }],
+      details: [{ k: 'shape', pts: rect(-11, 31.6, 22, 1.2), tone: 'accent' }, { k: 'line', pts: [[-11, 26], [-5.6, 26]] }, { k: 'line', pts: [[5.6, 26], [11, 26]] }],
+    }),
+    // The command bridge tower: a broad base, a second tier with the long bridge windows, a sensor
+    // array across its front, masts and dishes.
+    part('command', chamfer(0, 22, 12.4, 12, 2.8), 'hull2', 3, {
+      lift: 2.8,
+      facets: [{ pts: [[-6.2, 18.8], [-3.4, 16], [-3.4, 28], [-6.2, 25.2]], slope: [-0.5, 0] }, { pts: [[6.2, 18.8], [3.4, 16], [3.4, 28], [6.2, 25.2]], slope: [0.5, 0] }],
+      details: [{ k: 'shape', pts: rect(-6.2, 24.6, 12.4, 1.4), tone: 'accent' }, windows([-4.4, 19.6], [4.4, 19.6], 5, 0.3), { k: 'line', pts: [[-6.2, 22.4], [6.2, 22.4]] }],
+    }),
+    part('tier', chamfer(0, 21, 8, 6.4, 1.6), 'hull', 3.4, {
+      lift: 1.8,
+      details: [{ k: 'shape', pts: rect(-3.4, 18.6, 6.8, 1.4), tone: 'glass' }, { k: 'lights', pts: along([-2.8, 19.3], [2.8, 19.3], 4), r: 0.3, tone: 'glow' }, { k: 'shape', pts: rect(-4, 23, 8, 0.8), tone: 'accent' }],
+    }),
+    part('array', rect(-4.6, 15.2, 9.2, 0.9), 'dark', 3.6, { detach: { hull: 0.58 }, details: [{ k: 'lights', pts: along([-3.8, 15.6], [3.8, 15.6], 3), r: 0.3, tone: 'accent' }] }),
+    ...sym(mast('mast', -3.2, 29.2, 4.6, 3.6, 0.55), { detach: { hull: 0.48 } }),
+    ...sym(dish('dish', -5.6, 30.4, 1.6, 3.4, 0.4), { detach: { hull: 0.3 } }),
+    // Seats: barbettes under the batteries, pads under the point defence, rings under the shield
+    // bulbs; the hangars sit in the flight deck.
+    ...[0, 1].flatMap((i) => seat(`barbette${i}`, c, i, 1.3, 2.4, 'heavy')),
+    ...[2, 3].flatMap((i) => seat(`barbette${i}`, c, i, 1.3, 2.2, 'heavy')),
+    ...[4, 5, 6, 7].flatMap((i) => seat(`seatF${i}`, c, i, 1.3, 2.2, 'oct')),
+    ...seat('seatS0', c, 8, 1.18, 2.2, 'heavy'),
+    ...seat('seatS1', c, 9, 1.18, 2.2, 'heavy'),
+    part('pylon', chamfer(0, 35.6, 32, 5, 1.6), 'metal', 0.5, { lift: 0.6, details: [{ k: 'line', pts: [[-15, 35.6], [15, 35.6]] }] }),
+    ...pods(c, [12, 13, 14, 15], 32.5, [48.4, 49.4, 49.4, 48.4], 6.8, 1.8),
+  ]
+  return { parts, breakStyle: 'bands', cuts: 2, mount: (i) => ({ detach: i >= 4 && i <= 7 }) }
+}

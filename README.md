@@ -1702,15 +1702,24 @@ AI tournament): the Confederacy's alpha strikes and shield-breaking edge out the
 Republic's shields and turbolasers edge out the Swarm, and the Swarm's numbers and regrowth wear
 down the Confederacy's thin shields.
 
-- **Republic**: tough, shielded warships with strong repair; fewer ships, each worth more.
+- **Republic**: tough, shielded warships with strong repair; fewer ships, each worth more. Its
+  frigate-tier ships are the Warden frigate and the Sentinel destroyer, a shield escort whose
+  projector domes speed the shields of the fleet round it; its two flagships are the Sovereign
+  dreadnought (heavy guns and a fighter wing) and the Resolute battleship, a command carrier with a
+  flight deck of Lance squadrons and a fire-control aura.
 - **Confederacy**: heavy guns that hit hard and early, missiles and the Breaker's spinal ion lance
   for shields, fast strike craft; thin shields and weaker repairs. Its two flagships are the
   Dominator dreadnought (carrier, Alpha strike) and the Tyrant battleship, whose fire-control aura
   makes the guns round it hit harder.
 - **Swarm**: no shields anywhere (more hull instead), living hulls that grow back out of combat,
-  cheap ships that hatch fast, the Leech corvette's drain aura, and broods of Stingers from the
-  Leviathan and the fully grown Hive Nexus. Its mining platform's "Shield generator" upgrade is a
-  Hardened carapace (more hull, faster regrowth), and its station takes no Shield core.
+  cheap ships that hatch fast, the Leech corvette's drain aura, and broods of Stingers from its
+  flagships and the fully grown Hive Nexus. Its frigate-tier ships are the Harvester frigate and
+  the Impaler destroyer, a living spear that turns its whole body to aim a spinal tendril lance at
+  big hulls; its two flagships are the Leviathan dreadnought, the gun flagship (heavy tendril lances
+  and spore cannons, one slow brood), and the Broodmother carrier, which hatches broods of Stingers
+  far faster and keeps four out, with weak guns of its own. Its mining platform's "Shield
+  generator" upgrade is a Hardened carapace (more hull, faster regrowth), and its station takes no
+  Shield core.
 
 Everything that belongs to one faction is in files of its own, so the factions can be worked on
 side by side without touching each other's:
@@ -1748,11 +1757,16 @@ faction's data; all off unless a unit sets them, and none draws a random number)
   ships within `radius`, shared evenly.
 - `fireControl` (`{ radius, bonus }`): our ships within `radius` deal `bonus` more damage (0.15:
   15%); auras don't stack, the best counts.
+- `shieldAura` (`{ radius, regen }`): a shield projector. Our ships within `radius`, itself
+  included, recharge their shields `regen` faster (1: twice as fast; it multiplies on top of the
+  rest, out-of-combat doubling included). Auras don't stack, the best counts; a ship with shield
+  generators projects only while one of them stands (shoot the projectors off and it stops), and
+  ships without shields gain nothing. The Republic's Sentinel destroyer carries one.
 - A brood: a station launches strike craft as a flagship carrier does (`StationPlan.carrier`:
   `{ unit, every, max, level }`, from that level on), on a clock of its own beside its defense wing.
 - A spinal gun (`spinal(weapon, degrees)` in data/kit.ts): fixed along the keel, it fires only
   within `degrees` either side of the nose, so the whole ship turns to aim it; its mount doesn't
-  turn on the model.
+  turn on the model. The Confederacy's Breaker and the Swarm's Impaler carry one.
 - No shields: `shield: 0` with no shield generators works everywhere (the HUD shows no shield
   bar, ion barely scratches the hull, shield research does nothing).
 
@@ -1762,7 +1776,8 @@ each one on for a test unit and checks what it does.
 
 The battle shows them (render.ts, in each side's bolt and engine colours): a drain ship's tendrils
 to the enemies it bites and heal sparks off the allies it mends, a fire-control ship's ring (and,
-selected or up close, lines to what its ships fire on), a pulsing glow on a living hull growing
+selected or up close, lines to what its ships fire on), a shield projector's faint ring and
+shimmering links to the ships whose shields it is feeding, a pulsing glow on a living hull growing
 back, a spinal gun's charge at its muzzle and its shot as a lance of light, and a Swarm brood
 bursting from its sac. The Codex lists them as **Traits** (with "No shields" and carriers), and the
 unit cards and their tips explain them (`traits` in
@@ -1770,13 +1785,15 @@ unit cards and their tips explain them (`traits` in
 
 **Research for the mechanics** (`TechEffect` in data/kit.ts, applied in sim.ts like the others, as
 fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shields that much
-harder), `aura` (added to its fire-control bonus) and `auraRadius`, `regrow` (faster regrowth) and
-`regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
+harder), `aura` (added to its fire-control bonus) and `auraRadius` (the reach of its fire-control
+or shield-projector aura), `shieldAura` (added to its shield projector's `regen`), `regrow` (faster
+regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
 station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
 each ship's own `build` research), and `regrow`/`regrowDelay` there reach every living hull of the
 side, ships and structures, on top of their own. The AI weighs them like the rest. The research
 that uses them: the Confederacy's Shield breakers (Breaker, `shieldDamage`) and Fire-control net
-(Tyrant, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm),
+(Tyrant, `aura` and `auraRadius`), the Republic's Projector arrays and Wide-field emitters
+(Sentinel, `shieldAura` and `auraRadius`) and Fleet command (Resolute, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm), Swollen wombs (Broodmother, `regrow`),
 Deeper tendrils (Leech, `drain` and `drainHeal`) and Hive surge (Hive Nexus, `fleetBuild`).
 
 **Names per faction** (FactionInfo `names` in data/kit.ts): its guns by kind (`weapon`, the Codex's
@@ -1799,9 +1816,17 @@ chitter. FactionInfo `sound.turbo` still tunes the heavy guns' pitch. Settings â
 its fire from further off and sends its fast warships round the flank of a goal where that is
 clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
 Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
-ships in among the enemy with its wave, values fire-control and spinal ships, and with more than one
-flagship to choose from (the Confederacy's Dominator and Tyrant) settles on one by what its fleet
-needs, so both appear. A side without shields never orders a Shield core.
+ships in among the enemy with its wave, values fire-control and spinal ships, values a shield
+projector by how many warships it has and how much of their staying power is shields (and keeps it
+with the fleet, never scouting or flanking). Every side has two flagships, a gun flagship and a
+carrier/support one: the Republic's Sovereign and Resolute (carrier and fire-control aura), the
+Confederacy's Dominator and Tyrant (fire-control aura), the Swarm's Leviathan and Broodmother
+(carrier). A side settles on one only once it is really saving for a flagship (a fleet worth
+guarding it, nothing attacking home, a Capital slip that could build it), not at the start of the
+battle, drawn by what its fleet needs: the support flagship the bigger its own fleet and the more
+strike craft the enemy flies, the gun flagship the more cruisers and flagships the enemy fields.
+It keeps to that pick until the flagship is built, and settles afresh after losing it, so both
+appear. A side without shields never orders a Shield core.
 
 **For a faction's model files** (all additive, no shared file to change):
 
@@ -2206,8 +2231,11 @@ machinery and blue engines: the Lance interceptor, the blunt twin-engine Hammer 
 bomb bay and torpedo racks, the Suture repair fighter with manipulator arms and a green repair hub,
 the Aegis picket in the defense wing's gold bands, the Halberd gunship with a ball turret on each
 wing, the Mercy corvette with its green repair ring and crane booms, the Warden frigate, the long
-Paladin cruiser with its turbolasers in a row on an armoured spine, and the Sovereign dreadnought
-with a flight-deck trench and twin bridge towers. Its Bastion station is a squared-off military
+Paladin cruiser with its turbolasers in a row on an armoured spine, the Sentinel destroyer, a slim
+dagger with three shield-projector domes (two on armoured flank sponsons, one on the spine) joined
+by glowing power conduits, the Sovereign dreadnought with a flight-deck trench and twin bridge
+towers, and the Resolute battleship, a broad dagger with a sunken flight deck between two
+flight-bay sponsons and a raised two-tier command bridge aft. Its Bastion station is a squared-off military
 platform of plates and girders that grows with its level: a compact eight-sided core at level 1,
 short arms with docking pods and a girder frame at level 2, long arms, big pods and dry docks at
 level 3, and a great outer frame on struts at level 4, square with corner bastions or octagonal

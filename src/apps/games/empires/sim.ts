@@ -63,8 +63,9 @@ export type Mods = {
   hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number
   // From research for the faction mechanics (TechEffect), each a multiplier, there only when some
   // research changes it (and absent in units saved before them): damage to shields, a fire-control
-  // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal.
-  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number
+  // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal,
+  // a shield-projector aura's regen (added; its reach is auraRadius).
+  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; shieldAura?: number
 }
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
@@ -618,6 +619,7 @@ function modsFor(p: Player, t: UnitType): Mods {
   if (regrowDelay) mods.regrowDelay = Math.max(0, 1 + regrowDelay)
   if (e.drain) mods.drain = 1 + e.drain
   if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
+  if (e.shieldAura) mods.shieldAura = e.shieldAura
   return mods
 }
 /** A fire-control aura as it stands for `u`: its type's, with its research (TechEffect aura and
@@ -627,6 +629,16 @@ export function auraOf(u: Unit): { radius: number; bonus: number } | null {
   if (!f) return null
   return { radius: f.radius * (u.mods.auraRadius ?? 1), bonus: f.bonus + (u.mods.aura ?? 0) }
 }
+/** A shield-projector aura as it stands for `u`: its type's, with its research (TechEffect
+ * shieldAura, added to its regen, and auraRadius). Null for a unit without one. */
+export function shieldAuraOf(u: Unit): { radius: number; regen: number } | null {
+  const s = u.t.shieldAura
+  if (!s) return null
+  return { radius: s.radius * (u.mods.auraRadius ?? 1), regen: s.regen + (u.mods.shieldAura ?? 0) }
+}
+/** Whether a shield projector is projecting: built, alive, and (if it has shield generators) with
+ * one of them standing. */
+export const projecting = (u: Unit) => !!u.t.shieldAura && !u.dead && !building(u) && !u.site && !u.launch && share(u, 'shield') > 0
 /** A living hull's regrowth as it stands for `u`, with its research (TechEffect regrow and
  * regrowDelay). Null for a unit without one. */
 export function regrowOf(u: Unit): { rate: number; delay: number } | null {
@@ -4352,7 +4364,7 @@ function terrain(w: World, u: Unit, dt: number) {
 // --- Faction mechanics -----------------------------------------------------------------------------------
 //
 // What a unit's type can switch on (data/kit.ts UnitType): living hulls that grow back, a drain aura,
-// a fire-control aura. A station that launches strike craft is a carrier (see tick and launch); a
+// a fire-control aura, a shield-projector aura. A station that launches strike craft is a carrier (see tick and launch); a
 // spinal gun is a hardpoint weapon with an arc (see shoot and bearing). Each is off unless a unit
 // sets it, and none of them draws a random number, so every copy of a battle agrees.
 
@@ -4413,6 +4425,21 @@ function controlBonus(w: World, u: Unit) {
   return best
 }
 
+/** The shield projectors standing this tick (UnitType shieldAura): worked out once a tick, like
+ * fireControl. Only ever read during a tick, which fills it afresh. */
+const projectors: Unit[] = []
+/** How much faster `u`'s shields recharge under a shield projector: the best aura of its side it
+ * is within (auras don't stack), 0 when none. Only ships are covered. */
+function projectorBoost(w: World, u: Unit) {
+  if (!projectors.length || !isShip(u.t)) return 0
+  let best = 0
+  for (const a of projectors) {
+    const s = shieldAuraOf(a)!
+    if (s.regen > best && !foes(w, a.owner, u.owner) && d2(a.x, a.y, u.x, u.y) <= s.radius * s.radius) best = s.regen
+  }
+  return best
+}
+
 export function tick(w: World, dt = STEP) {
   if (w.winner !== -1) return
   w.time += dt
@@ -4440,7 +4467,11 @@ export function tick(w: World, dt = STEP) {
   findSpotGroups(w)
   findEscorts(w)
   fireControl.length = 0
-  for (const u of w.units) if (u.t.fireControl && !u.dead && !building(u) && !u.site) fireControl.push(u)
+  projectors.length = 0
+  for (const u of w.units) {
+    if (u.t.fireControl && !u.dead && !building(u) && !u.site) fireControl.push(u)
+    if (u.t.shieldAura && projecting(u)) projectors.push(u)
+  }
   for (const u of w.units) {
     if (u.dead) continue
     // A yard goes up only as fast as engineers build it (see construction).
@@ -4464,7 +4495,7 @@ export function tick(w: World, dt = STEP) {
     // failed shields take a few seconds to come back at all, rather than flickering on and off.
     if (!terrain(w, u, dt) && w.time - u.shieldOut >= SHIELD_REBOOT) {
       const smax = shieldMax(u)
-      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (coreUp(u) ? 1 + MODULE_FX.regen : 1) * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (coreUp(u) ? 1 + MODULE_FX.regen : 1) * (1 + RANK_BONUS * u.rank) * (1 + projectorBoost(w, u)) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     }
     if (u.t.regrow) regrow(w, u, dt)
     // A new ship on its way out of its yard or the station's hangar: nothing else until it's clear.

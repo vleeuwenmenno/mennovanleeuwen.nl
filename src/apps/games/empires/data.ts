@@ -131,6 +131,7 @@ const scaled = (t: UnitType): UnitType => ({
   ...(t.support ? { support: { ...t.support, range: reach(t.support.range) } } : {}),
   ...(t.drain ? { drain: { ...t.drain, radius: reach(t.drain.radius) } } : {}),
   ...(t.fireControl ? { fireControl: { ...t.fireControl, radius: reach(t.fireControl.radius) } } : {}),
+  ...(t.shieldAura ? { shieldAura: { ...t.shieldAura, radius: reach(t.shieldAura.radius) } } : {}),
 })
 /** Toughened and scaled: every unit goes through this once. */
 const finish = (t: UnitType) => scaled(toughen(t))
