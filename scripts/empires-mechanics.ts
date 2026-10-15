@@ -107,7 +107,8 @@ const mid = () => ({ x: map.w / 2, y: map.h / 2 })
   const { x, y } = mid()
   const rg = { ...UNIT['s-frigate'], regrow: { rate: 0.05, delay: 5 } }
   const u = put(w, 's-frigate', 0, x, y, 0, rg)
-  const plain = put(w, 's-frigate', 0, x, y + 400, 0)
+  // Swarm ships regrow by default: these test units don't, so each check sees one mechanic only.
+  const plain = put(w, 's-frigate', 0, x, y + 400, 0, { ...UNIT['s-frigate'], regrow: undefined })
   u.hull = u.hullMax * 0.5
   plain.hull = plain.hullMax * 0.5
   u.lastHit = plain.lastHit = w.time
@@ -140,7 +141,7 @@ const mid = () => ({ x: map.w / 2, y: map.h / 2 })
   const { x, y } = mid()
   const drain = { radius: 500, dps: 40, heal: 0.5 }
   const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain })
-  const ally = put(w, 's-frigate', 0, x - 250, y, 0, unarmed(UNIT['s-frigate']))
+  const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
   const far = put(w, 'd-frigate', 1, x + 900, y, Math.PI, unarmed(UNIT['d-frigate']))
   const weak = put(w, 'd-fighter', 1, x, y + 200, 0, unarmed(UNIT['d-fighter']))
@@ -399,7 +400,7 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   const { x, y } = mid()
   research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5 })
   const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5 } })
-  const ally = put(w, 's-frigate', 0, x - 250, y, 0, unarmed(UNIT['s-frigate']))
+  const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
   ally.hull = ally.hullMax * 0.2
   const d = drainOf(leech)!
