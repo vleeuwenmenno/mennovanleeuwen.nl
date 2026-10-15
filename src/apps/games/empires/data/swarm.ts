@@ -192,17 +192,18 @@ const DEVOURER: UnitType = {
  * narrow organism grown round one great spinal tendril lance, a violet crystal spike that runs from
  * its clawed head far out past the nose: it turns its whole body to aim and skewers big hulls with
  * one heavy bolt at a time. Two acid sprayers on its hind plates keep strike craft off it; no
- * shields, a thin hull that grows back.
+ * shields, a thinner hull than the Harvester's that grows back, and its tissue knits furiously when
+ * it is badly hurt (Frenzied knitting).
  */
 const IMPALER: UnitType = {
-  id: 's-destroyer', faction: 'swarm', tier: 'frigate', name: 'Impaler destroyer', blurb: 'A living spear: a long, narrow organism grown round a spinal tendril lance. It turns its whole body to aim, and each thrust of the lance skewers a big hull. Fragile, and helpless against strike craft that get close.',
-  sprite: 'swarm-destroyer', aspect: 0.3, size: 160, hull: 1050, shield: 0, regen: 0, speed: 82, turn: 1.0, pop: 3, cost: 760, build: 20, level: 2, squad: 1, sensor: 1050,
+  id: 's-destroyer', faction: 'swarm', tier: 'frigate', name: 'Impaler destroyer', blurb: 'A living spear: a long, narrow organism grown round a spinal tendril lance. It turns its whole body to aim, and each thrust of the lance skewers a big hull. Thin-skinned and slow to deal with strike craft; badly hurt, its tissue knits furiously.',
+  sprite: 'swarm-destroyer', aspect: 0.3, size: 160, hull: 1250, shield: 0, regen: 0, speed: 82, turn: 1.0, pop: 3, cost: 760, build: 20, level: 2, squad: 1, sensor: 1050,
   weapons: [],
   hardpoints: [
-    { ...gun('turbo', 5, 1.6, 0.09, 380, spinal(turbo(120, 720, 3, 1), 10)), look: 'lance' },
+    { ...gun('turbo', 5, 1.6, 0.09, 380, spinal(turbo(200, 720, 3.2, 1), 10)), look: 'lance' },
     gun('flak', 3.0, 7.0, 0.06, 170, flak(5.5, 300, 0.4)), gun('flak', 7.0, 7.0, 0.06, 170, flak(5.5, 300, 0.4)),
   ],
-  engines: [[3.6, 9.5], [6.4, 9.5]],
+  engines: [[3.6, 9.5], [6.4, 9.5]], ability: 'repairSwarm',
   regrow: REGROW.ship,
   role: { role: 'Lance ship', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'being flanked'] },
 }
