@@ -11,6 +11,7 @@
     "data": "node scripts/fetch-data.ts",
     "build:full": "node scripts/fetch-data.ts && tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
+    "check:pwa-mobile": "node scripts/pwa-mobile-check.mjs",
     "check:frames": "node scripts/frame-stats-check.ts",
     "check:perf": "node scripts/perf/check.ts",
     "check:push": "node scripts/webpush-check.ts",
