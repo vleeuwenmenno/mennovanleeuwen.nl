@@ -29,10 +29,10 @@ await new Promise((resolve, reject) => {
   server.once('error', reject)
   server.listen(port, '127.0.0.1', resolve)
 })
-let browser
+let browser, page
 try {
   browser = await launch(1280, 800)
-  const page = await newPage(browser, 390, 844, '')
+  page = await newPage(browser, 390, 844, '')
   await page.send('Emulation.setTouchEmulationEnabled', { enabled: true })
   await page.send('Page.navigate', { url: `http://127.0.0.1:${port}/` })
   await page.waitFor(`document.readyState === 'complete'`)
@@ -41,6 +41,8 @@ try {
     await sleep(150)
     if (await page.eval(`!document.querySelector('.boot')`)) break
   }
+  await page.waitFor(`!!document.querySelector('.topbar') && !document.querySelector('.boot')`)
+  await sleep(300)
   await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: 'notebook' }))`)
   await page.waitFor(`!!document.querySelector('.notebook')`)
   assert.equal(await page.eval(`getComputedStyle(document.querySelector('.notebook .nb-main')).display`), 'none')
@@ -92,6 +94,7 @@ try {
   assert.deepEqual(page.errors, [])
 } catch (error) {
   console.error(error)
+  if (page) console.error('Browser errors:', page.errors, 'Page:', await page.eval('document.body.innerText.slice(0, 1000)'))
   process.exitCode = 1
 } finally {
   if (browser) await browser.close()
