@@ -1,12 +1,18 @@
 import { FACTIONS, type AbilityId, type FactionId, type Tier, type WeaponKind } from './data'
+import { MusicDirector, type MusicScene } from './music'
 import { RETREAT_TIME, WARP_RESERVE, WARP_YARD } from './sim'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresBus, type EmpiresMix } from '../prefs'
+
+export type { MusicScene }
 
 // Empires At War sounds, all synthesised: no audio files. Each sound is rendered once, in a few
 // slightly different takes, into a sample (small DSP below: oscillators, envelopes, a resonant
 // filter, noise), then played through one of three buses: the battle, the interface (crew
 // acknowledgements and alerts), and the ambience. Battle sounds are panned and, further away,
 // quieter and muffled; everything gets a touch of a long, soft reverb.
+//
+// Music (music.ts): six separate pieces (menu, lobby, skirmish, skirmish combat, galaxy, galaxy
+// alarm) with hard cuts — no shared bed. Combat heat and GC threats flip the in-game variants.
 //
 // Each faction has a set of its own (see SET): the Republic's clone crews answer over a squelchy
 // radio with clean military beeps, and its guns are the films' blasters and turbolasers; the
@@ -16,8 +22,8 @@ import { empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresBus,
 
 
 export type Where = { pan: number; gain: number }
-/** Battle sounds, crews answering (and abilities), interface and alerts, ambience (wind and the
- * far-off battle) and music (the bridge's low chord): each has its own volume. */
+/** Battle sounds, crews answering (and abilities), interface and alerts, ambience (the far-off
+ * battle rumble) and music (adaptive score): each has its own volume. */
 export type Bus = EmpiresBus
 const BUSES: Bus[] = ['sfx', 'voice', 'ui', 'amb', 'music']
 export type OrderKind = 'move' | 'attack' | 'attackMove' | 'patrol' | 'hold' | 'stop' | 'rally' | 'target'
@@ -1148,8 +1154,9 @@ export class EmpiresSound {
   private bank = new Map<string, AudioBuffer[]>()
   private recent = new Map<string, number[]>()
   private ackSrc: AudioBufferSourceNode | null = null
-  private drone: { stop: () => void } | null = null
+  private musicDir: MusicDirector | null = null
   private rumble: GainNode | null = null
+  private rumbleSrc: AudioBufferSourceNode | null = null
   private heat = 0
   /** Off, the volume, the mix and the music are kept with Settings (../prefs.ts), which may
    * change them mid-game. The music can be switched off on its own, keeping its volume. */
@@ -1167,7 +1174,8 @@ export class EmpiresSound {
     return empiresMusic.get()
   }
 
-  /** Browsers only allow audio after a click or key press. */
+  /** Browsers only allow audio after a click or key press. iOS also wants a silent buffer
+   * played in the same gesture, and may suspend again when the tab backgrounds. */
   unlock() {
     if (!this.ctx) {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
@@ -1203,9 +1211,22 @@ export class EmpiresSound {
         g.connect(shelf)
         this.buses[b] = g
       }
+      this.musicDir = new MusicDirector(ctx, this.buses.music!)
       this.applyVolume()
     }
-    if (this.ctx.state === 'suspended') void this.ctx.resume()
+    // iOS Safari: a zero-length buffer played under the user gesture unlocks the graph for later.
+    try {
+      const buf = this.ctx.createBuffer(1, 1, this.ctx.sampleRate)
+      const src = this.ctx.createBufferSource()
+      src.buffer = buf
+      src.connect(this.ctx.destination)
+      src.start(0)
+    } catch {
+      /* ignore */
+    }
+    const kick = () => this.musicDir?.kick()
+    if (this.ctx.state === 'suspended') void this.ctx.resume().then(kick)
+    else kick()
   }
 
   private applyVolume() {
@@ -1343,7 +1364,9 @@ export class EmpiresSound {
 
   /** A shot landing; `faction`: whose ship it hit (a living hull thuds wetly instead of crunching). */
   hit(shield: boolean, heavy: boolean, where: Where, faction?: FactionId) {
-    if (!this.ready() || where.gain < 0.03) return
+    if (!this.ready()) return
+    this.feel(heavy ? 0.4 : shield ? 0.12 : 0.2, where)
+    if (where.gain < 0.03) return
     if (shield) {
       if (this.allow('shield', 2, 0.1)) this.play('shield', shieldHit, { where, gain: 0.12, takes: 4 })
     } else if (this.allow('hull', heavy ? 3 : 2, 0.1)) {
@@ -1479,6 +1502,9 @@ export class EmpiresSound {
     this.ui('levelup', (sr) => brass(sr, 196, [[[0, 4, 7], 0.22], [[2, 5, 9], 0.22], [[4, 7, 12], 0.7]], 0.6), 0.55, 1)
   }
   alarm(station: boolean) {
+    // Under attack: snap the score into combat music, don't wait for heat to crawl up.
+    this.heat = Math.max(this.heat, station ? 3.5 : 2.5)
+    this.musicDir?.setHeat(this.heat)
     if (this.ready() && this.allow('alarm', 1, 2)) this.ui(station ? 'klaxon-st' : 'klaxon', klaxon(station), 0.45, 1)
   }
   eliminated(friendly: boolean) {
@@ -1493,6 +1519,7 @@ export class EmpiresSound {
     this.ui(paused ? 'pause' : 'resume', tape(paused), 0.4, 1)
   }
   victory() {
+    this.musicDir?.duckFor(3.2)
     this.ui('victory', (sr) =>
       layers(sr, [
         { data: brass(sr, 196, [[[0, 4, 7], 0.3], [[0, 4, 7], 0.15], [[5, 9, 12], 0.3], [[7, 11, 14], 0.3], [[12, 16, 19], 1.6]], 1.2) },
@@ -1501,53 +1528,37 @@ export class EmpiresSound {
       0.75, 1)
   }
   defeat() {
+    this.musicDir?.duckFor(3.2)
     this.ui('defeat', (sr) =>
       layers(sr, [{ data: brass(sr, 147, [[[0, 3, 7], 0.6], [[-2, 2, 5], 0.6], [[-5, -2, 3], 1.6]], 1.2) }, { data: explosion(2)(sr, Math.random), gain: 0.35, at: 0.1 }]),
       0.7, 1)
   }
 
-  // --- Ambience -------------------------------------------------------------------------------------------
+  // --- Ambience and music ---------------------------------------------------------------------------------
 
-  /** Combat adds to the distant rumble, more for fights far from the camera. */
+  /**
+   * Combat heat for music + rumble. Nearby fighting matters most (where.gain high) — the old
+   * `(1 - gain)` formula only heated distant battles, so combat music never started on-camera.
+   */
   private feel(amount: number, where: Where) {
-    this.heat = Math.min(6, this.heat + amount * (1 - where.gain) * 0.12)
+    const near = 0.3 + where.gain * 0.7
+    this.heat = Math.min(6, this.heat + amount * near * 0.7)
   }
 
-  /** Call every frame: the rumble follows the fighting, and fades when it stops. */
+  /** Call every frame: rumble + combat-heat flip between skirmish and skirmishCombat music. */
   ambience(dt: number) {
-    if (!this.rumble || !this.ctx) return
-    this.heat *= Math.exp(-dt / 2.5)
-    this.rumble.gain.setTargetAtTime(Math.min(0.5, this.heat * 0.12), this.ctx.currentTime, 0.4)
+    if (!this.ctx) return
+    // Hold heat a bit so a skirmish stays in combat music between volleys.
+    this.heat *= Math.exp(-dt / 4.5)
+    if (this.rumble) this.rumble.gain.setTargetAtTime(Math.min(0.5, this.heat * 0.12), this.ctx.currentTime, 0.4)
+    this.musicDir?.setHeat(this.heat)
+    this.musicDir?.tick(dt)
   }
 
-  /** The hum of a ship's bridge in deep space, and the far-off battle rumble. */
-  startDrone() {
-    if (!this.ctx || this.drone) return
+  /** Distant battle rumble on the ambience bus (skirmish / combat only). */
+  private ensureRumble() {
+    if (!this.ctx || this.rumble) return
     const ctx = this.ctx
-    const out = this.buses.amb!
-    const g = ctx.createGain()
-    g.gain.value = 0.0001
-    g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 3)
-    const f = ctx.createBiquadFilter()
-    f.type = 'lowpass'
-    f.frequency.value = 240
-    const lfo = ctx.createOscillator()
-    lfo.frequency.value = 0.06
-    const lg = ctx.createGain()
-    lg.gain.value = 110
-    lfo.connect(lg).connect(f.frequency)
-    const oscs = [55, 55.3, 82.4, 110.4, 164.8].map((fr) => {
-      const o = ctx.createOscillator()
-      o.type = fr > 100 ? 'triangle' : 'sawtooth'
-      o.frequency.value = fr
-      o.connect(f)
-      o.start()
-      return o
-    })
-    f.connect(g).connect(this.buses.music!)
-    lfo.start()
-    // The battle rumble comes from a looping noise sample, deep-filtered. (There used to be a
-    // "static wind" too, a swept band of the same noise; it whooshed, and went.)
     const n = ctx.sampleRate * 3
     const nb = ctx.createBuffer(1, n, ctx.sampleRate)
     const d = nb.getChannelData(0)
@@ -1559,41 +1570,74 @@ export class EmpiresSound {
     const rf = ctx.createBiquadFilter()
     rf.type = 'lowpass'
     rf.frequency.value = 160
-    // Kept locally too: a drone stopped just before the next one starts must not take the new
-    // drone's rumble down with it.
     const rumble = ctx.createGain()
     rumble.gain.value = 0
-    this.rumble = rumble
-    rb.connect(rf).connect(rumble).connect(out)
+    rb.connect(rf).connect(rumble).connect(this.buses.amb!)
     rb.start()
-    this.drone = {
-      stop: () => {
-        const t = ctx.currentTime
-        for (const node of [g, rumble]) {
-          node.gain.cancelScheduledValues(t)
-          node.gain.setValueAtTime(node.gain.value, t)
-          node.gain.linearRampToValueAtTime(0, t + 0.6)
-        }
-        setTimeout(() => {
-          for (const o of [...oscs, lfo]) o.stop()
-          rb.stop()
-          g.disconnect()
-          rumble.disconnect()
-          if (this.rumble === rumble) this.rumble = null
-        }, 800)
-      },
-    }
+    this.rumble = rumble
+    this.rumbleSrc = rb
   }
 
-  stopDrone() {
-    this.drone?.stop()
-    this.drone = null
+  private stopRumble() {
+    const rumble = this.rumble
+    const rb = this.rumbleSrc
+    this.rumble = null
+    this.rumbleSrc = null
+    if (!rumble || !this.ctx) return
+    const t = this.ctx.currentTime
+    rumble.gain.cancelScheduledValues(t)
+    rumble.gain.setValueAtTime(rumble.gain.value, t)
+    rumble.gain.linearRampToValueAtTime(0, t + 0.6)
+    setTimeout(() => {
+      try {
+        rb?.stop()
+      } catch {
+        /* already stopped */
+      }
+      rumble.disconnect()
+    }, 800)
+  }
+
+  /**
+   * Shell music location. Combat and GC-alarm pieces flip automatically (heat / galaxyThreat).
+   * `'none'` stops. Skirmish starts the distant rumble.
+   */
+  setMusicScene(scene: 'menu' | 'lobby' | 'skirmish' | 'galaxy' | 'none') {
+    this.unlock()
+    if (!this.musicDir) return
+    if (scene === 'skirmish') this.ensureRumble()
+    else this.stopRumble()
+    if (scene !== 'skirmish') this.heat = 0
+    this.musicDir.setScene(scene)
+    this.musicDir.kick()
+  }
+
+  /** Sound-test: audition any piece, including combat / alarm variants. */
+  previewMusic(scene: MusicScene) {
+    this.unlock()
+    if (!this.musicDir) return
+    if (scene === 'skirmish' || scene === 'skirmishCombat') this.ensureRumble()
+    else this.stopRumble()
+    this.musicDir.preview(scene)
+    this.musicDir.kick()
+  }
+
+  /** Galactic conquest: hostile event — switches map music to the alarm piece for a while. */
+  galaxyThreat(seconds = 16) {
+    this.unlock()
+    this.musicDir?.galaxyThreat(seconds)
+  }
+
+  get musicScene(): MusicScene {
+    return this.musicDir?.currentScene ?? 'none'
   }
 
   dispose() {
     this.unsubscribe?.()
     this.unsubscribe = null
-    this.stopDrone()
+    this.stopRumble()
+    this.musicDir?.dispose()
+    this.musicDir = null
     void this.ctx?.close()
     this.ctx = null
   }

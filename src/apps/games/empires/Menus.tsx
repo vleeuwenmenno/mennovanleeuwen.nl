@@ -14,7 +14,7 @@ import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Re
 import { MAP_SCALE } from './scale'
 import { Codex } from './Codex'
 import { score } from './Scoreboard'
-import type { Bus, EmpiresSound } from './sound'
+import type { Bus, EmpiresSound, MusicScene } from './sound'
 import { TAP_SLOP, isTouch, useCoarse } from './Touch'
 import './touch-menus.css'
 
@@ -345,6 +345,17 @@ export function LayoutSection({ store = battleLayout, campaign = false }: { stor
 /** Every sound in the game on a button, to audition them. */
 function SoundTest({ sound }: { sound: EmpiresSound }) {
   const at = { pan: 0, gain: 1 }
+  const [musicScene, setMusicScene] = useState(sound.musicScene)
+  // Leave the shell's scene as we found it when the test closes.
+  useEffect(() => {
+    const prev = sound.musicScene
+    return () => {
+      if (prev === 'lobby') sound.setMusicScene('lobby')
+      else if (prev === 'galaxy' || prev === 'galaxyAlarm') sound.setMusicScene('galaxy')
+      else if (prev === 'skirmish' || prev === 'skirmishCombat') sound.setMusicScene('skirmish')
+      else sound.setMusicScene('menu')
+    }
+  }, [sound])
   // Each faction's own set (sound.ts SET): its guns, hits and deaths, and its crews.
   const side = (f: FactionId): [string, [string, () => void][]][] => [
     [`${FACTIONS[f].name}: weapons and damage`, [
@@ -425,8 +436,32 @@ function SoundTest({ sound }: { sound: EmpiresSound }) {
       ['Defeat', () => sound.defeat()],
     ]],
   ]
+  const pickMusic = (scene: MusicScene) => {
+    sound.unlock()
+    sound.previewMusic(scene)
+    setMusicScene(scene)
+  }
   return (
     <div className="ew-soundtest">
+      <section>
+        <h5>Music</h5>
+        <p className="ew-muted ew-small">Six separate pieces — no shared bed. Skirmish flips to combat when the fight heats up; the galaxy map flips to alarm on a threat.</p>
+        <div className="ew-soundgrid">
+          {([
+            ['Menu', 'menu'],
+            ['Lobby', 'lobby'],
+            ['Skirmish (calm)', 'skirmish'],
+            ['Skirmish (combat)', 'skirmishCombat'],
+            ['Galaxy map', 'galaxy'],
+            ['Galaxy (alarm)', 'galaxyAlarm'],
+            ['Stop', 'none'],
+          ] as const).map(([label, scene]) => (
+            <button key={scene} className={musicScene === scene ? 'is-on' : ''} onClick={() => pickMusic(scene)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
       {groups.map(([g, items]) => (
         <section key={g}>
           <h5>{g}</h5>

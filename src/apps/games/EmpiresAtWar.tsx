@@ -96,6 +96,39 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
     [],
   )
   const mp = useSyncExternalStore(net ? net.subscribe : noSubscribe, net ? net.getView : noView)
+  // Distinct pieces per shell location. Battle owns skirmish/skirmishCombat itself.
+  useEffect(() => {
+    if (screen === 'battle' || screen === 'fleetBattle') return
+    if (screen === 'multiplayer' && mp?.match) return
+    if (screen === 'conquest') sound.current.setMusicScene('galaxy')
+    else if (screen === 'lobby' || screen === 'multiplayer') sound.current.setMusicScene('lobby')
+    else sound.current.setMusicScene('menu')
+  }, [screen, mp?.match])
+  // iOS Safari suspends Web Audio freely: resume under the finger, and re-assert the shell
+  // piece when the tab comes back.
+  useEffect(() => {
+    const sceneFor = (): 'menu' | 'lobby' | 'skirmish' | 'galaxy' => {
+      if (screen === 'battle' || screen === 'fleetBattle') return 'skirmish'
+      if (screen === 'multiplayer' && mp?.match) return 'skirmish'
+      if (screen === 'conquest') return 'galaxy'
+      if (screen === 'lobby' || screen === 'multiplayer') return 'lobby'
+      return 'menu'
+    }
+    const resume = () => sound.current.unlock()
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      sound.current.unlock()
+      sound.current.setMusicScene(sceneFor())
+    }
+    window.addEventListener('pointerdown', resume, { capture: true })
+    window.addEventListener('touchstart', resume, { capture: true, passive: true })
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.removeEventListener('pointerdown', resume, true)
+      window.removeEventListener('touchstart', resume, true)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [screen, mp?.match])
   // A reload in the middle of multiplayer goes back to it: the server still has us for a while.
   useEffect(() => {
     if (!mpActive.get(session)) return
@@ -1392,7 +1425,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const ctx = c.getContext('2d')!
     const mctx = m.getContext('2d')!
     sound.unlock()
-    sound.startDrone()
+    sound.setMusicScene('skirmish')
     const fit = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1)
       for (const [el, g] of [
@@ -1683,7 +1716,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           ended = true
           // Over: nothing to resume any more.
           onSnap?.(null)
-          sound.stopDrone()
           if (w.winner === myTeam) {
             sound.victory()
             // Skirmish wins count on the menu; campaign battles count in the campaign.
@@ -1697,7 +1729,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
-      sound.stopDrone()
+      // Parent screen effect restores menu / galaxy music.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready])
