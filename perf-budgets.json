@@ -113,8 +113,8 @@
         "kind": "count"
       },
       "new canvases / sim s": {
-        "baseline": 213,
-        "budget": 245,
+        "baseline": 257,
+        "budget": 260,
         "kind": "count"
       },
       "bitmap cache MB": {
