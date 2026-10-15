@@ -6,14 +6,15 @@
 //
 // Its doctrine is attrition and numbers: no shields anywhere (more hull instead), living hulls that
 // grow back once out of the fight (UnitType and StationPlan `regrow`), cheap hulls that hatch fast,
-// fragile strike craft, the Leech corvette's drain aura (UnitType `drain`) and broods of Stingers
-// from the Leviathan and the fully grown Hive (`carrier`).
+// fragile strike craft, the Leech corvette's drain aura (UnitType `drain`), the Impaler's spinal
+// lance, and broods of Stingers from the Broodmother, the Leviathan and the fully grown Hive
+// (`carrier`).
 //
 // Its weapon organs are its own mount looks (Hardpoint `look`, drawn in models/swarm/mounts.ts): a
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -128,7 +129,7 @@ function capitalYard(): UnitType {
   const lance = turbo(30, 760, 2.4, 2)
   return {
     id: 's-cyard', faction: 'swarm', tier: 'yard', name: 'Leviathan Spawning Pit',
-    blurb: 'A vast spawning trench grown within the Hive Nexus\'s build radius, from station level 3: it grows cruisers, and Leviathans once its Capital slip has grown. Its own queue and rally point; tendril lances and acid sprayers guard it, and its hull grows back between attacks.',
+    blurb: 'A vast spawning trench grown within the Hive Nexus\'s build radius, from station level 3: it grows cruisers, and Leviathans and Broodmothers once its Capital slip has grown. Its own queue and rally point; tendril lances and acid sprayers guard it, and its hull grows back between attacks.',
     sprite: 'swarm-cyard', aspect: 0.74, size: 430, hull: 9400, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, cost: 1850, build: 42, level: 3, squad: 1, sensor: 1200,
     weapons: [],
     hardpoints: [
@@ -187,23 +188,65 @@ const DEVOURER: UnitType = {
 }
 
 /**
- * Leviathan dreadnought: the living hive vessel of the reference sheet. Four tendril lances flank its
- * hive core, four acid sprayers ride its chitin plates, two spore cannon nodes crown its spine array,
- * two brood chambers on its hind plates spawn Stingers, and three engine sacs push it.
+ * Impaler destroyer: a living spear, the Swarm's counterpart of the Confederacy's Breaker. A long,
+ * narrow organism grown round one great spinal tendril lance, a violet crystal spike that runs from
+ * its clawed head far out past the nose: it turns its whole body to aim and skewers big hulls with
+ * one heavy bolt at a time. Two acid sprayers on its hind plates keep strike craft off it; no
+ * shields, a thin hull that grows back.
+ */
+const IMPALER: UnitType = {
+  id: 's-destroyer', faction: 'swarm', tier: 'frigate', name: 'Impaler destroyer', blurb: 'A living spear: a long, narrow organism grown round a spinal tendril lance. It turns its whole body to aim, and each thrust of the lance skewers a big hull. Fragile, and helpless against strike craft that get close.',
+  sprite: 'swarm-destroyer', aspect: 0.3, size: 160, hull: 1050, shield: 0, regen: 0, speed: 82, turn: 1.0, pop: 3, cost: 760, build: 20, level: 2, squad: 1, sensor: 1050,
+  weapons: [],
+  hardpoints: [
+    { ...gun('turbo', 5, 1.6, 0.09, 380, spinal(turbo(120, 720, 3, 1), 10)), look: 'lance' },
+    gun('flak', 3.0, 7.0, 0.06, 170, flak(5.5, 300, 0.4)), gun('flak', 7.0, 7.0, 0.06, 170, flak(5.5, 300, 0.4)),
+  ],
+  engines: [[3.6, 9.5], [6.4, 9.5]],
+  regrow: REGROW.ship,
+  role: { role: 'Lance ship', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'being flanked'] },
+}
+
+/**
+ * Leviathan dreadnought: the living hive vessel of the reference sheet, the Swarm's gun flagship.
+ * Four heavy tendril lances flank its hive core, four acid sprayers ride its chitin plates, two
+ * spore cannon nodes crown its spine array, two brood chambers on its hind plates keep one brood of
+ * Stingers by it (the Broodmother is the carrier), and three engine sacs push it.
  */
 const LEVIATHAN: UnitType = {
-  id: 's-capital', faction: 'swarm', tier: 'capital', name: 'Leviathan dreadnought', blurb: 'A living hive vessel round a great violet core. Its brood chambers never stop spawning Stingers, and its hull grows back between battles.',
+  id: 's-capital', faction: 'swarm', tier: 'capital', name: 'Leviathan dreadnought', blurb: 'A living hive vessel round a great violet core, the Swarm\'s gun flagship: heavy tendril lances and spore cannons, a brood of Stingers at its side, and a hull that grows back between battles.',
   sprite: 'swarm-capital', aspect: 0.66, size: 380, hull: 7200, shield: 0, regen: 0, speed: 31, turn: 0.32, pop: 10, cost: 3800, build: 60, level: 4, squad: 1, sensor: 1500,
   weapons: [],
   hardpoints: [
-    gun('turbo', 3.18, 3.6, 0.07, 720, turbo(50, 720)), gun('turbo', 6.82, 3.6, 0.07, 720, turbo(50, 720)), gun('turbo', 2.88, 6.4, 0.07, 720, turbo(50, 720)), gun('turbo', 7.12, 6.4, 0.07, 720, turbo(50, 720)),
+    gun('turbo', 3.18, 3.6, 0.07, 720, turbo(64, 740)), gun('turbo', 6.82, 3.6, 0.07, 720, turbo(64, 740)), gun('turbo', 2.88, 6.4, 0.07, 720, turbo(64, 740)), gun('turbo', 7.12, 6.4, 0.07, 720, turbo(64, 740)),
     gun('flak', 1.67, 2.6, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 8.33, 2.6, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 0.9, 5.2, 0.045, 300, flak(6, 340, 0.9)), gun('flak', 9.1, 5.2, 0.045, 300, flak(6, 340, 0.9)),
-    sporeNode(4.09, 1.8, 0.065, 640, spore(32, 760, 3.8)), sporeNode(5.91, 1.8, 0.065, 640, spore(32, 760, 3.8)),
+    sporeNode(4.09, 1.8, 0.065, 640, spore(44, 780, 3.8)), sporeNode(5.91, 1.8, 0.065, 640, spore(44, 780, 3.8)),
     P('engine', 5, 9.4, 950),
     broodSac(2.27, 7.8, 0.075, 760), broodSac(7.73, 7.8, 0.075, 760),
   ],
-  engines: [[3.5, 9.6], [5, 9.75], [6.5, 9.6]], ability: 'launchSwarm', carrier: { unit: 's-fighter', every: 18, max: 3 },
+  engines: [[3.5, 9.6], [5, 9.75], [6.5, 9.6]], ability: 'launchSwarm', carrier: { unit: 's-fighter', every: 30, max: 1 },
   regrow: REGROW.capital,
+}
+
+/**
+ * Broodmother carrier: the Swarm's living carrier. A bloated, broad hive vessel swollen with brood
+ * sacs and hatching chambers round a glowing violet core: four brood chambers that hatch Stingers
+ * far faster than the Leviathan's and keep many more broods out. Two light tendril lances and two
+ * acid sprayers are all its own guns; its hull grows back quicker than any other flagship's.
+ */
+const BROODMOTHER: UnitType = {
+  id: 's-battleship', faction: 'swarm', tier: 'capital', name: 'Broodmother carrier', blurb: 'A bloated hive vessel swollen with brood sacs: it hatches broods of Stingers far faster than the Leviathan and keeps many more of them out. Its own guns are weak; its hull grows back quickly between attacks.',
+  sprite: 'swarm-battleship', aspect: 0.8, size: 330, hull: 6200, shield: 0, regen: 0, speed: 30, turn: 0.3, pop: 9, cost: 3300, build: 56, level: 4, squad: 1, sensor: 1450,
+  weapons: [],
+  hardpoints: [
+    gun('turbo', 3.3, 2.5, 0.06, 560, turbo(26, 640, 2.2, 2)), gun('turbo', 6.7, 2.5, 0.06, 560, turbo(26, 640, 2.2, 2)),
+    gun('flak', 1.25, 4.3, 0.045, 280, flak(6, 340, 0.8)), gun('flak', 8.75, 4.3, 0.045, 280, flak(6, 340, 0.8)),
+    broodSac(2.0, 6.0, 0.07, 720), broodSac(8.0, 6.0, 0.07, 720), broodSac(3.05, 8.05, 0.07, 720), broodSac(6.95, 8.05, 0.07, 720),
+    P('engine', 5, 9.4, 900),
+  ],
+  engines: [[3.7, 9.55], [5, 9.7], [6.3, 9.55]], ability: 'launchSwarm', carrier: { unit: 's-fighter', every: 10, max: 4 },
+  regrow: { rate: 0.008, delay: 9 },
+  role: { role: 'Carrier', strong: ['frigates', 'cruisers', 'flagships'], weak: ['flak', 'fighters', 'gunships'] },
 }
 
 /** A warship's layout at its size: the same points and sizes as written. */
@@ -291,9 +334,13 @@ export const SWARM: FactionData = {
       regrow: REGROW.ship,
       role: { role: 'Drain support', strong: ['long fights', 'shielded ships'], weak: ['fighters', 'anything that catches it alone'] },
     },
+    IMPALER,
     HARVESTER,
     DEVOURER,
     LEVIATHAN,
+    // The Broodmother: the carrier flagship. Shares the flagships' tier and their limit of one (it
+    // is grown at the Spawning Pit like them); weak guns, many fast broods.
+    BROODMOTHER,
   ],
   station: {
     id: 's-station',
@@ -356,10 +403,14 @@ export const SWARM: FactionData = {
     tech('swarm', 's-corvette', 's-co-drain', 'Deeper tendrils', 'Leech tendrils bite 30% harder, and pass on 20% more of what they drain.', 600, 38, 2, { drain: 0.3, drainHeal: 0.2 }, ['s-co-coils']),
     tech('swarm', 's-frigate', 's-fr-plate', 'Chitin layering', 'Harvesters grow 25% more hull.', 550, 36, 2, { hull: 0.25 }),
     tech('swarm', 's-frigate', 's-fr-prong', 'Adaptive organs', 'Harvester weapon organs adapt to their prey: 20% more damage.', 600, 36, 2, { damage: 0.2 }, ['s-fr-plate']),
+    tech('swarm', 's-destroyer', 's-de-barb', 'Barbed lance', 'Impaler lances grow hooked barbs that tear as they go in: 25% more damage.', 650, 38, 2, { damage: 0.25 }),
+    tech('swarm', 's-destroyer', 's-de-sinew', 'Coiled sinews', 'The sinews that drive the Impaler\'s lance coil tighter: it thrusts 20% faster.', 650, 38, 2, { cooldown: -0.2 }, ['s-de-barb']),
     tech('swarm', 's-cruiser', 's-cr-ray', 'Acid glands', 'Devourer weapon organs deal 20% more damage.', 800, 42, 3, { damage: 0.2 }),
     tech('swarm', 's-cruiser', 's-cr-thrust', 'Engine sacs', 'Devourers swim 20% faster.', 650, 36, 3, { speed: 0.2 }, ['s-cr-ray']),
-    tech('swarm', 's-capital', 's-ca-hangar', 'Brood chambers', 'Leviathans spawn Stingers faster and keep one more brood out.', 1100, 55, 4, { hangar: 1 }),
+    tech('swarm', 's-capital', 's-ca-hangar', 'Brood chambers', 'Leviathans spawn Stingers faster and keep a second brood out.', 1100, 55, 4, { hangar: 1 }),
     tech('swarm', 's-capital', 's-ca-armour', 'Ancient carapace', 'Leviathans grow 25% more hull.', 1100, 55, 4, { hull: 0.25 }, ['s-ca-hangar']),
+    tech('swarm', 's-battleship', 's-bs-brood', 'Endless brood', 'Broodmothers hatch Stingers faster and keep one more brood out.', 1100, 55, 4, { hangar: 1 }),
+    tech('swarm', 's-battleship', 's-bs-womb', 'Swollen wombs', 'Broodmothers grow 20% more hull, and it grows back 50% faster.', 1100, 55, 4, { hull: 0.2, regrow: 0.5 }, ['s-bs-brood']),
     tech('swarm', 's-cyard', 's-yd-rush', 'Premature birth', 'Warships are pushed out of the pit before they are fully grown: the Leviathan Spawning Pit can rush out the warship it is growing once it is half grown (Rush launch). It comes out wounded, its weapon organs still unformed, and needs Menders or Weavers to finish it. Needs a Leviathan Spawning Pit.', 750, 40, 3, {}),
   ],
   rushTech: 's-yd-rush',
@@ -379,8 +430,10 @@ export const SWARM: FactionData = {
     's-cyard': [-26, -6, 14, 28],
   },
   layout: {
+    's-destroyer': asWritten(IMPALER),
     's-frigate': asWritten(HARVESTER),
     's-cruiser': asWritten(DEVOURER),
     's-capital': asWritten(LEVIATHAN),
+    's-battleship': asWritten(BROODMOTHER),
   },
 }
