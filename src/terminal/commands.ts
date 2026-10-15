@@ -120,6 +120,7 @@ const APPS: Record<string, AppId> = {
   omamp: 'amp',
   winamp: 'amp',
   music: 'amp',
+  weather: 'weather',
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
@@ -163,6 +164,7 @@ const APP_NAMES: Record<AppId, string> = {
   photos: 'photos',
   contacts: 'contacts',
   tasks: 'tasks',
+  weather: 'weather',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
@@ -350,7 +352,7 @@ export const commands: Record<string, Command> = {
     run: () => {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
-        ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'games']],
+        ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'weather', 'games']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
         ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
@@ -1181,6 +1183,7 @@ export const commands: Record<string, Command> = {
   mail: { desc: 'open the Mail app', run: (ctx) => openHere(ctx, 'mail') },
   contacts: { desc: 'open the Contacts app', run: (ctx) => openHere(ctx, 'contacts') },
   tasks: { desc: 'open the Tasks app', run: (ctx) => openHere(ctx, 'tasks') },
+  weather: { desc: 'open the Weather app', run: (ctx) => openHere(ctx, 'weather') },
   nautilus: { desc: 'alias for files', hidden: true, run: (ctx) => commands.files.run(ctx) },
   calc: {
     desc: 'calculator with units and currencies',
