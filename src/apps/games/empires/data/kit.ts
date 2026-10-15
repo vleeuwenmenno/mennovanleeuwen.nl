@@ -215,8 +215,9 @@ export type BaseModule = {
  * - drain: its drain aura bites this much harder (0.25); drainHeal: it heals this much more of what
  *   it drains (0.5: half as much again).
  * On the station (`for` its station id): mines (the refinery's income), repair (its repair dock),
- * and fleetBuild: every ship of the faction is built this much faster (-0.1: 10%), on top of each
- * ship's own build research.
+ * fleetBuild: every ship of the faction is built this much faster (-0.1: 10%), on top of each
+ * ship's own build research; and regrow and regrowDelay, for every living hull of the side (ships
+ * and structures), on top of each one's own.
  */
 export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines' | 'shieldDamage' | 'aura' | 'auraRadius' | 'regrow' | 'regrowDelay' | 'drain' | 'drainHeal' | 'fleetBuild', number>>
 /**

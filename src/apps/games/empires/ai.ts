@@ -639,6 +639,8 @@ function pickTech(w: World, b: Brain, mines: number): Tech | null {
       // Every ship built faster: worth it with a fleet to build, the more so for a side that wins by
       // numbers (DOCTRINE build).
       else if (e.fleetBuild) s = (army.length >= 4 ? 1.6 : 0.5) * Math.abs(e.fleetBuild) * 10 * DOCTRINE[p.faction].build
+      // Every living hull grows back faster: worth it once there is a fleet to mend.
+      else if (e.regrow || e.regrowDelay) s = warships >= 3 ? 1.8 : army.length >= 4 ? 0.8 : 0.2
     } else if (t.id === RUSH_TECH[p.faction]) {
       // Rushed construction is decided on its own (see think): not weighed against the upgrades.
       s = 0

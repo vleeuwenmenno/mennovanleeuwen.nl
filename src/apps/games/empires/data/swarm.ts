@@ -327,7 +327,10 @@ export const SWARM: FactionData = {
   techs: [
     tech('swarm', 's-station', 's-st-guns', 'Sensory stalks', 'A sensory stalk grows on the Hive Nexus: its spine batteries hit 25% harder while it stands.', 650, 40, 1, { damage: 0.25 }),
     tech('swarm', 's-station', 's-st-ore', 'Digestive organs', 'A digestive organ on the Hive Nexus: Feeding Nodes bring in 25% more credits while it stands.', 600, 36, 1, { mines: 0.25 }),
+    tech('swarm', 's-station', 's-hv-surge', 'Hive surge', 'The Hive Nexus quickens every brood: all our ships hatch 10% faster.', 700, 40, 2, { fleetBuild: -0.1 }, ['s-st-ore']),
     tech('swarm', 's-station', 's-st-dock', 'Regeneration pools', 'A regeneration pool on the Hive Nexus: our ships near it regrow 2% of their hull a second while it stands.', 750, 40, 2, { repair: 0.02 }, ['s-st-ore']),
+    // On the Hive Nexus, but for the whole Swarm: every living hull of ours, ships and structures.
+    tech('swarm', 's-station', 's-hv-regrow', 'Rapid regrowth', 'Every living hull of ours, ships and structures alike, grows back 50% faster, and starts 30% sooner after a fight.', 900, 50, 3, { regrow: 0.5, regrowDelay: -0.3 }, ['s-st-dock']),
     tech('swarm', 's-fighter', 's-fi-line', 'Brood cycles', 'Stingers hatch 30% faster.', 350, 25, 1, { build: -0.3 }),
     tech('swarm', 's-fighter', 's-fi-guns', 'Barbed spines', 'Stinger barbs and stings deal 25% more damage.', 450, 32, 2, { damage: 0.25 }, ['s-fi-line']),
     tech('swarm', 's-gunship', 's-gs-shell', 'Thickened carapace', 'Ravagers grow 25% more hull.', 400, 28, 1, { hull: 0.25 }),
@@ -335,6 +338,7 @@ export const SWARM: FactionData = {
     tech('swarm', 's-repair', 's-re-wing', 'Mender strain', 'Breeds healers in the Hive Nexus: unlocks the Mender and its Field repair.', 300, 22, 1, {}),
     tech('swarm', 's-bomber', 's-bo-pods', 'Caustic spores', 'Brood spore sacs deal 25% more damage.', 500, 32, 2, { damage: 0.25 }),
     tech('swarm', 's-corvette', 's-co-coils', 'Engorged sacs', 'Leeches grow 30% more hull, so they live long enough to feed.', 550, 36, 2, { hull: 0.3 }),
+    tech('swarm', 's-corvette', 's-co-drain', 'Deeper tendrils', 'Leech tendrils bite 30% harder, and pass on 20% more of what they drain.', 600, 38, 2, { drain: 0.3, drainHeal: 0.2 }, ['s-co-coils']),
     tech('swarm', 's-frigate', 's-fr-plate', 'Chitin layering', 'Harvesters grow 25% more hull.', 550, 36, 2, { hull: 0.25 }),
     tech('swarm', 's-frigate', 's-fr-prong', 'Adaptive organs', 'Harvester weapon organs adapt to their prey: 20% more damage.', 600, 36, 2, { damage: 0.2 }, ['s-fr-plate']),
     tech('swarm', 's-cruiser', 's-cr-ray', 'Acid glands', 'Devourer weapon organs deal 20% more damage.', 800, 42, 3, { damage: 0.2 }),

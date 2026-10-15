@@ -610,8 +610,12 @@ function modsFor(p: Player, t: UnitType): Mods {
   if (e.shieldDamage) mods.shieldDamage = 1 + e.shieldDamage
   if (e.aura) mods.aura = e.aura
   if (e.auraRadius) mods.auraRadius = 1 + e.auraRadius
-  if (e.regrow) mods.regrow = 1 + e.regrow
-  if (e.regrowDelay) mods.regrowDelay = Math.max(0, 1 + e.regrowDelay)
+  // Living hulls also take the station's regrowth research, which is for every unit of the side.
+  const st = t.id === stationOf(p) ? {} : techBonus(p, stationOf(p))
+  const regrow = (e.regrow ?? 0) + (st.regrow ?? 0)
+  const regrowDelay = (e.regrowDelay ?? 0) + (st.regrowDelay ?? 0)
+  if (regrow) mods.regrow = 1 + regrow
+  if (regrowDelay) mods.regrowDelay = Math.max(0, 1 + regrowDelay)
   if (e.drain) mods.drain = 1 + e.drain
   if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
   return mods
@@ -1994,8 +1998,11 @@ function finishResearch(w: World, o: Owner, id: string) {
   const p = w.players[o]
   p.techs.push(id)
   const forId = TECH[id].for
+  // The station's regrowth research reaches every living hull of the side (see modsFor).
+  const fx = TECH[id].effect
+  const wide = forId === stationOf(p) && !!(fx.regrow || fx.regrowDelay)
   for (const u of w.units) {
-    if (u.dead || u.owner !== o || u.t.id !== forId) continue
+    if (u.dead || u.owner !== o || (u.t.id !== forId && !(wide && u.t.regrow))) continue
     remod(w, u)
     if (u.t.tier === 'station') restation(w, u)
   }

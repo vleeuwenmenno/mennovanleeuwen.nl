@@ -413,6 +413,25 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   check('and our damaged ship gets the researched share', near(ally.hull - a0, 0.75 * (f0 - foe.hull), 1.5), `${(ally.hull - a0).toFixed(1)}`)
 }
 {
+  // The station's regrow research (Rapid regrowth) reaches every living hull of the side, ships
+  // already out included, on top of their own.
+  const w = newWorld(map, [{ faction: 'swarm', team: 0, spawn: 0 }, { faction: 'droid', team: 1, spawn: 1 }], { seed: 3, credits: 99999 })
+  const p = w.players[0]
+  const { x, y } = mid()
+  const out = put(w, 's-frigate', 0, x, y, 0)
+  p.level = 3
+  p.techs.push(...(TECH['s-hv-regrow'].requires ?? []))
+  check('Rapid regrowth can be researched', cmdResearch(w, 0, 's-hv-regrow') === null)
+  run(w, TECH['s-hv-regrow'].time + 2)
+  const g = regrowOf(out)!
+  const st = regrowOf(w.byId.get(p.station)!)!
+  const want = UNIT['s-frigate'].regrow!
+  check('a ship already out regrows faster and sooner', p.techs.includes('s-hv-regrow') && near(g.rate, want.rate * 1.5, 1e-12) && near(g.delay, want.delay * 0.7, 1e-12), `${g.rate}, ${g.delay}`)
+  check('and so does the station itself', near(st.rate, STATIONS.swarm.regrow!.rate * 1.5, 1e-12), `${st.rate}`)
+  const fresh = put(w, 's-cruiser', 0, x, y + 500, 0)
+  check('and a ship grown after it', near(regrowOf(fresh)!.rate, UNIT['s-cruiser'].regrow!.rate * 1.5, 1e-12))
+}
+{
   // fleetBuild on the station: every ship is built faster, on top of its own build research.
   const w = newWorld(map, [{ faction: 'republic', team: 0, spawn: 0 }, { faction: 'droid', team: 1, spawn: 1 }], { seed: 3, credits: 99999 })
   const p = w.players[0]
