@@ -1,4 +1,4 @@
-import { MODULE, REBUILD_MODULE, STATIONS, TECH, WORKS_NAME, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
+import { MODULE, REBUILD_MODULE, STATIONS, TECH, UNIT, WORKS_NAME, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
 import { hpName } from './icons'
 import { factionModels, type Model } from './models/index.ts'
 
@@ -210,7 +210,7 @@ export function traits(t: UnitType): Trait[] {
     const deg = Math.round(((spine.arc ?? 0) * 180) / Math.PI)
     out.push({ name: 'Spinal gun', value: `±${deg}°`, tip: `Spinal ${WEAPON_NAME[spine.kind].toLowerCase()}: built along the keel, it only fires within ${deg}° either side of the nose, so the whole ship turns to aim it. It can't answer what is behind it.` })
   }
-  if (t.tier === 'station' && t.carrier) out.push({ name: 'Brood', value: `every ${t.carrier.every} s`, tip: `Brood spawning: the station grows a squadron of strike craft every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out, beside its defense wing.` })
+  if (t.tier === 'station' && t.carrier) out.push({ name: 'Brood', value: `every ${t.carrier.every} s`, tip: `Brood spawning: the station grows a squadron of ${UNIT[t.carrier.unit]?.name ?? 'strike craft'} every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out, beside its defense wing.` })
   else if (t.carrier) out.push({ name: 'Carrier', value: `every ${t.carrier.every} s`, tip: `Carrier: launches a squadron every ${t.carrier.every} s from its hangars while fewer than ${t.carrier.max} are out; with every hangar shot off it launches no more.` })
   if (!t.shield && !t.hardpoints.some((h) => h.kind === 'shield') && t.tier !== 'fighter' && t.tier !== 'mine') out.push({ name: 'No shields', value: 'armour only', tip: 'No shields: every hit goes straight to its hull and modules. Ion weapons barely scratch it, and shield research does nothing for it.' })
   return out

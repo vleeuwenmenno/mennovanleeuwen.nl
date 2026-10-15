@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNIT, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, traits, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
@@ -43,8 +43,6 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
 const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
-/** A share as a whole percentage: 0.15 is 15%. */
-const pct = (v: number) => `${Math.round(v * 100)}%`
 
 /** The unit as the Codex shows it: a station at the level picked, with every module it can have
  * (its expansions too); a yard with every expansion fitted. */
@@ -151,11 +149,6 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
         {t.squad > 1 && row('Squadron', `${t.squad} craft`)}
         {dps > 0 && row('Firepower', `${dps.toFixed(1)} dps`, 'Damage a second with every gun firing, before shields, armour and accuracy')}
         {tech && row('Research', tech.name, tech.blurb)}
-        {/* The faction mechanics (sim.ts), where a unit has them. */}
-        {t.regrow && row('Living hull', `+${pct(t.regrow.rate)}/s`, `Out of the fight for ${t.regrow.delay} s, the hull grows back by ${pct(t.regrow.rate)} of its full hull a second`)}
-        {t.drain && row('Drain', `${fmt(t.drain.dps)}/s · ${fmt(t.drain.radius)} reach`, `Drains the hull of every enemy in reach, past their shields; ${pct(t.drain.heal)} of it mends our damaged ships in reach`)}
-        {t.fireControl && row('Fire control', `+${pct(t.fireControl.bonus)} damage`, `Our ships within ${fmt(t.fireControl.radius)} hit ${pct(t.fireControl.bonus)} harder (the best of several auras counts)`)}
-        {t.tier === 'station' && t.carrier && row('Brood', `${UNIT[t.carrier.unit]?.name ?? t.carrier.unit} every ${t.carrier.every} s`, `Launches a squadron every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out`)}
       </div>
       {traits(t).length > 0 && (
         <>
