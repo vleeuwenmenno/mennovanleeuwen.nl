@@ -1,504 +1,275 @@
-import { along, capsule, circle, halfHull, part, spline, sym, thick, turn, turnPart } from '../kit.ts'
-import type { ModelDef } from '../spec.ts'
+import { circle, halfHull, part, spline, sym, thick, turn } from '../kit.ts'
+import { hpAt } from '../proto.ts'
+import type { BuildCtx, ModelDef } from '../spec.ts'
 import type { Detail, Part, Pt, Tone } from '../types.ts'
+import { engineSac } from './mounts.ts'
 
-// The Swarm's style kit: organic, insect-like curves instead of plates, bone-tan shells with violet
-// accents, a glowing sensor eye and violet engine light, built from arcs and tapering segments
-// rather than wedges. These were the Confederacy's first designs, kept as the Swarm's concept: one
-// for each Confederacy unit, on the same box and hardpoints, now the Swarm's own units' models
-// (placeholders until the Swarm is designed properly; see data/swarm.ts).
+// The Swarm's style kit and its small organisms: strike craft, the Ravager gunship and the Leech
+// corvette. Swarm vessels are grown, not built: a segmented central spine, pale chitin plates over
+// dark purple chitin and darker tissue, a violet glowing core as the focal point, acid-green vents
+// and engine sacs, tendrils, and claw-like silhouettes, organic and a little asymmetric but always
+// readable from above. Small craft keep to silhouette and colour; fine detail (panel lines, rows of
+// glands) is for the big ones, and panel lines only show on big bitmaps anyway (paint.ts `fine`).
 
-/**
- * A crescent: points along an elliptical arc (centre cx, cy, radii rx, ry) from angle a0 to a1, and
- * back along a thinner arc inside it, the band tapering from `t0` of the radius at the start to
- * `t1` at the end.
- */
-export function crescent(cx: number, cy: number, rx: number, ry: number, a0: number, a1: number, t0: number, t1: number, n = 14): Pt[] {
-  const outer: Pt[] = []
-  const inner: Pt[] = []
-  for (let i = 0; i <= n; i++) {
-    const t = i / n
-    const a = a0 + (a1 - a0) * t
-    const k = 1 - (t0 + (t1 - t0) * t)
-    outer.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry])
-    inner.push([cx + Math.cos(a) * rx * k, cy + Math.sin(a) * ry * k])
-  }
-  return [...outer, ...inner.reverse()]
-}
+// --- The Swarm's parts ---------------------------------------------------------------------------------
 
-const deg = (d: number) => (d * Math.PI) / 180
-
-/**
- * Mantis droid fighter: a beaked head with one violet eye, a segmented tail and two hooked claw
- * wings that sweep forward and down. The lower claws snap off as it is shot up.
- */
-export const fighter: ModelDef = () => {
-  const cx = -3
-  const cy = 10
-  const R = 41
-  const upper = crescent(cx, cy, R, R, deg(-99), deg(-172), 0.34, 0.2, 12)
-  const lower = crescent(cx, cy, R, R, deg(-172), deg(-230), 0.2, 0.02, 9)
-  // A joint across the claw at angle a: a dark band, as the droids' segmented limbs have.
-  const joint = (a: number, k0: number, k1: number): Pt[] => {
-    const at = (r: number, d: number): Pt => [cx + Math.cos(deg(a + d)) * r, cy + Math.sin(deg(a + d)) * r]
-    return [at(R * 1.01, -1.6), at(R * 1.01, 1.6), at(R * k1, 1.6), at(R * k0, -1.6)]
-  }
-  const parts: Part[] = [
-    ...sym(part('claw', upper, 'hull', 1, {
-      slope: [-0.4, -0.1],
-      lift: 0.8,
-      details: [
-        { k: 'shape', pts: crescent(cx, cy, R * 0.88, R * 0.88, deg(-108), deg(-168), 0.05, 0.05, 10), tone: 'accent' },
-        { k: 'shape', pts: joint(-128, 0.7, 0.7), tone: 'dark' },
-        { k: 'shape', pts: joint(-152, 0.74, 0.74), tone: 'dark' },
-      ],
-    }), { slope: [0.4, -0.1] }),
-    ...sym(part('hook', lower, 'hull2', 1, {
-      slope: [-0.4, 0.1],
-      lift: 0.8,
-      detach: { hull: 0.4 },
-      details: [{ k: 'shape', pts: joint(-196, 0.8, 0.8), tone: 'dark' }, { k: 'shape', pts: crescent(cx, cy, R * 0.9, R * 0.9, deg(-176), deg(-212), 0.05, 0.03, 6), tone: 'accent' }],
-    }), { slope: [0.4, 0.1], detach: { hull: 0.24 } }),
-    // Blaster barrels at the crest of each claw.
-    ...sym(part('gun', [[-28.8, -30], [-27.2, -30], [-26.4, -20], [-29.6, -21]], 'dark', 2, { detach: { death: true } })),
-    // The shoulder that carries the claws, behind the head.
-    ...sym(part('shoulder', [[0, -26], [-11, -30], [-14, -24], [-10, -13], [0, -11]], 'metal', 1.5, { slope: [-0.4, 0], lift: 0.6, details: [{ k: 'line', pts: [[-6, -28], [-6, -12]] }] })),
-    ...sym(part('tail', [[0, -6], [-6.5, -4], [-5.2, 12], [-3.4, 26], [-2.2, 33], [0, 34]], 'hull', 2, {
-      slope: [-0.5, 0],
-      details: [
-        { k: 'line', pts: [[0, 4], [-6, 4]] },
-        { k: 'line', pts: [[0, 13], [-5.2, 13]] },
-        { k: 'line', pts: [[0, 22], [-4, 22]] },
-        { k: 'shape', pts: [[-1, 6], [-3, 6], [-2.6, 11], [-1, 11]], tone: 'accent' },
-      ],
-    })),
-    ...sym(part('head', [[0, -50], [-2.6, -41], [-5.6, -28], [-8.5, -17], [-7, -8], [0, -6]], 'hull', 3, {
-      slope: [-0.5, 0],
-      lift: 1,
-      details: [
-        { k: 'line', pts: [[-2.4, -38], [-6.5, -20]] },
-        { k: 'shape', pts: [[0, -47], [-1.2, -41], [-1.2, -33], [0, -32]], tone: 'hull2' },
-      ],
-    })),
-    part('eye', circle(0, -15, 4, 16), 'glass', 4, { lift: 0.6, details: [{ k: 'lights', pts: [[0, -15]], r: 2 }] }),
-    part('engine', circle(0, 33, 3.2, 12), 'dark', 3, { engine: 0, details: [{ k: 'lights', pts: [[0, 33.4]], r: 1.6 }] }),
-  ]
-  return { parts, breakStyle: 'bands' }
-}
-
-// --- Shared droid parts ------------------------------------------------------------------------------
-
-/** A sensor eye: a violet lens with a glowing pupil. */
-export const eye = (id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part =>
-  part(id, circle(x, y, r, 16), 'glass', z, { lift: 0.6, details: [{ k: 'lights', pts: [[x, y]], r: r * 0.48 }], ...more })
-
-/**
- * One vertebra of a segmented body, centred on (0, y), `h` long and `w` half-wide: a left and a right
- * shell (each lit on its own) with a violet seam down its side.
- */
-export function vertebra(id: string, y: number, h: number, w: number, tone: Tone, z: number, more: Partial<Part> = {}, stripe = true): Part[] {
-  const rows: [number, number][] = [[y - h / 2, w * 0.56], [y - h * 0.32, w * 0.93], [y, w], [y + h * 0.32, w * 0.93], [y + h / 2, w * 0.56]]
-  const details: Detail[] = stripe ? [{ k: 'shape', pts: [[-w * 0.5, y - h * 0.28], [-w * 0.72, y - h * 0.24], [-w * 0.72, y + h * 0.24], [-w * 0.5, y + h * 0.28]], tone: 'accent' }] : []
-  return sym(part(id, halfHull(rows), tone, z, { slope: [-0.5, 0], lift: 1, details, ...more }))
-}
-
-/**
- * A droid engine pod: a rounded casing with a violet nozzle at the back, shaded as a cylinder.
- */
-export function thruster(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}): Part {
-  const h = w / 2
-  const half = (s: number): Pt[] => [[x, y0], [x + s * h * 0.55, y0 + h * 0.15], [x + s * h, y0 + h], [x + s * h * 0.95, y1 - h * 0.6], [x + s * h * 0.6, y1], [x, y1]]
-  const r = h * 0.62
-  const details: Detail[] = [
-    { k: 'shape', pts: [[x - h, y0 + (y1 - y0) * 0.35], [x + h, y0 + (y1 - y0) * 0.35], [x + h, y0 + (y1 - y0) * 0.45], [x - h, y0 + (y1 - y0) * 0.45]], tone: 'dark' },
-    { k: 'shape', pts: circle(x, y1 - r - 0.3, r, 12), tone: 'dark' },
-  ]
-  if (engine !== undefined) details.push({ k: 'lights', pts: [[x, y1 - r - 0.2]], r: r * 0.55 })
-  return part(id, [...half(-1), ...half(1).reverse()], 'hull2', z, { lift: 0.8, engine, facets: [{ pts: half(-1), slope: [-0.5, 0] }, { pts: half(1), slope: [0.5, 0] }], details, ...more })
-}
-
-/** A jointed limb along `pts` (shoulder, knees, tip), tapering: the joints dark. */
-export function limb(id: string, pts: Pt[], w0: number, w1: number, tone: Tone, z: number, more: Partial<Part> = {}): Part {
-  const joints: Detail[] = pts.slice(1, -1).map(([x, y]) => ({ k: 'shape', pts: circle(x, y, Math.max(w0, w1) * 0.42, 8), tone: 'dark' }))
-  return part(id, thick(pts, w0, w1), tone, z, { lift: 0.8, ...more, details: [...joints, ...(more.details ?? [])] })
-}
+/** A smooth band along a curve through `pts`, `w0` thick at its start tapering to `w1`: a claw, a
+ * limb, a tendril, a blade. */
+export const band = (pts: Pt[], w0: number, w1: number, n = 4): Pt[] => thick(spline(pts, n), w0, w1)
 
 /** A closed organic outline through control points. */
 export const blobby = (pts: Pt[], n = 4) => spline(pts, n, true)
 
-// --- Strike craft ------------------------------------------------------------------------------------
+/** A chitin plate: a raised part lit as it faces, with its outline. */
+export const plate = (id: string, pts: Pt[], tone: Tone, z: number, slope: Pt, more: Partial<Part> = {}): Part =>
+  part(id, pts, tone, z, { lift: 1, slope, ...more })
 
 /**
- * Gnat guard droid: the foundry's own defense wing. A tiny teardrop head ringed in gold round its eye
- * (only the defense wing wears it) and two sickle wings hanging down, a blaster at each tip.
+ * A chitin blade: one overlapping armour segment, a plate that grows from its root at `pts[0]` along
+ * the curve and tapers to a claw point at its end, `w` wide at the root. Lit on its own facing
+ * (`slope`), a seam down its length and a violet edge along it (`edge`). Laid one over another, they
+ * make the Swarm's layered, claw-like silhouettes.
  */
-export const picket: ModelDef = () => {
-  const parts: Part[] = [
-    ...sym(part('wing', crescent(-2, 2, 42, 40, deg(-146), deg(-218), 0.3, 0.04, 12), 'hull', 1, {
-      slope: [-0.4, 0.05],
-      lift: 0.8,
-      details: [{ k: 'shape', pts: crescent(-2, 2, 39, 37, deg(-156), deg(-205), 0.08, 0.04, 8), tone: 'accent' }, { k: 'shape', pts: crescent(-2, 2, 42.5, 40.5, deg(-176), deg(-183), 0.3, 0.3, 2), tone: 'dark' }],
-    }), { slope: [0.4, 0.05] }),
-    ...sym(part('gun', [[-34.6, 26], [-33, 25], [-31.6, 36], [-33.6, 36.6]], 'dark', 1.6, { detach: { death: true } })),
-    ...sym(part('shoulder', capsule([-6, -12], [-32, -20], 4, 3), 'metal', 1.4, { lift: 0.6 })),
-    ...sym(part('head', halfHull([[-46, 0.5], [-40, 4.5], [-30, 8], [-18, 10.5], [-4, 11], [10, 9], [22, 5.5], [30, 2]]), 'hull', 2, {
-      slope: [-0.5, 0],
-      lift: 1,
-      details: [{ k: 'shape', pts: [[0, -44], [-1.6, -38], [-2, -28], [0, -27]], tone: 'accent' }, { k: 'line', pts: [[-9, 10], [0, 14]] }, { k: 'line', pts: [[-6, 20], [0, 22]] }],
-    })),
-    part('ring', circle(0, -8, 9.6, 22), 'trim', 3, { holes: [circle(0, -8, 6.4, 18)], lift: 0.9 }),
-    eye('eye', 0, -8, 5.4, 3.2),
-    part('engine', circle(0, 30, 3.6, 12), 'dark', 2.5, { engine: 0, details: [{ k: 'lights', pts: [[0, 30.4]], r: 1.8 }] }),
-  ]
-  return { parts, breakStyle: 'bands' }
+export function blade(id: string, pts: Pt[], w: number, tone: Tone, z: number, slope: Pt, more: Partial<Part> = {}, edge = true): Part {
+  const curve = spline(pts, 5)
+  const seam = curve.slice(1, Math.ceil(curve.length * 0.75))
+  const details: Detail[] = [{ k: 'line', pts: seam }]
+  if (edge) details.push({ k: 'shape', pts: thick(curve.slice(0, Math.ceil(curve.length * 0.85)).map(([x, y]) => [x + slope[0] * w * 0.42, y + slope[1] * w * 0.42] as Pt), w * 0.16, w * 0.03), tone: 'accent' })
+  return part(id, thick(curve, w, w * 0.06), tone, z, { lift: 1.1, slope, ...more, details: [...details, ...(more.details ?? [])] })
 }
 
 /**
- * Locust bomber: a segmented body with a beaked head, swept leaf wings and, slung either side of it,
- * two fat bomb pods with violet warheads glowing at their tails. The pods are what makes it a bomber.
+ * A violet core: the focal point of every Swarm vessel. A dark socket of tissue, an acid-green ring
+ * of membrane round it (on bigger ones), and the core itself glowing violet, a brighter heart in it.
+ * `rx`, `ry` its radii; `ring` adds the green membrane.
  */
-export const bomber: ModelDef = () => {
-  const parts: Part[] = [
-    ...sym(part('wing', blobby([[-8, -24], [-24, -21], [-41, -9], [-47, 4], [-42, 9], [-26, 3], [-10, -6]]), 'hull', 1, {
-      slope: [-0.35, -0.1],
-      lift: 0.8,
-      details: [
-        { k: 'shape', pts: blobby([[-14, -19], [-27, -16], [-40, -6], [-41, -3], [-28, -10], [-14, -15]]), tone: 'accent' },
-        { k: 'shape', pts: thick([[-30, -16], [-27, -3]], 2), tone: 'dark' },
-      ],
-    }), { slope: [0.35, -0.1] }),
-    ...sym(part('strut', capsule([-6, 8], [-12, 10], 2.6), 'dark', 1.5)),
-    ...sym(part('pod', blobby([[-17, -6], [-24, 0], [-26, 14], [-23, 28], [-17, 33], [-11, 28], [-8.6, 14], [-10, 0]]), 'hull2', 2, {
-      lift: 1.2,
-      detach: { hull: 0.36 },
-      facets: [{ pts: [[-17, -6], [-24, 0], [-26, 14], [-23, 28], [-17, 33]], slope: [-0.5, 0] }],
-      details: [
-        { k: 'shape', pts: thick([[-25.6, 8], [-17, 9], [-9, 8]], 2), tone: 'dark' },
-        { k: 'shape', pts: thick([[-25, 20], [-17, 21], [-10, 20]], 2), tone: 'dark' },
-        { k: 'shape', pts: blobby([[-17, 25], [-21, 28], [-17, 32], [-13, 28]]), tone: 'glass' },
-        { k: 'lights', pts: [[-17, 28.6]], r: 1.4 },
-        { k: 'shape', pts: [[-12, 0], [-10.6, 1], [-10, 6], [-11.6, 6]], tone: 'accent' },
-      ],
-    }), { detach: { hull: 0.22 }, facets: [{ pts: [[17, -6], [24, 0], [26, 14], [23, 28], [17, 33]], slope: [0.5, 0] }] }),
-    ...sym(part('body', halfHull([[-44, 1], [-38, 4], [-28, 7], [-16, 8.6], [-4, 8.8], [10, 8], [22, 6], [32, 3.6], [38, 1.6]]), 'hull', 3, {
-      slope: [-0.5, 0],
-      details: [
-        { k: 'line', pts: [[0, -8], [-8.8, -8]] },
-        { k: 'line', pts: [[0, 4], [-8.6, 4]] },
-        { k: 'line', pts: [[0, 16], [-7.4, 16]] },
-        { k: 'line', pts: [[0, 27], [-4.8, 27]] },
-        { k: 'shape', pts: [[-2.4, -6], [-5, -6], [-5, 2], [-2.4, 2]], tone: 'accent' },
-        { k: 'shape', pts: [[-2.4, 6], [-4.6, 6], [-4.4, 14], [-2.4, 14]], tone: 'accent' },
-      ],
-    })),
-    ...sym(part('head', [[0, -50], [-3, -44], [-6.8, -32], [-6.4, -22], [0, -20]], 'hull2', 4, { slope: [-0.5, -0.05], lift: 1, details: [{ k: 'line', pts: [[-2.6, -42], [-5.6, -28]] }] })),
-    eye('eye', 0, -29, 3.2, 5),
-    part('engine', circle(0, 37, 3.4, 12), 'dark', 2.5, { engine: 0, details: [{ k: 'lights', pts: [[0, 37.4]], r: 1.7 }] }),
-  ]
-  return { parts, breakStyle: 'bands' }
-}
-
-/**
- * Weaver repair droid: a spindly spider of a welder. A ribbed abdomen, a small head with its eye, and
- * three thin jointed legs a side; the front pair reach forward with welding torches glowing at their
- * tips.
- */
-export const repair: ModelDef = () => {
-  const torch = (x: number, y: number): Detail => ({ k: 'lights', pts: [[x, y]], r: 1.1, tone: 'ember' })
-  const parts: Part[] = [
-    ...sym(limb('legF', [[-5, -18], [-23, -30], [-19.5, -46]], 4.4, 2.2, 'metal', 1, { detach: { hull: 0.3 }, details: [torch(-19.4, -47)] }), { detach: { hull: 0.18 } }),
-    ...sym(limb('legM', [[-7, -4], [-29, -12], [-36.5, 4]], 4, 2, 'metal', 1, { detach: { death: true }, details: [torch(-36.6, 5)] })),
-    ...sym(limb('legB', [[-7, 12], [-27, 21], [-28, 39]], 4, 2, 'metal', 1, { detach: { death: true } })),
-    ...sym(part('plate', thick([[-6.5, -17], [-20, -27.6]], 4.2, 3), 'hull', 1.5, { lift: 0.6, details: [{ k: 'shape', pts: thick([[-9, -18.6], [-18, -25.6]], 1.2), tone: 'accent' }] })),
-    ...sym(part('abdomen', halfHull([[-6, 3], [-2, 7.6], [6, 10], [16, 10.6], [26, 8.6], [32, 5.2], [36, 1.6]]), 'hull', 2, {
-      slope: [-0.5, 0.05],
-      lift: 1,
-      details: [
-        { k: 'line', pts: [[0, 4], [-9.6, 4]] },
-        { k: 'line', pts: [[0, 14], [-10.6, 14]] },
-        { k: 'line', pts: [[0, 24], [-9, 24]] },
-        { k: 'shape', pts: [[-3, 6], [-6.4, 6], [-6.6, 12], [-3, 12]], tone: 'accent' },
-        { k: 'shape', pts: [[-3, 16], [-6.6, 16], [-6, 22], [-3, 22]], tone: 'accent' },
-      ],
-    })),
-    ...sym(part('head', halfHull([[-34, 1], [-30, 5], [-22, 7.6], [-14, 7], [-8, 4.6], [-4, 3]]), 'hull2', 3, { slope: [-0.5, -0.05], lift: 1.2, details: [{ k: 'line', pts: [[-5, -30], [-7, -18]] }] })),
-    eye('eye', 0, -22, 3.6, 4),
-    part('engine', circle(0, 39, 3.4, 12), 'dark', 1.8, { engine: 0, details: [{ k: 'lights', pts: [[0, 39.4]], r: 1.7 }] }),
-  ]
-  return { parts, breakStyle: 'bands' }
-}
-
-// --- Gunship -----------------------------------------------------------------------------------------
-
-/**
- * Trident gunship: a round armoured thorax with its eye, and three segmented blaster arms, one
- * forward and two raking back, each ending in a twin-barrelled gun pod. A three-pointed star where
- * every other droid ship is long.
- */
-export const gunship: ModelDef = ({ h }) => {
-  const parts: Part[] = []
-  // The two rear arms, drawn for the left one.
-  const arm: Pt[] = [[-9, 6], [-24, 14.6], [-39, 23.4]]
-  parts.push(
-    ...sym(limb('arm', arm, 8, 6, 'hull', 1, { slope: [-0.3, 0.2], details: [{ k: 'shape', pts: thick([[-12, 9.4], [-21.4, 14.4]], 2.2), tone: 'accent' }, { k: 'shape', pts: thick([[-27, 18.4], [-36, 23.4]], 1.8), tone: 'accent' }] }), { slope: [0.3, 0.2] }),
-    ...sym(part('podGun', thick([[-41, 25.6], [-49, 30.4]], 1.4), 'dark', 1.6, { detach: { death: true } })),
-    ...sym(part('podGun2', thick([[-38.8, 27.8], [-46.6, 32.6]], 1.4), 'dark', 1.6, { detach: { death: true } })),
-    ...sym(part('pod', blobby([[-35, 19], [-41, 21.4], [-44, 27], [-40, 30], [-35, 27]]), 'hull2', 2, { lift: 0.8, detach: { hull: 0.36 }, details: [{ k: 'lights', pts: [[-39.4, 25]], r: 0.9, tone: 'glow' }] }), { detach: { hull: 0.22 } }),
-    ...sym(part('neck', [[0, -10], [-4.6, -12], [-4, -30], [-2.6, -38], [0, -39]], 'hull', 1, { slope: [-0.5, 0], lift: 0.8, details: [{ k: 'shape', pts: [[-1, -16], [-2.8, -16], [-2.4, -30], [-1, -30]], tone: 'accent' }, { k: 'line', pts: [[0, -24], [-4.2, -24]] }] })),
-    part('gunF', thick([[-1.8, -36], [-1.8, -h / 2 + 0.6]], 1.6), 'dark', 1.8, { detach: { death: true } }),
-    part('gunF2', thick([[1.8, -36], [1.8, -h / 2 + 0.6]], 1.6), 'dark', 1.8, { detach: { death: true } }),
-    part('collar', blobby([[0, -40], [-5.4, -37], [-5, -32], [0, -31], [5, -32], [5.4, -37]]), 'hull2', 2, { lift: 0.6, details: [{ k: 'lights', pts: [[0, -36]], r: 0.9, tone: 'glow' }] }),
-    part('engine', circle(0, 15.4, 3.6, 12), 'dark', 2.2, { engine: 0, details: [{ k: 'lights', pts: [[0, 15.8]], r: 1.8 }] }),
-    part('thorax', circle(0, 0, 14.5, 26), 'hull', 3, {
-      sphere: true,
-      details: [
-        { k: 'shape', pts: circle(0, 0, 11.2, 22), tone: 'hull2' },
-        { k: 'shape', pts: circle(0, 0, 9.6, 20), tone: 'hull' },
-        ...[0, 1, 2].map((i): Detail => ({ k: 'shape', pts: turn(thick([[0, -9.6], [0, -13.6]], 2.6), (i * 2 * Math.PI) / 3 + Math.PI / 3), tone: 'accent' })),
-      ],
-    }),
-    eye('eye', 0, -1, 5, 4),
-  )
-  return { parts, breakStyle: 'bands' }
-}
-
-// --- Warships: their designs are in warships.ts -----------------------------------------------------
-
-// --- Station -----------------------------------------------------------------------------------------
-
-/**
- * Foundry station: a hive. Level 1 is its core, an egg-shaped carapace of six shell plates round a
- * domed iris, violet light in the seams between them and short horns where the arms will grow. Level
- * 2 rings it with a collar and grows six segmented arms; level 3 runs them out full length to knuckle
- * pods where the long-range guns sit; level 4 spins a web between the arm tips, its strands carrying
- * the outer guns. Coordinates are frame pixels from the frame's centre, where data.ts places the
- * modules (every stage is cut round the same centre).
- */
-export const station: ModelDef = ({ level }) => {
-  const parts: Part[] = []
-  const RX = 205
-  const RY = 262
-  const at = (a: number, k: number): Pt => [Math.cos(a) * RX * k, Math.sin(a) * RY * k]
-  /** A band of the egg between k0 and k1 of its radius, from angle a0 to a1. */
-  const eggBand = (k0: number, k1: number, a0: number, a1: number, n = 10): Pt[] => {
-    const out: Pt[] = []
-    for (let i = 0; i <= n; i++) out.push(at(a0 + ((a1 - a0) * i) / n, k1))
-    for (let i = n; i >= 0; i--) out.push(at(a0 + ((a1 - a0) * i) / n, k0))
-    return out
-  }
-  const D = Math.PI / 180
-  // The six arms, by their tips at full length: up, upper right, lower right, down, lower left, upper
-  // left, where data.ts puts the level-3 and level-4 guns.
-  const tips: Pt[] = [[0, -457], [473, -222], [481, 233], [0, 463], [-481, 233], [-473, -222]]
-
-  // --- Level 4: the web between the arm tips, under everything else -----------------------------
-  if (level >= 4) {
-    for (let i = 0; i < 6; i++) {
-      const a = tips[i]
-      const b = tips[(i + 1) % 6]
-      // The strands bow outward a little, more on the lower ones, so they pass under their guns.
-      const bow = i === 2 || i === 3 ? 1.12 : i === 1 || i === 4 ? 1.03 : 1.03
-      const mid: Pt = [((a[0] + b[0]) / 2) * bow, ((a[1] + b[1]) / 2) * bow]
-      const line = spline([a, mid, b], 8)
-      parts.push(part(`web${i}`, thick(line, 72), 'hull', 1, {
-        lift: 5,
-        slope: [mid[0] / Math.hypot(...mid) * 0.4, mid[1] / Math.hypot(...mid) * 0.4],
-        details: [
-          { k: 'shape', pts: thick(line.slice(3, -3), 14), tone: 'accent' },
-          ...line.filter((_, j) => j % 4 === 2).map(([x, y]): Detail => ({ k: 'shape', pts: circle(x, y, 13, 8), tone: 'dark' })),
-          { k: 'lights', pts: line.filter((_, j) => j % 4 === 2), r: 5, tone: 'glow' },
-        ],
-      }))
-      // Threads of silk from the strand's middle back towards the hive.
-      parts.push(part(`thread${i}`, thick([mid, [mid[0] * 0.45, mid[1] * 0.45]], 9, 6), 'dark', 0.5, { noOutline: true }))
-    }
-  }
-
-  // --- Levels 2 and 3: the arms -------------------------------------------------------------------
-  if (level >= 2) {
-    const full = level >= 3
-    tips.forEach(([tx, ty], i) => {
-      const a = Math.atan2(ty, tx) + Math.PI / 2
-      // Growing: at level 2 the up and down arms reach most of the way already, the side ones less.
-      const len = full ? Math.hypot(tx, ty) : tx === 0 ? 420 : Math.hypot(tx, ty) * 0.74
-      // Drawn pointing up (negative y) and turned to its own direction: tapering shell segments, each
-      // overlapping the next like an insect's leg, dark joints showing between them.
-      const segs = full ? 4 : 3
-      const r0 = 196
-      const step = (len - r0) / segs
-      for (let s = 0; s < segs; s++) {
-        const y0 = -(r0 + step * s) + 16
-        const y1 = -(r0 + step * (s + 1)) + 4
-        const w = 132 - s * 15
-        const shell = blobby([[-w * 0.4, y0], [-w * 0.52, y0 - (y0 - y1) * 0.35], [-w * 0.44, y1 + 12], [-w * 0.28, y1], [w * 0.28, y1], [w * 0.44, y1 + 12], [w * 0.52, y0 - (y0 - y1) * 0.35], [w * 0.4, y0]], 3)
-        parts.push(turnPart(part(`arm${i}.${s}`, shell, s % 2 ? 'hull2' : 'hull', 3 - s * 0.01, {
-          lift: 4,
-          facets: [{ pts: [[0, y0 + 2], [-w, y0 + 2], [-w, y1 - 2], [0, y1 - 2]], slope: [-0.45, 0] }],
-          details: [
-            { k: 'shape', pts: [[-w * 0.1, y0 - 18], [-w * 0.22, y0 - 18], [-w * 0.2, y1 + 20], [-w * 0.1, y1 + 20]], tone: 'accent' },
-            { k: 'shape', pts: [[w * 0.1, y0 - 18], [w * 0.22, y0 - 18], [w * 0.2, y1 + 20], [w * 0.1, y1 + 20]], tone: 'accent' },
-            { k: 'line', pts: [[-w * 0.44, y1 + 22], [0, y1 + 14], [w * 0.44, y1 + 22]] },
-            { k: 'lights', pts: [[-w * 0.36, (y0 + y1) / 2], [w * 0.36, (y0 + y1) / 2]], r: 4, tone: 'glow' },
-          ],
-        }), a))
-        // A dark joint under the overlap.
-        parts.push(turnPart(part(`joint${i}.${s}`, [[-w * 0.3, y1 + 12], [w * 0.3, y1 + 12], [w * 0.26, y1 - 16], [-w * 0.26, y1 - 16]], 'dark', 2.8), a))
-      }
-      // The tip: a claw pod at level 2, a big knuckle pod where the guns sit at level 3.
-      const tip: Pt = [0, -len]
-      parts.push(turnPart(part(`knuckle${i}`, full ? circle(0, -len, 64, 24) : blobby([[0, -len - 34], [-36, -len - 12], [-40, -len + 26], [0, -len + 40], [40, -len + 26], [36, -len - 12]]), 'hull2', 4, {
-        lift: 6,
-        facets: full ? [{ pts: circle(0, -len, 64, 24).filter(([x]) => x <= 0), slope: [-0.4, 0] }] : undefined,
-        details: full
-          ? [{ k: 'shape', pts: circle(tip[0], tip[1], 54, 22), tone: 'accent' }, { k: 'shape', pts: circle(tip[0], tip[1], 46, 20), tone: 'hull2' }, { k: 'lights', pts: [[-40, -len], [40, -len]], r: 5, tone: 'glow' }]
-          : [{ k: 'shape', pts: [[-10, -len - 26], [10, -len - 26], [8, -len + 20], [-8, -len + 20]], tone: 'accent' }, { k: 'lights', pts: [[0, -len + 30]], r: 5, tone: 'glow' }],
-      }), a))
-    })
-    // The collar round the core: a dark ring of ribs, lit violet between them.
-    const collarOut = Array.from({ length: 48 }, (_, i) => at((i / 48) * Math.PI * 2, 1.09))
-    const collarIn = Array.from({ length: 48 }, (_, i) => at((i / 48) * Math.PI * 2, 0.97))
-    parts.push(part('collar', collarOut, 'metal', 5, {
-      holes: [collarIn],
-      lift: 3,
-      details: [{ k: 'lights', pts: Array.from({ length: 12 }, (_, i) => at((i / 12) * Math.PI * 2 + 15 * D, 1.03)), r: 5, tone: 'glow' }],
-    }))
-  }
-
-  // --- Level 1: the core --------------------------------------------------------------------------
-  parts.push(part('core', Array.from({ length: 48 }, (_, i) => at((i / 48) * Math.PI * 2, 1.0)), 'dark', 6, {
-    lift: 3,
-    details: [{ k: 'lights', pts: Array.from({ length: 6 }, (_, i) => at(-90 * D + 30 * D + i * 60 * D, 0.72)), r: 7, tone: 'glow' }],
+export function core(id: string, x: number, y: number, rx: number, ry: number, z: number, ring = true): Part[] {
+  const out: Part[] = [part(`${id}Socket`, circle(x, y, rx * 1.35, 18, ry * 1.25), 'dark', z, { lift: 0.4, details: ring ? [{ k: 'shape', pts: circle(x, y, rx * 1.18, 18, ry * 1.12), tone: 'aid' }] : [] })]
+  out.push(part(id, circle(x, y, rx, 18, ry), 'glow', z + 0.05, {
+    glow: true,
+    details: [
+      { k: 'shape', pts: circle(x - rx * 0.18, y - ry * 0.2, rx * 0.55, 12, ry * 0.55), tone: 'glass' },
+      { k: 'lights', pts: [[x - rx * 0.2, y - ry * 0.25]], r: Math.min(rx, ry) * 0.22, tone: 'glass' },
+    ],
   }))
-  for (let i = 0; i < 6; i++) {
-    const c = -90 * D + i * 60 * D
-    const slope: Pt = [Math.cos(c) * 0.45, Math.sin(c) * 0.45]
-    parts.push(part(`plate${i}`, eggBand(0.4, 0.98, c - 26 * D, c + 26 * D), i % 2 ? 'hull2' : 'hull', 7, {
-      lift: 4,
-      slope,
-      details: [
-        { k: 'shape', pts: eggBand(0.78, 0.88, c - 15 * D, c + 15 * D, 6), tone: 'accent' },
-        { k: 'line', pts: [at(c - 20 * D, 0.62), at(c, 0.6), at(c + 20 * D, 0.62)] },
-        { k: 'shape', pts: eggBand(0.44, 0.5, c - 8 * D, c + 8 * D, 4), tone: 'dark' },
-      ],
-    }))
-    // Short horns between the plates at level 1, where the arms will grow from.
-    if (level < 2) {
-      const h = c + 30 * D
-      parts.push(part(`horn${i}`, thick([at(h, 0.92), at(h + 4 * D, 1.06), at(h + 2 * D, 1.12)], 26, 8), 'hull2', 6.5, { lift: 2 }))
-    }
-  }
-  parts.push(part('dome', Array.from({ length: 36 }, (_, i) => at((i / 36) * Math.PI * 2, 0.4)), 'hull2', 8, {
-    lift: 5,
-    facets: [{ pts: Array.from({ length: 19 }, (_, i) => at(Math.PI / 2 + (i / 18) * Math.PI, 0.4)), slope: [-0.4, 0] }],
-    details: [{ k: 'shape', pts: Array.from({ length: 36 }, (_, i) => at((i / 36) * Math.PI * 2, 0.3)), tone: 'accent' }, { k: 'shape', pts: Array.from({ length: 36 }, (_, i) => at((i / 36) * Math.PI * 2, 0.25)), tone: 'dark' }],
-  }))
-  parts.push(eye('iris', 0, 0, 34, 9))
-  return { parts, breakStyle: 'pie' }
-}
-
-// --- Structures on the ore ---------------------------------------------------------------------------
-
-/** Four jointed insect legs holding a structure to its asteroid, from (x0, y0) by way of the knee
- * (kx, ky) to the foot (fx, fy), drawn for the top-left one and mirrored to the others. */
-function anchorLegs(x0: number, y0: number, kx: number, ky: number, fx: number, fy: number, z: number): Part[] {
-  const out: Part[] = []
-  for (const [sx, sy, n] of [[1, 1, 0], [-1, 1, 1], [1, -1, 2], [-1, -1, 3]] as const) {
-    const f = (p: Pt): Pt => [p[0] * sx, p[1] * sy]
-    out.push(limb(`leg${n}`, [f([x0, y0]), f([kx, ky]), f([fx, fy])], 5, 3, 'metal', z))
-    out.push(part(`claw${n}`, [f([fx - 3, fy - 2]), f([fx + 1, fy - 4]), f([fx + 4, fy - 1]), f([fx + 1, fy + 3.4]), f([fx - 2.4, fy + 2])], 'dark', z + 0.1))
-  }
   return out
 }
 
+/** Acid-green glands: small glowing spots in the tissue, the Swarm's secondary light. */
+export const glands = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'aid' })
+/** Violet lights. */
+export const sparks = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glow' })
+
 /**
- * Droid ore harvester: a domed carapace over the ore silo, two drill wells either side in ribbed
- * shell rings, a landing shell on top (where the shield dome goes) and a gun bulb below, held to the
- * asteroid by four jointed insect legs.
+ * A segmented spine down the middle: one vertebra per [y, half-width, length] row, each a left and a
+ * right chitin shell lit on its own, dark tissue showing at the joints between them and a violet
+ * node on every other one.
  */
-export const mine: ModelDef = ({ h }) => {
-  const H = h / 2
-  const ring = (x: number): Pt[] => Array.from({ length: 20 }, (_, i) => {
-    const a = (i / 20) * Math.PI * 2
-    const r = i % 2 ? 19.6 : 21
-    return [x + Math.cos(a) * r, Math.sin(a) * r] as Pt
+export function spine(id: string, segs: [number, number, number][], tone: Tone, z: number, nodes = true): Part[] {
+  const out: Part[] = []
+  segs.forEach(([y, w, h], i) => {
+    const rows: [number, number][] = [[y - h / 2, w * 0.5], [y - h * 0.3, w * 0.95], [y + h * 0.15, w], [y + h / 2, w * 0.62]]
+    const details: Detail[] = [{ k: 'line', pts: [[-w * 0.4, y - h * 0.1], [-w * 0.85, y + h * 0.15]] }]
+    if (nodes && i % 2 === 1) details.push({ k: 'shape', pts: circle(-w * 0.18, y, Math.min(w * 0.3, h * 0.22), 8), tone: 'accent' })
+    out.push(...sym(part(`${id}${i}`, halfHull(rows), i % 2 ? tone : tone === 'hull' ? 'hull2' : 'hull', z + i * 0.01, { lift: 0.9, slope: [-0.5, 0], details })))
   })
-  const padY = (1.6 / 10 - 0.5) * h
-  const pdY = (7.9 / 10 - 0.5) * h
-  const parts: Part[] = [
-    ...anchorLegs(-12, -12, -22, -34, -44, -H + 4, 0),
-    ...sym(part('link', thick([[-13, 0], [-20, -1.2], [-26, 0]], 9, 8), 'metal', 1, { lift: 1.2, details: [{ k: 'line', pts: [[-17, -4], [-17, 4]] }] })),
-    ...sym(part('well', ring(-32), 'hull', 2, {
-      lift: 2.2,
-      facets: [{ pts: ring(-32).filter(([x]) => x <= -32), slope: [-0.35, 0] }],
-      details: [
-        ...[0, 1, 2, 3, 4, 5].map((i): Detail => ({ k: 'shape', pts: turn(thick([[-32, -21], [-32, -16.6]], 2.4), (i * Math.PI) / 3, -32, 0), tone: 'dark' })),
-        ...[0, 1, 2].map((i): Detail => ({ k: 'shape', pts: turn(thick([[-32, -20.4], [-32, -17.4]], 3.4), (i * 2 * Math.PI) / 3 + Math.PI / 6, -32, 0), tone: 'accent' })),
-      ],
-    })),
-    part('pad', blobby([[0, padY - 11], [-13, padY - 7], [-16, padY + 3], [-8, padY + 11], [8, padY + 11], [16, padY + 3], [13, padY - 7]]), 'hull', 2, {
-      lift: 1.8,
-      details: [{ k: 'shape', pts: circle(0, padY, 7.6, 6), tone: 'dark' }, { k: 'shape', pts: thick([[-10, padY - 7], [10, padY - 7]], 1.6), tone: 'accent' }, { k: 'lights', pts: [[-12, padY + 2], [12, padY + 2]], r: 0.8, tone: 'glow' }],
-    }),
-    part('neck', [[-5, padY + 8], [5, padY + 8], [6, -10], [-6, -10]], 'metal', 1.6, { lift: 1 }),
-    part('bulb', circle(0, pdY, 9.6, 18), 'hull2', 2, { lift: 2, details: [{ k: 'shape', pts: thick([[-9, pdY + 3], [9, pdY + 3]], 1.6), tone: 'accent' }] }),
-    part('dome', circle(0, 0, 16, 24), 'hull2', 3, {
-      lift: 2.8,
-      facets: [{ pts: [...circle(0, 0, 16, 24).filter(([, y]) => y >= 0)], slope: [0, 0.4] }],
-      details: [
-        ...[0, 1, 2, 3, 4, 5].map((i): Detail => ({ k: 'shape', pts: turn(thick([[0, -15.6], [0, -9]], 2.6, 1.6), (i * Math.PI) / 3 + Math.PI / 6), tone: 'accent' })),
-        { k: 'shape', pts: circle(0, 0, 8.6, 6), tone: 'dark' },
-      ],
-    }),
-    part('antenna', thick([[36, -17], [40, -26], [38.6, -33]], 2.2, 1.2), 'dark', 3.4, { detach: { hull: 0.5 }, details: [{ k: 'lights', pts: [[38.6, -33]], r: 1, tone: 'glow' }] }),
+  return out
+}
+
+/** A tendril of dark tissue: a long thin band that tapers to a point, fluttering off the hull. */
+export const tendril = (id: string, pts: Pt[], w: number, z = 0.6, more: Partial<Part> = {}): Part =>
+  part(id, band(pts, w, w * 0.18, 3), 'metal', z, { lift: 0.6, ...more })
+
+/**
+ * The seat a weapon node grows from on a warship's hardpoint `i`: a raised collar of dark chitin
+ * round it, a little wider than the node, with a violet band on its back (the node's mount sits on
+ * top, see mounts.ts).
+ */
+export function nodeSeat(id: string, c: BuildCtx, i: number, r: number, z: number): Part {
+  const [x, y] = hpAt(c, i)
+  return part(id, circle(x, y, r, 16), 'metal', z, {
+    lift: 0.8,
+    details: [{ k: 'line', pts: [...circle(x, y, r * 0.84, 16), circle(x, y, r * 0.84, 16)[0]] }, { k: 'shape', pts: circle(x, y + r * 0.72, r * 0.32, 8, r * 0.16), tone: 'accent' }],
+  })
+}
+
+/** A small weapon organ grown into a hull (no hardpoint, for strike craft and gunships, whose guns are
+ * fixed): an acid sprayer, its green organ cupped in a claw, the nozzle pointing forward. */
+export function acidOrgan(id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part[] {
+  return [
+    part(`${id}Cup`, band([[x - r * 0.9, y + r * 0.6], [x - r, y - r * 0.3], [x - r * 0.4, y - r * 1.1]], r * 0.5, r * 0.15), 'hull', z, { lift: 0.5, slope: [-0.4, 0], ...more }),
+    part(`${id}CupR`, band([[x + r * 0.9, y + r * 0.6], [x + r, y - r * 0.3], [x + r * 0.4, y - r * 1.1]], r * 0.5, r * 0.15), 'hull', z, { lift: 0.5, slope: [0.4, 0], ...more }),
+    part(id, circle(x, y, r * 0.62, 12, r * 0.72), 'aid', z + 0.05, { sphere: true, ...more, details: [{ k: 'lights', pts: [[x, y - r * 0.9]], r: r * 0.16, tone: 'aid' }] }),
   ]
-  return { parts, breakStyle: 'pie' }
+}
+
+/** A bio-turret: a green core ringed with spines, the Swarm's rapid-fire point defence. */
+export function bioTurret(id: string, x: number, y: number, r: number, z: number, spines = 6): Part[] {
+  const out: Part[] = []
+  for (let i = 0; i < spines; i++) {
+    const a = (i / spines) * Math.PI * 2 - Math.PI / 2
+    out.push(part(`${id}Spine${i}`, turn([[-r * 0.2, -r * 0.55], [r * 0.2, -r * 0.55], [0, -r * 1.25]], a + Math.PI / 2, 0, 0).map(([px, py]) => [px + x, py + y] as Pt), 'hull', z, { slope: [Math.cos(a) * 0.4, Math.sin(a) * 0.4] }))
+  }
+  out.push(part(`${id}Ring`, circle(x, y, r * 0.7, 14), 'metal', z + 0.02, { lift: 0.5 }))
+  out.push(part(id, circle(x, y, r * 0.48, 12), 'aid', z + 0.04, { sphere: true }))
+  return out
+}
+
+// --- Strike craft ------------------------------------------------------------------------------------
+
+/**
+ * Stinger interceptor: a small predatory dart. A narrow segmented body with a violet core, two
+ * hooked bat wings swept back, mandibles at the nose and one green engine sac at the tail.
+ */
+export const fighter: ModelDef = () => {
+  const parts: Part[] = [
+    ...sym(part('membrane', [[-5, -8], [-27, 10], [-24, 24], [-5, 18]], 'metal', 0.5, { lift: 0.3 })),
+    ...sym(plate('wing', band([[-5, -14], [-20, -6], [-34, 12], [-33, 32]], 13, 2.4), 'hull', 1, [-0.4, -0.1], {
+      details: [{ k: 'shape', pts: band([[-12, -8], [-24, 2], [-31, 16]], 2.6, 1), tone: 'accent' }],
+    })),
+    engineSac('sac', 0, 30, 47, 10, 0, 1.2, {}, false),
+    ...sym(plate('body', halfHull([[-48, 0.5], [-40, 3.4], [-26, 6.4], [-10, 8.4], [6, 7.2], [20, 5.4], [33, 3]]), 'hull2', 2, [-0.5, 0], {
+      details: [{ k: 'line', pts: [[0, -18], [-6.6, -14]] }],
+    })),
+    ...sym(plate('carapace', halfHull([[-44, 1], [-34, 4], [-20, 5.6], [-12, 4.6]]), 'hull', 2.4, [-0.5, -0.2])),
+    ...sym(plate('jaw', band([[-2.6, -40], [-6, -46], [-4, -51]], 3, 1), 'hull', 2.2, [-0.4, -0.3])),
+    ...core('core', 0, -2, 3.4, 5, 3, false),
+    ...sym(part('barb', [[-4.6, 14], [-3, 14], [-2.4, 26], [-4, 24]], 'dark', 2.6)),
+  ]
+  return { parts, breakStyle: 'bands' }
 }
 
 /**
- * Droid defense platforms (balanced, flak and gun share one deck): a round carapace rim of six shell
- * plates, ribs from a domed hub out to four gun cradles, nodes on its sides, held down by four insect
- * legs. The flak platform carries gold ammunition sacs; the gun platform glowing capacitor spines.
+ * Seeker picket: the Hive's sentinel. A tiny round body all eye, ringed in gold (only the defense
+ * wing wears it), feelers forward, two short hooked fins and a green engine sac.
  */
-export const defense: ModelDef = ({ t, h }) => {
-  const kind = t.id.endsWith('flak') ? 'flak' : t.id.endsWith('gun') ? 'gun' : 'balanced'
-  const cy = (5.1 / 10 - 0.5) * h
-  const corners: Pt[] = [[-24, (3 / 10 - 0.5) * h], [24, (3 / 10 - 0.5) * h], [-24, (7.3 / 10 - 0.5) * h], [24, (7.3 / 10 - 0.5) * h]]
-  // The rim: a round ring, slightly lobed, cut into six plates by dark joints.
-  const rimOut = Array.from({ length: 36 }, (_, i) => {
-    const a = (i / 36) * Math.PI * 2
-    return [Math.cos(a) * 46.6, Math.sin(a) * 46.6 * 0.99] as Pt
-  })
-  const rimIn = Array.from({ length: 36 }, (_, i) => {
-    const a = (i / 36) * Math.PI * 2
-    return [Math.cos(a) * 37.4, Math.sin(a) * 37.4] as Pt
-  })
+export const picket: ModelDef = () => {
   const parts: Part[] = [
-    ...anchorLegs(-26, -30, -40, -36, -46, -46, 0),
-    part('rim', rimOut, 'hull', 1, {
-      holes: [rimIn],
-      lift: 2.4,
-      details: [
-        ...[0, 1, 2, 3, 4, 5].map((i): Detail => ({ k: 'shape', pts: turn(thick([[0, -46.6], [0, -37.4]], 3.4), (i * Math.PI) / 3 + Math.PI / 6), tone: 'dark' })),
-        ...[0, 1, 2, 3, 4, 5].map((i): Detail => ({ k: 'shape', pts: turn(thick([[-6, -44], [6, -44]], 3.2), (i * Math.PI) / 3), tone: 'accent' })),
-        { k: 'lights', pts: [0, 1, 2, 3, 4, 5].map((i) => [Math.cos((i * Math.PI) / 3 + Math.PI / 6) * 42, Math.sin((i * Math.PI) / 3 + Math.PI / 6) * 42] as Pt), r: 0.9, tone: 'glow' },
-      ],
-    }),
-    ...corners.map(([x, y], i) => part(`rib${i}`, thick([[x * 0.3, cy + (y - cy) * 0.3], [x * 0.75, cy + (y - cy) * 0.75], [x * 1.42, y * 1.42 + cy * 0.4]], 6.4, 4.4), 'hull2', 1.6, { lift: 1.4 })),
-    ...sym(part('node', circle(-41, 0, 7.6, 16), 'hull2', 2.6, { lift: 2.6, details: [{ k: 'shape', pts: thick([[-46, 0], [-44, 0]], 4), tone: 'accent' }] })),
-    ...corners.map(([x, y], i) => part(`cradle${i}`, circle(x, y, 10.4, 18), 'hull2', 2.5, {
-      lift: 3,
-      details: [{ k: 'shape', pts: turn(thick([[x, y - 10.2], [x, y - 7.6]], 5), Math.atan2(y - cy, x) + Math.PI / 2, x, y), tone: 'accent' }],
-    })),
-    part('hub', circle(0, cy, 20, 28), 'hull', 3, {
-      lift: 3.4,
-      facets: [{ pts: circle(0, cy, 20, 28).filter(([, y]) => y >= cy), slope: [0, 0.4] }],
-      details: [{ k: 'shape', pts: circle(0, cy, 18.4, 26), tone: 'accent' }, { k: 'shape', pts: circle(0, cy, 16.6, 24), tone: 'hull' }],
-    }),
+    ...sym(plate('fin', band([[-10, -2], [-30, 10], [-40, 26], [-34, 36]], 12, 2.6), 'hull2', 1, [-0.4, 0])),
+    ...sym(part('feeler', band([[-6, -20], [-12, -38], [-8, -49]], 3, 1), 'metal', 1.2)),
+    engineSac('sac', 0, 22, 46, 13, 0, 1.4, {}, false),
+    part('body', circle(0, -6, 19, 22, 21), 'hull', 2, { lift: 1, sphere: true }),
+    part('ring', circle(0, -6, 14.6, 20), 'trim', 2.4, { lift: 0.6, holes: [circle(0, -6, 11.6, 18)] }),
+    ...core('eye', 0, -6, 9, 9, 2.6, false),
   ]
-  if (kind === 'flak')
-    corners.forEach(([x, y], i) => parts.push(part(`sac${i}`, circle(x * 0.55, cy + (y - cy) * 0.55 + (y < cy ? -4 : 4), 3.6, 10), 'trim', 3.2, { lift: 0.8, sphere: true })))
-  if (kind === 'gun')
-    for (const s of [-1, 1]) parts.push(part(`spike${s < 0 ? 'T' : 'B'}`, thick([[0, cy + s * 22], [0, cy + s * 40]], 5, 2), 'dark', 3, { lift: 1.6, details: [{ k: 'lights', pts: along([0, cy + s * 25], [0, cy + s * 37], 3), r: 1, tone: 'glow' }] }))
-  if (kind === 'balanced') parts.push(part('antenna', thick([[0, cy - 20], [-2.4, cy - 30], [0, cy - 40]], 3, 1.6), 'dark', 3.2, { lift: 1, detach: { hull: 0.5 }, details: [{ k: 'lights', pts: [[0, cy - 40]], r: 1.1, tone: 'glow' }] }))
-  return { parts, breakStyle: 'pie' }
+  return { parts, breakStyle: 'bands' }
+}
+
+/**
+ * Brood bomber: a bloated spore carrier. A bulbous body under overlapping chitin plates round a
+ * violet core, a cluster of acid-green spore sacs held out on each side in claws, mandibles at the
+ * front and a green engine sac behind.
+ */
+export const bomber: ModelDef = () => {
+  const parts: Part[] = [
+    ...sym(part('arm', band([[-14, 4], [-30, 2], [-40, 12]], 7, 4), 'metal', 0.6, { lift: 0.6 })),
+    ...sym(part('sacs', blobby([[-30, -8], [-44, -2], [-46, 14], [-38, 24], [-26, 20], [-24, 6]]), 'aid', 1, {
+      sphere: true,
+      details: [{ k: 'line', pts: [[-36, -4], [-34, 20]] }, { k: 'shape', pts: circle(-41, 6, 3, 8), tone: 'dark' }, { k: 'shape', pts: circle(-33, 14, 2.4, 8), tone: 'dark' }],
+    })),
+    ...sym(plate('claw', band([[-20, -16], [-34, -14], [-44, -4]], 6, 1.6), 'hull', 1.4, [-0.4, -0.2])),
+    engineSac('sac', 0, 30, 48, 12, 0, 1.2, {}, false),
+    ...sym(plate('belly', halfHull([[-40, 3], [-32, 12], [-18, 20], [0, 22], [16, 18], [30, 10], [36, 4]]), 'hull2', 2, [-0.5, 0])),
+    ...sym(plate('shellA', halfHull([[-36, 3], [-28, 10], [-16, 14], [-8, 12]]), 'hull', 2.4, [-0.5, -0.3])),
+    ...sym(plate('shellB', halfHull([[2, 12], [12, 15], [24, 10], [30, 5]]), 'hull', 2.4, [-0.5, 0.3])),
+    ...sym(plate('jaw', band([[-4, -38], [-9, -46], [-6, -50]], 4, 1.2), 'hull', 2.2, [-0.4, -0.3])),
+    ...core('core', 0, -3, 6, 7, 3),
+  ]
+  return { parts, breakStyle: 'bands' }
+}
+
+/**
+ * Mender repair organism: a healer in a leaf-shaped shell. Two pale leaf halves cupped round a
+ * glowing acid-green core, two little tendril arms reaching forward with green tips, and an engine sac.
+ */
+export const repair: ModelDef = () => {
+  const leaf: Pt[] = [[0, -44], [-14, -36], [-30, -14], [-34, 8], [-24, 26], [-8, 32], [-4, 10], [-6, -20]]
+  const parts: Part[] = [
+    ...sym(part('arm', band([[-8, -24], [-16, -40], [-12, -50]], 3.2, 1.2), 'metal', 0.6, { details: [glands([[-12, -48]], 1.6)] })),
+    engineSac('sac', 0, 26, 47, 12, 0, 1, {}, false),
+    ...sym(plate('leaf', blobby(leaf, 3), 'hull', 1.4, [-0.45, 0], {
+      details: [{ k: 'line', pts: [[-6, -30], [-20, -8], [-22, 14]] }, { k: 'shape', pts: band([[-10, -34], [-24, -10], [-24, 14]], 2.2, 1), tone: 'accent' }],
+    })),
+    part('heartSocket', circle(0, -2, 10, 18, 13), 'dark', 2, { lift: 0.4 }),
+    part('heart', circle(0, -2, 7.6, 18, 10), 'aid', 2.1, { glow: true, details: [{ k: 'lights', pts: [[-1.4, -4]], r: 1.8, tone: 'aid' }] }),
+  ]
+  return { parts, breakStyle: 'bands' }
+}
+
+/**
+ * Weaver engineer: a spinner organism. A round abdomen of dark chitin with an acid-green spinneret at
+ * its back, a pale head with a violet eye, and three jointed legs a side folded round it; the legs
+ * hold the silk it weaves structures from.
+ */
+export const engineer: ModelDef = () => {
+  const legs: Pt[][] = [
+    [[-8, -18], [-26, -30], [-34, -46]],
+    [[-12, -4], [-32, -10], [-44, -4]],
+    [[-12, 10], [-30, 18], [-38, 34]],
+  ]
+  const parts: Part[] = [
+    ...legs.flatMap((pts, i) => sym(part(`leg${i}`, band(pts, 4, 2, 3), i === 1 ? 'hull2' : 'metal', 0.6 + i * 0.01, { lift: 0.6, details: [{ k: 'shape', pts: circle(pts[1][0], pts[1][1], 2.2, 8), tone: 'dark' }] }))),
+    engineSac('sac', 0, 30, 47, 10, 0, 1, {}, false),
+    part('abdomen', circle(0, 12, 17, 22, 19), 'metal', 2, {
+      sphere: true,
+      details: [{ k: 'shape', pts: band([[-8, 2], [0, 6], [8, 2]], 2.4, 2.4), tone: 'accent' }, { k: 'shape', pts: band([[-10, 14], [0, 18], [10, 14]], 2.4, 2.4), tone: 'accent' }],
+    }),
+    part('spinneret', circle(0, 28, 4.4, 12), 'aid', 2.4, { glow: true }),
+    part('head', blobby([[0, -36], [-11, -28], [-12, -12], [0, -6], [12, -12], [11, -28]], 3), 'hull', 2.6, { lift: 1, facets: [{ pts: [[0, -36], [-11, -28], [-12, -12], [0, -6]], slope: [-0.5, 0] }] }),
+    ...core('eye', 0, -22, 4, 4.6, 2.8, false),
+  ]
+  return { parts, breakStyle: 'bands' }
+}
+
+// --- Gunship and corvette -----------------------------------------------------------------------------
+
+/**
+ * Ravager gunship: an elongated hunter. A segmented spine from a clawed head to two engine sacs, two
+ * forelimbs carrying acid sprayers, a bio-turret of spines on its back, chitin plates down its flanks,
+ * a violet core and trailing tendrils.
+ */
+export const gunship: ModelDef = () => {
+  const parts: Part[] = [
+    ...sym(tendril('tendril', [[-6, 26], [-12, 38], [-10, 48]], 3.2, 0.4)),
+    ...sym(part('limb', band([[-6, -14], [-20, -18], [-26, -28]], 6, 4), 'metal', 0.8, { lift: 0.8 })),
+    ...sym(plate('blade', band([[-8, 4], [-26, 6], [-36, 20], [-34, 32]], 10, 2), 'hull2', 1, [-0.4, 0.1], {
+      details: [{ k: 'shape', pts: band([[-14, 6], [-26, 10], [-32, 20]], 2, 0.8), tone: 'accent' }],
+    })),
+    engineSac('sacL', -8.25, 32, 49, 9, 0, 1.1),
+    engineSac('sacR', 8.25, 32, 49, 9, 1, 1.1),
+    ...spine('seg', [[-30, 7, 14], [-16, 9, 14], [-2, 10, 14], [12, 9, 14], [25, 7, 12]], 'hull', 2),
+    ...sym(plate('head', halfHull([[-50, 0.5], [-46, 4], [-38, 7], [-34, 6]]), 'hull', 2.3, [-0.5, -0.3])),
+    ...sym(plate('jaw', band([[-4, -42], [-10, -48], [-7, -51]], 3.4, 1), 'hull', 2.2, [-0.4, -0.3])),
+    ...acidOrgan('acidL', -25, -27, 6, 2.5),
+    ...acidOrgan('acidR', 25, -27, 6, 2.5),
+    ...core('core', 0, -18, 3.4, 4.4, 2.6, false),
+    ...bioTurret('turret', 0, 4, 7, 2.7),
+  ]
+  return { parts, breakStyle: 'bands' }
+}
+
+/**
+ * Leech corvette: a segmented armoured hunter that feeds. A round sucker mouth ringed in teeth at its
+ * front with a violet glow in its gullet, feeding tendrils reaching forward either side with green
+ * hooks, armoured segments down its body, a regen node (green core in a leaf shell) on its back that
+ * passes the drained biomass on, and two engine sacs.
+ */
+export const corvette: ModelDef = () => {
+  const parts: Part[] = [
+    ...sym(part('feeder', band([[-10, -26], [-24, -36], [-26, -48]], 4, 1.4), 'metal', 0.6, { lift: 0.6, details: [glands([[-26, -47]], 1.4)] })),
+    ...sym(tendril('tail', [[-5, 30], [-14, 40], [-18, 50]], 3, 0.4)),
+    ...sym(plate('flap', band([[-10, -6], [-28, 2], [-34, 18], [-26, 28]], 9, 2), 'hull2', 1, [-0.4, 0.1], {
+      details: [{ k: 'line', pts: [[-18, 2], [-28, 14]] }, glands([[-26, 8], [-29, 18]], 0.9)],
+    })),
+    engineSac('sacL', -7.7, 32, 48, 8, 0, 1.1),
+    engineSac('sacR', 7.7, 32, 48, 8, 1, 1.1),
+    ...spine('seg', [[-30, 11, 12], [-18, 13, 13], [-5, 14, 14], [9, 13, 14], [22, 10, 12]], 'hull', 2),
+    part('mouth', circle(0, -41, 9.6, 20), 'hull', 2.4, { lift: 1, slope: [0, -0.4], holes: [circle(0, -41, 6, 16)] }),
+    part('gullet', circle(0, -41, 6.4, 16), 'dark', 2.3, { details: [{ k: 'shape', pts: circle(0, -41, 3.4, 10), tone: 'glow' }, ...Array.from({ length: 6 }, (_, i): Detail => ({ k: 'shape', pts: turn([[-1, -6.2], [1, -6.2], [0, -3.8]], (i / 6) * Math.PI * 2, 0, 0).map(([x, y]) => [x, y - 41] as Pt), tone: 'hull' }))] }),
+    ...sym(plate('leaf', blobby([[0, -2], [-9, 2], [-11, 12], [-6, 20], [0, 22]], 3), 'hull', 2.6, [-0.45, 0])),
+    part('nodeSocket', circle(0, 10, 5.2, 14, 7), 'dark', 2.7, { lift: 0.3 }),
+    part('node', circle(0, 10, 3.8, 14, 5.4), 'aid', 2.8, { glow: true, details: [{ k: 'lights', pts: [[-0.8, 8.6]], r: 1, tone: 'aid' }] }),
+    ...core('core', 0, -22, 3, 3.6, 2.7, false),
+  ]
+  return { parts, breakStyle: 'bands' }
 }
