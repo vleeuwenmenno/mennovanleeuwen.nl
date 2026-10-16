@@ -157,6 +157,9 @@ export type Unit = {
   face: number | null
   /** Seconds left on a structure's repair, 0 when none is under way. */
   repair: number
+  /** Stations: when enemy ships were last within its reach, which slows its repairs (see
+   * REPAIR_FIRE). Absent until the first came. */
+  fired?: number
   /** Seconds until a retreating warship jumps out, 0 when it isn't retreating. */
   retreat: number
   /** A structure's focus: the enemy all its guns fire on first, while they can reach and hurt it. */
@@ -1576,8 +1579,23 @@ export function cantRepair(w: World, owner: Owner, u: Unit | undefined): string 
   return null
 }
 
+/**
+ * Repairs under fire: while enemy warships or strike craft are within a station's reach (its size,
+ * its guns' range and `margin`), its repair crew works at `rate` of its pace and rebuilds no part
+ * that was shot off; `calm` seconds after the last of them has gone it is back to full pace (so
+ * ships slipping in and out of range gain nothing). Before, a crew put back 5% of a station's hull
+ * a second and every gun shot off, for at most 1,500 credits, under any fire: a station whose
+ * owner had money outlasted any fleet that wasn't far bigger than its own.
+ */
+export const REPAIR_FIRE = { rate: 0.25, margin: 250, calm: 4 }
+/** How near enemy ships slow a station's repairs (see REPAIR_FIRE). */
+export const repairReach = (t: UnitType) => radius(t) + Math.max(0, ...t.hardpoints.map((h) => h.weapon?.range ?? 0)) + REPAIR_FIRE.margin
+/** Whether a structure's repairs are slowed by enemy ships near it right now (see REPAIR_FIRE). */
+export const repairSlowed = (w: World, u: Unit) => u.t.tier === 'station' && u.fired !== undefined && w.time - u.fired < REPAIR_FIRE.calm
+
 /** Send a repair crew: it mends the hull and every module, rebuilding the ones shot off, over
- * REPAIR_TIME seconds, under fire or not. */
+ * REPAIR_TIME seconds; slower, and with no rebuilding, while enemy ships are near a station (see
+ * REPAIR_FIRE). */
 export function cmdRepair(w: World, owner: Owner, id: number): string | null {
   const u = w.byId.get(id)
   const why = cantRepair(w, owner, u)
@@ -1588,17 +1606,36 @@ export function cmdRepair(w: World, owner: Owner, id: number): string | null {
 }
 
 function repairs(w: World, dt: number) {
+  // Stations with enemy ships within their reach (see REPAIR_FIRE).
+  for (const u of w.units) {
+    if (u.dead || u.t.tier !== 'station') continue
+    let hot = false
+    near(w, u.x, u.y, repairReach(u.t), (e) => {
+      if (!hot && !e.dead && isShip(e.t) && foes(w, e.owner, u.owner)) hot = true
+    })
+    if (hot) u.fired = w.time
+  }
   for (const u of w.units) {
     if (u.dead || u.repair <= 0) continue
-    u.repair -= dt
-    const k = dt / REPAIR_TIME
+    const slow = repairSlowed(w, u)
+    const pace = slow ? REPAIR_FIRE.rate : 1
+    u.repair -= dt * pace
+    const k = (dt * pace) / REPAIR_TIME
     u.hull = Math.min(u.hullMax, u.hull + u.hullMax * k)
-    u.hps.forEach((h) => (h.hp = Math.min(h.max, h.hp + h.max * k)))
+    // (Under fire, a part shot off stays off.)
+    for (const h of u.hps) if (!(slow && h.hp <= 0)) h.hp = Math.min(h.max, h.hp + h.max * k)
     if (u.repair <= 0 || wear(u) < 0.001) {
-      // Done: whatever rounding left over is made good.
+      // Done: whatever rounding left over is made good; parts still shot off under fire are paid
+      // back (their share of the price) rather than rebuilt.
       u.repair = 0
       u.hull = u.hullMax
-      for (const h of u.hps) h.hp = h.max
+      let off = 0
+      for (const h of u.hps) {
+        if (slow && h.hp <= 0) off += h.max
+        else h.hp = h.max
+      }
+      const back = off ? Math.floor(worth(u) * (off / (u.hullMax + u.hps.reduce((s, h) => s + h.max, 0))) * 0.6) : 0
+      if (back > 0) giveBack(w, w.players[u.owner], back, 'repairs', `Repairs: ${u.t.name} (parts left under fire)`)
       w.events.push({ k: 'repaired', owner: u.owner, unit: u.id, x: u.x, y: u.y })
     }
   }
@@ -3190,6 +3227,14 @@ export function navRocks(w: World) {
 /** Where to head for on the way to (tx, ty): straight there, or round the first rock in the way,
  * on whichever side of it the ship already is. Without this, a ship aimed through the middle of
  * a big rock is pushed straight back out and sits there. */
+/** The structures standing (not those only planned), worked out once a tick. */
+const standing = new WeakMap<World, { t: number; list: Unit[] }>()
+function structuresOf(w: World) {
+  let c = standing.get(w)
+  if (!c || c.t !== w.time) standing.set(w, (c = { t: w.time, list: w.units.filter((o) => !o.dead && !isShip(o.t) && !planned(o)) }))
+  return c.list
+}
+
 function detour(w: World, u: Unit, tx: number, ty: number) {
   const dx = tx - u.x
   const dy = ty - u.y
@@ -3212,6 +3257,26 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
     first = along
     best = k
     side = off
+  }
+  // Structures (stations, platforms, yards) too: the way round the rocks knows nothing of them,
+  // and a flagship whose way led past its own mining platform pressed into it for good. Only those
+  // close ahead, and not the one it's going to.
+  if (u.t.tier !== 'fighter') {
+    const r0 = radius(u.t)
+    for (const o of structuresOf(w)) {
+      if (o.dead) continue
+      const kr = radius(o.t) + r0 * (1 - HULL_ROCK) + HULL_GAP
+      const R = kr + clear
+      const rx = o.x - u.x
+      const ry = o.y - u.y
+      const along = rx * ux + ry * uy
+      if (along < -R * 0.2 || along - R > Math.min(len, r0 + 600) || along >= first) continue
+      const off = rx * uy - ry * ux
+      if (Math.abs(off) >= R || d2(tx, ty, o.x, o.y) < R * R) continue
+      first = along
+      best = { x: o.x, y: o.y, r: kr }
+      side = off
+    }
   }
   if (!best) return { x: tx, y: ty }
   // Pass on our side of the rock: perpendicular to our line, a little beyond the rock's edge.
@@ -3790,9 +3855,16 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const ny = d > 1 ? (u.y - o.y) / d : M.sin(u.id)
       u.x += nx * push
       u.y += ny * push
-      if (!bigger) return
-      // Running into the bigger hull: the part of our way that heads into it turns into a slide
-      // round it, on the side we're already on (by id when dead centre), so we steer round it.
+      const solid = !isShip(o.t)
+      // The way round the rocks knows nothing of structures: a waypoint that lies under one we're
+      // up against can't be reached, so it counts as passed (else a flagship whose way led past a
+      // mining platform pressed into the platform for good, and the wave's cruisers behind it).
+      const route = u.route?.pts
+      if (solid && route && route.length > 1 && d2(route[0].x, route[0].y, o.x, o.y) < min * min) route.shift()
+      if (!bigger && !solid) return
+      // Running into the bigger hull, or a structure (which doesn't budge either): the part of our
+      // way that heads into it turns into a slide round it, on the side we're already on (by id
+      // when dead centre), so we steer round it.
       const hx = M.cos(u.a)
       const hy = M.sin(u.a)
       const into = -(hx * nx + hy * ny)

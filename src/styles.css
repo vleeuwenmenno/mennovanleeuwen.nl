@@ -10138,6 +10138,131 @@ kbd {
   }
 }
 
+/* ---------- Changelog app (src/apps/Changelog.tsx) ---------- */
+
+.cl {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+.cl-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.cl-head h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+.cl-head p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+}
+.cl-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 20px;
+  -webkit-overflow-scrolling: touch;
+}
+.cl-pad {
+  padding: 16px 8px;
+}
+.cl-pad .btn {
+  margin-top: 10px;
+}
+.cl-item {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  margin-bottom: 8px;
+}
+.cl-item.is-open {
+  border-color: var(--line-strong);
+}
+.cl-item-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 14px 14px 16px;
+  min-height: 52px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.cl-item-head:hover {
+  background: var(--panel-2);
+}
+.cl-item-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.cl-item-titles {
+  flex: 1;
+  min-width: 0;
+}
+.cl-item-titles h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cl-item-titles p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+}
+.cl-pre {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.cl-chevron {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  width: 1.2em;
+  text-align: center;
+}
+.cl-item-body {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--line);
+}
+.cl-md {
+  padding: 12px 0 4px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.cl-md > :first-child {
+  margin-top: 0;
+}
+.cl-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--accent);
+}
+.cl.is-mobile .cl-item-head {
+  min-height: 56px;
+  padding: 14px 12px 14px 14px;
+}
 /* ---------- Weather app (src/apps/Weather.tsx, src/apps/weather/) ---------- */
 
 /* Colours all come from the theme. The sky is mixed from the palette per condition, so it is

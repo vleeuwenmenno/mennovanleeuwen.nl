@@ -1764,6 +1764,17 @@ the bottom of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HE
 account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
 dock, `weather` in the terminal, or from the weather widget.
 
+### Changelog
+
+The **Changelog** app ([`src/apps/Changelog.tsx`](src/apps/Changelog.tsx)) lists MvL OS GitHub
+releases (`MvL OS X.Y.Z`) with their notes rendered as Markdown. It loads them through the site's
+cached `/api/git/…/releases` proxy ([`server/github.ts`](server/github.ts)), falling back to the
+public GitHub API when that proxy is absent. Open it from All apps, Spotlight, the dock, or
+`open changelog` in the terminal.
+
+The terminal's `changelog` command ([`src/terminal/commands.ts`](src/terminal/commands.ts)) prints
+the same releases as scrollable coloured text (`changelog`, `changelog 3`, `changelog 1.80.0`).
+
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
 for its frame colours and tilt (`useFrame`), its own menu items (`useMenu`) and how a new one is
@@ -2060,10 +2071,14 @@ expands, fights and finishes on it: duels on spawns as far apart as the map has 
 every spawn taken (sides alternating round the map), each played from both sides. It reports how
 many games ended and how long they took, how often each spawn's side won, and the ore, beacons,
 expansions, ships and kills per admiral. `MAPS=hadrel,orvane pnpm empires:tournament` runs the AI
-profile tournament on those maps instead of the two-spawn ones. AI-only battles between equal admirals on the
-large and huge maps often run past 40 minutes without a winner, duels most of all (as on Vanth
-Crossing): with ore to spare both sides reach the fleet limit, and their waves reach the enemy
-station a few ships at a time.
+profile tournament on those maps instead of the two-spawn ones. With repairs slowed under fire (see
+"Repair crews" below), hard AI-only battles mostly end (`pnpm empires:maps 60 3`: 99 of 156
+within the hour, median 34 minutes; every spawn taken, 56 of 66), and duels on the small and
+medium maps do too. Duels between equal hard admirals on the large and huge maps still mostly
+run past an hour (Velkar and Draxis none of 6, Vanth, Quintara, Orvane and Tarsis 1, Serrat 2,
+Ithra 3): both sides reach the fleet limit, two equal capped fleets trade evenly in the open
+field, and the side that loses a fight builds its fleet again at home before the winner's wave
+has crossed the map.
 
 ```sh
 pnpm empires:maps 40 3 velkar,draxis,tarsis      # minutes, seeds, maps (default all), layouts (1v1,near,full), difficulty, profile
@@ -2111,6 +2126,11 @@ straight legs. Strike craft fly straight.
   (`asNearAsItGets`) and fights from there, instead of flying at the rocks for good. A selected
   ship's route line ends there too. Each grid knows which pieces of open space connect, so this
   costs no search of the whole map.
+- **Structures** (stations, platforms, yards) aren't on the grid: they come and go during the
+  battle. Warships steer round the one close ahead on their way as they do round a rock (`detour`,
+  never the one they're headed for), slide round one they run into as they do round a bigger hull,
+  and count a waypoint under one they're up against as passed. Before, a flagship whose way led
+  past its own mining platform pressed into it for good, and the wave's cruisers piled up behind it.
 
 **Scattering the rocks.** Each battle scatters its rocks from its seed (`newWorld`), copied to every
 side by the map's symmetry. They keep clear of ore, beacons, wrecks, the build radius round each
@@ -2181,6 +2201,20 @@ structure of an ally's welds it back too (their sites and rush-launched ships ar
 and whoever welds pays for rebuilding shot-off modules, Field repair crews on an ally's station
 included. Enemies are refused by the sim and, online, by the server referee before the order
 reaches anyone.
+
+**Repair crews** (*Repair* on a structure's card, `cmdRepair`): for 60% of what's missing of the
+structure's worth, a crew mends the hull and every module, rebuilding the shot-off ones, over 20 s.
+**Under fire** they're slower (`REPAIR_FIRE` in sim.ts): while enemy warships or strike craft are
+within a station's reach (its size, its guns' range and 250 more, `repairReach`), the crew works
+at 25% of its pace and rebuilds no shot-off module; full pace comes back 4 s after the last of them
+has gone, so ships slipping in and out of range gain nothing. A repair that ends under fire leaves
+those modules off and pays back their share of the price. Players and the AI alike. The station's card says
+so on the button itself, in gold ("Repair 723 · under fire", or "Repairing… 76s · under fire" with
+the time at the slowed pace), and the tooltip says why; on a screen too narrow for the card's side
+column (a phone) the button sits in the card's header, so it can be seen and tapped there. Before, a crew put back
+5% of a station's hull a second and every gun shot off, under any fire, for at most 1,500 credits:
+a station whose owner had money outlasted any fleet not far bigger than its own, and battles
+between equal admirals rarely ended.
 
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
 Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
@@ -2339,7 +2373,10 @@ Esc, the banner's *Leave* or a look anywhere else lets go.
 on two defense sites round its Command Station, ordered in the planet's queue like a yard (paid when
 queued, refunded in full when called off), and on the shipyard's **Defense** page. Each has three
 levels, each upgrade ordered in the queue too, with 1, 2 and 4 **module slots**; the player picks
-the module for each slot (a module ordered into a full slot replaces what is there once it's done):
+the module for each slot (a module ordered into a full slot replaces what is there once it's done).
+On the Defense page each site is its own bordered group: the station's card on the left, its upgrade
+and its four slots to the right, the modules to pick from below. The groups sit side by side on a
+wide panel and stack on a narrow one or a phone (each at least 320 px wide):
 
 | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
 | --- | --- | --- | --- |
@@ -2570,6 +2607,23 @@ Balanced. Every profile plays the same game, with a purpose:
   flagships badly hurt go home to the repair dock or the repair craft and rejoin once whole. It
   defends an outlying mine only when it can win there; against more it waits under the station's
   guns.
+- **Sieges** (medium and hard): a wave going for the enemy station gathers just out of reach of its
+  guns, on the side it comes from, and the ships that follow it out join it there rather than fly
+  into the guns a few at a time. It goes in once what has gathered is twice what it knows guards
+  the station and hits harder than the station's repair crews can mend under fire (`SIEGE`), or after
+  90 seconds there with half as much again as it knows of. When the assault is down to 40% of what
+  went in, the rest pull back to the gathering spot and try again with the new ships. A wave that
+  comes no closer for two and a half minutes with nothing to fight (stuck) comes home to gather
+  again (`STALL`). With a wave out far from home and 3000 credits or more, it buys its new ships as
+  reinforcements and calls them in beside the wave, surcharge and all (`frontline`): on a big map the
+  side that lost a fight in the field had otherwise built its fleet again at home before the
+  winner's new ships had flown across. Ships with their engines shot off stay at home (a group flies
+  at its slowest ship's pace), and a ship slowed for a moment isn't given the group's order until
+  it's free.
+- **A big bank at the fleet limit** (8000 credits, within 6 of the limit; medium and hard): it picks
+  ships by what they're worth per place in the fleet rather than per credit, and sends its cheapest
+  gunships at home out through hyperspace (for part of their price back) to make room for cruisers
+  (`REFIT`); lamed ships go the same way.
 
 | | Defensive | Balanced | Offensive |
 | --- | --- | --- | --- |
@@ -2862,8 +2916,11 @@ or it is resized, never per frame).
 
 A desperate measure for a base under attack. Once **Rushed construction** (the droids' **Hasty
 assembly protocols**) is researched (800 credits, 45 s, station level 3, and it needs a Capital Yard
-standing; it shows on the tech tree's Capital Yard line), the Capital Yard's build queue shows
-**Rush launch (62%)** once the ship in progress is at least half built. A click sends it out now; on
+standing; it shows on the tech tree's Capital Yard line), the Capital Yard's build queue shows a
+**Rush launch** button beside the ship in progress (not for fleet-inventory builds). It is always
+there, so it can be found: disabled as **locked** (the tooltip names the research needed), **at 50%**
+until the ship is half built, and **Rush launch · 1:12** while the yard cools down; enabled as
+**Rush launch (62%)** otherwise. A click sends it out now; on
 a touch screen the button is held for 0.6 s (a ring fills round it) so a stray tap can't do it.
 
 - The ship flies out of the berth with its hull at the share that was built, no shields, and as many of its
@@ -3322,7 +3379,8 @@ non-root user on port 8080 (`PORT` changes it). Its API routes live in
 [`server/api.ts`](server/api.ts), shared with `pnpm dev`. It serves the built site, answers `/healthz`, serves
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
 `/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
-anonymous limit of 60 requests an hour), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+anonymous limit of 60 requests an hour), `/api/git/<owner>/<repo>/releases` (for the Changelog app,
+same cache and token), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.

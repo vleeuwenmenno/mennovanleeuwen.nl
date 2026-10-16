@@ -294,6 +294,7 @@ export function PlanetDefense({ g, p, sound, toast, only }: { g: Galaxy; p: Plan
           <strong>{orbitalName(f, o.level)}</strong>
           <span className="ew-modline">Level {o.level}</span>
         </div>
+        <div className="ew-gdef-side">
         {o.level < ORBITAL_TOP && (
           <button className={`ew-gp-up ew-gdef-up ${upLock && !upBusy ? 'is-off' : ''}`} onClick={() => order(up)}
             data-tip={`Upgrade to the ${orbitalName(f, o.level + 1)}: ${orbitalSlots(o.level + 1)} module slots, more hull. ${orbitalCost(g, ME, p, up)} credits, ${Math.round(orbitalTime(g, ME, p, up))} s.${upBusy ? '\nClick to call it off (refunded).' : upLock ? `\n${upLock}` : ''}`}>
@@ -318,6 +319,7 @@ export function PlanetDefense({ g, p, sound, toast, only }: { g: Galaxy; p: Plan
               </button>
             )
           })}
+        </div>
         </div>
         {pick?.i === i && (
           <div className="ew-gdef-pick" role="group" aria-label={`Modules for slot ${pick.slot + 1}`}>
