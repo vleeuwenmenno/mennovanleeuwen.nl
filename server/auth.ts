@@ -42,6 +42,10 @@ export function registration() {
   return { open: registrationOpen(), full: count >= max, count, max }
 }
 
+const signInHandlers: ((userId: number) => void)[] = []
+/** Runs after every sign-in, with its new token (maybe with other scopes, or let into more organisations): server/search.ts forgets that user's cached lists. */
+export const onSignIn = (fn: (userId: number) => void) => void signInHandlers.push(fn)
+
 export type User = { id: number; login: string; name: string | null; avatar: string | null; githubToken: string; githubScopes: string[]; admin: boolean }
 
 type UserRow = { id: number; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
@@ -174,6 +178,8 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
     id = nextUserId()
     db.prepare('INSERT INTO users (id, github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, me.id, me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, now)
   }
+
+  for (const fn of signInHandlers) fn(id)
 
   const sid = randomBytes(32).toString('base64url')
   db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + SESSION_DAYS * 864e5)

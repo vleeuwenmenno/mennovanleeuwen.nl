@@ -635,6 +635,20 @@ and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo 
 Tab completes the highlighted result (`owner/repo`, then type `#` or `@`); Ctrl+Enter copies a
 clone command, link or branch name.
 
+Your repositories include those of every organisation you are in: GitHub's own list
+(owned, collaborator and organisation repositories) plus the most recently pushed hundred of
+each organisation, so typing an organisation's name (`acme`) lists its repositories too. Lists are
+kept a few minutes (GitHub 5, Gitea/Forgejo 15) and refreshed in the background; an issue, pull
+request or branch from a repository the list lacks refreshes it at once (at most once a minute),
+and signing in again starts over. Settings → Code hosts lists your GitHub organisations and
+whether the site can read them. Organisations can restrict OAuth apps (GitHub's default for new
+ones): until an owner approves the site, only their public repositories show. The *Grant access*
+button opens GitHub's page for the site's OAuth app, where owners click *Grant* and members
+*Request*; coming back to the tab checks again. GitHub hides an organisation that restricts the
+app from the site altogether when your membership is private, so it only shows up on that page.
+Sign-ins from before "Allow private" asked for `read:org` see only public memberships, and get a
+*Sign in again* button.
+
 Signed in, the dock is yours too ([`src/os/dockItems.ts`](src/os/dockItems.ts)): right-click a
 dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or repository in
 Spotlight or All apps to pin it. An open app that isn't pinned offers *Keep in dock* on its own

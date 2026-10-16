@@ -1,17 +1,22 @@
-import type { BranchHit, Hit, IssueHit, Label, ParsedQuery, RepoHit, SearchResponse } from '../src/data/code.ts'
+import type { BranchHit, Hit, IssueHit, Label, OrgAccess, OrgsResponse, ParsedQuery, RepoHit, SearchResponse } from '../src/data/code.ts'
 import { parseQuery } from '../src/data/code.ts'
-import type { User } from './auth.ts'
+import { onSignIn, type User } from './auth.ts'
 import { onUserGone } from './db.ts'
-import { sources, type Source } from './forges.ts'
+import { githubSource, ORG_RESTRICTED, ORG_SSO, sources, type Source } from './forges.ts'
 
 // Spotlight's code search over GitHub and linked Gitea/Forgejo instances. The query grammar is
 // in src/data/code.ts (parseQuery). Repository lists, branch lists and pull request lists are
 // cached per user for a few minutes, so typing doesn't hammer the APIs; lookups by number and
 // text searches go out live.
 
-// Repositories rarely come or go: lists are kept 30 minutes, and served stale (refreshed in the
-// background) after that, so typing never waits on them.
-const REPO_TTL = 30 * 60_000
+// Repository lists are served stale (refreshed in the background) once they are old, so typing
+// never waits on them. GitHub's is a handful of requests and kept 5 minutes, so an organisation
+// that just let the site in shows up soon; walking a Gitea/Forgejo instance's organisations takes
+// more, so that list is kept 15 minutes. Issues or branches in a repository missing from the list
+// refresh it at once (healRepos), and Settings → Code hosts can ask for a fresh one.
+const GITHUB_REPO_TTL = 5 * 60_000
+const FORGE_REPO_TTL = 15 * 60_000
+const repoTtl = (src: Source) => (src.kind === 'github' ? GITHUB_REPO_TTL : FORGE_REPO_TTL)
 const ISSUE_SEARCH_TTL = 2 * 60_000
 const LIST_TTL = 2 * 60_000
 const cache = new Map<string, { at: number; ttl: number; value: Promise<unknown> }>()
@@ -46,16 +51,19 @@ function cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T>
   return value
 }
 
-/** Forget a user's cached lists (after linking or unlinking an instance). */
+/** Forget a user's cached lists (after linking or unlinking an instance, or signing in again). */
 export function clearSearchCache(user: User) {
-  for (const k of cache.keys()) if (k.startsWith(`${user.id}|`)) cache.delete(k)
+  for (const map of [cache, healedAt, stillMissing, freshAt] as Map<string, unknown>[]) for (const k of map.keys()) if (k.startsWith(`${user.id}|`)) map.delete(k)
 }
 onUserGone((id) => clearSearchCache({ id } as User))
+// A new token may reach more (an organisation granted meanwhile, other scopes): start over.
+onSignIn((id) => clearSearchCache({ id } as User))
 
 // ---------------------------------------------------------------------------------------------
 // API shapes, only the fields used
 
-type GhRepo = { full_name: string; html_url: string; description: string | null; private: boolean; fork: boolean; archived: boolean; stargazers_count?: number; stars_count?: number; open_issues_count: number; language: string | null; default_branch: string; pushed_at?: string | null; updated_at?: string; clone_url: string; ssh_url?: string }
+type GhOrg = { login: string; avatar_url?: string | null }
+type GhRepo = { owner?: { login: string; type?: string }; full_name: string; html_url: string; description: string | null; private: boolean; fork: boolean; archived: boolean; stargazers_count?: number; stars_count?: number; open_issues_count: number; language: string | null; default_branch: string; pushed_at?: string | null; updated_at?: string; clone_url: string; ssh_url?: string }
 export type ApiIssue = {
   number: number
   title: string
@@ -142,24 +150,150 @@ async function pages<T>(src: Source, path: (page: number) => string, per: number
   return out
 }
 
+type RepoSet = { repos: RepoHit[]; orgs: OrgAccess[]; canListOrgs: boolean }
+
+/** Organisations walked for their repositories, at most (each is one request). */
+const MAX_ORGS = 30
+
+const byPushed = (a: RepoHit, b: RepoHit) => (b.pushedAt ?? '').localeCompare(a.pushedAt ?? '')
+
+function dedupe(src: Source, raw: GhRepo[]): RepoHit[] {
+  const seen = new Set<string>()
+  return raw
+    .filter((r) => !seen.has(r.full_name.toLowerCase()) && seen.add(r.full_name.toLowerCase()))
+    .map((r) => toRepo(src, r))
+    .sort(byPushed)
+}
+
+/**
+ * GitHub: what /user/repos lists (owned, collaborator, and through organisation membership), plus
+ * the most recently pushed repositories of each organisation the account belongs to. Membership
+ * comes from /user/orgs, which needs the read:org scope and leaves out organisations whose OAuth
+ * app policy keeps this site out, and from the public memberships, which show those too. An
+ * organisation only seen publicly is reported as restricted (Settings → Code hosts explains it);
+ * one with a private membership and a policy against the app can't be seen at all.
+ */
+async function loadGithub(src: Source): Promise<RepoSet> {
+  const [mine, listed, publicOrgs] = await Promise.all([
+    pages<GhRepo>(src, (p) => `/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=${p}`, 100, 5),
+    // Without read:org (or user) GitHub answers 403 here: then only public memberships are known.
+    pages<GhOrg>(src, (p) => `/user/orgs?per_page=100&page=${p}`, 100, 2).catch(() => null),
+    src
+      .api<GhOrg[]>(`/users/${encodeURIComponent(src.login)}/orgs?per_page=100`)
+      .then((l) => list<GhOrg>(l))
+      .catch(() => [] as GhOrg[]),
+  ])
+  const orgs = new Map<string, { org: GhOrg; listed: boolean }>()
+  for (const org of listed ?? []) orgs.set(org.login.toLowerCase(), { org, listed: true })
+  for (const org of publicOrgs) if (!orgs.has(org.login.toLowerCase())) orgs.set(org.login.toLowerCase(), { org, listed: false })
+
+  const walked = await Promise.all(
+    [...orgs.values()].slice(0, MAX_ORGS).map(async ({ org, listed: seen }) => {
+      let access: OrgAccess['access'] = seen ? 'ok' : listed ? 'restricted' : 'unknown'
+      let repos: GhRepo[] = []
+      try {
+        repos = list<GhRepo>(await src.api(`/orgs/${encodeURIComponent(org.login)}/repos?type=all&sort=pushed&per_page=100`))
+        // Private repositories came back, so the app is let in whatever the listing said.
+        if (repos.some((r) => r.private)) access = 'ok'
+      } catch (e) {
+        const msg = (e as Error).message
+        if (msg.includes(ORG_RESTRICTED)) access = 'restricted'
+        else if (msg.includes(ORG_SSO)) access = 'sso'
+      }
+      return { org, access, repos }
+    }),
+  )
+  const all = dedupe(src, [...mine, ...walked.flatMap((w) => w.repos)])
+  return {
+    repos: all,
+    canListOrgs: !!listed,
+    orgs: walked
+      .map(({ org, access }) => {
+        const own = all.filter((r) => r.fullName.toLowerCase().startsWith(`${org.login.toLowerCase()}/`))
+        return { login: org.login, avatar: org.avatar_url ?? null, url: `${src.web}/${org.login}`, access, repos: own.length, privateRepos: own.filter((r) => r.private).length }
+      })
+      .sort((a, b) => a.login.localeCompare(b.login, undefined, { sensitivity: 'base' })),
+  }
+}
+
+async function loadGitea(src: Source): Promise<RepoSet> {
+  const own = await pages<GhRepo>(src, (p) => `/user/repos?limit=50&page=${p}`, 50, 10)
+  const orgs = list<{ username?: string; name?: string }>(await src.api('/user/orgs?limit=50'))
+  const orgRepos = await Promise.all(orgs.map((o) => pages<GhRepo>(src, (p) => `/orgs/${encodeURIComponent(o.username ?? o.name ?? '')}/repos?limit=50&page=${p}`, 50, 4).catch(() => [])))
+  return { repos: dedupe(src, [...own, ...orgRepos.flat()]), orgs: [], canListOrgs: true }
+}
+
+const repoKey = (user: User, src: Source) => `${user.id}|${src.id}|repos`
+const loadRepos = (src: Source) => (src.kind === 'github' ? loadGithub(src) : loadGitea(src))
+const repoSet = (user: User, src: Source) => cachedStale(repoKey(user, src), repoTtl(src), () => loadRepos(src))
+
 /** Every repository the user owns, collaborates on or reaches through an organisation. */
-function repoList(user: User, src: Source): Promise<RepoHit[]> {
-  return cachedStale(`${user.id}|${src.id}|repos`, REPO_TTL, async () => {
-    let raw: GhRepo[]
-    if (src.kind === 'github') {
-      raw = await pages<GhRepo>(src, (p) => `/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=${p}`, 100, 5)
-    } else {
-      const own = await pages<GhRepo>(src, (p) => `/user/repos?limit=50&page=${p}`, 50, 10)
-      const orgs = list<{ username?: string; name?: string }>(await src.api('/user/orgs?limit=50'))
-      const orgRepos = await Promise.all(orgs.map((o) => pages<GhRepo>(src, (p) => `/orgs/${encodeURIComponent(o.username ?? o.name ?? '')}/repos?limit=50&page=${p}`, 50, 4).catch(() => [])))
-      raw = [...own, ...orgRepos.flat()]
-    }
-    const seen = new Set<string>()
-    return raw
-      .filter((r) => !seen.has(r.full_name.toLowerCase()) && seen.add(r.full_name.toLowerCase()))
-      .map((r) => toRepo(src, r))
-      .sort((a, b) => (b.pushedAt ?? '').localeCompare(a.pushedAt ?? ''))
-  })
+export function repoList(user: User, src: Source): Promise<RepoHit[]> {
+  return repoSet(user, src).then((s) => s.repos)
+}
+
+/** Loads the list again now; the old one is answered until the new one is in. */
+function refreshRepos(user: User, src: Source): Promise<RepoSet> {
+  const fresh = loadRepos(src)
+  fresh.then(() => {
+    settled.add(fresh)
+    cache.set(repoKey(user, src), { at: Date.now(), ttl: repoTtl(src), value: fresh })
+  }, () => {})
+  return fresh
+}
+
+/** A repository list refreshes at most this often because of hits it lacks. */
+const HEAL_EVERY = 60_000
+/** A repository still missing after such a refresh (someone else's, where you commented) doesn't ask again for this long. */
+const MISSING_FOR = 30 * 60_000
+const healedAt = new Map<string, number>()
+const stillMissing = new Map<string, number>()
+
+/**
+ * Issues, pull requests or branches from repositories the cached list lacks mean it is out of date
+ * (an organisation that just let the site in, a repository made a minute ago): refresh it now, so
+ * they show up as repositories from the next keystroke. Resolves when done (tests wait on it).
+ */
+export async function healRepos(user: User, src: Source, names: string[]): Promise<void> {
+  const k = `${user.id}|${src.id}`
+  const have = new Set((await repoList(user, src)).map((r) => r.fullName.toLowerCase()))
+  const now = Date.now()
+  const missing = [...new Set(names.map((n) => n.toLowerCase()))].filter((n) => n.includes('/') && !have.has(n) && now - (stillMissing.get(`${k}|${n}`) ?? 0) > MISSING_FOR)
+  if (!missing.length || now - (healedAt.get(k) ?? 0) < HEAL_EVERY) return
+  healedAt.set(k, now)
+  const fresh = new Set((await refreshRepos(user, src)).repos.map((r) => r.fullName.toLowerCase()))
+  for (const n of missing) if (!fresh.has(n)) stillMissing.set(`${k}|${n}`, Date.now())
+  if (stillMissing.size > 5000) for (const [key, at] of stillMissing) if (Date.now() - at > MISSING_FOR) stillMissing.delete(key)
+}
+
+function healFromHits(user: User, all: Source[], hits: Hit[]) {
+  for (const src of all) {
+    const names = hits.flatMap((h) => (h.source === src.id && h.kind !== 'repo' ? [h.repo] : []))
+    if (names.length) healRepos(user, src, names).catch(() => {})
+  }
+}
+
+/** Settings → Code hosts asks for a fresh check at most this often. */
+const FRESH_EVERY = 10_000
+const freshAt = new Map<string, number>()
+
+/** The GitHub organisations the account belongs to and whether the site's OAuth app reaches them. */
+export async function githubOrgAccess(user: User, src: Source, fresh = false): Promise<OrgsResponse> {
+  const clientId = process.env.GITHUB_CLIENT_ID || null
+  try {
+    const k = `${user.id}|${src.id}|fresh`
+    const set = fresh && Date.now() - (freshAt.get(k) ?? 0) > FRESH_EVERY ? (freshAt.set(k, Date.now()), await refreshRepos(user, src)) : await repoSet(user, src)
+    return { clientId, canListOrgs: set.canListOrgs, orgs: set.orgs, error: null }
+  } catch (e) {
+    return { clientId, canListOrgs: false, orgs: [], error: (e as Error).message }
+  }
+}
+
+/** For /api/code/orgs: `fresh` (Settings' Refresh, or coming back from GitHub) loads everything again. */
+export async function orgAccess(user: User, fresh: boolean): Promise<OrgsResponse> {
+  // Repositories found missing before (say, before an organisation let the site in) may heal again.
+  if (fresh) for (const map of [healedAt, stillMissing] as Map<string, unknown>[]) for (const k of map.keys()) if (k.startsWith(`${user.id}|`)) map.delete(k)
+  return githubOrgAccess(user, githubSource(user), fresh)
 }
 
 /** Higher is better; 0 is no match. In-order letters ("bw" for boltwarden) only with `fuzzy`. */
@@ -374,5 +508,6 @@ export async function search(user: User, raw: string): Promise<SearchResponse> {
     const targets = query.repo ? await resolveRepo(user, all, query.repo, errors) : await recentRepos(user, all, 6, errors)
     hits = await each(targets, ({ src, repo }) => branches(user, src, repo, query.text, query.repo ? 12 : 4), errors)
   }
+  healFromHits(user, all, hits)
   return { query, hits, errors: [...new Set(errors)] }
 }
