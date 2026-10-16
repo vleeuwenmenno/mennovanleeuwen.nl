@@ -27,7 +27,7 @@ import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } 
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
-import { search, clearSearchCache } from './search.ts'
+import { search, clearSearchCache, orgAccess } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser } from './users.ts'
@@ -413,6 +413,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true
+    // Settings → Code hosts: the GitHub organisations and whether this site's OAuth app reaches them.
+    if (path === '/api/code/orgs' && read) return json(res, 200, await orgAccess(requireUser(req), url.searchParams.get('fresh') === '1')), true
     // The Mail app over JMAP (server/jmap.ts): accounts, mailboxes, conversations, drafts, sending and attachments.
     if (path.startsWith('/api/mail/')) return await handleMailApi(req, res, url)
     // Mail, Contacts, Calendar and Tasks together (server/pim.ts): invitations, a contact's mail and events, tasks from mail.
