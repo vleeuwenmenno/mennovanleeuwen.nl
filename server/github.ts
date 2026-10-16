@@ -1,14 +1,18 @@
-// git log / git show for the terminal, through the site's server: cached for a minute and, with
-// GITHUB_TOKEN set, under the authenticated rate limit instead of each visitor's 60 an hour.
-// Only commit endpoints of the repos the site shows are passed through.
+// git log / git show for the terminal, and MvL OS release notes for the Changelog app, through
+// the site's server: cached for a minute and, with GITHUB_TOKEN set, under the authenticated rate
+// limit instead of each visitor's 60 an hour. Only commit and releases endpoints of the repos the
+// site shows are passed through.
 
 const REPOS = new Set(['vleeuwenmenno/mennovanleeuwen.nl', 'vleeuwenmenno/boltwarden', 'vleeuwenmenno/omasoloist', 'maajix/omarchy-spotlight', 'chr0nzz/omarchy-omafile'])
 const CACHE_MS = 60_000
 const cache = new Map<string, { at: number; value: Promise<{ status: number; body: string }> }>()
 
-/** `path` is e.g. "vleeuwenmenno/boltwarden/commits?per_page=10" or ".../commits/<sha>". */
+const COMMITS = /^([\w.-]+\/[\w.-]+)\/commits(\/[0-9a-zA-Z._-]+)?(\?per_page=\d{1,3})?$/
+const RELEASES = /^([\w.-]+\/[\w.-]+)\/releases(\?per_page=\d{1,3})?$/
+
+/** `path` is e.g. "vleeuwenmenno/boltwarden/commits?per_page=10", ".../commits/<sha>", or ".../releases?per_page=30". */
 export function githubCommits(path: string): Promise<{ status: number; body: string }> {
-  const m = /^([\w.-]+\/[\w.-]+)\/commits(\/[0-9a-zA-Z._-]+)?(\?per_page=\d{1,3})?$/.exec(path)
+  const m = COMMITS.exec(path) ?? RELEASES.exec(path)
   if (!m || !REPOS.has(m[1])) return Promise.resolve({ status: 404, body: '{"message":"Not Found"}' })
   const hit = cache.get(path)
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value
