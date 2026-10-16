@@ -2309,7 +2309,10 @@ lets go.
 on two defense sites round its Command Station, ordered in the planet's queue like a yard (paid when
 queued, refunded in full when called off), and on the shipyard's **Defense** page. Each has three
 levels, each upgrade ordered in the queue too, with 1, 2 and 4 **module slots**; the player picks
-the module for each slot (a module ordered into a full slot replaces what is there once it's done):
+the module for each slot (a module ordered into a full slot replaces what is there once it's done).
+On the Defense page each site is its own bordered group: the station's card on the left, its upgrade
+and its four slots to the right, the modules to pick from below. The groups sit side by side on a
+wide panel and stack on a narrow one or a phone (each at least 320 px wide):
 
 | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
 | --- | --- | --- | --- |
