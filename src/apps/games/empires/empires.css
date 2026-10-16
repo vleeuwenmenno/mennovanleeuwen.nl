@@ -7727,21 +7727,35 @@ span.ew-teamtag {
   margin-top: 6px;
 }
 /* The Defense page: a group per defense site, its slots and the modules to pick from. */
+/* Each site gets a column at least 320px wide (two side by side on a wide panel, one when narrow or
+   on a phone), so its four slots stay readable and the modules to pick from have room to wrap. */
 .ew-yard.ew-gbuild.ew-gdefs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-rows: none;
+  grid-auto-flow: row;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  grid-auto-columns: auto;
+  gap: 14px 18px;
+  align-items: start;
+  max-width: none;
+  overflow: visible;
+  /* The panel is as wide as its content: ask for room for two sites side by side (less on a small screen). */
+  min-width: min(700px, 60vw);
 }
 .ew-gdef {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 8px;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 6px 10px;
   align-items: start;
+  align-content: start;
   min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ew-line);
+  border-radius: 8px;
 }
 .ew-gdef > small {
   grid-column: 1 / -1;
+  grid-row: 1;
   color: var(--ew-muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -7754,15 +7768,25 @@ span.ew-teamtag {
   opacity: 0.45;
   filter: grayscale(0.6);
 }
+.ew-deck .ew-gdef > .ew-shipcard.ew-yardcard {
+  grid-column: 1;
+  grid-row: 2;
+}
+.ew-gdef-side {
+  grid-column: 2;
+  grid-row: 2;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
 .ew-gdef-up {
-  align-self: start;
+  justify-self: start;
 }
 .ew-gdef-slots {
-  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  min-width: min(100%, 300px);
-  gap: 4px;
+  gap: 6px;
 }
 .ew-deck .ew-gdef-slot {
   display: grid;
@@ -7809,7 +7833,7 @@ span.ew-teamtag {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
 }
 /* A skirmish's defense station card: its level and upgrade, its slots, the modules for the slot picked. */
 .ew-fort {
