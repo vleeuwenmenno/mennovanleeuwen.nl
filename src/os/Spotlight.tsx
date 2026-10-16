@@ -26,6 +26,7 @@ import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
 import { asWebAddress, isLocalAddress, useLinkPreview, type LinkPreview } from './linkPreview'
 import { openLink } from '../data/links'
+import { gitProps } from '../apps/git/route'
 import { displayName, matchScore, openContact, useContacts, type Contact } from '../data/contacts'
 import { composeMail, fetchThreads, openMail, useMailAccounts, type ThreadRow } from '../data/mail'
 import { Avatar } from '../apps/contacts/people'
@@ -408,7 +409,8 @@ function BranchPreview({ b }: { b: BranchHit }) {
   )
 }
 
-function codeRow(h: Hit, copy: (text: string, label: string) => void): Result {
+/** `openInApp` opens a repository, pull request or issue in the Git app (its actions panel). */
+function codeRow(h: Hit, copy: (text: string, label: string) => void, openInApp: (h: Hit) => void): Result {
   // Opening something remembers it, so it comes back first next time (here, not in the
   // websites history: the Recent group already has it).
   const open = (url: string) => {
@@ -427,6 +429,7 @@ function codeRow(h: Hit, copy: (text: string, label: string) => void): Result {
       alt: { label: 'Copy clone command', run: () => copy(`git clone ${h.cloneUrl}`, 'clone command') },
       complete: h.fullName,
       link: { label: h.fullName.split('/').pop()!, url: h.url },
+      more: [{ label: 'Open in Git', run: () => openInApp(h) }],
       preview: () => <RepoPreview r={h} />,
     }
   if (h.kind === 'branch')
@@ -450,6 +453,7 @@ function codeRow(h: Hit, copy: (text: string, label: string) => void): Result {
     run: () => open(h.url),
     alt: { label: 'Copy link', run: () => copy(h.url, 'link') },
     complete: `${h.repo}#${h.number}`,
+    more: [{ label: 'Open in Git', run: () => openInApp(h) }],
     preview: () => <IssuePreview i={h} />,
   }
 }
@@ -1032,9 +1036,15 @@ export function Spotlight() {
     // A web address always leads: "Go to google.com", with what the page says about itself.
     if (address) out.unshift(goToRow(address, page, (url) => openLink(url, { title: page?.title ?? undefined }), copy))
 
+    // Ctrl+K on a repository, pull request or issue: the same in the Git app instead of the web.
+    const openInApp = (h: Hit) => {
+      if (h.kind === 'branch') return
+      rememberHit(h)
+      wm.open('git', h.kind === 'repo' ? gitProps(h.source, h.fullName) : gitProps(h.source, h.repo, { kind: h.kind, number: h.number }))
+    }
     // What you opened from Spotlight before, most used and recent first; right-click forgets one.
     const recentRow = (h: Hit): Result => {
-      const r = codeRow(h, copy)
+      const r = codeRow(h, copy, openInApp)
       return { ...r, id: `recent-${hitKey(h)}`, group: 'Recent', forget: () => forgetHit(h) }
     }
     const recentRanked = recentHits.slice().sort((a, b) => weight(b) - weight(a))
@@ -1074,7 +1084,7 @@ export function Spotlight() {
     const recentKeys = new Set(recentMatches.map((x) => hitKey(x.r.hit)))
 
     // Repositories, issues, PRs and branches from the user's code hosts.
-    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, copy))
+    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, copy, openInApp))
     const codeStatus: Result[] = []
     // Searching and trouble only matter when the query is about code (#123, repo@branch).
     if (isCodeQuery(query) && code.loading && !codeRows.length) codeStatus.push({ id: 'code-loading', group: 'Code', title: 'Searching your code hosts…', icon: <Glyph>⌕</Glyph>, run: () => {} })
