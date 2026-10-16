@@ -8,6 +8,7 @@ import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unb
 import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
+import { handleGitApi } from './git.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, knownUids, updateEvent } from './calendars.ts'
 import { findLinked, noteLinkApi } from './noteLinks.ts'
@@ -27,7 +28,7 @@ import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } 
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
-import { search, clearSearchCache } from './search.ts'
+import { search, clearSearchCache, orgAccess } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser } from './users.ts'
@@ -413,6 +414,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true
+    // Settings → Code hosts: the GitHub organisations and whether this site's OAuth app reaches them.
+    if (path === '/api/code/orgs' && read) return json(res, 200, await orgAccess(requireUser(req), url.searchParams.get('fresh') === '1')), true
+    // The Git app (server/git.ts): repositories, pull requests, issues and commits; comments and your own descriptions can be written.
+    if (path === '/api/repos' || path.startsWith('/api/repos/')) return await handleGitApi(req, res, url, requireUser(req))
     // The Mail app over JMAP (server/jmap.ts): accounts, mailboxes, conversations, drafts, sending and attachments.
     if (path.startsWith('/api/mail/')) return await handleMailApi(req, res, url)
     // Mail, Contacts, Calendar and Tasks together (server/pim.ts): invitations, a contact's mail and events, tasks from mail.

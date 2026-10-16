@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { battleLayout, type LayoutStore } from './layout'
+import { SNAP_MOUSE, SNAP_TOUCH, candidates, dockCentred, dockName, dockStyle, isDock, nearest, type At, type Cand } from './dock'
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
-  abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
-  type UnitType,
+  BASE_POP, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { traits } from './codexInfo'
@@ -13,7 +15,7 @@ import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
 import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { oreGuns, cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -95,6 +97,8 @@ const ICONS = {
   restart: 'M4.5 12a7.5 7.5 0 1 0 2.2-5.3 M4.5 3.5v4h4',
   exit: 'M14 4.5h5.5v15H14 M10.5 8l-4 4l4 4 M6.5 12H16',
   speed: 'M4 6l7 6l-7 6z M12 6l7 6l-7 6z',
+  // A magnifying glass: search.
+  search: 'M10.5 10.5m-6.5 0a6.5 6.5 0 1 0 13 0a6.5 6.5 0 1 0 -13 0 M15.2 15.2L21 21',
   // A grid with one corner cell shaded off: the fog grid.
   grid: 'M3.5 3.5h17v17h-17z M3.5 9.17h17 M3.5 14.83h17 M9.17 3.5v17 M14.83 3.5v17 M14.83 14.83l5.67 5.67 M17.6 14.83l2.9 2.9',
   // An open book: the Codex.
@@ -601,12 +605,12 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           <span className="ew-gold"><Icon name="give" size={18} /></span>
         </button>
       )}
-      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip="Fleet size / capacity. Capture beacons and upgrade the station for more.">
+      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip={`Fleet size / capacity: ${BASE_POP} to start with, +${POP_PER_LEVEL} per station level above 1${hud.level > 1 ? ` (+${(hud.level - 1) * POP_PER_LEVEL})` : ''}, and +${BEACON_POP} per beacon our team holds (${hud.beacons} held: +${hud.beacons * BEACON_POP}). Capture beacons and upgrade the station for more.`}>
         <Icon name="fleet" size={20} />
         <b className="ew-big">{hud.pop}</b>
         <small>/ {hud.popCap}</small>
       </div>
-      <div className="ew-top-cell ew-hide-narrow" data-tip="Mining platforms, and beacons held">
+      <div className="ew-top-cell ew-hide-narrow" data-tip={`Mining platforms, and beacons held. Each beacon our team holds: +${BEACON_POP} fleet capacity, +${fmt(BEACON_INCOME * 60)} credits a minute, and vision ${BEACON_SENSOR} round it.`}>
         <span className="ew-ore"><Icon name="ore" size={17} /></span>
         <b>{hud.mines}</b>
         <span className="ew-beacon"><Icon name="beacon" size={17} /></span>
@@ -895,6 +899,9 @@ type DetailProps = {
   /** Order an expansion on building `uid`, or call off the one at `index` in its queue. */
   onExpand: (uid: number, id: ModuleId) => void
   onCancelExpand: (uid: number, index: number) => void
+  /** A defense station `uid`: its next level, a module into a slot, or the work at `cancel` in its
+   * queue called off. */
+  onFort: (uid: number, job: { up: true } | { slot: number; mod: OrbitalModId } | { cancel: number }) => void
   /** Rush launch: the Capital Yard `uid` sends out its ship in progress unfinished. */
   onRush: (uid: number) => void
   onResearch: (id: string) => void
@@ -927,6 +934,8 @@ export function DetailPanel(p: DetailProps) {
   if (station) return <StationDetail {...p} st={station} />
   const first = sel[0]
   if (first.owner === me && first.t.tier === 'yard' && sel.length === 1) return <YardDetail {...p} y={first} />
+  // A defense station of ours in a skirmish: its levels and module slots.
+  if (first.owner === me && first.t.orbital && sel.length === 1 && !p.w.fleet) return <FortDetail key={first.id} {...p} u={first} />
   if (sel.every((u) => u.t.id === first.t.id)) return <UnitDetail {...p} u={first} squad={sel} />
   return <GroupDetail {...p} />
 }
@@ -1303,7 +1312,7 @@ function OreDetail(p: DetailProps & { n: OreNode }) {
         {!site && pct > 0 && pct < 100 && <Bar value={pct} max={100} kind="shield" />}
         {!site && (
           <div className="ew-siteopts">
-            {siteOptions(faction).map(option)}
+            {siteOptions(faction, oreGuns(w)).map(option)}
           </div>
         )}
       </div>
@@ -1586,7 +1595,7 @@ export function ReserveTray({ reserve, onGrab, onClose, launch = false }: { rese
 }
 
 /** Where a window sits until it's moved: distances from the screen's edges, like CSS. */
-export type Anchor = { left?: number; right?: number; top?: number; bottom?: number }
+export type Anchor = At
 
 /** What a drag can't start on: the controls inside a window. */
 const NO_DRAG = 'button, input, select, textarea, canvas, a, [data-nodrag]'
@@ -1614,10 +1623,14 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
   children: ReactNode
 }) {
   layout.useLayoutVersion()
+  const { snapWindows } = useSettings()
   const moved = layout.panelPos(id)
-  const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
+  // Moved to a spot (pixels), or onto a dock point (dock.ts), which it keeps as the screen is resized.
+  const spot = moved && 'x' in moved ? moved : undefined
+  const dock = moved && 'dock' in moved && isDock(moved.dock) ? moved.dock : undefined
+  const [drag, setDrag] = useState<DragState | null>(null)
   const box = useRef<HTMLDivElement>(null)
-  const pos = drag ?? moved
+  const fit = useDockFit(box, dock !== undefined && dockCentred(dock))
   /** A position (inside the screen's box) moved inside the screen with a margin, below the top
    * bar: where a drag can take it (see fit.ts). */
   const clamp = (x: number, y: number) => {
@@ -1681,16 +1694,27 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     const start = { px: e.clientX, py: e.clientY, x: r.left - rr.left, y: r.top - rr.top }
     let last = { x: start.x, y: start.y }
     let went = false
+    // Where it can be dropped to snap (dock.ts), worked out once: its default spot and the dock
+    // points. Not for a window the stylesheet pins (the phone layout) or when snapping is off.
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const touch = isTouch(e)
+    const snap: Snap | null = snapWindows && floatsFreely(el) ? { cands: candidates(homeOf(el, at, rr), at, w, h, root.clientWidth, root.clientHeight), w, h, reach: touch ? SNAP_TOUCH : SNAP_MOUSE, touch } : null
+    let near: Cand | null = null
     const move = (ev: PointerEvent) => {
       if (!went && Math.hypot(ev.clientX - start.px, ev.clientY - start.py) < 4) return
       went = true
       last = clamp(start.x + ev.clientX - start.px, start.y + ev.clientY - start.py)
-      setDrag(last)
+      // Shift held: a free drop, with no anchors.
+      const on = snap && !ev.shiftKey ? snap : null
+      near = on ? nearest(on.cands, last.x, last.y, on.w, on.h, at, on.reach) : null
+      setDrag({ ...last, snap: on, near })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      if (went) layout.setPanelPos(id, last)
+      // On the default spot: nothing kept, so it follows the default again (as the screen changes).
+      if (went) layout.setPanelPos(id, near ? (near.id === 'home' ? undefined : { dock: near.id }) : last)
       setDrag(null)
     }
     window.addEventListener('pointermove', move)
@@ -1700,9 +1724,11 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     if (lastPointer.current === 'touch') return
     if (!(e.target as Element).closest(NO_DRAG)) layout.setPanelPos(id, undefined)
   }
-  const style: React.CSSProperties = { ...(pos ? { left: pos.x, top: pos.y } : at), ...vars }
+  const style: React.CSSProperties = { ...(drag ? { left: drag.x, top: drag.y } : spot ? { left: spot.x, top: spot.y } : dock ? dockStyle(dock, fit) : at), ...vars }
+  const root = box.current?.parentElement
   return (
-    <div ref={box} className={`ew-float ${bare ? 'is-bare' : ''} ${pos ? 'is-moved' : ''} ${className}`} style={style} onPointerDown={grab} onDoubleClick={reset}>
+    <div ref={box} className={`ew-float ${bare ? 'is-bare' : ''} ${drag || moved ? 'is-moved' : ''} ${className}`} style={style} onPointerDown={grab} onDoubleClick={reset}>
+      {drag?.snap && root && createPortal(<DockGuides snap={drag.snap} near={drag.near} />, root)}
       {bare ? (
         children
       ) : (
@@ -1717,6 +1743,80 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
           </div>
         </section>
       )}
+    </div>
+  )
+}
+
+/** What a drag knows about where it can snap: the places, the dragged window's size, how near is
+ * near, and whether a finger is doing it (bigger anchors). */
+type Snap = { cands: Cand[]; w: number; h: number; reach: number; touch: boolean }
+type DragState = { x: number; y: number; snap: Snap | null; near: Cand | null }
+
+/** Whether the stylesheet lets the window sit where it is told (it doesn't on a phone, where
+ * panels are pinned with !important): nudged by a few pixels, does it follow? */
+function floatsFreely(el: HTMLElement): boolean {
+  const s = el.style
+  const keep = [s.left, s.right, s.top, s.bottom]
+  const cs = getComputedStyle(el)
+  const x = parseFloat(cs.left)
+  const y = parseFloat(cs.top)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false
+  const a = el.getBoundingClientRect()
+  s.right = ''
+  s.bottom = ''
+  s.left = `${x + 17}px`
+  s.top = `${y + 17}px`
+  const b = el.getBoundingClientRect()
+  ;[s.left, s.right, s.top, s.bottom] = keep
+  return Math.abs(b.left - a.left - 17) < 1 && Math.abs(b.top - a.top - 17) < 1
+}
+
+/** Where the window sits in its default spot (`at`), in its screen's coordinates: measured, so a
+ * stylesheet that nudges it is counted. */
+function homeOf(el: HTMLElement, at: At, root: DOMRect) {
+  const s = el.style
+  const keep = [s.left, s.right, s.top, s.bottom]
+  const px = (v?: number) => (v === undefined ? '' : `${v}px`)
+  ;[s.left, s.right, s.top, s.bottom] = [px(at.left), px(at.right), px(at.top), px(at.bottom)]
+  const r = el.getBoundingClientRect()
+  ;[s.left, s.right, s.top, s.bottom] = keep
+  return { x: Math.round(r.left - root.left), y: Math.round(r.top - root.top) }
+}
+
+/** The size of a window and of its screen while it is on a dock point it is centred on (dock.ts
+ * dockStyle needs them), kept up to date as either changes. */
+function useDockFit(box: RefObject<HTMLElement | null>, on: boolean) {
+  const [fit, setFit] = useState({ w: 0, h: 0, rw: 0, rh: 0 })
+  useLayoutEffect(() => {
+    const el = box.current
+    const root = el?.parentElement
+    if (!on || !el || !root) return
+    const measure = () => {
+      const n = { w: el.offsetWidth, h: el.offsetHeight, rw: root.clientWidth, rh: root.clientHeight }
+      setFit((f) => (f.w === n.w && f.h === n.h && f.rw === n.rw && f.rh === n.rh ? f : n))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    ro.observe(root)
+    return () => ro.disconnect()
+  }, [box, on])
+  return fit
+}
+
+/** While a window is dragged: an anchor at each place it can snap to, the one it would snap to
+ * lit, with an outline of where the window would land. Drawn in the screen, never in the way. */
+function DockGuides({ snap, near }: { snap: Snap; near: Cand | null }) {
+  return (
+    <div className={`ew-dockguides ${snap.touch ? 'is-touch' : ''}`} aria-hidden="true">
+      {near && (
+        <div className="ew-dockghost" style={{ left: near.x, top: near.y, width: snap.w, height: snap.h }}>
+          <span>{dockName(near.id)}</span>
+        </div>
+      )}
+      {snap.cands.map((c) => (
+        <i key={c.id} className={`ew-dockpin ${c.id === 'home' ? 'is-home' : ''} ${c === near ? 'is-near' : ''}`} style={{ left: c.px, top: c.py }} />
+      ))}
     </div>
   )
 }
@@ -1895,8 +1995,9 @@ export const unitTip = (t: UnitType, who: { who: string; rel: string }, note?: s
   ...(live ? { 'data-tip-uid': String(live.id) } : {}),
 })
 
-/** The unit card for something on the battlefield, beside the cursor, with its live hull and shields. */
-export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: number; x: number; y: number }) {
+/** The unit card for something on the battlefield, beside the cursor, with its live hull and shields;
+ * with `beacon`, what that capture beacon gives the team holding it instead. */
+export function FieldIntel({ w, me, id, x, y, beacon }: { w: World; me: Owner; id: number; x: number; y: number; beacon?: number }) {
   const box = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const b = box.current
@@ -1915,6 +2016,21 @@ export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: numbe
     b.style.top = `${p.y - rr.top}px`
     b.style.visibility = 'visible'
   })
+  const b = beacon !== undefined ? w.beacons[beacon] : undefined
+  if (b) {
+    const team = w.players[me].team
+    const held = b.owner === team ? 'Held by our team' : b.owner === -1 ? 'Neutral' : 'Held by the enemy'
+    const taking = b.progress > 0 && b.progress < 1 && b.claim >= 0 ? ` · ${b.claim === team ? 'we are' : 'the enemy is'} taking it (${Math.round(b.progress * 100)}%)` : ''
+    return (
+      <div ref={box} className="ew-tip" role="tooltip" style={{ visibility: 'hidden' }}>
+        <strong>Capture beacon</strong>
+        {'\n'}
+        {held}{taking}
+        {'\n\n'}
+        For every player on the team holding it: +{BEACON_POP} fleet cap, +{fmt(BEACON_INCOME * 60)} credits a minute, and vision {BEACON_SENSOR} round it (the fog lifts there, reinforcements can be called in). Hold ships near it, unopposed, to take it.
+      </div>
+    )
+  }
   const u = w.byId.get(id)
   if (!u || u.dead) return null
   const o = ownerTag(w, me, u.owner)
@@ -2253,6 +2369,43 @@ export function YardCard({ w, me, t, crew, onPlace, onSelect, hint }: { w: World
   )
 }
 
+/** What faction `f`'s defense station brings, for the tooltips: its levels and slots, and its modules. */
+function fortStory(f: FactionId) {
+  const plan = ORBITALS[f]
+  const st = plan.stages
+  return `${plan.blurb}\nLevel 1, the ${st[0].name}: one module slot. Level 2, the ${st[1].name} (${st[1].cost} credits, station level ${st[1].station}): two. Level 3, the ${st[2].name} (${st[2].cost} credits, station level ${st[2].station}): four. It upgrades itself and fits its own modules, one job at a time: ${plan.modules.map((m) => `${m.name} ${m.cost}`).join(', ')}.`
+}
+
+/**
+ * The defense station card in the engineers' Build section: its price, how long the selected crew
+ * take, and how many we have of the battle's limit ("1/2", standing or going up). At the limit, or
+ * with the station level short, it is locked, the reason in its tooltip. Click to place one.
+ */
+function FortCard({ w, me, crew, onPlace, hint }: { w: World; me: Owner; crew: number; onPlace: (unit: string) => void; hint: string }) {
+  const f = w.players[me].faction
+  const t = defenseType(f, 1, [])
+  const cap = defenseCap(w)
+  const n = defensesOf(w, me).length
+  const lock = fortLock(w, me)
+  const poor = !lock && w.players[me].credits < t.cost
+  const why = lock ?? (poor ? `Not enough credits: ${Math.ceil(t.cost - w.players[me].credits)} more` : null)
+  const secs = Math.ceil(t.build / (Math.min(Math.max(crew, 1), ENGINEERS.crew) / 3))
+  const tip = `${ORBITALS[f].name}\nEngineers put it up within the Command Station's build radius, as a yard: ${t.build} s for one squadron, more go faster (up to ${ENGINEERS.crew / 3}).\n${fortStory(f)}\nUp to ${cap} at a time in this battle, standing or going up: we have ${n}.${why ? `\n\n${why}` : `\n\n${hint}.`}`
+  return (
+    <button className={`ew-shipcard ew-yardcard ew-fortcard ${lock ? 'is-locked' : poor ? 'is-poor' : ''}`} aria-disabled={!!lock} onClick={() => (lock ? undefined : onPlace(defenseId(f)))} {...unitTip(t, ownerTag(w, me, me), tip)}
+      aria-label={`Defense station: ${n} of ${cap}${lock ? `, ${lock}` : ''}`}>
+      <ShipArt t={t} />
+      <strong>Defense station</strong>
+      <span className="ew-yc-line">
+        <span className="ew-cost"><Icon name="credits" size={10} /> {t.cost}</span>
+        <span className="ew-time"><Icon name="time" size={10} /> {secs}s</span>
+        <span className="ew-yc-crew">{n}/{cap}</span>
+      </span>
+      {lock && <span className="ew-yc-lv">{n >= cap ? `${n}/${cap}` : lock.startsWith('Needs station level') ? `Lv ${t.level}` : 'Locked'}</span>}
+    </button>
+  )
+}
+
 /**
  * The Build section of selected engineers: the yards they can put up as cards (the Frigate Yard and
  * the Capital Yard, one of them a ruin to rebuild if it was destroyed), each with its price, the
@@ -2273,6 +2426,7 @@ export function EngineerBuild({ w, me, crew, onPlace, onSelect }: { w: World; me
       </header>
       <div className="ew-yard ew-engbuild-cards">
         {yardsFor(faction).map((yt) => <YardCard key={yt.id} w={w} me={me} t={yt} crew={crew.length} onPlace={onPlace} onSelect={onSelect} hint={hint} />)}
+        {defenseCap(w) > 0 && <FortCard w={w} me={me} crew={crew.length} onPlace={onPlace} hint={hint} />}
       </div>
     </section>
   )
@@ -2358,6 +2512,32 @@ const siteCrew = (craft: number) => {
   return craft > ENGINEERS.crew ? `${n} (only ${ENGINEERS.crew / 3} count)` : n
 }
 
+/** A construction site of ours (a yard or a defense station, `what`): who is on their way or
+ * welding, how far along it is and how long is left, and a way to call it off (with the refund). */
+function SiteBox({ w, me, y, what, onCancelSite }: { w: World; me: Owner; y: Unit; what: string; onCancelSite: (id: number) => void }) {
+  const crews = w.units.filter((u) => !u.dead && isEngineer(u.t) && u.mending.includes(y.id)).length
+  const coming = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'construct' && u.order.id === y.id).length
+  const progress = 1 - y.building / y.t.build
+  return (
+    <div className="ew-sitebox" data-tip={`Engineers build ${what} at one squadron's pace per three craft, up to three squadrons at once: this one takes ${y.t.build} s with one squadron, ${Math.round(y.t.build / 2)} s with two, ${Math.round(y.t.build / 3)} s with three.`}>
+      <span className="ew-muted">
+        {!y.site!.started
+          ? coming
+            ? `Engineers on their way (${coming} craft).`
+            : 'Waiting for engineers: send some to build it.'
+          : crews
+            ? `Under construction: ${Math.round(progress * 100)}%, ${siteCrew(crews)} welding · ${Math.ceil(y.building / (Math.min(crews, ENGINEERS.crew) / 3))} s left.`
+            : `Under construction: ${Math.round(progress * 100)}%, nobody welding.`}
+      </span>
+      <Bar value={progress} max={1} kind="shield" />
+      <button className="ew-repair" onClick={() => onCancelSite(y.id)} data-tip={y.site!.started ? 'Call it off: work has started, so only part of the price comes back.' : 'Call it off before work starts: the full price comes back.'}>
+        <Icon name="stop" size={13} /> Cancel <Icon name="credits" size={12} /> +{siteRefund(y)}
+      </button>
+      {cantConstruct(w, me, y) === null && !crews && !coming && <small className="ew-muted">Select engineers and right-click it (long-press on touch).</small>}
+    </div>
+  )
+}
+
 /**
  * One of our yards: while it goes up, its progress, who is building it and a way to call it off
  * (with the refund); once built, its own queue and build cards, as the station's shipyard has.
@@ -2386,9 +2566,6 @@ function YardDetail(p: DetailProps & { y: Unit }) {
     }
   }
   const queue = y.yq ?? []
-  const crews = w.units.filter((u) => !u.dead && isEngineer(u.t) && u.mending.includes(y.id)).length
-  const coming = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'construct' && u.order.id === y.id).length
-  const progress = 1 - y.building / y.t.build
   // Rush launch: once Rushed construction is done and the ship in progress is far enough along.
   const share = rushShare(y)
   const rush = !site && kind === 'cyard' && y.owner === me && hud.techs.includes(RUSH_TECH[faction]) && share >= rushRules(w).min ? { share, why: cantRush(w, me, y.id), onRush: () => p.onRush(y.id) } : undefined
@@ -2410,22 +2587,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
             <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} onRuin={() => p.onEngineers()} />
           </header>
           {site ? (
-            <div className="ew-sitebox" data-tip={`Engineers build a yard at one squadron's pace per three craft, up to three squadrons at once: this one takes ${y.t.build} s with one squadron, ${Math.round(y.t.build / 2)} s with two, ${Math.round(y.t.build / 3)} s with three.`}>
-              <span className="ew-muted">
-                {!y.site!.started
-                  ? coming
-                    ? `Engineers on their way (${coming} craft).`
-                    : 'Waiting for engineers: send some to build it.'
-                  : crews
-                    ? `Under construction: ${Math.round(progress * 100)}%, ${siteCrew(crews)} welding · ${Math.ceil(y.building / (Math.min(crews, ENGINEERS.crew) / 3))} s left.`
-                    : `Under construction: ${Math.round(progress * 100)}%, nobody welding.`}
-              </span>
-              <Bar value={progress} max={1} kind="shield" />
-              <button className="ew-repair" onClick={() => p.onCancelSite(y.id)} data-tip={y.site!.started ? 'Call it off: work has started, so only part of the price comes back.' : 'Call it off before work starts: the full price comes back.'}>
-                <Icon name="stop" size={13} /> Cancel <Icon name="credits" size={12} /> +{siteRefund(y)}
-              </button>
-              {cantConstruct(w, me, y) === null && !crews && !coming && <small className="ew-muted">Select engineers and right-click it (long-press on touch).</small>}
-            </div>
+            <SiteBox w={w} me={me} y={y} what="a yard" onCancelSite={p.onCancelSite} />
           ) : (
             <BuildPanel
               tabs={[
@@ -2444,6 +2606,127 @@ function YardDetail(p: DetailProps & { y: Unit }) {
                 ))}
               </div>
             </BuildPanel>
+          )}
+        </div>
+      </Frame>
+    </div>
+  )
+}
+
+/**
+ * One of our defense stations (a skirmish's): while it goes up, the site; once built, its level
+ * with the upgrade to the next, its module slots (1, 2 and 4 by level) and, for the slot picked,
+ * the modules to fit (or swap in). Work goes into the station's own queue, one job at a time:
+ * clicking work under way or queued (the upgrade, a module being fitted, or its chip in the queue)
+ * calls it off, refunded in full.
+ */
+function FortDetail(p: DetailProps & { u: Unit }) {
+  const { w, me, u } = p
+  const coarse = useCoarse()
+  const f = u.t.faction
+  const plan = ORBITALS[f]
+  const o = u.t.orbital!
+  const site = !!u.site
+  const [pick, setPick] = useState<number | null>(null)
+  const queue = u.dq ?? []
+  const n = orbitalSlots(ORBITAL_TOP)
+  const price = (x: { cost: number; time: number }) => (
+    <>
+      <span className="ew-cost"><Icon name="credits" size={11} /> {x.cost}</span>
+      <span className="ew-time"><Icon name="time" size={11} /> {Math.round(x.time)}s</span>
+    </>
+  )
+  const busy = (i: number) => (i === 0 ? `${Math.ceil(queue[0].left)}s` : `Queued #${i + 1}`)
+  const upAt = queue.findIndex((j) => j.k === 'up')
+  const upLock = fortJobLock(w, me, u, { k: 'up' })
+  const upWhy = cantFortify(w, me, u.id, { k: 'up' })
+  const upWork = fortWork(u, { k: 'up' })
+  const slot = pick !== null && pick < orbitalSlots(Math.max(o.level, queue.some((j) => j.k === 'up') ? o.level + 1 : o.level)) ? pick : null
+  const cancelTip = coarse ? 'Tap to call it off (refunded in full).' : 'Click to call it off (refunded in full).'
+  const aimed = !!u.focus || u.guns.some((g) => g.focus) || p.turretPick?.unit === u.id
+  return (
+    <div className="ew-stationwrap">
+      <Frame className="ew-detail is-station is-yard is-fort">
+        <div className="ew-detail-side">
+          <Schematic u={u} size={88} tip={unitTip(u.t, ownerTag(w, me, u.owner), undefined, u)} />
+          <SideName w={w} me={me} u={u} sub={`Defense station · level ${o.level} of ${ORBITAL_TOP}`} info={`${fortStory(f)}\n\n${GUNS_TIP}`} />
+          <Vitals u={u} now={w.time} />
+          {u.hps.length > 0 && <HpSummary u={u} />}
+          {!site && <RepairButton w={w} me={me} u={u} onRepair={p.onRepair} />}
+        </div>
+        <div className="ew-detail-main">
+          <header className="ew-yardhead">
+            <BaseTabs w={w} me={me} cur={u.id} onSelect={p.onSelect} onRuin={() => p.onEngineers()} />
+          </header>
+          {site ? (
+            <SiteBox w={w} me={me} y={u} what="a defense station" onCancelSite={p.onCancelSite} />
+          ) : (
+            <div className="ew-fort">
+              <div className="ew-fort-head">
+                <strong>{orbitalName(f, o.level)}</strong>
+                <span className="ew-muted ew-small">{orbitalSlots(o.level)} module slot{orbitalSlots(o.level) > 1 ? 's' : ''}</span>
+                {o.level < ORBITAL_TOP && (
+                  <button className={`ew-gp-up ew-gdef-up ${upAt < 0 && upWhy ? 'is-off' : ''}`} onClick={() => p.onFort(u.id, upAt >= 0 ? { cancel: upAt } : { up: true })}
+                    data-tip={`Upgrade to the ${orbitalName(f, o.level + 1)}: ${orbitalSlots(o.level + 1)} module slots, ${Math.round((plan.stages[o.level].hull / plan.stages[o.level - 1].hull - 1) * 100)}% more hull. ${upWork.cost} credits, ${upWork.time} s, built by the station itself.${upAt >= 0 ? `\n\n${cancelTip}` : upWhy ? `\n\n${upWhy}` : ''}`}
+                    aria-label={`Upgrade to level ${o.level + 1}`}>
+                    <Icon name="yard" size={13} /> {upAt >= 0 ? busy(upAt) : `Level ${o.level + 1}`} {upAt < 0 && <><Icon name="credits" size={12} /> {upWork.cost}</>}
+                    {upAt < 0 && upLock?.startsWith('Needs station level') && <em className="ew-fort-lv">{upLock.replace('Needs station level ', 'Lv')}</em>}
+                  </button>
+                )}
+              </div>
+              <div className="ew-gdef-slots" role="group" aria-label="Module slots">
+                {Array.from({ length: n }, (_, s) => {
+                  const have = s < orbitalSlots(o.level)
+                  const soon = !have && s < orbitalSlots(Math.min(ORBITAL_TOP, o.level + (upAt >= 0 ? 1 : 0)))
+                  const m = o.slots[s] ? orbitalMod(f, o.slots[s]!) : null
+                  const hp = m ? u.t.hardpoints.findIndex((h) => h.key === `s${s}:${m.id}`) : -1
+                  const lost = hp >= 0 && u.hps[hp].hp <= 0
+                  const at = queue.findIndex((j) => j.k === 'mod' && j.slot === s)
+                  const into = at >= 0 && queue[at].k === 'mod' ? orbitalMod(f, (queue[at] as { mod: OrbitalModId }).mod) : null
+                  const on = slot === s
+                  const open = have || soon
+                  return (
+                    <button key={s} className={`ew-gdef-slot ${open ? '' : 'is-locked'} ${on ? 'is-on' : ''} ${m ? 'is-full' : ''} ${into ? 'is-fitting' : ''} ${lost ? 'is-lost' : ''}`} aria-disabled={!open}
+                      onClick={() => (open ? setPick(on ? null : s) : undefined)}
+                      data-tip={open ? `Slot ${s + 1}: ${m ? `${m.name}${lost ? ' (shot off: Repair, or engineers, rebuild it)' : ''}. ${m.blurb}` : soon ? 'comes with the upgrade under way.' : 'empty.'}${into ? `\nBeing fitted: ${into.name} (${busy(at)}).` : ''}\n${coarse ? 'Tap' : 'Click'} to ${m ? 'swap it for another module' : 'fit a module'}.` : `Slot ${s + 1}: comes with level ${orbitalSlotLevel(s)}.`}
+                      aria-label={`Slot ${s + 1}: ${m?.name ?? (open ? 'empty' : 'locked')}`}>
+                      {m ? <span className="ew-modicon" style={{ ['--c' as string]: HP_COLOR[m.kind] }}><HpIcon kind={m.kind} size={16} /></span> : <i className="ew-gdef-empty">{open ? '+' : `Lv${orbitalSlotLevel(s)}`}</i>}
+                      <small>{m ? (lost ? 'Shot off' : m.name) : open ? 'Empty' : 'Locked'}</small>
+                      {into && <em>→ {into.name}</em>}
+                    </button>
+                  )
+                })}
+              </div>
+              {slot !== null ? (
+                <div className="ew-gdef-pick" role="group" aria-label={`Modules for slot ${slot + 1}`}>
+                  {plan.modules.map((m) => {
+                    const job = { k: 'mod' as const, slot, mod: m.id }
+                    const at = queue.findIndex((j) => j.k === 'mod' && j.slot === slot && j.mod === m.id)
+                    const lock = at >= 0 ? null : fortJobLock(w, me, u, job)
+                    const why = at >= 0 ? null : cantFortify(w, me, u.id, job)
+                    const work = fortWork(u, job)
+                    return (
+                      <button key={m.id} className={`ew-fortmod ${at >= 0 ? 'is-busy' : lock ? 'is-locked' : why ? 'is-off' : ''}`} onClick={() => p.onFort(u.id, at >= 0 ? { cancel: at } : { slot, mod: m.id })}
+                        data-tip={`${m.name}\n${m.blurb}\n${work.cost} credits, ${work.time} s. Into slot ${slot + 1}${o.slots[slot] ? `, in place of the ${orbitalMod(f, o.slots[slot]!).name}` : ''}. It can be shot off: then Repair (or engineers) rebuild it.\n\n${at >= 0 ? cancelTip : why ?? `${coarse ? 'Tap' : 'Click'} to fit it.`}`}
+                        aria-label={m.name}>
+                        <span className="ew-modicon" style={{ ['--c' as string]: HP_COLOR[m.kind] }}><HpIcon kind={m.kind} size={14} /></span>
+                        <strong>{m.name}</strong>
+                        <span className="ew-fortmod-line">{at >= 0 ? busy(at) : price(work)}</span>
+                        {at === 0 && <i className="ew-modbar" style={{ transform: `scaleX(${1 - queue[0].left / queue[0].total})` }} />}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <>
+                  {/* Its guns' focus, when they have one or one was picked (here, where there is
+                      room, in place of the hint, rather than in the side column). */}
+                  {aimed ? <FocusInfo w={w} u={u} pick={p.turretPick} onClear={p.onClearFocus} quiet /> : <small className="ew-muted ew-fort-hint">
+                    {queue.length ? `Working: ${queue.map((j, i) => `${j.k === 'up' ? `level ${o.level + 1}` : orbitalMod(f, j.mod).name} (${busy(i)})`).join(', ')}.` : `${coarse ? 'Tap' : 'Click'} a slot to fit a module.`}
+                  </small>}
+                </>
+              )}
+            </div>
           )}
         </div>
       </Frame>

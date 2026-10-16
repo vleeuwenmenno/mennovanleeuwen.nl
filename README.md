@@ -70,9 +70,18 @@ Super is Omarchy's key, but the system keeps it, so a web page never sees it; th
 **Alt+1…9** goes to a workspace, **Alt+Shift+1…9** moves the focused window there (and goes with
 it, like Hyprland's `movetoworkspace`), **Ctrl+Alt+← →** steps through them. These work everywhere,
 the terminal included, except that on a Mac a text field keeps Option+digit for typing characters.
-**Ctrl+K** (or Cmd+K) opens Spotlight, and **Ctrl+Space** toggles All apps — also from anywhere,
-including the terminal. Ctrl+Space is best-effort: some OSes and input methods keep that chord, so
-the page never sees it, the same way Super never reaches a web page.
+**Ctrl+Space** opens Spotlight, and **Ctrl+K** (or Cmd+K) opens All apps — also from anywhere,
+including the terminal. Settings → Spotlight can point Ctrl+Space at All apps instead, which gives
+Ctrl+K back to Spotlight. Ctrl+Space is best-effort: some OSes and input methods keep that chord,
+so the page never sees it, the same way Super never reaches a web page.
+
+The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPrefs.ts`](src/os/topbarPrefs.ts))
+holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
+notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
+the earlier CV-only rule). Right-click the bar to **Unlock the top bar**, then drag a widget
+to reorder it, or use *Show or hide* for each widget; **Lock the top bar** when you are done. A
+click that does not move still activates the widget. The
+layout is kept in this browser, and follows your account when you are signed in.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
 number in the bar moves it there. Each window's workspace is saved with the window layout; which
 workspace is on screen is kept per browser. Phones have room for one workspace, so there the
@@ -549,7 +558,7 @@ service (API tokens, app passwords, a library's password) is a
 managers to leave alone, with a show/hide button, because browsers fill a saved password into any
 `type="password"` field and ignore `autocomplete="off"` there. Those apps' window menus have *… settings…*
 to jump to their pane.
-Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
+Settings → Spotlight chooses what **Ctrl+Space** toggles (Spotlight, the default, or All apps). All apps gives Ctrl+K (or Cmd+K) back to Spotlight. It also picks what the empty Spotlight shows (favourites, recently visited websites,
 status, apps, your repositories) and how many recent items of each, which kinds of results it searches (your
 contacts among them, and your mail after `mail:`; see *How the apps work together*), whether Enter on an unmatched query searches the
 web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites
@@ -562,7 +571,7 @@ favourites* there (or Ctrl+D) keeps it at the top of the empty box
 ([`src/data/spotlightFavourites.ts`](src/data/spotlightFavourites.ts)); Settings → Spotlight reorders
 them. The terminal's `visited` lists the same history (`visited <text>`, `visited open <#>`,
 `visited forget <#>`, `visited clear`).
-Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
+Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order, the top bar and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
 
@@ -624,7 +633,92 @@ and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo 
 | `repo@text`, `@text` | branches, with their last commit and pull request |
 
 Tab completes the highlighted result (`owner/repo`, then type `#` or `@`); Ctrl+Enter copies a
-clone command, link or branch name.
+clone command, link or branch name. Enter opens a repository, issue or pull request on the web;
+its actions panel (Ctrl+K or right-click) has *Open in Git*, which shows it in the Git app instead.
+
+### The Git app
+
+**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) browses the same repositories, and takes
+part in their conversations: everything on your GitHub account (also through your organisations) and on the
+Gitea/Forgejo instances you linked. The list on the left filters by name, owner or organisation and
+host, grouped by owner with your own first, and shows the language, when it was last pushed and
+whether it is private. Without "Allow private" in Settings → Code hosts only public GitHub
+repositories show, and the list says so. A repository has four tabs:
+
+- **Overview**: description, stars, forks, open issues, default branch, licence, topics, the clone
+  addresses to copy, and the README rendered with the site's Markdown renderer. Its relative links
+  and images point into the repository on the host; the common HTML in READMEs (logos, badges,
+  `<details>`) is turned into Markdown first, since the renderer never renders HTML.
+- **Pull requests** (open, merged, closed or all) and **Issues** (open, closed or all), a page at a
+  time with *Load more*. A pull request has *Conversation*, *Commits* and *Files changed*; an issue
+  shows its conversation.
+- **Commits**, per branch (a picker lists them), grouped by day. A commit shows its message, author,
+  parents (click to walk back) and its changed files.
+
+Changed files are unified diffs, one collapsible box per file with line numbers and the additions
+and deletions tinted from the theme; a long line scrolls inside its box. Binary files and diffs
+too large to send (over 96 KB for a file, 2 MB in all) say so with a link to the host's page, as
+does anything past GitHub's limits (300 files).
+
+A conversation ([`Timeline.tsx`](src/apps/git/Timeline.tsx)) reads like the host's own page: the
+description, then in the order they happened the comments (marked when edited), reviews (approved,
+changes requested or commented, with their comments on lines listed under them as `file:line`),
+the commits pushed in between as one compact block per push (short hash and first line, each
+opening the commit), and one-line events: closed, reopened, merged (with its commit), force-pushed,
+title changed, labels, assignees, review requests, branch deleted and mentions from other issues
+and pull requests (which open in the app). The first 300 entries show; past that a link goes to
+the host. Below it is a box to **add a comment**: Markdown with *Write* and *Preview*, Ctrl+Enter
+(⌘+Enter) sends, and the new comment appears at once. The description and the comments **you
+wrote** have an *Edit* button that opens the same editor with *Save* and *Cancel*. What you type is
+kept as a draft per pull request or issue for as long as the tab is open (also across a reload,
+where the browser allows sessionStorage), and leaving one, or closing the window, with text that
+wasn't sent asks first. Writing to GitHub needs "Allow private" in Settings → Code hosts (the
+default sign-in can only read); without it the box is greyed out with a pointer there. A linked
+Gitea/Forgejo token needs the `write:issue` scope, and says so when it lacks it. Anything else
+(reviewing, merging, closing, labels, a new issue or pull request, checks) is a button with an
+arrow-out icon that opens the host's web page.
+
+A wide window keeps the list beside the open repository with breadcrumbs above it; a narrow window
+or a phone shows one view at a time with Back (Alt+← with a keyboard). The window takes a `route`
+prop (`github/owner/repo`, `…/pull/12`, `…/issue/4`, `…/commit/<sha>`, a linked instance as
+`forge:<id>`; see [`route.ts`](src/apps/git/route.ts)), which is how Spotlight opens it; without
+one it reopens the repository you had open last in this browser. Signed out, it asks you to sign
+in. Open it from All apps, Spotlight, the dock or `open git` in the terminal.
+
+The server side is [`server/git.ts`](server/git.ts): a fixed set of `GET /api/repos/...` routes
+(repositories; a repository with its README; branches; pull requests, one with its timeline, its
+commits and its files; issues and one with its timeline; commits and one with its files), and three
+that write: `POST …/issues/:n/comments` (a comment, on an issue or a pull request),
+`PATCH …/issues/:n` (the description) and `PATCH …/issues/comments/:id` (a comment), each taking
+`{ body }` as JSON (at most 65,536 characters, GitHub's limit). Every part of the path is checked
+(host id, owner, name, number, hash, branch, comment id) and each route answers only its own
+methods, so it is no open proxy. Before an edit the server reads the item or comment from the host
+and refuses unless its author is your login there; writes need a signed-in user, pass the same
+cross-site check as the site's other changes, and GitHub ones need the write scope before GitHub is
+asked. A refusal from the host comes back as what to fix (sign in again with private repositories
+allowed; a token with `write:issue`). Timelines come from GitHub's and Gitea's issue timeline APIs
+(Gitea before 1.20 has none: its comments and reviews are used instead), with the pull request's
+commits for logins and its review comments for the reviews. It goes through the same code host sources as Spotlight
+([`server/forges.ts`](server/forges.ts)), so tokens, rate limits and the address checks for linked
+instances are shared. GitHub's and Gitea's answers are turned into one shape there
+([`server/gitShapes.ts`](server/gitShapes.ts), types in
+[`src/data/gitTypes.ts`](src/data/gitTypes.ts)); Gitea's diffs come as a `.diff`, which is split
+into files on the server. Answers are kept a minute per user; Reload in the app asks the host
+again, and a write forgets that repository's answers so the next read is fresh.
+
+Your repositories include those of every organisation you are in: GitHub's own list
+(owned, collaborator and organisation repositories) plus the most recently pushed hundred of
+each organisation, so typing an organisation's name (`acme`) lists its repositories too. Lists are
+kept a few minutes (GitHub 5, Gitea/Forgejo 15) and refreshed in the background; an issue, pull
+request or branch from a repository the list lacks refreshes it at once (at most once a minute),
+and signing in again starts over. Settings → Code hosts lists your GitHub organisations and
+whether the site can read them. Organisations can restrict OAuth apps (GitHub's default for new
+ones): until an owner approves the site, only their public repositories show. The *Grant access*
+button opens GitHub's page for the site's OAuth app, where owners click *Grant* and members
+*Request*; coming back to the tab checks again. GitHub hides an organisation that restricts the
+app from the site altogether when your membership is private, so it only shows up on that page.
+Sign-ins from before "Allow private" asked for `read:org` see only public memberships, and get a
+*Sign in again* button.
 
 Signed in, the dock is yours too ([`src/os/dockItems.ts`](src/os/dockItems.ts)): right-click a
 dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or repository in
@@ -1316,6 +1410,9 @@ own watchers. `NOTIFY_WATCH=off` leaves the watchers off.
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
+Clicking an entry opens it in the Git app; when the app can't load it (no access, a host it doesn't
+know, no answer within a few seconds) it opens on the web instead. Ctrl-, Shift- and middle-clicks
+still open the web page in a new tab.
 
 ## Photos
 
@@ -1614,15 +1711,58 @@ click opens the Minecraft server window).
 
 ### Weather
 
-The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a full forecast window in the
-spirit of Apple Weather: current conditions, the next 24 hours (temperature, precipitation or wind),
-a 10-day outlook with temperature-range bars, and detail tiles for UV, feels like, precipitation,
-visibility, humidity, pressure, wind, sunrise/sunset, moon phase and air quality. It uses the same
-Open-Meteo fetch as the widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the
-browser with no API key. On a wide window the layout grows to a multi-column tile grid and an optional
-locations sidebar; on a phone or a narrow pane it stays a single scrolling column with a locations
-sheet. Saved cities and units sync with your account; the browser's own location stays on that device.
-Open it from All apps, Spotlight, the dock, `weather` in the terminal, or from the weather widget.
+The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx), with its parts in
+[`src/apps/weather/`](src/apps/weather)) is a forecast dashboard: current conditions, the next hour
+of precipitation, the coming hours (temperature, precipitation or wind), a 10-day outlook, and tiles
+for UV, sunrise and sunset, wind, precipitation, feels like, humidity, pressure, visibility, the
+moon, an animated precipitation radar and air quality. A strip at the top of the window switches
+location and refreshes. On a wide window the tiles sit in a grid; on a tablet the 10-day list sits
+beside the map; on a phone or a narrow pane they stack. It uses the same Open-Meteo fetch as the
+widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key:
+current conditions, every hour of the 10 days (temperature, feels like, precipitation and its
+chance, wind, gusts and direction, UV, humidity, dew point, pressure, visibility, cloud cover),
+15-minute precipitation for three hours, and hourly air quality (European AQI, PM2.5, PM10, ozone,
+NO₂) a few days ahead.
+
+**Looks.** Behind the cards the sky follows the current conditions, mixed from the theme's palette
+(deep in a dark theme, pale in a light one): drifting clouds, slanted rain, falling snow, twinkling
+stars and a moon glow at night, a lightning flicker in a storm, a slow sun glow on a clear day. The
+cards are layered glass with a soft shadow, rise in one after another, and lift on hover; the
+weather icons move a little, numbers count up, and the tiles carry small drawn-in sparklines (UV,
+precipitation, feels like, humidity, visibility, air quality), a swaying wind needle and a sun on
+its arc. All of it is CSS animation on transform and opacity (no frame loop, no React renders), and
+with *reduce motion* set in the system everything stands still.
+
+**Details.** Every card opens a detail with one shared interactive chart
+([`weather/Chart.tsx`](src/apps/weather/Chart.tsx), plain SVG): hover with a mouse or drag with a
+finger or pen along it and a crosshair, a tooltip with every series and the readout above follow
+that point; the handle under the axis drags too, and arrow keys, Page Up/Down, Home and End step
+through it when it has focus. What each shows: *hourly* temperature and feels like, precipitation
+amount and chance, or wind and gusts with direction arrows (switchable in the detail); *10 days*
+highs and lows as a band with the chance of precipitation, and a button into that day; *a day* its
+hours, with previous and next day; *next hour* three hours in 15-minute bars; *UV* by hour over
+the UV bands, with advice for the hour; *sun* a sun you drag through the day along its path (time,
+time to sunset or sunrise) and the daylight over 10 days; *wind* a compass that turns with the
+scrubbed hour; *precipitation* the next 24 hours or 10 days; *feels like*, *humidity* (with dew
+point and how muggy it feels), *pressure* (the gauge follows, with the trend) and *visibility*
+(with cloud cover) by hour; *moon* 30 days of illumination plus a phase calendar to tap through;
+*air quality* the AQI by hour over its bands with the pollutants for that hour.
+
+**Radar** ([`weather/Radar.tsx`](src/apps/weather/Radar.tsx)). The map card is a quiet gray canvas
+(Esri's dark canvas in a dark theme, the light canvas in light mode) with
+[RainViewer](https://www.rainviewer.com/)'s frames on top: the last two hours of scans, and its
+nowcast frames when it publishes them (it publishes none at the moment; the timeline then ends at
+the latest scan and says so). Each frame is its own stacked layer, loaded up front, so the loop and
+scrubbing only crossfade between layers. Radar tiles are 512 px from one zoom level down, a quarter
+of the requests. The card loops by itself while it is on screen and the page is visible, showing the
+frame's time; tap it for the big map: play and pause, a timeline to drag (past and forecast drawn
+differently, a *Now* mark, local time with "40 min ago" or "+30 min"), three speeds, drag to pan,
+zoom buttons or the wheel, and a button back to the place. If RainViewer does not answer, the canvas
+stays and the map says the radar is unavailable; the rest of the forecast is unaffected. The line at
+the bottom of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
+[OpenStreetMap](https://www.openstreetmap.org/copyright)). Saved cities and units sync with your
+account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
+dock, `weather` in the terminal, or from the weather widget.
 
 ### Changelog
 
@@ -1779,11 +1919,13 @@ there.
 faction's data; all off unless a unit sets them, and none draws a random number):
 
 - `regrow` (`{ rate, delay }`): living hulls. Once `delay` seconds have passed since an enemy last
-  hit it, the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
+  hit it (or an asteroid field's rocks: flying through a field holds the regrowth off, so a living
+  hull can't cross one for free), the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
   A station gets it from a level on (`StationPlan.regrow`, with `level`).
-- `drain` (`{ radius, dps, heal }`): every enemy it sees within `radius` loses `dps` hull points a
-  second, straight off the hull past shields; `heal` of what it took (0.5: half) mends our damaged
-  ships within `radius`, shared evenly.
+- `drain` (`{ radius, dps, heal, targets }`): the `targets` nearest enemies it sees within `radius`
+  (nearest first, ties by unit id) lose `dps` hull points a second each, straight off the hull past
+  shields; `heal` of what it took (0.5: half) mends our damaged ships within `radius`, shared
+  evenly. The Leech bites 3 at once.
 - `fireControl` (`{ radius, bonus }`): our ships within `radius` deal `bonus` more damage (0.15:
   15%); auras don't stack, the best counts.
 - `shieldAura` (`{ radius, regen }`): a shield projector. Our ships within `radius`, itself
@@ -1801,7 +1943,9 @@ faction's data; all off unless a unit sets them, and none draws a random number)
 
 Radii are written at the old battlefield scale and stretched like gun ranges (and spread out with
 the fleet for the bigger hulls, as repair tenders are). `pnpm check:empires-mechanics` switches
-each one on for a test unit and checks what it does.
+each one on for a test unit and checks what it does, along with ships crossing an asteroid field (a
+Swarm hull loses hull and doesn't regrow inside; shields wear at `FIELD_WEAR`), the drain's target
+limit and the strike craft's toughness.
 
 The battle shows them (render.ts, in each side's bolt and engine colours): a drain ship's tendrils
 to the enemies it bites and heal sparks off the allies it mends, a fire-control ship's ring (and,
@@ -1816,14 +1960,14 @@ unit cards and their tips explain them (`traits` in
 fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shields that much
 harder), `aura` (added to its fire-control bonus) and `auraRadius` (the reach of its fire-control
 or shield-projector aura), `shieldAura` (added to its shield projector's `regen`), `regrow` (faster
-regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
+regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps), `drainHeal` and `drainTargets` (added to how many enemies it bites); on the
 station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
 each ship's own `build` research), and `regrow`/`regrowDelay` there reach every living hull of the
 side, ships and structures, on top of their own. The AI weighs them like the rest. The research
 that uses them: the Confederacy's Shield breakers (Breaker, `shieldDamage`) and Fire-control net
 (Tyrant, `aura` and `auraRadius`), the Republic's Projector arrays and Wide-field emitters
 (Sentinel, `shieldAura` and `auraRadius`) and Fleet command (Resolute, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm), Swollen wombs (Broodmother, `regrow`),
-Deeper tendrils (Leech, `drain` and `drainHeal`) and Hive surge (Hive Nexus, `fleetBuild`).
+Deeper tendrils (Leech, `drain`, `drainHeal` and one more target) and Hive surge (Hive Nexus, `fleetBuild`).
 
 **Names per faction** (FactionInfo `names` in data/kit.ts): its guns by kind (`weapon`, the Codex's
 weapon lists), turrets by the gun on them (`mount`), its other hardpoints (`part`), its mount looks
@@ -1845,7 +1989,10 @@ chitter. FactionInfo `sound.turbo` still tunes the heavy guns' pitch. Settings �
 
 **AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
 its fire from further off and sends its fast warships round the flank of a goal where that is
-clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
+clear, and strikes early: its first waves go out at 85% of the usual fleet value, and its quiet
+start is 40% of its difficulty's (on Medium a minute rather than two and a half; Hard has none).
+With the full quiet start it sat out the build-up and lost about two Medium battles in three, while
+winning most on Hard. The Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
 Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
 ships in among the enemy with its wave, values fire-control and spinal ships, values a shield
 projector by how many warships it has and how much of their staying power is shields (and keeps it
@@ -1882,6 +2029,57 @@ The multiplayer client and server check each other's `PROTOCOL` version
 from another version would play another battle, so the server turns it away and the game asks for a
 reload.
 
+## Empires At War maps
+
+Skirmishes and multiplayer battles are fought on fifteen hand-made maps
+([`maps.ts`](src/apps/games/empires/maps.ts)) or on a generated one, for 2 to 6 players. Every
+map is symmetric: everything is placed for one side and copied to the others, so every spawn gets
+the same ore, beacons, terrain and lanes. The symmetries: `point` (two sides, turned half way
+round), `quad` (four corners, mirrored both ways), `tri`, `penta` and `hex` (three, five and six
+sides turned round the middle) and `tripair` (six: three pairs of mirror twins turned a third of
+the way round). Teams are always two sides, so a six-spawn map plays 3v3, 2v4, 1v5, a duel with
+empty spawns, or anything in between.
+
+A map's size class goes by its area at the battlefield's scale (`mapSize` in `Menus.tsx`, in
+millions of square units divided by `MAP_SCALE`²): **Small** under 30, **Medium** under 50,
+**Large** under 90, **Huge** from 90.
+
+| Map | Size | Spawns | The idea |
+| --- | --- | --- | --- |
+| Cinder Gate | Small | 2 | A tight duel over four ore, the middle beacon in a nebula |
+| Hadrel Narrows | Small | 2 | An asteroid wall with two narrow gaps, a beacon in each, and a derelict in the wall |
+| Tessaly Knot | Small | 3 | Walls between each pair of stations; every road runs through the one beacon in the middle |
+| Kessar Belt | Medium | 2 | The classic duel: three beacons down the middle |
+| Orvane Lanes | Medium | 2 | Three lanes split by long walls, open only at a crossroads in the middle |
+| Twin Reefs | Medium | 4 | Four lean corners, reefs in every quarter |
+| Ithra Archipelago | Medium | 4 | Four ore islands ringed by asteroids, each open towards its own corner |
+| Trinity Rift | Large | 3 | Three stations round a contested core in a nebula |
+| Shroud Expanse | Large | 3 | The richest ore in the clouds on the rim |
+| Vanth Crossing | Large | 4 | Four corners, five beacons |
+| Quintara Crown | Large | 5 | A crown of asteroids with a beacon in each gap, the richest ore inside |
+| Serrat Halo | Large | 6 | A ring round a dead heart of asteroids; neighbours share the beacons between them |
+| Velkar Core | Huge | 6 | A wide open field round a rich core ringed by six beacons |
+| Draxis Spiral | Huge | 6 | Asteroid arms wound like a pinwheel: every road to the core curves past a neighbour |
+| Tarsis Triad | Huge | 6 | Three pairs of twin stations sharing a beacon, three nebula fronts between the pairs |
+
+The huge maps are laid out for a duel on opposite spawns as well as for 3v3: the empty spawns'
+ore is there for the taking, and the beacons ring the middle rather than the stations. The
+generator builds maps for 2 to 6 players (five and six turned round the middle, like three).
+
+`pnpm empires:maps` plays the maps out with AI admirals, to see that a map is fair and that the AI
+expands, fights and finishes on it: duels on spawns as far apart as the map has and battles with
+every spawn taken (sides alternating round the map), each played from both sides. It reports how
+many games ended and how long they took, how often each spawn's side won, and the ore, beacons,
+expansions, ships and kills per admiral. `MAPS=hadrel,orvane pnpm empires:tournament` runs the AI
+profile tournament on those maps instead of the two-spawn ones. AI-only battles between equal admirals on the
+large and huge maps often run past 40 minutes without a winner, duels most of all (as on Vanth
+Crossing): with ore to spare both sides reach the fleet limit, and their waves reach the enemy
+station a few ships at a time.
+
+```sh
+pnpm empires:maps 40 3 velkar,draxis,tarsis      # minutes, seeds, maps (default all), layouts (1v1,near,full), difficulty, profile
+```
+
 ## Empires At War battlefield scale
 
 Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battle feels:
@@ -1897,6 +2095,46 @@ Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battl
 
 Changing one changes every battle, so the multiplayer hash from `pnpm check:empires` changes too.
 Battles saved before keep the map and ship types they were saved with.
+
+## Empires At War path finding and rocks
+
+Warships find their way round the rocks on a grid of 80-unit cells
+([`nav.ts`](src/apps/games/empires/nav.ts)), one per hull size, built the first time a ship that
+size needs a path and cached on the world (`World.nav`); the path is then pulled tight into
+straight legs. Strike craft fly straight.
+
+- **Rocks** are as big to the ships as 80% of their drawn radius (`ROCK_HIT`: the art is lumpy,
+  its outline at 0.7 to 1.15 of the radius), and a hull may reach into one by 60% of its own radius
+  (`HULL_ROCK` in sim.ts; hulls are longer than wide, so side on that's only the edge of the hull).
+  The path keeps 20 to 40 units more than that (`navClear`). The push that keeps ships out of rocks,
+  the steering round the next rock (`detour`) and where a move order may end (`offRocks`) all use
+  the same sizes, so the path and the physics agree.
+- **Asteroid fields and nebulas** are soft ground, never walls: crossing one costs more than open
+  space (`navCost`): a nebula 1.5 times as much plus 12 times the hull's share of its strength
+  in shields (`NEBULA_SHIELD_COST`), since a nebula strips the shields within a second: about 6
+  times for a Republic warship, about 4.5 for a Confederacy one, 1.5 for a Swarm hull, which has
+  none to lose. A field costs 1.2 (gunships) to 2.5 (frigates), 3
+  (cruisers) and 4 (flagships) times, since the rocks there batter big hulls. So a path goes round
+  one unless that takes far longer. One the ship was sent into, or is in already, costs nothing
+  extra. Pulling a path tight never cuts back across a patch it went round.
+- **Somewhere walled in** (a spot inside the rocks, or in a pocket no hull that size fits into):
+  the path ends at the nearest point the ship can reach (`Path.short`), and the ship stops there
+  (`asNearAsItGets`) and fights from there, instead of flying at the rocks for good. A selected
+  ship's route line ends there too. Each grid knows which pieces of open space connect, so this
+  costs no search of the whole map.
+
+**Scattering the rocks.** Each battle scatters its rocks from its seed (`newWorld`), copied to every
+side by the map's symmetry. They keep clear of ore, beacons, wrecks, the build radius round each
+start, asteroid fields (with room for the biggest flagship to skirt one) and the lanes: from each
+station into the middle and to its neighbours, and from each beacon to the stations nearest it,
+each wide enough for the biggest flagship. A rock is also left out if it would wall the biggest
+flagship off from any station, beacon or ore it could reach before (`rockStamp`, `reachCheck`).
+Without that, rocks piled up in the space left over, walled off whole sides of the four-player maps
+and ringed the beacons, and flagships went the long way round, through the fields, or nowhere.
+
+```sh
+pnpm check:empires-nav   # every faction's biggest hull reaches every spawn, beacon and ore on every map (and generated ones), routes across Twin Reefs, a walled-in spot, path cost
+```
 
 ## Empires At War weapon ranges and repair craft
 
@@ -2082,7 +2320,10 @@ lets go.
 on two defense sites round its Command Station, ordered in the planet's queue like a yard (paid when
 queued, refunded in full when called off), and on the shipyard's **Defense** page. Each has three
 levels, each upgrade ordered in the queue too, with 1, 2 and 4 **module slots**; the player picks
-the module for each slot (a module ordered into a full slot replaces what is there once it's done):
+the module for each slot (a module ordered into a full slot replaces what is there once it's done).
+On the Defense page each site is its own bordered group: the station's card on the left, its upgrade
+and its four slots to the right, the modules to pick from below. The groups sit side by side on a
+wide panel and stack on a narrow one or a phone (each at least 320 px wide):
 
 | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
 | --- | --- | --- | --- |
@@ -2270,6 +2511,11 @@ The AI plays like a person with limited hands, more limited the easier it is:
   older saves get one too): a defensive one wants to be 15% stronger than a planet's defence before
   it attacks, gathers 30% more first and leaves you alone 30% longer; an offensive one 12% less, 20%
   less and 30% sooner (`GALAXY_STYLE`). Its fleet battles are fought with the same profile.
+- **Fleet cap on the easy levels** (`cap` in `DIFFICULTY`, [`ai.ts`](src/apps/games/empires/ai.ts)):
+  Easy stops building warships at a fleet value of 2,800, Very easy at 4,000 (not counting scouts and
+  yard guards); Medium and Hard have none. Their long quiet start used to make the first wave bigger,
+  not weaker: they stockpiled the whole time and sent it all at once (Easy's first wave came out
+  larger than Medium's). Waves on those levels go out at 70% of the cap at most.
 - **Battles** ([`ai.ts`](src/apps/games/empires/ai.ts)): at most 25, 35, 60 or 100 actions a
   minute (a move for a group of ships is one), and it notices an attack on its base 6 to 1 seconds
   late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
@@ -2317,7 +2563,7 @@ Balanced. Every profile plays the same game, with a purpose:
 | Fights for an outlying mine with | 1× the attackers | 0.85× | 0.6× |
 | Station level 2 / 3 / 4 due at | 130 / 320 / 540 s | 170 / 400 / 680 s | 200 / 460 / 800 s |
 | Fleet value per station level before upgrading | 600 | 900 | 1000 |
-| Gun platforms (level 1-2 / 3 / 4) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
+| Gun platforms on ore (level 1-2 / 3 / 4; only with *Defense platforms on ore* on) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
 | Mines on top of its difficulty's (+1 from level 3) | 0 | +1 | +1 |
 | Raiders after your mines | none | none | 2 ships, from 4 min |
 | Counter-attacks | when your attack fails, or the fleet it has seen of yours is small | when your attack fails | no |
@@ -2625,6 +2871,104 @@ a touch screen the button is held for 0.6 s (a ring fills round it) so a stray t
 pnpm check:empires-rush   # the gates, the ship as it launches, finishing it, cooldown and slowdown, save and restore, the AI
 ```
 
+## Empires At War defense stations in skirmishes
+
+Skirmishes and multiplayer battles have Galactic conquest's defense stations too: the same Bastion,
+Bulwark and Guardian, their three levels, modules, prices, names and models (data.ts `ORBITALS`,
+`defenseType`, which is `orbitalType` with a price and a build time; see *Galactic conquest orbit
+view and defense stations* above for the stations themselves).
+
+- **The lobby** (the skirmish setup and the multiplayer lobby, where only the host changes it):
+  *Defense stations* Off, 1, 2, 3, 4 or 6 per player (`DEFENSE_STEPS`), 2 by default
+  (`DEFENSE_DEFAULT`). It is part of the match config (`MatchInfo.stations`, `World.defense`),
+  cleaned by the server (`cleanDefense`); a lobby, setup or match without it gets the default. Off:
+  engineers have no defense station card, the AI builds none, and the orders are refused by the
+  protocol (`cleanCmd`) and by the sim. A battle saved before them (no `defense` in its world) plays
+  on as before, with them off.
+- **Building:** the engineers' Build section has a *Defense station* card beside the yards, with
+  its price, how long the selected crew take and how many we have of the limit ("1/2"). Placed like
+  a yard (the ghost, turning it, the action wheel's *Build defense station* and the pinned spot on a
+  touch screen), inside the build radius and clear of everything a yard keeps clear of, by the size
+  it grows to at level 3 (so it always has room to). It goes up at level 1 with one empty slot,
+  welded by engineers at a yard's pace (one squadron's time is the galaxy's over `SHIP_TIME`).
+  The limit counts the ones standing and going up (`fortLock`); a destroyed one leaves no ruin and
+  frees its place.
+- **Levels and modules:** selecting one opens its card (Hud.tsx `FortDetail`): its upgrade to the
+  next level, its slots (1, 2 and 4 by level) and, for the slot picked, the five modules (fitting a
+  filled slot swaps its module once it's done). The station does the work itself, up to three jobs
+  queued (`DEFENSE_QUEUE`), one at a time; a job clicked again is called off, refunded in full (an
+  upgrade called off takes the modules waiting for its slots with it), and work lost with the
+  station is paid back. A slot the queued upgrade brings may be fitted already. Prices are the
+  galaxy's; times are the galaxy's over `SHIP_TIME` (1.5):
+
+  | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
+  | --- | --- | --- | --- |
+  | Level 1 (station level 1) | Watchpost: 700, 27 s | Gun Post: 750, 27 s | Spore: 600, 23 s |
+  | Level 2 (station level 2) | Battle Station: 900, 33 s | Battle Station: 950, 33 s | Bloom: 800, 29 s |
+  | Level 3 (station level 3) | Redoubt: 1300, 43 s | Keep: 1400, 43 s | Hive: 1150, 37 s |
+
+  Modules take 9 to 16 s. Each is a part of the station, drawn on its model, that can be shot off:
+  batteries, flak and launchers fire, a shield generator gives shields (the Swarm's regeneration
+  pool more hull, regrowing faster), a hangar keeps a squadron of the faction's interceptors in the
+  air (its first one launches as soon as it's fitted). A repair crew (*Repair*) rebuilds every
+  module that was shot off; engineers weld one back for `REBUILD_MODULE` of its price.
+- **The AI** (ai.ts `planForts`, Style `forts` and `fortTop`): a Defensive admiral wants one from
+  station level 2 and raises it to level 2, a Balanced one one from level 3 and an Offensive one
+  one at level 4, both left at level 1, all within the limit (more turned the AI-only tournaments
+  into stalls: bases a wave can't crack). It puts one up between its station and the nearest enemy
+  with its engineers while its base is quiet, saves up for the first module of each (picked by what
+  the enemy flies, data.ts `orbitalPick`, as the galaxy AI arms its own), fits the rest and the
+  upgrades with credits to spare, and sends repair crews like for any structure.
+  `DEFENSE=0 node scripts/empires-tournament.ts …` plays the tournament with them off (exactly the
+  battles from before them). All of it goes through the same orders
+  as a player's (`fortUp`, `fortFit`, `cancelFort`, `place`), so lockstep holds.
+- **Codex and tech tree:** the Codex lists each side's defense station under Structures, with a
+  level picker, its slots filled, and its levels and modules; the tech tree has a line of its
+  levels and modules (ordered on each station's card).
+
+```sh
+pnpm check:empires-sk-defense   # the lobby's limit and Off, placement, levels and slots, modules and swaps, refunds, combat, repairs, the AI, old saves
+```
+
+## Empires At War beacons, idle strike craft and defense platforms on ore
+
+- **Beacons see.** A capture beacon a team holds is a pair of eyes for every player on it:
+  `BEACON_SENSOR` (900 as written, 990 at the battlefield's scale, a frigate's sensors about) round
+  it, on top of the fleet cap (`BEACON_POP`, +6) and income (`BEACON_INCOME`, 90 credits a minute)
+  it already gave. It counts wherever sight does (sim.ts `eyesOf`: the ships and structures, then
+  the beacons held): the fog of war and the fog grid, the minimap, what the AI sees (`sight`,
+  `canSee`), sparks and ruins drawn in the fog, and where reinforcements may be called in. A
+  neutral or half-taken beacon sees nothing, and one that is lost stops seeing for its old holder
+  at once. Hovering over a beacon (the action wheel's *Beacon info* on a touch screen) shows what it
+  gives; the top bar's fleet cell spells out the cap (base, station levels, beacons held) and the
+  beacon cell what each one gives.
+- **Idle strike craft hold station.** Fighters, bombers and the like with no orders and nothing to
+  fight (alone at their spot, round their carrier, or escorting a ship that waits) fly a slow, wide
+  circle round it (sim.ts `loiter`): `IDLE_PACE` (45%) of their speed, on a 130 to 208 radius by
+  craft, with half their turn rate (`IDLE_TURN`), where they used to buzz round a tight 70 to 124
+  ring at 65%. Further out than a couple of radii they come back quicker (up to 80%, full turns);
+  round a carrier under way the circle moves with it and they add its pace to theirs. A
+  target or an order takes them out of it straight away: picking up an enemy is as quick as ever
+  (the same look round every 0.4 to 0.7 s) and they're at full speed within a second. The engine
+  glow follows the speed. The defense wing still parks in its slots round the station.
+- **Defense platforms on ore** (the lobby's *Battle settings*, beside *Defense stations*; in the
+  multiplayer lobby only the host changes it): Off by default, and then surveyed ore takes only a
+  mining platform: the ore card has no gun, flak or all-round platform, the sim refuses one
+  (`cantSite`, World `oreDefense`, `oreGuns`) and so does the protocol (`cleanCmd`). On, it's as it
+  always was. It is part of the match config (`MatchInfo.oreDefense`, set by the server from the
+  lobby, only `true` or `false`). A skirmish setup saved before the choice comes back with it off,
+  as a new lobby has it; a battle saved before it (no `oreDefense` in its world) and a match from
+  before it play on with them on, as they were. Galactic conquest's fleet battles build nothing, so
+  it doesn't apply there. The AI builds none with them off, and the money goes to its fleet.
+  (Admirals fill their claims with mines first, so they seldom built one even before; a defense
+  station more in their place was tried and turned more of the AI-only tournaments into stalls.)
+  `ORE_DEFENSE=1 node scripts/empires-tournament.ts …` plays the tournament with them on.
+
+```sh
+pnpm check:empires-mechanics   # 13-15: beacon vision on capture and loss, idle strike craft pace and response, the ore switch, old saves, the AI
+pnpm check:empires             # also a battle with defense platforms on ore, frozen with them standing
+```
+
 ## Empires At War control groups and credits for allies
 
 **Control groups** ([`groups.ts`](src/apps/games/empires/groups.ts)), as in classic RTS games:
@@ -2667,6 +3011,22 @@ Keybinds and Multiplayer. Controls is edge scrolling, Camera is how fast the vie
 Gameplay is the battlefield and the shipyard. Key bindings live on the Keybinds tab, not as their
 own item on the main menu. How to play is off the main menu for now; the battle menu still opens it.
 
+## Empires At War dock points
+
+Dragging a floating window (the tactical map, economy, fleet inventory, players; on the galaxy map the
+map, planet dock, fleets, economy and selection) shows small anchors at the places it can snap to,
+the nearest one lit with an outline of where the window would land ([`src/apps/games/empires/dock.ts`](src/apps/games/empires/dock.ts),
+drawn by `Floating` in `Hud.tsx`). Let go within 44 px (64 px for a finger) of one and it sits there exactly;
+anywhere else it stays where it was dropped, as before. The places are the window's own **default spot**
+(always first: snapping there clears its moved entry, so it follows the default again) and eight dock
+points: the four corners, top centre, bottom centre and the left and right middles, 8 px from the edges
+and 56 px under the top. A window on a dock point is stored in the layout as `{ dock }`, not pixels, so
+it stays on that corner or edge when the screen is resized or the window grows; layouts saved with
+pixels load as they were. Hold **Shift** while dragging to place a window freely, with no anchors.
+*Settings → Apps → Empires At War → Snap windows to dock points* (and the game's Settings, Gameplay
+tab) turns it off; it is on by default. Windows the phone layout pins in place (the tactical map on touch
+screens) don't take part.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),
@@ -2685,7 +3045,7 @@ the view and has no keys to bind.
 
 On phone-sized screens the game opens in fullscreen:
 - the HUD and galaxy panels become bottom sheets, with the minimap behind a button;
-- the menus and lobby scroll and fit;
+- the menus and lobby scroll and fit, with the lobby's launch bar always in view;
 - portrait shows a hint to turn the phone sideways.
 
 ## Empires At War multiplayer
@@ -2702,6 +3062,25 @@ show the remembered name, to change it for next time or *Forget* it, so the next
 host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI (with its difficulty and style) or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
+
+The lobby, and the single-player skirmish setup that shares its layout, is a panel centred on the
+screen: at most 1500 px wide and no taller than its contents, so a big or ultrawide window gets
+margins rather than a giant map. *Players* (the spawns) and *Battle settings* (starting credits,
+reinforcements, defense stations, defense platforms on ore and, on a generated map, its rules) sit on the left, the map with its legend in the
+middle, and the chat as a rail on the right. In a narrower window the chat moves under the map; on a
+phone everything is one column, with each player as a two-line card. A launch bar at the foot stays in
+view at every size. It says what the battle is still waiting for, and holds *Start battle* for the
+host, *I'm ready* for the others, or *Launch battle* in a skirmish.
+
+*Change map* opens the map picker. It lists the maps one to a row: a thumbnail, the name with its
+terrain (fields, nebulas, wrecks), a one-line description, and the map's size, players, beacons and
+ore. A search box filters by name and description; it takes the focus on a desktop, but not on a
+touch screen, where it would pop up the keyboard. Quick filters pick a player count. The list sorts
+by name, size or players; clicking the active sort again reverses it, and the last sort is
+remembered in this browser (`mvlos.empires.mapsort`). The current map is marked and scrolled into
+view. The arrow keys move through the list and Enter picks, so typing part of a name and pressing
+Enter picks the first match. The generated map stays pinned under the list, whatever the search. On
+a phone the picker fills the screen and each map takes two lines.
 
 Battles run in deterministic lockstep: every player's browser runs the whole battle, and only
 orders cross the network. The server ([`server/empires.ts`](server/empires.ts), on the WebSocket
@@ -2756,9 +3135,9 @@ The reverse proxy in front of the site has to pass WebSocket upgrades through (n
 `proxy_set_header Connection "upgrade"`; Caddy and Traefik do it by default).
 
 ```sh
-pnpm check:empires                                              # two copies of a battle stay identical
+pnpm check:empires                                              # two copies of a battle stay identical (four seats, then six)
 pnpm check:empires-ws ws://localhost:5173/api/empires/ws        # names, limits and lobbies (needs pnpm dev)
-pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave
+pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave (add a map id, e.g. tarsis, for six seats)
 pnpm check:empires-restart                                      # a battle through a server restart (starts its own servers)
 pnpm check:empires-rejoin                                       # stepping away: rejoining, votes, teammate takeover, timeout
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
@@ -2781,7 +3160,8 @@ pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/
 ```
 
 **The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
-middle of the map, the camera panning across); a skirmish reloaded from the tab's resume snapshot
+middle of the map, the camera panning across); six admirals on a huge map (Velkar Core), 40 craft
+each sent at the middle, seen zoomed all the way out and then panning across the fight; a skirmish reloaded from the tab's resume snapshot
 with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
 view (the battle screen must never scroll, and the panels laid out round each other must settle:
 no React update loop, few commits); the galactic conquest map of a new and a late

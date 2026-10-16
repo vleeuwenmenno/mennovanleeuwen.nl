@@ -3418,6 +3418,10 @@ input.is-bad {
 .ib-item:hover {
   background: color-mix(in srgb, currentColor 8%, transparent);
 }
+.ib-item[aria-busy='true'] {
+  cursor: progress;
+  opacity: 0.6;
+}
 .ib-kind {
   flex: none;
   opacity: 0.6;

@@ -1,11 +1,12 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
 import type { IssueHit } from '../data/code'
 import { timeAgo } from '../data/recents'
 import { api, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
-import type { WinState } from '../os/wm'
+import { useWM, type WinState } from '../os/wm'
 import { openLink } from '../data/links'
+import { gitProps, repoApi, routeToView } from '../apps/git/route'
 import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
@@ -34,10 +35,33 @@ function load(fresh = false) {
   return value
 }
 
+/** Whether the Git app can show this pull request or issue: it asks the same API the app will (whose answer the server then keeps for a minute), and gives up after a few seconds. */
+async function gitAppHas(h: IssueHit, route: string): Promise<boolean> {
+  const view = routeToView(route)
+  if (!view || view.v === 'list') return false
+  const timeout = new Promise<false>((done) => setTimeout(() => done(false), 4000))
+  const check = api(`${repoApi(view)}/${h.kind === 'pr' ? 'pulls' : 'issues'}/${h.number}`).then(() => true, () => false)
+  return Promise.race([check, timeout])
+}
+
 function Item({ h }: { h: IssueHit }) {
+  const wm = useWM()
+  const [opening, setOpening] = useState(false)
   const label = h.draft && h.state === 'open' ? 'draft' : null
+  // A plain click opens it in the Git app, or on the web when the app can't load it (a host it
+  // doesn't know, no access). Ctrl-, Shift- and middle-clicks stay the browser's.
+  const onClick = (e: MouseEvent) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    if (opening) return
+    const props = gitProps(h.source, h.repo, { kind: h.kind, number: h.number })
+    setOpening(true)
+    gitAppHas(h, props.route)
+      .then((ok) => (ok ? wm.open('git', props) : openLink(h.url)))
+      .finally(() => setOpening(false))
+  }
   return (
-    <a className="ib-item" href={h.url} target="_blank" rel="noopener noreferrer" title={`${h.repo}#${h.number} · ${h.sourceLabel}`}>
+    <a className="ib-item" href={h.url} target="_blank" rel="noopener noreferrer" onClick={onClick} aria-busy={opening} title={`${h.repo}#${h.number} · ${h.sourceLabel} · opens in Git`}>
       <span className="ib-kind" aria-hidden>
         {h.kind === 'pr' ? '⇄' : '●'}
       </span>

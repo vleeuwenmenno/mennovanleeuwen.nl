@@ -22,6 +22,24 @@ export type RepoHit = Base & {
   cloneUrl: string
 }
 
+/**
+ * A GitHub organisation the signed-in account belongs to, and whether this site's OAuth app can
+ * reach its repositories (/api/code/orgs, Settings → Code hosts). "restricted": the organisation's
+ * OAuth app policy keeps the app out (or it isn't listed for this token although the membership is
+ * public); "sso": SAML single sign-on has to be granted for the token; "unknown": the token lacks
+ * the read:org scope, so it can't tell.
+ */
+export type OrgAccess = { login: string; avatar: string | null; url: string; access: 'ok' | 'restricted' | 'sso' | 'unknown'; repos: number; privateRepos: number }
+
+export type OrgsResponse = {
+  /** The site's GitHub OAuth app (public), for GitHub's "grant or request access" page */
+  clientId: string | null
+  /** Whether the token may list organisations (read:org); without it only public memberships show */
+  canListOrgs: boolean
+  orgs: OrgAccess[]
+  error: string | null
+}
+
 export type IssueHit = Base & {
   kind: 'issue' | 'pr'
   repo: string

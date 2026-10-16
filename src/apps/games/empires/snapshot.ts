@@ -1,6 +1,6 @@
 import type { Brain } from './ai.ts'
 import type { UnitType } from './data.ts'
-import type { World } from './sim.ts'
+import { buildGrid, type World } from './sim.ts'
 
 // A battle frozen mid-fight, so a reload carries on from the same moment (keep.ts stores it): the
 // whole world (every ship with its damage, orders and reload timers, the shots in flight, the
@@ -46,7 +46,11 @@ export function snapshotWorld(w: World): string {
   delete rest.grid
   delete rest.nav
   delete rest.units
-  return JSON.stringify({ v: 2, ...rest, units, types }, write)
+  // The lookup grid is rebuilt at the start of every tick, but the AI thinks before the tick, on the
+  // grid the last tick built (from where the units were then). A restored world must think on that
+  // same grid, or its admirals see a different battle for one think and the copies drift apart.
+  const cells = [...w.grid].map(([k, us]) => [k, us.map((u) => u.id)])
+  return JSON.stringify({ v: 2, ...rest, units, types, cells }, write)
 }
 
 export function restoreWorld(s: string): World | null {
@@ -55,9 +59,15 @@ export function restoreWorld(s: string): World | null {
     if (!(o?.v === 2 || (o?.v === 1 && o.sizes === 'big')) || !Array.isArray(o.units) || !Array.isArray(o.types)) return null
     delete o.sizes
     const units = o.units.map((u) => ({ ...u, t: o.types[u.t] }))
-    const w = { ...o, units, byId: new Map(units.map((u) => [u.id, u])), grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown }
+    const byId = new Map(units.map((u) => [u.id, u]))
+    const cells = Array.isArray(o.cells) ? (o.cells as [number, number[]][]) : null
+    const w = { ...o, units, byId, grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown; cells?: unknown }
     delete w.v
     delete w.types
+    delete w.cells
+    // Saved before snapshots kept the grid: built from where the units are, as a tick would.
+    if (cells) for (const [k, ids] of cells) w.grid.set(k, ids.map((id) => byId.get(id)).filter((u) => !!u))
+    else buildGrid(w)
     // Saved before the world kept its own counters and random numbers.
     w.squadSeq ??= Math.max(0, ...units.map((u) => u.squad)) + 1
     w.wreckSeq ??= Math.max(999, ...w.wrecks.map((h) => h.id)) + 1

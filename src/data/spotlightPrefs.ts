@@ -44,6 +44,13 @@ export const ANSWERS_KEEP: [AnswersKeep, string][] = [
 /** Enter when nothing of yours matches. */
 export type Fallback = 'web' | 'terminal'
 
+/** What Ctrl+Space toggles. Ctrl+K / Cmd+K takes the other one. Default is Spotlight. */
+export type CtrlSpace = 'launchpad' | 'spotlight'
+export const CTRL_SPACE: [CtrlSpace, string][] = [
+  ['spotlight', 'Spotlight'],
+  ['launchpad', 'All apps'],
+]
+
 export type SpotlightPrefs = {
   start: Record<StartSection, boolean>
   include: Record<Category, boolean>
@@ -55,6 +62,8 @@ export type SpotlightPrefs = {
   history: boolean
   /** Quick answers are deleted this long after their last message (read by the server) */
   answersKeep: AnswersKeep
+  /** Ctrl+Space toggles this; Ctrl+K / Cmd+K toggles the other. Default is Spotlight. */
+  ctrlSpace: CtrlSpace
 }
 
 const DEFAULTS: SpotlightPrefs = {
@@ -65,6 +74,7 @@ const DEFAULTS: SpotlightPrefs = {
   recentCount: 5,
   history: true,
   answersKeep: '1d',
+  ctrlSpace: 'spotlight',
 }
 
 const flags = <K extends string>(defaults: Record<K, boolean>, v: unknown): Record<K, boolean> => {
@@ -83,6 +93,7 @@ const store = synced<SpotlightPrefs>('spotlight', DEFAULTS, {
       recentCount: (RECENT_COUNTS as readonly number[]).includes(s.recentCount) ? s.recentCount : DEFAULTS.recentCount,
       history: s.history !== false,
       answersKeep: ANSWERS_KEEP.some(([k]) => k === s.answersKeep) ? s.answersKeep : DEFAULTS.answersKeep,
+      ctrlSpace: s.ctrlSpace === 'launchpad' ? 'launchpad' : 'spotlight',
     }
   },
 })

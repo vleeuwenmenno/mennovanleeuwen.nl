@@ -112,14 +112,16 @@ export type UnitType = {
 
   // --- Faction mechanics (sim.ts): each is off unless a unit sets it. -------------------------------
 
-  /** Living hulls: out of combat (`delay` seconds since an enemy last hit it) the hull grows back,
+  /** Living hulls: out of combat (`delay` seconds since an enemy, or an asteroid field's rocks, last
+   * hit it) the hull grows back,
    * `rate` of its full hull a second, up to what it can have (a rush-launched ship's unbuilt hull
    * stays unbuilt). Module damage isn't mended by it. */
   regrow?: { rate: number; delay: number }
-  /** A drain aura: every enemy within `radius` (as written, stretched like gun ranges) loses `dps`
-   * hull points a second, straight off the hull past any shields, and `heal` of what is drained
-   * mends our ships within `radius`, shared out evenly among the damaged ones (itself included). */
-  drain?: { radius: number; dps: number; heal: number }
+  /** A drain aura: the `targets` nearest enemies within `radius` (as written, stretched like gun
+   * ranges) lose `dps` hull points a second each, straight off the hull past any shields, and `heal`
+   * of what is drained mends our ships within `radius`, shared out evenly among the damaged ones
+   * (itself included). */
+  drain?: { radius: number; dps: number; heal: number; targets: number }
   /** A fire-control aura: our ships within `radius` (as written, stretched like gun ranges), itself
    * included, deal `bonus` more damage (0.15: 15%). Auras don't stack: a ship near several gets the
    * best one. */
@@ -270,7 +272,7 @@ export const ORBITAL_FRAME = {
  * - regrow: its living hull grows back this much faster (0.5: half as fast again); regrowDelay: its
  *   wait out of combat before it does (-0.3: 30% shorter).
  * - drain: its drain aura bites this much harder (0.25); drainHeal: it heals this much more of what
- *   it drains (0.5: half as much again).
+ *   it drains (0.5: half as much again); drainTargets: it bites this many more enemies at once (1).
  * - shieldAura: added to its shield-projector aura's `regen` (0.5: a +100% aura becomes +150%);
  *   auraRadius widens a shield-projector aura as it does a fire-control one.
  * On the station (`for` its station id): mines (the refinery's income), repair (its repair dock),
@@ -278,7 +280,7 @@ export const ORBITAL_FRAME = {
  * ship's own build research; and regrow and regrowDelay, for every living hull of the side (ships
  * and structures), on top of each one's own.
  */
-export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines' | 'shieldDamage' | 'aura' | 'auraRadius' | 'regrow' | 'regrowDelay' | 'drain' | 'drainHeal' | 'shieldAura' | 'fleetBuild', number>>
+export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines' | 'shieldDamage' | 'aura' | 'auraRadius' | 'regrow' | 'regrowDelay' | 'drain' | 'drainHeal' | 'drainTargets' | 'shieldAura' | 'fleetBuild', number>>
 /**
  * `for` is the unit type it upgrades, or the station (which also covers the economy). `requires`
  * lists research that has to come first, on top of the station level: that is what makes it a

@@ -9,7 +9,7 @@ import { HOME_CURRENCIES, setHomeCurrency, useHomeCurrency } from '../data/curre
 import { clearVisits, useVisits } from '../data/siteHistory'
 import { clearHits, useRecentHits } from '../data/spotlightRecent'
 import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
-import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { ANSWERS_KEEP, CATEGORIES, CTRL_SPACE, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
 import { clearQuick } from '../data/agents'
 import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, moveLauncher, posixPath, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
@@ -27,8 +27,9 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasOrgScope, hasRepoScope, orgAccess, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
+import type { OrgAccess, OrgsResponse } from '../data/code'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
@@ -635,6 +636,135 @@ function Instances() {
       </button>
       <p className="muted set-help">Gitea and Forgejo instances are linked with a personal access token. Spotlight then searches their repositories, issues, pull requests and branches too.</p>
       <p className="muted set-help">Private GitHub repositories need GitHub's <code>repo</code> scope, which also allows writing to them (GitHub has no read-only version). Turning it off again may need the app removed under GitHub → Settings → Applications.</p>
+      <GithubOrgs />
+    </>
+  )
+}
+
+const ORG_STATUS: Record<Exclude<OrgAccess['access'], 'ok'>, { short: string; long: string }> = {
+  restricted: { short: 'Blocked by its OAuth app policy', long: "The organisation restricts OAuth apps and hasn't approved this site, so only its public repositories show." },
+  sso: { short: 'Needs single sign-on', long: 'The organisation uses SAML single sign-on: sign in again and authorise it for this site.' },
+  unknown: { short: 'Public membership, access unknown', long: 'Without the read:org scope this site only sees public memberships and cannot tell whether it may read the private repositories.' },
+}
+
+function orgLine(o: OrgAccess) {
+  if (o.access !== 'ok') return ORG_STATUS[o.access].short
+  if (!o.repos) return 'No repositories you can see'
+  return `${o.repos} ${o.repos === 1 ? 'repository' : 'repositories'}${o.privateRepos ? `, ${o.privateRepos} private` : ''}`
+}
+
+/**
+ * The GitHub organisations the account is in and whether this site's OAuth app may read their
+ * repositories (server/search.ts). Organisations can keep OAuth apps out (GitHub's default for new
+ * ones) until an owner approves the app, which no code here can get around: this says so and links
+ * GitHub's page for granting or requesting access, and checks again on coming back from it.
+ */
+function GithubOrgs() {
+  const account = useAccount()
+  const user = account.user
+  const [data, setData] = useState<OrgsResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  /** Sent to GitHub: check again when this tab is back in front. */
+  const away = useRef(false)
+  const load = useRef((fresh: boolean) => {
+    setBusy(true)
+    orgAccess(fresh)
+      .then(
+        (d) => {
+          setData(d)
+          setError(d.error)
+          // Spotlight's remembered results may predate an organisation letting the site in.
+          if (fresh) clearCodeSearch()
+        },
+        (e: Error) => setError(e.message),
+      )
+      .finally(() => setBusy(false))
+  }).current
+  useEffect(() => {
+    load(true)
+    const back = () => {
+      if (document.visibilityState !== 'visible' || !away.current) return
+      away.current = false
+      load(true)
+    }
+    document.addEventListener('visibilitychange', back)
+    window.addEventListener('focus', back)
+    return () => {
+      document.removeEventListener('visibilitychange', back)
+      window.removeEventListener('focus', back)
+    }
+  }, [load])
+  if (!user) return null
+  const repo = hasRepoScope(user)
+  const grant = data?.clientId ? `https://github.com/settings/connections/applications/${encodeURIComponent(data.clientId)}` : null
+  const toGitHub = () => (away.current = true)
+  const blocked = (data?.orgs ?? []).filter((o) => o.access !== 'ok')
+  return (
+    <>
+      <h4 className="set-subhead">GitHub organisations</h4>
+      {!repo ? (
+        <p className="muted set-help">Spotlight searches the public repositories of your organisations. Their private ones need “Allow private” above.</p>
+      ) : (
+        !hasOrgScope(user) && (
+          <ul className="set-list">
+            <li className="set-row">
+              <span className="set-glyph">!</span>
+              <span className="set-row-text">
+                <strong>New sign-in needed</strong>
+                <span className="muted" title="Your GitHub sign-in is from before this site asked for read:org">Your sign-in predates the read:org scope, so only public memberships show.</span>
+              </span>
+              <button className="btn btn-small" onClick={() => signInWithRepos(true)}>
+                Sign in again
+              </button>
+            </li>
+          </ul>
+        )
+      )}
+      {data && data.orgs.length > 0 && (
+        <ul className="set-list">
+          {data.orgs.map((o) => (
+            <li key={o.login} className="set-row">
+              {o.avatar ? <img className="set-fav" src={o.avatar} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /> : <span className="set-glyph">◫</span>}
+              <span className="set-row-text">
+                <a href={o.url} target="_blank" rel="noopener noreferrer">
+                  <strong>{o.login}</strong>
+                </a>
+                <span className={o.access === 'ok' ? 'muted' : 't-yellow'} title={o.access === 'ok' ? undefined : ORG_STATUS[o.access].long}>
+                  {orgLine(o)}
+                </span>
+              </span>
+              {o.access === 'restricted' && grant && (
+                <a className="btn btn-small" href={grant} target="_blank" rel="noopener noreferrer" onClick={toGitHub}>
+                  Grant access
+                </a>
+              )}
+              {o.access === 'sso' && (
+                <button className="btn btn-small" onClick={() => signInWithRepos(repo)}>
+                  Sign in again
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {data && !data.orgs.length && !error && <p className="muted set-help">No organisations found for @{user.login}.</p>}
+      {!data && !error && <p className="muted set-help">Checking your organisations…</p>}
+      {error && <p className="t-red copyable">{error}</p>}
+      {blocked.length > 0 && <p className="muted set-help">{blocked.map((o) => `${o.login}: ${ORG_STATUS[o.access as Exclude<OrgAccess['access'], 'ok'>].long}`).join(' ')}</p>}
+      <div className="set-actions">
+        <button className="btn btn-small" disabled={busy} onClick={() => load(true)}>
+          {busy ? 'Checking…' : 'Check again'}
+        </button>
+        {grant && (
+          <a className="btn btn-small" href={grant} target="_blank" rel="noopener noreferrer" onClick={toGitHub}>
+            Organisation access on GitHub
+          </a>
+        )}
+      </div>
+      <p className="muted set-help">
+        Spotlight lists the repositories of every organisation you are in; typing an organisation's name finds its repositories. Organisations can restrict OAuth apps (GitHub's default for new ones): until an owner approves this site, their private repositories stay out. On GitHub's page for this site, owners click <em>Grant</em> and members <em>Request</em> next to the organisation. If your membership is private and the organisation keeps the site out, GitHub hides the organisation from this list too, but that page still shows it. Coming back to this tab checks again.
+      </p>
     </>
   )
 }
@@ -1602,6 +1732,20 @@ function SpotlightSettings() {
   ]
   return (
     <>
+      <SetGroup title="Ctrl+Space opens">
+        <div className="seg set-seg" role="radiogroup" aria-label="Ctrl+Space opens">
+          {CTRL_SPACE.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={prefs.ctrlSpace === id} className={prefs.ctrlSpace === id ? 'is-active' : ''} onClick={() => setSpotlightPrefs({ ctrlSpace: id })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">
+          {prefs.ctrlSpace === 'spotlight'
+            ? 'Ctrl+Space opens Spotlight. Ctrl+K and Cmd+K open All apps.'
+            : 'Ctrl+Space opens All apps. Ctrl+K and Cmd+K open Spotlight.'}
+        </p>
+      </SetGroup>
       <SetGroup title="When Spotlight opens, show">
         {START_SECTIONS.filter(([id]) => agents || id !== 'answers').map(([id, label, hint]) => (
           <label key={id} className="set-check">
@@ -1978,7 +2122,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, Files' bookmarks, and Weather's units and saved cities; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the top bar, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, Files' bookmarks, and Weather's units and saved cities; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
     </>
   )
 }
@@ -1996,7 +2140,7 @@ const GROUPS: Group[] = [
   },
   {
     panes: [
-      { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
+      { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred ctrl space shortcut keyboard all apps launchpad', blurb: 'What Spotlight shows when it opens, what it searches, what it remembers, and what Ctrl+Space opens.', render: () => <SpotlightSettings /> },
       { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page drag move resize modifier key ctrl alt hyprland corner mouse', blurb: 'What the desktop shows when MvL OS opens again, one workspace per browser tab, and dragging windows with a key.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
       { id: 'language', label: 'Language & region', hue: 'var(--magenta)', icon: svg(<><path d="M4 6h9M8.5 3v3M6 6c.5 3 3 5.5 6 6.5M12 6c-.5 3-3 5.5-6 6.5" /><path d="M13 20l3.5-8 3.5 8M14.3 17h4.4" /></>), keywords: 'language region furigana ruby reading readings kanji japanese hiragana hover show hide size small medium large bigger currency home money exchange rate euro dollar yen', blurb: 'Furigana, the readings above Japanese characters, and your home currency.', render: () => <LanguagePane /> },
@@ -2006,7 +2150,7 @@ const GROUPS: Group[] = [
   },
   {
     panes: [
-      { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
+      { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories repos org orgs organisation organisations organization organizations team company private access grant oauth sso saml read:org', blurb: 'GitHub and its organisations, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
       { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations accounts link connect updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail immich photos calendar calendars google caldav tasks contacts carddav address book icloud nextcloud', blurb: 'Every account and key: calendars (Google, CalDAV), contacts (CardDAV), Mail, Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     ],
   },

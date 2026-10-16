@@ -30,12 +30,29 @@
 // 9. A shield-projector aura (UnitType shieldAura): our ships in reach (itself included) recharge
 //    their shields `regen` faster, out of reach and enemies as usual, two auras don't stack (the
 //    best counts), and a projector with all its shield generators shot off projects nothing.
+// 10. Asteroid fields: a Swarm ship crossing one comes out with less hull than it went in with and
+//     doesn't grow any back while inside (the rocks hold its regrowth off, then it waits as after a
+//     hit); a shielded cruiser loses FIELD_WEAR of its shields per 1000 units, more than the old
+//     0.15; rocks never take a hull below its floor.
+// 11. A drain aura bites at most `targets` enemies at once: the nearest, ties by unit id.
+// 12. Strike craft (interceptors, bombers, defense wings) are about 10% tougher than they were.
+// 13. Beacon vision: a captured beacon sees BEACON_SENSOR round it for its team (fog, canSee, the
+//     AI's sight), with no ship near; a neutral one sees nothing; lost, it stops at once, and its
+//     fleet cap bonus goes with it.
+// 14. Idle strike craft hold station: about IDLE_PACE of full speed on a wide circle with gentle
+//     turns (alone, and round a waiting carrier), and back to full speed as soon as an enemy comes
+//     into reach (picked up as fast as before) or an order comes.
+// 15. Defense platforms on ore: off in a new battle (the ore card, the sim and the protocol refuse
+//     them, a mine still goes up), on when the lobby says so; an old saved battle or match without
+//     the switch plays with them on; the AI builds none when they're off.
 
-import { MAPS } from '../src/apps/games/empires/maps.ts'
-import { LEVEL_UP, STATIONS, TECH, UNIT, stationType, type TechEffect, type UnitType } from '../src/apps/games/empires/data.ts'
+import { DEFAULT_RULES, MAPS, inside } from '../src/apps/games/empires/maps.ts'
+import { BEACON_POP, BEACON_SENSOR, LEVEL_UP, STATIONS, TECH, TOUGHNESS, UNIT, siteOptions, stationType, type TechEffect, type UnitType } from '../src/apps/games/empires/data.ts'
+import { cleanCmd } from '../src/apps/games/empires/commands.ts'
+import { matchWorld } from '../src/apps/games/empires/match.ts'
 import { spinal } from '../src/apps/games/empires/data/kit.ts'
 import { buildModel } from '../src/apps/games/empires/models/index.ts'
-import { STEP, auraOf, cmdAttack, cmdBuild, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldAuraOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { FIELD_WEAR, IDLE_PACE, IDLE_TURN, STEP, auraOf, calm, canSee, cantSite, cmdSite, eyesOf, oreGuns, cmdAttack, cmdBuild, cmdMove, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldAuraOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { newBrain, think } from '../src/apps/games/empires/ai.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import type { FactionId } from '../src/apps/games/empires/data.ts'
@@ -143,7 +160,7 @@ const mid = () => ({ x: map.w / 2, y: map.h / 2 })
 {
   const w = empty()
   const { x, y } = mid()
-  const drain = { radius: 500, dps: 40, heal: 0.5 }
+  const drain = { radius: 500, dps: 40, heal: 0.5, targets: 3 }
   const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain })
   const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
@@ -312,7 +329,7 @@ function mixed(): World {
   const w = empty()
   const { x, y } = mid()
   put(w, 's-frigate', 0, x, y, 0, { ...UNIT['s-frigate'], regrow: { rate: 0.03, delay: 3 } })
-  put(w, 's-corvette', 0, x - 200, y + 150, 0, { ...UNIT['s-corvette'], drain: { radius: 450, dps: 25, heal: 0.6 } })
+  put(w, 's-corvette', 0, x - 200, y + 150, 0, { ...UNIT['s-corvette'], drain: { radius: 450, dps: 25, heal: 0.6, targets: 3 } })
   put(w, 'd-battleship', 1, x + 700, y, Math.PI, { ...UNIT['d-battleship'], fireControl: { radius: 700, bonus: 0.25 } })
   const base = UNIT['d-ion']
   put(w, 'd-ion', 1, x + 600, y + 200, Math.PI, { ...base, hardpoints: base.hardpoints.map((h, i) => (i === 0 ? { ...h, weapon: spinal(h.weapon!, 12) } : h)) })
@@ -404,13 +421,13 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   // drain and drainHeal: bites harder, heals more of it.
   const w = empty()
   const { x, y } = mid()
-  research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5 })
-  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5 } })
+  research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5, drainTargets: 1 })
+  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5, targets: 3 } })
   const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
   ally.hull = ally.hullMax * 0.2
   const d = drainOf(leech)!
-  check('drain research strengthens the bite and the heal', d.dps === 60 && near(d.heal, 0.75, 1e-12), `${d.dps}, ${d.heal}`)
+  check('drain research strengthens the bite and the heal, and adds a target', d.dps === 60 && near(d.heal, 0.75, 1e-12) && d.targets === 4, `${d.dps}, ${d.heal}, ${d.targets}`)
   run(w, 0.3)
   const f0 = foe.hull
   const a0 = ally.hull
@@ -511,6 +528,286 @@ function recharge(w: World, us: Unit[], secs: number): number[] {
   const [got] = recharge(w, [ally], 2)
   const want = ally.t.regen * ally.mods.regen * 2 * 2.5
   check('a ship in the wider reach recharges the researched boost faster', near(got, want, want * 0.03), `${got.toFixed(1)}, want ${want}`)
+}
+
+// --- 10. Asteroid fields --------------------------------------------------------------------------------
+
+/** A ship of `id` flown straight across the biggest asteroid field on a map that has them, through
+ * its middle, from just inside its edge: its hull and shields as a share, on the way in, on the way
+ * out and whenever its hull grew while inside, and the distance it flew inside. */
+function crossField(id: string, start = 1) {
+  const fm = MAPS.filter((m) => m.fields.length).sort((a, b) => b.fields.length - a.fields.length)[0]
+  const f = [...fm.fields].sort((a, b) => b.r - a.r)[0]
+  const fac = UNIT[id].faction
+  const w = newWorld(fm, [{ faction: fac, team: 0, spawn: 0 }, { faction: fac === 'droid' ? 'republic' : 'droid', team: 1, spawn: 1 }], { seed: 3 })
+  w.units = []
+  w.byId = new Map()
+  w.arrivals = []
+  w.wrecks = []
+  const u = spawn(w, id, 0, f.x - f.r + 4, f.y, 0)
+  u.stance = 'hold'
+  u.v = u.t.speed * u.mods.speed
+  u.hull = u.hullMax * start
+  // Already inside, it flies straight through rather than steering round.
+  cmdMove(w, 0, [u.id], f.x + f.r + 400, f.y)
+  const smax = shieldFull(u) || 1
+  const enter = { hull: u.hull / u.hullMax, shield: u.shield / smax }
+  let grew = false
+  let path = 0
+  let last = u.hull
+  for (let t = 0; t < 120 && inside(fm.fields, u.x, u.y); t += STEP) {
+    const px = u.x
+    const py = u.y
+    tick(w)
+    w.events.length = 0
+    if (inside(fm.fields, u.x, u.y)) path += Math.hypot(u.x - px, u.y - py)
+    if (u.hull > last + 1e-9) grew = true
+    last = u.hull
+  }
+  const exit = { hull: u.hull / u.hullMax, shield: u.shield / smax }
+  return { w, u, enter, exit, grew, path, out: !inside(fm.fields, u.x, u.y) }
+}
+{
+  const s = crossField('s-cruiser', 0.7)
+  check('a Swarm cruiser flies out of the field', s.out && s.path > 500, `${s.path.toFixed(0)} units inside`)
+  check('it comes out with less hull than it went in with', s.exit.hull < s.enter.hull - 0.05, `${(s.enter.hull * 100).toFixed(1)}% in, ${(s.exit.hull * 100).toFixed(1)}% out`)
+  check('its hull never grew back while inside', !s.grew)
+  const want = FIELD_WEAR * 0.5 * (s.path / 1000)
+  check('it lost FIELD_WEAR of half its hull per 1000 units', near(s.enter.hull - s.exit.hull, want, 0.01), `${(s.enter.hull - s.exit.hull).toFixed(3)}, want ${want.toFixed(3)}`)
+  // Out of the field: it waits as after a hit, then grows back.
+  const g = regrowOf(s.u)!
+  const h0 = s.u.hull
+  run(s.w, g.delay - 1)
+  check('out of the field it waits its regrowth delay first', s.u.hull === h0 && calm(s.w, s.u) < g.delay, `${calm(s.w, s.u).toFixed(1)} s calm`)
+  run(s.w, 3)
+  check('then grows back', s.u.hull > h0)
+  // A Leviathan too, from full.
+  const l = crossField('s-capital')
+  check('a Leviathan crossing from full comes out hurt', l.out && l.exit.hull < 0.92 && !l.grew, `${(l.exit.hull * 100).toFixed(1)}% hull`)
+}
+{
+  const r = crossField('r-cruiser')
+  const lost = r.enter.shield - r.exit.shield
+  const old = 0.15 * (r.path / 1000)
+  check('a Republic cruiser crossing loses FIELD_WEAR of its shields per 1000 units', near(lost, FIELD_WEAR * (r.path / 1000), 0.01), `${(lost * 100).toFixed(1)}% over ${r.path.toFixed(0)} units`)
+  check('more than it did before (0.15 per 1000)', lost > old * 1.5, `${(lost * 100).toFixed(1)}%, was ${(old * 100).toFixed(1)}%`)
+  check('its hull is untouched while the shields hold', r.exit.hull === 1)
+  const low = crossField('s-frigate', 0.16)
+  check('rocks never take a hull below its floor', near(low.exit.hull, 0.15, 1e-9), `${(low.exit.hull * 100).toFixed(2)}%`)
+}
+
+// --- 11. A drain aura's target limit ------------------------------------------------------------------------
+
+{
+  const w = empty()
+  const { x, y } = mid()
+  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 20, heal: 0.5, targets: 3 } })
+  // Six enemies at different distances, spawned out of order so their ids don't follow distance.
+  const at = [400, 150, 350, 250, 300, 200]
+  const foes = at.map((d, i) => put(w, 'd-frigate', 1, x + Math.cos(i) * d, y + Math.sin(i) * d, 0, unarmed(UNIT['d-frigate'])))
+  run(w, 0.3)
+  const h0 = foes.map((u) => u.hull)
+  run(w, 3)
+  const lost = foes.map((u, i) => h0[i] - u.hull)
+  const bitten = foes.filter((_, i) => lost[i] > 0).map((u) => at[foes.indexOf(u)]).sort((a, b) => a - b)
+  check('a Leech next to six enemies drains exactly three', bitten.length === 3, `${bitten.length} bitten`)
+  check('the three nearest', bitten.join() === '150,200,250', bitten.join())
+  check('each at the full dps', foes.every((_, i) => lost[i] === 0 || near(lost[i], 60, 1)), lost.map((v) => v.toFixed(1)).join(' '))
+  check('it shows tendrils to just those', leech.drained?.length === 3)
+  // A tie for the last place: the lower unit id gets it.
+  const w2 = empty()
+  put(w2, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 20, heal: 0.5, targets: 1 } })
+  const a = put(w2, 'd-frigate', 1, x, y - 200, 0, unarmed(UNIT['d-frigate']))
+  const b = put(w2, 'd-frigate', 1, x, y + 200, 0, unarmed(UNIT['d-frigate']))
+  run(w2, 2)
+  check('at the same distance, the lower unit id is bitten', a.id < b.id && a.hull < a.hullMax && b.hull === b.hullMax)
+  check('the Leech as written bites three at once', UNIT['s-corvette'].drain?.targets === 3)
+}
+
+// --- 12. Strike craft toughness -------------------------------------------------------------------------------
+
+{
+  // As written before this change: hull and shields.
+  const was: Record<string, [number, number]> = {
+    'r-fighter': [55, 20], 'r-bomber': [150, 40], 'r-picket': [34, 10],
+    'd-fighter': [60, 0], 'd-bomber': [135, 15], 'd-picket': [30, 0],
+    's-fighter': [38, 0], 's-bomber': [85, 0], 's-picket': [28, 0],
+  }
+  for (const [id, [hull, shield]] of Object.entries(was)) {
+    const t = UNIT[id]
+    const k = t.hull / Math.round(hull * TOUGHNESS)
+    const ks = shield ? t.shield / Math.round(shield * TOUGHNESS) : 1
+    check(`${t.name} is about 10% tougher`, k >= 1.07 && k <= 1.13 && (!shield || (ks >= 1.05 && ks <= 1.2)), `hull ${t.hull}${shield ? `, shields ${t.shield}` : ''}`)
+  }
+}
+
+// --- 13. Beacon vision --------------------------------------------------------------------------------------
+
+{
+  const w = empty(['republic', 'droid'])
+  const b = w.beacons[0]
+  const R = BEACON_SENSOR
+  // An enemy inside the beacon's sight (well outside its capture ring) and one just outside it.
+  const inSight = put(w, 'd-frigate', 1, b.x + R * 0.7, b.y, 0, unarmed(UNIT['d-frigate']))
+  const outside = put(w, 'd-frigate', 1, b.x - R * 1.15, b.y, 0, unarmed(UNIT['d-frigate']))
+  run(w, 0.6)
+  check('a neutral beacon sees nothing', !inSight.seen[0] && !canSee(w, 0, b.x, b.y) && !eyesOf(w, 0).some((e) => e.r === R))
+  const cap0 = w.players[0].popCap
+  // Take it with one of ours, unarmed, parked on it.
+  const g = put(w, 'r-gunship', 0, b.x, b.y + 80, 0, unarmed(UNIT['r-gunship']))
+  let took = -1
+  run(w, 40, (ww) => {
+    if (took < 0 && b.owner === 0) took = ww.time
+  })
+  check('a gunship parked on it takes the beacon', b.owner === 0, `after ${took.toFixed(1)} s`)
+  // Then send it away out of sight: the beacon still sees for us.
+  w.units = w.units.filter((u) => u !== g)
+  w.byId.delete(g.id)
+  run(w, 0.6)
+  check('a captured beacon sees round itself for its team, with no ship near', inSight.seen[0] && canSee(w, 0, b.x + R * 0.7, b.y), `sensor ${R}`)
+  check('but no further than BEACON_SENSOR', !outside.seen[0])
+  check('the enemy gets no eyes from our beacon', !eyesOf(w, 1).some((e) => e.x === b.x && e.y === b.y))
+  check('it raises the fleet cap by BEACON_POP', w.players[0].popCap === cap0 + BEACON_POP, `${cap0} to ${w.players[0].popCap}`)
+  check('eyesOf lists it', eyesOf(w, 0).some((e) => e.x === b.x && e.y === b.y && e.r === R))
+  // The enemy parks on it and winds it back: at neutral it sees for nobody.
+  put(w, 'd-gunship', 1, b.x, b.y - 80, 0, unarmed(UNIT['d-gunship']))
+  let lost = -1
+  run(w, 40, (ww) => {
+    if (lost < 0 && b.owner !== 0) lost = ww.time
+  })
+  run(w, 0.3)
+  check('lost to the enemy, it stops seeing for us', b.owner !== 0 && !inSight.seen[0] && !canSee(w, 0, b.x + R * 0.7, b.y), `owner ${b.owner} after ${(lost - took).toFixed(1)} s`)
+  check('and the cap bonus goes with it', w.players[0].popCap === cap0)
+}
+
+// --- 14. Idle strike craft hold station calmly -----------------------------------------------------------
+
+{
+  const w = empty(['republic', 'droid'])
+  const { x, y } = mid()
+  const at = { x: x - 1500, y: y + 900 }
+  const f = put(w, 'r-fighter', 0, at.x, at.y, 0)
+  f.stance = 'maneuver'
+  // Settle in, then measure how fast it flies and how far it strays while idle.
+  run(w, 8)
+  let sum = 0
+  let n = 0
+  let far = 0
+  let turn = 0
+  let a0 = f.a
+  run(w, 10, () => {
+    sum += f.v
+    n++
+    far = Math.max(far, Math.hypot(f.x - at.x, f.y - at.y))
+    turn = Math.max(turn, Math.abs(wrap(f.a - a0)) / STEP)
+    a0 = f.a
+  })
+  const max = f.t.speed * f.mods.speed
+  const idle = sum / n / max
+  check('an idle fighter loiters at about IDLE_PACE of full speed', near(idle, IDLE_PACE, 0.08), `${(idle * 100).toFixed(0)}% of ${max.toFixed(0)}, was 65%`)
+  check('on a wide, gentle circle round its spot', far > 100 && far < 320, `strays up to ${far.toFixed(0)}`)
+  check('turning gently (at most IDLE_TURN of its turn rate)', turn <= f.t.turn * IDLE_TURN + 1e-6, `${turn.toFixed(2)} rad/s of ${f.t.turn}`)
+  // An enemy comes into reach: it picks it up as fast as ever and goes to full speed.
+  const e = put(w, 'd-fighter', 1, f.x + 420, f.y, 0, unarmed(UNIT['d-fighter']))
+  let picked = -1
+  let fast = -1
+  const t0 = w.time
+  run(w, 3, (ww) => {
+    if (picked < 0 && f.target === e.id) picked = ww.time - t0
+    if (fast < 0 && f.v > max * 0.9) fast = ww.time - t0
+  })
+  check('it takes the enemy on as fast as ever (a look round every 0.4-0.7 s, sight every 0.25 s)', picked >= 0 && picked <= 0.95, `${picked.toFixed(2)} s`)
+  check('and is at full speed soon after', fast >= 0 && fast <= 2, `${fast.toFixed(2)} s`)
+  // An order: straight to full speed too.
+  const w2 = empty(['republic', 'droid'])
+  const f2 = put(w2, 'r-fighter', 0, at.x, at.y, 0)
+  run(w2, 8)
+  cmdMove(w2, 0, [f2.id], at.x + 3000, at.y)
+  let go = -1
+  const t1 = w2.time
+  run(w2, 3, (ww) => {
+    if (go < 0 && f2.v > max * 0.9) go = ww.time - t1
+  })
+  check('a move order puts an idle fighter back to full speed at once', go >= 0 && go <= 1.5, `${go.toFixed(2)} s`)
+  // A carrier's wing parked round it loiters as calmly.
+  const w3 = empty(['republic', 'droid'])
+  const c = put(w3, 'r-cruiser', 0, at.x, at.y, 0)
+  const wing = put(w3, 'r-fighter', 0, at.x + 200, at.y, 0)
+  wing.parent = c.id
+  run(w3, 8)
+  let s3 = 0
+  let n3 = 0
+  run(w3, 6, () => {
+    s3 += wing.v
+    n3++
+  })
+  check('a wing parked round its carrier loiters as slowly', near(s3 / n3 / max, IDLE_PACE, 0.1), `${((s3 / n3 / max) * 100).toFixed(0)}%`)
+  // The carrier sets off: its idle wing keeps up with it.
+  cmdMove(w3, 0, [c.id], at.x + 4000, at.y)
+  let gap = 0
+  run(w3, 20, () => {
+    gap = Math.max(gap, Math.hypot(wing.x - c.x, wing.y - c.y))
+  })
+  check('round a carrier under way, its idle wing keeps up', gap < 500, `at most ${gap.toFixed(0)} away, the carrier at ${c.v.toFixed(0)}`)
+}
+
+// --- 15. Defense platforms on ore: the lobby's switch ---------------------------------------------------
+
+{
+  const seats = [{ faction: 'republic' as FactionId, team: 0, spawn: 0 }, { faction: 'droid' as FactionId, team: 1, spawn: 1 }]
+  const claim = (w: World) => {
+    const st = w.byId.get(w.players[0].station)!
+    const n = [...w.nodes].sort((a, b) => Math.hypot(a.x - st.x, a.y - st.y) - Math.hypot(b.x - st.x, b.y - st.y))[0]
+    n.owner = 0
+    n.claim = 0
+    n.progress = 1
+    w.players[0].credits = 9000
+    return n
+  }
+  const off = newWorld(map, seats, { seed: 3 })
+  const n = claim(off)
+  check('a new battle has defense platforms on ore off', off.oreDefense === false && !oreGuns(off))
+  check('off: the ore card offers only the mining platform', siteOptions('republic', oreGuns(off)).map((t) => t.tier).join() === 'mine')
+  check('off: the sim refuses a defense platform', cantSite(off, 0, n.id, 'r-defense') === 'Defense platforms on ore are off in this battle' && cmdSite(off, 0, n.id, 'r-defense-gun') !== null && !n.site)
+  check('off: the protocol drops the order', cleanCmd({ f: 'site', a: [n.id, 'r-defense-flak'] }, off) === null)
+  check('off: a mining platform still goes up', cleanCmd({ f: 'site', a: [n.id, 'r-mine'] }, off) !== null && cmdSite(off, 0, n.id, 'r-mine') === null && !!n.site)
+  const on = newWorld(map, seats, { seed: 3, oreDefense: true })
+  const m = claim(on)
+  check('on: all four options', oreGuns(on) && siteOptions('republic', oreGuns(on)).length === 4)
+  check('on: the protocol passes the order and the sim builds it', cleanCmd({ f: 'site', a: [m.id, 'r-defense'] }, on) !== null && cmdSite(on, 0, m.id, 'r-defense') === null && on.byId.get(m.site)?.t.id === 'r-defense')
+  check('the battle fingerprint tells them apart', stateHash(newWorld(map, seats, { seed: 3 })) !== stateHash(newWorld(map, seats, { seed: 3, oreDefense: true })))
+  // A battle saved before the switch (no oreDefense in its world) plays on with them on.
+  const old = JSON.parse(snapshotWorld(newWorld(map, seats, { seed: 3 })))
+  delete old.oreDefense
+  const back = restoreWorld(JSON.stringify(old))!
+  const k = claim(back)
+  check('an old saved battle loads with defense platforms on ore on', back.oreDefense === undefined && oreGuns(back) && cantSite(back, 0, k.id, 'r-defense') === null)
+  const kept = restoreWorld(snapshotWorld(off))!
+  check('a new one saved with them off stays off', !oreGuns(kept))
+  // Matches: from before the switch, on; the server always sets it.
+  const info = {
+    id: 't', seed: 3, map: map.id, gen: { ...DEFAULT_RULES }, credits: 1600,
+    seats: [
+      { kind: 'ai' as const, player: 'a', name: 'A', faction: 'republic' as FactionId, team: 0 as const, spawn: 0, difficulty: 'medium' as const },
+      { kind: 'ai' as const, player: 'b', name: 'B', faction: 'droid' as FactionId, team: 1 as const, spawn: 1, difficulty: 'medium' as const },
+    ],
+  }
+  check('a match from before the switch: on', oreGuns(matchWorld(info)))
+  check('a match with it off: off; on: on', !oreGuns(matchWorld({ ...info, oreDefense: false })) && oreGuns(matchWorld({ ...info, oreDefense: true })))
+  // The AI: with them off it builds none (the money buys ships).
+  const platforms = (oreDefense: boolean) => {
+    const w = newWorld(map, seats, { seed: 5, oreDefense })
+    const brains = [newBrain(0, 'hard', 'defensive'), newBrain(1, 'hard', 'defensive')]
+    let most = 0
+    for (let i = 0; i < Math.round(750 / STEP); i++) {
+      for (const b of brains) think(w, b, STEP)
+      tick(w)
+      w.events.length = 0
+      most = Math.max(most, w.units.filter((u) => !u.dead && u.t.tier === 'defense' && !u.t.orbital).length)
+    }
+    return most
+  }
+  check('off: two Defensive admirals put no defense platform on ore in 12 minutes', platforms(false) === 0)
 }
 
 console.log(failed ? 'FAILED' : 'all passed')

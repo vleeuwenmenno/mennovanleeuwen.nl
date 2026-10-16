@@ -6,8 +6,9 @@ import type { AppId } from './wm'
 // desktop with the CV apps added. Decided once per page load: the path doesn't change after it.
 //
 // Away from /cv the CV apps are left out of what you launch apps from (dock, Launchpad, Spotlight,
-// the terminal, launchers), but something that asks for one (the Minecraft widget, a notification,
-// the Activity button) opens its window right there, without leaving the page (src/os/wm.tsx).
+// the terminal, launchers), but something that asks for one (the Minecraft top-bar widget, a
+// notification, the Activity button) opens its window right there, without leaving the page
+// (src/os/wm.tsx). Minecraft is on the top bar by default off /cv and off on /cv (topbarPrefs.ts).
 
 export const cvMode = (): boolean => /^\/cv\/?$/.test(location.pathname)
 

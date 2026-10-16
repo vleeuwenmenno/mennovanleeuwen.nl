@@ -16,7 +16,10 @@
 // value left leads); each pairing; each faction pairing (which faction led); when the first frigate came out; who researched Rushed
 // construction and how often it rushed; which expansions each profile built; the defense wing
 // craft lost; and the waves sent out. Games run in parallel worker threads (TOURNAMENT_WORKERS sets
-// how many). EMPIRES=path/to/empires runs another copy of the game, to compare.
+// how many). EMPIRES=path/to/empires runs another copy of the game, to compare. MAPS=id,id plays
+// those maps instead of the two-spawn ones; on a map with more spawns, on two as far apart as it has.
+// DEFENSE=0 (or 1, 2, 3, 4, 6) sets the lobby's defense station limit (the default when left out).
+// ORE_DEFENSE=1 turns defense platforms on ore on (a new lobby has them off, and so do these games).
 
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { availableParallelism } from 'node:os'
@@ -35,7 +38,7 @@ async function play(job: Job): Promise<Result> {
   const { UNIT } = await import(`${job.dir}data.ts`)
   const map = MAPS.find((m: { name: string }) => m.name === job.map)
   const factions = job.factions
-  const w = newWorld(map, factions.map((f, i) => ({ faction: f, team: i, spawn: job.spawns[i], incomeMul: DIFFICULTY[job.diff].income })), { seed: job.seed })
+  const w = newWorld(map, factions.map((f, i) => ({ faction: f, team: i, spawn: job.spawns[i], incomeMul: DIFFICULTY[job.diff].income })), { seed: job.seed, ...(process.env.DEFENSE !== undefined ? { defense: Number(process.env.DEFENSE) } : {}), ...(process.env.ORE_DEFENSE === '1' ? { oreDefense: true } : {}) })
   const brains = job.profiles.map((p, i) => newBrain(i, job.diff, p))
   const sides: Side[] = job.profiles.map((p, i) => ({ profile: p, faction: factions[i], flags: {}, frigate: -1, rushTech: -1, rushes: 0, mods: [], wingLost: 0, waves: 0, techs: 0, level: 1, worth: 0 }))
   const wings = [new Set<number>(), new Set<number>()]
@@ -87,7 +90,16 @@ if (!isMainThread) {
     ? process.argv[5].split(',').map((p) => p.split('-') as [string, string])
     : ids.flatMap((a, i) => ids.slice(i + 1).map((b) => [a, b] as [string, string]))
   const { MAPS } = await import(`${dir}maps.ts`)
-  const maps: string[] = MAPS.filter((m: { spawns: unknown[] }) => m.spawns.length === 2).map((m: { name: string }) => m.name)
+  type M = { id: string; name: string; sym: string; spawns: unknown[] }
+  const only = process.env.MAPS?.split(',')
+  const picked: M[] = only ? only.map((id) => MAPS.find((m: M) => m.id === id) ?? (() => { throw new Error(`No map ${id}`) })()) : MAPS.filter((m: M) => m.spawns.length === 2)
+  const maps: string[] = picked.map((m) => m.name)
+  /** The spawn facing the first: opposite on an even ring, across the diagonal on four corners. */
+  const far = (m: M) => {
+    const n = m.spawns.length
+    return n === 2 ? 1 : m.sym === 'quad' ? 3 : n % 2 ? Math.floor(n / 2) : n / 2
+  }
+  const farOf = new Map(picked.map((m) => [m.name, far(m)]))
   const P = ['defensive', 'balanced', 'offensive']
   const pairs: [string, string][] = []
   for (let a = 0; a < P.length; a++) for (let b = a; b < P.length; b++) pairs.push([P[a], P[b]])
@@ -98,7 +110,7 @@ if (!isMainThread) {
         for (let s = 1; s <= seeds; s++)
           for (const [a, b] of pairs)
             // (A mirror swaps the spawns instead: the same profiles swapped would be the same game.)
-            for (const swap of [false, true]) jobs.push({ i: jobs.length, map, seed: s * 101 + maps.indexOf(map) * 7, diff, profiles: swap && a !== b ? [b, a] : [a, b], factions, spawns: swap && a === b ? [1, 0] : [0, 1], minutes, dir })
+            for (const swap of [false, true]) jobs.push({ i: jobs.length, map, seed: s * 101 + maps.indexOf(map) * 7, diff, profiles: swap && a !== b ? [b, a] : [a, b], factions, spawns: swap && a === b ? [farOf.get(map)!, 0] : [0, farOf.get(map)!], minutes, dir })
   const n = Math.min(jobs.length, Number(process.env.TOURNAMENT_WORKERS ?? Math.max(1, availableParallelism() - 4)))
   console.log(`${jobs.length} games (${sides.map((f) => f.join(' v ')).join(', ')} x ${pairs.length} pairings x ${diffs.join('/')} x ${maps.join(', ')} x ${seeds} seeds x both sides), up to ${minutes} min each, ${n} workers`)
   const results: Result[] = []

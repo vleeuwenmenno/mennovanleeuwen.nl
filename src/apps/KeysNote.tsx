@@ -1,5 +1,6 @@
 import { useLayoutEffect } from 'react'
-import { SHORTCUTS } from '../data/shortcuts'
+import { shortcuts } from '../data/shortcuts'
+import { useSpotlightPrefs } from '../data/spotlightPrefs'
 import { useWM, type WinState } from '../os/wm'
 
 const DOCK_SPACE = 96
@@ -7,6 +8,7 @@ const DOCK_SPACE = 96
 /** A second sticky note, in blue, listing every shortcut. It scrolls; sticky notes are small. */
 export function KeysNote({ win }: { win: WinState }) {
   const wm = useWM()
+  const groups = shortcuts(useSpotlightPrefs().ctrlSpace)
 
   // At boot it tucks itself just under the headline note, whose height depends on fonts and width.
   // Measured again once the handwriting font has loaded, since that changes the note's height.
@@ -38,7 +40,7 @@ export function KeysNote({ win }: { win: WinState }) {
     <div className="note keys-note">
       <p className="note-hello">Shortcuts ⌨</p>
       <div className="keys-scroll selectable">
-        {SHORTCUTS.map((group) => (
+        {groups.map((group) => (
           <section key={group.area}>
             <p className="keys-area">{group.area}</p>
             <dl className="keys-list">

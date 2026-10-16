@@ -7,7 +7,7 @@
 
 import { DOCTRINE, PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
-  FACTIONS, MODULE, MODULE_FX, moduleFits, ORBITAL_MAX, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, dims, needsModule, orbitalMod, orbitalName, orbitalSlots, orbitalType, stationType, unitOf, yardOf, yardType,
+  FACTIONS, MODULE, MODULE_FX, moduleFits, ORBITAL_MAX, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, dims, needsModule, orbitalMod, orbitalName, orbitalPick, orbitalSlots, orbitalType, stationType, unitOf, yardOf, yardType, SHIP_TIME,
   type FactionId, type ModuleId, type OrbitalModId, type Tier, type UnitType, type Works,
 } from './data.ts'
 import { rng } from './maps.ts'
@@ -51,7 +51,9 @@ export const MAX_YARD = 5
 /** Station building and upgrades: the price and seconds to reach each level (index = level). */
 export const STATION_COST = [0, 1200, 1900, 2900, 4200]
 export const STATION_TIME = [0, 30, 40, 50, 60]
-export const SHIP_TIME = 1.5
+/** A ship's build takes this many times its skirmish time on the galaxy clock (data.ts, shared with
+ * the skirmish's defense stations). */
+export { SHIP_TIME }
 /** Yards and expansions take their skirmish build time (data.ts) times this on the galaxy clock, as
  * ships do: a Frigate Yard goes up in about the time of a station upgrade. */
 export const WORKS_TIME = SHIP_TIME
@@ -2699,15 +2701,8 @@ function pickOrbitalMod(g: Galaxy, o: number, st: OrbitalState): OrbitalModId {
       else big += t.cost
     }
   }
-  const n = (id: OrbitalModId) => st.mods.filter((m) => m === id).length
   const shielded = g.sides.some((s, i) => i !== o && s.alive && FACTIONS[s.faction] && unitOf(s.faction, 'cruiser').shield > 0)
-  const fitted = st.mods.filter(Boolean).length
-  if (fitted === 0) return small > big * 1.3 ? 'flak' : 'battery'
-  if (fitted === 3) return 'hangar'
-  if (small > big * 1.3 && n('flak') < 2) return 'flak'
-  if (!n('flak')) return 'flak'
-  if (big >= small && n('battery') + n('launcher') < 2) return shielded && n('battery') ? 'launcher' : 'battery'
-  return n('shield') ? 'battery' : 'shield'
+  return orbitalPick(st.mods, small, big, shielded)
 }
 
 /**

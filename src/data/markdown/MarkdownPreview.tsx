@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { parseMarkdown, type Block, type Inline } from './parse.ts'
 import { highlight, knownLanguage } from './highlight.ts'
 import { useFurigana } from '../furigana.ts'
@@ -26,6 +26,26 @@ function Ruby({ base, reading }: { base: string; reading: string }) {
       <rp>)</rp>
     </ruby>
   )
+}
+
+/**
+ * Where relative links and images point: a README's are relative to its repository (the Git app),
+ * so it says how to make them absolute. Without one they are left as written.
+ */
+const ResolveUrl = createContext<((url: string, image: boolean) => string) | null>(null)
+
+function MdLink({ href, title, children }: { href: string; title?: string; children: ReactNode }) {
+  const resolve = useContext(ResolveUrl)
+  return (
+    <a href={resolve ? resolve(href, false) : href} title={title} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  )
+}
+
+function MdImage({ src, alt, title }: { src: string; alt: string; title?: string }) {
+  const resolve = useContext(ResolveUrl)
+  return <img className="md-img" src={resolve ? resolve(src, true) : src} alt={alt} title={title} loading="lazy" referrerPolicy="no-referrer" />
 }
 
 /** Amounts of money in plain text as buttons that open their exchange rates (src/data/money.ts). */
@@ -59,12 +79,12 @@ function inlines(nodes: Inline[], key: string, money = false): ReactNode[] {
         return <del key={k}>{inlines(n.children, k, money)}</del>
       case 'link':
         return (
-          <a key={k} href={n.href} title={n.title} target="_blank" rel="noopener noreferrer">
+          <MdLink key={k} href={n.href} title={n.title}>
             {inlines(n.children, k)}
-          </a>
+          </MdLink>
         )
       case 'image':
-        return <img key={k} className="md-img" src={n.src} alt={n.alt} title={n.title} loading="lazy" referrerPolicy="no-referrer" />
+        return <MdImage key={k} src={n.src} alt={n.alt} title={n.title} />
     }
   })
 }
@@ -197,7 +217,20 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
  * Markdown as React nodes. `breaks` keeps a paragraph's line breaks and spacing, like a chat
  * message (the Agents app's own messages); otherwise its lines join into one, as Markdown does.
  */
-export function MarkdownPreview({ text, breaks = false, money = false }: { text: string; breaks?: boolean; /** Amounts of money open their exchange rates (the Agents app's answers) */ money?: boolean }) {
+export function MarkdownPreview({
+  text,
+  breaks = false,
+  money = false,
+  resolveUrl,
+}: {
+  text: string
+  breaks?: boolean
+  /** Amounts of money open their exchange rates (the Agents app's answers) */
+  money?: boolean
+  /** Makes relative link and image addresses absolute (a README's, against its repository) */
+  resolveUrl?: (url: string, image: boolean) => string
+}) {
   const tree = useMemo(() => parseMarkdown(text), [text])
-  return <>{blocks(tree, breaks, 'b', false, money)}</>
+  const out = <>{blocks(tree, breaks, 'b', false, money)}</>
+  return resolveUrl ? <ResolveUrl.Provider value={resolveUrl}>{out}</ResolveUrl.Provider> : out
 }

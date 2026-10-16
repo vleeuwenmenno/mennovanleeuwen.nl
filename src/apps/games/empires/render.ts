@@ -1,9 +1,9 @@
-import { CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { ORBITAL_TOP, orbitalType, CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, projecting, radius, regrowOf, SALVAGE_RANGE, sensorOf, shieldAuraOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, projecting, radius, regrowOf, calm, SALVAGE_RANGE, canSee, eyesOf, sensorOf, shieldAuraOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
-import { YARD_BERTHS } from './data'
+import { BEACON_SENSOR, YARD_BERTHS } from './data'
 import { ModelFx } from './models/fx.ts'
 import { hash, rng as seeded } from './models/kit.ts'
 import { PALETTES } from './models/palettes.ts'
@@ -523,11 +523,7 @@ export class Renderer {
 
   /** Turns the sim's events into effects. Only what the viewer can see makes sparks. */
   consume(events: SimEvent[], w: World, me: Owner) {
-    const seen = (x: number, y: number) => {
-      const team = w.players[me].team
-      for (const u of w.units) if (w.players[u.owner].team === team && (u.x - x) ** 2 + (u.y - y) ** 2 < sensorOf(u) ** 2) return true
-      return false
-    }
+    const seen = (x: number, y: number) => canSee(w, w.players[me].team, x, y)
     for (const e of events) {
       if (e.k === 'fire') {
         if (e.kind === 'turbo') this.add({ kind: 'muzzle', x: e.x, y: e.y, life: 0.12, size: 10, color: FACTIONS[w.players[e.owner].faction].bolt })
@@ -1103,11 +1099,14 @@ export class Renderer {
         // Follow the way round the rocks (and fields and nebulas) when there is one, as a smooth
         // curve rather than corners: each waypoint pulls the line towards it, the line passing
         // halfway between them.
-        const route = u.route && u.route.x === o.x && u.route.y === o.y ? u.route.pts : []
-        const pts = [{ x: u.x, y: u.y }, ...route.filter((pt) => pt.x !== o.x || pt.y !== o.y), { x: o.x, y: o.y }]
+        const mine = u.route && u.route.x === o.x && u.route.y === o.y ? u.route : null
+        const route = mine?.pts ?? []
+        // Somewhere rocks wall in: the line ends where the ship will stop, as near as it gets.
+        const end = mine?.short && route.length ? route[route.length - 1] : { x: o.x, y: o.y }
+        const pts = [{ x: u.x, y: u.y }, ...route.filter((pt) => pt.x !== end.x || pt.y !== end.y), end]
         ctx.moveTo(pts[0].x, pts[0].y)
         for (let i = 1; i < pts.length - 1; i++) ctx.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2)
-        ctx.lineTo(o.x, o.y)
+        ctx.lineTo(end.x, end.y)
         ctx.stroke()
         // Its own spot, and a tick the way it will face there.
         ctx.fillStyle = ctx.strokeStyle
@@ -1465,7 +1464,7 @@ export class Renderer {
     ctx.globalAlpha = 1
     ctx.restore()
 
-    // Fog of war: dark everywhere except around our ships and structures.
+    // Fog of war: dark everywhere except around our ships and structures and the beacons we hold.
     const fs = 4
     const fw = Math.ceil(vw / fs)
     const fh = Math.ceil(vh / fs)
@@ -1480,11 +1479,10 @@ export class Renderer {
     f.fillStyle = view.reveal ? 'rgba(2,4,12,0)' : 'rgba(2,4,12,0.55)'
     f.fillRect(0, 0, fw, fh)
     f.globalCompositeOperation = 'destination-out'
-    for (const u of w.units) {
-      if (w.players[u.owner].team !== w.players[view.me].team) continue
-      const r = (sensorOf(u) * z) / fs
-      const sx = ((u.x - cam.x) * z + vw / 2) / fs
-      const sy = ((u.y - cam.y) * z + vh / 2) / fs
+    for (const e of eyesOf(w, w.players[view.me].team)) {
+      const r = (e.r * z) / fs
+      const sx = ((e.x - cam.x) * z + vw / 2) / fs
+      const sy = ((e.y - cam.y) * z + vh / 2) / fs
       if (sx + r < 0 || sy + r < 0 || sx - r > fw || sy - r > fh) continue
       f.drawImage(this.disc, sx - r, sy - r, r * 2, r * 2)
     }
@@ -1912,7 +1910,7 @@ export class Renderer {
    * pulsing over it in its side's colours. One glow sprite, drawn additively. */
   private drawRegrow(ctx: CanvasRenderingContext2D, u: Unit, w: World, size: number) {
     const g = regrowOf(u)
-    if (!g || u.hull >= hullCap(u) || w.time - u.lastHit < g.delay || building(u)) return
+    if (!g || u.hull >= hullCap(u) || calm(w, u) < g.delay || building(u)) return
     const pulse = 0.5 + 0.5 * Math.sin(this.clock * 3 + u.id)
     const r = size * 0.62
     ctx.globalCompositeOperation = 'lighter'
@@ -2044,8 +2042,8 @@ export class Renderer {
   }
 
   /**
-   * Drain auras (sim.ts drain): a tendril from the drain ship to each enemy in its reach that it
-   * sees (at most MECH.tendrils), wavering, with a bead of light running back along it; and heal
+   * Drain auras (sim.ts drain): a tendril from the drain ship to each enemy it bit this tick (its
+   * `drained`, at most MECH.tendrils), wavering, with a bead of light running back along it; and heal
    * sparks rising off our damaged ships in its reach, a few every MECH.sparkEvery seconds.
    */
   private drawDrains(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean, dt: number) {
@@ -2058,7 +2056,6 @@ export class Renderer {
       if (!onScreen(u.x, u.y, d.radius)) continue
       const col = FACTIONS[u.t.faction].bolt
       const heal = PALETTES[u.t.faction].engine
-      const theirs = w.players[u.owner].team
       let n = 0
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
@@ -2066,7 +2063,7 @@ export class Renderer {
       near(w, u.x, u.y, d.radius, (e) => {
         if (e === u) return
         if (foes(w, e.owner, u.owner)) {
-          if (n >= MECH.tendrils || !e.seen[theirs] || !e.seen[team]) return
+          if (n >= MECH.tendrils || !u.drained?.includes(e.id) || !e.seen[team]) return
           n++
           // A wavering curve: its middle swung to one side and back.
           const dx = e.x - u.x
@@ -2195,7 +2192,7 @@ export class Renderer {
     const rows = y1 - y0
     if (cols <= 0 || rows <= 0 || cols * rows > 20000) return
     const team = w.players[me].team
-    const eyes = w.units.filter((u) => !u.dead && w.players[u.owner].team === team).map((u) => ({ x: u.x, y: u.y, r2: sensorOf(u) ** 2 }))
+    const eyes = eyesOf(w, team).map((e) => ({ x: e.x, y: e.y, r2: e.r ** 2 }))
     const seen = new Uint8Array(cols * rows)
     for (let j = 0; j < rows; j++)
       for (let i = 0; i < cols; i++) {
@@ -2728,7 +2725,9 @@ export class Renderer {
     const zdpr = z * canvasDpr()
     const col = g.ok ? '#7dffa0' : '#ff5a50'
     const rot = g.a + Math.PI / 2
-    const [sw, sh] = dims(g.t)
+    // A defense station shows the room it grows into (its last level's footprint), and has no mouth.
+    const fort = !!g.t.orbital
+    const [sw, sh] = dims(fort ? orbitalType(g.t.faction, ORBITAL_TOP, []) : g.t)
     const m = modelFor(g.t)
     if (m) drawHull(ctx, m, g.x, g.y, rot, g.t.size, zdpr, FRESH, { alpha: g.ok ? 0.6 : 0.3 })
     ctx.save()
@@ -2740,11 +2739,13 @@ export class Renderer {
     ctx.fillRect(-sw / 2, -sh / 2, sw, sh)
     ctx.strokeRect(-sw / 2, -sh / 2, sw, sh)
     // The slipway's mouth: where its ships come out.
-    ctx.beginPath()
-    ctx.moveTo(-14 / z, -sh / 2 - 6 / z)
-    ctx.lineTo(0, -sh / 2 - 22 / z)
-    ctx.lineTo(14 / z, -sh / 2 - 6 / z)
-    ctx.stroke()
+    if (!fort) {
+      ctx.beginPath()
+      ctx.moveTo(-14 / z, -sh / 2 - 6 / z)
+      ctx.lineTo(0, -sh / 2 - 22 / z)
+      ctx.lineTo(14 / z, -sh / 2 - 6 / z)
+      ctx.stroke()
+    }
     ctx.restore()
     const label = g.ok ? `${g.rebuild ? 'Rebuild' : g.t.name}: ${g.cost} credits` : (g.why ?? '')
     ctx.save()
@@ -2777,7 +2778,7 @@ export class Renderer {
       const t = UNIT[r.unit]
       if (!t || !onScreen(r.x, r.y, t.size)) continue
       const ours = w.players[r.owner].team === team
-      if (!ours && !w.units.some((u) => !u.dead && w.players[u.owner].team === team && (u.x - r.x) ** 2 + (u.y - r.y) ** 2 < sensorOf(u) ** 2)) continue
+      if (!ours && !canSee(w, team, r.x, r.y)) continue
       const m = modelFor(t)
       const rot = r.a + Math.PI / 2
       if (m) {
@@ -3199,6 +3200,13 @@ export class Renderer {
       if (w.players[u.owner].team !== w.players[me].team) continue
       ctx.beginPath()
       ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    // The beacons we hold see round themselves too.
+    for (const b of w.beacons) {
+      if (b.owner !== w.players[me].team) continue
+      ctx.beginPath()
+      ctx.arc(X(b.x), Y(b.y), BEACON_SENSOR * s, 0, Math.PI * 2)
       ctx.fill()
     }
     ctx.globalCompositeOperation = 'source-over'

@@ -1,13 +1,13 @@
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
-import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
+import { ROCK_HIT, clearLine, crosses, findPath, navCost, navGrid, reachCheck, rockStamp, stampRock, type NavGrid, type Soft } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, BEACON_SENSOR, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
-  type WeaponKind,
+  type WeaponKind, DEFENSE_QUEUE, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, cleanDefense, defenseModTime, defenseTime, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, placeType,
 } from './data.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
@@ -64,8 +64,8 @@ export type Mods = {
   // From research for the faction mechanics (TechEffect), each a multiplier, there only when some
   // research changes it (and absent in units saved before them): damage to shields, a fire-control
   // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal,
-  // a shield-projector aura's regen (added; its reach is auraRadius).
-  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; shieldAura?: number
+  // a shield-projector aura's regen (added; its reach is auraRadius), a drain's extra targets (added).
+  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; drainTargets?: number; shieldAura?: number
 }
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
@@ -97,6 +97,9 @@ export type Unit = {
   target: number
   retarget: number
   lastHit: number
+  /** When rocks in an asteroid field last hit it (see terrain): not an attack, but a living hull
+   * waits from it as from a hit. Absent until it first flies through a field. */
+  scraped?: number
   /** Shield shimmer: time of the last shield hit and where it came from. */
   shieldHit: number
   /** When the shields last failed: they stay down for SHIELD_REBOOT seconds before recharging. */
@@ -137,13 +140,18 @@ export type Unit = {
   queue: Order[]
   /** Support ships: the ships they're repairing right now, for the repair beams. */
   mending: number[]
+  /** Drain ships: the enemies they bit this tick, for the tendrils. Absent until one first drains. */
+  drained?: number[]
   /** A repair craft on a Field repair run: the ship or station it is mending (0 when none). */
   aid: number
   /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
   breakOff: boolean
   /** Waypoints round the rocks to where the ship is going (x, y), found when it set off (from fx,
-   * fy; found again from where it is when it was pushed off its line, see waypoint). */
-  route: { x: number; y: number; pts: Pt[]; obs: { x: number; y: number; r: number }[]; fx?: number; fy?: number } | null
+   * fy; found again from where it is when it was pushed off its line, see waypoint). `soft`: the
+   * fields and nebulas the way was priced round, which cutting a corner mustn't cross. `short`:
+   * rocks wall (x, y) in, and the way ends as near it as the ship can get. (`obs` is what battles
+   * saved before kept here: the rocks and patches it steered round.) */
+  route: { x: number; y: number; pts: Pt[]; soft?: { x: number; y: number; r: number }[]; short?: boolean; obs?: { x: number; y: number; r: number }[]; fx?: number; fy?: number } | null
   /** The heading an idle ship turns to at its spot, from a move given one; null to stay as it is. */
   face: number | null
   /** Seconds left on a structure's repair, 0 when none is under way. */
@@ -183,6 +191,9 @@ export type Unit = {
    * and in battles saved before expansions. */
   xm?: ModuleId[]
   xq?: ModuleJob[]
+  /** A defense station's work (skirmish defense stations): its upgrade and modules ordered, the
+   * first under way, built by the station itself. Absent until it has any. */
+  dq?: DefenseJob[]
   /** A warship rush-launched unfinished (see Rush). Absent once it is finished, and on every other unit. */
   rush?: Rush
   /** A yard that rush-launched: when it may rush again (World time). */
@@ -217,6 +228,11 @@ export type Rush = { left: number; total: number; gap: number; parts: number[]; 
 
 /** An expansion being built onto its building: seconds left of its time. */
 export type ModuleJob = { id: ModuleId; left: number; total: number }
+/** Work ordered on a defense station: its next level, or module `mod` into slot `slot` (in place of
+ * what is there); seconds left of its time, and what was paid (refunded if it is called off). */
+export type DefenseJob = ({ k: 'up' } | { k: 'mod'; slot: number; mod: OrbitalModId }) & { left: number; total: number; paid: number }
+/** What can be ordered on a defense station (see cantFortify). */
+export type DefenseWork = { k: 'up' } | { k: 'mod'; slot: number; mod: OrbitalModId }
 
 /** Where a yard was destroyed: its owner's engineers can rebuild it there for REBUILD of its price. */
 export type Ruin = { id: number; owner: Owner; unit: string; x: number; y: number; a: number }
@@ -394,6 +410,8 @@ export type SimEvent =
   | { k: 'finished'; owner: Owner; unit: number; x: number; y: number }
   /** Credits sent from one ally to another. */
   | { k: 'gift'; from: Owner; to: Owner; amount: number }
+  /** A defense station finished an upgrade or fitted a module (`what` says which). */
+  | { k: 'fortified'; owner: Owner; unit: number; what: string; x: number; y: number }
 
 export type World = {
   w: number
@@ -441,7 +459,20 @@ export type World = {
    * before that (and in fleet battles, which build nothing): new ships jump in beside their yard, as
    * they always did there, and the reserve costs nothing extra. */
   reinforce?: Reinforce
+  /** Defense stations (the Galactic conquest ones, data.ts defenseType): how many each player may
+   * have at a time, standing or going up, as the lobby set it; 0 when they are off. Absent in a
+   * battle saved before them, and in fleet battles: none (engineers can't build them). */
+  defense?: number
+  /** Defense platforms (the gun, flak and all-round ones) on surveyed ore, as the lobby set it:
+   * false when they are off, and then only mining platforms go on ore. Absent in a battle saved
+   * before the lobby had the choice (and in fleet battles, which build nothing): on, as they always
+   * were there. See oreGuns. */
+  oreDefense?: boolean
 }
+
+/** Whether defense platforms may go on ore in this battle (World `oreDefense`; on unless the lobby
+ * turned them off). */
+export const oreGuns = (w: World) => w.oreDefense !== false
 
 /**
  * Reinforcements, a battle's rules set in the lobby: whether strike craft (fighter-class: fighters,
@@ -619,6 +650,7 @@ function modsFor(p: Player, t: UnitType): Mods {
   if (regrowDelay) mods.regrowDelay = Math.max(0, 1 + regrowDelay)
   if (e.drain) mods.drain = 1 + e.drain
   if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
+  if (e.drainTargets) mods.drainTargets = e.drainTargets
   if (e.shieldAura) mods.shieldAura = e.shieldAura
   return mods
 }
@@ -646,11 +678,15 @@ export function regrowOf(u: Unit): { rate: number; delay: number } | null {
   if (!g) return null
   return { rate: g.rate * (u.mods.regrow ?? 1), delay: g.delay * (u.mods.regrowDelay ?? 1) }
 }
-/** A drain aura as it stands for `u`, with its research (TechEffect drain and drainHeal). */
-export function drainOf(u: Unit): { radius: number; dps: number; heal: number } | null {
+/** Seconds since anything last hurt `u`: an enemy's hit, or rocks in an asteroid field. A living
+ * hull grows back only once this is past its wait. */
+export const calm = (w: World, u: Unit) => w.time - Math.max(u.lastHit, u.scraped ?? -99)
+/** A drain aura as it stands for `u`, with its research (TechEffect drain, drainHeal and
+ * drainTargets, which adds to how many enemies it bites at once). */
+export function drainOf(u: Unit): { radius: number; dps: number; heal: number; targets: number } | null {
   const d = u.t.drain
   if (!d) return null
-  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1) }
+  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1), targets: d.targets + (u.mods.drainTargets ?? 0) }
 }
 const stationOf = (p: Player) => unitOf(p.faction, 'station').id
 /** Whether one of a unit's own hangars stands (a Strike hangar doesn't count: it only launches bombers). */
@@ -817,7 +853,10 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
 }
 
 /** `reinforce`: the lobby's reinforcement rules (REINFORCE when left out). */
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce } = {}): World {
+/** `defense`: how many defense stations each player may have (data.ts DEFENSE_STEPS, 0: off;
+ * DEFENSE_DEFAULT when left out). `oreDefense`: whether defense platforms may go on ore (off when
+ * left out, as a new lobby has it). */
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce; defense?: number; oreDefense?: boolean } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -828,7 +867,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
     // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
     // New ships fly out of the yards, and reinforcements cost extra (see Reinforce).
-    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce) }),
+    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce), defense: cleanDefense(opts.defense), oreDefense: opts.oreDefense === true }),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -850,11 +889,14 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
   w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
   // Scattered rocks: each one is copied to every side by the map's symmetry, so nobody gets the
-  // better lanes. They keep clear of ore, beacons, asteroid fields and the lanes into the middle
-  // (wide enough for the biggest flagship to fly down, with a cell of the path finding's grid to
-  // spare: without them a Big flagship often found no way through at all and sat at the first
-  // gap too narrow for it), and of the ground round each station's start where its yards go up
-  // (the build radius).
+  // better lanes. They keep clear of ore, beacons, asteroid fields, the ground round each
+  // station's start where its yards go up (the build radius), and the lanes: from each station
+  // into the middle and to its neighbours, and from each beacon to the stations nearest it, every
+  // one wide enough for the biggest flagship to fly down with a cell of the path finding's grid to
+  // spare. Without them the rocks piled up in what space was left, walled off whole sides of the
+  // map and ringed the beacons, and a flagship found no way through, or a long way round.
+  // On top of that, a rock is left out if it would wall the biggest flagship off from a station,
+  // beacon or ore it could get to before.
   // Map wrecks: the big hulks of earlier battles, Republic or droid as the seed falls.
   w.wrecks = map.wrecks.map((h, i) => {
     const big = h.value >= 900
@@ -862,15 +904,35 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
   const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, BUILD_RADIUS])]
-  const lane = Math.max(240, ...UNITS.filter(isShip).map((t) => navClear(t) + 100))
+  const bigClear = Math.max(...UNITS.filter(isShip).map(navClear))
+  const lane = Math.max(240, bigClear + 100)
+  const lanes: [Pt, Pt][] = []
+  /** The spawns nearest `p` (all of them as near as the nearest, give or take 5%), `p` left out. */
+  const nearest = (p: Pt, n: number) => {
+    const by = map.spawns.filter((s) => s !== p).map((s) => ({ s, d: M.hypot(s.x - p.x, s.y - p.y) })).sort((a, b) => a.d - b.d)
+    const cut = by.length ? by[Math.min(n, by.length) - 1].d * 1.05 : 0
+    return by.filter((o) => o.d <= cut).map((o) => o.s)
+  }
+  for (const s of map.spawns) {
+    lanes.push([s, c])
+    for (const o of nearest(s, 2)) lanes.push([s, o])
+  }
+  for (const b of map.beacons) for (const s of nearest(b, 1)) lanes.push([b, s])
   const inLane = (x: number, y: number, rad: number) =>
-    map.spawns.some((p) => {
-      // Distance from the point to the segment between this spawn and the centre.
-      const vx = c.x - p.x
-      const vy = c.y - p.y
-      const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy), 0, 1)
+    lanes.some(([p, q]) => {
+      // Distance from the point to the segment from p to q.
+      const vx = q.x - p.x
+      const vy = q.y - p.y
+      const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy || 1), 0, 1)
       return d2(x, y, p.x + vx * t, p.y + vy * t) < sq(lane + rad)
     })
+  // What the biggest flagship has to be able to get to from the first spawn (and so, the map being
+  // the same from every side, from every spawn): every spawn, beacon and ore.
+  const open = rockStamp(W, H, bigClear)
+  const goals = [...map.spawns.map((p) => ({ ...p, tol: 600 })), ...map.beacons.map((p) => ({ ...p, tol: 300 })), ...map.ore.map((p) => ({ ...p, tol: 300 }))]
+  const from = map.spawns[0] ?? c
+  const before = reachCheck(open, from, goals).reached()
+  const reach = reachCheck(open, from, goals.filter((_, i) => before[i]))
   let tries = 0
   while (w.rocks.length < map.rocks && tries++ < 4000) {
     const cx = 250 + r() * (W - 500)
@@ -882,10 +944,17 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
         p.x > 150 && p.y > 150 && p.x < W - 150 && p.y < H - 150 &&
         !keepClear.some(([x, y, cc]) => d2(p.x, p.y, x, y) < sq(cc + rad)) &&
         !inLane(p.x, p.y, rad) &&
-        !inside(map.fields, p.x, p.y, rad + 60) &&
+        !inside(map.fields, p.x, p.y, rad + bigClear + 60) &&
         !w.rocks.some((k) => d2(p.x, p.y, k.x, k.y) < sq(k.r + rad + 40)),
     )
     if (!ok) continue
+    const hits = copies.map((p) => ({ x: p.x, y: p.y, r: rad * ROCK_HIT }))
+    let closed = 0
+    for (const k of hits) closed += stampRock(open, k, 1)
+    if (closed && !reach.test()) {
+      for (const k of hits) stampRock(open, k, -1)
+      continue
+    }
     const kind = r() < 0.5 ? 0 : 1
     const rot = r() * TAU
     const spin = (r() - 0.5) * 0.1
@@ -936,8 +1005,8 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
     x = cx + nx * R
     y = cy + ny * R
   }
-  const clear = radius(u.t) * 0.7 + 10
-  for (const k of w.rocks) away(k.x, k.y, k.r + clear)
+  const clear = radius(u.t) * HULL_ROCK + 10
+  for (const k of navRocks(w)) away(k.x, k.y, k.r + clear)
   const r0 = radius(u.t)
   for (let pass = 0; pass < 2; pass++)
     for (const o of w.units) if (!o.dead && !isShip(o.t) && !planned(o)) away(o.x, o.y, r0 + radius(o.t) + HULL_GAP + 6)
@@ -1663,9 +1732,19 @@ export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at
   return null
 }
 
-/** Whether a team can see a point: any of its ships or structures has it in sensor range. */
+/** Whether a team can see a point: any of its ships or structures has it in sensor range, or a
+ * beacon it holds (BEACON_SENSOR). */
 export function canSee(w: World, team: number, x: number, y: number) {
-  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sq(sensorOf(u)))
+  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sq(sensorOf(u))) || w.beacons.some((b) => b.owner === team && d2(b.x, b.y, x, y) < sq(BEACON_SENSOR))
+}
+
+/** What a team sees with: each of its ships and structures (at its sensor range, see sensorOf) and
+ * each beacon it holds (BEACON_SENSOR round it). The fog, the minimap and `sight` all go by these. */
+export function eyesOf(w: World, team: number): { x: number; y: number; r: number }[] {
+  const out: { x: number; y: number; r: number }[] = []
+  for (const u of w.units) if (!u.dead && w.players[u.owner].team === team) out.push({ x: u.x, y: u.y, r: sensorOf(u) })
+  for (const b of w.beacons) if (b.owner === team) out.push({ x: b.x, y: b.y, r: BEACON_SENSOR })
+  return out
 }
 
 /**
@@ -1980,6 +2059,13 @@ function restation(w: World, u: Unit) {
   const p = w.players[u.owner]
   const t = stationType(p.faction, p.level, p.techs, u.xm ?? [])
   if (t === u.t) return
+  // The same stage and modules as it has (a battle restored from a save has a copy of its type,
+  // not the cached one): nothing changes. Retyping it anyway would draw fresh reloads for its guns
+  // from the battle's dice, which the copy that was never saved doesn't, and the two drift apart.
+  if (t.sprite === u.t.sprite && t.hull === u.t.hull && t.shield === u.t.shield && t.hardpoints.map((h) => h.key).join() === u.t.hardpoints.map((h) => h.key).join()) {
+    u.t = t
+    return
+  }
   retype(w, u, t)
   const max = t.hull * u.mods.hull
   u.hull += max - u.hullMax
@@ -2047,6 +2133,7 @@ export function cantSite(w: World, owner: Owner, node: number, id: string): stri
   if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && sees(w, owner, u) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < sq(SURVEY_RADIUS))) return 'Enemy ships are in the way'
   const t = UNIT[id]
   if (!t || t.faction !== p.faction || (t.tier !== 'mine' && t.tier !== 'defense')) return 'That can\'t be built on ore'
+  if (t.tier === 'defense' && !oreGuns(w)) return 'Defense platforms on ore are off in this battle'
   if (p.credits < t.cost) return 'Not enough credits'
   return null
 }
@@ -2110,12 +2197,15 @@ function boxesNear(ax: number, ay: number, aa: number, ahl: number, ahw: number,
 }
 
 /** `facing`: the way the yard faces, if its owner chose one (else away from the Command Station, as
- * the AI's always do); a ruin keeps the way it lay. The overlap checks use the yard's box at that angle. */
+ * the AI's always do); a ruin keeps the way it lay. The overlap checks use the yard's box at that angle.
+ * A defense station (data.ts defenseId) goes the same way, within the battle's limit of them
+ * (World `defense`), kept clear by the size it grows to. */
 export function placement(w: World, owner: Owner, unitId: string, x: number, y: number, facing?: number): Placement {
   const p = w.players[owner]
-  const t = UNIT[unitId]
+  const t = placeType(unitId)
   const st = w.byId.get(p.station)
-  const ruin = t && (w.ruins ?? []).find((r) => r.owner === owner && r.unit === unitId && d2(x, y, r.x, r.y) < sq(radius(t) * 0.8))
+  const fort = !!t?.orbital
+  const ruin = !t || fort ? undefined : (w.ruins ?? []).find((r) => r.owner === owner && r.unit === unitId && d2(x, y, r.x, r.y) < sq(radius(t) * 0.8))
   if (ruin) {
     x = ruin.x
     y = ruin.y
@@ -2123,6 +2213,7 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
   const a = ruin ? ruin.a : facing !== undefined && Number.isFinite(facing) ? wrapAngle(facing) : st ? M.atan2(y - st.y, x - st.x) : 0
   const cost = t ? (ruin ? Math.round(t.cost * REBUILD) : t.cost) : 0
   const out = (why: string | null): Placement => ({ why, x, y, a, cost, ...(ruin ? { ruin } : {}) })
+  if (fort) return out(fortProblem(w, owner, t, x, y, a) ?? (p.credits < cost ? 'Not enough credits' : null))
   if (!w.hybrid || w.fleet) return out('No yards in this battle')
   if (!t || t.tier !== 'yard' || t.faction !== p.faction) return out('That can\'t be built here')
   if (!st || st.dead) return out('No station')
@@ -2132,6 +2223,168 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
   if (why) return out(why)
   if (p.credits < cost) return out('Not enough credits')
   return out(null)
+}
+
+// --- Hybrid bases: defense stations ---------------------------------------------------------------------
+
+/** How many defense stations each player may have in this battle (0: none, they are off). */
+export const defenseCap = (w: World) => (w.hybrid && !w.fleet ? (w.defense ?? 0) : 0)
+/** A player's defense stations, standing or going up (what the limit counts). */
+export const defensesOf = (w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && !!u.t.orbital)
+/** Why player `owner` can't put up another defense station at all (off in this battle, no station,
+ * its level, at the limit), or null; without a spot to check, for the build card. */
+export function fortLock(w: World, owner: Owner): string | null {
+  const cap = defenseCap(w)
+  if (!cap) return w.hybrid && !w.fleet ? 'Defense stations are off in this battle' : 'No defense stations in this battle'
+  const p = w.players[owner]
+  const st = w.byId.get(p.station)
+  if (!st || st.dead) return 'No station'
+  const need = ORBITALS[p.faction].stages[0].station
+  if (need > p.level) return `Needs station level ${need}`
+  const n = defensesOf(w, owner).length
+  if (n >= cap) return `At the limit: ${n}/${cap} defense stations, standing or going up`
+  return null
+}
+/** Why defense station `t` can't go up at (x, y) facing `a`, or null: off, at the limit, or no room.
+ * It is kept clear by the size it grows to (its last level), so it always has room to. */
+function fortProblem(w: World, owner: Owner, t: UnitType, x: number, y: number, a: number): string | null {
+  if (t.faction !== w.players[owner].faction) return 'That can\'t be built here'
+  const lock = fortLock(w, owner)
+  if (lock) return lock
+  return siteProblem(w, owner, orbitalType(t.faction, ORBITAL_TOP, []), w.byId.get(w.players[owner].station)!, x, y, a)
+}
+
+/** The price and seconds of work `job` on defense station `u` (as it stands). */
+export function fortWork(u: Unit, job: DefenseWork): { cost: number; time: number } {
+  const f = u.t.faction
+  const lv = u.t.orbital?.level ?? 1
+  if (job.k === 'up') return { cost: ORBITALS[f].stages[Math.min(ORBITAL_TOP - 1, lv)].cost, time: defenseTime(f, Math.min(ORBITAL_TOP, lv + 1)) }
+  return { cost: orbitalMod(f, job.mod).cost, time: defenseModTime(f, job.mod) }
+}
+/** The level defense station `u` will have once the upgrade in its queue (if any) is done. */
+export const fortLevelAfter = (u: Unit) => Math.min(ORBITAL_TOP, (u.t.orbital?.level ?? 1) + (u.dq?.some((j) => j.k === 'up') ? 1 : 0))
+
+/**
+ * What rules work `job` out on defense station `u` regardless of credits and queue space (the card
+ * shows these as locked): not ours or not one, still going up, an upgrade already queued or the top
+ * level reached or the station level short; a slot it doesn't have (yet: one the queued upgrade
+ * brings counts), one already being fitted, or the module already in it.
+ */
+export function fortJobLock(w: World, owner: Owner, u: Unit | undefined, job: DefenseWork): string | null {
+  if (!defenseCap(w)) return 'Defense stations are off in this battle'
+  if (!u || u.dead || u.owner !== owner || !u.t.orbital) return 'Pick one of our defense stations'
+  if (u.site || building(u)) return 'Still under construction'
+  const o = u.t.orbital
+  if (job.k === 'up') {
+    if (o.level >= ORBITAL_TOP) return 'At its highest level'
+    if (u.dq?.some((j) => j.k === 'up')) return 'Already in the queue'
+    const need = ORBITALS[u.t.faction].stages[o.level].station
+    if (need > w.players[owner].level) return `Needs station level ${need}`
+    return null
+  }
+  if (!ORBITAL_MODS.includes(job.mod)) return 'No such module'
+  if (!Number.isInteger(job.slot) || job.slot < 0 || job.slot >= orbitalSlots(ORBITAL_TOP)) return 'No such slot'
+  if (job.slot >= orbitalSlots(fortLevelAfter(u))) return `Needs level ${orbitalSlotLevel(job.slot)}`
+  if (u.dq?.some((j) => j.k === 'mod' && j.slot === job.slot)) return 'That slot is already being fitted'
+  if (o.slots[job.slot] === job.mod) return 'Already fitted there'
+  return null
+}
+/** Why work `job` can't be ordered on defense station `uid` right now, or null if it can. */
+export function cantFortify(w: World, owner: Owner, uid: number, job: DefenseWork): string | null {
+  const u = w.byId.get(uid)
+  const lock = fortJobLock(w, owner, u, job)
+  if (lock) return lock
+  if ((u!.dq?.length ?? 0) >= DEFENSE_QUEUE) return 'Its queue is full'
+  if (w.players[owner].credits < fortWork(u!, job).cost) return 'Not enough credits'
+  return null
+}
+const fortJobName = (u: Unit, job: DefenseWork) => (job.k === 'up' ? orbitalName(u.t.faction, (u.t.orbital?.level ?? 1) + 1) : `${orbitalMod(u.t.faction, job.mod).name} (slot ${job.slot + 1})`)
+function fortify(w: World, owner: Owner, uid: number, job: DefenseWork): string | null {
+  const why = cantFortify(w, owner, uid, job)
+  if (why) return why
+  const u = w.byId.get(uid)!
+  const { cost, time } = fortWork(u, job)
+  spend(w, w.players[owner], cost, 'structures', fortJobName(u, job))
+  ;(u.dq ??= []).push({ ...job, left: time, total: time, paid: cost })
+  return null
+}
+/** Raise defense station `uid` a level (more hull, more module slots): paid now, done by the station
+ * itself after its time, after what is queued before it. */
+export const cmdFortUp = (w: World, owner: Owner, uid: number): string | null => fortify(w, owner, uid, { k: 'up' })
+/** Fit module `mod` into slot `slot` of defense station `uid` (a module there is swapped for it once
+ * it's done): paid now, done by the station itself. */
+export const cmdFortFit = (w: World, owner: Owner, uid: number, slot: number, mod: OrbitalModId): string | null => fortify(w, owner, uid, { k: 'mod', slot, mod })
+/** Call off the work at `index` in defense station `uid`'s queue: refunded in full. A module waiting
+ * for an upgrade that is called off is called off with it. */
+export function cmdCancelFort(w: World, owner: Owner, uid: number, index: number): string | null {
+  const u = w.byId.get(uid)
+  const j = u && !u.dead && u.owner === owner ? u.dq?.[index] : undefined
+  if (!j) return 'Nothing to cancel'
+  const p = w.players[owner]
+  cancelUpgrade(w, p, j.paid, 'structures', fortJobName(u!, j))
+  u!.dq!.splice(index, 1)
+  if (j.k === 'up') {
+    const n = orbitalSlots(u!.t.orbital!.level)
+    for (let i = u!.dq!.length - 1; i >= 0; i--) {
+      const x = u!.dq![i]
+      if (x.k !== 'mod' || x.slot < n) continue
+      cancelUpgrade(w, p, x.paid, 'structures', fortJobName(u!, x))
+      u!.dq!.splice(i, 1)
+    }
+  }
+  return null
+}
+
+/** A defense station as it now stands (a level more, a module in): its new type, the parts it had
+ * keeping their damage (a swapped module is a new part, whole), the extra hull arriving whole, its
+ * shields kept (up to what it now has). A new hangar launches its squadron straight away. */
+function refit(w: World, u: Unit, level: number, slots: (OrbitalModId | null)[]) {
+  const hangars = u.t.carrier?.max ?? 0
+  const t = defenseType(u.t.faction, level, slots)
+  retype(w, u, t)
+  const max = t.hull * u.mods.hull
+  u.hull = Math.max(1, u.hull + max - u.hullMax)
+  u.hullMax = max
+  u.shield = Math.min(u.shield, shieldMax(u))
+  if ((t.carrier?.max ?? 0) > hangars) u.hangarT = Math.max(u.hangarT, t.carrier!.every)
+}
+
+/** The defense stations work on what was ordered on them, one job at a time each. */
+function fortWorks(w: World, dt: number) {
+  for (const u of w.units) {
+    const j = u.dq?.[0]
+    if (!j || u.dead || !u.t.orbital || u.site || building(u)) continue
+    j.left -= dt
+    if (j.left > 0) continue
+    u.dq!.shift()
+    const o = u.t.orbital
+    if (j.k === 'up') refit(w, u, Math.min(ORBITAL_TOP, o.level + 1), [...o.slots])
+    else if (j.slot >= orbitalSlots(o.level)) {
+      giveBack(w, w.players[u.owner], j.paid, 'structures', `No slot for it: ${orbitalMod(u.t.faction, j.mod).name}`)
+      continue
+    } else {
+      const slots = [...o.slots]
+      slots[j.slot] = j.mod
+      refit(w, u, o.level, slots)
+    }
+    w.events.push({ k: 'fortified', owner: u.owner, unit: u.id, what: j.k === 'up' ? `${u.t.name} ready` : `${orbitalMod(u.t.faction, j.mod).name} fitted`, x: u.x, y: u.y })
+  }
+}
+
+/** The name of part `i` of `t` that has a price of its own: an expansion, or a defense station module. */
+function hpLabel(t: UnitType, i: number) {
+  const h = t.hardpoints[i]
+  if (h.exp) return MODULE[h.exp].name
+  const m = h.key ? /^s\d:(\w+)$/.exec(h.key) : null
+  return m && (ORBITAL_MODS as string[]).includes(m[1]) ? orbitalMod(t.faction, m[1] as OrbitalModId).name : h.kind
+}
+/** What welding shot-off part `i` of `t` back costs: an expansion's or a defense station module's
+ * share (REBUILD_MODULE) of its price; nothing for a part of the building itself. */
+export function partRebuildCost(t: UnitType, i: number) {
+  const h = t.hardpoints[i]
+  if (h.exp) return moduleRebuildCost(h.exp)
+  const m = t.orbital && h.key ? /^s\d:(\w+)$/.exec(h.key) : null
+  return m && (ORBITAL_MODS as string[]).includes(m[1]) ? Math.round(orbitalMod(t.faction, m[1] as OrbitalModId).cost * REBUILD_MODULE) : 0
 }
 
 /** Why yard `t` can't stand at (x, y) facing `a` round station `st`, or null when it can: inside the
@@ -2151,7 +2404,8 @@ function siteProblem(w: World, owner: Owner, t: UnitType, st: Unit, x: number, y
   if (w.beacons.some((b) => gap(b.x, b.y) < 240)) return 'Too close to a beacon'
   if (w.wrecks.some((h) => gap(h.x, h.y) < h.size * 0.6)) return 'A wreck is in the way'
   // Kept clear of other structures: a yard by its box, the rest by their longest side, a station by the size it grows to.
-  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o)) * 0.5
+  // (A skirmish's defense station by the size it grows to; Galactic conquest's stand as they are.)
+  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o.orbital && !w.fleet ? orbitalType(o.faction, ORBITAL_TOP, []) : o)) * 0.5
   const crowded = (u: Unit) => {
     if (u.t.tier === 'yard') {
       const b = yardBox(u.t)
@@ -2174,9 +2428,9 @@ export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, 
   if (!crew.length) return 'Select engineers to build it'
   const pl = placement(w, owner, unitId, x, y, facing)
   if (pl.why) return pl.why
-  const t = UNIT[unitId]
+  const t = placeType(unitId)!
   spend(w, w.players[owner], pl.cost, 'structures', pl.ruin ? `Rebuilding: ${t.name}` : t.name)
-  const site = spawn(w, unitId, owner, pl.x, pl.y, pl.a)
+  const site = spawn(w, t, owner, pl.x, pl.y, pl.a)
   site.building = t.build
   site.hull = site.hullMax * 0.1
   site.shield = 0
@@ -2331,6 +2585,12 @@ export function cmdCancelSite(w: World, owner: Owner, id: number): string | null
 function finishSite(w: World, t: Unit) {
   t.building = 0
   delete t.site
+  if (t.t.orbital) {
+    // A defense station: it holds its place, its guns (once fitted) on whatever comes in reach.
+    t.stance = 'hold'
+    w.events.push({ k: 'built', owner: t.owner, unit: t.t.id, x: t.x, y: t.y })
+    return
+  }
   t.yq = []
   const d = radius(t.t) + 280
   t.yr = { x: clamp(t.x + M.cos(t.a) * d, 40, w.w - 40), y: clamp(t.y + M.sin(t.a) * d, 40, w.h - 40) }
@@ -2422,7 +2682,7 @@ function construction(w: World, dt: number) {
     }
     t.hull = Math.min(t.hullMax, t.hull + (ENGINEERS.flat + ENGINEERS.share * t.hullMax) * k * dt)
     for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * ENGINEERS.share * k * dt)
-    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(w, t, dt, payers.get(id))
+    if (t.t.tier === 'station' || t.t.tier === 'yard' || (t.t.orbital && !w.fleet)) for (let i = 0; i < k; i++) rebuildModule(w, t, dt, payers.get(id))
   }
 }
 
@@ -2619,7 +2879,8 @@ function expansions(w: World, dt: number) {
 const CELL = 320
 const key = (cx: number, cy: number) => cx + cy * 1000
 
-function buildGrid(w: World) {
+/** Files every living unit under its cell, for `near`. */
+export function buildGrid(w: World) {
   w.grid.clear()
   for (const u of w.units) {
     if (u.dead) continue
@@ -2760,6 +3021,9 @@ function kill(w: World, u: Unit, by: Owner | -1) {
     u.xq = []
     ;(w.ruins ??= []).push({ id: w.wreckSeq++, owner: u.owner, unit: u.t.id, x: u.x, y: u.y, a: u.a })
   }
+  // A defense station's work not yet done is paid back.
+  for (const j of u.dq ?? []) giveBack(w, w.players[u.owner], j.paid, 'structures', `Lost with the station: ${j.k === 'up' ? 'its upgrade' : orbitalMod(u.t.faction, j.mod).name}`)
+  if (u.dq) u.dq = []
   if (u.t.tier === 'station' && !w.fleet) {
     // A player whose station falls is out; the last team with a station standing wins.
     w.players[u.owner].alive = false
@@ -2887,8 +3151,8 @@ function pickTarget(w: World, u: Unit, r: number, ok: (e: Unit) => boolean = () 
   return best
 }
 
-function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlace = false) {
-  const turn = u.t.turn * (u.slow > 0 ? 0.5 : 1)
+function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlace = false, turnMul = 1) {
+  const turn = u.t.turn * (u.slow > 0 ? 0.5 : 1) * turnMul
   const ang = M.atan2(ty - u.y, tx - u.x)
   const diff = wrap(ang - u.a)
   u.a = wrap(u.a + clamp(diff, -turn * dt, turn * dt))
@@ -2898,6 +3162,20 @@ function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlac
   const target = want * align
   const acc = accOf(u.t) * (fighter ? 1.6 : 0.6)
   u.v += clamp(target - u.v, -acc * dt * 1.5, acc * dt)
+}
+
+/**
+ * How far into a rock a ship's hull may go, as a share of its radius: the rest keeps clear. Hulls
+ * are longer than they are wide, so side on all but the edge of the hull is clear of the rock.
+ */
+const HULL_ROCK = 0.6
+/** The rocks as ships run into them and find their way round them: a little inside their drawn
+ * size (see ROCK_HIT). Worked out once per set of rocks. */
+const hitRocks = new WeakMap<Rock[], { x: number; y: number; r: number }[]>()
+export function navRocks(w: World) {
+  let hit = hitRocks.get(w.rocks)
+  if (!hit) hitRocks.set(w.rocks, (hit = w.rocks.map((k) => ({ x: k.x, y: k.y, r: k.r * ROCK_HIT }))))
+  return hit
 }
 
 /** Where to head for on the way to (tx, ty): straight there, or round the first rock in the way,
@@ -2910,11 +3188,11 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
   if (len < 1) return { x: tx, y: ty }
   const ux = dx / len
   const uy = dy / len
-  const clear = radius(u.t) * 0.7 + 30
-  let best: Rock | undefined
+  const clear = radius(u.t) * HULL_ROCK + 30
+  let best: { x: number; y: number; r: number } | undefined
   let first = Infinity
   let side = 0
-  for (const k of w.rocks) {
+  for (const k of navRocks(w)) {
     const rx = k.x - u.x
     const ry = k.y - u.y
     const along = rx * ux + ry * uy
@@ -2940,44 +3218,73 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
 
 /** How far a ship moves from where it last found its way before it may look for it again. */
 const REPATH = 80
-/** How far a ship's path keeps from rocks (its hull may graze one by a third of its radius), sized
- * to 20-unit steps so similar ships share a grid. */
-const navClear = (t: UnitType) => Math.ceil((radius(t) * 0.7 + 20) / 20) * 20
+/** How far a ship's path keeps from rocks: its hull may go into one by HULL_ROCK of its radius,
+ * and the path keeps a little more, sized to 20-unit steps so similar ships share a grid. */
+export const navClear = (t: UnitType) => Math.ceil((radius(t) * HULL_ROCK + 20) / 20) * 20
+
+/** What crossing a nebula costs a path, against open space: it strips the shields (all of them
+ * within a second, see NEBULA_DRAIN, and they reboot only after the ship is out), so it costs more
+ * the more of a hull's strength is in its shields: NEBULA_SHIELD_COST times its shields' share of
+ * shields and hull on top. A Republic warship (about 0.4) pays about 6, a Confederacy one (about
+ * 0.25) about 4.5, a Swarm hull (no shields) only the base: it loses no more than sensor range. */
+const NEBULA_COST = 1.5
+const NEBULA_SHIELD_COST = 12
+/** What crossing an asteroid field costs a path, by class: the rocks batter the clumsy big hulls
+ * (see CLUMSY), the biggest worst; gunships weave through and barely mind. */
+const FIELD_COST: Partial<Record<Tier, number>> = { gunship: 1.2, frigate: 2.5, cruiser: 3, capital: 4 }
 
 /**
  * Where to head for next on the way to (tx, ty): the next waypoint round the rocks, found once per
- * destination and dropped as each one comes into view. Asteroid fields and nebulas are steered
- * round too, as if they were rocks, except one the ship was sent into (its destination is inside)
- * or is in already: going through one has to be asked for.
+ * destination and dropped as each one comes into view. Asteroid fields and nebulas are dear to
+ * cross (FIELD_COST, NEBULA_COST), so the way goes round one unless that's much further, except
+ * one the ship was sent into (its destination is inside) or is in already. Somewhere rocks wall
+ * in, the way ends as near as the ship can get (see asNearAsItGets).
  */
 function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
-  const patches = [...w.map.fields, ...w.map.nebulas]
-  if ((!w.rocks.length && !patches.length) || u.t.tier === 'fighter') return { x: tx, y: ty }
+  const { fields, nebulas } = w.map
+  if ((!w.rocks.length && !fields.length && !nebulas.length) || u.t.tier === 'fighter') return { x: tx, y: ty }
   const clear = navClear(u.t)
+  const rocks = navRocks(w)
   // Pushed off its line (by other hulls, or round a rock) with rocks in the way of where it heads
   // next now: the way is found again from here, once it has moved on from where it was last found.
   // (Else it flew straight at the rocks and sat there for good.)
   const next = u.route?.pts[0] ?? { x: tx, y: ty }
-  const lost = !!u.route && d2(u.x, u.y, u.route.fx ?? -1e6, u.route.fy ?? -1e6) > sq(REPATH) && !clearLine(u.route.obs, u.x, u.y, next.x, next.y, clear)
+  const lost = !!u.route && d2(u.x, u.y, u.route.fx ?? -1e6, u.route.fy ?? -1e6) > sq(REPATH) && !clearLine(rocks, u.x, u.y, next.x, next.y, clear)
   if (!u.route || u.route.x !== tx || u.route.y !== ty || lost) {
     const within = (p: { x: number; y: number; r: number }, x: number, y: number) => sq(x - p.x) + sq(y - p.y) < sq(p.r)
-    const keepOut = patches.map((p, i) => (within(p, tx, ty) || within(p, u.x, u.y) ? -1 : i)).filter((i) => i >= 0)
-    const find = (out: number[]) => {
-      const obs = [...w.rocks, ...out.map((i) => patches[i])]
-      const key = `${clear}:${out.join(',')}`
-      let g = w.nav.get(key)
-      if (!g) w.nav.set(key, (g = navGrid(obs, w.w, w.h, clear)))
-      return { pts: findPath(g, obs, clear, u.x, u.y, tx, ty), obs }
+    const fieldCost = FIELD_COST[u.t.tier] ?? 1
+    const nebulaCost = NEBULA_COST + NEBULA_SHIELD_COST * (u.t.shield / (u.t.shield + u.t.hull))
+    const soft: Soft[] = []
+    const priced: number[] = []
+    const add = (p: { x: number; y: number; r: number }, i: number, cost: number) => {
+      if (cost <= 1 || within(p, tx, ty) || within(p, u.x, u.y)) return
+      soft.push({ x: p.x, y: p.y, r: p.r, cost })
+      priced.push(i)
     }
-    let way = find(keepOut)
-    // No way round the fields and nebulas for a hull this big: through them, rather than straight
-    // at the rocks.
-    if (!way.pts.length && keepOut.length && !clearLine(way.obs, u.x, u.y, tx, ty, clear)) way = find([])
-    u.route = { x: tx, y: ty, ...way, fx: u.x, fy: u.y }
+    fields.forEach((p, i) => add(p, i, fieldCost))
+    nebulas.forEach((p, i) => add(p, fields.length + i, nebulaCost))
+    const key = `${clear}`
+    let g = w.nav.get(key)
+    if (!g) w.nav.set(key, (g = navGrid(rocks, w.w, w.h, clear)))
+    const cost = soft.length ? navCost(g, soft, `${fieldCost}:${nebulaCost}:${priced.join(',')}`) : undefined
+    const way = findPath(g, rocks, clear, u.x, u.y, tx, ty, cost && { cost, patches: soft })
+    u.route = { x: tx, y: ty, pts: way.pts, soft: soft.map(({ x, y, r }) => ({ x, y, r })), short: way.short, fx: u.x, fy: u.y }
   }
-  const { pts, obs } = u.route
-  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < sq(60) || clearLine(obs, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
+  const { pts } = u.route
+  const soft = u.route.soft ?? []
+  // Drop a waypoint once the one after it is in plain view, unless that cuts across a field or
+  // nebula the way went round.
+  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < sq(60) || (clearLine(rocks, u.x, u.y, pts[1].x, pts[1].y, clear) && !crosses(soft, u.x, u.y, pts[1].x, pts[1].y)))) pts.shift()
   return pts.length ? pts[0] : { x: tx, y: ty }
+}
+
+/** Whether a ship sent to (tx, ty), somewhere rocks wall in, has got as near as it can: it is at
+ * the end of a way there that ends short. It stops there rather than pressing on into the rocks. */
+function asNearAsItGets(u: Unit, tx: number, ty: number) {
+  const r = u.route
+  if (!r?.short || r.x !== tx || r.y !== ty || r.pts.length > 1) return false
+  const end = r.pts[0]
+  return !end || d2(u.x, u.y, end.x, end.y) < sq(40 + radius(u.t) * 0.2)
 }
 
 // --- Attack spots ----------------------------------------------------------------------------------
@@ -3186,7 +3493,8 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
     }
     const brake = Math.sqrt(2 * accOf(t) * 0.9 * Math.max(0, dist - stop))
     const p = closingOn(w, u, e.x, e.y, dist - stop)
-    steer(u, p.x, p.y, Math.min(max, brake), dt)
+    if (p) steer(u, p.x, p.y, Math.min(max, brake), dt)
+    else steer(u, e.x, e.y, 0, dt, true)
     return
   }
   const key = groupKey(g)
@@ -3205,16 +3513,21 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
   }
   const brake = Math.sqrt(2 * accOf(t) * 0.9 * off)
   const p = closingOn(w, u, px, py, off)
-  steer(u, p.x, p.y, Math.min(max, brake), dt)
+  if (p) steer(u, p.x, p.y, Math.min(max, brake), dt)
+  else steer(u, e.x, e.y, 0, dt, true)
 }
 
 /** Where a warship closing in on a spot `left` away heads for next: from far off the way round the
  * rocks, as a move goes (to the spot rounded to CLOSE_GRID, so the path found holds while a moving
  * target stays about where it was), near it straight there round the first rock in the way. A
  * fleet sent at a target far behind a cluster of rocks sat on the first of them for ever. */
-function closingOn(w: World, u: Unit, x: number, y: number, left: number) {
+function closingOn(w: World, u: Unit, x: number, y: number, left: number): Pt | null {
   if (left > CLOSE_GRID * 3) {
-    const wp = waypoint(w, u, Math.round(x / CLOSE_GRID) * CLOSE_GRID, Math.round(y / CLOSE_GRID) * CLOSE_GRID)
+    const gx = Math.round(x / CLOSE_GRID) * CLOSE_GRID
+    const gy = Math.round(y / CLOSE_GRID) * CLOSE_GRID
+    const wp = waypoint(w, u, gx, gy)
+    // Rocks wall the target in: it fights from as near as it gets, if its guns reach from there.
+    if (asNearAsItGets(u, gx, gy)) return null
     return detour(w, u, wp.x, wp.y)
   }
   return detour(w, u, x, y)
@@ -3375,7 +3688,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const dist = M.hypot(o.x - u.x, o.y - u.y)
     const clear = !w.units.some((e) => !e.dead && foes(w, e.owner, u.owner) && sees(w, u.owner, e) && inArea(o, e))
     if (clear && (dist < o.r * 0.8 || canSee(w, w.players[u.owner].team, o.x, o.y))) nextOrder(u, u.x, u.y)
-    else if (dist > o.r * 0.5) {
+    else if (dist > o.r * 0.5 && !asNearAsItGets(u, o.x, o.y)) {
       unsettle(u)
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)
@@ -3385,8 +3698,11 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const o = u.order
     const dist = M.hypot(o.x - u.x, o.y - u.y)
     const pace = Math.min(max, o.speed)
-    if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
+    // Somewhere walled in by rocks: as near as it gets counts as there.
+    const short = !fighter && asNearAsItGets(u, o.x, o.y)
+    if (dist < (fighter ? 60 : 24 + radius(t) * 0.2) || short) {
       if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
+      else if (short) nextOrder(u, u.x, u.y, o.face ?? null)
       else nextOrder(u, o.x, o.y, o.face ?? null)
     } else {
       unsettle(u)
@@ -3407,13 +3723,10 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else steer(u, u.x + M.cos(s.a) * 100, u.y + M.sin(s.a) * 100, 0, dt, true)
   } else if (ward) keepStation(w, u, ward, max, dt)
   else {
-    // Idle: fighters circle their spot, everything else drifts back to it and waits.
+    // Idle: fighters circle their spot calmly, everything else drifts back to it and waits.
     const dist = M.hypot(u.ax - u.x, u.ay - u.y)
-    if (fighter) {
-      const ang = w.time * 0.9 + u.id
-      const r = 70 + (u.id % 4) * 18
-      steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
-    } else if (dist > 30 + radius(t) * 0.3) {
+    if (fighter) loiter(u, u.ax, u.ay, max, dt, 1, parent)
+    else if (dist > 30 + radius(t) * 0.3 && !asNearAsItGets(u, u.ax, u.ay)) {
       unsettle(u)
       const wp = waypoint(w, u, u.ax, u.ay)
       const p = detour(w, u, wp.x, wp.y)
@@ -3429,8 +3742,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
 
   // Keep clear of rocks, structures and each other (fighters only dodge the big stuff).
   const r0 = radius(t)
-  for (const k of w.rocks) {
-    const min = k.r + r0 * 0.7
+  for (const k of navRocks(w)) {
+    const min = k.r + r0 * HULL_ROCK
     const dd = d2(u.x, u.y, k.x, k.y)
     if (dd < min * min) {
       const d = Math.sqrt(dd) || 1
@@ -3498,6 +3811,35 @@ function moveUnit(w: World, u: Unit, dt: number) {
   }
   u.x = clamp(u.x, 20, w.w - 20)
   u.y = clamp(u.y, 20, w.h - 20)
+}
+
+/**
+ * Strike craft with nothing to do (no orders, no target, parked round a carrier, a waiting ship or
+ * their spot) hold station: a slow, wide circle round (cx, cy) at IDLE_PACE of full speed with
+ * gentle turns (IDLE_TURN), each craft on its own radius (`size` scales it) and going round the way
+ * its id gives. Further out than a couple of radii they come back quicker (RETURN_PACE at most).
+ * Round a carrier under way (`with`) the circle moves with it and they add its pace to theirs, so
+ * the wing keeps up. The moment they have an order or a target moveUnit's other branches fly them
+ * at full speed again.
+ */
+export const IDLE_PACE = 0.45
+export const IDLE_TURN = 0.5
+const RETURN_PACE = 0.8
+function loiter(u: Unit, cx: number, cy: number, max: number, dt: number, size = 1, with_?: Unit) {
+  const r = (130 + (u.id % 4) * 26) * size
+  const gv = with_ ? with_.v : 0
+  if (gv > 1) {
+    cx += M.cos(with_!.a) * gv * 0.5
+    cy += M.sin(with_!.a) * gv * 0.5
+  }
+  const d = M.hypot(u.x - cx, u.y - cy)
+  // Aim a little ahead round the circle from where the craft is: it flies a smooth orbit at its
+  // own pace, drawn back onto the ring from inside or out, rather than chasing a point round.
+  const way = u.id % 2 ? 1 : -1
+  const ang = M.atan2(u.y - cy, u.x - cx) + way * 0.6
+  const back = clamp((d - r * 1.6) / (r * 2), 0, 1)
+  const pace = Math.min(max, max * (IDLE_PACE + (RETURN_PACE - IDLE_PACE) * back) + gv)
+  steer(u, cx + M.cos(ang) * r, cy + M.sin(ang) * r, pace, dt, false, IDLE_TURN + (1 - IDLE_TURN) * back)
 }
 
 const BOLT_SPEED: Record<WeaponKind, number> = { laser: 1100, flak: 1250, turbo: 850, missile: 480, ion: 700 }
@@ -3822,10 +4164,10 @@ function survey(w: World, dt: number) {
   }
 }
 
-/** What each team can see: anything within sensor range of one of its ships or structures. */
+/** What each team can see: anything within sensor range of one of its ships or structures, or of
+ * a beacon it holds (see eyesOf). */
 function sight(w: World) {
-  const eyes: Unit[][] = Array.from({ length: w.teams }, () => [])
-  for (const u of w.units) if (!u.dead) eyes[w.players[u.owner].team].push(u)
+  const eyes = Array.from({ length: w.teams }, (_, t) => eyesOf(w, t))
   for (const u of w.units) {
     if (u.dead) continue
     const own = w.players[u.owner].team
@@ -3842,8 +4184,7 @@ function sight(w: World) {
       }
       let s = false
       for (const e of eyes[t]) {
-        const r = sensorOf(e)
-        if (d2(u.x, u.y, e.x, e.y) < r * r) {
+        if (d2(u.x, u.y, e.x, e.y) < e.r * e.r) {
           s = true
           break
         }
@@ -3861,21 +4202,14 @@ export const NEBULA_SENSOR = 0.5
 const NEBULA_DRAIN = 1.5
 /** Below this speed a ship is drifting, not ploughing through rocks. */
 const FIELD_MIN_SPEED = 10
-/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field. A
- * capital crossing a typical field (about 800 units) loses around an eighth of its shields. */
-const FIELD_WEAR = 0.15
+/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field (a
+ * ship with no shields: of half its hull). A big ship crossing a typical field (about 800 units)
+ * loses around a quarter of its shields; a Swarm hull, which has none, about an eighth of its hull. */
+export const FIELD_WEAR = 0.3
 /** Rocks scrape hulls but never finish a ship off: they stop at this share of the hull. */
 const FIELD_HULL_FLOOR = 0.15
 /** Only big ships are too clumsy to dodge the rocks; fighters and gunships weave through. */
 const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capital: true }
-
-/**
- * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
- * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
- * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
- * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
- * terrain keeps the shields from recharging.
- */
 // --- Defense wings -----------------------------------------------------------------------------------
 
 /** A station's defense wing in a loose ring round it, as its carrier fighters would be: their
@@ -4125,6 +4459,8 @@ function keepStation(w: World, u: Unit, g: Unit, max: number, dt: number) {
   const ca = M.cos(g.a)
   const sa = M.sin(g.a)
   if (t.tier === 'fighter') {
+    // The ship waiting: they hold station over it as idle craft do, slow and wide.
+    if (g.v < 4) return loiter(u, s.x, s.y, max, dt, 0.6)
     const ang = w.time * 1.2 + u.id
     const r = 40 + (u.id % 4) * 14
     steer(u, s.x + M.cos(ang) * r + ca * g.v * 0.5, s.y + M.sin(ang) * r + sa * g.v * 0.5, Math.min(max, max * 0.6 + g.v), dt)
@@ -4169,12 +4505,12 @@ function tendTo(w: World, u: Unit, p: Unit, max: number, dt: number) {
   const want = Math.min(radius(p.t) + radius(t) + 30, t.support!.range * 0.6)
   const dx = u.x - p.x
   const dy = u.y - p.y
-  const d = Math.hypot(dx, dy) || 1
+  const d = M.hypot(dx, dy) || 1
   const sx = p.x + (dx / d) * want
   const sy = p.y + (dy / d) * want
   if (d > want + 40) {
     unsettle(u)
-    const off = Math.hypot(sx - u.x, sy - u.y)
+    const off = M.hypot(sx - u.x, sy - u.y)
     const wp = waypoint(w, u, sx, sy)
     const q = detour(w, u, wp.x, wp.y)
     steer(u, q.x, q.y, Math.min(max, p.v + off * 0.9 + 12), dt)
@@ -4211,16 +4547,16 @@ function rebuildModule(w: World, t: Unit, dt: number, payer: Owner = t.owner) {
   let pick = -1
   t.hps.forEach((h, i) => {
     if (h.hp > 0) return
-    // A shot-off expansion is welded back for part of its price, paid as the work on it starts;
-    // one we can't pay for yet waits.
-    const x = t.t.hardpoints[i].exp
-    if (x && !h.fix && p.credits < moduleRebuildCost(x)) return
+    // A shot-off expansion (or defense station module) is welded back for part of its price, paid
+    // as the work on it starts; one we can't pay for yet waits.
+    const price = partRebuildCost(t.t, i)
+    if (price && !h.fix && p.credits < price) return
     if (pick < 0 || h.max > t.hps[pick].max) pick = i
   })
   if (pick < 0) return
   const h = t.hps[pick]
-  const x = t.t.hardpoints[pick].exp
-  if (x && !h.fix) spend(w, p, moduleRebuildCost(x), 'repairs', `Rebuilding: ${MODULE[x].name}`)
+  const price = partRebuildCost(t.t, pick)
+  if (price && !h.fix) spend(w, p, price, 'repairs', `Rebuilding: ${hpLabel(t.t, pick)}`)
   h.fix = (h.fix ?? 0) + dt
   if (h.fix < FIELD_REPAIR.rebuild) return
   h.fix = 0
@@ -4347,6 +4683,15 @@ function tenders(w: World, dt: number) {
   }
 }
 
+/**
+ * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
+ * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
+ * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
+ * hull. Neither counts as being attacked, so no alarms, no kill credit and nobody to shoot back at;
+ * but a living hull doesn't grow back while the rocks are hitting it (they set `scraped`, which
+ * restarts its wait like a hit: see calm). Returns true while the terrain keeps the shields from
+ * recharging.
+ */
 function terrain(w: World, u: Unit, dt: number) {
   const ship = isShip(u.t)
   u.nebula = ship && w.map.nebulas.length > 0 && inside(w.map.nebulas, u.x, u.y)
@@ -4360,6 +4705,7 @@ function terrain(w: World, u: Unit, dt: number) {
   u.shield -= soaked
   wear -= soaked
   if (wear > 0) u.hull = Math.max(Math.min(u.hull, u.hullMax * FIELD_HULL_FLOOR), u.hull - wear)
+  u.scraped = w.time
   return true
 }
 
@@ -4370,38 +4716,48 @@ function terrain(w: World, u: Unit, dt: number) {
 // spinal gun is a hardpoint weapon with an arc (see shoot and bearing). Each is off unless a unit
 // sets it, and none of them draws a random number, so every copy of a battle agrees.
 
-/** Living hulls (UnitType regrow): out of the fight for `delay` seconds, the hull grows back by
- * `rate` of its full hull a second, as far as it can go (a rush-launched ship's unbuilt hull stays
- * unbuilt). Only the hull: modules are mended as ever. */
+/** Living hulls (UnitType regrow): out of the fight for `delay` seconds (nothing has hit it, and no
+ * asteroid field's rocks either: see calm), the hull grows back by `rate` of its full hull a
+ * second, as far as it can go (a rush-launched ship's unbuilt hull stays unbuilt). Only the hull:
+ * modules are mended as ever. */
 function regrow(w: World, u: Unit, dt: number) {
   const g = regrowOf(u)!
-  if (w.time - u.lastHit < g.delay) return
+  if (calm(w, u) < g.delay) return
   const cap = hullCap(u)
   if (u.hull < cap) u.hull = Math.min(cap, u.hull + u.hullMax * g.rate * dt)
 }
 
 /**
- * Drain auras (UnitType drain): each one takes `dps` hull points a second off every enemy it can
- * see within `radius`, straight off the hull past shields and modules, and gives `heal` of what it
- * took to our damaged ships within `radius` (itself included), shared out evenly. What one can't
- * use (it's mended full) is lost, not passed on.
+ * Drain auras (UnitType drain): each one takes `dps` hull points a second off the `targets`
+ * nearest enemies it can see within `radius` (nearest first, ties by id, so every copy of the
+ * battle picks the same ones), straight off the hull past shields and modules, and gives `heal` of
+ * what it took to our damaged ships within `radius` (itself included), shared out evenly. What one
+ * can't use (it's mended full) is lost, not passed on.
  */
 function drains(w: World, dt: number) {
+  const prey: { e: Unit; d: number }[] = []
   for (const u of w.units) {
     const d = u.t.drain ? drainOf(u) : null
     if (!d || u.dead || building(u) || u.site || u.launch) continue
     let took = 0
-    near(w, u.x, u.y, d.radius, (e) => {
-      if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || planned(e)) return
+    prey.length = 0
+    u.drained = []
+    near(w, u.x, u.y, d.radius, (e, dd) => {
+      if (foes(w, e.owner, u.owner) && sees(w, u.owner, e) && !planned(e) && e.hull > 0) prey.push({ e, d: dd })
+    })
+    prey.sort((a, b) => a.d - b.d || a.e.id - b.e.id)
+    for (let i = 0; i < prey.length && i < d.targets; i++) {
+      const e = prey[i].e
       const bite = Math.min(e.hull, d.dps * dt)
-      if (bite <= 0) return
+      if (bite <= 0) continue
       took += bite
+      u.drained.push(e.id)
       e.lastHit = w.time
       e.hitBy = u.id
       alarm(w, e)
       e.hull -= bite
       if (e.hull <= 0) hullGone(w, e, false, u.owner, u.id)
-    })
+    }
     if (took <= 0 || d.heal <= 0) continue
     const hurt: Unit[] = []
     near(w, u.x, u.y, d.radius, (a) => {
@@ -4465,6 +4821,7 @@ export function tick(w: World, dt = STEP) {
   construction(w, dt)
   finishing(w, dt)
   if (w.hybrid) expansions(w, dt)
+  if (w.defense) fortWorks(w, dt)
   wings(w, dt)
   findSpotGroups(w)
   findEscorts(w)
@@ -4859,7 +5216,16 @@ export function stateHash(w: World): number {
       int(u.t.hardpoints.length)
       for (const j of u.xq ?? []) num(j.left)
     }
+    // A defense station's level, modules and work under way.
+    if (u.t.orbital) {
+      int(u.t.orbital.level)
+      int(u.t.hardpoints.length)
+      num(u.building)
+      for (const j of u.dq ?? []) num(j.left)
+    }
   }
+  int(w.defense ?? -1)
+  int(oreGuns(w) ? 1 : 0)
   int(w.ruins?.length ?? -1)
   int(w.shots.length)
   for (const s of w.shots) {

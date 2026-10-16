@@ -1,8 +1,8 @@
-import { LEVEL_UP, MAX_LEVEL, stageName, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, worksOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { ORBITALS, ORBITAL_TOP, defenseModTime, defenseTime, defenseType, orbitalSlots, LEVEL_UP, MAX_LEVEL, stageName, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, worksOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import { HP_COLOR } from './icons'
 import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, unitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
-import type { Owner, World } from './sim'
+import { defenseCap, defensesOf, type Owner, type World } from './sim'
 import { CANCEL_TIP, useCancelPress, useCoarse } from './Touch'
 
 
@@ -75,6 +75,7 @@ export function TechTree({ w, me, hud, onResearch, onCancel, onClose, onExpand, 
       </p>
       <div className="ew-tt-scroll">
         {w.hybrid && onExpand && onCancelExpand && (['station', 'yard', 'cyard'] as Works[]).map((k) => <BaseLine key={k} kind={k} w={w} me={me} hud={hud} faction={faction} onExpand={onExpand} onCancel={onCancelExpand} />)}
+        {defenseCap(w) > 0 && <FortLine w={w} me={me} hud={hud} faction={faction} />}
         {lines.map((line) => (
           <TreeLine key={line.t.id} line={line} w={w} me={me} hud={hud} faction={faction} onResearch={onResearch} onCancel={onCancel} />
         ))}
@@ -193,6 +194,54 @@ function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Wor
           </div>
         )
       })}
+    </section>
+  )
+}
+
+/**
+ * Defense stations, in a battle that has them: a line of the tree with the station at its head (how
+ * many we have of the battle's limit) and a tile for each level and each module, with what it does,
+ * its price and time and what it needs. They are ordered on each station's own panel (select one),
+ * so the tiles only tell.
+ */
+function FortLine({ w, me, hud, faction }: { w: World; me: Owner; hud: Hud; faction: FactionId }) {
+  const art = unitArt
+  const plan = ORBITALS[faction]
+  const have = defensesOf(w, me)
+  const cap = defenseCap(w)
+  const top = have.reduce((m, u) => Math.max(m, u.t.orbital?.level ?? 0), 0)
+  const tiles = [
+    ...plan.stages.slice(1).map((st, i) => ({ key: `lv${i + 2}`, name: `Level ${i + 2}: ${st.name}`, blurb: `${orbitalSlots(i + 2)} module slots and ${st.hull.toLocaleString('en-US')} hull.`, cost: st.cost, time: defenseTime(faction, i + 2), icon: null, need: st.station > hud.level ? `Needs station level ${st.station}` : null, done: top >= i + 2 })),
+    ...plan.modules.map((m) => ({ key: m.id, name: m.name, blurb: m.blurb, cost: m.cost, time: defenseModTime(faction, m.id), icon: m.kind, need: null, done: have.some((u) => u.t.orbital?.slots.includes(m.id)) })),
+  ]
+  const width = nodeX(tiles.length) - COL_GAP
+  return (
+    <section className="ew-tt-line is-base" style={{ gridTemplateColumns: `${HEAD_W}px repeat(${tiles.length}, ${NODE_W}px)`, gridTemplateRows: `${NODE_H}px`, columnGap: COL_GAP, width }}>
+      <div className={`ew-tt-head ${!have.length ? 'is-locked' : ''}`} data-tip={`${plan.name}: engineers put one up round the Command Station, up to ${cap} at a time in this battle. Select one to upgrade it (up to level ${ORBITAL_TOP}) and fit its slots.`}>
+        <img src={art(defenseType(faction, 1, []).sprite)} alt="" />
+        <strong>Defense stations</strong>
+        <small>{have.length}/{cap} standing or going up</small>
+      </div>
+      {tiles.map((x, i) => (
+        <div key={x.key} className={`ew-tnode is-${x.done ? 'done' : x.need ? 'locked' : 'ready'}`} style={{ gridColumn: i + 2, gridRow: 1 }}>
+          <button className="ew-tnode-main" aria-disabled data-tip={`${x.name}\n${x.blurb}\n${x.cost} credits, ${x.time} s, built by the defense station itself.${x.need ? `\n\n${x.need}` : '\n\nOrdered on a defense station\'s own panel: select one.'}`}>
+            {x.icon ? <span className="ew-modicon ew-tt-modicon" style={{ ['--c' as string]: HP_COLOR[x.icon] }}><HpIcon kind={x.icon} size={26} /></span> : <span className="ew-modicon ew-tt-modicon"><Icon name="yard" size={24} /></span>}
+            <span className="ew-tnode-text">
+              <strong>{x.name}</strong>
+              <small>{x.blurb}</small>
+              <span className="ew-tnode-foot">
+                {x.need ? <em className="is-why">{x.need}</em> : (
+                  <>
+                    <span className="ew-cost"><Icon name="credits" size={12} /> {x.cost}</span>
+                    <span className="ew-time"><Icon name="time" size={12} /> {x.time}s</span>
+                    <em>{x.done ? '✓ On a station of ours' : 'On its panel'}</em>
+                  </>
+                )}
+              </span>
+            </span>
+          </button>
+        </div>
+      ))}
     </section>
   )
 }

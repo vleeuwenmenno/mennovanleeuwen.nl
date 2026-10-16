@@ -1,9 +1,9 @@
-import { ABILITIES, BUILD_RADIUS, moduleFits, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { defenseId, defenseType, orbitalPick, ABILITIES, BUILD_RADIUS, moduleFits, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  canSee, cantReinforce, dpsVs, fleet, shipPrice, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -32,6 +32,9 @@ type Level = {
   think: number
   /** Fleet value it waits for before its first attack. */
   wave: number
+  /** Fleet value it stops building warships at (0: no limit). Without one, a long quiet start only
+   * made the first wave bigger: it stockpiled for the whole of it and sent the lot at once. */
+  cap: number
   mines: number
   /** Focuses its fleet's fire, and aims heavy guns at shield generators. */
   focus: boolean
@@ -53,19 +56,19 @@ type Level = {
 export const DIFFICULTY: Record<Difficulty, Level> = {
   veryEasy: {
     name: 'Very easy', blurb: 'A sleepy recruit: earns little, never researches, and leaves you alone for the first ten minutes.',
-    income: 0.55, think: 3.5, wave: 5000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false, apm: 25, react: 6, menders: 0, pace: 1.8,
+    income: 0.55, think: 3.5, wave: 3600, cap: 4000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false, apm: 25, react: 6, menders: 0, pace: 1.8,
   },
   easy: {
     name: 'Easy', blurb: 'Slow to react and slow to grow. No attacks for the first six minutes.',
-    income: 0.68, think: 3, wave: 4200, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4, menders: 0.03, pace: 1.35,
+    income: 0.68, think: 3, wave: 2500, cap: 2800, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4, menders: 0.03, pace: 1.35,
   },
   medium: {
-    name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in (a minute and a half if it plays offensively).',
-    income: 1, think: 1.5, wave: 2500, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2, menders: 0.08, pace: 1,
+    name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in (a minute and a half if it plays offensively, and less when it plays the Confederacy, which strikes early).',
+    income: 1, think: 1.5, wave: 2500, cap: 0, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2, menders: 0.08, pace: 1,
   },
   hard: {
     name: 'Hard', blurb: 'Quick, greedy, aggressive from the start, and it goes for your shield generators.',
-    income: 1.25, think: 0.8, wave: 2000, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true, apm: 100, react: 1, menders: 0.16, pace: 0.85,
+    income: 1.25, think: 0.8, wave: 2000, cap: 0, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true, apm: 100, react: 1, menders: 0.16, pace: 0.85,
   },
 }
 
@@ -133,6 +136,11 @@ type Style = {
   /** The expansions it wants, most wanted first (the Capital slip always comes first once it can:
    * that's the way to the flagships). */
   modules: ModuleId[]
+  /** Defense stations (in a battle that has them) it wants at station level 1, 2, 3 and 4, within
+   * the battle's limit. */
+  forts: [number, number, number, number]
+  /** The level it raises its defense stations to, at most. */
+  fortTop: number
   /** Fleet battles: an attacker pulls out below this share of the defender's strength... */
   bail: number
   /** ...and a holder goes out to meet attackers this much further from its station. */
@@ -142,21 +150,21 @@ type Style = {
 export const PROFILES: Record<Profile, Style> = {
   defensive: {
     name: 'Defensive',
-    blurb: 'Turtles: more gun platforms and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
+    blurb: 'Turtles: more gun platforms (when the lobby allows them on ore) and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
     wave: 1.6, calm: 1.3, rest: 60, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.25, beaconReach: 3800, hold: 0.85, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [170, 400, 680], levelArmy: 900, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
-    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], bail: 0.4, sally: 0.8,
+    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], forts: [0, 1, 1, 1], fortTop: 2, bail: 0.4, sally: 0.8,
   },
   balanced: {
     name: 'Balanced',
     blurb: 'A steady mix: expands, upgrades and researches as it goes, and attacks once it has gathered a fleet.',
     wave: 1, calm: 1, rest: 45, regroup: 0.4, outgunned: 1.5, recall: 0.6, edge: 1.25, beaconReach: 4300, hold: 0.85, turtle: false, platforms: 0, platPerLevel: 1, platMax: 1, levels: [170, 400, 680], levelArmy: 900, mines: 1, raiders: 0, counter: true, fortify: 1.2, keep: 200, mendAt: 0.35,
-    tiers: {}, yardDelay: 10, yardGuards: 2, cyardDelay: 40, modules: ['secondSlip', 'shieldCore', 'drydock', 'strikeHangar', 'armourWorks', 'sensorArray', 'fighterWing'], bail: 0.3, sally: 1,
+    tiers: {}, yardDelay: 10, yardGuards: 2, cyardDelay: 40, modules: ['secondSlip', 'shieldCore', 'drydock', 'strikeHangar', 'armourWorks', 'sensorArray', 'fighterWing'], forts: [0, 0, 1, 1], fortTop: 1, bail: 0.3, sally: 1,
   },
   offensive: {
     name: 'Offensive',
     blurb: 'Early pressure: raids your mines, attacks often and takes risks. Few platforms, later upgrades.',
     wave: 0.7, calm: 0.6, rest: 15, regroup: 0.25, outgunned: 2, recall: 1.2, edge: 0.9, beaconReach: 4800, hold: 0.6, turtle: false, platforms: 0, platPerLevel: 0.5, platMax: 1, levels: [200, 460, 800], levelArmy: 1000, mines: 1, raiders: 2, counter: false, fortify: 0.5, keep: 100, mendAt: 0.25,
-    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, cyardDelay: 75, modules: ['secondSlip', 'strikeHangar', 'sensorArray', 'drydock', 'armourWorks', 'fighterWing', 'shieldCore'], bail: 0.2, sally: 1.6,
+    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, cyardDelay: 75, modules: ['secondSlip', 'strikeHangar', 'sensorArray', 'drydock', 'armourWorks', 'fighterWing', 'shieldCore'], forts: [0, 0, 0, 1], fortTop: 1, bail: 0.2, sally: 1.6,
   },
 }
 /**
@@ -164,18 +172,20 @@ export const PROFILES: Record<Profile, Style> = {
  * - the Republic as the profiles say;
  * - the Confederacy concentrates its fire harder (its warships join a focus from further off, see
  *   focusFire) and sends its fast warships round the flank of a goal (see waves), and likes its heavy
- *   classes a little more;
+ *   classes a little more; it strikes early, with smaller first waves after a shorter quiet start
+ *   (against a long quiet start, its admirals sat out the fair fight the other sides built up for
+ *   and lost most Medium battles, while on Hard, with no quiet start, they won most);
  * - the Swarm favours numbers and fast production (small, quickly grown ships; build-time research
  *   worth twice as much) and goes out with smaller waves.
  * `tiers` multiplies the profile's taste for each class, `wave` the fleet value it waits for before a
- * wave, `quick` how much it favours ships that are quick to build, `focus` the reach of its focus
+ * wave, `calm` its quiet start (see calmOf), `quick` how much it favours ships that are quick to build (a power, in quarters: see pow4), `focus` the reach of its focus
  * fire, `flank` whether fast ships go round the side, `build` the worth of build-time research.
  */
-type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; quick: number; focus: number; flank: boolean; build: number }
+type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; calm: number; quick: number; focus: number; flank: boolean; build: number }
 export const DOCTRINE: Record<FactionId, Doctrine> = {
-  republic: { tiers: {}, wave: 1, quick: 0, focus: 1, flank: false, build: 1 },
-  droid: { tiers: { cruiser: 1.1, capital: 1.15 }, wave: 1, quick: 0, focus: 1.3, flank: true, build: 1 },
-  swarm: { tiers: { fighter: 1.15, gunship: 1.15 }, wave: 1, quick: 0.25, focus: 1, flank: false, build: 2 },
+  republic: { tiers: {}, wave: 1, calm: 1, quick: 0, focus: 1, flank: false, build: 1 },
+  droid: { tiers: { cruiser: 1.1, capital: 1.15 }, wave: 0.85, calm: 0.4, quick: 0, focus: 1.3, flank: true, build: 1 },
+  swarm: { tiers: { fighter: 1.15, gunship: 1.15 }, wave: 1, calm: 1, quick: 0.25, focus: 1, flank: false, build: 2 },
 }
 const doctrineOf = (w: World, b: Brain) => DOCTRINE[w.players[b.o].faction] ?? DOCTRINE.republic
 
@@ -316,10 +326,10 @@ function reinforcements(w: World, b: Brain, st: Unit, army: Unit[]) {
 }
 
 /** The quiet start before it attacks anything of ours: its difficulty's, stretched or shortened
- * by its profile; never shorter than the easy levels promise. */
-const calmOf = (b: Brain) => {
+ * by its profile and its faction's doctrine; never shorter than the easy levels promise. */
+const calmOf = (w: World, b: Brain) => {
   const D = DIFFICULTY[b.diff]
-  const c = D.calm * PROFILES[b.profile].calm
+  const c = D.calm * PROFILES[b.profile].calm * doctrineOf(w, b).calm
   return b.diff === 'easy' || b.diff === 'veryEasy' ? Math.max(D.calm, c) : c
 }
 
@@ -626,11 +636,11 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     // Living hulls mend themselves between fights: a little more staying power than the numbers say.
     if (t.regrow) v *= 1.1
     // Quick to build (the Swarm's way): ships out of the yard sooner count for more.
-    if (Doc.quick) v *= Math.pow(30 / Math.max(5, t.build), Doc.quick)
+    if (Doc.quick) v *= M.pow4(30 / Math.max(5, t.build), Doc.quick)
     // A mix rather than one kind: each one already flying makes the next a little less wanted.
     return v / (1 + 0.12 * count(t.id))
   }
-  const line = options.map((t) => (t.kind === 'support' || t.kind === 'repair' ? 0 : Math.pow(weight(t), 1.5)))
+  const line = options.map((t) => (t.kind === 'support' || t.kind === 'repair' ? 0 : M.pow4(weight(t), 1.5)))
   const top = Math.max(...line, 0.01)
   // Specialists by need, next to the best of the line ships: a repair tender for a fleet worth
   // mending, a squadron or two of repair craft once there are warships to look after.
@@ -747,7 +757,8 @@ export function think(w: World, b: Brain, dt: number) {
 
   // --- The economy ---------------------------------------------------------------------------------
   const mines = w.units.filter((u) => u.owner === o && u.t.tier === 'mine').length
-  const platforms = w.units.filter((u) => u.owner === o && u.t.tier === 'defense').length
+  // (Gun platforms on the ore: defense stations are planned apart, see planForts.)
+  const platforms = w.units.filter((u) => u.owner === o && u.t.tier === 'defense' && !u.t.orbital).length
   // Ore counts as ours to take when it's nearer to us than to any enemy station, and nearer to us
   // than to an ally's, so allies don't take each other's.
   const enemyStations = w.players.filter((q) => q.alive && q.team !== team).map((q) => w.byId.get(q.station)).filter((u): u is Unit => !!u)
@@ -759,9 +770,12 @@ export function think(w: World, b: Brain, dt: number) {
   const mineToTake = (n: { x: number; y: number }) => enemyStations.every((e) => d2(n, st) < d2(n, e) * reach) && nearerUs(n)
   // Build on our team's claims nearest us; an ally's own patch is theirs (unless they're gone).
   const ours = w.nodes.filter((n) => n.owner === team && !n.site && nearerUs(n)).sort((a, c) => d2(a, st) - d2(c, st))
-  // Mining expands steadily, one more from station level 3; platforms by profile and level.
+  // Mining expands steadily, one more from station level 3; platforms by profile and level (none
+  // in a battle with them off: that money buys ships instead. A defense station more in their place
+  // turned more of the AI-only tournaments into stalls, and admirals fill their claims with mines
+  // first, so they seldom built a platform anyway).
   const mineGoal = D.mines + (D.research ? S.mines : 0) + (p.level >= 3 && D.research ? 1 : 0)
-  const platGoal = D.defenses ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
+  const platGoal = D.defenses && oreGuns(w) ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
   // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
   // (A gun platform goes up once a couple of mines are and there is a claim to spare for it, or
   // once every mine it wants is up: then the last free claim is its. A claim kept for a platform
@@ -889,6 +903,9 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Expansions for the station and the yards, by profile, with credits to spare.
   const modSaving = w.hybrid && !saving && !yardSaving ? planModules(w, b, D, S, threatValue > armyValue * 0.8) : false
+  // Defense stations, in a battle that has them: put up and armed when due (saving up for them once
+  // they're within reach), upgraded with credits to spare.
+  const fortSaving = w.defense && !saving && !yardSaving && !modSaving ? planForts(w, b, D, S, st, enemySt, army, threatValue > armyValue * 0.8) : false
 
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
   // A yard standing idle is saved up for first: its next ship is one of its own (frigates and
@@ -924,7 +941,7 @@ export function think(w: World, b: Brain, dt: number) {
     if (freed >= flag.pop && out.length) act(b, () => cmdRetreat(w, o, out.map((u) => u.id)))
   }
   // (A yard is one more to keep busy.)
-  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !modSaving && !(savingForMine && p.credits < 500)) {
+  if (queued < (savingForMine || lean ? 1 : 2) + yards && !(D.cap && value(army.filter((u) => !b.scouts.has(u.id) && !b.guards.includes(u.id) && !b.escort.includes(u.id) && !worker(u))) >= D.cap) && !saving && !yardSaving && !modSaving && !fortSaving && !(savingForMine && p.credits < 500)) {
     if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits' && !(flagship && b.want === flag.id)) b.want = null
     b.want ??= pickShip(w, b)
     const want = b.want
@@ -1064,7 +1081,7 @@ export function think(w: World, b: Brain, dt: number) {
   const scoutValue = value(scouts)
   // Unsurveyed ore on our half comes first, then beacons.
   // While calm, only neutral ones: nothing the player already holds.
-  const calm = w.time < calmOf(b)
+  const calm = w.time < calmOf(w, b)
   // Ore nearer to us than to any enemy station, so allies don't race each other for it.
   const ore = w.nodes.filter((n) => !n.site && n.owner !== team && (!calm || n.owner === -1) && mineToTake(n))
   // Wrecks on our side of the map are free credits for a parked scout.
@@ -1181,7 +1198,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   const seenFoes = Object.values(b.foes).reduce((s, v) => s + v, 0)
   // (A restless wave, too, is at least a match for what it has seen of the enemy fleet: sent out
   // short of that, it only fed the enemy, and kept both sides too poor to ever finish the other.)
-  const restless = w.time - Math.max(b.lastWave, calmOf(b)) > 240 && mainValue >= b.wave * 0.5 && mainValue >= seenFoes
+  const restless = w.time - Math.max(b.lastWave, calmOf(w, b)) > 240 && mainValue >= b.wave * 0.5 && mainValue >= seenFoes
   const counter =
     S.counter &&
     mainValue >= b.wave * 0.6 &&
@@ -1193,7 +1210,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   for (const [wx, wy, g] of Object.values(b.walls)) if (enemySt && sq(wx - enemySt.x) + sq(wy - enemySt.y) < sq(rangeDist(1400))) walls += g
   const ahead = mainValue >= Math.max(seenFoes, walls) * S.edge
   const Doc = doctrineOf(w, b)
-  const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= b.wave * Doc.wave && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
+  const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= Math.min(b.wave * Doc.wave, D.cap ? D.cap * 0.7 : Infinity) && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
   if (!b.attacking) {
     if (!ready) {
       b.muster = -1
@@ -1237,7 +1254,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   if (!troops.length || troopValue < (b.peak * S.regroup) / grit || outgunned) {
     b.attacking = false
     b.home = w.time
-    b.wave = Math.min(9000, b.wave * 1.15)
+    b.wave = Math.min(D.cap ? D.cap * 0.7 : 9000, b.wave * 1.15)
     b.troops = []
     b.focus = 0
     act(b, () => cmdMove(w, o, main.map((u) => u.id), p.rally.x, p.rally.y))
@@ -1602,6 +1619,95 @@ function planModules(w: World, b: Brain, D: Level, S: Style, attacked: boolean):
     if (++next >= 2) return false
   }
   return false
+}
+
+/**
+ * Hybrid bases: defense stations, in a battle that has them (World `defense`). Its profile says how
+ * many it wants at each station level (Style `forts`), within the battle's limit. One going up gets
+ * its engineers (once no yard is being built). With credits to spare, one thing at a time: a module
+ * for a station's empty slot, picked by what the enemy flies (data.ts orbitalPick, as the galaxy AI
+ * arms its own); then, while its base is quiet and it isn't saving for the station, a new one put up
+ * between its station and the nearest enemy; then a level up for one whose slots are all full, with
+ * more to spare still.
+ */
+function planForts(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit | undefined, army: Unit[], attacked: boolean): boolean {
+  const o = b.o
+  const p = w.players[o]
+  const cap = defenseCap(w)
+  if (!cap || !D.defenses || attacked || w.time < 150) return false
+  const mine = defensesOf(w, o)
+  const engineers = army.filter((u) => isEngineer(u.t))
+  /** Whether it is worth saving up for something costing `cost`: within about twenty seconds' income. */
+  const within = (cost: number) => p.credits + p.income * 20 >= cost + 100
+  const site = mine.find((u) => !!u.site)
+  if (site) {
+    const yardUp = w.units.some((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && building(u))
+    if (!yardUp && engineers.length && !engineers.some((u) => u.order.k === 'construct' && u.order.id === site.id)) act(b, () => cmdConstruct(w, o, engineers.map((u) => u.id), site.id))
+    return false
+  }
+  // What the enemy flies, as far as it has seen: strike craft and gunships against the rest.
+  let small = 0
+  let big = 0
+  for (const [id, n] of Object.entries(b.foes)) {
+    const t = UNIT[id]
+    if (!t) continue
+    if (t.tier === 'fighter' || t.tier === 'gunship') small += t.cost * n
+    else big += t.cost * n
+  }
+  const shielded = w.players.some((q, i) => q.alive && foes(w, i, o) && unitOf(q.faction, 'cruiser').shield > 0)
+  // A station's first module is what makes it worth anything: saved up for. The rest wait for
+  // credits to spare.
+  for (const u of mine) {
+    if (u.dq?.length) continue
+    const slots = u.t.orbital!.slots
+    const slot = slots.findIndex((m) => !m)
+    if (slot < 0) continue
+    const mod = orbitalPick(slots, small, big, shielded)
+    const job = { k: 'mod' as const, slot, mod }
+    const why = cantFortify(w, o, u.id, job)
+    const cost = fortWork(u, job).cost
+    const first = slots.every((m) => !m)
+    if (!why && p.credits >= cost + (first ? 100 : S.keep + 100)) {
+      act(b, () => cmdFortFit(w, o, u.id, slot, mod), true)
+      return false
+    }
+    if (first && (!why || why === 'Not enough credits')) return within(cost)
+  }
+  const goal = Math.min(cap, S.forts[Math.max(0, Math.min(3, p.level - 1))])
+  if (mine.length < goal && b.alarm < 0 && engineers.length) {
+    const id = defenseId(p.faction)
+    const cost = defenseType(p.faction, 1, []).cost
+    if (p.credits < cost + 100) return within(cost)
+    const spot = fortSpot(w, o, st, enemySt, id, mine)
+    if (spot) act(b, () => cmdPlace(w, o, engineers.map((u) => u.id), id, spot.x, spot.y), true)
+    return false
+  }
+  for (const u of mine) {
+    if (u.dq?.length || u.t.orbital!.slots.some((m) => !m) || u.t.orbital!.level >= S.fortTop) continue
+    if (!cantFortify(w, o, u.id, { k: 'up' }) && p.credits >= fortWork(u, { k: 'up' }).cost + S.keep + 100) {
+      act(b, () => cmdFortUp(w, o, u.id), true)
+      return false
+    }
+  }
+  return false
+}
+
+/** Where an admiral puts a defense station: inside the build radius on the side of its station
+ * towards the nearest enemy station (or the middle of the map), spread round from the ones it has,
+ * clear of the survey rings round ore where it can be. */
+function fortSpot(w: World, o: Owner, st: Unit, enemySt: Unit | undefined, id: string, have: Unit[]): { x: number; y: number } | null {
+  const toward = enemySt ? M.atan2(enemySt.y - st.y, enemySt.x - st.x) : M.atan2(w.h / 2 - st.y, w.w / 2 - st.x)
+  const r0 = radius(st.t) + 420
+  for (const strict of [true, false])
+    for (const off of [0, 0.55, -0.55, 1.1, -1.1, 1.6, -1.6, 2.2, -2.2])
+      for (let d = Math.max(r0, BUILD_RADIUS * 0.55); d >= r0 - 1; d -= 180) {
+        const x = st.x + M.cos(toward + off) * d
+        const y = st.y + M.sin(toward + off) * d
+        if (placement(w, o, id, x, y).why) continue
+        if (strict && (w.nodes.some((n) => d2(n, { x, y }) < sq(SURVEY_RADIUS + 160)) || have.some((u) => d2(u, { x, y }) < sq(mapDist(900))))) continue
+        return { x, y }
+      }
+  return null
 }
 
 /**

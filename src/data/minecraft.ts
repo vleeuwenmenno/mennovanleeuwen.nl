@@ -203,13 +203,25 @@ export function useMinecraft() {
   return s
 }
 
-// One poller for the whole page, however many widgets show the status. Paused while the tab is hidden.
+// One poller for the whole page, however many widgets show the status. Paused while the tab is
+// hidden: the timer is not even armed then, so a background tab does not wake for it.
 let polling = false
 function startPolling() {
   if (polling) return
   polling = true
   fetchMinecraft()
-  setInterval(() => document.visibilityState === 'visible' && fetchMinecraft(true), REFRESH_MS)
+  let timer = 0
+  const schedule = () => {
+    clearTimeout(timer)
+    if (document.visibilityState !== 'visible') return
+    timer = window.setTimeout(() => {
+      if (document.visibilityState !== 'visible') return
+      fetchMinecraft(true)
+      schedule()
+    }, REFRESH_MS)
+  }
+  document.addEventListener('visibilitychange', schedule)
+  schedule()
 }
 
 // ---------------------------------------------------------------------------------------------
