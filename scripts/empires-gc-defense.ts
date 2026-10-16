@@ -3,17 +3,19 @@
 // three levels and their module slots (1, 2 and 4), fitting and swapping modules and what each does
 // to the station's type, ruins after a lost battle (and with a lost station) and their cheaper
 // rebuild, auto-resolved battles counting them, fleet battles spawning them with their modules where
-// the planet's layout has them (and the yards too), what a battle leaves of them written back, moving
-// structures round a planet, the galaxy AI building and arming them, and old saves without them.
+// the planet's layout on its battle map has them (and the yards too), what a battle leaves of them
+// written back, placing structures on the map, the galaxy AI building and arming them, and old saves
+// without them (and with a layout round the planet from before the battle maps).
 //
 //   node scripts/empires-gc-defense.ts
 //
 // Every check prints a line; it exits with 1 if any of them failed.
 
 import { generateMap, DEFAULT_RULES } from '../src/apps/games/empires/maps.ts'
-import { BUILD_RADIUS, ORBITALS, ORBITAL_MAX, REBUILD, UNIT, orbitalKey, orbitalMod, orbitalSlots, orbitalType, type FactionId, type OrbitalModId } from '../src/apps/games/empires/data.ts'
+import { BUILD_RADIUS, yardOf, ORBITALS, ORBITAL_MAX, REBUILD, UNIT, orbitalKey, orbitalMod, orbitalSlots, orbitalType, type FactionId, type OrbitalModId } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
-import { baseLeft, layoutPoint, newFleetBattle, type FleetSide } from '../src/apps/games/empires/sim.ts'
+import { LAYOUT_IDS, baseLeft, layoutTop, layoutWorld, nearestClear, newFleetBattle, standBase, type FleetSide, type LayoutItem } from '../src/apps/games/empires/sim.ts'
+import { AUTO_SPOT, SPOT_D, planetMap, polarToMap } from '../src/apps/games/empires/conquestMap.ts'
 import * as G from '../src/apps/games/empires/galaxy.ts'
 import type { Galaxy, OrbitalWork, PlanetBase } from '../src/apps/games/empires/galaxy.ts'
 
@@ -155,7 +157,7 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   const enemy = g.fleets.find((f) => f.owner === 1)!
   Object.assign(enemy, { planet: cap.id, system: cap.system, leg: null, route: [] })
   const c = G.clashAt(g, cap.id)!
-  check('the clash carries the defense stations', JSON.stringify(c.base?.orb) === JSON.stringify(cap.base.orb) && !!c.spots && c.spots.def0.d > 0)
+  check('the clash carries the defense stations', JSON.stringify(c.base?.orb) === JSON.stringify(cap.base.orb) && !c.layout)
   const c0 = credits(g)
   // The battle: site 1 destroyed, site 2's battery shot off.
   G.applyBattle(g, c, { winner: 0, survivors: { 0: c.holderShips, 1: [] }, escaped: { 0: [], 1: [] }, stationLeft: true, base: { yards: ['yard'], mods: [], orb: [null, ['flak', null]] } }, false)
@@ -175,7 +177,7 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   run(g, 200, () => !cap.queue.length)
   check('and comes back at its level, its slots empty', JSON.stringify(G.orbitalAt(cap, 0)) === JSON.stringify({ level: 3, mods: [null, null, null, null] }))
   // A station lost: everything round it is a ruin, the layout stays the holder's until it's taken.
-  cap.layout = { def0: { a: 0.5, d: 2.2 } }
+  cap.layout = { def0: { x: 1500, y: 1500 } }
   g.fleets.push({ id: g.nextId++, owner: 1, ships: ['d-cruiser', 'd-frigate'], items: [], planet: cap.id, system: cap.system, from: -1, leg: null, route: [], arrived: g.time })
   G.layoutFleets(g)
   const c2 = G.clashAt(g, cap.id)!
@@ -192,7 +194,7 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   cap.base = { yards: {}, mods: [] }
   const clash = (orb?: PlanetBase['orb']): G.Clash => ({
     planet: cap.id, holder: 0, attacker: 1, station: 2, holderShips: ['r-frigate'], holderHeld: [], attackerShips: ['d-cruiser', 'd-cruiser', 'd-frigate', 'd-frigate', 'd-fighter', 'd-fighter'], attackerHeld: [],
-    base: { yards: {}, mods: [], ...(orb ? { orb } : {}) }, spots: G.layoutOf(cap),
+    base: { yards: {}, mods: [], ...(orb ? { orb } : {}) },
   })
   const strong: PlanetBase['orb'] = [{ level: 3, mods: ['battery', 'battery', 'flak', 'shield'] }, { level: 3, mods: ['battery', 'launcher', 'flak', 'hangar'] }]
   let without = 0
@@ -214,15 +216,14 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
 
 // --- Fleet battles: spawned with their modules where the layout has them --------------------------------
 {
-  const map = generateMap({ ...DEFAULT_RULES, seed: 11, players: 2, size: 'small', beacons: 0, wrecks: 'none' })
-  const planet = { kind: 'city', x: map.w / 2 + (map.spawns[0].x - map.w / 2) * 0.5, y: map.h / 2 + 1875, r: 560 }
-  const spotsOf = (layout: G.Planet['layout']) => G.layoutOf({ layout })
+  const { g, cap } = campaign()
+  const pm = planetMap(g, cap.id)
   const battle = (layout: G.Planet['layout'], orbitals: NonNullable<FleetSide['orbitals']>) => {
     const sides: FleetSide[] = [
-      { faction: 'republic', team: 0, ships: ['r-frigate'], station: 3, yards: ['yard', 'cyard'], exp: [], orbitals, spots: spotsOf(layout) },
-      { faction: 'droid', team: 1, ships: ['d-frigate', 'd-frigate'] },
+      { faction: 'republic', team: 0, ships: ['r-frigate'], station: 3, yards: ['yard', 'cyard'], exp: [], orbitals, ...(layout ? { layout } : {}), spawn: 0 },
+      { faction: 'droid', team: 1, ships: ['d-frigate', 'd-frigate'], spawn: 1 },
     ]
-    return newFleetBattle({ ...map, planet }, sides, { seed: 5 })
+    return newFleetBattle(pm.map, sides, { seed: pm.map.seed })
   }
   const orbitals = [{ i: 0, level: 3, mods: ['battery', 'flak', 'shield', 'hangar'] as (OrbitalModId | null)[] }, { i: 1, level: 1, mods: ['flak'] as (OrbitalModId | null)[] }]
   const w = battle(undefined, orbitals)
@@ -231,19 +232,26 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   check('both defense stations stand in the battle, ours', orbs.length === 2 && orbs.every((u) => u.owner === 0 && u.t.tier === 'defense'))
   const big = orbs.find((u) => u.t.orbital!.i === 0)!
   check('with their levels and modules as parts', big.t.orbital!.level === 3 && big.t.hardpoints.length === 4 && big.hps.length === 4 && big.t.carrier?.unit === 'r-fighter' && big.shield > 0)
-  const near = (u: { x: number; y: number }, p: { x: number; y: number } | null) => !!p && Math.hypot(u.x - p.x, u.y - p.y) < 1000
-  check('where the planet\'s layout has them round the station', orbs.every((u) => near(u, layoutPoint(w, st, spotsOf(undefined), u.t.orbital!.i ? 'def1' : 'def0'))) && orbs.every((u) => Math.hypot(u.x - st.x, u.y - st.y) <= BUILD_RADIUS))
-  const yard = w.units.find((u) => u.t.id === 'r-yard')!
-  check('and the yards too', near(yard, layoutPoint(w, st, spotsOf(undefined), 'yard')))
-  // Moved round the planet: they stand somewhere else.
-  const moved = battle({ def0: { a: 1.6, d: 2.6 }, yard: { a: -1.6, d: 2.6 } }, orbitals)
-  const st2 = moved.byId.get(moved.players[0].station)!
-  const big2 = moved.units.find((u) => u.t.orbital?.i === 0)!
-  const yard2 = moved.units.find((u) => u.t.id === 'r-yard')!
-  const want = layoutPoint(moved, st2, spotsOf({ def0: { a: 1.6, d: 2.6 } }), 'def0')!
-  check('moved in the layout, they stand where it puts them', Math.hypot(big2.x - big.x, big2.y - big.y) > 400 && Math.hypot(big2.x - want.x, big2.y - want.y) < 1000 && Math.hypot(yard2.x - yard.x, yard2.y - yard.y) > 400, `moved ${Math.round(Math.hypot(big2.x - big.x, big2.y - big.y))}`)
-  const pos = (x: typeof w) => x.units.filter((u) => u.t.orbital || u.t.tier === 'yard').map((u) => `${u.t.id}@${u.x.toFixed(2)},${u.y.toFixed(2)}`).join(' ')
-  check('at the same spots every time', pos(battle(undefined, orbitals)) === pos(w))
+  // The planet's own map, laid out as the orbit view's preview lays it out (standBase on it).
+  const lw = layoutWorld(pm.map)
+  const items: LayoutItem[] = [{ id: 'yard', t: yardOf('republic', 'yard') }, { id: 'cyard', t: yardOf('republic', 'cyard') }, ...orbitals.map((d) => ({ id: (d.i ? 'def1' : 'def0') as LayoutItem['id'], t: orbitalType('republic', d.level, d.mods, d.i) }))]
+  const shown = (layout: G.Planet['layout']) => standBase(lw, 0, 'republic', pm.home, layout, pm.map.spawns.slice(1), items)
+  const at = (x: typeof w, id: string) => x.units.find((u) => (id === 'station' ? u.t.tier === 'station' : id === 'yard' ? u.t.id === 'r-yard' : id === 'cyard' ? u.t.id === 'r-cyard' : u.t.orbital?.i === (id === 'def1' ? 1 : 0)))!
+  const same = (x: typeof w, layout: G.Planet['layout']) => shown(layout).every((s) => { const u = at(x, s.id); return !!u && u.x === s.x && u.y === s.y && u.a === s.a })
+  check('by default, exactly where the planet\'s map preview puts them', same(w, undefined) && shown(undefined).length === 5)
+  check('within the build radius', orbs.every((u) => Math.hypot(u.x - st.x, u.y - st.y) <= BUILD_RADIUS))
+  // Placed elsewhere on the map: they stand exactly there.
+  const now = shown(undefined)
+  const others = (id: string) => now.filter((x) => x.id !== id).map((x) => ({ ...x, t: layoutTop('republic', x.id) }))
+  const spot = (id: 'yard' | 'def0', dx: number, dy: number) => nearestClear(lw, now[0], layoutTop('republic', id), { x: now[0].x + dx, y: now[0].y + dy }, others(id))!
+  const layout: G.Planet['layout'] = Object.fromEntries(now.map((x) => [x.id, { x: x.x, y: x.y }]))
+  layout!.def0 = spot('def0', 900, 900)
+  layout!.yard = spot('yard', -300, -1500)
+  const moved = battle(layout, orbitals)
+  check('placed elsewhere, they stand exactly there', same(moved, layout) && LAYOUT_IDS.every((id) => at(moved, id).x === layout![id]!.x && at(moved, id).y === layout![id]!.y), JSON.stringify(layout))
+  check('and that is somewhere else', Math.hypot(at(moved, 'def0').x - big.x, at(moved, 'def0').y - big.y) > 400)
+  const pos = (x: typeof w) => x.units.filter((u) => u.t.orbital || u.t.tier === 'yard' || u.t.tier === 'station').map((u) => `${u.t.id}@${u.x.toFixed(2)},${u.y.toFixed(2)}`).join(' ')
+  check('at the same spots every time', pos(battle(undefined, orbitals)) === pos(w) && pos(battle(layout, orbitals)) === pos(moved))
   // What the battle leaves of them, written back.
   big.hps[1].hp = 0
   orbs.find((u) => u.t.orbital!.i === 1)!.dead = true
@@ -252,18 +260,15 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   check('a site that didn\'t fight is left out', baseLeft(w, 0, [], [1]).orb?.[0] === undefined)
 }
 
-// --- The layout round a planet --------------------------------------------------------------------------------
+// --- The layout on a planet's map ---------------------------------------------------------------------------
 {
   const { g, cap } = campaign()
-  check('every structure has its own spot, clear of the others', G.STRUCTS.every((id) => G.spotProblem('republic', cap, id, G.spotOf(cap, id)) === null))
-  check('a structure moves where there is room', G.moveStruct(g, 0, cap.id, 'def0', -1.6, 2.0) === null && G.spotOf(cap, 'def0').a === -1.6 && G.spotOf(cap, 'def0').d === 2)
-  check('kept out of the planet and within reach', G.moveStruct(g, 0, cap.id, 'def1', 2.2, 9) === null && G.spotOf(cap, 'def1').d === G.SPOT_D.max && G.moveStruct(g, 0, cap.id, 'def1', 2.2, 0.2) === null && G.spotOf(cap, 'def1').d === G.SPOT_D.min)
-  const yard = G.spotOf(cap, 'yard')
-  G.moveStruct(g, 0, cap.id, 'cyard', yard.a, yard.d)
-  const cy = G.spotOf(cap, 'cyard')
-  check('dropped onto another, it is nudged round to the nearest clear spot', G.spotProblem('republic', cap, 'cyard', cy) === null && cy.a !== yard.a && Math.abs(Math.atan2(Math.sin(cy.a - yard.a), Math.cos(cy.a - yard.a))) < Math.PI / 2)
-  check('not on someone else\'s planet', G.moveStruct(g, 0, g.planets.find((p) => p.owner === 1)!.id, 'station', 0, 2) === 'Not our planet')
-  check('reset puts them all back', G.resetLayout(g, 0, cap.id) === null && !cap.layout && G.STRUCTS.every((id) => JSON.stringify(G.spotOf(cap, id)) === JSON.stringify(G.AUTO_SPOT[id])))
+  const pm = planetMap(g, cap.id)
+  check('a planet\'s map is the same every time', JSON.stringify(planetMap(g, cap.id).map) === JSON.stringify(pm.map) && pm.entries.length >= 1)
+  check('placing structures stores where they stand', G.setLayout(g, 0, cap.id, { def0: { x: 2000, y: 1800 } }) === null && cap.layout?.def0?.x === 2000 && cap.layout.def0.y === 1800)
+  check('not off the map', G.setLayout(g, 0, cap.id, { def0: { x: -5, y: 1800 } }) === 'Nothing to move')
+  check('not on someone else\'s planet', G.setLayout(g, 0, g.planets.find((p) => p.owner === 1)!.id, { station: { x: 2000, y: 2000 } }) === 'Not our planet')
+  check('reset puts them all back', G.resetLayout(g, 0, cap.id) === null && !cap.layout)
 }
 
 // --- The galaxy AI builds and arms them -----------------------------------------------------------------------
@@ -292,11 +297,11 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
 {
   const { g, cap } = campaign()
   cap.base.orb = [{ level: 2, mods: ['battery', null] }, null]
-  cap.layout = { def0: { a: 1, d: 2.4 } }
+  cap.layout = { def0: { x: 2100, y: 1700 } }
   G.orderOrbital(g, 0, cap.id, mod(0, 1, 'flak'))
-  check('a save is version 4', G.saveGalaxy(g) && g.v === 4)
+  check('a save is version 5', G.saveGalaxy(g) && g.v === 5)
   const back = G.loadSave(g.save.id)!
-  check('defense stations, their work and the layout survive a save', JSON.stringify(G.orbitalAt(back.planets[cap.id], 0)) === JSON.stringify({ level: 2, mods: ['battery', null] }) && back.planets[cap.id].queue.some((q) => q.unit === 'orbm0.1.flak') && back.planets[cap.id].layout?.def0?.a === 1)
+  check('defense stations, their work and the layout survive a save', JSON.stringify(G.orbitalAt(back.planets[cap.id], 0)) === JSON.stringify({ level: 2, mods: ['battery', null] }) && back.planets[cap.id].queue.some((q) => q.unit === 'orbm0.1.flak') && back.planets[cap.id].layout?.def0?.x === 2100)
   // A version 3 save, from before: no defense stations, no layout.
   const key = `mvlos.empires.save.${g.save.id}`
   const old = JSON.parse(store.get(key)!) as Galaxy & { v: number }
@@ -309,7 +314,7 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   for (const s of old.sides) for (const i of s.intel ?? []) if (i.base) delete i.base.orb
   store.set(key, JSON.stringify(old))
   const o = G.loadSave(g.save.id)!
-  check('an old save loads, with no defense stations and every structure on its own spot', !!o && o.v === 4 && o.planets.every((p) => !p.base.orb && !p.layout && G.orbitalAt(p, 0) === null) && G.spotOf(o.planets[cap.id], 'def0') === G.AUTO_SPOT.def0)
+  check('an old save loads, with no defense stations and every structure at its default', !!o && o.v === 5 && o.planets.every((p) => !p.base.orb && !p.layout && G.orbitalAt(p, 0) === null))
   check('and plays on', (() => {
     run(o, 30)
     return G.cantOrbital(o, 0, cap.id, build(0)) === null
@@ -321,7 +326,12 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   ;(bad.planets[cap.id] as unknown as { layout: unknown }).layout = { def0: { a: 'x', d: 2 }, station: { a: 0.2, d: 99 }, nope: { a: 0, d: 2 } }
   store.set(key, JSON.stringify(bad))
   const b = G.loadSave(g.save.id)!
-  check('a broken save is made sound', JSON.stringify(b.planets[cap.id].base.orb) === JSON.stringify([{ level: 3, mods: ['battery', null, null, 'flak'] }, null]) && JSON.stringify(b.planets[cap.id].layout) === JSON.stringify({ station: { a: 0.2, d: G.SPOT_D.max } }), JSON.stringify([b.planets[cap.id].base.orb, b.planets[cap.id].layout]))
+  // (A version 4 layout round the planet comes over onto its map as battles stood it: the station at
+  // home, the rest turned round it.)
+  const pm = planetMap(b, cap.id)
+  const S = { a: 0.2, d: SPOT_D.max }
+  const lay = b.planets[cap.id].layout
+  check('a broken save is made sound', JSON.stringify(b.planets[cap.id].base.orb) === JSON.stringify([{ level: 3, mods: ['battery', null, null, 'flak'] }, null]) && JSON.stringify(lay?.station) === JSON.stringify(pm.home) && JSON.stringify(lay?.def0) === JSON.stringify(polarToMap(pm.map, pm.home, S, AUTO_SPOT.def0)) && !(lay as Record<string, unknown>)?.nope, JSON.stringify([b.planets[cap.id].base.orb, lay]))
 }
 
 // (Every unit the battles above can bring stands in UNIT; the defense stations are types of their own.)

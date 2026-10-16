@@ -341,7 +341,7 @@ function copy(b: G.PlanetBase): G.PlanetBase {
   lv2.queue = [{ unit: 'station', left: 10, total: 50 }, { unit: 'r-gunship', left: 21, total: 21 }]
   store.set('mvlos.empires.save.old1', JSON.stringify(old))
   const back = G.loadSave('old1')
-  check('an old save loads', !!back && back.v === 4)
+  check('an old save loads', !!back && back.v === 5)
   const at = (id: number) => back!.planets[id]
   check('a level 3 capital gets both yards it used to build from', at(g.planets.find((p) => p.owner === 0 && p.station === 3)!.id).base.yards.yard === 'up' && at(g.planets.find((p) => p.owner === 0 && p.station === 3)!.id).base.yards.cyard === 'up')
   check('level 2: a Frigate Yard; level 4: both; level 1: none', at(lv2.id).base.yards.yard === 'up' && !at(lv2.id).base.yards.cyard && at(lv4.id).base.yards.cyard === 'up' && G.YARD_KINDS.every((k) => !back!.planets.find((p) => p.station === 1)?.base.yards[k]))
@@ -795,11 +795,11 @@ function copy(b: G.PlanetBase): G.PlanetBase {
     const { g, cap } = rushCampaign()
     G.rushLaunch(g, 0, cap.id)
     g.sides[0].credits = 1
-    check('a save is version 4', G.saveGalaxy(g) && g.v === 4)
+    check('a save is version 5', G.saveGalaxy(g) && g.v === 5)
     const key = `mvlos.empires.save.${g.save.id}`
     const loaded = G.loadSave(g.save.id)!
     const it = loaded.fleets.flatMap((f) => f.items).find((i) => i.rush)
-    check('a rushed ship and the planet\'s cooldown survive a save', !!it && near(it.rush!.done, 0.62, 0.001) && loaded.planets[cap.id].rushAt === cap.rushAt && loaded.v === 4, JSON.stringify(it?.rush))
+    check('a rushed ship and the planet\'s cooldown survive a save', !!it && near(it.rush!.done, 0.62, 0.001) && loaded.planets[cap.id].rushAt === cap.rushAt && loaded.v === 5, JSON.stringify(it?.rush))
     const old = JSON.parse(store.get(key)!) as Galaxy & { v: number }
     old.v = 2
     for (const f of old.fleets) for (const i of f.items) delete i.rush
@@ -809,7 +809,7 @@ function copy(b: G.PlanetBase): G.PlanetBase {
     }
     store.set(key, JSON.stringify(old))
     const o = G.loadSave(g.save.id)!
-    check('a version 2 save loads, every ship a normal ship', !!o && o.v === 4 && o.fleets.every((f) => f.items.every((i) => !i.rush)) && o.fleets.reduce((n, f) => n + f.ships.length, 0) === g.fleets.reduce((n, f) => n + f.ships.length, 0))
+    check('a version 2 save loads, every ship a normal ship', !!o && o.v === 5 && o.fleets.every((f) => f.items.every((i) => !i.rush)) && o.fleets.reduce((n, f) => n + f.ships.length, 0) === g.fleets.reduce((n, f) => n + f.ships.length, 0))
     const ok = G.autoResolve(o, { planet: cap.id, holder: 0, attacker: 1, station: 0, holderShips: ['r-cruiser'], holderHeld: [], attackerShips: ['d-gunship'], attackerHeld: [] }, 3)
     check('and plays (a battle without rushed ships has no word of them)', ok.rushed === undefined)
     const bad = JSON.parse(store.get(key)!) as Galaxy & { v: number }

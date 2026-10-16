@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { FACTIONS, MODULE, ORBITAL_MAX, ORBITAL_TOP, ORBITALS, REBUILD, dims, orbitalMod, orbitalName, orbitalSlots, orbitalType, stageName, stationType, yardOf, yardType, type FactionId, type OrbitalModId, type UnitType } from './data'
 import {
-  SPOT_D, structLong, YARD_KINDS, cancelBuild, orbitalAt, orbitalCost, orbitalLock, orbitalTime, orbitalWorkId, orderOrbital, parseOrbital, rebuildLevel, slotLevel, spotOf, spotProblem,
-  type Galaxy, type OrbitalState, type OrbitalWork, type Planet, type PlanetBase, type StructId,
+  AUTO_SPOT, SPOT_D, structLong, YARD_KINDS, cancelBuild, orbitalAt, orbitalCost, orbitalLock, orbitalTime, orbitalWorkId, orderOrbital, parseOrbital, rebuildLevel, slotLevel,
+  type Galaxy, type OrbitalState, type OrbitalWork, type Planet, type PlanetBase, type Spot, type StructId,
 } from './galaxy'
 import { HpIcon, Icon, ShipArt, unitTip } from './Hud'
 import { HP_COLOR } from './icons'
@@ -13,11 +13,12 @@ import { TAP_SLOP } from './Touch'
 
 // Galactic conquest's orbit view: zoomed right in on one planet, its Command Station, its yards and
 // its defense stations round it, drawn as their real models (from the same cached bitmaps as the
-// cards: one painted picture per look), slowly orbiting together. Each can be picked (the orbit
-// card then shows its orders) and ours dragged to another spot round the planet (galaxy.ts Spot);
-// empty yard and defense sites show as ghost outlines to order them from. The same structures show
-// as small pictures round every planet at the zoom between (see orbitThings and the galaxy map's
-// pins), so what a planet has is plain to see without zooming all the way in.
+// cards: one painted picture per look), slowly orbiting together, where the planet's layout on its
+// battle map puts them, turned back round the planet (conquestMap.ts mapToPolar; they are placed on
+// the map's preview beside it, PlanetMap.tsx). Each can be picked (the orbit card then shows its
+// orders); empty yard and defense sites show as ghost outlines to order them from. The same
+// structures show as small pictures round every planet at the zoom between (see orbitThings and the
+// galaxy map's pins), so what a planet has is plain to see without zooming all the way in.
 //
 // Also the Defense page of a planet's shipyard (PlanetDefense): the two defense sites, their levels
 // and their module slots, ordered in the planet's queue.
@@ -73,10 +74,9 @@ const ART_PX = 512
  * with what stands round it, drawn in content pixels (100 for a map unit) that the camera scales and
  * places without a render (as the map's own layer is). It fades in as the camera closes in on the
  * planet (`kIn` is the zoom it settles at). `sel`: the structure picked; `onPick` picks one (null:
- * none); `onMove` asks to move one of ours (a bearing, and planet radii out, in the layout's own
- * turn, the orbit's motion taken out).
+ * none). `spots`: where each sits round the planet (its own spot, AUTO_SPOT, where left out).
  */
-export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, station, onPick, onMove }: {
+export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, station, spots, onPick }: {
   p: Planet
   at: { x: number; y: number }
   R: number
@@ -87,26 +87,26 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
   live: boolean
   base: PlanetBase
   station: number
+  spots: Partial<Record<StructId, Spot>>
   onPick: (id: StructId | null) => void
-  onMove: (id: StructId, a: number, d: number) => void
 }) {
   const root = useRef<HTMLDivElement>(null)
   const world = useRef<HTMLDivElement>(null)
   const ours = p.owner === ME && live
   const things = orbitThings(faction, station, base, ours)
-  // The orbit's turn so far (radians), and whether it's held still (something picked or dragged).
+  // The orbit's turn so far (radians), and whether it's held still (something picked).
   const phase = useRef(0)
-  const drag = useRef<{ id: StructId; a: number; d: number } | null>(null)
   const held = useRef(false)
-  held.current = !!sel || !!drag.current
+  held.current = !!sel
+  const spotsRef = useRef(spots)
+  spotsRef.current = spots
   const els = useRef(new Map<StructId, HTMLElement>())
   // The content pixels per planet radius (each structure is drawn its own length of them, see
   // structLong).
   const RD = R * 100
   const place = (id: StructId, el: HTMLElement) => {
-    const d = drag.current?.id === id ? drag.current : null
-    const s = d ?? spotOf(p, id)
-    const a = s.a + (d ? 0 : phase.current)
+    const s = spotsRef.current[id] ?? AUTO_SPOT[id]
+    const a = s.a + phase.current
     const t = `translate(${(Math.cos(a) * s.d * RD).toFixed(2)}px, ${(Math.sin(a) * s.d * RD).toFixed(2)}px)`
     if (el.style.transform !== t) el.style.transform = t
   }
@@ -145,7 +145,7 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
     return () => cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p, RD])
-  /** A press on a structure: a tap picks it, a drag (ours) moves it round the planet. */
+  /** A press on a structure: a tap picks it (structures are moved on the map's preview). */
   const down = (id: StructId, e: React.PointerEvent) => {
     e.stopPropagation()
     if (e.button !== 0) return
@@ -159,38 +159,15 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
     } catch {
       // (A pointer that went away.)
     }
-    const spot = (cx: number, cy: number) => {
-      const r = root.current!.getBoundingClientRect()
-      const { x, y, k } = view.cam
-      const px = r.left + (at.x - x) * k + view.size.w / 2
-      const py = r.top + (at.y - y) * k + view.size.h / 2
-      const a = Math.atan2(cy - py, cx - px) - phase.current
-      const d = Math.max(SPOT_D.min, Math.min(SPOT_D.max, Math.hypot(cx - px, cy - py) / (R * k)))
-      return { a: Math.atan2(Math.sin(a), Math.cos(a)), d }
-    }
     const move = (m: PointerEvent) => {
-      if (m.pointerId !== e.pointerId) return
-      if (!moved && Math.hypot(m.clientX - x0, m.clientY - y0) <= slop) return
-      if (!ours) return
-      moved = true
-      const s = spot(m.clientX, m.clientY)
-      drag.current = { id, ...s }
-      held.current = true
-      el.classList.add('is-dragging')
-      el.classList.toggle('is-bad', !!spotProblem(faction, p, id, s))
-      place(id, el)
+      if (m.pointerId === e.pointerId && Math.hypot(m.clientX - x0, m.clientY - y0) > slop) moved = true
     }
     const up = (u: PointerEvent) => {
       if (u.pointerId !== e.pointerId) return
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', up)
       el.removeEventListener('pointercancel', up)
-      el.classList.remove('is-dragging', 'is-bad')
-      const d = drag.current
-      drag.current = null
-      if (moved && d && u.type === 'pointerup') onMove(id, d.a, d.d)
-      else if (!moved && u.type === 'pointerup') onPick(sel === id ? null : id)
-      place(id, el)
+      if (!moved && u.type === 'pointerup') onPick(sel === id ? null : id)
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', up)
@@ -208,8 +185,8 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
           const w = (dw + long * 0.08) * f
           const h = (dh + long * 0.08) * f
           const tip = th.state === 'ghost'
-            ? `${th.name}: nothing built here yet. Click to order it${ours ? '; drag to move the site' : ''}.`
-            : `${th.name}${th.state === 'ruin' ? ': destroyed in a battle, rebuilt for half' : ''}. Click for its orders${ours ? '; drag to move it round the planet' : ''}.`
+            ? `${th.name}: nothing built here yet. Click to order it${ours ? '; drag it on the battle map beside the planet to place it' : ''}.`
+            : `${th.name}${th.state === 'ruin' ? ': destroyed in a battle, rebuilt for half' : ''}. Click for its orders${ours ? '; drag it on the battle map beside the planet to place it' : ''}.`
           // A site whose building is in the planet's queue (a yard, a defense station) shows it.
           const busy = ours && th.state !== 'up' && p.queue.some((q) => q.unit === (th.id === 'def0' ? 'orb0' : th.id === 'def1' ? 'orb1' : th.id))
           return (

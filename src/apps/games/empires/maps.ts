@@ -10,8 +10,9 @@ import { MAP_SCALE } from './scale.ts'
 export type Pt = { x: number; y: number }
 /** How a map's sides copy each other: 'point' (two, turned half way round the middle), 'quad'
  * (four, mirrored left-right and top-bottom), 'tri', 'penta' and 'hex' (three, five and six, turned
- * round the middle) and 'tripair' (six: three pairs of mirror twins, turned a third of the way round). */
-export type Symmetry = 'point' | 'quad' | 'tri' | 'penta' | 'hex' | 'tripair'
+ * round the middle) and 'tripair' (six: three pairs of mirror twins, turned a third of the way round);
+ * 'none': a Galactic conquest planet's map, whose rocks are its own all over (conquestMap.ts). */
+export type Symmetry = 'point' | 'quad' | 'tri' | 'penta' | 'hex' | 'tripair' | 'none'
 /** A round patch of terrain. Fields and nebulas are built from a few overlapping ones, so they read
  * as blobs rather than perfect circles. */
 export type Patch = { x: number; y: number; r: number }
@@ -40,6 +41,9 @@ export type MapDef = {
   wrecks: Wreckage[]
   /** A fleet battle's planet, drawn far behind the battle (kind names its art in planets/). */
   planet?: { kind: string; x: number; y: number; r: number }
+  /** How far round each spawn the scattered rocks keep clear (left out: a station's build radius
+   * round every one). A Galactic conquest planet's entry zones need less than its home. */
+  keep?: number[]
 }
 export type Wreckage = Pt & { value: number }
 
@@ -82,6 +86,7 @@ type Shape = { w: number; h: number; sym: Symmetry }
 /** Every copy of a point under a map's symmetry, the point itself first. */
 export function mirrored(m: Shape, p: Pt): Pt[] {
   const { w, h } = m
+  if (m.sym === 'none') return [p]
   if (m.sym === 'point') return [p, { x: w - p.x, y: h - p.y }]
   if (m.sym === 'quad') return [p, { x: w - p.x, y: p.y }, { x: p.x, y: h - p.y }, { x: w - p.x, y: h - p.y }]
   const c = { x: w / 2, y: h / 2 }

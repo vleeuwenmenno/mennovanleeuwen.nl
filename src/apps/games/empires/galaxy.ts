@@ -7,11 +7,13 @@
 
 import { DOCTRINE, PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
-  FACTIONS, MODULE, MODULE_FX, moduleFits, ORBITAL_MAX, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, dims, needsModule, orbitalMod, orbitalName, orbitalPick, orbitalSlots, orbitalType, stationType, unitOf, yardOf, yardType, SHIP_TIME,
+  FACTIONS, MODULE, MODULE_FX, moduleFits, ORBITAL_MAX, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, needsModule, orbitalMod, orbitalName, orbitalPick, orbitalSlots, orbitalType, stationType, unitOf, yardOf, yardType, SHIP_TIME,
   type FactionId, type ModuleId, type OrbitalModId, type Tier, type UnitType, type Works,
 } from './data.ts'
-import { rng } from './maps.ts'
-import { dpsVs, type RushedIn } from './sim.ts'
+import { rng, type MapDef } from './maps.ts'
+import { dpsVs, type FleetSide, type RushedIn } from './sim.ts'
+import { cleanLayout, entrySpawn, planetMap, type PlanetLayout } from './conquestMap.ts'
+export { AUTO_SPOT, SPOT_D, type PlanetLayout, type Place, type Spot } from './conquestMap.ts'
 
 export type PlanetKind = 'desert' | 'ice' | 'lava' | 'ocean' | 'jungle' | 'city' | 'gas' | 'barren' | 'icegiant' | 'stormgiant' | 'toxic' | 'swamp' | 'crystal' | 'tundra'
 /** Gas giants: big, and their clouds fill a battle over them with nebulas. */
@@ -157,8 +159,10 @@ export type Planet = {
    * yard or an expansion cost when it was queued (a ruin's rebuild is cheaper), for a refund. */
   queue: { unit: string; left: number; total: number; full?: boolean; paid?: number; /** Built RUSH_GC.slowdown slower: the ship started after a rush launch. */ slow?: boolean; /** A defense station being built: the level it comes out at (a ruin's). */ lv?: number }[]
   /** Where its Command Station, yards and defense stations sit round it, as the player placed them
-   * (see StructId and Spot); left out, each at its own spot (AUTO_SPOT). Battles here put them there. */
-  layout?: Partial<Record<StructId, Spot>>
+   * on its battle map (see StructId and conquestMap.ts); left out, each at its default. Battles here
+   * stand them there. Saves before version 5 kept bearings round the planet instead (turned onto
+   * the map on load). */
+  layout?: PlanetLayout
   /** Rush launch: when this planet's Capital Yard may rush a ship again (galaxy time), and a rush
    * with nothing else queued: the next Capital Yard ship it queues goes slower. */
   rushAt?: number
@@ -193,6 +197,10 @@ export type Fleet = {
   /** The fleet it was sent to join up with (Gather): the two become one once both are at the same
    * planet. */
   join?: number
+  /** The system it last came into the current one from, down a hyperlane (-1: it last moved within
+   * this system; left out: it hasn't moved since it was built). An attack comes in at that lane's
+   * entry zone on the planet's battle map (conquestMap.ts entrySpawn). */
+  via?: number
 }
 
 /** The most fleets a side keeps at one planet: more that end up there join up where they fit, and
@@ -233,10 +241,11 @@ export type GalaxyEvent =
   | { k: 'orbital'; planet: number; owner: number; i: number; text: string }
 
 export type Galaxy = {
-  /** 4 since planets have defense stations (PlanetBase.orb) and a layout (Planet.layout); 3 since
+  /** 5 since every planet has a battle map of its own and its layout is placed on it (Planet.layout
+   * in map units, Intel.layout, Fleet.via); 4 since planets have defense stations (PlanetBase.orb) and a layout (Planet.layout); 3 since
    * ships can be rush-launched unfinished (Item.rush, Planet.rushAt); 2 since planets have
    * buildings (yards and expansions); 1 before (see clean). */
-  v: 4
+  v: 5
   /** The save slot it lives in, and the name the player gave it. */
   save: { id: string; name: string }
   name: string
@@ -445,7 +454,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
   const other = rivalOf(opts)
   const defs = opts.choice.kind === 'rim' ? RIM_WARS.filter((s) => s.tier <= (opts.size === 'short' ? 1 : opts.size === 'standard' ? 2 : 3) && (!s.only || s.only === opts.faction || s.only === other)) : generatedDefs(seed, SIZES[opts.size].systems)
   const g: Galaxy = {
-    v: 4,
+    v: 5,
     save: { id: newSaveId(), name: opts.name?.trim() || `${opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`}, ${FACTIONS[opts.faction].name}` },
     name: opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`,
     seed,
@@ -745,6 +754,7 @@ function splitOff(g: Galaxy, f: Fleet, take: string[]): Fleet {
   const nf = newFleet(g, f.owner, f.planet, f.arrived)
   nf.system = f.system
   nf.from = f.from
+  if (f.via !== undefined) nf.via = f.via
   for (const [id, n] of grouped(take)) {
     let left = n
     for (const it of f.items.filter((i) => i.unit === id).sort((a, b) => Number(!!a.held) - Number(!!b.held) || Number(!!a.rush) - Number(!!b.rush))) {
@@ -1059,7 +1069,10 @@ const enemyIn = (g: Galaxy, s: number, owner: number) => ownersIn(g, s, owner).s
 /** What a side last saw of a planet: who held it, its station level and buildings, the other side's
  * ships in its orbit (how many and what they cost; -1 ships: never seen) and when (galaxy seconds).
  * `base` is missing from looks taken before planets had buildings: nothing seen. */
-export type Intel = { owner: number; station: number; base?: PlanetBase; ships: number; value: number; t: number }
+export type Intel = { owner: number; station: number; base?: PlanetBase; ships: number; value: number; t: number
+  /** Where its structures stood (Planet.layout; missing from looks taken before version 5, and for a
+   * planet laid out by default). */
+  layout?: PlanetLayout }
 /** What a side knows of a planet now: live when it sees the system, else its last look. */
 export type Known = Intel & { base: PlanetBase; live: boolean }
 
@@ -1084,18 +1097,18 @@ function garrison(g: Galaxy, o: number, pid: number) {
 }
 /** What side `o` knows of a planet: live when it sees the system, else its last look. */
 export function known(g: Galaxy, o: number, p: Planet): Known {
-  if (sees(g, o, p.system)) return { owner: p.owner, station: p.station, base: p.base, ...garrison(g, o, p.id), t: g.time, live: true }
+  if (sees(g, o, p.system)) return { owner: p.owner, station: p.station, base: p.base, ...(p.layout ? { layout: p.layout } : {}), ...garrison(g, o, p.id), t: g.time, live: true }
   const i = g.sides[o].intel?.[p.id]
   return i ? { ...i, base: i.base ?? emptyBase(), live: false } : { owner: -1, station: 0, base: emptyBase(), ships: -1, value: 0, t: -1, live: false }
 }
 /** The pre-war charts: who holds each planet, its station and buildings now, but no fleets. */
-const chartOf = (g: Galaxy): Intel[] => g.planets.map((p) => ({ owner: p.owner, station: p.station, base: copyBase(p.base), ships: -1, value: 0, t: g.time }))
+const chartOf = (g: Galaxy): Intel[] => g.planets.map((p) => ({ owner: p.owner, station: p.station, base: copyBase(p.base), ...(p.layout ? { layout: copyLayout(p.layout) } : {}), ships: -1, value: 0, t: g.time }))
 /** Side `o` takes a look at a planet now (it sees it, flies through, or hears how a battle ended). */
 function note(g: Galaxy, o: number, p: Planet) {
   const s = g.sides[o]
   if (!s) return
   s.intel ??= chartOf(g)
-  s.intel[p.id] = { owner: p.owner, station: p.station, base: copyBase(p.base), ...garrison(g, o, p.id), t: g.time }
+  s.intel[p.id] = { owner: p.owner, station: p.station, base: copyBase(p.base), ...(p.layout ? { layout: copyLayout(p.layout) } : {}), ...garrison(g, o, p.id), t: g.time }
 }
 /** A fleet passing through a system (or arriving in it) glimpses every planet there. */
 const glimpse = (g: Galaxy, o: number, s: number) => {
@@ -1679,27 +1692,17 @@ export function orbitalValue(f: FactionId, o: OrbitalState) {
   return plan.stages.slice(0, o.level).reduce((s, x) => s + x.cost, 0) + o.mods.reduce((s, m) => s + (m ? orbitalMod(f, m).cost : 0), 0)
 }
 
-// --- Where the structures sit round a planet ----------------------------------------------------------
+// --- Where the structures stand ----------------------------------------------------------------------
 //
-// In the orbit view each planet's Command Station, its two yards and its two defense sites sit round
-// it at a bearing `a` (radians, screen-wise: 0 to the right, clockwise) and a distance `d` in planet
-// radii from its middle. Each has its own spot by default (AUTO_SPOT); the player can drag one to
-// another within SPOT_D, clear of the planet and of the others (by their size at their biggest,
-// STRUCT_R), and put them all back. A battle at the planet stands them the same way round its station.
+// Every planet has a battle map of its own (conquestMap.ts), and its Command Station, its two yards and
+// its two defense sites stand on it where its holder placed them on the orbit view's preview
+// (Planet.layout, in the map's world units; each one left out at its default, conquestMap.ts
+// autoLayout). A battle there stands them exactly so (sim.ts standBase). The orbit view's pictures round
+// the planet show the same layout turned back round it (conquestMap.ts mapToPolar).
 
 /** The structures round a planet: its Command Station, its yards and its two defense sites. */
 export type StructId = 'station' | YardKind | 'def0' | 'def1'
 export const STRUCTS: StructId[] = ['station', 'yard', 'cyard', 'def0', 'def1']
-export type Spot = { a: number; d: number }
-export const AUTO_SPOT: Record<StructId, Spot> = {
-  station: { a: -0.75, d: 2.05 },
-  yard: { a: Math.PI, d: 2.25 },
-  cyard: { a: 0.9, d: 2.3 },
-  def0: { a: -2.25, d: 1.9 },
-  def1: { a: 2.2, d: 1.9 },
-}
-/** How near and how far from the planet's middle a structure may sit, in planet radii. */
-export const SPOT_D = { min: 1.6, max: 2.9 }
 /** How long (planet radii) each kind of structure is drawn round its planet at its biggest: the
  * Command Station at level 4, the yards, a defense station at level 3 (smaller levels in proportion
  * to their size). Not to the battle's scale, where a Capital Yard dwarfs the station. */
@@ -1711,78 +1714,30 @@ export function structLong(t: UnitType) {
   if (t.tier === 'yard') return t.id.endsWith('cyard') ? STRUCT_LONG.cyard : STRUCT_LONG.yard
   return 0.5
 }
-/** How far each structure reaches from its spot (planet radii), at its biggest. Two may not come
- * closer than the sum, and a gap. */
-export function structR(f: FactionId, id: StructId) {
-  const key = `${f}:${id}`
-  let r = structRs.get(key)
-  if (r === undefined) {
-    const t = id === 'station' ? stationType(f, 4, []) : id === 'yard' || id === 'cyard' ? yardOf(f, id) : orbitalType(f, ORBITAL_TOP, [])
-    const [w, h] = dims(t)
-    // (Half its long side, a little less for the corners of a round or narrow one.)
-    structRs.set(key, (r = (structLong(t) / 2) * (0.75 + 0.15 * (Math.min(w, h) / Math.max(w, h)))))
-  }
-  return r
-}
-const structRs = new Map<string, number>()
-const SPOT_GAP = 0.06
-/** Where a structure sits round planet `p`: where the player put it, else its own spot. */
-export const spotOf = (p: Pick<Planet, 'layout'>, id: StructId): Spot => p.layout?.[id] ?? AUTO_SPOT[id]
-/** Every structure's spot round planet `p`. */
-export const layoutOf = (p: Pick<Planet, 'layout'>) => Object.fromEntries(STRUCTS.map((id) => [id, spotOf(p, id)])) as Record<StructId, Spot>
-const spotXY = (s: Spot) => ({ x: Math.cos(s.a) * s.d, y: Math.sin(s.a) * s.d })
-/** Why structure `id` can't sit at spot `s` round planet `p` (of faction `f`), or null. */
-export function spotProblem(f: FactionId, p: Pick<Planet, 'layout'>, id: StructId, s: Spot): string | null {
-  if (!Number.isFinite(s.a) || !Number.isFinite(s.d)) return 'Not a place'
-  if (s.d < SPOT_D.min - 1e-6) return 'Too close to the planet'
-  if (s.d > SPOT_D.max + 1e-6) return 'Too far out'
-  const q = spotXY(s)
-  for (const other of STRUCTS) {
-    if (other === id) continue
-    const o = spotXY(spotOf(p, other))
-    if (Math.hypot(q.x - o.x, q.y - o.y) < structR(f, id) + structR(f, other) + SPOT_GAP) return 'Too close to another structure'
-  }
-  return null
-}
+/** Planet `pid`'s battle map (see conquestMap.ts). */
+export const mapOf = (g: Galaxy, pid: number) => planetMap(g, pid)
 /**
- * Moves structure `id` of planet `planet` (ours) to bearing `a`, `d` planet radii out (kept within
- * SPOT_D). A spot too close to another is nudged round the planet to the nearest clear one within a
- * quarter turn; failing that, it stays where it was. Returns why not, or null.
+ * Our structures of planet `planet` stand where `layout` has them on its battle map from now on (the
+ * orbit view's preview has checked each spot against the map, see sim.ts standBase; here only that
+ * each is a place on it). Returns why not, or null.
  */
-export function moveStruct(g: Galaxy, owner: number, planet: number, id: StructId, a: number, d: number): string | null {
+export function setLayout(g: Galaxy, owner: number, planet: number, layout: PlanetLayout): string | null {
   const p = g.planets[planet]
   if (!p || p.owner !== owner) return 'Not our planet'
-  if (!STRUCTS.includes(id)) return 'Nothing to move'
-  const f = g.sides[owner].faction
-  const dd = Math.max(SPOT_D.min, Math.min(SPOT_D.max, d))
-  const norm = (x: number) => Math.atan2(Math.sin(x), Math.cos(x))
-  for (let k = 0; k <= 24; k++) {
-    for (const s of k ? [1, -1] : [1]) {
-      const spot = { a: +norm(a + s * k * (Math.PI / 48)).toFixed(4), d: +dd.toFixed(4) }
-      if (spotProblem(f, p, id, spot)) continue
-      p.layout = { ...(p.layout ?? {}), [id]: spot }
-      return null
-    }
-  }
-  return 'Too close to another structure'
+  const pm = planetMap(g, planet)
+  const clean = cleanLayout(layout, () => pm)
+  if (!clean) return 'Nothing to move'
+  p.layout = clean
+  return null
 }
-/** Every structure of planet `planet` back on its own spot. */
+/** Every structure of planet `planet` back at its default. */
 export function resetLayout(g: Galaxy, owner: number, planet: number): string | null {
   const p = g.planets[planet]
   if (!p || p.owner !== owner) return 'Not our planet'
   delete p.layout
   return null
 }
-/** A saved layout made sound: only structures that exist, at spots in reach, else their own spot. */
-function cleanLayout(l: unknown): Planet['layout'] {
-  if (!l || typeof l !== 'object') return undefined
-  const out: Partial<Record<StructId, Spot>> = {}
-  for (const id of STRUCTS) {
-    const s = (l as Record<string, Spot | undefined>)[id]
-    if (s && Number.isFinite(s.a) && Number.isFinite(s.d)) out[id] = { a: s.a, d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, s.d)) }
-  }
-  return Object.keys(out).length ? out : undefined
-}
+const copyLayout = (l: PlanetLayout | undefined): PlanetLayout | undefined => (l ? Object.fromEntries(Object.entries(l).map(([id, q]) => [id, { x: q.x, y: q.y }])) : undefined)
 
 // --- Battles ---------------------------------------------------------------------------------------
 
@@ -1790,8 +1745,10 @@ function cleanLayout(l: unknown): Planet['layout'] {
  * the part of each side's ships its fleets hold back in the reserve (included in `Ships`). `base`:
  * the holder's yards and expansions round its station (only when it owns the planet and has one). */
 export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[]; base?: PlanetBase
-  /** Where the holder's structures sit round the planet (see Spot), with its base. */
-  spots?: Record<StructId, Spot>
+  /** Where the holder's structures stand on the planet's battle map (see Planet.layout), with its base. */
+  layout?: PlanetLayout
+  /** The system the attackers came from (see Fleet.via): their entry zone on the planet's map. */
+  via?: number
   /** The ships among them rush-launched unfinished (see Rushed), by side. */
   holderRush?: RushedShip[]; attackerRush?: RushedShip[] }
 
@@ -1811,7 +1768,29 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
   const rushed = (o: number): RushedShip[] => here.filter((f) => f.owner === o).flatMap((f) => f.items.flatMap((i) => (i.rush ? [{ unit: i.unit, ...i.rush, ...(i.held ? { held: true } : {}) }] : [])))
   const hr = rushed(holder)
   const ar = rushed(attacker)
-  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base), spots: layoutOf(p) } : {}), ...(hr.length ? { holderRush: hr } : {}), ...(ar.length ? { attackerRush: ar } : {}) }
+  // The attackers come in where the first of their fleets here came from.
+  const first = here.filter((f) => f.owner === attacker).sort((a, b) => a.arrived - b.arrived || a.id - b.id)[0]
+  const via = first?.via
+  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base), ...(p.layout ? { layout: copyLayout(p.layout) } : {}) } : {}), ...(via !== undefined ? { via } : {}), ...(hr.length ? { holderRush: hr } : {}), ...(ar.length ? { attackerRush: ar } : {}) }
+}
+
+/**
+ * A battle the player fights out: the planet's own map (conquestMap.ts; always the same for the
+ * planet) and the two sides. The holder starts at home, its station, yards and defense stations
+ * standing where the planet's layout has them (see sim.ts newFleetBattle); the attackers drop out of
+ * hyperspace at the entry zone of the lane they came down (conquestMap.ts entrySpawn). Ships the
+ * fleets hold back start in the battle's reserve, to be called in from there.
+ */
+export function clashBattle(g: Galaxy, c: Clash): { map: MapDef; sides: FleetSide[] } {
+  const pm = planetMap(g, c.planet)
+  const sides: FleetSide[] = [
+    {
+      faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, rushed: rushIntoBattle(c.holderRush), station: c.station, spawn: 0,
+      ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods], orbitals: orbitalsUp(c.base).map(({ i, o }) => ({ i, level: o.level, mods: [...o.mods] })), ...(c.layout ? { layout: c.layout } : {}) } : {}),
+    },
+    { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld, rushed: rushIntoBattle(c.attackerRush), spawn: entrySpawn(pm, c.via) },
+  ]
+  return { map: pm.map, sides }
 }
 
 /** Seconds into an auto-resolved battle before held back ships are called in (sooner when nothing
@@ -2150,6 +2129,7 @@ export function tickGalaxy(g: Galaxy, dt: number) {
     if (f.leg.left > 0) continue
     // Into a system (to stay, or on the way through): a look round it as it comes out of hyperspace.
     if (f.leg.system !== f.system) glimpse(g, f.owner, f.leg.system)
+    f.via = f.leg.system !== f.system ? f.system : -1
     f.system = f.leg.system
     if (f.leg.planet >= 0) {
       f.planet = f.leg.planet
@@ -2879,7 +2859,7 @@ function cleanBase(b: PlanetBase | undefined): PlanetBase | undefined {
 /** A saved campaign, made fit for this version of the game, or null. */
 function clean(v: Galaxy | null): Galaxy | null {
   const version = (v as { v?: number } | null)?.v
-  if (!v || (version !== 1 && version !== 2 && version !== 3 && version !== 4) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
+  if (!v || (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
   // Ships that no longer exist in the game are dropped.
   for (const f of v.fleets) {
     f.ships = (f.ships ?? []).filter((id) => UNIT[id])
@@ -2916,8 +2896,9 @@ function clean(v: Galaxy | null): Galaxy | null {
       if (!q.slow) delete q.slow
       if (typeof q.lv !== 'number') delete q.lv
     }
-    // Saves from before the orbit view (version 4) have no layout: every structure on its own spot.
-    const layout = cleanLayout(p.layout)
+    // Saves from before the orbit view (version 4) have no layout: every structure at its default.
+    // Saves from before the battle maps (version 5) kept bearings round the planet: turned onto its map.
+    const layout = cleanLayout(p.layout, () => planetMap(v, p.id))
     if (layout) p.layout = layout
     else delete p.layout
     if (!PLANET_KINDS[p.kind]) p.kind = 'barren'
@@ -2939,7 +2920,17 @@ function clean(v: Galaxy | null): Galaxy | null {
   for (const s of v.sides) if (!Array.isArray(s.intel) || s.intel.length !== v.planets.length) s.intel = chartOf(v)
   // What each side last saw of a planet before there were buildings: what that station level had.
   for (const s of v.sides) for (const i of s.intel!) if (i) i.base = cleanBase(i.base) ?? (version === 1 ? baseOfOld(i.station ?? 0) : emptyBase())
-  v.v = 4
+  // What each side last saw of where a planet's structures stood (version 5; looks before have none:
+  // the planet shows laid out by default).
+  for (const s of v.sides)
+    s.intel!.forEach((i, pid) => {
+      if (!i) return
+      const l = cleanLayout(i.layout, () => planetMap(v, pid))
+      if (l) i.layout = l
+      else delete i.layout
+    })
+  for (const f of v.fleets) if (typeof f.via !== 'number' || !Number.isInteger(f.via)) delete f.via
+  v.v = 5
   updateSight(v)
   return v
 }
