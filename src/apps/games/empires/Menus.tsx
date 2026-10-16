@@ -8,7 +8,7 @@ import { REJOIN_WAIT, mpName } from './net'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
-import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
+import { empiresMapSort, empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresMapSort as MapSort } from '../prefs'
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Reinforce, type World } from './sim'
 import { MAP_SCALE } from './scale'
@@ -1193,27 +1193,181 @@ export function mapSize(m: MapDef) {
   return { cls, dims: `${(m.w / 1000).toFixed(1)}k × ${(m.h / 1000).toFixed(1)}k` }
 }
 
-/** A map in the picker: preview, size, what's on it, and its description. */
-export function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; blurb: string; on: boolean; onPick: () => void }) {
+/** One map in the picker's list: a thumbnail, its name and terrain, a one-line description, and
+ * its size, players, beacons and ore in columns. */
+function MapRow({ m, title, blurb, on, sel, onPick, onFocus }: { m: MapDef; title: string; blurb: string; on: boolean; sel: boolean; onPick: () => void; onFocus: () => void }) {
   const size = mapSize(m)
-  const terrain = [m.fields.length && 'asteroid fields', m.nebulas.length && 'nebulas'].filter(Boolean).join(' and ')
+  const terrain = [m.fields.length > 0 && 'Fields', m.nebulas.length > 0 && 'Nebulas', m.wrecks.length > 0 && 'Wrecks'].filter(Boolean) as string[]
   return (
-    <button className={`ew-mapcard ${on ? 'is-on' : ''}`} onClick={onPick} aria-pressed={on}>
+    <button className={`ew-maprow ${on ? 'is-on' : ''} ${sel ? 'is-sel' : ''}`} onClick={onPick} onFocus={onFocus} role="option" aria-selected={sel} aria-current={on || undefined} tabIndex={sel ? 0 : -1}>
       <MapPreview map={m} className="is-thumb" />
-      <span className="ew-mapcard-head">
-        <strong>{title}</strong>
-        <em data-tip={`${size.dims} units`}>{size.cls}</em>
+      <span className="ew-maprow-main">
+        <span className="ew-maprow-name">
+          <strong>{title}</strong>
+          {on && <em className="is-now">Current</em>}
+          {terrain.map((t) => (
+            <em key={t}>{t}</em>
+          ))}
+        </span>
+        <small className="ew-maprow-blurb">{blurb}</small>
+        <small className="ew-maprow-short">
+          {m.spawns.length} players · {size.cls}
+        </small>
       </span>
-      <span className="ew-mapcard-stats">
-        <b>{m.spawns.length} players</b>
-        <span>{size.dims}</span>
-        <span>{m.ore.length} ore</span>
-        <span>{m.beacons.length} beacons</span>
-        {m.wrecks.length > 0 && <span>{m.wrecks.length} wrecks</span>}
+      <span className="ew-maprow-size" data-tip={`${size.dims} units`}>
+        <b>{size.cls}</b>
+        <small>{size.dims}</small>
       </span>
-      {terrain && <small className="ew-mapcard-terrain">With {terrain}</small>}
-      <small className="ew-mapcard-blurb">{blurb}</small>
+      <span className="ew-maprow-n">{m.spawns.length}</span>
+      <span className="ew-maprow-n">{m.beacons.length}</span>
+      <span className="ew-maprow-n">{m.ore.length}</span>
     </button>
+  )
+}
+
+const SORTS: [MapSort['by'], string][] = [
+  ['name', 'Name'],
+  ['size', 'Size'],
+  ['players', 'Players'],
+]
+const mapArea = (m: MapDef) => m.w * m.h
+
+/**
+ * The map picker of both lobbies: the maps as a list to search (name and description) and sort
+ * (name, size or players; the last sort is remembered in this browser), with quick filters by
+ * player count. The generated map stays pinned at the foot, whatever the search. Arrow keys move
+ * through the list and Enter picks; the search box takes the keys while it has the focus.
+ */
+export function MapPicker({ current, generated, generatedBlurb, onPick, onClose }: { current: string; generated: MapDef; generatedBlurb: string; onPick: (id: string) => void; onClose: () => void }) {
+  const coarse = useCoarse()
+  const sort = empiresMapSort.use()
+  const [query, setQuery] = useState('')
+  const [players, setPlayers] = useState<number | null>(null)
+  const counts = useMemo(() => [...new Set(MAPS.map((m) => m.spawns.length))].sort((a, b) => a - b), [])
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const shown = MAPS.filter((m) => (players === null || m.spawns.length === players) && words.every((w) => `${m.name} ${m.blurb}`.toLowerCase().includes(w))).sort((a, b) => {
+    const by = sort.by === 'size' ? mapArea(a) - mapArea(b) : sort.by === 'players' ? a.spawns.length - b.spawns.length : 0
+    return (by || a.name.localeCompare(b.name)) * (sort.desc ? -1 : 1)
+  })
+  // Every row, the generated map last: what the arrow keys walk through.
+  const ids = [...shown.map((m) => m.id), GENERATED]
+  // The selected row, by its map (null: the first), so a new sort keeps it and a new search starts at the top.
+  const [selId, setSelId] = useState<string | null>(current)
+  const at = selId === null ? 0 : Math.max(0, ids.indexOf(selId))
+  const list = useRef<HTMLDivElement>(null)
+  const search = useRef<HTMLInputElement>(null)
+  // The current map in view when the picker opens; the selected one as it moves.
+  useEffect(() => {
+    list.current?.querySelector(`[data-id="${ids[at]}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [at, ids.join()])
+  // Typing on a desktop goes straight to the search; a phone's keyboard waits for a tap.
+  useEffect(() => {
+    if (!coarse) search.current?.focus({ preventScroll: true })
+  }, [coarse])
+  const move = (d: number, focusRow: boolean) => {
+    const next = Math.max(0, Math.min(ids.length - 1, at + d))
+    setSelId(ids[next])
+    if (focusRow) list.current?.querySelector<HTMLElement>(`[data-id="${ids[next]}"] > button`)?.focus()
+  }
+  const keys = (e: React.KeyboardEvent, inRows: boolean) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      move(e.key === 'ArrowDown' ? 1 : -1, inRows)
+    } else if (e.key === 'Enter' && !inRows) {
+      e.preventDefault()
+      onPick(ids[at])
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      onClose()
+    }
+  }
+  const setSort = (by: MapSort['by']) => empiresMapSort.set((s) => ({ by, desc: s.by === by ? !s.desc : false }))
+  const clear = () => {
+    setQuery('')
+    setPlayers(null)
+    setSelId(null)
+    search.current?.focus({ preventScroll: true })
+  }
+  const filtered = !!words.length || players !== null
+  return (
+    <Modal title="Choose a map" onClose={onClose} wide className="ew-mappicker-modal">
+      <div className="ew-mappicker">
+        <div className="ew-mappicker-tools">
+          <label className="ew-mapsearch">
+            <Icon name="search" size={15} />
+            <input
+              ref={search}
+              type="search"
+              value={query}
+              placeholder="Search maps"
+              aria-label="Search maps by name or description"
+              spellCheck={false}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                setSelId(null)
+              }}
+              onKeyDown={(e) => keys(e, false)}
+            />
+          </label>
+          <div className="ew-mappicker-opts">
+            <div className="ew-seg ew-mapfilter" role="group" aria-label="Players">
+              <button className={players === null ? 'is-on' : ''} aria-pressed={players === null} onClick={() => (setPlayers(null), setSelId(null))}>
+                All
+              </button>
+              {counts.map((n) => (
+                <button key={n} className={players === n ? 'is-on' : ''} aria-pressed={players === n} onClick={() => (setPlayers(players === n ? null : n), setSelId(null))} data-tip={`Maps for ${n} players`}>
+                  {n}P
+                </button>
+              ))}
+            </div>
+            <div className="ew-seg ew-mapsort" role="group" aria-label="Sort maps">
+              {SORTS.map(([by, label]) => {
+                const on = sort.by === by
+                return (
+                  <button key={by} className={on ? 'is-on' : ''} aria-pressed={on} onClick={() => setSort(by)} data-tip={on ? 'Click again to reverse' : `Sort by ${label.toLowerCase()}`}>
+                    {label}
+                    {on && <span aria-label={sort.desc ? 'descending' : 'ascending'}>{sort.desc ? ' ↓' : ' ↑'}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+        <div className="ew-maprow is-head" aria-hidden="true">
+          <span />
+          <span>Map</span>
+          <span>Size</span>
+          <span>Players</span>
+          <span>Beacons</span>
+          <span>Ore</span>
+        </div>
+        <div className="ew-maplist" ref={list} role="listbox" aria-label="Maps" onKeyDown={(e) => keys(e, true)}>
+          {/* The maps scroll; the generated map stays in view under them. */}
+          <div className="ew-maplist-maps" role="none">
+            {shown.map((m, i) => (
+              <div key={m.id} data-id={m.id} role="none">
+                <MapRow m={m} title={m.name} blurb={m.blurb} on={current === m.id} sel={at === i} onPick={() => onPick(m.id)} onFocus={() => setSelId(m.id)} />
+              </div>
+            ))}
+            {!shown.length && (
+              <div className="ew-mapempty">
+                <p>
+                  No maps match{words.length ? ` “${query.trim()}”` : ''}
+                  {players !== null ? ` with ${players} players` : ''}.
+                </p>
+                <button className="ew-chip" onClick={clear}>
+                  {words.length ? 'Clear search' : 'Show all maps'}
+                </button>
+              </div>
+            )}
+          </div>
+          <p className="ew-maplist-sep">{filtered && shown.length ? 'Or build your own' : 'Build your own'}</p>
+          <div data-id={GENERATED} role="none">
+            <MapRow m={generated} title="Generated" blurb={generatedBlurb} on={current === GENERATED} sel={at === shown.length} onPick={() => onPick(GENERATED)} onFocus={() => setSelId(GENERATED)} />
+          </div>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -1524,20 +1678,13 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         </LaunchBar>
       </div>
       {picker && (
-        <Modal title="Choose a map" onClose={() => setPicker(false)} wide className="ew-mappicker-modal">
-          <div className="ew-mappicker">
-            {MAPS.map((m) => (
-              <MapCard key={m.id} m={m} title={m.name} blurb={m.blurb} on={!isGen && m.id === map.id} onPick={() => pickMap(m)} />
-            ))}
-            <MapCard
-              m={generated}
-              title="Generated"
-              blurb={`Built from your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them in Battle settings after picking it.`}
-              on={isGen}
-              onPick={() => pickMap(generated, GENERATED)}
-            />
-          </div>
-        </Modal>
+        <MapPicker
+          current={isGen ? GENERATED : map.id}
+          generated={generated}
+          generatedBlurb={`From your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them in Battle settings after picking it.`}
+          onPick={(id) => (id === GENERATED ? pickMap(generated, GENERATED) : pickMap(MAP[id] ?? MAPS[0]))}
+          onClose={() => setPicker(false)}
+        />
       )}
     </div>
   )

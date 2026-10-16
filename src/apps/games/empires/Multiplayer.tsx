@@ -4,7 +4,7 @@ import { DIFFICULTY, PROFILES, profileOf } from './ai'
 import { CREDIT_STEPS, FACTION_IDS, FACTIONS } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
-import { AiPicker, GenControls, LaunchBar, MapBlurb, MapCard, MapLegend, MapPreview, Modal, ReinforceOptions, slotColor, type Slot } from './Menus'
+import { AiPicker, GenControls, LaunchBar, MapBlurb, MapLegend, MapPicker, MapPreview, Modal, ReinforceOptions, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
@@ -396,20 +396,13 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
         </LaunchBar>
       </div>
       {picker && (
-        <Modal title="Choose a map" onClose={() => setPicker(false)} wide className="ew-mappicker-modal">
-          <div className="ew-mappicker">
-            {MAPS.map((m) => (
-              <MapCard key={m.id} m={m} title={m.name} blurb={m.blurb} on={lobby.map === m.id} onPick={() => (setPicker(false), setup({ map: m.id }))} />
-            ))}
-            <MapCard
-              m={generated}
-              title="Generated"
-              blurb={`Built from rules and a seed (now: ${generated.name}, seed ${lobby.gen.seed}). Change them in Battle settings after picking it.`}
-              on={lobby.map === GENERATED}
-              onPick={() => (setPicker(false), setup({ map: GENERATED }))}
-            />
-          </div>
-        </Modal>
+        <MapPicker
+          current={lobby.map}
+          generated={generated}
+          generatedBlurb={`From rules and a seed (now: ${generated.name}, seed ${lobby.gen.seed}). Change them in Battle settings after picking it.`}
+          onPick={(id) => (setPicker(false), setup({ map: id }))}
+          onClose={() => setPicker(false)}
+        />
       )}
       {children}
     </div>

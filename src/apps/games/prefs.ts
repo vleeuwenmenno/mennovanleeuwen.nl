@@ -35,6 +35,13 @@ export const gladiatorVolume = levelPref('mvlos.gladiator.volume', 0.8)
 export type EmpiresBus = 'sfx' | 'voice' | 'ui' | 'amb' | 'music'
 export type EmpiresMix = Record<EmpiresBus, number>
 
+/** How the lobbies' map picker sorts its list, remembered in this browser. */
+export type EmpiresMapSort = { by: 'name' | 'size' | 'players'; desc: boolean }
+export const empiresMapSort = jsonPref<EmpiresMapSort>('mvlos.empires.mapsort', { by: 'name', desc: false }, (v) => ({
+  by: v.by === 'size' || v.by === 'players' ? v.by : 'name',
+  desc: v.desc === true,
+}))
+
 export const empiresMuted = flagPref('mvlos.empires.muted', false)
 export const empiresMusic = flagPref('mvlos.empires.music', true)
 export const empiresVolume = levelPref('mvlos.empires.volume', 0.7)

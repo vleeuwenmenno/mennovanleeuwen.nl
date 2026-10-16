@@ -2829,6 +2829,16 @@ phone everything is one column, with each player as a two-line card. A launch ba
 view at every size. It says what the battle is still waiting for, and holds *Start battle* for the
 host, *I'm ready* for the others, or *Launch battle* in a skirmish.
 
+*Change map* opens the map picker. It lists the maps one to a row: a thumbnail, the name with its
+terrain (fields, nebulas, wrecks), a one-line description, and the map's size, players, beacons and
+ore. A search box filters by name and description; it takes the focus on a desktop, but not on a
+touch screen, where it would pop up the keyboard. Quick filters pick a player count. The list sorts
+by name, size or players; clicking the active sort again reverses it, and the last sort is
+remembered in this browser (`mvlos.empires.mapsort`). The current map is marked and scrolled into
+view. The arrow keys move through the list and Enter picks, so typing part of a name and pressing
+Enter picks the first match. The generated map stays pinned under the list, whatever the search. On
+a phone the picker fills the screen and each map takes two lines.
+
 Battles run in deterministic lockstep: every player's browser runs the whole battle, and only
 orders cross the network. The server ([`server/empires.ts`](server/empires.ts), on the WebSocket
 `/api/empires/ws` from the dependency-free [`server/ws.ts`](server/ws.ts)) keeps the clock at 30

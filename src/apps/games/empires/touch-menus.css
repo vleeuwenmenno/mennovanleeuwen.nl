@@ -162,6 +162,15 @@
   .ew-root.ew-deck .ew-areahint > span {
     flex: 1 1 200px;
   }
+  /* The map picker's search, filters and sort. */
+  .ew-root.ew-deck .ew-mapsearch {
+    min-height: 40px;
+  }
+  .ew-root.ew-deck .ew-mappicker .ew-seg button {
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 13px;
+  }
 
   /* The tech tree's cancel buttons. */
   .ew-root.ew-deck .ew-tnode-x {

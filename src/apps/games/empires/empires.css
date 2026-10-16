@@ -768,31 +768,6 @@
     min-width: 0;
   }
 }
-.ew-maplist {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ew-deck .ew-mapcard {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px;
-  text-align: left;
-}
-.ew-mapcard span {
-  display: flex;
-  flex-direction: column;
-}
-.ew-mapcard strong {
-  font-size: 12.5px;
-}
-.ew-mapcard small {
-  color: var(--ew-muted);
-}
-.ew-mapcard.is-on small {
-  color: #dce8ff;
-}
 .ew-mappreview {
   display: block;
   width: 100%;
@@ -981,73 +956,279 @@
 .ew-areahint .ew-dot {
   margin-right: 6px;
 }
+/* The map picker: a search box, quick filters by player count and the sort, over a list of maps
+   with the generated map pinned at its foot. One height whatever the filter, so the dialog doesn't
+   jump as the list shrinks; on a phone it fills the screen and each map takes two lines. */
 .ew-modal.ew-mappicker-modal {
-  width: min(980px, 100%);
+  width: min(880px, 100%);
+  height: min(680px, 100%);
 }
-.ew-mappicker {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 10px;
-}
-.ew-deck .ew-mappicker .ew-mapcard {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 5px;
-  padding: 8px;
-}
-.ew-mappicker .ew-mappreview.is-thumb {
-  width: 100%;
-  height: 120px;
-}
-/* Rows, not the stacked column older map cards use for their spans. */
-.ew-mapcard .ew-mapcard-head,
-.ew-mapcard .ew-mapcard-stats {
-  flex-direction: row;
-}
-.ew-mapcard-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-.ew-mappicker .ew-mapcard-head strong {
-  font-size: 13.5px;
-}
-.ew-mapcard-head em {
-  font-style: normal;
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 1px 7px;
-  border-radius: 8px;
-  border: 1px solid var(--ew-cell-line);
-  color: #c4d0e4;
-}
-.ew-mapcard-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 8px;
-  font-size: 11.5px;
-  color: #c4d0e4;
-}
-.ew-mapcard-stats b {
-  font-weight: 600;
-  color: var(--ew-head);
-}
-.ew-mappicker .ew-mapcard-terrain {
-  color: #e8c98c;
-}
-.ew-mappicker .ew-mapcard-blurb {
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+.ew-modal.ew-mappicker-modal .ew-frame-in {
   overflow: hidden;
 }
-.ew-mapcard.is-on .ew-mapcard-stats,
-.ew-mapcard.is-on .ew-mapcard-head em {
-  color: #dce8ff;
+.ew-mappicker {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  container: ew-picker / inline-size;
+}
+.ew-mappicker-tools {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.ew-mapsearch {
+  flex: 1 1 220px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: var(--ew-cell);
+  border: 1px solid var(--ew-cell-line);
+  color: var(--ew-muted);
+}
+.ew-mapsearch:focus-within {
+  border-color: var(--ew-active-hi);
+}
+.ew-deck .ew-mapsearch input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ew-text);
+  background: none;
+  border: 0;
+  outline: none;
+}
+.ew-mappicker-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.ew-mapsort span {
+  color: var(--ew-gold);
+}
+.ew-maplist {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ew-maplist-maps {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-right: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ew-rim) transparent;
+}
+/* A map: thumbnail, name (with its terrain) over a one-line description, then size, players,
+   beacons and ore in columns. */
+.ew-maprow {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 104px 58px 62px 42px;
+  align-items: center;
+  gap: 12px;
+}
+.ew-deck .ew-maprow:not(.is-head) {
+  width: 100%;
+  padding: 6px 12px 6px 6px;
+  text-align: left;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ew-cell) 60%, transparent);
+  border: 1px solid var(--ew-cell-line);
+}
+.ew-maprow.is-head {
+  flex: none;
+  padding: 0 15px 0 7px;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-maprow.is-head > :nth-child(n + 4),
+.ew-maprow-n {
+  text-align: center;
+}
+.ew-deck .ew-maprow.is-on {
+  border-color: var(--ew-rim-hi);
+  box-shadow: inset 3px 0 0 var(--ew-gold);
+}
+.ew-deck .ew-maprow.is-sel {
+  border-color: var(--ew-active-hi);
+  background: color-mix(in srgb, var(--ew-active) 22%, var(--ew-cell));
+}
+.ew-maprow .ew-mappreview.is-thumb {
+  width: 96px;
+  height: 60px;
+}
+.ew-maprow-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ew-maprow-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.ew-maprow-name strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ew-display);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--ew-head);
+}
+.ew-maprow-name em {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--ew-cell-line);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-maprow-name em.is-now {
+  color: var(--ew-gold);
+  border-color: color-mix(in srgb, var(--ew-gold) 45%, transparent);
+}
+.ew-maprow-blurb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--ew-muted);
+}
+.ew-maprow-short {
+  display: none;
+  font-size: 11.5px;
+  color: var(--ew-muted);
+}
+.ew-maprow-size {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+.ew-maprow-size b {
+  font-weight: 600;
+  font-size: 12px;
+}
+.ew-maprow-size small,
+.ew-maprow-n {
+  font-variant-numeric: tabular-nums;
+}
+.ew-maprow-size small {
+  font-size: 11px;
+  color: var(--ew-muted);
+}
+.ew-maprow-n {
+  font-size: 13px;
+}
+.ew-maplist-sep {
+  flex: none;
+  margin: 6px 0 0;
+  font-family: var(--ew-display);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-mapempty {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 12px;
+  border-radius: 6px;
+  border: 1px dashed var(--ew-cell-line);
+  color: var(--ew-muted);
+}
+.ew-mapempty p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Narrower: no beacons and ore columns. */
+@container ew-picker (max-width: 680px) {
+  .ew-maprow {
+    grid-template-columns: 84px minmax(0, 1fr) 96px 56px;
+  }
+  .ew-maprow > :nth-child(n + 5) {
+    display: none;
+  }
+  .ew-maprow .ew-mappreview.is-thumb {
+    width: 84px;
+    height: 54px;
+  }
+}
+/* A phone: each map in two lines (name, then players and size), the options a row each. */
+@container ew-picker (max-width: 520px) {
+  .ew-maprow {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .ew-maprow.is-head,
+  .ew-maprow > :nth-child(n + 3),
+  .ew-maprow-blurb,
+  .ew-maprow-name em:not(.is-now) {
+    display: none;
+  }
+  .ew-maprow-short {
+    display: block;
+  }
+  .ew-deck .ew-maprow:not(.is-head) {
+    min-height: 58px;
+    padding: 6px 10px 6px 6px;
+  }
+  .ew-maprow .ew-mappreview.is-thumb {
+    width: 72px;
+    height: 46px;
+  }
+  .ew-mapsearch {
+    flex-basis: 100%;
+  }
+  .ew-mappicker-opts {
+    width: 100%;
+  }
+  .ew-mappicker-opts > .ew-seg {
+    flex: 1 1 auto;
+  }
+  .ew-mappicker-opts > .ew-seg > button {
+    flex: 1;
+  }
+  .ew-mapempty {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+@container (max-width: 560px) {
+  .ew-modal-back:has(> .ew-mappicker-modal) {
+    padding: 0;
+  }
+  .ew-modal.ew-mappicker-modal {
+    height: 100%;
+  }
 }
 .ew-deploybox {
   width: min(400px, calc(100% - 32px));
