@@ -155,7 +155,7 @@ export const onHull = (m: Model, x: number, y: number) => m.parts.some((p) => p.
 
 /** Where scorch marks can go: spots on the hull, the first few showing from light damage, more as
  * it gets worse. */
-function scorchSpots(parts: Part[], w: number, h: number, seed: number): Scorch[] {
+export function scorchSpots(parts: Part[], w: number, h: number, seed: number): Scorch[] {
   const solid = parts.filter((p) => p.pts.length >= 3 && !p.glow && !p.detach)
   const r = rng(seed ^ 0x5c0)
   const out: Scorch[] = []
