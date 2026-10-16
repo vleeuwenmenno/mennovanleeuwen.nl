@@ -1623,15 +1623,25 @@ click opens the Minecraft server window).
 
 ### Weather
 
-The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a full forecast window in the
-spirit of Apple Weather: current conditions, the next 24 hours (temperature, precipitation or wind),
-a 10-day outlook with temperature-range bars, and detail tiles for UV, feels like, precipitation,
-visibility, humidity, pressure, wind, sunrise/sunset, moon phase and air quality. It uses the same
-Open-Meteo fetch as the widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the
-browser with no API key. On a wide window the layout grows to a multi-column tile grid and an optional
-locations sidebar; on a phone or a narrow pane it stays a single scrolling column with a locations
-sheet. Saved cities and units sync with your account; the browser's own location stays on that device.
-Open it from All apps, Spotlight, the dock, `weather` in the terminal, or from the weather widget.
+The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a forecast dashboard: current
+conditions, the next hour of precipitation, the coming hours (temperature, precipitation or wind), a
+10-day outlook, and tiles for UV, sunrise and sunset, wind, precipitation, feels like, humidity,
+pressure, visibility, the moon, a precipitation radar and air quality. A strip at the top of the
+window switches location and refreshes. On a wide window the tiles sit in a grid; on a tablet the
+10-day list sits beside the map; on a phone or a narrow pane they stack. Behind the cards the
+window keeps the sky from before: clear, night, cloud, fog, rain, snow or storm, from the current
+conditions. Each card opens a detail
+with a chart or the reading written out. It uses the same Open-Meteo fetch as the widget
+([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key, including
+15-minute precipitation. The map card is that radar, centred on the selected place: a quiet gray
+canvas (Esri's dark canvas in a dark theme, the light canvas when the document is in light mode)
+with the latest past [RainViewer](https://www.rainviewer.com/) frame on top. The card is one button
+and opens a larger copy of the same map. If RainViewer does not answer, the canvas stays and the
+map says the radar is unavailable; the rest of the forecast is unaffected. The line at the bottom
+of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
+[OpenStreetMap](https://www.openstreetmap.org/copyright)). Saved cities and units sync with your
+account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
+dock, `weather` in the terminal, or from the weather widget.
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
