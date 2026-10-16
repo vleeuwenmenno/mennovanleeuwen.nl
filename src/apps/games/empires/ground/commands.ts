@@ -1,19 +1,26 @@
-import { cmdMove, cmdStop, type GroundWorld, type Owner } from './sim.ts'
+import { cmdCancel, cmdConstruct, cmdPlace, cmdRally, cmdTrain } from './build.ts'
+import { GROUND_UNIT, cmdMove, cmdStop, type GroundWorld, type Owner } from './sim.ts'
 
 // Every order a player can give in a ground battle, as data: a name and its arguments, in the same
 // pattern as the space game's ../commands.ts. In multiplayer an order goes to the server, which
 // cleans it (right types, sane sizes, inside the map) and sends it to everyone to run at the same
 // tick. The owner is never part of an order: the server fills in the sender's own seat.
-//
-// Still to come (building and training): place, construct, train, cancel, rally.
 
-type Arg = 'ids' | 'x' | 'y' | 'bool'
+type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'bool' | 'type'
 
 /** The functions, by order name, with what each argument must be. */
 const TABLE = {
   // Move: units, where to, and whether it goes after their orders (shift).
   move: { run: cmdMove, args: ['ids', 'x', 'y', 'bool'] },
   stop: { run: cmdStop, args: ['ids'] },
+  // Building and training (build.ts): engineers place a building or build one of ours, a
+  // structure trains units (count: 1, or 5 with shift), a queue item or a site is called off, and
+  // a structure's rally point.
+  place: { run: cmdPlace, args: ['ids', 'type', 'x', 'y', 'bool'] },
+  construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
+  train: { run: cmdTrain, args: ['id', 'type', 'int'] },
+  cancel: { run: cmdCancel, args: ['id', 'int'] },
+  rally: { run: cmdRally, args: ['id', 'x', 'y'] },
 } as const satisfies Record<string, { run: (w: GroundWorld, owner: Owner, ...a: never[]) => unknown; args: readonly Arg[] }>
 
 export type GroundCmdName = keyof typeof TABLE
@@ -35,6 +42,12 @@ function cleanArg(kind: Arg, v: unknown, w: GroundWorld): unknown {
       const out = v.map((x) => int(x, 1, MAX_ID))
       return out.every((x) => x !== null) ? out : null
     }
+    case 'id':
+      return int(v, 1, MAX_ID)
+    case 'int':
+      return int(v, -1, 1000)
+    case 'type':
+      return typeof v === 'string' && Object.hasOwn(GROUND_UNIT, v) ? v : null
     case 'x':
       return num(v, 0, w.w)
     case 'y':
