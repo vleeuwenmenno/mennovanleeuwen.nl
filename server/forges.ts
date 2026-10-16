@@ -25,6 +25,10 @@ export type ForgeInfo = { id: number; label: string; baseUrl: string; username: 
 
 const TIMEOUT = 8000
 
+/** Error texts for an organisation that blocks this OAuth app, or wants SAML sign-on first. */
+export const ORG_RESTRICTED = 'the organisation restricts OAuth app access'
+export const ORG_SSO = 'the organisation wants SAML single sign-on for this token'
+
 // When a host says "rate limited", stop asking it until the limit resets instead of failing on
 // every keystroke. GitHub limits its search API (30 a minute) apart from the rest, so search and
 // other requests are tracked separately, per token.
@@ -50,6 +54,11 @@ async function get<T>(user: User | null, url: string, headers: Record<string, st
       blockedUntil.set(key, retry ? Date.now() + retry : reset > Date.now() ? reset : Date.now() + 60_000)
       throw new HttpError(429, `${label} rate limit, back in ${Math.ceil(((blockedUntil.get(key) ?? 0) - Date.now()) / 1000)} s`)
     }
+    // GitHub says why when an organisation keeps this OAuth app out (its third-party access policy)
+    // or wants SAML single sign-on first; Settings → Code hosts tells those apart (search.ts).
+    const why = String(((await res.json().catch(() => null)) as { message?: unknown } | null)?.message ?? '')
+    if (/OAuth App access restrictions/i.test(why)) throw new HttpError(403, `${label}: ${ORG_RESTRICTED}`)
+    if (/SAML/i.test(why)) throw new HttpError(403, `${label}: ${ORG_SSO}`)
     throw new HttpError(502, `${label} refused (no permission)`)
   }
   if (!res.ok) throw new HttpError(502, `${label} answered ${res.status}`)

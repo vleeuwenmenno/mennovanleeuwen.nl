@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { cvMode } from './cvMode'
 import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
+import type { OrgsResponse } from '../data/code'
 
 // Who is signed in (GitHub, see server/auth.ts) and which Gitea/Forgejo instances they linked.
 // Visitors are "anon"; "off" means this server has no sign-in configured (or no server at all,
@@ -183,6 +184,12 @@ export const signInWithRepos = (repo: boolean) => {
 
 /** Whether GitHub gave this account's token access to private repositories. */
 export const hasRepoScope = (u: AccountUser | null) => !!u?.githubScopes.includes('repo')
+
+/** Whether the token may list the account's organisations (read:org, or the broader org and user scopes). Tokens from before "Allow private" asked for it lack it. */
+export const hasOrgScope = (u: AccountUser | null) => !!u?.githubScopes.some((s) => s === 'read:org' || s === 'write:org' || s === 'admin:org' || s === 'user')
+
+/** The GitHub organisations the account belongs to and whether this site's OAuth app reaches their repositories (Settings → Code hosts). `fresh` loads them again. */
+export const orgAccess = (fresh = false) => api<OrgsResponse>(`/api/code/orgs${fresh ? '?fresh=1' : ''}`)
 
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
