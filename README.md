@@ -633,7 +633,52 @@ and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo 
 | `repo@text`, `@text` | branches, with their last commit and pull request |
 
 Tab completes the highlighted result (`owner/repo`, then type `#` or `@`); Ctrl+Enter copies a
-clone command, link or branch name.
+clone command, link or branch name. Enter opens a repository, issue or pull request on the web;
+its actions panel (Ctrl+K or right-click) has *Open in Git*, which shows it in the Git app instead.
+
+### The Git app
+
+**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) is a read-only viewer for the same
+repositories: everything on your GitHub account (also through your organisations) and on the
+Gitea/Forgejo instances you linked. The list on the left filters by name, owner or organisation and
+host, grouped by owner with your own first, and shows the language, when it was last pushed and
+whether it is private. Without "Allow private" in Settings → Code hosts only public GitHub
+repositories show, and the list says so. A repository has four tabs:
+
+- **Overview**: description, stars, forks, open issues, default branch, licence, topics, the clone
+  addresses to copy, and the README rendered with the site's Markdown renderer. Its relative links
+  and images point into the repository on the host; the common HTML in READMEs (logos, badges,
+  `<details>`) is turned into Markdown first, since the renderer never renders HTML.
+- **Pull requests** (open, merged, closed or all) and **Issues** (open, closed or all), a page at a
+  time with *Load more*. A pull request has *Conversation* (the description and comments),
+  *Commits* and *Files changed*; an issue shows its description and comments.
+- **Commits**, per branch (a picker lists them), grouped by day. A commit shows its message, author,
+  parents (click to walk back) and its changed files.
+
+Changed files are unified diffs, one collapsible box per file with line numbers and the additions
+and deletions tinted from the theme; a long line scrolls inside its box. Binary files and diffs
+too large to send (over 96 KB for a file, 2 MB in all) say so with a link to the host's page, as
+does anything past GitHub's limits (300 files). Anything the app doesn't do itself (commenting,
+reviewing, merging, a new issue or pull request, checks) is a button with an arrow-out icon that
+opens the host's web page.
+
+A wide window keeps the list beside the open repository with breadcrumbs above it; a narrow window
+or a phone shows one view at a time with Back (Alt+← with a keyboard). The window takes a `route`
+prop (`github/owner/repo`, `…/pull/12`, `…/issue/4`, `…/commit/<sha>`, a linked instance as
+`forge:<id>`; see [`route.ts`](src/apps/git/route.ts)), which is how Spotlight opens it; without
+one it reopens the repository you had open last in this browser. Signed out, it asks you to sign
+in. Open it from All apps, Spotlight, the dock or `open git` in the terminal.
+
+The server side is [`server/git.ts`](server/git.ts): a fixed set of `GET /api/repos/...` routes
+(repositories; a repository with its README; branches; pull requests, one with its comments, its
+commits and its files; issues and one with its comments; commits and one with its files), each
+part of the path checked (host id, owner, name, number, hash, branch), so it is no open proxy and
+never writes. It goes through the same code host sources as Spotlight
+([`server/forges.ts`](server/forges.ts)), so tokens, rate limits and the address checks for linked
+instances are shared. GitHub's and Gitea's answers are turned into one shape there
+([`server/gitShapes.ts`](server/gitShapes.ts), types in
+[`src/data/gitTypes.ts`](src/data/gitTypes.ts)); Gitea's diffs come as a `.diff`, which is split
+into files on the server. Answers are kept a minute per user; Reload in the app asks the host again.
 
 Signed in, the dock is yours too ([`src/os/dockItems.ts`](src/os/dockItems.ts)): right-click a
 dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or repository in

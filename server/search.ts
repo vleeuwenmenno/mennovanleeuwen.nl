@@ -143,7 +143,7 @@ async function pages<T>(src: Source, path: (page: number) => string, per: number
 }
 
 /** Every repository the user owns, collaborates on or reaches through an organisation. */
-function repoList(user: User, src: Source): Promise<RepoHit[]> {
+export function repoList(user: User, src: Source): Promise<RepoHit[]> {
   return cachedStale(`${user.id}|${src.id}|repos`, REPO_TTL, async () => {
     let raw: GhRepo[]
     if (src.kind === 'github') {

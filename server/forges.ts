@@ -17,6 +17,8 @@ export type Source = {
   login: string
   /** GET an API path ("/repos/a/b"); resolves null on 404, throws on other errors. */
   api: <T>(path: string) => Promise<T | null>
+  /** The same, for an answer that is plain text (a .diff) */
+  text: (path: string) => Promise<string | null>
 }
 
 export type ForgeInfo = { id: number; label: string; baseUrl: string; username: string }
@@ -30,7 +32,7 @@ const blockedUntil = new Map<string, number>()
 const limitKey = (url: string, headers: Record<string, string>) => `${new URL(url).host}|${url.includes('/search/') ? 'search' : 'core'}|${headers.Authorization ?? ''}`
 
 /** `user` is who chose the address (a linked instance: checked by guardedFetch), null for GitHub's own API. */
-async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string): Promise<T | null> {
+async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string, text = false): Promise<T | null> {
   const key = limitKey(url, headers)
   const until = blockedUntil.get(key) ?? 0
   if (until > Date.now()) throw new HttpError(429, `${label} rate limit, back in ${Math.ceil((until - Date.now()) / 1000)} s`)
@@ -51,7 +53,8 @@ async function get<T>(user: User | null, url: string, headers: Record<string, st
     throw new HttpError(502, `${label} refused (no permission)`)
   }
   if (!res.ok) throw new HttpError(502, `${label} answered ${res.status}`)
-  return JSON.parse((await readCapped(res, 16 * 1024 * 1024)).toString('utf8')) as T
+  const body = (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  return (text ? body : JSON.parse(body)) as T
 }
 
 export function githubSource(user: User): Source {
@@ -62,11 +65,20 @@ export function githubSource(user: User): Source {
     web: 'https://github.com',
     login: user.login,
     api: (path) => get(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub'),
+    text: (path) => get<string>(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github.diff', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub', true),
   }
 }
 
 function giteaSource(user: User, id: number, label: string, base: string, username: string, token: string): Source {
-  return { id: `forge:${id}`, label, kind: 'gitea', web: base, login: username, api: (path) => get(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label) }
+  return {
+    id: `forge:${id}`,
+    label,
+    kind: 'gitea',
+    web: base,
+    login: username,
+    api: (path) => get(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label),
+    text: (path) => get<string>(user, `${base}/api/v1${path}`, { Authorization: `token ${token}`, Accept: 'text/plain' }, label, true),
+  }
 }
 
 type ForgeRow = { id: number; label: string; base_url: string; username: string; token: string }

@@ -121,6 +121,7 @@ const APPS: Record<string, AppId> = {
   winamp: 'amp',
   music: 'amp',
   weather: 'weather',
+  git: 'git',
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
@@ -165,6 +166,7 @@ const APP_NAMES: Record<AppId, string> = {
   contacts: 'contacts',
   tasks: 'tasks',
   weather: 'weather',
+  git: 'git',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
