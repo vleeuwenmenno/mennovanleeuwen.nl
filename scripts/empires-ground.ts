@@ -12,7 +12,10 @@
 //    first at every second.
 // 4. Along the way: no unit stays where it can't stand for long (a building put on it pushes it
 //    off), none leaves the map, nothing turns NaN, and most move orders arrive.
-// Then the same on every generated ground map, once the terrain generator is in.
+// Then the same on every generated ground map.
+// 5. Building and training (scripts/empires-ground-build.ts): every placement rule refuses with its
+//    reason, and a scripted building battle against the passive AI stays in step and does what the
+//    rules say (sites, crews, refunds, repairs, training, rally points, income).
 
 import { readFileSync, readdirSync } from 'node:fs'
 import { TILE, type GroundMap } from '../src/apps/games/empires/ground/types.ts'
@@ -21,6 +24,7 @@ import { anchorAt, footprintOpen, stands } from '../src/apps/games/empires/groun
 import { GROUND_UNIT, STEP, addStructure, isStructure, newGroundWorld, removeUnit, spawnUnit, stateHash, tick, typeOf, type GroundSeat, type GroundWorld } from '../src/apps/games/empires/ground/sim.ts'
 import { cleanGroundCmd, groundCmd, runGroundCmd } from '../src/apps/games/empires/ground/commands.ts'
 import { explored } from '../src/apps/games/empires/ground/fog.ts'
+import { checkBuilding } from './empires-ground-build.ts'
 
 const seconds = Number(process.argv[2] ?? 200)
 let failed = false
@@ -33,7 +37,7 @@ const check = (what: string, ok: boolean, detail = '') => {
 
 {
   const dir = new URL('../src/apps/games/empires/ground/', import.meta.url)
-  const sim = ['sim.ts', 'nav.ts', 'fog.ts', 'commands.ts']
+  const sim = ['sim.ts', 'nav.ts', 'fog.ts', 'commands.ts', 'build.ts', 'units.ts', 'ai.ts', 'match.ts']
   const bad: string[] = []
   const banned = /Math\.(random|sin|cos|tan|atan2?|hypot|exp|pow|log)\b|\bDate\b|performance\.|\bdocument\b|\bwindow\b|localStorage|requestAnimationFrame|\*\*/
   for (const f of readdirSync(dir).filter((f) => sim.includes(f))) {
@@ -254,6 +258,10 @@ async function groundMaps(): Promise<{ build: () => GroundMap; name: string }[] 
 const built = await groundMaps()
 if (!built) console.log('SKIP generated ground maps (ground/terrain.ts and ground/maps.ts not in yet)')
 else for (const m of built) run(m.name, m.build, m.build().spawns)
+
+// --- Building and training -------------------------------------------------------------------------------
+
+if (built) checkBuilding(check)
 
 if (failed) {
   console.log('ground sync check FAILED')

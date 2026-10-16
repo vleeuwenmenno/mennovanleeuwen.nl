@@ -305,6 +305,50 @@ export function turnPart(p: Part, a: number, cx = 0, cy = 0): Part {
   }
 }
 
+/** The four bevelled edges of a box centred on (x, y), `b` wide, as facets facing up, right, down
+ * and left: how a ground building's armoured block or a vehicle's hull is cel shaded from above. */
+export function bevel(x: number, y: number, w: number, h: number, b: number, k = 0.8): { pts: Pt[]; slope: Pt }[] {
+  const l = x - w / 2
+  const r = x + w / 2
+  const t = y - h / 2
+  const d = y + h / 2
+  return [
+    { pts: [[l, t], [r, t], [r - b, t + b], [l + b, t + b]], slope: [0, -k] },
+    { pts: [[r, t], [r, d], [r - b, d - b], [r - b, t + b]], slope: [k, 0] },
+    { pts: [[r, d], [l, d], [l + b, d - b], [r - b, d - b]], slope: [0, k] },
+    { pts: [[l, d], [l, t], [l + b, t + b], [l + b, d - b]], slope: [-k, 0] },
+  ]
+}
+
+/** A regular polygon of `n` sides round (x, y), radius `r` to its corners, the first corner at
+ * angle `a0`: an eight-sided deck, a hex pad. */
+export function ngon(x: number, y: number, r: number, n: number, a0 = 0): Pt[] {
+  return Array.from({ length: n }, (_, i) => [x + Math.cos(a0 + (i / n) * TAU) * r, y + Math.sin(a0 + (i / n) * TAU) * r] as Pt)
+}
+
+/** Facets between an outline and a smaller copy of it scaled towards (x, y) by `inner` (0 a cone to
+ * the middle): each side's band faces outwards, so a deck's rim or a mound is cel shaded round. */
+export function rimFacets(outline: Pt[], x: number, y: number, inner: number, k = 0.8): { pts: Pt[]; slope: Pt }[] {
+  const n = outline.length
+  const inPt = ([px, py]: Pt): Pt => [x + (px - x) * inner, y + (py - y) * inner]
+  return outline.map((a, i) => {
+    const b = outline[(i + 1) % n]
+    const mx = (a[0] + b[0]) / 2 - x
+    const my = (a[1] + b[1]) / 2 - y
+    const l = Math.hypot(mx, my) || 1
+    return { pts: [a, b, inPt(b), inPt(a)], slope: [(mx / l) * k, (my / l) * k] as Pt }
+  })
+}
+
+/** Track or tread lines across a band from (x0, y0) to (x1, y1), `n` of them evenly spaced down it:
+ * the treads of a tracked vehicle seen from above. */
+export function treads(x0: number, x1: number, y0: number, y1: number, n: number): Detail[] {
+  return Array.from({ length: n }, (_, i) => {
+    const y = y0 + ((y1 - y0) * (i + 0.5)) / n
+    return { k: 'line' as const, pts: [[x0, y], [x1, y]] as Pt[] }
+  })
+}
+
 /** A blob for a scorch mark: a lumpy circle. */
 export function blob(x: number, y: number, r: number, r0: () => number, n = 9): Pt[] {
   const out: Pt[] = []
