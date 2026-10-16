@@ -2883,8 +2883,11 @@ or it is resized, never per frame).
 
 A desperate measure for a base under attack. Once **Rushed construction** (the droids' **Hasty
 assembly protocols**) is researched (800 credits, 45 s, station level 3, and it needs a Capital Yard
-standing; it shows on the tech tree's Capital Yard line), the Capital Yard's build queue shows
-**Rush launch (62%)** once the ship in progress is at least half built. A click sends it out now; on
+standing; it shows on the tech tree's Capital Yard line), the Capital Yard's build queue shows a
+**Rush launch** button beside the ship in progress (not for fleet-inventory builds). It is always
+there, so it can be found: disabled as **locked** (the tooltip names the research needed), **at 50%**
+until the ship is half built, and **Rush launch · 1:12** while the yard cools down; enabled as
+**Rush launch (62%)** otherwise. A click sends it out now; on
 a touch screen the button is held for 0.6 s (a ring fills round it) so a stray tap can't do it.
 
 - The ship flies out of the berth with its hull at the share that was built, no shields, and as many of its
