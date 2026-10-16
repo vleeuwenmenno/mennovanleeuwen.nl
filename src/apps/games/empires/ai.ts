@@ -2,7 +2,7 @@ import { defenseId, defenseType, orbitalPick, ABILITIES, BUILD_RADIUS, moduleFit
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
-  allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, REPAIR_TIME, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
+  allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, REPAIR_TIME, REPAIR_FIRE, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
   cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
@@ -1273,7 +1273,7 @@ const SIEGE_GATHER = 40
  */
 const STALL = { after: 150, by: mapDist(500), short: mapDist(800) }
 /** A wave gathering to go in on the enemy station (see siege): the margin over what it knows guards
- * the station; the share of the station's repair rate its gathered guns must beat; the seconds it
+ * the station; the share of the station's repair rate under fire its gathered guns must beat; the seconds it
  * waits at most with at least what it knows of there, and at most at all; and the share of what
  * went in that pulls back to gather again. */
 const SIEGE = { edge: 2, breach: 1.3, hold: 90, hedge: 1.5, most: 200, fall: 0.4 }
@@ -1507,8 +1507,8 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
  * A wave going for the enemy station (medium and harder): it gathers on `spot`, just out of reach of
  * the station's guns, with the ships that follow it out joining it there, and goes in only once
  * what has gathered is enough to take the station: more than the guns and ships it knows of there,
- * by SIEGE.edge, and (hitting the station alone) more than its repair crews can put back, by
- * SIEGE.breach; or, short of that, once it has waited SIEGE.hold seconds there with at least what
+ * by SIEGE.edge, and (hitting the station alone) more than its repair crews can put back under
+ * fire (see REPAIR_FIRE), by SIEGE.breach; or, short of that, once it has waited SIEGE.hold seconds there with at least what
  * it knows of, or SIEGE.most whatever it has. Going in, it remembers what it went in with; once
  * what is left of that by the station is down to SIEGE.fall of it, the rest pull back to the spot
  * and gather again with the new ships that came meanwhile, rather than going on into the guns a few
@@ -1522,7 +1522,7 @@ function siege(w: World, b: Brain, troops: Unit[], troopValue: number, enemySt: 
     if (b.gather! < 0 && gap >= 0 && gap < out + mapDist(1200)) b.gather = w.time
     const known = knownForce(w, b, enemySt.x, enemySt.y, rangeDist(1400))
     const dps = gathered.reduce((sum, u) => sum + dpsVs(u.t, 'station'), 0)
-    const enough = there >= known * SIEGE.edge && dps >= (enemySt.hullMax / REPAIR_TIME) * SIEGE.breach
+    const enough = there >= known * SIEGE.edge && dps >= ((enemySt.hullMax * REPAIR_FIRE.rate) / REPAIR_TIME) * SIEGE.breach
     const waited = b.gather! >= 0 ? w.time - b.gather! : 0
     if ((enough && there >= troopValue * 0.8) || (waited > SIEGE.hold && there >= known * SIEGE.hedge) || (waited > SIEGE.most && there > 0)) {
       b.storm = true

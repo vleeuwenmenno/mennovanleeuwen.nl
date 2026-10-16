@@ -13,7 +13,7 @@ import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
 import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
-import { cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_FIRE, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, repairSlowed, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -470,18 +470,22 @@ function FocusInfo({ w, u, pick, onClear, quiet = false }: { w: World; u: Unit; 
 
 /** Send a repair crew to a structure: the price for what's missing, or how far along it is. */
 function RepairButton({ w, me, u, onRepair }: { w: World; me: Owner; u: Unit; onRepair: (id: number) => void }) {
+  // Enemy ships near a station slow its crew and stop it rebuilding shot-off parts (REPAIR_FIRE):
+  // said on the button itself, so it shows on a phone too, not only in the tooltip.
+  const slow = repairSlowed(w, u)
+  const fire = `Enemy ships in range: the crew works at ${Math.round(REPAIR_FIRE.rate * 100)}% pace and rebuilds no shot-off module until they've been gone ${REPAIR_FIRE.calm} s (modules left off are paid back).`
   if (u.repair > 0)
     return (
-      <span className="ew-repair is-busy" data-tip="The repair crew mends the hull and rebuilds shot-off modules">
-        <Icon name="yard" size={13} /> Repairing… {Math.ceil(u.repair)}s
+      <span className={`ew-repair is-busy ${slow ? 'is-slow' : ''}`} data-tip={slow ? fire : 'The repair crew mends the hull and rebuilds shot-off modules'}>
+        <Icon name="yard" size={13} /> Repairing… {Math.ceil(slow ? u.repair / REPAIR_FIRE.rate : u.repair)}s{slow ? ' · under fire' : ''}
         <i style={{ width: `${(1 - u.repair / REPAIR_TIME) * 100}%` }} />
       </span>
     )
   const why = cantRepair(w, me, u)
   if (why === 'Nothing to repair' || why === 'Still under construction') return null
   return (
-    <button className={`ew-repair ${why ? 'is-off' : ''}`} onClick={() => onRepair(u.id)} data-tip={`Send a repair crew: it mends the hull and rebuilds every module that was shot off, over ${REPAIR_TIME} s.${why ? `\n\n${why}` : ''}`}>
-      <Icon name="yard" size={13} /> Repair <Icon name="credits" size={12} /> {repairCost(u)}
+    <button className={`ew-repair ${why ? 'is-off' : ''} ${slow ? 'is-slow' : ''}`} onClick={() => onRepair(u.id)} data-tip={`Send a repair crew: it mends the hull and rebuilds every module that was shot off, over ${REPAIR_TIME} s.${slow ? `\n\n${fire}` : ''}${why ? `\n\n${why}` : ''}`}>
+      <Icon name="yard" size={13} /> Repair <Icon name="credits" size={12} /> {repairCost(u)}{slow ? ' · under fire' : ''}
     </button>
   )
 }
@@ -1217,6 +1221,11 @@ function StationDetail(p: DetailProps & { st: Unit }) {
           <header className={`ew-yardhead ${w.hybrid && (w.units.some((u) => !u.dead && u.owner === me && u.t.tier === 'yard') || (w.ruins ?? []).some((r) => r.owner === me)) ? 'is-tight' : ''}`}>
             {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} onRuin={() => !p.onEngineers() && pick('strike')} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
+            {/* (On a narrow screen the side column, its repair button with it, is hidden: the button
+                 comes up here instead, slowed-under-fire note and all.) */}
+            <span className="ew-narrow-repair">
+              <RepairButton w={w} me={me} u={st} onRepair={p.onRepair} />
+            </span>
           </header>
           <BuildPanel
             tabs={[
@@ -2110,7 +2119,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const col = useRef<HTMLDivElement>(null)
   const escorted = mine && one && isShip(t) && t.tier !== 'fighter' ? escortsOf(w, u).length > 0 : false
   const reboot = t.shield > 0 && SHIELD_REBOOT - (w.time - u.shieldOut) > 0
-  useFitLines(col, [t.id, squad.length, mine, !!u.rush, escorted, u.nebula, reboot, !!earning, building(u), u.repair > 0, u.focus, !!p.turretPick, u.hps.some((h) => h.hp < h.max)].join('|'))
+  useFitLines(col, [t.id, squad.length, mine, !!u.rush, escorted, u.nebula, reboot, !!earning, building(u), u.repair > 0, repairSlowed(w, u), u.focus, !!p.turretPick, u.hps.some((h) => h.hp < h.max)].join('|'))
   return (
     <Frame className={`ew-detail is-unit ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>
       <div className="ew-detail-side">

@@ -2060,14 +2060,14 @@ expands, fights and finishes on it: duels on spawns as far apart as the map has 
 every spawn taken (sides alternating round the map), each played from both sides. It reports how
 many games ended and how long they took, how often each spawn's side won, and the ore, beacons,
 expansions, ships and kills per admiral. `MAPS=hadrel,orvane pnpm empires:tournament` runs the AI
-profile tournament on those maps instead of the two-spawn ones. AI-only duels between equal hard
-admirals on the large and huge maps still mostly run past an hour (`pnpm empires:maps 60 3`: none
-on Quintara, Serrat, Velkar, Draxis or Tarsis ends, 1 in 6 on Vanth, Ithra and Orvane), though
-battles with every spawn taken end in 54 of 66. Both sides reach the fleet limit and bank tens of
-thousands of credits; two equal capped fleets trade evenly in the field, the loser builds its
-fleet again at home before the winner's wave can get through, and a station's repair crews (5% of
-its hull a second, every shot-off part rebuilt, for at most 1,500 credits) outlast what one equal
-fleet can bring to bear on it.
+profile tournament on those maps instead of the two-spawn ones. With repairs slowed under fire (see
+"Repair crews" below), hard AI-only battles mostly end (`pnpm empires:maps 60 3`: 99 of 156
+within the hour, median 34 minutes; every spawn taken, 56 of 66), and duels on the small and
+medium maps do too. Duels between equal hard admirals on the large and huge maps still mostly
+run past an hour (Velkar and Draxis none of 6, Vanth, Quintara, Orvane and Tarsis 1, Serrat 2,
+Ithra 3): both sides reach the fleet limit, two equal capped fleets trade evenly in the open
+field, and the side that loses a fight builds its fleet again at home before the winner's wave
+has crossed the map.
 
 ```sh
 pnpm empires:maps 40 3 velkar,draxis,tarsis      # minutes, seeds, maps (default all), layouts (1v1,near,full), difficulty, profile
@@ -2190,6 +2190,20 @@ structure of an ally's welds it back too (their sites and rush-launched ships ar
 and whoever welds pays for rebuilding shot-off modules, Field repair crews on an ally's station
 included. Enemies are refused by the sim and, online, by the server referee before the order
 reaches anyone.
+
+**Repair crews** (*Repair* on a structure's card, `cmdRepair`): for 60% of what's missing of the
+structure's worth, a crew mends the hull and every module, rebuilding the shot-off ones, over 20 s.
+**Under fire** they're slower (`REPAIR_FIRE` in sim.ts): while enemy warships or strike craft are
+within a station's reach (its size, its guns' range and 250 more, `repairReach`), the crew works
+at 25% of its pace and rebuilds no shot-off module; full pace comes back 4 s after the last of them
+has gone, so ships slipping in and out of range gain nothing. A repair that ends under fire leaves
+those modules off and pays back their share of the price. Players and the AI alike. The station's card says
+so on the button itself, in gold ("Repair 723 · under fire", or "Repairing… 76s · under fire" with
+the time at the slowed pace), and the tooltip says why; on a screen too narrow for the card's side
+column (a phone) the button sits in the card's header, so it can be seen and tapped there. Before, a crew put back
+5% of a station's hull a second and every gun shot off, under any fire, for at most 1,500 credits:
+a station whose owner had money outlasted any fleet not far bigger than its own, and battles
+between equal admirals rarely ended.
 
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
 Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
@@ -2544,7 +2558,7 @@ Balanced. Every profile plays the same game, with a purpose:
 - **Sieges** (medium and hard): a wave going for the enemy station gathers just out of reach of its
   guns, on the side it comes from, and the ships that follow it out join it there rather than fly
   into the guns a few at a time. It goes in once what has gathered is twice what it knows guards
-  the station and hits harder than the station's repair crews can mend (`SIEGE`), or after
+  the station and hits harder than the station's repair crews can mend under fire (`SIEGE`), or after
   90 seconds there with half as much again as it knows of. When the assault is down to 40% of what
   went in, the rest pull back to the gathering spot and try again with the new ships. A wave that
   comes no closer for two and a half minutes with nothing to fight (stuck) comes home to gather

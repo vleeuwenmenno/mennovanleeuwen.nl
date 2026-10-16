@@ -156,6 +156,9 @@ export type Unit = {
   face: number | null
   /** Seconds left on a structure's repair, 0 when none is under way. */
   repair: number
+  /** Stations: when enemy ships were last within its reach, which slows its repairs (see
+   * REPAIR_FIRE). Absent until the first came. */
+  fired?: number
   /** Seconds until a retreating warship jumps out, 0 when it isn't retreating. */
   retreat: number
   /** A structure's focus: the enemy all its guns fire on first, while they can reach and hurt it. */
@@ -1565,8 +1568,23 @@ export function cantRepair(w: World, owner: Owner, u: Unit | undefined): string 
   return null
 }
 
+/**
+ * Repairs under fire: while enemy warships or strike craft are within a station's reach (its size,
+ * its guns' range and `margin`), its repair crew works at `rate` of its pace and rebuilds no part
+ * that was shot off; `calm` seconds after the last of them has gone it is back to full pace (so
+ * ships slipping in and out of range gain nothing). Before, a crew put back 5% of a station's hull
+ * a second and every gun shot off, for at most 1,500 credits, under any fire: a station whose
+ * owner had money outlasted any fleet that wasn't far bigger than its own.
+ */
+export const REPAIR_FIRE = { rate: 0.25, margin: 250, calm: 4 }
+/** How near enemy ships slow a station's repairs (see REPAIR_FIRE). */
+export const repairReach = (t: UnitType) => radius(t) + Math.max(0, ...t.hardpoints.map((h) => h.weapon?.range ?? 0)) + REPAIR_FIRE.margin
+/** Whether a structure's repairs are slowed by enemy ships near it right now (see REPAIR_FIRE). */
+export const repairSlowed = (w: World, u: Unit) => u.t.tier === 'station' && u.fired !== undefined && w.time - u.fired < REPAIR_FIRE.calm
+
 /** Send a repair crew: it mends the hull and every module, rebuilding the ones shot off, over
- * REPAIR_TIME seconds, under fire or not. */
+ * REPAIR_TIME seconds; slower, and with no rebuilding, while enemy ships are near a station (see
+ * REPAIR_FIRE). */
 export function cmdRepair(w: World, owner: Owner, id: number): string | null {
   const u = w.byId.get(id)
   const why = cantRepair(w, owner, u)
@@ -1577,17 +1595,36 @@ export function cmdRepair(w: World, owner: Owner, id: number): string | null {
 }
 
 function repairs(w: World, dt: number) {
+  // Stations with enemy ships within their reach (see REPAIR_FIRE).
+  for (const u of w.units) {
+    if (u.dead || u.t.tier !== 'station') continue
+    let hot = false
+    near(w, u.x, u.y, repairReach(u.t), (e) => {
+      if (!hot && !e.dead && isShip(e.t) && foes(w, e.owner, u.owner)) hot = true
+    })
+    if (hot) u.fired = w.time
+  }
   for (const u of w.units) {
     if (u.dead || u.repair <= 0) continue
-    u.repair -= dt
-    const k = dt / REPAIR_TIME
+    const slow = repairSlowed(w, u)
+    const pace = slow ? REPAIR_FIRE.rate : 1
+    u.repair -= dt * pace
+    const k = (dt * pace) / REPAIR_TIME
     u.hull = Math.min(u.hullMax, u.hull + u.hullMax * k)
-    u.hps.forEach((h) => (h.hp = Math.min(h.max, h.hp + h.max * k)))
+    // (Under fire, a part shot off stays off.)
+    for (const h of u.hps) if (!(slow && h.hp <= 0)) h.hp = Math.min(h.max, h.hp + h.max * k)
     if (u.repair <= 0 || wear(u) < 0.001) {
-      // Done: whatever rounding left over is made good.
+      // Done: whatever rounding left over is made good; parts still shot off under fire are paid
+      // back (their share of the price) rather than rebuilt.
       u.repair = 0
       u.hull = u.hullMax
-      for (const h of u.hps) h.hp = h.max
+      let off = 0
+      for (const h of u.hps) {
+        if (slow && h.hp <= 0) off += h.max
+        else h.hp = h.max
+      }
+      const back = off ? Math.floor(worth(u) * (off / (u.hullMax + u.hps.reduce((s, h) => s + h.max, 0))) * 0.6) : 0
+      if (back > 0) giveBack(w, w.players[u.owner], back, 'repairs', `Repairs: ${u.t.name} (parts left under fire)`)
       w.events.push({ k: 'repaired', owner: u.owner, unit: u.id, x: u.x, y: u.y })
     }
   }
