@@ -1,9 +1,9 @@
-import { ABILITIES, BUILD_RADIUS, moduleFits, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { defenseId, defenseType, orbitalPick, ABILITIES, BUILD_RADIUS, moduleFits, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, REPAIR_TIME, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -133,6 +133,11 @@ type Style = {
   /** The expansions it wants, most wanted first (the Capital slip always comes first once it can:
    * that's the way to the flagships). */
   modules: ModuleId[]
+  /** Defense stations (in a battle that has them) it wants at station level 1, 2, 3 and 4, within
+   * the battle's limit. */
+  forts: [number, number, number, number]
+  /** The level it raises its defense stations to, at most. */
+  fortTop: number
   /** Fleet battles: an attacker pulls out below this share of the defender's strength... */
   bail: number
   /** ...and a holder goes out to meet attackers this much further from its station. */
@@ -144,19 +149,19 @@ export const PROFILES: Record<Profile, Style> = {
     name: 'Defensive',
     blurb: 'Turtles: more gun platforms and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
     wave: 1.6, calm: 1.3, rest: 60, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.25, beaconReach: 3800, hold: 0.85, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [170, 400, 680], levelArmy: 900, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
-    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], bail: 0.4, sally: 0.8,
+    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], forts: [0, 1, 1, 1], fortTop: 2, bail: 0.4, sally: 0.8,
   },
   balanced: {
     name: 'Balanced',
     blurb: 'A steady mix: expands, upgrades and researches as it goes, and attacks once it has gathered a fleet.',
     wave: 1, calm: 1, rest: 45, regroup: 0.4, outgunned: 1.5, recall: 0.6, edge: 1.25, beaconReach: 4300, hold: 0.85, turtle: false, platforms: 0, platPerLevel: 1, platMax: 1, levels: [170, 400, 680], levelArmy: 900, mines: 1, raiders: 0, counter: true, fortify: 1.2, keep: 200, mendAt: 0.35,
-    tiers: {}, yardDelay: 10, yardGuards: 2, cyardDelay: 40, modules: ['secondSlip', 'shieldCore', 'drydock', 'strikeHangar', 'armourWorks', 'sensorArray', 'fighterWing'], bail: 0.3, sally: 1,
+    tiers: {}, yardDelay: 10, yardGuards: 2, cyardDelay: 40, modules: ['secondSlip', 'shieldCore', 'drydock', 'strikeHangar', 'armourWorks', 'sensorArray', 'fighterWing'], forts: [0, 0, 1, 1], fortTop: 1, bail: 0.3, sally: 1,
   },
   offensive: {
     name: 'Offensive',
     blurb: 'Early pressure: raids your mines, attacks often and takes risks. Few platforms, later upgrades.',
     wave: 0.7, calm: 0.6, rest: 15, regroup: 0.25, outgunned: 2, recall: 1.2, edge: 0.9, beaconReach: 4800, hold: 0.6, turtle: false, platforms: 0, platPerLevel: 0.5, platMax: 1, levels: [200, 460, 800], levelArmy: 1000, mines: 1, raiders: 2, counter: false, fortify: 0.5, keep: 100, mendAt: 0.25,
-    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, cyardDelay: 75, modules: ['secondSlip', 'strikeHangar', 'sensorArray', 'drydock', 'armourWorks', 'fighterWing', 'shieldCore'], bail: 0.2, sally: 1.6,
+    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, cyardDelay: 75, modules: ['secondSlip', 'strikeHangar', 'sensorArray', 'drydock', 'armourWorks', 'fighterWing', 'shieldCore'], forts: [0, 0, 0, 1], fortTop: 1, bail: 0.2, sally: 1.6,
   },
 }
 /**
@@ -799,7 +804,8 @@ export function think(w: World, b: Brain, dt: number) {
 
   // --- The economy ---------------------------------------------------------------------------------
   const mines = w.units.filter((u) => u.owner === o && u.t.tier === 'mine').length
-  const platforms = w.units.filter((u) => u.owner === o && u.t.tier === 'defense').length
+  // (Gun platforms on the ore: defense stations are planned apart, see planForts.)
+  const platforms = w.units.filter((u) => u.owner === o && u.t.tier === 'defense' && !u.t.orbital).length
   // Ore counts as ours to take when it's nearer to us than to any enemy station, and nearer to us
   // than to an ally's, so allies don't take each other's.
   const enemyStations = w.players.filter((q) => q.alive && q.team !== team).map((q) => w.byId.get(q.station)).filter((u): u is Unit => !!u)
@@ -941,6 +947,9 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Expansions for the station and the yards, by profile, with credits to spare.
   const modSaving = w.hybrid && !saving && !yardSaving ? planModules(w, b, D, S, threatValue > armyValue * 0.8) : false
+  // Defense stations, in a battle that has them: put up and armed when due (saving up for them once
+  // they're within reach), upgraded with credits to spare.
+  const fortSaving = w.defense && !saving && !yardSaving && !modSaving ? planForts(w, b, D, S, st, enemySt, army, threatValue > armyValue * 0.8) : false
 
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
   // A yard standing idle is saved up for first: its next ship is one of its own (frigates and
@@ -978,7 +987,7 @@ export function think(w: World, b: Brain, dt: number) {
   // At its limit with money piling up: gunships make room for cruisers (see refit).
   if (D.focus && b.alarm < 0 && !saving && !yardSaving && !flagship) refit(w, b, army, mendingIds)
   // (A yard is one more to keep busy.)
-  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !modSaving && !(savingForMine && p.credits < 500)) {
+  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !modSaving && !fortSaving && !(savingForMine && p.credits < 500)) {
     if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits' && !(flagship && b.want === flag.id)) b.want = null
     b.want ??= pickShip(w, b)
     const want = b.want
@@ -1795,6 +1804,95 @@ function planModules(w: World, b: Brain, D: Level, S: Style, attacked: boolean):
     if (++next >= 2) return false
   }
   return false
+}
+
+/**
+ * Hybrid bases: defense stations, in a battle that has them (World `defense`). Its profile says how
+ * many it wants at each station level (Style `forts`), within the battle's limit. One going up gets
+ * its engineers (once no yard is being built). With credits to spare, one thing at a time: a module
+ * for a station's empty slot, picked by what the enemy flies (data.ts orbitalPick, as the galaxy AI
+ * arms its own); then, while its base is quiet and it isn't saving for the station, a new one put up
+ * between its station and the nearest enemy; then a level up for one whose slots are all full, with
+ * more to spare still.
+ */
+function planForts(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit | undefined, army: Unit[], attacked: boolean): boolean {
+  const o = b.o
+  const p = w.players[o]
+  const cap = defenseCap(w)
+  if (!cap || !D.defenses || attacked || w.time < 150) return false
+  const mine = defensesOf(w, o)
+  const engineers = army.filter((u) => isEngineer(u.t))
+  /** Whether it is worth saving up for something costing `cost`: within about twenty seconds' income. */
+  const within = (cost: number) => p.credits + p.income * 20 >= cost + 100
+  const site = mine.find((u) => !!u.site)
+  if (site) {
+    const yardUp = w.units.some((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && building(u))
+    if (!yardUp && engineers.length && !engineers.some((u) => u.order.k === 'construct' && u.order.id === site.id)) act(b, () => cmdConstruct(w, o, engineers.map((u) => u.id), site.id))
+    return false
+  }
+  // What the enemy flies, as far as it has seen: strike craft and gunships against the rest.
+  let small = 0
+  let big = 0
+  for (const [id, n] of Object.entries(b.foes)) {
+    const t = UNIT[id]
+    if (!t) continue
+    if (t.tier === 'fighter' || t.tier === 'gunship') small += t.cost * n
+    else big += t.cost * n
+  }
+  const shielded = w.players.some((q, i) => q.alive && foes(w, i, o) && unitOf(q.faction, 'cruiser').shield > 0)
+  // A station's first module is what makes it worth anything: saved up for. The rest wait for
+  // credits to spare.
+  for (const u of mine) {
+    if (u.dq?.length) continue
+    const slots = u.t.orbital!.slots
+    const slot = slots.findIndex((m) => !m)
+    if (slot < 0) continue
+    const mod = orbitalPick(slots, small, big, shielded)
+    const job = { k: 'mod' as const, slot, mod }
+    const why = cantFortify(w, o, u.id, job)
+    const cost = fortWork(u, job).cost
+    const first = slots.every((m) => !m)
+    if (!why && p.credits >= cost + (first ? 100 : S.keep + 100)) {
+      act(b, () => cmdFortFit(w, o, u.id, slot, mod), true)
+      return false
+    }
+    if (first && (!why || why === 'Not enough credits')) return within(cost)
+  }
+  const goal = Math.min(cap, S.forts[Math.max(0, Math.min(3, p.level - 1))])
+  if (mine.length < goal && b.alarm < 0 && engineers.length) {
+    const id = defenseId(p.faction)
+    const cost = defenseType(p.faction, 1, []).cost
+    if (p.credits < cost + 100) return within(cost)
+    const spot = fortSpot(w, o, st, enemySt, id, mine)
+    if (spot) act(b, () => cmdPlace(w, o, engineers.map((u) => u.id), id, spot.x, spot.y), true)
+    return false
+  }
+  for (const u of mine) {
+    if (u.dq?.length || u.t.orbital!.slots.some((m) => !m) || u.t.orbital!.level >= S.fortTop) continue
+    if (!cantFortify(w, o, u.id, { k: 'up' }) && p.credits >= fortWork(u, { k: 'up' }).cost + S.keep + 100) {
+      act(b, () => cmdFortUp(w, o, u.id), true)
+      return false
+    }
+  }
+  return false
+}
+
+/** Where an admiral puts a defense station: inside the build radius on the side of its station
+ * towards the nearest enemy station (or the middle of the map), spread round from the ones it has,
+ * clear of the survey rings round ore where it can be. */
+function fortSpot(w: World, o: Owner, st: Unit, enemySt: Unit | undefined, id: string, have: Unit[]): { x: number; y: number } | null {
+  const toward = enemySt ? M.atan2(enemySt.y - st.y, enemySt.x - st.x) : M.atan2(w.h / 2 - st.y, w.w / 2 - st.x)
+  const r0 = radius(st.t) + 420
+  for (const strict of [true, false])
+    for (const off of [0, 0.55, -0.55, 1.1, -1.1, 1.6, -1.6, 2.2, -2.2])
+      for (let d = Math.max(r0, BUILD_RADIUS * 0.55); d >= r0 - 1; d -= 180) {
+        const x = st.x + M.cos(toward + off) * d
+        const y = st.y + M.sin(toward + off) * d
+        if (placement(w, o, id, x, y).why) continue
+        if (strict && (w.nodes.some((n) => d2(n, { x, y }) < sq(SURVEY_RADIUS + 160)) || have.some((u) => d2(u, { x, y }) < sq(mapDist(900))))) continue
+        return { x, y }
+      }
+  return null
 }
 
 /**

@@ -2878,6 +2878,65 @@ a touch screen the button is held for 0.6 s (a ring fills round it) so a stray t
 pnpm check:empires-rush   # the gates, the ship as it launches, finishing it, cooldown and slowdown, save and restore, the AI
 ```
 
+## Empires At War defense stations in skirmishes
+
+Skirmishes and multiplayer battles have Galactic conquest's defense stations too: the same Bastion,
+Bulwark and Guardian, their three levels, modules, prices, names and models (data.ts `ORBITALS`,
+`defenseType`, which is `orbitalType` with a price and a build time; see *Galactic conquest orbit
+view and defense stations* above for the stations themselves).
+
+- **The lobby** (the skirmish setup and the multiplayer lobby, where only the host changes it):
+  *Defense stations* Off, 1, 2, 3, 4 or 6 per player (`DEFENSE_STEPS`), 2 by default
+  (`DEFENSE_DEFAULT`). It is part of the match config (`MatchInfo.stations`, `World.defense`),
+  cleaned by the server (`cleanDefense`); a lobby, setup or match without it gets the default. Off:
+  engineers have no defense station card, the AI builds none, and the orders are refused by the
+  protocol (`cleanCmd`) and by the sim. A battle saved before them (no `defense` in its world) plays
+  on as before, with them off.
+- **Building:** the engineers' Build section has a *Defense station* card beside the yards, with
+  its price, how long the selected crew take and how many we have of the limit ("1/2"). Placed like
+  a yard (the ghost, turning it, the action wheel's *Build defense station* and the pinned spot on a
+  touch screen), inside the build radius and clear of everything a yard keeps clear of, by the size
+  it grows to at level 3 (so it always has room to). It goes up at level 1 with one empty slot,
+  welded by engineers at a yard's pace (one squadron's time is the galaxy's over `SHIP_TIME`).
+  The limit counts the ones standing and going up (`fortLock`); a destroyed one leaves no ruin and
+  frees its place.
+- **Levels and modules:** selecting one opens its card (Hud.tsx `FortDetail`): its upgrade to the
+  next level, its slots (1, 2 and 4 by level) and, for the slot picked, the five modules (fitting a
+  filled slot swaps its module once it's done). The station does the work itself, up to three jobs
+  queued (`DEFENSE_QUEUE`), one at a time; a job clicked again is called off, refunded in full (an
+  upgrade called off takes the modules waiting for its slots with it), and work lost with the
+  station is paid back. A slot the queued upgrade brings may be fitted already. Prices are the
+  galaxy's; times are the galaxy's over `SHIP_TIME` (1.5):
+
+  | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
+  | --- | --- | --- | --- |
+  | Level 1 (station level 1) | Watchpost: 700, 27 s | Gun Post: 750, 27 s | Spore: 600, 23 s |
+  | Level 2 (station level 2) | Battle Station: 900, 33 s | Battle Station: 950, 33 s | Bloom: 800, 29 s |
+  | Level 3 (station level 3) | Redoubt: 1300, 43 s | Keep: 1400, 43 s | Hive: 1150, 37 s |
+
+  Modules take 9 to 16 s. Each is a part of the station, drawn on its model, that can be shot off:
+  batteries, flak and launchers fire, a shield generator gives shields (the Swarm's regeneration
+  pool more hull, regrowing faster), a hangar keeps a squadron of the faction's interceptors in the
+  air (its first one launches as soon as it's fitted). A repair crew (*Repair*) rebuilds every
+  module that was shot off; engineers weld one back for `REBUILD_MODULE` of its price.
+- **The AI** (ai.ts `planForts`, Style `forts` and `fortTop`): a Defensive admiral wants one from
+  station level 2 and raises it to level 2, a Balanced one one from level 3 and an Offensive one
+  one at level 4, both left at level 1, all within the limit (more turned the AI-only tournaments
+  into stalls: bases a wave can't crack). It puts one up between its station and the nearest enemy
+  with its engineers while its base is quiet, saves up for the first module of each (picked by what
+  the enemy flies, data.ts `orbitalPick`, as the galaxy AI arms its own), fits the rest and the
+  upgrades with credits to spare, and sends repair crews like for any structure.
+  `DEFENSE=0 node scripts/empires-tournament.ts …` plays the tournament with them off (exactly the
+  battles from before them). All of it goes through the same orders
+  as a player's (`fortUp`, `fortFit`, `cancelFort`, `place`), so lockstep holds.
+- **Codex and tech tree:** the Codex lists each side's defense station under Structures, with a
+  level picker, its slots filled, and its levels and modules; the tech tree has a line of its
+  levels and modules (ordered on each station's card).
+
+```sh
+pnpm check:empires-sk-defense   # the lobby's limit and Off, placement, levels and slots, modules and swaps, refunds, combat, repairs, the AI, old saves
+```
+
 ## Empires At War control groups and credits for allies
 
 **Control groups** ([`groups.ts`](src/apps/games/empires/groups.ts)), as in classic RTS games:
