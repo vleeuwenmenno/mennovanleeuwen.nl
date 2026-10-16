@@ -3002,8 +3002,13 @@ const REPATH = 80
  * and the path keeps a little more, sized to 20-unit steps so similar ships share a grid. */
 export const navClear = (t: UnitType) => Math.ceil((radius(t) * HULL_ROCK + 20) / 20) * 20
 
-/** What crossing a nebula costs a path, against open space: it strips the shields. */
+/** What crossing a nebula costs a path, against open space: it strips the shields (all of them
+ * within a second, see NEBULA_DRAIN, and they reboot only after the ship is out), so it costs more
+ * the more of a hull's strength is in its shields: NEBULA_SHIELD_COST times its shields' share of
+ * shields and hull on top. A Republic warship (about 0.4) pays about 6, a Confederacy one (about
+ * 0.25) about 4.5, a Swarm hull (no shields) only the base: it loses no more than sensor range. */
 const NEBULA_COST = 1.5
+const NEBULA_SHIELD_COST = 12
 /** What crossing an asteroid field costs a path, by class: the rocks batter the clumsy big hulls
  * (see CLUMSY), the biggest worst; gunships weave through and barely mind. */
 const FIELD_COST: Partial<Record<Tier, number>> = { gunship: 1.2, frigate: 2.5, cruiser: 3, capital: 4 }
@@ -3028,6 +3033,7 @@ function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
   if (!u.route || u.route.x !== tx || u.route.y !== ty || lost) {
     const within = (p: { x: number; y: number; r: number }, x: number, y: number) => sq(x - p.x) + sq(y - p.y) < sq(p.r)
     const fieldCost = FIELD_COST[u.t.tier] ?? 1
+    const nebulaCost = NEBULA_COST + NEBULA_SHIELD_COST * (u.t.shield / (u.t.shield + u.t.hull))
     const soft: Soft[] = []
     const priced: number[] = []
     const add = (p: { x: number; y: number; r: number }, i: number, cost: number) => {
@@ -3036,11 +3042,11 @@ function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
       priced.push(i)
     }
     fields.forEach((p, i) => add(p, i, fieldCost))
-    nebulas.forEach((p, i) => add(p, fields.length + i, NEBULA_COST))
+    nebulas.forEach((p, i) => add(p, fields.length + i, nebulaCost))
     const key = `${clear}`
     let g = w.nav.get(key)
     if (!g) w.nav.set(key, (g = navGrid(rocks, w.w, w.h, clear)))
-    const cost = soft.length ? navCost(g, soft, `${fieldCost}:${priced.join(',')}`) : undefined
+    const cost = soft.length ? navCost(g, soft, `${fieldCost}:${nebulaCost}:${priced.join(',')}`) : undefined
     const way = findPath(g, rocks, clear, u.x, u.y, tx, ty, cost && { cost, patches: soft })
     u.route = { x: tx, y: ty, pts: way.pts, soft: soft.map(({ x, y, r }) => ({ x, y, r })), short: way.short, fx: u.x, fy: u.y }
   }

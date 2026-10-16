@@ -1835,7 +1835,10 @@ chitter. FactionInfo `sound.turbo` still tunes the heavy guns' pitch. Settings â
 
 **AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
 its fire from further off and sends its fast warships round the flank of a goal where that is
-clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
+clear, and strikes early: its first waves go out at 85% of the usual fleet value, and its quiet
+start is 40% of its difficulty's (on Medium a minute rather than two and a half; Hard has none).
+With the full quiet start it sat out the build-up and lost about two Medium battles in three, while
+winning most on Hard. The Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
 Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
 ships in among the enemy with its wave, values fire-control and spinal ships, values a shield
 projector by how many warships it has and how much of their staying power is shields (and keeps it
@@ -1902,7 +1905,10 @@ straight legs. Strike craft fly straight.
   the steering round the next rock (`detour`) and where a move order may end (`offRocks`) all use
   the same sizes, so the path and the physics agree.
 - **Asteroid fields and nebulas** are soft ground, never walls: crossing one costs more than open
-  space (`navCost`): a nebula 1.5 times as much, a field 1.2 (gunships) to 2.5 (frigates), 3
+  space (`navCost`): a nebula 1.5 times as much plus 12 times the hull's share of its strength
+  in shields (`NEBULA_SHIELD_COST`), since a nebula strips the shields within a second: about 6
+  times for a Republic warship, about 4.5 for a Confederacy one, 1.5 for a Swarm hull, which has
+  none to lose. A field costs 1.2 (gunships) to 2.5 (frigates), 3
   (cruisers) and 4 (flagships) times, since the rocks there batter big hulls. So a path goes round
   one unless that takes far longer. One the ship was sent into, or is in already, costs nothing
   extra. Pulling a path tight never cuts back across a patch it went round.
