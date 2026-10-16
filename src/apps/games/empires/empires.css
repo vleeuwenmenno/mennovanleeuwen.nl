@@ -8010,3 +8010,75 @@ span.ew-teamtag {
 .ew-slv.is-small {
   font-size: 9px;
 }
+
+/* Dock points, shown while a window is dragged (Floating, dock.ts): a small anchor at each place it
+ * can snap to, the one it would snap to lit, and an outline of where the window would land. */
+.ew-dockguides {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+.ew-dockpin {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  box-sizing: border-box;
+  border: 2px solid var(--ew-active-hi);
+  border-radius: 50%;
+  background: var(--ew-glass);
+  opacity: 0.75;
+  transition: transform 0.1s, opacity 0.1s;
+}
+.ew-dockpin::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--ew-active-hi);
+  opacity: 0.55;
+}
+.ew-dockpin.is-home {
+  border-radius: 3px;
+  transform: rotate(45deg);
+  border-color: var(--ew-head);
+}
+.ew-dockpin.is-home::after {
+  border-radius: 1px;
+  background: var(--ew-head);
+}
+.ew-dockpin.is-near {
+  opacity: 1;
+  transform: scale(1.6);
+  background: var(--ew-active);
+  box-shadow: 0 0 10px var(--ew-active-hi);
+}
+.ew-dockpin.is-home.is-near {
+  transform: rotate(45deg) scale(1.6);
+}
+.ew-dockghost {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed var(--ew-active-hi);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ew-active) 18%, transparent);
+}
+.ew-dockghost span {
+  display: inline-block;
+  margin: 4px 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--ew-glass);
+  color: var(--ew-head);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.ew-dockguides.is-touch .ew-dockpin {
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+}
+.ew-dockguides.is-touch .ew-dockghost span {
+  font-size: 13px;
+}
