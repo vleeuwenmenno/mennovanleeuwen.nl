@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
 import { BEACON_INCOME, BEACON_POP, BEACON_SENSOR, CREDIT_STEPS, DEFENSE_DEFAULT, DEFENSE_STEPS, FACTION_IDS, FACTIONS, ORBITALS, cleanDefense, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
@@ -1538,8 +1538,14 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
   )
 }
 
+// Dev builds only, until ground units can fight: the Space / Ground switch in the skirmish setup and
+// the ground map viewer behind it. The condition is false in a production build, so the viewer's
+// chunk is never emitted.
+const GroundViewer = import.meta.env.DEV ? lazy(() => import('./ground/Viewer.tsx')) : null
+
 export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack: () => void; onLaunch: (s: Setup) => void }) {
   const [setup, setSetup] = useState(lastSetup)
+  const [mode, setMode] = useState<'space' | 'ground'>('space')
   const factions = FACTION_IDS
   const [picker, setPicker] = useState(false)
   /** Whose start area a drag on the map redraws. */
@@ -1578,6 +1584,12 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const allies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 0).length
   const step = Math.max(0, CREDIT_STEPS.indexOf(setup.credits))
   const act = setup.slots[active]?.kind === 'closed' ? 0 : active
+  if (GroundViewer && mode === 'ground')
+    return (
+      <Suspense fallback={null}>
+        <GroundViewer onBack={() => (sound.click(), setMode('space'))} />
+      </Suspense>
+    )
   return (
     <div className="ew-root ew-deck ew-lobby" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
       <Tips />
@@ -1585,6 +1597,16 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <header className="ew-lobby-head">
           <button onClick={() => (sound.click(), onBack())}>← Main menu</button>
           <h2>Skirmish</h2>
+          {GroundViewer && (
+            <div className="ew-seg" role="group" aria-label="Battle mode (dev builds only)">
+              <button className="is-on" aria-pressed>
+                Space
+              </button>
+              <button onClick={() => (sound.click(), setMode('ground'))} aria-pressed={false} data-tip="Ground battles: dev builds only, a map viewer for now">
+                Ground
+              </button>
+            </div>
+          )}
         </header>
         <div className="ew-room">
           <div className="ew-room-col is-main">
