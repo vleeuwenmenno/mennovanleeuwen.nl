@@ -1711,22 +1711,55 @@ click opens the Minecraft server window).
 
 ### Weather
 
-The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a forecast dashboard: current
-conditions, the next hour of precipitation, the coming hours (temperature, precipitation or wind), a
-10-day outlook, and tiles for UV, sunrise and sunset, wind, precipitation, feels like, humidity,
-pressure, visibility, the moon, a precipitation radar and air quality. A strip at the top of the
-window switches location and refreshes. On a wide window the tiles sit in a grid; on a tablet the
-10-day list sits beside the map; on a phone or a narrow pane they stack. Behind the cards the
-window keeps the sky from before: clear, night, cloud, fog, rain, snow or storm, from the current
-conditions. Each card opens a detail
-with a chart or the reading written out. It uses the same Open-Meteo fetch as the widget
-([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key, including
-15-minute precipitation. The map card is that radar, centred on the selected place: a quiet gray
-canvas (Esri's dark canvas in a dark theme, the light canvas when the document is in light mode)
-with the latest past [RainViewer](https://www.rainviewer.com/) frame on top. The card is one button
-and opens a larger copy of the same map. If RainViewer does not answer, the canvas stays and the
-map says the radar is unavailable; the rest of the forecast is unaffected. The line at the bottom
-of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
+The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx), with its parts in
+[`src/apps/weather/`](src/apps/weather)) is a forecast dashboard: current conditions, the next hour
+of precipitation, the coming hours (temperature, precipitation or wind), a 10-day outlook, and tiles
+for UV, sunrise and sunset, wind, precipitation, feels like, humidity, pressure, visibility, the
+moon, an animated precipitation radar and air quality. A strip at the top of the window switches
+location and refreshes. On a wide window the tiles sit in a grid; on a tablet the 10-day list sits
+beside the map; on a phone or a narrow pane they stack. It uses the same Open-Meteo fetch as the
+widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key:
+current conditions, every hour of the 10 days (temperature, feels like, precipitation and its
+chance, wind, gusts and direction, UV, humidity, dew point, pressure, visibility, cloud cover),
+15-minute precipitation for three hours, and hourly air quality (European AQI, PM2.5, PM10, ozone,
+NO₂) a few days ahead.
+
+**Looks.** Behind the cards the sky follows the current conditions, mixed from the theme's palette
+(deep in a dark theme, pale in a light one): drifting clouds, slanted rain, falling snow, twinkling
+stars and a moon glow at night, a lightning flicker in a storm, a slow sun glow on a clear day. The
+cards are layered glass with a soft shadow, rise in one after another, and lift on hover; the
+weather icons move a little, numbers count up, and the tiles carry small drawn-in sparklines (UV,
+precipitation, feels like, humidity, visibility, air quality), a swaying wind needle and a sun on
+its arc. All of it is CSS animation on transform and opacity (no frame loop, no React renders), and
+with *reduce motion* set in the system everything stands still.
+
+**Details.** Every card opens a detail with one shared interactive chart
+([`weather/Chart.tsx`](src/apps/weather/Chart.tsx), plain SVG): hover with a mouse or drag with a
+finger or pen along it and a crosshair, a tooltip with every series and the readout above follow
+that point; the handle under the axis drags too, and arrow keys, Page Up/Down, Home and End step
+through it when it has focus. What each shows: *hourly* temperature and feels like, precipitation
+amount and chance, or wind and gusts with direction arrows (switchable in the detail); *10 days*
+highs and lows as a band with the chance of precipitation, and a button into that day; *a day* its
+hours, with previous and next day; *next hour* three hours in 15-minute bars; *UV* by hour over
+the UV bands, with advice for the hour; *sun* a sun you drag through the day along its path (time,
+time to sunset or sunrise) and the daylight over 10 days; *wind* a compass that turns with the
+scrubbed hour; *precipitation* the next 24 hours or 10 days; *feels like*, *humidity* (with dew
+point and how muggy it feels), *pressure* (the gauge follows, with the trend) and *visibility*
+(with cloud cover) by hour; *moon* 30 days of illumination plus a phase calendar to tap through;
+*air quality* the AQI by hour over its bands with the pollutants for that hour.
+
+**Radar** ([`weather/Radar.tsx`](src/apps/weather/Radar.tsx)). The map card is a quiet gray canvas
+(Esri's dark canvas in a dark theme, the light canvas in light mode) with
+[RainViewer](https://www.rainviewer.com/)'s frames on top: the last two hours of scans, and its
+nowcast frames when it publishes them (it publishes none at the moment; the timeline then ends at
+the latest scan and says so). Each frame is its own stacked layer, loaded up front, so the loop and
+scrubbing only crossfade between layers. Radar tiles are 512 px from one zoom level down, a quarter
+of the requests. The card loops by itself while it is on screen and the page is visible, showing the
+frame's time; tap it for the big map: play and pause, a timeline to drag (past and forecast drawn
+differently, a *Now* mark, local time with "40 min ago" or "+30 min"), three speeds, drag to pan,
+zoom buttons or the wheel, and a button back to the place. If RainViewer does not answer, the canvas
+stays and the map says the radar is unavailable; the rest of the forecast is unaffected. The line at
+the bottom of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
 [OpenStreetMap](https://www.openstreetmap.org/copyright)). Saved cities and units sync with your
 account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
 dock, `weather` in the terminal, or from the weather widget.
