@@ -2953,6 +2953,22 @@ Keybinds and Multiplayer. Controls is edge scrolling, Camera is how fast the vie
 Gameplay is the battlefield and the shipyard. Key bindings live on the Keybinds tab, not as their
 own item on the main menu. How to play is off the main menu for now; the battle menu still opens it.
 
+## Empires At War dock points
+
+Dragging a floating window (the tactical map, economy, fleet inventory, players; on the galaxy map the
+map, planet dock, fleets, economy and selection) shows small anchors at the places it can snap to,
+the nearest one lit with an outline of where the window would land ([`src/apps/games/empires/dock.ts`](src/apps/games/empires/dock.ts),
+drawn by `Floating` in `Hud.tsx`). Let go within 44 px (64 px for a finger) of one and it sits there exactly;
+anywhere else it stays where it was dropped, as before. The places are the window's own **default spot**
+(always first: snapping there clears its moved entry, so it follows the default again) and eight dock
+points: the four corners, top centre, bottom centre and the left and right middles, 8 px from the edges
+and 56 px under the top. A window on a dock point is stored in the layout as `{ dock }`, not pixels, so
+it stays on that corner or edge when the screen is resized or the window grows; layouts saved with
+pixels load as they were. Hold **Shift** while dragging to place a window freely, with no anchors.
+*Settings → Apps → Empires At War → Snap windows to dock points* (and the game's Settings, Gameplay
+tab) turns it off; it is on by default. Windows the phone layout pins in place (the tactical map on touch
+screens) don't take part.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),

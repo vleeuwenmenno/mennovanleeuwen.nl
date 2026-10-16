@@ -456,6 +456,9 @@ function EmpiresSettings() {
         <Row title="Show weapon ranges on hover" hint="Rings for each gun's reach and the sensors round the ship or station under the pointer; on a touch screen, round the selected ones">
           <Toggle on={s.ranges} onChange={(ranges) => setEmpires({ ranges })} label="Show weapon ranges on hover" />
         </Row>
+        <Row title="Snap windows to dock points" hint="Dragging a window shows anchors (its default spot, the screen's corners and edges) and snaps it onto the one it is dropped near; Shift while dragging places it freely">
+          <Toggle on={s.snapWindows} onChange={(snapWindows) => setEmpires({ snapWindows })} label="Snap windows to dock points" />
+        </Row>
         <Row title="Fog of war grid" hint={`Where sight ends, cell by cell · ${keyName(s.keys.fogGrid)} in a battle`}>
           <Toggle on={s.fogGrid} onChange={(fogGrid) => setEmpires({ fogGrid })} label="Fog of war grid" />
         </Row>

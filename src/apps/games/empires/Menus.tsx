@@ -659,6 +659,11 @@ export function SettingsPanel({ sound, initial = 'sound' }: { sound: EmpiresSoun
               <span>Show FPS and frame time</span>
               <Seg label="Show FPS and frame time" value={fps} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => performanceOverlayPref.set(v)} />
             </div>
+            <h5>Windows</h5>
+            <div className="ew-row">
+              <span data-tip={coarse ? 'Dragging a window shows anchors: its default spot and the screen\'s corners and edges. Let go near one and it snaps there.' : 'Dragging a window shows anchors: its default spot and the screen\'s corners and edges. Let go near one and it snaps there. Hold Shift while dragging to place it freely.'}>Snap windows to dock points</span>
+              <Seg label="Snap windows to dock points" value={s.snapWindows} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ snapWindows: v })} />
+            </div>
             <h5>Shipyard</h5>
             <div className="ew-row">
               <span>Ships the station isn't upgraded for</span>
