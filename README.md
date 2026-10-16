@@ -2802,7 +2802,7 @@ the view and has no keys to bind.
 
 On phone-sized screens the game opens in fullscreen:
 - the HUD and galaxy panels become bottom sheets, with the minimap behind a button;
-- the menus and lobby scroll and fit;
+- the menus and lobby scroll and fit, with the lobby's launch bar always in view;
 - portrait shows a hint to turn the phone sideways.
 
 ## Empires At War multiplayer
@@ -2819,6 +2819,15 @@ show the remembered name, to change it for next time or *Forget* it, so the next
 host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI (with its difficulty and style) or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
+
+The lobby, and the single-player skirmish setup that shares its layout, is a panel centred on the
+screen: at most 1500 px wide and no taller than its contents, so a big or ultrawide window gets
+margins rather than a giant map. *Players* (the spawns) and *Battle settings* (starting credits,
+reinforcements and, on a generated map, its rules) sit on the left, the map with its legend in the
+middle, and the chat as a rail on the right. In a narrower window the chat moves under the map; on a
+phone everything is one column, with each player as a two-line card. A launch bar at the foot stays in
+view at every size. It says what the battle is still waiting for, and holds *Start battle* for the
+host, *I'm ready* for the others, or *Launch battle* in a skirmish.
 
 Battles run in deterministic lockstep: every player's browser runs the whole battle, and only
 orders cross the network. The server ([`server/empires.ts`](server/empires.ts), on the WebSocket

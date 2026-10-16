@@ -397,8 +397,9 @@
   background: rgba(20, 32, 60, 0.8);
 }
 
-/* Lobby: the players as a wide table on the left, the map with its start areas on the right; other
-   maps open in a picker. */
+/* Lobbies: the header, and the grid of the multiplayer battle list. The skirmish setup and the
+   multiplayer lobby lay out their frames with .ew-lobby-body and .ew-room, below. Other maps open
+   in a picker. */
 .ew-lobby {
   display: flex;
   flex-direction: column;
@@ -430,6 +431,342 @@
 }
 .ew-lobby-grid .ew-frame-in {
   overflow: auto;
+}
+
+/* The skirmish setup and the multiplayer lobby share one layout: a panel centred on the screen, no
+   wider than --ew-lobby-max and no taller than its contents, so an ultrawide window gets margins
+   rather than a giant map. In it: the header, the frames (.ew-room), and at its foot the launch bar,
+   which stays in view however much the frames scroll. The frames' columns follow the panel's width:
+   - one column (phones, short screens): everything scrolls above the launch bar, the map after the players;
+   - two columns: players and battle settings | the map, and the chat under the map;
+   - three columns (multiplayer, wide): players and battle settings | the map | the chat as a side rail.
+   With columns, each scrolls on its own once the screen is too short for it. */
+.ew-lobby-body {
+  --ew-lobby-max: 1500px;
+  position: relative;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: min(100%, var(--ew-lobby-max));
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px 14px;
+  container: ew-lobby / inline-size;
+}
+.ew-lobby-body > .ew-lobby-head {
+  padding: 12px 0 0;
+}
+.ew-lobby-body > .ew-mp-status {
+  margin: 0;
+}
+.ew-room {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ew-rim) transparent;
+}
+.ew-room-col {
+  display: contents;
+}
+.ew-room .ew-frame {
+  flex: none;
+}
+.ew-room .ew-lobby-slots {
+  order: 1;
+}
+.ew-room .ew-lobby-preview {
+  order: 2;
+}
+.ew-room .ew-lobby-settings {
+  order: 3;
+}
+.ew-room .ew-mp-chat {
+  order: 4;
+}
+/* The preview is the map's own shape, a little shorter on a phone. When its box is taller or wider
+   than the map, the map is drawn in its middle, on a darker screen. */
+.ew-room .ew-lobby-preview .ew-mappreview {
+  flex: none;
+  width: 100%;
+  min-height: 150px;
+  max-height: 300px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ew-cell) 45%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ew-cell-line);
+}
+.ew-room .ew-areahint,
+.ew-room .ew-legend,
+.ew-room .ew-mapblurb {
+  flex: none;
+}
+.ew-room .ew-mp-chat .ew-frame-in {
+  height: auto;
+}
+.ew-room .ew-mp-chat .ew-mp-lines {
+  min-height: 48px;
+  max-height: 132px;
+}
+@media (min-height: 500px) {
+  @container ew-lobby (min-width: 740px) {
+    .ew-room {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-areas: 'main map';
+      overflow: visible;
+    }
+    .ew-room.has-chat {
+      grid-template-rows: minmax(0, 1fr) 190px;
+      grid-template-areas: 'main map' 'main chat';
+    }
+    .ew-room-col {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: var(--ew-rim) transparent;
+    }
+    .ew-room-col.is-main {
+      grid-area: main;
+    }
+    .ew-room-col.is-map {
+      grid-area: map;
+    }
+    .ew-room-col.is-chat {
+      grid-area: chat;
+    }
+    /* Columns end level: the last frame of each takes what's left of its column. */
+    .ew-room-col > .ew-frame:last-child {
+      flex: 1 0 auto;
+    }
+    /* The map's frame gives and takes room through its preview: as tall as the map's shape when
+       there's room, smaller (and the map in its middle) when the screen is short. */
+    .ew-room-col.is-map > .ew-frame,
+    .ew-room-col.is-chat > .ew-frame {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .ew-room-col.is-map .ew-frame-in,
+    .ew-room-col.is-chat .ew-frame-in {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+    }
+    .ew-room .ew-lobby-preview .ew-mappreview {
+      flex: 1 1 auto;
+      min-height: 140px;
+      max-height: none;
+    }
+    .ew-room .ew-mp-chat .ew-mp-lines {
+      max-height: none;
+    }
+  }
+  @container ew-lobby (min-width: 1220px) {
+    .ew-room.has-chat {
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) clamp(240px, 21cqw, 320px);
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-areas: 'main map chat';
+    }
+  }
+}
+/* Battle settings: each setting under its own heading, divided by a hairline. */
+.ew-lobby-settings .ew-frame-in {
+  gap: 10px;
+}
+.ew-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-setting + .ew-setting {
+  padding-top: 10px;
+  border-top: 1px solid var(--ew-cell-line);
+}
+.ew-lobby .ew-setting > h5 {
+  margin: 0;
+}
+.ew-mapblurb {
+  margin: 0;
+  color: var(--ew-muted);
+}
+.ew-mapblurb > span {
+  white-space: nowrap;
+}
+/* The players, laid out by the width of their own frame. Wide enough, the chosen faction shows its
+   name and the others only their emblems (with a tooltip); narrower, every faction is an emblem;
+   narrower still (a phone), each player is a two-line card. */
+.ew-room .ew-lobby-slots {
+  container: ew-slots / inline-size;
+}
+.ew-root.ew-deck .ew-room .ew-slotrow {
+  grid-template-columns: var(--ew-slotno, 26px) minmax(0, 0.8fr) minmax(0, 1.4fr) 76px minmax(84px, 108px);
+}
+.ew-room .ew-slotrow .ew-factionseg button:not(.is-on) {
+  flex: none;
+}
+.ew-deck .ew-room .ew-slotrow .ew-factionseg button:not(.is-on) {
+  padding: 3px 5px;
+}
+.ew-room .ew-slotrow .ew-factionseg button:not(.is-on) span {
+  display: none;
+}
+.ew-deck .ew-room .ew-slotrow .ew-factionseg button.is-on {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
+}
+.ew-room .ew-slotrow .ew-factionseg button.is-on span {
+  display: inline;
+}
+@container ew-slots (min-width: 440px) and (max-width: 599px) {
+  .ew-room .ew-slotrow .ew-factionseg button.is-on span {
+    display: none;
+  }
+  .ew-deck .ew-room .ew-slotrow .ew-factionseg button.is-on {
+    flex: none;
+    padding: 3px 5px;
+  }
+}
+.ew-room .ew-lobby-slots .ew-frame-in > p {
+  margin: 0;
+}
+/* A phone-wide lobby: each player a two-line card. Who and their status (or the AI's level and
+   style); then the faction and the side. */
+@container ew-slots (max-width: 439px) {
+  .ew-root.ew-deck .ew-room .ew-slotrow {
+    grid-template-columns: var(--ew-slotno, 26px) minmax(0, 1fr) auto auto;
+    row-gap: 6px;
+  }
+  .ew-room .ew-slotrow.is-head {
+    display: none;
+  }
+  .ew-room .ew-slotrow > :nth-child(1) {
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+  .ew-room .ew-slotrow.is-closed > :nth-child(1) {
+    grid-row: 1;
+  }
+  .ew-room .ew-slotrow > :nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .ew-room .ew-slotrow > :nth-child(3) {
+    grid-column: 2 / 4;
+    grid-row: 2;
+  }
+  .ew-room .ew-slotrow > :nth-child(4) {
+    grid-column: 4;
+    grid-row: 2;
+  }
+  .ew-room .ew-slotrow > :nth-child(5) {
+    grid-column: 3 / -1;
+    grid-row: 1;
+    justify-self: end;
+    text-align: right;
+  }
+  .ew-room .ew-slotrow > .ew-slotopen {
+    grid-column: 3 / -1;
+    grid-row: 1;
+    text-align: right;
+  }
+  .ew-room .ew-slotrow strong.ew-slotwho,
+  .ew-room .ew-slotrow select.ew-slotwho {
+    width: auto;
+    max-width: 100%;
+  }
+  .ew-room .ew-aipick {
+    flex-direction: row;
+  }
+  .ew-room .ew-aipick > select {
+    width: auto;
+  }
+}
+@container (max-width: 560px) {
+  .ew-lobby-body {
+    gap: 8px;
+    padding: 0 8px 8px;
+  }
+  .ew-lobby-body > .ew-lobby-head {
+    padding-top: 8px;
+  }
+}
+/* The launch bar: what the battle waits for, or a green light, and the button that starts it. */
+.ew-launchbar {
+  flex: none;
+}
+.ew-launchbar > .ew-frame-in {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 10px 8px 16px;
+}
+.ew-launch-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ew-launch-note > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ew-launch-text {
+  font-size: 13px;
+  color: var(--ew-head);
+}
+.ew-launch-note small {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-launch-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ew-gold);
+  box-shadow: 0 0 8px var(--ew-gold);
+}
+.ew-launch-note.is-ok .ew-launch-dot {
+  background: var(--ew-good);
+  box-shadow: 0 0 8px var(--ew-good);
+}
+.ew-launch-acts {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.ew-deck .ew-launch-acts > button {
+  min-width: 170px;
+}
+@container ew-lobby (max-width: 520px) {
+  .ew-launchbar > .ew-frame-in {
+    gap: 10px;
+    padding-left: 12px;
+  }
+  .ew-launch-note small {
+    display: none;
+  }
+  .ew-launch-text {
+    font-size: 12px;
+  }
+  .ew-deck .ew-launch-acts > button {
+    min-width: 0;
+  }
 }
 .ew-maplist {
   display: flex;
@@ -468,11 +805,6 @@
   min-height: 0;
   flex: none;
 }
-.ew-lobby-preview .ew-mappreview {
-  /* Full width at the map's own shape; with the generator open the panel scrolls instead. */
-  flex: none;
-  min-height: 120px;
-}
 .ew-lobby-preview p {
   margin: 0;
 }
@@ -491,6 +823,10 @@
   display: flex;
   align-items: center;
   gap: 5px;
+}
+.ew-legend b {
+  font-weight: 600;
+  color: var(--ew-head);
 }
 .ew-legend i {
   display: block;
@@ -765,14 +1101,6 @@ span.ew-teamtag {
   color: #ffc4be;
   border-color: rgba(255, 90, 80, 0.5);
 }
-.ew-launch {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 10px;
-}
 
 /* Multiplayer: the name screen, the list of battles, and the lobby with its chat. */
 .ew-mp-name {
@@ -934,19 +1262,6 @@ span.ew-teamtag {
 .ew-deck .ew-mp-join {
   padding: 5px 10px !important;
 }
-.ew-mp-left {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-}
-.ew-mp-left > .ew-lobby-slots {
-  flex: none;
-}
-/* Player names need more room than "AI" does. */
-.ew-mp-room .ew-slotrow {
-  grid-template-columns: 26px minmax(80px, 1.6fr) minmax(64px, 0.8fr) 74px minmax(78px, 96px);
-}
 .ew-mp-who {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -977,10 +1292,6 @@ span.ew-teamtag {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ew-good);
-}
-.ew-mp-chat {
-  flex: 1;
-  min-height: 150px;
 }
 .ew-mp-chat .ew-frame-in {
   display: flex;
@@ -1118,9 +1429,6 @@ span.ew-teamtag {
   .ew-lobby-grid {
     grid-template-columns: 1fr;
     overflow: auto;
-  }
-  .ew-lobby-preview .ew-mappreview {
-    min-height: 200px;
   }
 }
 
