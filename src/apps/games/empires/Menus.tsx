@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
-import { CREDIT_STEPS, FACTION_IDS, FACTIONS, type FactionId } from './data'
+import { CREDIT_STEPS, DEFENSE_DEFAULT, DEFENSE_STEPS, FACTION_IDS, FACTIONS, ORBITALS, cleanDefense, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { NAME_MAX, nameProblem, tidyName } from './names'
@@ -31,6 +31,9 @@ export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty
 export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string; names?: (string | null)[]
   /** Reinforcements (sim.ts Reinforce); setups saved before them get the defaults. */
   reinforce?: Reinforce
+  /** Defense stations each player may have (data.ts DEFENSE_STEPS, 0: off); setups saved before
+   * them get DEFENSE_DEFAULT. */
+  stations?: number
 }
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
@@ -81,9 +84,11 @@ function lastSetup(): Setup {
       gen,
       // Setups saved before reinforcements had rules: the defaults.
       reinforce: cleanReinforce(v?.reinforce),
+      // Setups saved before defense stations: the default limit.
+      stations: cleanDefense(v?.stations),
     }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE } }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE }, stations: DEFENSE_DEFAULT }
   }
 }
 
@@ -166,6 +171,28 @@ export function ReinforceOptions({ value, onChange }: { value: Reinforce; onChan
       </label>
       <p className="ew-muted ew-small">
         New ships fly out of their yard or the station's hangar. A ship's red button buys it as a reinforcement instead: built the same way, it waits in hyperspace to be called in anywhere your fleet can see{r.surcharge ? `, for ${r.surcharge}% more` : ', at no extra cost'}.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * The defense station limit, for the skirmish setup and the multiplayer lobby (where only the host
+ * changes it, `onChange` absent for the others): how many each player may have at a time, standing or
+ * going up, or Off (none can be built, and the AI builds none).
+ */
+export function DefenseOptions({ value, onChange }: { value: number; onChange?: (n: number) => void }) {
+  const n = cleanDefense(value)
+  const names = Object.values(ORBITALS).map((o) => o.name.replace(/ defense station$/, '')).join(', ')
+  return (
+    <div className="ew-reinf ew-defopts" data-tip={`Engineers build defense stations round the Command Station like a yard (the ${names}), and each one upgrades itself to level 3 and takes a module in each of its slots: guns, flak, a launcher, shields or a hangar.`}>
+      {onChange ? (
+        <Seg label="Defense stations per player" value={n} options={DEFENSE_STEPS.map((x): [number, string] => [x, x ? String(x) : 'Off'])} onChange={onChange} />
+      ) : (
+        <b className="ew-reinf-ro">{n ? `${n} per player` : 'Off'}</b>
+      )}
+      <p className="ew-muted ew-small">
+        {n ? `Up to ${n} defense station${n === 1 ? '' : 's'} per player, put up by engineers near the Command Station and fitted with modules.` : 'No defense stations in this battle.'}
       </p>
     </div>
   )
@@ -797,6 +824,7 @@ export function HowToPlay() {
         <li>Select a mining platform to upgrade it: Deeper drills (twice) for more credits, Armour plating, and a Shield generator, since platforms start without shields. Upgrades belong to that platform: lose it and a new one starts from scratch. Every platform has a small flak turret that can just about hold off one fighter squadron.</li>
         <li>Guard ({k('guard')}), then click one of your ships or structures: the selection stays with it and fights off whatever comes near. On a ship two classes bigger (a flagship for gunships and corvettes, say) they escort it: each takes a place over its hull, moves and turns with it, takes on enemies that come within reach of it and comes back, and repair ships mend it first.</li>
         <li>Gunships and bigger can retreat into hyperspace ({k('retreat')}): the drive charges for 6 to 12 seconds while the ship holds still and keeps firing, then it jumps out, freeing its fleet space; 15 seconds later up to half its cost comes back, less the more damaged it was. Destroyed before it jumps, it's lost.</li>
+        <li>Engineers also build defense stations near the Command Station (as many as the lobby allows, two unless it says otherwise): select one to upgrade it to level 2 and 3 and to fit a module into each of its slots (one, two and four by level): a battery against warships, flak against strike craft, a launcher whose missiles go through shields, a shield generator or a hangar. Fitting a filled slot swaps its module.</li>
         <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
         <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
         <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
@@ -1417,6 +1445,8 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
           </label>
           <h5>Reinforcements</h5>
           <ReinforceOptions value={setup.reinforce ?? REINFORCE} onChange={(patch) => update({ ...setup, reinforce: cleanReinforce({ ...cleanReinforce(setup.reinforce), ...patch }) })} />
+          <h5>Defense stations</h5>
+          <DefenseOptions value={setup.stations ?? DEFENSE_DEFAULT} onChange={(n) => update({ ...setup, stations: n })} />
           <div className="ew-launch">
             <span className="ew-muted ew-small">
               {enemies ? `You${allies ? ` and ${allies} ${allies === 1 ? 'ally' : 'allies'}` : ''} against ${enemies} ${enemies === 1 ? 'enemy' : 'enemies'}` : 'Add at least one enemy.'}

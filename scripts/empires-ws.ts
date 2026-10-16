@@ -212,6 +212,21 @@ check('junk switches and surcharges fall back to the defaults', junk.reinforce.s
 guest.send({ t: 'setup', reinforce: { surcharge: 0 } })
 const notTheirs = await until(guest, 'error')
 check("a guest can't change the reinforcement rules", /host/.test(notTheirs.why), notTheirs)
+// Defense stations: 2 per player on a new lobby; the host picks one of the steps (Off is 0), junk
+// is ignored, and only the host may change it.
+check('a new lobby allows 2 defense stations per player', made.stations === 2, made.stations)
+host.send({ t: 'setup', stations: 0 })
+const off = (await until(guest, 'lobby', (m) => m.lobby.stations === 0)).lobby
+check('the host turns defense stations off', off.stations === 0, off.stations)
+host.send({ t: 'setup', stations: 5 })
+const odd = (await until(guest, 'lobby')).lobby
+check('a limit that is not one of the steps is ignored', odd.stations === 0, odd.stations)
+host.send({ t: 'setup', stations: 6 })
+const six = (await until(guest, 'lobby', (m) => m.lobby.stations === 6)).lobby
+check('the host sets 6', six.stations === 6, six.stations)
+guest.send({ t: 'setup', stations: 1 })
+const notTheirs2 = await until(guest, 'error')
+check("a guest can't change the defense station limit", /host/.test(notTheirs2.why), notTheirs2)
 host.send({ t: 'slot', i: 1, patch: { kind: 'open' } })
 const kicked = await until(guest, 'kicked')
 check('host can take a player out', /host/.test(kicked.why), kicked)

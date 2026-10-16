@@ -7,7 +7,7 @@ import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
   ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
-  type WeaponKind,
+  type WeaponKind, DEFENSE_QUEUE, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, cleanDefense, defenseModTime, defenseTime, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, placeType,
 } from './data.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
@@ -191,6 +191,9 @@ export type Unit = {
    * and in battles saved before expansions. */
   xm?: ModuleId[]
   xq?: ModuleJob[]
+  /** A defense station's work (skirmish defense stations): its upgrade and modules ordered, the
+   * first under way, built by the station itself. Absent until it has any. */
+  dq?: DefenseJob[]
   /** A warship rush-launched unfinished (see Rush). Absent once it is finished, and on every other unit. */
   rush?: Rush
   /** A yard that rush-launched: when it may rush again (World time). */
@@ -225,6 +228,11 @@ export type Rush = { left: number; total: number; gap: number; parts: number[]; 
 
 /** An expansion being built onto its building: seconds left of its time. */
 export type ModuleJob = { id: ModuleId; left: number; total: number }
+/** Work ordered on a defense station: its next level, or module `mod` into slot `slot` (in place of
+ * what is there); seconds left of its time, and what was paid (refunded if it is called off). */
+export type DefenseJob = ({ k: 'up' } | { k: 'mod'; slot: number; mod: OrbitalModId }) & { left: number; total: number; paid: number }
+/** What can be ordered on a defense station (see cantFortify). */
+export type DefenseWork = { k: 'up' } | { k: 'mod'; slot: number; mod: OrbitalModId }
 
 /** Where a yard was destroyed: its owner's engineers can rebuild it there for REBUILD of its price. */
 export type Ruin = { id: number; owner: Owner; unit: string; x: number; y: number; a: number }
@@ -402,6 +410,8 @@ export type SimEvent =
   | { k: 'finished'; owner: Owner; unit: number; x: number; y: number }
   /** Credits sent from one ally to another. */
   | { k: 'gift'; from: Owner; to: Owner; amount: number }
+  /** A defense station finished an upgrade or fitted a module (`what` says which). */
+  | { k: 'fortified'; owner: Owner; unit: number; what: string; x: number; y: number }
 
 export type World = {
   w: number
@@ -449,6 +459,10 @@ export type World = {
    * before that (and in fleet battles, which build nothing): new ships jump in beside their yard, as
    * they always did there, and the reserve costs nothing extra. */
   reinforce?: Reinforce
+  /** Defense stations (the Galactic conquest ones, data.ts defenseType): how many each player may
+   * have at a time, standing or going up, as the lobby set it; 0 when they are off. Absent in a
+   * battle saved before them, and in fleet battles: none (engineers can't build them). */
+  defense?: number
 }
 
 /**
@@ -830,7 +844,9 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
 }
 
 /** `reinforce`: the lobby's reinforcement rules (REINFORCE when left out). */
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce } = {}): World {
+/** `defense`: how many defense stations each player may have (data.ts DEFENSE_STEPS, 0: off;
+ * DEFENSE_DEFAULT when left out). */
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce; defense?: number } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -841,7 +857,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
     // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
     // New ships fly out of the yards, and reinforcements cost extra (see Reinforce).
-    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce) }),
+    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce), defense: cleanDefense(opts.defense) }),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -2023,6 +2039,13 @@ function restation(w: World, u: Unit) {
   const p = w.players[u.owner]
   const t = stationType(p.faction, p.level, p.techs, u.xm ?? [])
   if (t === u.t) return
+  // The same stage and modules as it has (a battle restored from a save has a copy of its type,
+  // not the cached one): nothing changes. Retyping it anyway would draw fresh reloads for its guns
+  // from the battle's dice, which the copy that was never saved doesn't, and the two drift apart.
+  if (t.sprite === u.t.sprite && t.hull === u.t.hull && t.shield === u.t.shield && t.hardpoints.map((h) => h.key).join() === u.t.hardpoints.map((h) => h.key).join()) {
+    u.t = t
+    return
+  }
   retype(w, u, t)
   const max = t.hull * u.mods.hull
   u.hull += max - u.hullMax
@@ -2153,12 +2176,15 @@ function boxesNear(ax: number, ay: number, aa: number, ahl: number, ahw: number,
 }
 
 /** `facing`: the way the yard faces, if its owner chose one (else away from the Command Station, as
- * the AI's always do); a ruin keeps the way it lay. The overlap checks use the yard's box at that angle. */
+ * the AI's always do); a ruin keeps the way it lay. The overlap checks use the yard's box at that angle.
+ * A defense station (data.ts defenseId) goes the same way, within the battle's limit of them
+ * (World `defense`), kept clear by the size it grows to. */
 export function placement(w: World, owner: Owner, unitId: string, x: number, y: number, facing?: number): Placement {
   const p = w.players[owner]
-  const t = UNIT[unitId]
+  const t = placeType(unitId)
   const st = w.byId.get(p.station)
-  const ruin = t && (w.ruins ?? []).find((r) => r.owner === owner && r.unit === unitId && d2(x, y, r.x, r.y) < sq(radius(t) * 0.8))
+  const fort = !!t?.orbital
+  const ruin = !t || fort ? undefined : (w.ruins ?? []).find((r) => r.owner === owner && r.unit === unitId && d2(x, y, r.x, r.y) < sq(radius(t) * 0.8))
   if (ruin) {
     x = ruin.x
     y = ruin.y
@@ -2166,6 +2192,7 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
   const a = ruin ? ruin.a : facing !== undefined && Number.isFinite(facing) ? wrapAngle(facing) : st ? M.atan2(y - st.y, x - st.x) : 0
   const cost = t ? (ruin ? Math.round(t.cost * REBUILD) : t.cost) : 0
   const out = (why: string | null): Placement => ({ why, x, y, a, cost, ...(ruin ? { ruin } : {}) })
+  if (fort) return out(fortProblem(w, owner, t, x, y, a) ?? (p.credits < cost ? 'Not enough credits' : null))
   if (!w.hybrid || w.fleet) return out('No yards in this battle')
   if (!t || t.tier !== 'yard' || t.faction !== p.faction) return out('That can\'t be built here')
   if (!st || st.dead) return out('No station')
@@ -2175,6 +2202,168 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
   if (why) return out(why)
   if (p.credits < cost) return out('Not enough credits')
   return out(null)
+}
+
+// --- Hybrid bases: defense stations ---------------------------------------------------------------------
+
+/** How many defense stations each player may have in this battle (0: none, they are off). */
+export const defenseCap = (w: World) => (w.hybrid && !w.fleet ? (w.defense ?? 0) : 0)
+/** A player's defense stations, standing or going up (what the limit counts). */
+export const defensesOf = (w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && !!u.t.orbital)
+/** Why player `owner` can't put up another defense station at all (off in this battle, no station,
+ * its level, at the limit), or null; without a spot to check, for the build card. */
+export function fortLock(w: World, owner: Owner): string | null {
+  const cap = defenseCap(w)
+  if (!cap) return w.hybrid && !w.fleet ? 'Defense stations are off in this battle' : 'No defense stations in this battle'
+  const p = w.players[owner]
+  const st = w.byId.get(p.station)
+  if (!st || st.dead) return 'No station'
+  const need = ORBITALS[p.faction].stages[0].station
+  if (need > p.level) return `Needs station level ${need}`
+  const n = defensesOf(w, owner).length
+  if (n >= cap) return `At the limit: ${n}/${cap} defense stations, standing or going up`
+  return null
+}
+/** Why defense station `t` can't go up at (x, y) facing `a`, or null: off, at the limit, or no room.
+ * It is kept clear by the size it grows to (its last level), so it always has room to. */
+function fortProblem(w: World, owner: Owner, t: UnitType, x: number, y: number, a: number): string | null {
+  if (t.faction !== w.players[owner].faction) return 'That can\'t be built here'
+  const lock = fortLock(w, owner)
+  if (lock) return lock
+  return siteProblem(w, owner, orbitalType(t.faction, ORBITAL_TOP, []), w.byId.get(w.players[owner].station)!, x, y, a)
+}
+
+/** The price and seconds of work `job` on defense station `u` (as it stands). */
+export function fortWork(u: Unit, job: DefenseWork): { cost: number; time: number } {
+  const f = u.t.faction
+  const lv = u.t.orbital?.level ?? 1
+  if (job.k === 'up') return { cost: ORBITALS[f].stages[Math.min(ORBITAL_TOP - 1, lv)].cost, time: defenseTime(f, Math.min(ORBITAL_TOP, lv + 1)) }
+  return { cost: orbitalMod(f, job.mod).cost, time: defenseModTime(f, job.mod) }
+}
+/** The level defense station `u` will have once the upgrade in its queue (if any) is done. */
+export const fortLevelAfter = (u: Unit) => Math.min(ORBITAL_TOP, (u.t.orbital?.level ?? 1) + (u.dq?.some((j) => j.k === 'up') ? 1 : 0))
+
+/**
+ * What rules work `job` out on defense station `u` regardless of credits and queue space (the card
+ * shows these as locked): not ours or not one, still going up, an upgrade already queued or the top
+ * level reached or the station level short; a slot it doesn't have (yet: one the queued upgrade
+ * brings counts), one already being fitted, or the module already in it.
+ */
+export function fortJobLock(w: World, owner: Owner, u: Unit | undefined, job: DefenseWork): string | null {
+  if (!defenseCap(w)) return 'Defense stations are off in this battle'
+  if (!u || u.dead || u.owner !== owner || !u.t.orbital) return 'Pick one of our defense stations'
+  if (u.site || building(u)) return 'Still under construction'
+  const o = u.t.orbital
+  if (job.k === 'up') {
+    if (o.level >= ORBITAL_TOP) return 'At its highest level'
+    if (u.dq?.some((j) => j.k === 'up')) return 'Already in the queue'
+    const need = ORBITALS[u.t.faction].stages[o.level].station
+    if (need > w.players[owner].level) return `Needs station level ${need}`
+    return null
+  }
+  if (!ORBITAL_MODS.includes(job.mod)) return 'No such module'
+  if (!Number.isInteger(job.slot) || job.slot < 0 || job.slot >= orbitalSlots(ORBITAL_TOP)) return 'No such slot'
+  if (job.slot >= orbitalSlots(fortLevelAfter(u))) return `Needs level ${orbitalSlotLevel(job.slot)}`
+  if (u.dq?.some((j) => j.k === 'mod' && j.slot === job.slot)) return 'That slot is already being fitted'
+  if (o.slots[job.slot] === job.mod) return 'Already fitted there'
+  return null
+}
+/** Why work `job` can't be ordered on defense station `uid` right now, or null if it can. */
+export function cantFortify(w: World, owner: Owner, uid: number, job: DefenseWork): string | null {
+  const u = w.byId.get(uid)
+  const lock = fortJobLock(w, owner, u, job)
+  if (lock) return lock
+  if ((u!.dq?.length ?? 0) >= DEFENSE_QUEUE) return 'Its queue is full'
+  if (w.players[owner].credits < fortWork(u!, job).cost) return 'Not enough credits'
+  return null
+}
+const fortJobName = (u: Unit, job: DefenseWork) => (job.k === 'up' ? orbitalName(u.t.faction, (u.t.orbital?.level ?? 1) + 1) : `${orbitalMod(u.t.faction, job.mod).name} (slot ${job.slot + 1})`)
+function fortify(w: World, owner: Owner, uid: number, job: DefenseWork): string | null {
+  const why = cantFortify(w, owner, uid, job)
+  if (why) return why
+  const u = w.byId.get(uid)!
+  const { cost, time } = fortWork(u, job)
+  spend(w, w.players[owner], cost, 'structures', fortJobName(u, job))
+  ;(u.dq ??= []).push({ ...job, left: time, total: time, paid: cost })
+  return null
+}
+/** Raise defense station `uid` a level (more hull, more module slots): paid now, done by the station
+ * itself after its time, after what is queued before it. */
+export const cmdFortUp = (w: World, owner: Owner, uid: number): string | null => fortify(w, owner, uid, { k: 'up' })
+/** Fit module `mod` into slot `slot` of defense station `uid` (a module there is swapped for it once
+ * it's done): paid now, done by the station itself. */
+export const cmdFortFit = (w: World, owner: Owner, uid: number, slot: number, mod: OrbitalModId): string | null => fortify(w, owner, uid, { k: 'mod', slot, mod })
+/** Call off the work at `index` in defense station `uid`'s queue: refunded in full. A module waiting
+ * for an upgrade that is called off is called off with it. */
+export function cmdCancelFort(w: World, owner: Owner, uid: number, index: number): string | null {
+  const u = w.byId.get(uid)
+  const j = u && !u.dead && u.owner === owner ? u.dq?.[index] : undefined
+  if (!j) return 'Nothing to cancel'
+  const p = w.players[owner]
+  cancelUpgrade(w, p, j.paid, 'structures', fortJobName(u!, j))
+  u!.dq!.splice(index, 1)
+  if (j.k === 'up') {
+    const n = orbitalSlots(u!.t.orbital!.level)
+    for (let i = u!.dq!.length - 1; i >= 0; i--) {
+      const x = u!.dq![i]
+      if (x.k !== 'mod' || x.slot < n) continue
+      cancelUpgrade(w, p, x.paid, 'structures', fortJobName(u!, x))
+      u!.dq!.splice(i, 1)
+    }
+  }
+  return null
+}
+
+/** A defense station as it now stands (a level more, a module in): its new type, the parts it had
+ * keeping their damage (a swapped module is a new part, whole), the extra hull arriving whole, its
+ * shields kept (up to what it now has). A new hangar launches its squadron straight away. */
+function refit(w: World, u: Unit, level: number, slots: (OrbitalModId | null)[]) {
+  const hangars = u.t.carrier?.max ?? 0
+  const t = defenseType(u.t.faction, level, slots)
+  retype(w, u, t)
+  const max = t.hull * u.mods.hull
+  u.hull = Math.max(1, u.hull + max - u.hullMax)
+  u.hullMax = max
+  u.shield = Math.min(u.shield, shieldMax(u))
+  if ((t.carrier?.max ?? 0) > hangars) u.hangarT = Math.max(u.hangarT, t.carrier!.every)
+}
+
+/** The defense stations work on what was ordered on them, one job at a time each. */
+function fortWorks(w: World, dt: number) {
+  for (const u of w.units) {
+    const j = u.dq?.[0]
+    if (!j || u.dead || !u.t.orbital || u.site || building(u)) continue
+    j.left -= dt
+    if (j.left > 0) continue
+    u.dq!.shift()
+    const o = u.t.orbital
+    if (j.k === 'up') refit(w, u, Math.min(ORBITAL_TOP, o.level + 1), [...o.slots])
+    else if (j.slot >= orbitalSlots(o.level)) {
+      giveBack(w, w.players[u.owner], j.paid, 'structures', `No slot for it: ${orbitalMod(u.t.faction, j.mod).name}`)
+      continue
+    } else {
+      const slots = [...o.slots]
+      slots[j.slot] = j.mod
+      refit(w, u, o.level, slots)
+    }
+    w.events.push({ k: 'fortified', owner: u.owner, unit: u.id, what: j.k === 'up' ? `${u.t.name} ready` : `${orbitalMod(u.t.faction, j.mod).name} fitted`, x: u.x, y: u.y })
+  }
+}
+
+/** The name of part `i` of `t` that has a price of its own: an expansion, or a defense station module. */
+function hpLabel(t: UnitType, i: number) {
+  const h = t.hardpoints[i]
+  if (h.exp) return MODULE[h.exp].name
+  const m = h.key ? /^s\d:(\w+)$/.exec(h.key) : null
+  return m && (ORBITAL_MODS as string[]).includes(m[1]) ? orbitalMod(t.faction, m[1] as OrbitalModId).name : h.kind
+}
+/** What welding shot-off part `i` of `t` back costs: an expansion's or a defense station module's
+ * share (REBUILD_MODULE) of its price; nothing for a part of the building itself. */
+export function partRebuildCost(t: UnitType, i: number) {
+  const h = t.hardpoints[i]
+  if (h.exp) return moduleRebuildCost(h.exp)
+  const m = t.orbital && h.key ? /^s\d:(\w+)$/.exec(h.key) : null
+  return m && (ORBITAL_MODS as string[]).includes(m[1]) ? Math.round(orbitalMod(t.faction, m[1] as OrbitalModId).cost * REBUILD_MODULE) : 0
 }
 
 /** Why yard `t` can't stand at (x, y) facing `a` round station `st`, or null when it can: inside the
@@ -2194,7 +2383,8 @@ function siteProblem(w: World, owner: Owner, t: UnitType, st: Unit, x: number, y
   if (w.beacons.some((b) => gap(b.x, b.y) < 240)) return 'Too close to a beacon'
   if (w.wrecks.some((h) => gap(h.x, h.y) < h.size * 0.6)) return 'A wreck is in the way'
   // Kept clear of other structures: a yard by its box, the rest by their longest side, a station by the size it grows to.
-  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o)) * 0.5
+  // (A skirmish's defense station by the size it grows to; Galactic conquest's stand as they are.)
+  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o.orbital && !w.fleet ? orbitalType(o.faction, ORBITAL_TOP, []) : o)) * 0.5
   const crowded = (u: Unit) => {
     if (u.t.tier === 'yard') {
       const b = yardBox(u.t)
@@ -2217,9 +2407,9 @@ export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, 
   if (!crew.length) return 'Select engineers to build it'
   const pl = placement(w, owner, unitId, x, y, facing)
   if (pl.why) return pl.why
-  const t = UNIT[unitId]
+  const t = placeType(unitId)!
   spend(w, w.players[owner], pl.cost, 'structures', pl.ruin ? `Rebuilding: ${t.name}` : t.name)
-  const site = spawn(w, unitId, owner, pl.x, pl.y, pl.a)
+  const site = spawn(w, t, owner, pl.x, pl.y, pl.a)
   site.building = t.build
   site.hull = site.hullMax * 0.1
   site.shield = 0
@@ -2374,6 +2564,12 @@ export function cmdCancelSite(w: World, owner: Owner, id: number): string | null
 function finishSite(w: World, t: Unit) {
   t.building = 0
   delete t.site
+  if (t.t.orbital) {
+    // A defense station: it holds its place, its guns (once fitted) on whatever comes in reach.
+    t.stance = 'hold'
+    w.events.push({ k: 'built', owner: t.owner, unit: t.t.id, x: t.x, y: t.y })
+    return
+  }
   t.yq = []
   const d = radius(t.t) + 280
   t.yr = { x: clamp(t.x + M.cos(t.a) * d, 40, w.w - 40), y: clamp(t.y + M.sin(t.a) * d, 40, w.h - 40) }
@@ -2465,7 +2661,7 @@ function construction(w: World, dt: number) {
     }
     t.hull = Math.min(t.hullMax, t.hull + (ENGINEERS.flat + ENGINEERS.share * t.hullMax) * k * dt)
     for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * ENGINEERS.share * k * dt)
-    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(w, t, dt, payers.get(id))
+    if (t.t.tier === 'station' || t.t.tier === 'yard' || (t.t.orbital && !w.fleet)) for (let i = 0; i < k; i++) rebuildModule(w, t, dt, payers.get(id))
   }
 }
 
@@ -2804,6 +3000,9 @@ function kill(w: World, u: Unit, by: Owner | -1) {
     u.xq = []
     ;(w.ruins ??= []).push({ id: w.wreckSeq++, owner: u.owner, unit: u.t.id, x: u.x, y: u.y, a: u.a })
   }
+  // A defense station's work not yet done is paid back.
+  for (const j of u.dq ?? []) giveBack(w, w.players[u.owner], j.paid, 'structures', `Lost with the station: ${j.k === 'up' ? 'its upgrade' : orbitalMod(u.t.faction, j.mod).name}`)
+  if (u.dq) u.dq = []
   if (u.t.tier === 'station' && !w.fleet) {
     // A player whose station falls is out; the last team with a station standing wins.
     w.players[u.owner].alive = false
@@ -4300,16 +4499,16 @@ function rebuildModule(w: World, t: Unit, dt: number, payer: Owner = t.owner) {
   let pick = -1
   t.hps.forEach((h, i) => {
     if (h.hp > 0) return
-    // A shot-off expansion is welded back for part of its price, paid as the work on it starts;
-    // one we can't pay for yet waits.
-    const x = t.t.hardpoints[i].exp
-    if (x && !h.fix && p.credits < moduleRebuildCost(x)) return
+    // A shot-off expansion (or defense station module) is welded back for part of its price, paid
+    // as the work on it starts; one we can't pay for yet waits.
+    const price = partRebuildCost(t.t, i)
+    if (price && !h.fix && p.credits < price) return
     if (pick < 0 || h.max > t.hps[pick].max) pick = i
   })
   if (pick < 0) return
   const h = t.hps[pick]
-  const x = t.t.hardpoints[pick].exp
-  if (x && !h.fix) spend(w, p, moduleRebuildCost(x), 'repairs', `Rebuilding: ${MODULE[x].name}`)
+  const price = partRebuildCost(t.t, pick)
+  if (price && !h.fix) spend(w, p, price, 'repairs', `Rebuilding: ${hpLabel(t.t, pick)}`)
   h.fix = (h.fix ?? 0) + dt
   if (h.fix < FIELD_REPAIR.rebuild) return
   h.fix = 0
@@ -4574,6 +4773,7 @@ export function tick(w: World, dt = STEP) {
   construction(w, dt)
   finishing(w, dt)
   if (w.hybrid) expansions(w, dt)
+  if (w.defense) fortWorks(w, dt)
   wings(w, dt)
   findSpotGroups(w)
   findEscorts(w)
@@ -4968,7 +5168,15 @@ export function stateHash(w: World): number {
       int(u.t.hardpoints.length)
       for (const j of u.xq ?? []) num(j.left)
     }
+    // A defense station's level, modules and work under way.
+    if (u.t.orbital) {
+      int(u.t.orbital.level)
+      int(u.t.hardpoints.length)
+      num(u.building)
+      for (const j of u.dq ?? []) num(j.left)
+    }
   }
+  int(w.defense ?? -1)
   int(w.ruins?.length ?? -1)
   int(w.shots.length)
   for (const s of w.shots) {

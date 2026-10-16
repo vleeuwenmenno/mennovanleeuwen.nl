@@ -7322,6 +7322,125 @@ span.ew-teamtag {
   flex-wrap: wrap;
   gap: 4px;
 }
+/* A skirmish's defense station card: its level and upgrade, its slots, the modules for the slot picked. */
+.ew-fort {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.ew-fort-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.ew-fort-head strong {
+  font-size: 13px;
+}
+.ew-fort-lv {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--ew-muted);
+}
+.ew-fort-hint {
+  font-size: 11px;
+  line-height: 1.35;
+}
+.ew-fort .ew-gdef-slots {
+  min-width: 0;
+}
+.ew-deck .ew-fort .ew-gdef-slot {
+  min-height: 0;
+  padding: 3px 4px;
+  gap: 1px;
+}
+.ew-fort .ew-gdef-slot .ew-modicon {
+  width: 22px;
+  height: 22px;
+  border-width: 1px;
+}
+.ew-fort .ew-gdef-pick {
+  gap: 3px;
+}
+.ew-fort .ew-focus,
+.ew-fort .ew-focus span {
+  min-width: 0;
+  white-space: normal;
+}
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-deck .ew-fort .ew-gdef-slot {
+    min-height: 44px;
+  }
+}
+/* A phone: the level and its upgrade on one line, the modules in one row that scrolls sideways
+   (as the build panels' cards do there), so the card itself never scrolls. */
+@media (max-width: 719px) {
+  .ew-fort-head .ew-small {
+    display: none;
+  }
+  .ew-fort .ew-gdef-pick {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ew-deck .ew-fort .ew-fortmod {
+    flex: 0 0 148px;
+    min-height: 44px;
+  }
+}
+/* A module to fit: a small chip (its icon, name, and price and time or where it stands), so all five
+   fit under the slots without the card scrolling. */
+.ew-deck .ew-fortmod {
+  position: relative;
+  flex: 1 1 30%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid var(--ew-line);
+  border-radius: 6px;
+  background: rgba(10, 16, 32, 0.75);
+  color: var(--ew-text);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+.ew-fortmod .ew-modicon {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  width: 24px;
+  height: 24px;
+  border-width: 1px;
+}
+.ew-fortmod strong {
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-fortmod-line {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--ew-muted);
+  white-space: nowrap;
+}
+.ew-deck .ew-fortmod.is-busy {
+  border-color: var(--ew-gold);
+}
+.ew-deck .ew-fortmod.is-locked,
+.ew-deck .ew-fortmod.is-off {
+  opacity: 0.55;
+}
+.ew-deck .ew-fortmod:hover:not(.is-locked) {
+  border-color: var(--ew-accent);
+}
+.ew-deck .ew-gdef-slot.is-lost {
+  border-color: var(--ew-bad);
+}
 @media (pointer: coarse), (max-width: 719px) {
   .ew-deck .ew-gdef-slot {
     min-height: 56px;

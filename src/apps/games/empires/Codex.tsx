@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { abilityOf, FACTION_IDS, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ORBITALS, defenseModTime, defenseTime, defenseType, orbitalSlots, type OrbitalModId, abilityOf, FACTION_IDS, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, traits, weaponLine, weaponName, type Sel } from './codexInfo'
 import { clampToViewport, screenArea } from './fit'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
@@ -47,10 +47,16 @@ const TAU = Math.PI * 2
 /** The unit as the Codex shows it: a station at the level picked, with every module it can have
  * (its expansions too); a yard with every expansion fitted. */
 function shown(t: UnitType, level: number) {
+  // A defense station at the level picked, its slots filled to show what goes in them.
+  if (t.orbital) return defenseType(t.faction, level, SHOWCASE.slice(0, orbitalSlots(level)))
   if (t.tier === 'yard') return yardType(t.id, modulesFor(worksOf(t)!, t.faction).map((m) => m.id))
   if (t.tier !== 'station') return t
   return stationType(t.faction, level, TECHS.filter((x) => x.faction === t.faction).map((x) => x.id), modulesFor('station', t.faction).map((m) => m.id))
 }
+
+/** The modules a defense station is shown with in the Codex, slot by slot (the shield generator is
+ * listed with the rest). */
+const SHOWCASE: OrbitalModId[] = ['battery', 'flak', 'launcher', 'hangar']
 
 /** Every gun a unit carries, grouped by kind and numbers. */
 function guns(t: UnitType) {
@@ -250,6 +256,38 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
               </p>
             </div>
           ))}
+        </>
+      )}
+      {t.orbital && (
+        <>
+          <h5>Levels</h5>
+          <p className="ew-muted ew-small">
+            In skirmishes engineers put it up round the Command Station like a yard (up to the lobby's limit per player, two unless it says otherwise), at level 1. It then upgrades itself and fits its own modules, one job at a time, ordered from its panel. In Galactic conquest a planet builds up to two in its queue.
+          </p>
+          <ul className="ew-cx-list">
+            {ORBITALS[t.faction].stages.map((x, i) => (
+              <li key={x.name}>
+                <i style={{ background: FACTIONS[t.faction].color }} />
+                <span>{x.name}</span>
+                <small>
+                  {fmt(x.hull)} hull · {orbitalSlots(i + 1)} slot{i ? 's' : ''} · {fmt(x.cost)} cr · {defenseTime(t.faction, i + 1)} s{x.station > 1 ? ` · station level ${x.station}` : ''}
+                </small>
+              </li>
+            ))}
+          </ul>
+          <h5>Modules</h5>
+          <p className="ew-muted ew-small">Each slot takes any of these; fitting a filled slot swaps its module. Each is a part with a hull of its own: shot off, it stops working until a repair crew (or engineers, for {Math.round(REBUILD_MODULE * 100)}% of its price) rebuild it. Times are a skirmish's.</p>
+          <ul className="ew-cx-list">
+            {ORBITALS[t.faction].modules.map((m) => (
+              <li key={m.id} data-tip={m.blurb}>
+                <i style={{ background: HP_COLOR[m.kind] }} />
+                <span>{m.name}</span>
+                <small>
+                  {fmt(m.cost)} cr · {defenseModTime(t.faction, m.id)} s
+                </small>
+              </li>
+            ))}
+          </ul>
         </>
       )}
       {t.support && <p className="ew-muted">Repairs up to {t.support.max} ships within {t.support.range}, {t.support.repair} hull a second each.</p>}
@@ -811,11 +849,12 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   const [side, setSide] = useState<FactionId>('republic')
   const sides = FACTION_IDS
   const faction: FactionId = side
-  const list = useMemo(() => UNITS.filter((u) => u.faction === faction), [faction])
+  // (With its defense station, which isn't in UNITS: only bases build it.)
+  const list = useMemo(() => [...UNITS.filter((u) => u.faction === faction), defenseType(faction, 1, [])], [faction])
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
-  const t = shown(base, level)
+  const t = shown(base, base.orbital ? Math.min(3, level) : level)
   const styles = modelStyles(t)
   const [style, setStyle] = useState('')
   const model = modelFor(t, styles.includes(style) ? style : '')
@@ -951,7 +990,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 <h5>{grp.name}</h5>
                 {units.map((u) => (
                   <button key={u.id} className={u.id === base.id ? 'is-on' : ''} onClick={click(() => setPickId(u.id))}>
-                    <span>{u.name}</span>
+                    <span>{u.orbital ? ORBITALS[u.faction].name : u.name}</span>
                   </button>
                 ))}
               </section>
@@ -976,9 +1015,10 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
               onNote={setNote}
             />
             {hover && !hover.fromList && <HoverTip t={t} model={model} sel={hover.sel} x={hover.x} y={hover.y} dmg={dmg} />}
-            {(t.tier === 'station' || styles.length > 0) && (
+            {(t.tier === 'station' || !!t.orbital || styles.length > 0) && (
               <div className="ew-cx-level">
                 {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((s, i) => [i + 1, s.name] as [number, string])} onChange={(v) => setLevel(v)} />}
+                {t.orbital && <Seg label="Defense station level" value={Math.min(3, level)} options={ORBITALS[t.faction].stages.map((s, i) => [i + 1, s.name] as [number, string])} onChange={(v) => setLevel(v)} />}
                 {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, STYLE_NAMES[s] ?? s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>
             )}

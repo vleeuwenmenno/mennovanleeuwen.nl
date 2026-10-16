@@ -6,7 +6,7 @@
 // for two, or two or three of them don't share a row where they would fit.
 //
 // Unit cards too: a gunship, a frigate, engineers with their build cards, an escorted flagship, a
-// rushed cruiser and a mine with its upgrades must not scroll; and at 1440x900 and up the simple ones
+// rushed cruiser, a mine with its upgrades and a defense station at level 3 with its slots must not scroll; and at 1440x900 and up the simple ones
 // (the gunship and the frigate) must show their description and role line (see useFitLines).
 //
 //   node scripts/empires-panel-fit.ts [http://localhost:5173] [screenshot dir]
@@ -91,7 +91,12 @@ const SETUP = `(async () => {
   m.node = n.id
   m.upg = { yield: 1 }
   m.hull = m.hullMax * 0.7
-  return { st: st.id, fy: fy.id, cy: cy.id, site: site.id, gun: gun.id, frig: frig.id, eng: eng[0].id, flag: flag.id, rush: cr.id, mine: m.id }
+  // A defense station at level 3, three of its four slots fitted, work queued on it.
+  const fo = far(1.6, 1300)
+  const fort = sim.spawn(w, data.defenseType(p.faction, 3, ['battery', 'flak', 'shield', null]), 0, fo.x, fo.y, fo.a)
+  fort.stance = 'hold'
+  sim.cmdFortFit(w, 0, fort.id, 3, 'hangar')
+  return { st: st.id, fy: fy.id, cy: cy.id, site: site.id, gun: gun.id, frig: frig.id, eng: eng[0].id, flag: flag.id, rush: cr.id, mine: m.id, fort: fort.id }
 })()`
 
 /** Name, buildings shown, the one to select, and the page (localStorage) to open on. */
@@ -117,6 +122,7 @@ const SCENES: [string, string[], string, string | null][] = [
   ['unit-flagship', ['fy', 'cy'], 'flag', null],
   ['unit-rushed', ['fy', 'cy'], 'rush', null],
   ['unit-mine', ['fy', 'cy'], 'mine', null],
+  ['unit-fort', ['fy', 'cy'], 'fort', null],
 ]
 /** Unit cards that must show their description and role line on a big enough window. */
 const SIMPLE = ['unit-gunship', 'unit-frigate']

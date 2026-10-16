@@ -392,6 +392,80 @@ export function orbitalType(f: FactionId, level: number, slots: readonly (Orbita
 }
 /** Whether a unit type is an orbital defense station. */
 export const isOrbital = (t: UnitType) => !!t.orbital
+/** The level a defense station slot comes with (slot 0 at level 1, slot 1 at 2, slots 2 and 3 at 3). */
+export const orbitalSlotLevel = (slot: number) => ORBITAL_FRAME.counts.findIndex((n) => n > slot) + 1
+
+/**
+ * The module the AI fits next into a defense station with `mods` in its slots (Galactic conquest's
+ * galaxy AI and the skirmish admirals both): flak against a fleet of strike craft and gunships
+ * (`small` against `big`, what the enemy flies), batteries against warships, a launcher against
+ * shielded hulls once it has a battery, then a shield generator (the Swarm's regeneration pool) and,
+ * on the fourth slot, a hangar.
+ */
+export function orbitalPick(mods: readonly (OrbitalModId | null)[], small: number, big: number, shielded: boolean): OrbitalModId {
+  const n = (id: OrbitalModId) => mods.filter((m) => m === id).length
+  const fitted = mods.filter(Boolean).length
+  if (fitted === 0) return small > big * 1.3 ? 'flak' : 'battery'
+  if (fitted === 3) return 'hangar'
+  if (small > big * 1.3 && n('flak') < 2) return 'flak'
+  if (!n('flak')) return 'flak'
+  if (big >= small && n('battery') + n('launcher') < 2) return shielded && n('battery') ? 'launcher' : 'battery'
+  return n('shield') ? 'battery' : 'shield'
+}
+
+// --- Defense stations in a skirmish ----------------------------------------------------------------
+
+/**
+ * A Galactic conquest build takes this many times its skirmish time on the galaxy clock (ships, yards,
+ * expansions), so a defense station's galaxy times (OrbitalPlan) divided by it are its skirmish times.
+ */
+export const SHIP_TIME = 1.5
+/**
+ * Defense stations in a skirmish (and a multiplayer battle): the same stations, levels, modules,
+ * prices and art as Galactic conquest's, put up by engineers within the build radius like a yard.
+ * How many a player may have at a time is the lobby's (DEFENSE_STEPS, 0 for off; DEFENSE_DEFAULT
+ * when a lobby or match has none).
+ */
+export const DEFENSE_STEPS = [0, 1, 2, 3, 4, 6]
+export const DEFENSE_DEFAULT = 2
+/** Upgrades and modules waiting or under way at one defense station, at most. */
+export const DEFENSE_QUEUE = 3
+/** The lobby's defense station limit as received (old setups have none, a tampered client anything):
+ * one of DEFENSE_STEPS, DEFENSE_DEFAULT when missing or not one of them. */
+export const cleanDefense = (v: unknown): number => (typeof v === 'number' && DEFENSE_STEPS.includes(v) ? v : DEFENSE_DEFAULT)
+/** The id faction `f`'s defense station goes by (`r-orbital`): not in UNIT, see defenseType. */
+export const defenseId = (f: FactionId) => `${prefixOf(f)}-orbital`
+/** The faction whose defense station id this is, or null for any other id. */
+export const defenseFaction = (id: string): FactionId | null => FACTION_IDS.find((f) => defenseId(f) === id) ?? null
+/** Seconds (on the skirmish clock) the work on faction `f`'s defense station takes: building it
+ * (`level` 1, one engineer squadron's work), an upgrade to `level` 2 or 3, or fitting a module. */
+export const defenseTime = (f: FactionId, level: number) => Math.round(ORBITALS[f].stages[Math.max(1, Math.min(ORBITAL_TOP, level)) - 1].time / SHIP_TIME)
+export const defenseModTime = (f: FactionId, id: OrbitalModId) => Math.round(orbitalMod(f, id).time / SHIP_TIME)
+/** What a defense station as it stands cost: its levels and the modules in its slots. */
+export const defenseValue = (f: FactionId, level: number, slots: readonly (OrbitalModId | null)[]) =>
+  ORBITALS[f].stages.slice(0, Math.max(1, Math.min(ORBITAL_TOP, level))).reduce((s, x) => s + x.cost, 0) + slots.reduce((s, m) => s + (m ? orbitalMod(f, m).cost : 0), 0)
+
+const defenseCache = new Map<string, UnitType>()
+/**
+ * A defense station in a skirmish: orbitalType's, with a price (what it stands for: its levels and
+ * modules, for its repairs and the experience for destroying it) and a build time (the first
+ * level's, on the skirmish clock: what engineers weld it up in). Galactic conquest keeps its own.
+ */
+export function defenseType(f: FactionId, level: number, slots: readonly (OrbitalModId | null)[]): UnitType {
+  const t = orbitalType(f, level, slots)
+  const hit = defenseCache.get(`${t.orbital!.level}:${t.orbital!.slots.join(',')}:${f}`)
+  if (hit) return hit
+  const out: UnitType = { ...t, cost: defenseValue(f, t.orbital!.level, t.orbital!.slots), build: defenseTime(f, 1), level: ORBITALS[f].stages[0].station }
+  defenseCache.set(`${t.orbital!.level}:${t.orbital!.slots.join(',')}:${f}`, out)
+  return out
+}
+/** What engineers can put up round the Command Station, by id: a yard, or a defense station (as it
+ * goes up: level 1, its slot empty). */
+export function placeType(id: string): UnitType | undefined {
+  if (Object.hasOwn(UNIT, id)) return UNIT[id]
+  const f = defenseFaction(id)
+  return f ? defenseType(f, 1, []) : undefined
+}
 
 /** Every unit as written, before TOUGHNESS: each faction's ships, its station, then its structures. */
 const WRITTEN: UnitType[] = KITS.flatMap((k) => [...k.ships, stationType(k.id, 1, []), ...k.structures])
