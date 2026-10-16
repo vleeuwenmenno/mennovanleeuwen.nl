@@ -95,6 +95,8 @@ const ICONS = {
   restart: 'M4.5 12a7.5 7.5 0 1 0 2.2-5.3 M4.5 3.5v4h4',
   exit: 'M14 4.5h5.5v15H14 M10.5 8l-4 4l4 4 M6.5 12H16',
   speed: 'M4 6l7 6l-7 6z M12 6l7 6l-7 6z',
+  // A magnifying glass: search.
+  search: 'M10.5 10.5m-6.5 0a6.5 6.5 0 1 0 13 0a6.5 6.5 0 1 0 -13 0 M15.2 15.2L21 21',
   // A grid with one corner cell shaded off: the fog grid.
   grid: 'M3.5 3.5h17v17h-17z M3.5 9.17h17 M3.5 14.83h17 M9.17 3.5v17 M14.83 3.5v17 M14.83 14.83l5.67 5.67 M17.6 14.83l2.9 2.9',
   // An open book: the Codex.

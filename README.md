@@ -2828,7 +2828,7 @@ the view and has no keys to bind.
 
 On phone-sized screens the game opens in fullscreen:
 - the HUD and galaxy panels become bottom sheets, with the minimap behind a button;
-- the menus and lobby scroll and fit;
+- the menus and lobby scroll and fit, with the lobby's launch bar always in view;
 - portrait shows a hint to turn the phone sideways.
 
 ## Empires At War multiplayer
@@ -2845,6 +2845,25 @@ show the remembered name, to change it for next time or *Forget* it, so the next
 host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI (with its difficulty and style) or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
+
+The lobby, and the single-player skirmish setup that shares its layout, is a panel centred on the
+screen: at most 1500 px wide and no taller than its contents, so a big or ultrawide window gets
+margins rather than a giant map. *Players* (the spawns) and *Battle settings* (starting credits,
+reinforcements and, on a generated map, its rules) sit on the left, the map with its legend in the
+middle, and the chat as a rail on the right. In a narrower window the chat moves under the map; on a
+phone everything is one column, with each player as a two-line card. A launch bar at the foot stays in
+view at every size. It says what the battle is still waiting for, and holds *Start battle* for the
+host, *I'm ready* for the others, or *Launch battle* in a skirmish.
+
+*Change map* opens the map picker. It lists the maps one to a row: a thumbnail, the name with its
+terrain (fields, nebulas, wrecks), a one-line description, and the map's size, players, beacons and
+ore. A search box filters by name and description; it takes the focus on a desktop, but not on a
+touch screen, where it would pop up the keyboard. Quick filters pick a player count. The list sorts
+by name, size or players; clicking the active sort again reverses it, and the last sort is
+remembered in this browser (`mvlos.empires.mapsort`). The current map is marked and scrolled into
+view. The arrow keys move through the list and Enter picks, so typing part of a name and pressing
+Enter picks the first match. The generated map stays pinned under the list, whatever the search. On
+a phone the picker fills the screen and each map takes two lines.
 
 Battles run in deterministic lockstep: every player's browser runs the whole battle, and only
 orders cross the network. The server ([`server/empires.ts`](server/empires.ts), on the WebSocket
