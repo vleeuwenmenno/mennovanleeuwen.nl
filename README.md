@@ -1846,11 +1846,13 @@ there.
 faction's data; all off unless a unit sets them, and none draws a random number):
 
 - `regrow` (`{ rate, delay }`): living hulls. Once `delay` seconds have passed since an enemy last
-  hit it, the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
+  hit it (or an asteroid field's rocks: flying through a field holds the regrowth off, so a living
+  hull can't cross one for free), the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
   A station gets it from a level on (`StationPlan.regrow`, with `level`).
-- `drain` (`{ radius, dps, heal }`): every enemy it sees within `radius` loses `dps` hull points a
-  second, straight off the hull past shields; `heal` of what it took (0.5: half) mends our damaged
-  ships within `radius`, shared evenly.
+- `drain` (`{ radius, dps, heal, targets }`): the `targets` nearest enemies it sees within `radius`
+  (nearest first, ties by unit id) lose `dps` hull points a second each, straight off the hull past
+  shields; `heal` of what it took (0.5: half) mends our damaged ships within `radius`, shared
+  evenly. The Leech bites 3 at once.
 - `fireControl` (`{ radius, bonus }`): our ships within `radius` deal `bonus` more damage (0.15:
   15%); auras don't stack, the best counts.
 - `shieldAura` (`{ radius, regen }`): a shield projector. Our ships within `radius`, itself
@@ -1868,7 +1870,9 @@ faction's data; all off unless a unit sets them, and none draws a random number)
 
 Radii are written at the old battlefield scale and stretched like gun ranges (and spread out with
 the fleet for the bigger hulls, as repair tenders are). `pnpm check:empires-mechanics` switches
-each one on for a test unit and checks what it does.
+each one on for a test unit and checks what it does, along with ships crossing an asteroid field (a
+Swarm hull loses hull and doesn't regrow inside; shields wear at `FIELD_WEAR`), the drain's target
+limit and the strike craft's toughness.
 
 The battle shows them (render.ts, in each side's bolt and engine colours): a drain ship's tendrils
 to the enemies it bites and heal sparks off the allies it mends, a fire-control ship's ring (and,
@@ -1883,14 +1887,14 @@ unit cards and their tips explain them (`traits` in
 fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shields that much
 harder), `aura` (added to its fire-control bonus) and `auraRadius` (the reach of its fire-control
 or shield-projector aura), `shieldAura` (added to its shield projector's `regen`), `regrow` (faster
-regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
+regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps), `drainHeal` and `drainTargets` (added to how many enemies it bites); on the
 station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
 each ship's own `build` research), and `regrow`/`regrowDelay` there reach every living hull of the
 side, ships and structures, on top of their own. The AI weighs them like the rest. The research
 that uses them: the Confederacy's Shield breakers (Breaker, `shieldDamage`) and Fire-control net
 (Tyrant, `aura` and `auraRadius`), the Republic's Projector arrays and Wide-field emitters
 (Sentinel, `shieldAura` and `auraRadius`) and Fleet command (Resolute, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm), Swollen wombs (Broodmother, `regrow`),
-Deeper tendrils (Leech, `drain` and `drainHeal`) and Hive surge (Hive Nexus, `fleetBuild`).
+Deeper tendrils (Leech, `drain`, `drainHeal` and one more target) and Hive surge (Hive Nexus, `fleetBuild`).
 
 **Names per faction** (FactionInfo `names` in data/kit.ts): its guns by kind (`weapon`, the Codex's
 weapon lists), turrets by the gun on them (`mount`), its other hardpoints (`part`), its mount looks
@@ -1912,7 +1916,10 @@ chitter. FactionInfo `sound.turbo` still tunes the heavy guns' pitch. Settings â
 
 **AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
 its fire from further off and sends its fast warships round the flank of a goal where that is
-clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
+clear, and strikes early: its first waves go out at 85% of the usual fleet value, and its quiet
+start is 40% of its difficulty's (on Medium a minute rather than two and a half; Hard has none).
+With the full quiet start it sat out the build-up and lost about two Medium battles in three, while
+winning most on Hard. The Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
 Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
 ships in among the enemy with its wave, values fire-control and spinal ships, values a shield
 projector by how many warships it has and how much of their staying power is shields (and keeps it
@@ -1964,6 +1971,46 @@ Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battl
 
 Changing one changes every battle, so the multiplayer hash from `pnpm check:empires` changes too.
 Battles saved before keep the map and ship types they were saved with.
+
+## Empires At War path finding and rocks
+
+Warships find their way round the rocks on a grid of 80-unit cells
+([`nav.ts`](src/apps/games/empires/nav.ts)), one per hull size, built the first time a ship that
+size needs a path and cached on the world (`World.nav`); the path is then pulled tight into
+straight legs. Strike craft fly straight.
+
+- **Rocks** are as big to the ships as 80% of their drawn radius (`ROCK_HIT`: the art is lumpy,
+  its outline at 0.7 to 1.15 of the radius), and a hull may reach into one by 60% of its own radius
+  (`HULL_ROCK` in sim.ts; hulls are longer than wide, so side on that's only the edge of the hull).
+  The path keeps 20 to 40 units more than that (`navClear`). The push that keeps ships out of rocks,
+  the steering round the next rock (`detour`) and where a move order may end (`offRocks`) all use
+  the same sizes, so the path and the physics agree.
+- **Asteroid fields and nebulas** are soft ground, never walls: crossing one costs more than open
+  space (`navCost`): a nebula 1.5 times as much plus 12 times the hull's share of its strength
+  in shields (`NEBULA_SHIELD_COST`), since a nebula strips the shields within a second: about 6
+  times for a Republic warship, about 4.5 for a Confederacy one, 1.5 for a Swarm hull, which has
+  none to lose. A field costs 1.2 (gunships) to 2.5 (frigates), 3
+  (cruisers) and 4 (flagships) times, since the rocks there batter big hulls. So a path goes round
+  one unless that takes far longer. One the ship was sent into, or is in already, costs nothing
+  extra. Pulling a path tight never cuts back across a patch it went round.
+- **Somewhere walled in** (a spot inside the rocks, or in a pocket no hull that size fits into):
+  the path ends at the nearest point the ship can reach (`Path.short`), and the ship stops there
+  (`asNearAsItGets`) and fights from there, instead of flying at the rocks for good. A selected
+  ship's route line ends there too. Each grid knows which pieces of open space connect, so this
+  costs no search of the whole map.
+
+**Scattering the rocks.** Each battle scatters its rocks from its seed (`newWorld`), copied to every
+side by the map's symmetry. They keep clear of ore, beacons, wrecks, the build radius round each
+start, asteroid fields (with room for the biggest flagship to skirt one) and the lanes: from each
+station into the middle and to its neighbours, and from each beacon to the stations nearest it,
+each wide enough for the biggest flagship. A rock is also left out if it would wall the biggest
+flagship off from any station, beacon or ore it could reach before (`rockStamp`, `reachCheck`).
+Without that, rocks piled up in the space left over, walled off whole sides of the four-player maps
+and ringed the beacons, and flagships went the long way round, through the fields, or nowhere.
+
+```sh
+pnpm check:empires-nav   # every faction's biggest hull reaches every spawn, beacon and ore on every map (and generated ones), routes across Twin Reefs, a walled-in spot, path cost
+```
 
 ## Empires At War weapon ranges and repair craft
 

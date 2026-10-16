@@ -1,7 +1,7 @@
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
-import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
+import { ROCK_HIT, clearLine, crosses, findPath, navCost, navGrid, reachCheck, rockStamp, stampRock, type NavGrid, type Soft } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
@@ -64,8 +64,8 @@ export type Mods = {
   // From research for the faction mechanics (TechEffect), each a multiplier, there only when some
   // research changes it (and absent in units saved before them): damage to shields, a fire-control
   // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal,
-  // a shield-projector aura's regen (added; its reach is auraRadius).
-  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; shieldAura?: number
+  // a shield-projector aura's regen (added; its reach is auraRadius), a drain's extra targets (added).
+  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; drainTargets?: number; shieldAura?: number
 }
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
@@ -97,6 +97,9 @@ export type Unit = {
   target: number
   retarget: number
   lastHit: number
+  /** When rocks in an asteroid field last hit it (see terrain): not an attack, but a living hull
+   * waits from it as from a hit. Absent until it first flies through a field. */
+  scraped?: number
   /** Shield shimmer: time of the last shield hit and where it came from. */
   shieldHit: number
   /** When the shields last failed: they stay down for SHIELD_REBOOT seconds before recharging. */
@@ -137,13 +140,18 @@ export type Unit = {
   queue: Order[]
   /** Support ships: the ships they're repairing right now, for the repair beams. */
   mending: number[]
+  /** Drain ships: the enemies they bit this tick, for the tendrils. Absent until one first drains. */
+  drained?: number[]
   /** A repair craft on a Field repair run: the ship or station it is mending (0 when none). */
   aid: number
   /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
   breakOff: boolean
   /** Waypoints round the rocks to where the ship is going (x, y), found when it set off (from fx,
-   * fy; found again from where it is when it was pushed off its line, see waypoint). */
-  route: { x: number; y: number; pts: Pt[]; obs: { x: number; y: number; r: number }[]; fx?: number; fy?: number } | null
+   * fy; found again from where it is when it was pushed off its line, see waypoint). `soft`: the
+   * fields and nebulas the way was priced round, which cutting a corner mustn't cross. `short`:
+   * rocks wall (x, y) in, and the way ends as near it as the ship can get. (`obs` is what battles
+   * saved before kept here: the rocks and patches it steered round.) */
+  route: { x: number; y: number; pts: Pt[]; soft?: { x: number; y: number; r: number }[]; short?: boolean; obs?: { x: number; y: number; r: number }[]; fx?: number; fy?: number } | null
   /** The heading an idle ship turns to at its spot, from a move given one; null to stay as it is. */
   face: number | null
   /** Seconds left on a structure's repair, 0 when none is under way. */
@@ -619,6 +627,7 @@ function modsFor(p: Player, t: UnitType): Mods {
   if (regrowDelay) mods.regrowDelay = Math.max(0, 1 + regrowDelay)
   if (e.drain) mods.drain = 1 + e.drain
   if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
+  if (e.drainTargets) mods.drainTargets = e.drainTargets
   if (e.shieldAura) mods.shieldAura = e.shieldAura
   return mods
 }
@@ -646,11 +655,15 @@ export function regrowOf(u: Unit): { rate: number; delay: number } | null {
   if (!g) return null
   return { rate: g.rate * (u.mods.regrow ?? 1), delay: g.delay * (u.mods.regrowDelay ?? 1) }
 }
-/** A drain aura as it stands for `u`, with its research (TechEffect drain and drainHeal). */
-export function drainOf(u: Unit): { radius: number; dps: number; heal: number } | null {
+/** Seconds since anything last hurt `u`: an enemy's hit, or rocks in an asteroid field. A living
+ * hull grows back only once this is past its wait. */
+export const calm = (w: World, u: Unit) => w.time - Math.max(u.lastHit, u.scraped ?? -99)
+/** A drain aura as it stands for `u`, with its research (TechEffect drain, drainHeal and
+ * drainTargets, which adds to how many enemies it bites at once). */
+export function drainOf(u: Unit): { radius: number; dps: number; heal: number; targets: number } | null {
   const d = u.t.drain
   if (!d) return null
-  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1) }
+  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1), targets: d.targets + (u.mods.drainTargets ?? 0) }
 }
 const stationOf = (p: Player) => unitOf(p.faction, 'station').id
 /** Whether one of a unit's own hangars stands (a Strike hangar doesn't count: it only launches bombers). */
@@ -850,11 +863,14 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
   w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
   // Scattered rocks: each one is copied to every side by the map's symmetry, so nobody gets the
-  // better lanes. They keep clear of ore, beacons, asteroid fields and the lanes into the middle
-  // (wide enough for the biggest flagship to fly down, with a cell of the path finding's grid to
-  // spare: without them a Big flagship often found no way through at all and sat at the first
-  // gap too narrow for it), and of the ground round each station's start where its yards go up
-  // (the build radius).
+  // better lanes. They keep clear of ore, beacons, asteroid fields, the ground round each
+  // station's start where its yards go up (the build radius), and the lanes: from each station
+  // into the middle and to its neighbours, and from each beacon to the stations nearest it, every
+  // one wide enough for the biggest flagship to fly down with a cell of the path finding's grid to
+  // spare. Without them the rocks piled up in what space was left, walled off whole sides of the
+  // map and ringed the beacons, and a flagship found no way through, or a long way round.
+  // On top of that, a rock is left out if it would wall the biggest flagship off from a station,
+  // beacon or ore it could get to before.
   // Map wrecks: the big hulks of earlier battles, Republic or droid as the seed falls.
   w.wrecks = map.wrecks.map((h, i) => {
     const big = h.value >= 900
@@ -862,15 +878,35 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
   const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, BUILD_RADIUS])]
-  const lane = Math.max(240, ...UNITS.filter(isShip).map((t) => navClear(t) + 100))
+  const bigClear = Math.max(...UNITS.filter(isShip).map(navClear))
+  const lane = Math.max(240, bigClear + 100)
+  const lanes: [Pt, Pt][] = []
+  /** The spawns nearest `p` (all of them as near as the nearest, give or take 5%), `p` left out. */
+  const nearest = (p: Pt, n: number) => {
+    const by = map.spawns.filter((s) => s !== p).map((s) => ({ s, d: M.hypot(s.x - p.x, s.y - p.y) })).sort((a, b) => a.d - b.d)
+    const cut = by.length ? by[Math.min(n, by.length) - 1].d * 1.05 : 0
+    return by.filter((o) => o.d <= cut).map((o) => o.s)
+  }
+  for (const s of map.spawns) {
+    lanes.push([s, c])
+    for (const o of nearest(s, 2)) lanes.push([s, o])
+  }
+  for (const b of map.beacons) for (const s of nearest(b, 1)) lanes.push([b, s])
   const inLane = (x: number, y: number, rad: number) =>
-    map.spawns.some((p) => {
-      // Distance from the point to the segment between this spawn and the centre.
-      const vx = c.x - p.x
-      const vy = c.y - p.y
-      const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy), 0, 1)
+    lanes.some(([p, q]) => {
+      // Distance from the point to the segment from p to q.
+      const vx = q.x - p.x
+      const vy = q.y - p.y
+      const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy || 1), 0, 1)
       return d2(x, y, p.x + vx * t, p.y + vy * t) < sq(lane + rad)
     })
+  // What the biggest flagship has to be able to get to from the first spawn (and so, the map being
+  // the same from every side, from every spawn): every spawn, beacon and ore.
+  const open = rockStamp(W, H, bigClear)
+  const goals = [...map.spawns.map((p) => ({ ...p, tol: 600 })), ...map.beacons.map((p) => ({ ...p, tol: 300 })), ...map.ore.map((p) => ({ ...p, tol: 300 }))]
+  const from = map.spawns[0] ?? c
+  const before = reachCheck(open, from, goals).reached()
+  const reach = reachCheck(open, from, goals.filter((_, i) => before[i]))
   let tries = 0
   while (w.rocks.length < map.rocks && tries++ < 4000) {
     const cx = 250 + r() * (W - 500)
@@ -882,10 +918,17 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
         p.x > 150 && p.y > 150 && p.x < W - 150 && p.y < H - 150 &&
         !keepClear.some(([x, y, cc]) => d2(p.x, p.y, x, y) < sq(cc + rad)) &&
         !inLane(p.x, p.y, rad) &&
-        !inside(map.fields, p.x, p.y, rad + 60) &&
+        !inside(map.fields, p.x, p.y, rad + bigClear + 60) &&
         !w.rocks.some((k) => d2(p.x, p.y, k.x, k.y) < sq(k.r + rad + 40)),
     )
     if (!ok) continue
+    const hits = copies.map((p) => ({ x: p.x, y: p.y, r: rad * ROCK_HIT }))
+    let closed = 0
+    for (const k of hits) closed += stampRock(open, k, 1)
+    if (closed && !reach.test()) {
+      for (const k of hits) stampRock(open, k, -1)
+      continue
+    }
     const kind = r() < 0.5 ? 0 : 1
     const rot = r() * TAU
     const spin = (r() - 0.5) * 0.1
@@ -936,8 +979,8 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
     x = cx + nx * R
     y = cy + ny * R
   }
-  const clear = radius(u.t) * 0.7 + 10
-  for (const k of w.rocks) away(k.x, k.y, k.r + clear)
+  const clear = radius(u.t) * HULL_ROCK + 10
+  for (const k of navRocks(w)) away(k.x, k.y, k.r + clear)
   const r0 = radius(u.t)
   for (let pass = 0; pass < 2; pass++)
     for (const o of w.units) if (!o.dead && !isShip(o.t) && !planned(o)) away(o.x, o.y, r0 + radius(o.t) + HULL_GAP + 6)
@@ -2619,7 +2662,8 @@ function expansions(w: World, dt: number) {
 const CELL = 320
 const key = (cx: number, cy: number) => cx + cy * 1000
 
-function buildGrid(w: World) {
+/** Files every living unit under its cell, for `near`. */
+export function buildGrid(w: World) {
   w.grid.clear()
   for (const u of w.units) {
     if (u.dead) continue
@@ -2900,6 +2944,20 @@ function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlac
   u.v += clamp(target - u.v, -acc * dt * 1.5, acc * dt)
 }
 
+/**
+ * How far into a rock a ship's hull may go, as a share of its radius: the rest keeps clear. Hulls
+ * are longer than they are wide, so side on all but the edge of the hull is clear of the rock.
+ */
+const HULL_ROCK = 0.6
+/** The rocks as ships run into them and find their way round them: a little inside their drawn
+ * size (see ROCK_HIT). Worked out once per set of rocks. */
+const hitRocks = new WeakMap<Rock[], { x: number; y: number; r: number }[]>()
+export function navRocks(w: World) {
+  let hit = hitRocks.get(w.rocks)
+  if (!hit) hitRocks.set(w.rocks, (hit = w.rocks.map((k) => ({ x: k.x, y: k.y, r: k.r * ROCK_HIT }))))
+  return hit
+}
+
 /** Where to head for on the way to (tx, ty): straight there, or round the first rock in the way,
  * on whichever side of it the ship already is. Without this, a ship aimed through the middle of
  * a big rock is pushed straight back out and sits there. */
@@ -2910,11 +2968,11 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
   if (len < 1) return { x: tx, y: ty }
   const ux = dx / len
   const uy = dy / len
-  const clear = radius(u.t) * 0.7 + 30
-  let best: Rock | undefined
+  const clear = radius(u.t) * HULL_ROCK + 30
+  let best: { x: number; y: number; r: number } | undefined
   let first = Infinity
   let side = 0
-  for (const k of w.rocks) {
+  for (const k of navRocks(w)) {
     const rx = k.x - u.x
     const ry = k.y - u.y
     const along = rx * ux + ry * uy
@@ -2940,44 +2998,73 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
 
 /** How far a ship moves from where it last found its way before it may look for it again. */
 const REPATH = 80
-/** How far a ship's path keeps from rocks (its hull may graze one by a third of its radius), sized
- * to 20-unit steps so similar ships share a grid. */
-const navClear = (t: UnitType) => Math.ceil((radius(t) * 0.7 + 20) / 20) * 20
+/** How far a ship's path keeps from rocks: its hull may go into one by HULL_ROCK of its radius,
+ * and the path keeps a little more, sized to 20-unit steps so similar ships share a grid. */
+export const navClear = (t: UnitType) => Math.ceil((radius(t) * HULL_ROCK + 20) / 20) * 20
+
+/** What crossing a nebula costs a path, against open space: it strips the shields (all of them
+ * within a second, see NEBULA_DRAIN, and they reboot only after the ship is out), so it costs more
+ * the more of a hull's strength is in its shields: NEBULA_SHIELD_COST times its shields' share of
+ * shields and hull on top. A Republic warship (about 0.4) pays about 6, a Confederacy one (about
+ * 0.25) about 4.5, a Swarm hull (no shields) only the base: it loses no more than sensor range. */
+const NEBULA_COST = 1.5
+const NEBULA_SHIELD_COST = 12
+/** What crossing an asteroid field costs a path, by class: the rocks batter the clumsy big hulls
+ * (see CLUMSY), the biggest worst; gunships weave through and barely mind. */
+const FIELD_COST: Partial<Record<Tier, number>> = { gunship: 1.2, frigate: 2.5, cruiser: 3, capital: 4 }
 
 /**
  * Where to head for next on the way to (tx, ty): the next waypoint round the rocks, found once per
- * destination and dropped as each one comes into view. Asteroid fields and nebulas are steered
- * round too, as if they were rocks, except one the ship was sent into (its destination is inside)
- * or is in already: going through one has to be asked for.
+ * destination and dropped as each one comes into view. Asteroid fields and nebulas are dear to
+ * cross (FIELD_COST, NEBULA_COST), so the way goes round one unless that's much further, except
+ * one the ship was sent into (its destination is inside) or is in already. Somewhere rocks wall
+ * in, the way ends as near as the ship can get (see asNearAsItGets).
  */
 function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
-  const patches = [...w.map.fields, ...w.map.nebulas]
-  if ((!w.rocks.length && !patches.length) || u.t.tier === 'fighter') return { x: tx, y: ty }
+  const { fields, nebulas } = w.map
+  if ((!w.rocks.length && !fields.length && !nebulas.length) || u.t.tier === 'fighter') return { x: tx, y: ty }
   const clear = navClear(u.t)
+  const rocks = navRocks(w)
   // Pushed off its line (by other hulls, or round a rock) with rocks in the way of where it heads
   // next now: the way is found again from here, once it has moved on from where it was last found.
   // (Else it flew straight at the rocks and sat there for good.)
   const next = u.route?.pts[0] ?? { x: tx, y: ty }
-  const lost = !!u.route && d2(u.x, u.y, u.route.fx ?? -1e6, u.route.fy ?? -1e6) > sq(REPATH) && !clearLine(u.route.obs, u.x, u.y, next.x, next.y, clear)
+  const lost = !!u.route && d2(u.x, u.y, u.route.fx ?? -1e6, u.route.fy ?? -1e6) > sq(REPATH) && !clearLine(rocks, u.x, u.y, next.x, next.y, clear)
   if (!u.route || u.route.x !== tx || u.route.y !== ty || lost) {
     const within = (p: { x: number; y: number; r: number }, x: number, y: number) => sq(x - p.x) + sq(y - p.y) < sq(p.r)
-    const keepOut = patches.map((p, i) => (within(p, tx, ty) || within(p, u.x, u.y) ? -1 : i)).filter((i) => i >= 0)
-    const find = (out: number[]) => {
-      const obs = [...w.rocks, ...out.map((i) => patches[i])]
-      const key = `${clear}:${out.join(',')}`
-      let g = w.nav.get(key)
-      if (!g) w.nav.set(key, (g = navGrid(obs, w.w, w.h, clear)))
-      return { pts: findPath(g, obs, clear, u.x, u.y, tx, ty), obs }
+    const fieldCost = FIELD_COST[u.t.tier] ?? 1
+    const nebulaCost = NEBULA_COST + NEBULA_SHIELD_COST * (u.t.shield / (u.t.shield + u.t.hull))
+    const soft: Soft[] = []
+    const priced: number[] = []
+    const add = (p: { x: number; y: number; r: number }, i: number, cost: number) => {
+      if (cost <= 1 || within(p, tx, ty) || within(p, u.x, u.y)) return
+      soft.push({ x: p.x, y: p.y, r: p.r, cost })
+      priced.push(i)
     }
-    let way = find(keepOut)
-    // No way round the fields and nebulas for a hull this big: through them, rather than straight
-    // at the rocks.
-    if (!way.pts.length && keepOut.length && !clearLine(way.obs, u.x, u.y, tx, ty, clear)) way = find([])
-    u.route = { x: tx, y: ty, ...way, fx: u.x, fy: u.y }
+    fields.forEach((p, i) => add(p, i, fieldCost))
+    nebulas.forEach((p, i) => add(p, fields.length + i, nebulaCost))
+    const key = `${clear}`
+    let g = w.nav.get(key)
+    if (!g) w.nav.set(key, (g = navGrid(rocks, w.w, w.h, clear)))
+    const cost = soft.length ? navCost(g, soft, `${fieldCost}:${nebulaCost}:${priced.join(',')}`) : undefined
+    const way = findPath(g, rocks, clear, u.x, u.y, tx, ty, cost && { cost, patches: soft })
+    u.route = { x: tx, y: ty, pts: way.pts, soft: soft.map(({ x, y, r }) => ({ x, y, r })), short: way.short, fx: u.x, fy: u.y }
   }
-  const { pts, obs } = u.route
-  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < sq(60) || clearLine(obs, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
+  const { pts } = u.route
+  const soft = u.route.soft ?? []
+  // Drop a waypoint once the one after it is in plain view, unless that cuts across a field or
+  // nebula the way went round.
+  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < sq(60) || (clearLine(rocks, u.x, u.y, pts[1].x, pts[1].y, clear) && !crosses(soft, u.x, u.y, pts[1].x, pts[1].y)))) pts.shift()
   return pts.length ? pts[0] : { x: tx, y: ty }
+}
+
+/** Whether a ship sent to (tx, ty), somewhere rocks wall in, has got as near as it can: it is at
+ * the end of a way there that ends short. It stops there rather than pressing on into the rocks. */
+function asNearAsItGets(u: Unit, tx: number, ty: number) {
+  const r = u.route
+  if (!r?.short || r.x !== tx || r.y !== ty || r.pts.length > 1) return false
+  const end = r.pts[0]
+  return !end || d2(u.x, u.y, end.x, end.y) < sq(40 + radius(u.t) * 0.2)
 }
 
 // --- Attack spots ----------------------------------------------------------------------------------
@@ -3186,7 +3273,8 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
     }
     const brake = Math.sqrt(2 * accOf(t) * 0.9 * Math.max(0, dist - stop))
     const p = closingOn(w, u, e.x, e.y, dist - stop)
-    steer(u, p.x, p.y, Math.min(max, brake), dt)
+    if (p) steer(u, p.x, p.y, Math.min(max, brake), dt)
+    else steer(u, e.x, e.y, 0, dt, true)
     return
   }
   const key = groupKey(g)
@@ -3205,16 +3293,21 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
   }
   const brake = Math.sqrt(2 * accOf(t) * 0.9 * off)
   const p = closingOn(w, u, px, py, off)
-  steer(u, p.x, p.y, Math.min(max, brake), dt)
+  if (p) steer(u, p.x, p.y, Math.min(max, brake), dt)
+  else steer(u, e.x, e.y, 0, dt, true)
 }
 
 /** Where a warship closing in on a spot `left` away heads for next: from far off the way round the
  * rocks, as a move goes (to the spot rounded to CLOSE_GRID, so the path found holds while a moving
  * target stays about where it was), near it straight there round the first rock in the way. A
  * fleet sent at a target far behind a cluster of rocks sat on the first of them for ever. */
-function closingOn(w: World, u: Unit, x: number, y: number, left: number) {
+function closingOn(w: World, u: Unit, x: number, y: number, left: number): Pt | null {
   if (left > CLOSE_GRID * 3) {
-    const wp = waypoint(w, u, Math.round(x / CLOSE_GRID) * CLOSE_GRID, Math.round(y / CLOSE_GRID) * CLOSE_GRID)
+    const gx = Math.round(x / CLOSE_GRID) * CLOSE_GRID
+    const gy = Math.round(y / CLOSE_GRID) * CLOSE_GRID
+    const wp = waypoint(w, u, gx, gy)
+    // Rocks wall the target in: it fights from as near as it gets, if its guns reach from there.
+    if (asNearAsItGets(u, gx, gy)) return null
     return detour(w, u, wp.x, wp.y)
   }
   return detour(w, u, x, y)
@@ -3375,7 +3468,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const dist = M.hypot(o.x - u.x, o.y - u.y)
     const clear = !w.units.some((e) => !e.dead && foes(w, e.owner, u.owner) && sees(w, u.owner, e) && inArea(o, e))
     if (clear && (dist < o.r * 0.8 || canSee(w, w.players[u.owner].team, o.x, o.y))) nextOrder(u, u.x, u.y)
-    else if (dist > o.r * 0.5) {
+    else if (dist > o.r * 0.5 && !asNearAsItGets(u, o.x, o.y)) {
       unsettle(u)
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)
@@ -3385,8 +3478,11 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const o = u.order
     const dist = M.hypot(o.x - u.x, o.y - u.y)
     const pace = Math.min(max, o.speed)
-    if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
+    // Somewhere walled in by rocks: as near as it gets counts as there.
+    const short = !fighter && asNearAsItGets(u, o.x, o.y)
+    if (dist < (fighter ? 60 : 24 + radius(t) * 0.2) || short) {
       if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
+      else if (short) nextOrder(u, u.x, u.y, o.face ?? null)
       else nextOrder(u, o.x, o.y, o.face ?? null)
     } else {
       unsettle(u)
@@ -3413,7 +3509,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const ang = w.time * 0.9 + u.id
       const r = 70 + (u.id % 4) * 18
       steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
-    } else if (dist > 30 + radius(t) * 0.3) {
+    } else if (dist > 30 + radius(t) * 0.3 && !asNearAsItGets(u, u.ax, u.ay)) {
       unsettle(u)
       const wp = waypoint(w, u, u.ax, u.ay)
       const p = detour(w, u, wp.x, wp.y)
@@ -3429,8 +3525,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
 
   // Keep clear of rocks, structures and each other (fighters only dodge the big stuff).
   const r0 = radius(t)
-  for (const k of w.rocks) {
-    const min = k.r + r0 * 0.7
+  for (const k of navRocks(w)) {
+    const min = k.r + r0 * HULL_ROCK
     const dd = d2(u.x, u.y, k.x, k.y)
     if (dd < min * min) {
       const d = Math.sqrt(dd) || 1
@@ -3861,21 +3957,14 @@ export const NEBULA_SENSOR = 0.5
 const NEBULA_DRAIN = 1.5
 /** Below this speed a ship is drifting, not ploughing through rocks. */
 const FIELD_MIN_SPEED = 10
-/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field. A
- * capital crossing a typical field (about 800 units) loses around an eighth of its shields. */
-const FIELD_WEAR = 0.15
+/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field (a
+ * ship with no shields: of half its hull). A big ship crossing a typical field (about 800 units)
+ * loses around a quarter of its shields; a Swarm hull, which has none, about an eighth of its hull. */
+export const FIELD_WEAR = 0.3
 /** Rocks scrape hulls but never finish a ship off: they stop at this share of the hull. */
 const FIELD_HULL_FLOOR = 0.15
 /** Only big ships are too clumsy to dodge the rocks; fighters and gunships weave through. */
 const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capital: true }
-
-/**
- * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
- * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
- * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
- * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
- * terrain keeps the shields from recharging.
- */
 // --- Defense wings -----------------------------------------------------------------------------------
 
 /** A station's defense wing in a loose ring round it, as its carrier fighters would be: their
@@ -4169,12 +4258,12 @@ function tendTo(w: World, u: Unit, p: Unit, max: number, dt: number) {
   const want = Math.min(radius(p.t) + radius(t) + 30, t.support!.range * 0.6)
   const dx = u.x - p.x
   const dy = u.y - p.y
-  const d = Math.hypot(dx, dy) || 1
+  const d = M.hypot(dx, dy) || 1
   const sx = p.x + (dx / d) * want
   const sy = p.y + (dy / d) * want
   if (d > want + 40) {
     unsettle(u)
-    const off = Math.hypot(sx - u.x, sy - u.y)
+    const off = M.hypot(sx - u.x, sy - u.y)
     const wp = waypoint(w, u, sx, sy)
     const q = detour(w, u, wp.x, wp.y)
     steer(u, q.x, q.y, Math.min(max, p.v + off * 0.9 + 12), dt)
@@ -4347,6 +4436,15 @@ function tenders(w: World, dt: number) {
   }
 }
 
+/**
+ * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
+ * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
+ * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
+ * hull. Neither counts as being attacked, so no alarms, no kill credit and nobody to shoot back at;
+ * but a living hull doesn't grow back while the rocks are hitting it (they set `scraped`, which
+ * restarts its wait like a hit: see calm). Returns true while the terrain keeps the shields from
+ * recharging.
+ */
 function terrain(w: World, u: Unit, dt: number) {
   const ship = isShip(u.t)
   u.nebula = ship && w.map.nebulas.length > 0 && inside(w.map.nebulas, u.x, u.y)
@@ -4360,6 +4458,7 @@ function terrain(w: World, u: Unit, dt: number) {
   u.shield -= soaked
   wear -= soaked
   if (wear > 0) u.hull = Math.max(Math.min(u.hull, u.hullMax * FIELD_HULL_FLOOR), u.hull - wear)
+  u.scraped = w.time
   return true
 }
 
@@ -4370,38 +4469,48 @@ function terrain(w: World, u: Unit, dt: number) {
 // spinal gun is a hardpoint weapon with an arc (see shoot and bearing). Each is off unless a unit
 // sets it, and none of them draws a random number, so every copy of a battle agrees.
 
-/** Living hulls (UnitType regrow): out of the fight for `delay` seconds, the hull grows back by
- * `rate` of its full hull a second, as far as it can go (a rush-launched ship's unbuilt hull stays
- * unbuilt). Only the hull: modules are mended as ever. */
+/** Living hulls (UnitType regrow): out of the fight for `delay` seconds (nothing has hit it, and no
+ * asteroid field's rocks either: see calm), the hull grows back by `rate` of its full hull a
+ * second, as far as it can go (a rush-launched ship's unbuilt hull stays unbuilt). Only the hull:
+ * modules are mended as ever. */
 function regrow(w: World, u: Unit, dt: number) {
   const g = regrowOf(u)!
-  if (w.time - u.lastHit < g.delay) return
+  if (calm(w, u) < g.delay) return
   const cap = hullCap(u)
   if (u.hull < cap) u.hull = Math.min(cap, u.hull + u.hullMax * g.rate * dt)
 }
 
 /**
- * Drain auras (UnitType drain): each one takes `dps` hull points a second off every enemy it can
- * see within `radius`, straight off the hull past shields and modules, and gives `heal` of what it
- * took to our damaged ships within `radius` (itself included), shared out evenly. What one can't
- * use (it's mended full) is lost, not passed on.
+ * Drain auras (UnitType drain): each one takes `dps` hull points a second off the `targets`
+ * nearest enemies it can see within `radius` (nearest first, ties by id, so every copy of the
+ * battle picks the same ones), straight off the hull past shields and modules, and gives `heal` of
+ * what it took to our damaged ships within `radius` (itself included), shared out evenly. What one
+ * can't use (it's mended full) is lost, not passed on.
  */
 function drains(w: World, dt: number) {
+  const prey: { e: Unit; d: number }[] = []
   for (const u of w.units) {
     const d = u.t.drain ? drainOf(u) : null
     if (!d || u.dead || building(u) || u.site || u.launch) continue
     let took = 0
-    near(w, u.x, u.y, d.radius, (e) => {
-      if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || planned(e)) return
+    prey.length = 0
+    u.drained = []
+    near(w, u.x, u.y, d.radius, (e, dd) => {
+      if (foes(w, e.owner, u.owner) && sees(w, u.owner, e) && !planned(e) && e.hull > 0) prey.push({ e, d: dd })
+    })
+    prey.sort((a, b) => a.d - b.d || a.e.id - b.e.id)
+    for (let i = 0; i < prey.length && i < d.targets; i++) {
+      const e = prey[i].e
       const bite = Math.min(e.hull, d.dps * dt)
-      if (bite <= 0) return
+      if (bite <= 0) continue
       took += bite
+      u.drained.push(e.id)
       e.lastHit = w.time
       e.hitBy = u.id
       alarm(w, e)
       e.hull -= bite
       if (e.hull <= 0) hullGone(w, e, false, u.owner, u.id)
-    })
+    }
     if (took <= 0 || d.heal <= 0) continue
     const hurt: Unit[] = []
     near(w, u.x, u.y, d.radius, (a) => {

@@ -30,12 +30,18 @@
 // 9. A shield-projector aura (UnitType shieldAura): our ships in reach (itself included) recharge
 //    their shields `regen` faster, out of reach and enemies as usual, two auras don't stack (the
 //    best counts), and a projector with all its shield generators shot off projects nothing.
+// 10. Asteroid fields: a Swarm ship crossing one comes out with less hull than it went in with and
+//     doesn't grow any back while inside (the rocks hold its regrowth off, then it waits as after a
+//     hit); a shielded cruiser loses FIELD_WEAR of its shields per 1000 units, more than the old
+//     0.15; rocks never take a hull below its floor.
+// 11. A drain aura bites at most `targets` enemies at once: the nearest, ties by unit id.
+// 12. Strike craft (interceptors, bombers, defense wings) are about 10% tougher than they were.
 
-import { MAPS } from '../src/apps/games/empires/maps.ts'
-import { LEVEL_UP, STATIONS, TECH, UNIT, stationType, type TechEffect, type UnitType } from '../src/apps/games/empires/data.ts'
+import { MAPS, inside } from '../src/apps/games/empires/maps.ts'
+import { LEVEL_UP, STATIONS, TECH, TOUGHNESS, UNIT, stationType, type TechEffect, type UnitType } from '../src/apps/games/empires/data.ts'
 import { spinal } from '../src/apps/games/empires/data/kit.ts'
 import { buildModel } from '../src/apps/games/empires/models/index.ts'
-import { STEP, auraOf, cmdAttack, cmdBuild, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldAuraOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { FIELD_WEAR, STEP, auraOf, calm, cmdAttack, cmdBuild, cmdMove, cmdResearch, damage, drainOf, newWorld, regrowOf, shieldAuraOf, shieldFull, shieldMax, spawn, stateHash, tick, type Shot, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { newBrain, think } from '../src/apps/games/empires/ai.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import type { FactionId } from '../src/apps/games/empires/data.ts'
@@ -143,7 +149,7 @@ const mid = () => ({ x: map.w / 2, y: map.h / 2 })
 {
   const w = empty()
   const { x, y } = mid()
-  const drain = { radius: 500, dps: 40, heal: 0.5 }
+  const drain = { radius: 500, dps: 40, heal: 0.5, targets: 3 }
   const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain })
   const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
@@ -312,7 +318,7 @@ function mixed(): World {
   const w = empty()
   const { x, y } = mid()
   put(w, 's-frigate', 0, x, y, 0, { ...UNIT['s-frigate'], regrow: { rate: 0.03, delay: 3 } })
-  put(w, 's-corvette', 0, x - 200, y + 150, 0, { ...UNIT['s-corvette'], drain: { radius: 450, dps: 25, heal: 0.6 } })
+  put(w, 's-corvette', 0, x - 200, y + 150, 0, { ...UNIT['s-corvette'], drain: { radius: 450, dps: 25, heal: 0.6, targets: 3 } })
   put(w, 'd-battleship', 1, x + 700, y, Math.PI, { ...UNIT['d-battleship'], fireControl: { radius: 700, bonus: 0.25 } })
   const base = UNIT['d-ion']
   put(w, 'd-ion', 1, x + 600, y + 200, Math.PI, { ...base, hardpoints: base.hardpoints.map((h, i) => (i === 0 ? { ...h, weapon: spinal(h.weapon!, 12) } : h)) })
@@ -404,13 +410,13 @@ function research(w: World, o: number, forId: string, effect: TechEffect) {
   // drain and drainHeal: bites harder, heals more of it.
   const w = empty()
   const { x, y } = mid()
-  research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5 })
-  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5 } })
+  research(w, 0, 's-corvette', { drain: 0.5, drainHeal: 0.5, drainTargets: 1 })
+  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 40, heal: 0.5, targets: 3 } })
   const ally = put(w, 's-frigate', 0, x - 250, y, 0, { ...unarmed(UNIT['s-frigate']), regrow: undefined })
   const foe = put(w, 'd-frigate', 1, x + 250, y, Math.PI, unarmed(UNIT['d-frigate']))
   ally.hull = ally.hullMax * 0.2
   const d = drainOf(leech)!
-  check('drain research strengthens the bite and the heal', d.dps === 60 && near(d.heal, 0.75, 1e-12), `${d.dps}, ${d.heal}`)
+  check('drain research strengthens the bite and the heal, and adds a target', d.dps === 60 && near(d.heal, 0.75, 1e-12) && d.targets === 4, `${d.dps}, ${d.heal}, ${d.targets}`)
   run(w, 0.3)
   const f0 = foe.hull
   const a0 = ally.hull
@@ -511,6 +517,117 @@ function recharge(w: World, us: Unit[], secs: number): number[] {
   const [got] = recharge(w, [ally], 2)
   const want = ally.t.regen * ally.mods.regen * 2 * 2.5
   check('a ship in the wider reach recharges the researched boost faster', near(got, want, want * 0.03), `${got.toFixed(1)}, want ${want}`)
+}
+
+// --- 10. Asteroid fields --------------------------------------------------------------------------------
+
+/** A ship of `id` flown straight across the biggest asteroid field on a map that has them, through
+ * its middle, from just inside its edge: its hull and shields as a share, on the way in, on the way
+ * out and whenever its hull grew while inside, and the distance it flew inside. */
+function crossField(id: string, start = 1) {
+  const fm = MAPS.filter((m) => m.fields.length).sort((a, b) => b.fields.length - a.fields.length)[0]
+  const f = [...fm.fields].sort((a, b) => b.r - a.r)[0]
+  const fac = UNIT[id].faction
+  const w = newWorld(fm, [{ faction: fac, team: 0, spawn: 0 }, { faction: fac === 'droid' ? 'republic' : 'droid', team: 1, spawn: 1 }], { seed: 3 })
+  w.units = []
+  w.byId = new Map()
+  w.arrivals = []
+  w.wrecks = []
+  const u = spawn(w, id, 0, f.x - f.r + 4, f.y, 0)
+  u.stance = 'hold'
+  u.v = u.t.speed * u.mods.speed
+  u.hull = u.hullMax * start
+  // Already inside, it flies straight through rather than steering round.
+  cmdMove(w, 0, [u.id], f.x + f.r + 400, f.y)
+  const smax = shieldFull(u) || 1
+  const enter = { hull: u.hull / u.hullMax, shield: u.shield / smax }
+  let grew = false
+  let path = 0
+  let last = u.hull
+  for (let t = 0; t < 120 && inside(fm.fields, u.x, u.y); t += STEP) {
+    const px = u.x
+    const py = u.y
+    tick(w)
+    w.events.length = 0
+    if (inside(fm.fields, u.x, u.y)) path += Math.hypot(u.x - px, u.y - py)
+    if (u.hull > last + 1e-9) grew = true
+    last = u.hull
+  }
+  const exit = { hull: u.hull / u.hullMax, shield: u.shield / smax }
+  return { w, u, enter, exit, grew, path, out: !inside(fm.fields, u.x, u.y) }
+}
+{
+  const s = crossField('s-cruiser', 0.7)
+  check('a Swarm cruiser flies out of the field', s.out && s.path > 500, `${s.path.toFixed(0)} units inside`)
+  check('it comes out with less hull than it went in with', s.exit.hull < s.enter.hull - 0.05, `${(s.enter.hull * 100).toFixed(1)}% in, ${(s.exit.hull * 100).toFixed(1)}% out`)
+  check('its hull never grew back while inside', !s.grew)
+  const want = FIELD_WEAR * 0.5 * (s.path / 1000)
+  check('it lost FIELD_WEAR of half its hull per 1000 units', near(s.enter.hull - s.exit.hull, want, 0.01), `${(s.enter.hull - s.exit.hull).toFixed(3)}, want ${want.toFixed(3)}`)
+  // Out of the field: it waits as after a hit, then grows back.
+  const g = regrowOf(s.u)!
+  const h0 = s.u.hull
+  run(s.w, g.delay - 1)
+  check('out of the field it waits its regrowth delay first', s.u.hull === h0 && calm(s.w, s.u) < g.delay, `${calm(s.w, s.u).toFixed(1)} s calm`)
+  run(s.w, 3)
+  check('then grows back', s.u.hull > h0)
+  // A Leviathan too, from full.
+  const l = crossField('s-capital')
+  check('a Leviathan crossing from full comes out hurt', l.out && l.exit.hull < 0.92 && !l.grew, `${(l.exit.hull * 100).toFixed(1)}% hull`)
+}
+{
+  const r = crossField('r-cruiser')
+  const lost = r.enter.shield - r.exit.shield
+  const old = 0.15 * (r.path / 1000)
+  check('a Republic cruiser crossing loses FIELD_WEAR of its shields per 1000 units', near(lost, FIELD_WEAR * (r.path / 1000), 0.01), `${(lost * 100).toFixed(1)}% over ${r.path.toFixed(0)} units`)
+  check('more than it did before (0.15 per 1000)', lost > old * 1.5, `${(lost * 100).toFixed(1)}%, was ${(old * 100).toFixed(1)}%`)
+  check('its hull is untouched while the shields hold', r.exit.hull === 1)
+  const low = crossField('s-frigate', 0.16)
+  check('rocks never take a hull below its floor', near(low.exit.hull, 0.15, 1e-9), `${(low.exit.hull * 100).toFixed(2)}%`)
+}
+
+// --- 11. A drain aura's target limit ------------------------------------------------------------------------
+
+{
+  const w = empty()
+  const { x, y } = mid()
+  const leech = put(w, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 20, heal: 0.5, targets: 3 } })
+  // Six enemies at different distances, spawned out of order so their ids don't follow distance.
+  const at = [400, 150, 350, 250, 300, 200]
+  const foes = at.map((d, i) => put(w, 'd-frigate', 1, x + Math.cos(i) * d, y + Math.sin(i) * d, 0, unarmed(UNIT['d-frigate'])))
+  run(w, 0.3)
+  const h0 = foes.map((u) => u.hull)
+  run(w, 3)
+  const lost = foes.map((u, i) => h0[i] - u.hull)
+  const bitten = foes.filter((_, i) => lost[i] > 0).map((u) => at[foes.indexOf(u)]).sort((a, b) => a - b)
+  check('a Leech next to six enemies drains exactly three', bitten.length === 3, `${bitten.length} bitten`)
+  check('the three nearest', bitten.join() === '150,200,250', bitten.join())
+  check('each at the full dps', foes.every((_, i) => lost[i] === 0 || near(lost[i], 60, 1)), lost.map((v) => v.toFixed(1)).join(' '))
+  check('it shows tendrils to just those', leech.drained?.length === 3)
+  // A tie for the last place: the lower unit id gets it.
+  const w2 = empty()
+  put(w2, 's-corvette', 0, x, y, 0, { ...unarmed(UNIT['s-corvette']), drain: { radius: 500, dps: 20, heal: 0.5, targets: 1 } })
+  const a = put(w2, 'd-frigate', 1, x, y - 200, 0, unarmed(UNIT['d-frigate']))
+  const b = put(w2, 'd-frigate', 1, x, y + 200, 0, unarmed(UNIT['d-frigate']))
+  run(w2, 2)
+  check('at the same distance, the lower unit id is bitten', a.id < b.id && a.hull < a.hullMax && b.hull === b.hullMax)
+  check('the Leech as written bites three at once', UNIT['s-corvette'].drain?.targets === 3)
+}
+
+// --- 12. Strike craft toughness -------------------------------------------------------------------------------
+
+{
+  // As written before this change: hull and shields.
+  const was: Record<string, [number, number]> = {
+    'r-fighter': [55, 20], 'r-bomber': [150, 40], 'r-picket': [34, 10],
+    'd-fighter': [60, 0], 'd-bomber': [135, 15], 'd-picket': [30, 0],
+    's-fighter': [38, 0], 's-bomber': [85, 0], 's-picket': [28, 0],
+  }
+  for (const [id, [hull, shield]] of Object.entries(was)) {
+    const t = UNIT[id]
+    const k = t.hull / Math.round(hull * TOUGHNESS)
+    const ks = shield ? t.shield / Math.round(shield * TOUGHNESS) : 1
+    check(`${t.name} is about 10% tougher`, k >= 1.07 && k <= 1.13 && (!shield || (ks >= 1.05 && ks <= 1.2)), `hull ${t.hull}${shield ? `, shields ${t.shield}` : ''}`)
+  }
 }
 
 console.log(failed ? 'FAILED' : 'all passed')

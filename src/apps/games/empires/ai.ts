@@ -60,7 +60,7 @@ export const DIFFICULTY: Record<Difficulty, Level> = {
     income: 0.68, think: 3, wave: 4200, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4, menders: 0.03, pace: 1.35,
   },
   medium: {
-    name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in (a minute and a half if it plays offensively).',
+    name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in (a minute and a half if it plays offensively, and less when it plays the Confederacy, which strikes early).',
     income: 1, think: 1.5, wave: 2500, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2, menders: 0.08, pace: 1,
   },
   hard: {
@@ -164,18 +164,20 @@ export const PROFILES: Record<Profile, Style> = {
  * - the Republic as the profiles say;
  * - the Confederacy concentrates its fire harder (its warships join a focus from further off, see
  *   focusFire) and sends its fast warships round the flank of a goal (see waves), and likes its heavy
- *   classes a little more;
+ *   classes a little more; it strikes early, with smaller first waves after a shorter quiet start
+ *   (against a long quiet start, its admirals sat out the fair fight the other sides built up for
+ *   and lost most Medium battles, while on Hard, with no quiet start, they won most);
  * - the Swarm favours numbers and fast production (small, quickly grown ships; build-time research
  *   worth twice as much) and goes out with smaller waves.
  * `tiers` multiplies the profile's taste for each class, `wave` the fleet value it waits for before a
- * wave, `quick` how much it favours ships that are quick to build, `focus` the reach of its focus
+ * wave, `calm` its quiet start (see calmOf), `quick` how much it favours ships that are quick to build (a power, in quarters: see pow4), `focus` the reach of its focus
  * fire, `flank` whether fast ships go round the side, `build` the worth of build-time research.
  */
-type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; quick: number; focus: number; flank: boolean; build: number }
+type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; calm: number; quick: number; focus: number; flank: boolean; build: number }
 export const DOCTRINE: Record<FactionId, Doctrine> = {
-  republic: { tiers: {}, wave: 1, quick: 0, focus: 1, flank: false, build: 1 },
-  droid: { tiers: { cruiser: 1.1, capital: 1.15 }, wave: 1, quick: 0, focus: 1.3, flank: true, build: 1 },
-  swarm: { tiers: { fighter: 1.15, gunship: 1.15 }, wave: 1, quick: 0.25, focus: 1, flank: false, build: 2 },
+  republic: { tiers: {}, wave: 1, calm: 1, quick: 0, focus: 1, flank: false, build: 1 },
+  droid: { tiers: { cruiser: 1.1, capital: 1.15 }, wave: 0.85, calm: 0.4, quick: 0, focus: 1.3, flank: true, build: 1 },
+  swarm: { tiers: { fighter: 1.15, gunship: 1.15 }, wave: 1, calm: 1, quick: 0.25, focus: 1, flank: false, build: 2 },
 }
 const doctrineOf = (w: World, b: Brain) => DOCTRINE[w.players[b.o].faction] ?? DOCTRINE.republic
 
@@ -316,10 +318,10 @@ function reinforcements(w: World, b: Brain, st: Unit, army: Unit[]) {
 }
 
 /** The quiet start before it attacks anything of ours: its difficulty's, stretched or shortened
- * by its profile; never shorter than the easy levels promise. */
-const calmOf = (b: Brain) => {
+ * by its profile and its faction's doctrine; never shorter than the easy levels promise. */
+const calmOf = (w: World, b: Brain) => {
   const D = DIFFICULTY[b.diff]
-  const c = D.calm * PROFILES[b.profile].calm
+  const c = D.calm * PROFILES[b.profile].calm * doctrineOf(w, b).calm
   return b.diff === 'easy' || b.diff === 'veryEasy' ? Math.max(D.calm, c) : c
 }
 
@@ -626,11 +628,11 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     // Living hulls mend themselves between fights: a little more staying power than the numbers say.
     if (t.regrow) v *= 1.1
     // Quick to build (the Swarm's way): ships out of the yard sooner count for more.
-    if (Doc.quick) v *= Math.pow(30 / Math.max(5, t.build), Doc.quick)
+    if (Doc.quick) v *= M.pow4(30 / Math.max(5, t.build), Doc.quick)
     // A mix rather than one kind: each one already flying makes the next a little less wanted.
     return v / (1 + 0.12 * count(t.id))
   }
-  const line = options.map((t) => (t.kind === 'support' || t.kind === 'repair' ? 0 : Math.pow(weight(t), 1.5)))
+  const line = options.map((t) => (t.kind === 'support' || t.kind === 'repair' ? 0 : M.pow4(weight(t), 1.5)))
   const top = Math.max(...line, 0.01)
   // Specialists by need, next to the best of the line ships: a repair tender for a fleet worth
   // mending, a squadron or two of repair craft once there are warships to look after.
@@ -1064,7 +1066,7 @@ export function think(w: World, b: Brain, dt: number) {
   const scoutValue = value(scouts)
   // Unsurveyed ore on our half comes first, then beacons.
   // While calm, only neutral ones: nothing the player already holds.
-  const calm = w.time < calmOf(b)
+  const calm = w.time < calmOf(w, b)
   // Ore nearer to us than to any enemy station, so allies don't race each other for it.
   const ore = w.nodes.filter((n) => !n.site && n.owner !== team && (!calm || n.owner === -1) && mineToTake(n))
   // Wrecks on our side of the map are free credits for a parked scout.
@@ -1181,7 +1183,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   const seenFoes = Object.values(b.foes).reduce((s, v) => s + v, 0)
   // (A restless wave, too, is at least a match for what it has seen of the enemy fleet: sent out
   // short of that, it only fed the enemy, and kept both sides too poor to ever finish the other.)
-  const restless = w.time - Math.max(b.lastWave, calmOf(b)) > 240 && mainValue >= b.wave * 0.5 && mainValue >= seenFoes
+  const restless = w.time - Math.max(b.lastWave, calmOf(w, b)) > 240 && mainValue >= b.wave * 0.5 && mainValue >= seenFoes
   const counter =
     S.counter &&
     mainValue >= b.wave * 0.6 &&
