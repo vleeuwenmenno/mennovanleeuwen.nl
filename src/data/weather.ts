@@ -33,6 +33,7 @@ export type Forecast = {
     time: string
     iso: string
     temp: number
+    feels: number
     code: number
     day: boolean
     precipProb: number
@@ -40,7 +41,12 @@ export type Forecast = {
     wind: number
     windDir: number
     uv: number
+    humidity: number
+    pressure: number
+    visibility: number
   }[]
+  /** Precipitation over the next hour, in 15-minute steps. */
+  minutes: { label: string; precip: number }[]
   days: {
     date: string
     max: number
@@ -110,7 +116,7 @@ export const WIDGET_SKIES: Record<Sky | 'night', { bg: string; fg: string }> = {
   storm: { bg: 'linear-gradient(170deg, #3f3a5f 0%, #6c6a8e 100%)', fg: '#f1efff' },
 }
 
-/** Full-app atmospheric backgrounds: dark enough for white glass tiles. */
+/** Full-window skies. These stay atmospheric on purpose, dark enough for light type on top. */
 export const APP_SKIES: Record<Sky | 'night', string> = {
   clear: 'linear-gradient(165deg, #2a6fb8 0%, #5aa0d8 42%, #c9dff5 78%, #f0c878 100%)',
   night: 'linear-gradient(165deg, #060a18 0%, #121833 45%, #1e2748 100%)',
@@ -129,8 +135,20 @@ function num(v: unknown, fallback = 0): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
 
+/** The next hour of 15-minute precipitation, labelled from the current slot. */
+function minutePrecip(times: string[] | undefined, amounts: unknown[] | undefined, nowIso: string | undefined): { label: string; precip: number }[] {
+  if (!times?.length) return []
+  const now = (nowIso ?? '').slice(0, 16)
+  const next = now ? times.findIndex((t) => t > now) : 0
+  const start = next < 0 ? Math.max(0, times.length - 5) : next === 0 ? 0 : next - 1
+  return times.slice(start, start + 5).map((_, i) => ({
+    label: i === 0 ? 'Now' : `${i * 15}m`,
+    precip: num(amounts?.[start + i]),
+  }))
+}
+
 export async function fetchForecast(lat: number, lon: number, units: Units): Promise<Forecast> {
-  const key = `${lat.toFixed(2)},${lon.toFixed(2)},${units}`
+  const key = `v2:${lat.toFixed(2)},${lon.toFixed(2)},${units}`
   const hit = forecasts.get(key)
   if (hit && Date.now() - hit.at < FORECAST_TTL) return hit
   const params = new URLSearchParams({
@@ -139,12 +157,14 @@ export async function fetchForecast(lat: number, lon: number, units: Units): Pro
     current:
       'temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day,relative_humidity_2m,dew_point_2m,surface_pressure,visibility,precipitation,cloud_cover',
     hourly:
-      'temperature_2m,weather_code,is_day,precipitation_probability,precipitation,wind_speed_10m,wind_direction_10m,uv_index',
+      'temperature_2m,apparent_temperature,weather_code,is_day,precipitation_probability,precipitation,wind_speed_10m,wind_direction_10m,uv_index,relative_humidity_2m,surface_pressure,visibility',
+    minutely_15: 'precipitation',
     daily:
       'temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset,precipitation_sum,precipitation_probability_max,uv_index_max,wind_speed_10m_max',
     timezone: 'auto',
     forecast_days: '10',
     forecast_hours: '25',
+    forecast_minutely_15: '8',
     ...(units === 'f' ? { temperature_unit: 'fahrenheit', wind_speed_unit: 'mph', precipitation_unit: 'inch' } : {}),
   })
   const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: AbortSignal.timeout(10_000) })
@@ -179,10 +199,11 @@ export async function fetchForecast(lat: number, lon: number, units: Units): Pro
       cloud: num(d.current.cloud_cover),
       day: !!d.current.is_day,
     },
-    hours: (hoursRaw ?? []).slice(0, 24).map((t, i) => ({
+    hours: (hoursRaw ?? []).slice(0, 25).map((t, i) => ({
       time: t.slice(11, 16),
       iso: t,
       temp: num(d.hourly.temperature_2m[i]),
+      feels: num(d.hourly.apparent_temperature?.[i]),
       code: num(d.hourly.weather_code[i]),
       day: !!d.hourly.is_day[i],
       precipProb: num(d.hourly.precipitation_probability?.[i]),
@@ -190,7 +211,11 @@ export async function fetchForecast(lat: number, lon: number, units: Units): Pro
       wind: num(d.hourly.wind_speed_10m?.[i]),
       windDir: num(d.hourly.wind_direction_10m?.[i]),
       uv: num(d.hourly.uv_index?.[i]),
+      humidity: num(d.hourly.relative_humidity_2m?.[i]),
+      pressure: num(d.hourly.surface_pressure?.[i]),
+      visibility: num(d.hourly.visibility?.[i]),
     })),
+    minutes: minutePrecip(d.minutely_15?.time as string[] | undefined, d.minutely_15?.precipitation as unknown[] | undefined, nowIso),
     days: (daysRaw ?? []).slice(0, 10).map((t, i) => ({
       date: t,
       max: num(d.daily.temperature_2m_max[i]),
@@ -400,11 +425,6 @@ export function moonPhase(date = new Date()): { name: string; illumination: numb
 
 export function shortPlaceName(name: string): string {
   return name.split(',')[0]?.trim() || name
-}
-
-export function formatPressure(hpa: number): string {
-  // Apple shows e.g. 1.021 — hectopascals / 1000 with three decimals.
-  return (hpa / 1000).toFixed(3)
 }
 
 export function formatVis(metres: number, units: Units): string {
