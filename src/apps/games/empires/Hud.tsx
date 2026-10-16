@@ -4,7 +4,7 @@ import { battleLayout, type LayoutStore } from './layout'
 import { SNAP_MOUSE, SNAP_TOUCH, candidates, dockCentred, dockName, dockStyle, isDock, nearest, type At, type Cand } from './dock'
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
-  ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
+  ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
   BASE_POP, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId,
 } from './data'
@@ -1499,18 +1499,24 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
 
 /** How long a finger holds Rush launch down to confirm it. */
 const RUSH_HOLD_MS = 600
-export type RushProps = { share: number; why: string | null; onRush: () => void; /** Its tooltip, where the default (a skirmish yard's) doesn't fit. */ tip?: string }
+export type RushProps = { share: number; why: string | null; /** The share of the build it takes before a rush is allowed. */ min?: number; onRush: () => void; /** Its tooltip, where the default (a skirmish yard's) doesn't fit. */ tip?: string }
 /**
  * Rush launch: sends the Capital Yard's ship out now, unfinished. A click with a mouse; on a touch
  * screen it has to be held (a ring fills round it) so a stray tap can't throw a ship away. Disabled
  * while the yard's cooldown runs, with the time left on it.
  */
-function RushButton({ share, why, onRush, tip }: RushProps) {
+function RushButton({ share, why, min, onRush, tip }: RushProps) {
   const [hold, setHold] = useState(false)
   const timer = useRef(0)
   const touched = useRef(false)
   useEffect(() => () => clearTimeout(timer.current), [])
-  const label = why?.startsWith('Ready again in ') ? `Rush launch · ${why.slice('Ready again in '.length)}` : `Rush launch (${Math.floor(share * 100)}%)`
+  const label = why?.startsWith('Ready again in ')
+    ? `Rush launch · ${why.slice('Ready again in '.length)}`
+    : why?.startsWith('Needs ')
+      ? 'Rush launch · locked'
+      : why?.startsWith('Not ') && min !== undefined
+        ? `Rush launch · at ${Math.round(min * 100)}%`
+        : `Rush launch (${Math.floor(share * 100)}%)`
   const stop = () => {
     clearTimeout(timer.current)
     setHold(false)
@@ -2566,9 +2572,10 @@ function YardDetail(p: DetailProps & { y: Unit }) {
     }
   }
   const queue = y.yq ?? []
-  // Rush launch: once Rushed construction is done and the ship in progress is far enough along.
+  // Rush launch: always shown beside a Capital Yard's ship in progress, disabled with its reason
+  // (research missing, not far enough along, cooling down) so it can be found before it can be used.
   const share = rushShare(y)
-  const rush = !site && kind === 'cyard' && y.owner === me && hud.techs.includes(RUSH_TECH[faction]) && share >= rushRules(w).min ? { share, why: cantRush(w, me, y.id), onRush: () => p.onRush(y.id) } : undefined
+  const rush = !site && kind === 'cyard' && y.owner === me && queue.length > 0 && !queue[0].reserve ? { share, why: cantRush(w, me, y.id), min: rushRules(w).min, onRush: () => p.onRush(y.id) } : undefined
   return (
     <div className="ew-stationwrap">
       {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, y.id)} at="the yard" rush={rush} launch={!!w.reinforce} />}
