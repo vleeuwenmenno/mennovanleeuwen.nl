@@ -638,8 +638,8 @@ its actions panel (Ctrl+K or right-click) has *Open in Git*, which shows it in t
 
 ### The Git app
 
-**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) is a read-only viewer for the same
-repositories: everything on your GitHub account (also through your organisations) and on the
+**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) browses the same repositories, and takes
+part in their conversations: everything on your GitHub account (also through your organisations) and on the
 Gitea/Forgejo instances you linked. The list on the left filters by name, owner or organisation and
 host, grouped by owner with your own first, and shows the language, when it was last pushed and
 whether it is private. Without "Allow private" in Settings → Code hosts only public GitHub
@@ -650,17 +650,33 @@ repositories show, and the list says so. A repository has four tabs:
   and images point into the repository on the host; the common HTML in READMEs (logos, badges,
   `<details>`) is turned into Markdown first, since the renderer never renders HTML.
 - **Pull requests** (open, merged, closed or all) and **Issues** (open, closed or all), a page at a
-  time with *Load more*. A pull request has *Conversation* (the description and comments),
-  *Commits* and *Files changed*; an issue shows its description and comments.
+  time with *Load more*. A pull request has *Conversation*, *Commits* and *Files changed*; an issue
+  shows its conversation.
 - **Commits**, per branch (a picker lists them), grouped by day. A commit shows its message, author,
   parents (click to walk back) and its changed files.
 
 Changed files are unified diffs, one collapsible box per file with line numbers and the additions
 and deletions tinted from the theme; a long line scrolls inside its box. Binary files and diffs
 too large to send (over 96 KB for a file, 2 MB in all) say so with a link to the host's page, as
-does anything past GitHub's limits (300 files). Anything the app doesn't do itself (commenting,
-reviewing, merging, a new issue or pull request, checks) is a button with an arrow-out icon that
-opens the host's web page.
+does anything past GitHub's limits (300 files).
+
+A conversation ([`Timeline.tsx`](src/apps/git/Timeline.tsx)) reads like the host's own page: the
+description, then in the order they happened the comments (marked when edited), reviews (approved,
+changes requested or commented, with their comments on lines listed under them as `file:line`),
+the commits pushed in between as one compact block per push (short hash and first line, each
+opening the commit), and one-line events: closed, reopened, merged (with its commit), force-pushed,
+title changed, labels, assignees, review requests, branch deleted and mentions from other issues
+and pull requests (which open in the app). The first 300 entries show; past that a link goes to
+the host. Below it is a box to **add a comment**: Markdown with *Write* and *Preview*, Ctrl+Enter
+(⌘+Enter) sends, and the new comment appears at once. The description and the comments **you
+wrote** have an *Edit* button that opens the same editor with *Save* and *Cancel*. What you type is
+kept as a draft per pull request or issue for as long as the tab is open (also across a reload,
+where the browser allows sessionStorage), and leaving one, or closing the window, with text that
+wasn't sent asks first. Writing to GitHub needs "Allow private" in Settings → Code hosts (the
+default sign-in can only read); without it the box is greyed out with a pointer there. A linked
+Gitea/Forgejo token needs the `write:issue` scope, and says so when it lacks it. Anything else
+(reviewing, merging, closing, labels, a new issue or pull request, checks) is a button with an
+arrow-out icon that opens the host's web page.
 
 A wide window keeps the list beside the open repository with breadcrumbs above it; a narrow window
 or a phone shows one view at a time with Back (Alt+← with a keyboard). The window takes a `route`
@@ -670,15 +686,25 @@ one it reopens the repository you had open last in this browser. Signed out, it 
 in. Open it from All apps, Spotlight, the dock or `open git` in the terminal.
 
 The server side is [`server/git.ts`](server/git.ts): a fixed set of `GET /api/repos/...` routes
-(repositories; a repository with its README; branches; pull requests, one with its comments, its
-commits and its files; issues and one with its comments; commits and one with its files), each
-part of the path checked (host id, owner, name, number, hash, branch), so it is no open proxy and
-never writes. It goes through the same code host sources as Spotlight
+(repositories; a repository with its README; branches; pull requests, one with its timeline, its
+commits and its files; issues and one with its timeline; commits and one with its files), and three
+that write: `POST …/issues/:n/comments` (a comment, on an issue or a pull request),
+`PATCH …/issues/:n` (the description) and `PATCH …/issues/comments/:id` (a comment), each taking
+`{ body }` as JSON (at most 65,536 characters, GitHub's limit). Every part of the path is checked
+(host id, owner, name, number, hash, branch, comment id) and each route answers only its own
+methods, so it is no open proxy. Before an edit the server reads the item or comment from the host
+and refuses unless its author is your login there; writes need a signed-in user, pass the same
+cross-site check as the site's other changes, and GitHub ones need the write scope before GitHub is
+asked. A refusal from the host comes back as what to fix (sign in again with private repositories
+allowed; a token with `write:issue`). Timelines come from GitHub's and Gitea's issue timeline APIs
+(Gitea before 1.20 has none: its comments and reviews are used instead), with the pull request's
+commits for logins and its review comments for the reviews. It goes through the same code host sources as Spotlight
 ([`server/forges.ts`](server/forges.ts)), so tokens, rate limits and the address checks for linked
 instances are shared. GitHub's and Gitea's answers are turned into one shape there
 ([`server/gitShapes.ts`](server/gitShapes.ts), types in
 [`src/data/gitTypes.ts`](src/data/gitTypes.ts)); Gitea's diffs come as a `.diff`, which is split
-into files on the server. Answers are kept a minute per user; Reload in the app asks the host again.
+into files on the server. Answers are kept a minute per user; Reload in the app asks the host
+again, and a write forgets that repository's answers so the next read is fresh.
 
 Your repositories include those of every organisation you are in: GitHub's own list
 (owned, collaborator and organisation repositories) plus the most recently pushed hundred of

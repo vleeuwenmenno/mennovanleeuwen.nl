@@ -73,16 +73,14 @@ export type GitIssueItem = {
   url: string
 }
 
-export type GitComment = { id: number; author: GitPerson | null; body: string; createdAt: string; updatedAt: string | null; url: string | null }
+/** An issue comment (also on a pull request's conversation). `edited`: changed after it was posted. */
+export type GitComment = { id: number; author: GitPerson | null; body: string; createdAt: string; updatedAt: string | null; url: string | null; edited: boolean }
 
-/** GET .../issues/:n */
+/** GET .../issues/:n (its comments and events: .../issues/:n/timeline) */
 export type GitIssue = GitIssueItem & {
   body: string
   assignees: GitPerson[]
   milestone: string | null
-  commentList: GitComment[]
-  /** More comments than were fetched: the rest are on the web */
-  moreComments: boolean
 }
 
 /** GET .../pulls/:n */
@@ -138,3 +136,68 @@ export type GitBranch = { name: string; sha: string | null; protected: boolean }
 
 /** One page of a list; `next` is the page to ask for next, or null at the end. */
 export type GitPage<T> = { items: T[]; next: number | null }
+
+// ---------------------------------------------------------------------------------------------
+// The conversation of a pull request or issue: GET .../pulls/:n/timeline and .../issues/:n/timeline
+
+export type GitReviewState = 'approved' | 'changes_requested' | 'commented' | 'dismissed'
+
+/** A comment on a line of the diff, made in a review. */
+export type GitReviewComment = { id: number; author: GitPerson | null; body: string; path: string; line: number | null; createdAt: string; url: string | null; reply: boolean }
+
+export type GitEventKind =
+  | 'closed'
+  | 'reopened'
+  | 'merged'
+  | 'force_pushed'
+  | 'renamed'
+  | 'labeled'
+  | 'unlabeled'
+  | 'assigned'
+  | 'unassigned'
+  | 'review_requested'
+  | 'review_request_removed'
+  | 'referenced'
+  | 'cross_referenced'
+  | 'ready_for_review'
+  | 'converted_to_draft'
+  | 'head_ref_deleted'
+  | 'head_ref_restored'
+  | 'base_changed'
+  | 'locked'
+  | 'unlocked'
+
+/** Another issue or pull request that mentioned this one. `repo` is "owner/name". */
+export type GitRef = { repo: string; number: number; title: string; url: string; pull: boolean; state: GitState }
+
+export type GitEvent = {
+  type: 'event'
+  id: string
+  event: GitEventKind
+  actor: GitPerson | null
+  createdAt: string
+  /** A commit hash (merged, referenced, force-pushed to) */
+  commit?: string | null
+  /** The repository ("owner/name") `commit` is in, when it may be another one (referenced) */
+  commitRepo?: string | null
+  label?: Label
+  /** Renamed (titles), base changed (branches), force-pushed (hashes) */
+  from?: string | null
+  to?: string | null
+  /** Who was assigned or asked for a review (a login or a team's name) */
+  subject?: string | null
+  ref?: GitRef
+}
+
+export type GitTimelineItem =
+  | (GitComment & { type: 'comment' })
+  | { type: 'review'; id: number; author: GitPerson | null; state: GitReviewState; body: string; createdAt: string; url: string | null; comments: GitReviewComment[] }
+  /** Commits pushed one after another, shown as one block */
+  | { type: 'commits'; id: string; createdAt: string; commits: GitCommitItem[] }
+  | GitEvent
+
+export type GitTimeline = {
+  items: GitTimelineItem[]
+  /** More than were fetched: the rest is on the web */
+  truncated: boolean
+}
