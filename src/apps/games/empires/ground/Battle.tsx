@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { jsonPref } from '../../../../os/localPref'
 import { useIsMobile } from '../../../../os/useIsMobile'
+import { useMediaQuery } from '../../../../os/useMediaQuery'
 import { FACTIONS, FACTION_IDS, type FactionId } from '../data.ts'
 import { DoublePress, GROUP_KEYS, addToGroup, setGroup, type Groups } from '../groups.ts'
 import { Bar, Frame, Icon, KeptInside, Tips, clock, fmt } from '../Hud.tsx'
@@ -224,7 +225,9 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
   const world = useRef<GroundWorld | null>(null)
   if (!world.current) world.current = startWorld(map, setup)
   const team = world.current.players[ME].team
-  const phone = useIsMobile()
+  // A phone, upright or held sideways (short): compact panels, the minimap folded away to start.
+  const short = useMediaQuery('(max-height: 520px)')
+  const phone = useIsMobile() || short
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const mini = useRef<HTMLCanvasElement>(null)

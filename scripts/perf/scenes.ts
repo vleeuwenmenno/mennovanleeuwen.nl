@@ -303,6 +303,85 @@ const skirmishHuge: Scene = {
   },
 }
 
+// --- A ground battle ---
+
+/**
+ * A ground battle (dev builds only, as the perf check's server is) on Dustfall Ridge: three dozen
+ * vehicles of both sides driving across the low ground in sight of each other, fog of war on, the
+ * camera panning over the terrain as they go.
+ */
+const groundBase: Scene = {
+  name: 'ground-base',
+  about: 'Ground battle on Dustfall Ridge, 36 vehicles driving over terrain, fog on, camera panning',
+  async run(page, url) {
+    await page.send('Page.navigate', { url: `${url}/play/empires` })
+    await page.waitFor(MENU)
+    await page.eval(`localStorage.setItem('mvlos.empires.groundsetup', JSON.stringify({ map: 'dustfall-ridge', you: 'republic', ai: 'droid', credits: 2000 }))`)
+    await press(page, '.ew-menu-btn', 'Single player')
+    await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
+    await press(page, '.ew-menu-btn', 'Skirmish')
+    await page.waitFor(`[...document.querySelectorAll('.ew-seg button')].some((b) => b.textContent.includes('Ground'))`)
+    await press(page, '.ew-seg button', 'Ground')
+    await page.waitFor(`!!document.querySelector('.ew-landsetup .ew-go')`)
+    await page.eval(`__perf.manual(11)`)
+    await press(page, '.ew-landsetup .ew-go', 'Launch battle')
+    // The terrain's pictures load in real time with the clock stopped.
+    await settleUntil(page, `!!window.__groundBattle && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth`)
+    await page.eval(`window.__groundBattle.renderer.ready.then(() => (window.__groundReady = true))`)
+    await settleUntil(page, `!!window.__groundReady`)
+    const spawned = await page.eval<number>(`(async () => {
+      const sim = await import('/src/apps/games/empires/ground/sim.ts')
+      const nav = await import('/src/apps/games/empires/ground/nav.ts')
+      const g = window.__groundBattle
+      const w = g.world
+      // Each side's own vehicle type (its engineer), 24 of ours and 12 of theirs in two blocks on
+      // the low ground between the bases, ours sent across theirs.
+      const typeOf = (o) => w.units.find((u) => u.owner === o && sim.GROUND_UNIT[u.type].kind === 'vehicle').type
+      const cx = w.w * 0.45, cy = w.h * 0.55
+      let made = 0
+      const block = (o, n, x0, y0) => {
+        const t = typeOf(o)
+        const k = sim.GROUND_UNIT[t].size
+        const ids = []
+        for (let i = 0; i < 400 && ids.length < n; i++) {
+          const x = x0 + (i % 8) * 56, y = y0 + Math.floor(i / 8) * 56
+          if (nav.standsAt(w.nav, k, x, y)) ids.push(sim.spawnUnit(w, t, o, x, y, 0).id)
+        }
+        made += ids.length
+        return ids
+      }
+      const ours = block(0, 24, cx - 520, cy - 160)
+      const theirs = block(1, 12, cx + 260, cy - 120)
+      sim.cmdMove(w, 0, ours, cx + 500, cy, false)
+      sim.cmdMove(w, 1, theirs, cx - 500, cy, false)
+      Object.assign(g.view, { x: cx - 300, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 2400)) })
+      return made
+    })()`)
+    // The terrain bakes and the fog clears round the vehicles, then a second is measured while
+    // the camera pans across them.
+    await page.eval(`__perf.frames(120)`)
+    const pan = await measure(page, 60, `window.__groundBattle.view.x += 10`)
+    const after = await page.eval<{ mb: number; terrain: number; nodes: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, terrain: window.__groundBattle.renderer.cacheBytes / 1048576, nodes: document.getElementsByTagName('*').length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 36 * 0.9) throw new Error(`Only ${spawned} of 36 vehicles spawned`)
+    return {
+      metrics: {
+        ...canvasMetrics(pan, 60),
+        'bitmap cache MB': count(after.mb),
+        'terrain cache MB': count(after.terrain),
+        'React commits / sim s': commitsPerSec(pan, 60),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(pan),
+      },
+      shots: { 'ground-base': shot },
+    }
+  },
+}
+
 // --- A skirmish picked up again after a reload ---
 
 /** The window sizes the resumed battle is looked at in: a laptop, a small window (the map and the
@@ -596,7 +675,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))

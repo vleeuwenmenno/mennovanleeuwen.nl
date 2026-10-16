@@ -3,6 +3,9 @@
    adds its few pieces: the minimap, the selection panel, the control groups and messages. */
 
 /* --- Setup --- */
+.ew-root.ew-landsetup {
+  overflow-y: auto;
+}
 .ew-landsetup .ew-lobby-body {
   width: min(100% - 24px, 640px);
   gap: 10px;
@@ -280,13 +283,23 @@
 }
 
 /* --- Phones, and short screens (a phone held sideways) --- */
+@media (max-height: 520px) {
+  .ew-landsetup .ew-lobby-body {
+    margin: 0 auto;
+  }
+  .ew-landsetup-grid {
+    gap: 6px 12px;
+    margin: 6px 0 10px;
+  }
+}
+/* On a phone the touch bar keeps the bottom left corner, the selection the right, and the minimap
+   (folded away to start) the top left. */
 .ew-landbattle.is-phone .ew-landsel {
-  left: 6px;
-  width: auto;
-  max-height: 46%;
+  width: min(430px, calc(100% - 72px));
+  max-height: calc(100% - 56px);
 }
 .ew-landbattle.is-phone .ew-landmap {
-  width: 168px;
+  width: 150px;
   top: 52px;
   bottom: auto;
 }
@@ -295,15 +308,6 @@
   left: 6px;
 }
 @media (max-height: 520px) {
-  .ew-landbattle .ew-landmap {
-    width: 168px;
-  }
-  .ew-landbattle.is-mapopen .ew-landtouchbar {
-    left: 180px;
-  }
-  .ew-landbattle .ew-landsel {
-    max-height: calc(100% - 58px);
-  }
   .ew-deck .ew-landcardrow .ew-shipcard {
     width: 76px;
   }
