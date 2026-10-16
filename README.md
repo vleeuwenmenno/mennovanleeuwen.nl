@@ -3259,6 +3259,63 @@ pnpm check:empires-rejoin                                       # stepping away:
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
 ```
 
+## Empires At War ground battles
+
+Ground (land) battles are being built next to the space battles, in
+[`src/apps/games/empires/ground/`](src/apps/games/empires/ground). They have a sim of their own; the
+space sim and its multiplayer hash are not touched. Until ground units can fight, the mode is in
+dev builds only: the Skirmish setup shows a **Space / Ground** switch when `import.meta.env.DEV` is
+set, and Ground opens a map viewer (drag or one finger to pan, wheel or pinch to zoom, and a debug
+overlay of the tile grid, heights and tile flags; hovering or tapping a tile shows what it is).
+Production builds contain none of it.
+
+**Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
+Each tile has a terrain (dirt, grass, rocky, and later sand, snow, ash, cracked earth and plating),
+a height of 0, 1 or 2, and flags: blocked, no building, ramp, deposit, water. Cliffs stand where
+heights differ, and only ramps join two levels (`canStep`, the one rule the reach check, path finding
+and movement share). The tile at the foot of every cliff is blocked (the rock face or the rubble
+under a lip covers it), on all four sides alike so mirrored maps stay fair.
+
+**Maps** ([`maps.ts`](src/apps/games/empires/ground/maps.ts)) are coarse sketches for one side,
+copied to the others by the same symmetries as space maps. Each character covers `cell` × `cell`
+tiles: `0` `1` `2` heights, `/` a ramp (it joins the levels on either side of it, and gets walls on
+its open sides), `~` water, `S` a spawn on the plateau, `d` a deposit on low ground, and `.` or a
+missing row for "take it from the mirror copy". [`terrain.ts`](src/apps/games/empires/ground/terrain.ts)
+builds the map from the sketch and its seed, the same on every machine (exactly rounded maths and a
+seeded random stream only):
+- cliff lines wobble: each tile reads the sketch at a position nudged by smooth noise, which fades
+  out near ramps so they meet their levels square, and a majority pass smooths away slivers;
+- terrain: rocky plateaus with dirt pockets away from the rim, rocky scree spilling one to three
+  tiles below every cliff foot, and dirt and grass by noise on the lower ground, grass kept back
+  from cliffs;
+- props by ground type, seeded and spaced: stone only on the plateau (never trees), rubble and heaps
+  on scree and along every cliff foot, trees and bushes on grass, rocks on dirt. They stay off
+  spawns and their build area (16 × 16 tiles), ramps and deposits. Trees, boulders and other big
+  props block the tiles under them; flat ones (rubble, cracked stone) only decorate.
+
+The first map is **Dustfall Ridge** (two players, 128 × 96 tiles, point symmetry): each base on a
+plateau in a corner with one ramp down to a shelf of mid ground, the shelf with two ramps to the low
+ground, three deposits a side, and a mid-level hill and a pond in the middle.
+
+**Drawing** ([`render.ts`](src/apps/games/empires/ground/render.ts)). The terrain is baked into
+16 × 16-tile chunks at the zoom's size step (√2 steps), kept in an LRU cache of about 48 MB (24 MB
+on phones, which also bake less densely), and drawn as a few `drawImage` calls a frame. A bake is
+split into passes and runs at most about 3 ms a frame; until a chunk is ready, the nearest step
+already baked stands in, and every chunk is also baked small once so there's always something to
+show. A bake lays the textures (`public/games/empires/ground/terrain/`, one repeat per 8 tiles) as
+patterns cut by noise-broken masks, then water, a faint large-scale tint and a little shade by
+level, the ramps, the cliffs and the flat props. Cliffs follow the height contours, smoothed: faces
+looking south hang the cliff-face strip in thin columns, faces looking east or west use an upright
+strip of their own (darker facing east, away from the light), and edges looking north show only a
+lit lip. The face's height swells and shrinks along the edge. Props are sprites with a lift shadow
+drawn in code; stone props are warmed to match the cliff rock. Trees are drawn each frame above
+units (baked in when zoomed far out). The screen draws into the frame through hooks, in world
+coordinates: ground (under units), units, fog (over trees) and an overlay.
+
+```sh
+pnpm check:ground-map   # every ground map: builds the same twice, symmetric, spawns reach each other and every deposit, no blocking prop on ramps or build areas
+```
+
 ## Performance guardrails
 
 The bar is the display's full refresh rate (up to 240 Hz) without giving up anything on screen.
