@@ -2544,7 +2544,7 @@ Balanced. Every profile plays the same game, with a purpose:
 | Fights for an outlying mine with | 1× the attackers | 0.85× | 0.6× |
 | Station level 2 / 3 / 4 due at | 130 / 320 / 540 s | 170 / 400 / 680 s | 200 / 460 / 800 s |
 | Fleet value per station level before upgrading | 600 | 900 | 1000 |
-| Gun platforms (level 1-2 / 3 / 4) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
+| Gun platforms on ore (level 1-2 / 3 / 4; only with *Defense platforms on ore* on) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
 | Mines on top of its difficulty's (+1 from level 3) | 0 | +1 | +1 |
 | Raiders after your mines | none | none | 2 ships, from 4 min |
 | Counter-attacks | when your attack fails, or the fleet it has seen of yours is small | when your attack fails | no |
@@ -2911,6 +2911,45 @@ view and defense stations* above for the stations themselves).
 pnpm check:empires-sk-defense   # the lobby's limit and Off, placement, levels and slots, modules and swaps, refunds, combat, repairs, the AI, old saves
 ```
 
+## Empires At War beacons, idle strike craft and defense platforms on ore
+
+- **Beacons see.** A capture beacon a team holds is a pair of eyes for every player on it:
+  `BEACON_SENSOR` (900 as written, 990 at the battlefield's scale, a frigate's sensors about) round
+  it, on top of the fleet cap (`BEACON_POP`, +6) and income (`BEACON_INCOME`, 90 credits a minute)
+  it already gave. It counts wherever sight does (sim.ts `eyesOf`: the ships and structures, then
+  the beacons held): the fog of war and the fog grid, the minimap, what the AI sees (`sight`,
+  `canSee`), sparks and ruins drawn in the fog, and where reinforcements may be called in. A
+  neutral or half-taken beacon sees nothing, and one that is lost stops seeing for its old holder
+  at once. Hovering over a beacon (the action wheel's *Beacon info* on a touch screen) shows what it
+  gives; the top bar's fleet cell spells out the cap (base, station levels, beacons held) and the
+  beacon cell what each one gives.
+- **Idle strike craft hold station.** Fighters, bombers and the like with no orders and nothing to
+  fight (alone at their spot, round their carrier, or escorting a ship that waits) fly a slow, wide
+  circle round it (sim.ts `loiter`): `IDLE_PACE` (45%) of their speed, on a 130 to 208 radius by
+  craft, with half their turn rate (`IDLE_TURN`), where they used to buzz round a tight 70 to 124
+  ring at 65%. Further out than a couple of radii they come back quicker (up to 80%, full turns);
+  round a carrier under way the circle moves with it and they add its pace to theirs. A
+  target or an order takes them out of it straight away: picking up an enemy is as quick as ever
+  (the same look round every 0.4 to 0.7 s) and they're at full speed within a second. The engine
+  glow follows the speed. The defense wing still parks in its slots round the station.
+- **Defense platforms on ore** (the lobby's *Battle settings*, beside *Defense stations*; in the
+  multiplayer lobby only the host changes it): Off by default, and then surveyed ore takes only a
+  mining platform: the ore card has no gun, flak or all-round platform, the sim refuses one
+  (`cantSite`, World `oreDefense`, `oreGuns`) and so does the protocol (`cleanCmd`). On, it's as it
+  always was. It is part of the match config (`MatchInfo.oreDefense`, set by the server from the
+  lobby, only `true` or `false`). A skirmish setup saved before the choice comes back with it off,
+  as a new lobby has it; a battle saved before it (no `oreDefense` in its world) and a match from
+  before it play on with them on, as they were. Galactic conquest's fleet battles build nothing, so
+  it doesn't apply there. The AI builds none with them off, and the money goes to its fleet.
+  (Admirals fill their claims with mines first, so they seldom built one even before; a defense
+  station more in their place was tried and turned more of the AI-only tournaments into stalls.)
+  `ORE_DEFENSE=1 node scripts/empires-tournament.ts …` plays the tournament with them on.
+
+```sh
+pnpm check:empires-mechanics   # 13-15: beacon vision on capture and loss, idle strike craft pace and response, the ore switch, old saves, the AI
+pnpm check:empires             # also a battle with defense platforms on ore, frozen with them standing
+```
+
 ## Empires At War control groups and credits for allies
 
 **Control groups** ([`groups.ts`](src/apps/games/empires/groups.ts)), as in classic RTS games:
@@ -3008,7 +3047,7 @@ faction and side, chat, and say they're ready.
 The lobby, and the single-player skirmish setup that shares its layout, is a panel centred on the
 screen: at most 1500 px wide and no taller than its contents, so a big or ultrawide window gets
 margins rather than a giant map. *Players* (the spawns) and *Battle settings* (starting credits,
-reinforcements and, on a generated map, its rules) sit on the left, the map with its legend in the
+reinforcements, defense stations, defense platforms on ore and, on a generated map, its rules) sit on the left, the map with its legend in the
 middle, and the chat as a rail on the right. In a narrower window the chat moves under the map; on a
 phone everything is one column, with each player as a two-line card. A launch bar at the foot stays in
 view at every size. It says what the battle is still waiting for, and holds *Start battle* for the

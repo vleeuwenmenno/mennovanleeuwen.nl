@@ -290,6 +290,9 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
           </ul>
         </>
       )}
+      {t.tier === 'defense' && !t.orbital && (
+        <p className="ew-muted ew-small">Goes up on surveyed ore in place of a mining platform, in a skirmish or multiplayer battle whose lobby turns Defense platforms on ore on (they are off unless it says so). The AI builds them then too.</p>
+      )}
       {t.support && <p className="ew-muted">Repairs up to {t.support.max} ships within {t.support.range}, {t.support.repair} hull a second each.</p>}
       {t.carrier && <p className="ew-muted">Launches a squadron every {t.carrier.every} s, up to {t.carrier.max} out at once.</p>}
     </div>

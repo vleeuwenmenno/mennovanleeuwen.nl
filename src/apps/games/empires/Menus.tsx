@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
-import { CREDIT_STEPS, DEFENSE_DEFAULT, DEFENSE_STEPS, FACTION_IDS, FACTIONS, ORBITALS, cleanDefense, type FactionId } from './data'
+import { BEACON_INCOME, BEACON_POP, BEACON_SENSOR, CREDIT_STEPS, DEFENSE_DEFAULT, DEFENSE_STEPS, FACTION_IDS, FACTIONS, ORBITALS, cleanDefense, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { NAME_MAX, nameProblem, tidyName } from './names'
@@ -34,6 +34,9 @@ export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules
   /** Defense stations each player may have (data.ts DEFENSE_STEPS, 0: off); setups saved before
    * them get DEFENSE_DEFAULT. */
   stations?: number
+  /** Defense platforms on ore (World `oreDefense`); setups saved before the choice get them off,
+   * as a new lobby has them. */
+  oreDefense?: boolean
 }
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
@@ -86,9 +89,11 @@ function lastSetup(): Setup {
       reinforce: cleanReinforce(v?.reinforce),
       // Setups saved before defense stations: the default limit.
       stations: cleanDefense(v?.stations),
+      // Setups saved before the choice: off, as a new lobby has them.
+      oreDefense: v?.oreDefense === true,
     }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE }, stations: DEFENSE_DEFAULT }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE }, stations: DEFENSE_DEFAULT, oreDefense: false }
   }
 }
 
@@ -194,6 +199,20 @@ export function DefenseOptions({ value, onChange }: { value: number; onChange?: 
       <p className="ew-muted ew-small">
         {n ? `Up to ${n} defense station${n === 1 ? '' : 's'} per player, put up by engineers near the Command Station and fitted with modules.` : 'No defense stations in this battle.'}
       </p>
+    </div>
+  )
+}
+
+/**
+ * Defense platforms on ore, for the skirmish setup and the multiplayer lobby (where only the host
+ * changes it, `onChange` absent for the others): Off (the default), surveyed ore takes only a mining
+ * platform; On, it may take a gun, flak or all-round defense platform instead.
+ */
+export function OreDefenseOptions({ value, onChange }: { value: boolean; onChange?: (on: boolean) => void }) {
+  return (
+    <div className="ew-reinf ew-defopts" data-tip="Whether surveyed ore can take a defense platform (gun, flak or all-round) instead of a mining platform. The AI builds them too when they're on.">
+      {onChange ? <Seg label="Defense platforms on ore" value={value} options={[[false, 'Off'], [true, 'On']]} onChange={onChange} /> : <b className="ew-reinf-ro">{value ? 'On' : 'Off'}</b>}
+      <p className="ew-muted ew-small">{value ? 'Surveyed ore takes a mining platform or a defense platform: guns against warships, flak against strike craft, or both.' : 'Surveyed ore takes only mining platforms.'}</p>
     </div>
   )
 }
@@ -830,8 +849,8 @@ export function HowToPlay() {
         <li>Guard ({k('guard')}), then click one of your ships or structures: the selection stays with it and fights off whatever comes near. On a ship two classes bigger (a flagship for gunships and corvettes, say) they escort it: each takes a place over its hull, moves and turns with it, takes on enemies that come within reach of it and comes back, and repair ships mend it first.</li>
         <li>Gunships and bigger can retreat into hyperspace ({k('retreat')}): the drive charges for 6 to 12 seconds while the ship holds still and keeps firing, then it jumps out, freeing its fleet space; 15 seconds later up to half its cost comes back, less the more damaged it was. Destroyed before it jumps, it's lost.</li>
         <li>Engineers also build defense stations near the Command Station (as many as the lobby allows, two unless it says otherwise): select one to upgrade it to level 2 and 3 and to fit a module into each of its slots (one, two and four by level): a battery against warships, flak against strike craft, a launcher whose missiles go through shields, a shield generator or a hangar. Fitting a filled slot swaps its module.</li>
-        <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
-        <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
+        <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits). With Defense platforms on ore turned on in the lobby (they're off unless it says so), it can take a defense platform (guns) instead.</li>
+        <li>Hold ships near a beacon to capture it. Each beacon your team holds gives every player on it +{BEACON_POP} fleet capacity and +{Math.round(BEACON_INCOME * 60)} credits a minute, and it sees {BEACON_SENSOR} round it for your whole team: the fog lifts there, on the minimap too, and reinforcements can be called in there. Hover over one to see what it gives.</li>
         <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
         <li>Your station is a Command Station: it builds strike craft, gunships and engineers. From station level 2, engineers build a Frigate Yard anywhere inside the build ring round it ({k('build')} with engineers or the station selected): the yard builds frigates and corvettes, with its own queue and rally point ({k('yard')} selects it). Engineers also weld our structures back together: right-click one with them. A destroyed yard leaves a ruin that engineers rebuild for half the price.</li>
         <li>From station level 3 engineers build a Capital Yard as well: cruisers come from there, and flagships once its Capital slip expansion is fitted (station level 4). {k('cyard')} selects it.</li>
@@ -1652,6 +1671,10 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
               <div className="ew-setting">
                 <h5>Defense stations</h5>
                 <DefenseOptions value={setup.stations ?? DEFENSE_DEFAULT} onChange={(n) => update({ ...setup, stations: n })} />
+              </div>
+              <div className="ew-setting">
+                <h5>Defense platforms on ore</h5>
+                <OreDefenseOptions value={setup.oreDefense === true} onChange={(on) => update({ ...setup, oreDefense: on })} />
               </div>
               {isGen && (
                 <div className="ew-setting">

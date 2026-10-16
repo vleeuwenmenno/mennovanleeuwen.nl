@@ -3,7 +3,7 @@ import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -147,7 +147,7 @@ type Style = {
 export const PROFILES: Record<Profile, Style> = {
   defensive: {
     name: 'Defensive',
-    blurb: 'Turtles: more gun platforms and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
+    blurb: 'Turtles: more gun platforms (when the lobby allows them on ore) and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
     wave: 1.6, calm: 1.3, rest: 60, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.25, beaconReach: 3800, hold: 0.85, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [170, 400, 680], levelArmy: 900, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
     tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], forts: [0, 1, 1, 1], fortTop: 2, bail: 0.4, sally: 0.8,
   },
@@ -767,9 +767,12 @@ export function think(w: World, b: Brain, dt: number) {
   const mineToTake = (n: { x: number; y: number }) => enemyStations.every((e) => d2(n, st) < d2(n, e) * reach) && nearerUs(n)
   // Build on our team's claims nearest us; an ally's own patch is theirs (unless they're gone).
   const ours = w.nodes.filter((n) => n.owner === team && !n.site && nearerUs(n)).sort((a, c) => d2(a, st) - d2(c, st))
-  // Mining expands steadily, one more from station level 3; platforms by profile and level.
+  // Mining expands steadily, one more from station level 3; platforms by profile and level (none
+  // in a battle with them off: that money buys ships instead. A defense station more in their place
+  // turned more of the AI-only tournaments into stalls, and admirals fill their claims with mines
+  // first, so they seldom built a platform anyway).
   const mineGoal = D.mines + (D.research ? S.mines : 0) + (p.level >= 3 && D.research ? 1 : 0)
-  const platGoal = D.defenses ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
+  const platGoal = D.defenses && oreGuns(w) ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
   // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
   // (A gun platform goes up once a couple of mines are and there is a claim to spare for it, or
   // once every mine it wants is up: then the last free claim is its. A claim kept for a platform

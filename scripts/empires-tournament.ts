@@ -19,6 +19,7 @@
 // how many). EMPIRES=path/to/empires runs another copy of the game, to compare. MAPS=id,id plays
 // those maps instead of the two-spawn ones; on a map with more spawns, on two as far apart as it has.
 // DEFENSE=0 (or 1, 2, 3, 4, 6) sets the lobby's defense station limit (the default when left out).
+// ORE_DEFENSE=1 turns defense platforms on ore on (a new lobby has them off, and so do these games).
 
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { availableParallelism } from 'node:os'
@@ -37,7 +38,7 @@ async function play(job: Job): Promise<Result> {
   const { UNIT } = await import(`${job.dir}data.ts`)
   const map = MAPS.find((m: { name: string }) => m.name === job.map)
   const factions = job.factions
-  const w = newWorld(map, factions.map((f, i) => ({ faction: f, team: i, spawn: job.spawns[i], incomeMul: DIFFICULTY[job.diff].income })), { seed: job.seed, ...(process.env.DEFENSE !== undefined ? { defense: Number(process.env.DEFENSE) } : {}) })
+  const w = newWorld(map, factions.map((f, i) => ({ faction: f, team: i, spawn: job.spawns[i], incomeMul: DIFFICULTY[job.diff].income })), { seed: job.seed, ...(process.env.DEFENSE !== undefined ? { defense: Number(process.env.DEFENSE) } : {}), ...(process.env.ORE_DEFENSE === '1' ? { oreDefense: true } : {}) })
   const brains = job.profiles.map((p, i) => newBrain(i, job.diff, p))
   const sides: Side[] = job.profiles.map((p, i) => ({ profile: p, faction: factions[i], flags: {}, frigate: -1, rushTech: -1, rushes: 0, mods: [], wingLost: 0, waves: 0, techs: 0, level: 1, worth: 0 }))
   const wings = [new Set<number>(), new Set<number>()]

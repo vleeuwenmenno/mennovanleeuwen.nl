@@ -5,7 +5,7 @@ import { ROCK_HIT, clearLine, crosses, findPath, navCost, navGrid, reachCheck, r
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, BEACON_SENSOR, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind, DEFENSE_QUEUE, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, cleanDefense, defenseModTime, defenseTime, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, placeType,
 } from './data.ts'
@@ -463,7 +463,16 @@ export type World = {
    * have at a time, standing or going up, as the lobby set it; 0 when they are off. Absent in a
    * battle saved before them, and in fleet battles: none (engineers can't build them). */
   defense?: number
+  /** Defense platforms (the gun, flak and all-round ones) on surveyed ore, as the lobby set it:
+   * false when they are off, and then only mining platforms go on ore. Absent in a battle saved
+   * before the lobby had the choice (and in fleet battles, which build nothing): on, as they always
+   * were there. See oreGuns. */
+  oreDefense?: boolean
 }
+
+/** Whether defense platforms may go on ore in this battle (World `oreDefense`; on unless the lobby
+ * turned them off). */
+export const oreGuns = (w: World) => w.oreDefense !== false
 
 /**
  * Reinforcements, a battle's rules set in the lobby: whether strike craft (fighter-class: fighters,
@@ -845,8 +854,9 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
 
 /** `reinforce`: the lobby's reinforcement rules (REINFORCE when left out). */
 /** `defense`: how many defense stations each player may have (data.ts DEFENSE_STEPS, 0: off;
- * DEFENSE_DEFAULT when left out). */
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce; defense?: number } = {}): World {
+ * DEFENSE_DEFAULT when left out). `oreDefense`: whether defense platforms may go on ore (off when
+ * left out, as a new lobby has it). */
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce; defense?: number; oreDefense?: boolean } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -857,7 +867,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
     // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
     // New ships fly out of the yards, and reinforcements cost extra (see Reinforce).
-    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce), defense: cleanDefense(opts.defense) }),
+    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce), defense: cleanDefense(opts.defense), oreDefense: opts.oreDefense === true }),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -1722,9 +1732,19 @@ export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at
   return null
 }
 
-/** Whether a team can see a point: any of its ships or structures has it in sensor range. */
+/** Whether a team can see a point: any of its ships or structures has it in sensor range, or a
+ * beacon it holds (BEACON_SENSOR). */
 export function canSee(w: World, team: number, x: number, y: number) {
-  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sq(sensorOf(u)))
+  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sq(sensorOf(u))) || w.beacons.some((b) => b.owner === team && d2(b.x, b.y, x, y) < sq(BEACON_SENSOR))
+}
+
+/** What a team sees with: each of its ships and structures (at its sensor range, see sensorOf) and
+ * each beacon it holds (BEACON_SENSOR round it). The fog, the minimap and `sight` all go by these. */
+export function eyesOf(w: World, team: number): { x: number; y: number; r: number }[] {
+  const out: { x: number; y: number; r: number }[] = []
+  for (const u of w.units) if (!u.dead && w.players[u.owner].team === team) out.push({ x: u.x, y: u.y, r: sensorOf(u) })
+  for (const b of w.beacons) if (b.owner === team) out.push({ x: b.x, y: b.y, r: BEACON_SENSOR })
+  return out
 }
 
 /**
@@ -2113,6 +2133,7 @@ export function cantSite(w: World, owner: Owner, node: number, id: string): stri
   if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && sees(w, owner, u) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < sq(SURVEY_RADIUS))) return 'Enemy ships are in the way'
   const t = UNIT[id]
   if (!t || t.faction !== p.faction || (t.tier !== 'mine' && t.tier !== 'defense')) return 'That can\'t be built on ore'
+  if (t.tier === 'defense' && !oreGuns(w)) return 'Defense platforms on ore are off in this battle'
   if (p.credits < t.cost) return 'Not enough credits'
   return null
 }
@@ -3130,8 +3151,8 @@ function pickTarget(w: World, u: Unit, r: number, ok: (e: Unit) => boolean = () 
   return best
 }
 
-function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlace = false) {
-  const turn = u.t.turn * (u.slow > 0 ? 0.5 : 1)
+function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlace = false, turnMul = 1) {
+  const turn = u.t.turn * (u.slow > 0 ? 0.5 : 1) * turnMul
   const ang = M.atan2(ty - u.y, tx - u.x)
   const diff = wrap(ang - u.a)
   u.a = wrap(u.a + clamp(diff, -turn * dt, turn * dt))
@@ -3702,13 +3723,10 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else steer(u, u.x + M.cos(s.a) * 100, u.y + M.sin(s.a) * 100, 0, dt, true)
   } else if (ward) keepStation(w, u, ward, max, dt)
   else {
-    // Idle: fighters circle their spot, everything else drifts back to it and waits.
+    // Idle: fighters circle their spot calmly, everything else drifts back to it and waits.
     const dist = M.hypot(u.ax - u.x, u.ay - u.y)
-    if (fighter) {
-      const ang = w.time * 0.9 + u.id
-      const r = 70 + (u.id % 4) * 18
-      steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
-    } else if (dist > 30 + radius(t) * 0.3 && !asNearAsItGets(u, u.ax, u.ay)) {
+    if (fighter) loiter(u, u.ax, u.ay, max, dt, 1, parent)
+    else if (dist > 30 + radius(t) * 0.3 && !asNearAsItGets(u, u.ax, u.ay)) {
       unsettle(u)
       const wp = waypoint(w, u, u.ax, u.ay)
       const p = detour(w, u, wp.x, wp.y)
@@ -3793,6 +3811,35 @@ function moveUnit(w: World, u: Unit, dt: number) {
   }
   u.x = clamp(u.x, 20, w.w - 20)
   u.y = clamp(u.y, 20, w.h - 20)
+}
+
+/**
+ * Strike craft with nothing to do (no orders, no target, parked round a carrier, a waiting ship or
+ * their spot) hold station: a slow, wide circle round (cx, cy) at IDLE_PACE of full speed with
+ * gentle turns (IDLE_TURN), each craft on its own radius (`size` scales it) and going round the way
+ * its id gives. Further out than a couple of radii they come back quicker (RETURN_PACE at most).
+ * Round a carrier under way (`with`) the circle moves with it and they add its pace to theirs, so
+ * the wing keeps up. The moment they have an order or a target moveUnit's other branches fly them
+ * at full speed again.
+ */
+export const IDLE_PACE = 0.45
+export const IDLE_TURN = 0.5
+const RETURN_PACE = 0.8
+function loiter(u: Unit, cx: number, cy: number, max: number, dt: number, size = 1, with_?: Unit) {
+  const r = (130 + (u.id % 4) * 26) * size
+  const gv = with_ ? with_.v : 0
+  if (gv > 1) {
+    cx += M.cos(with_!.a) * gv * 0.5
+    cy += M.sin(with_!.a) * gv * 0.5
+  }
+  const d = M.hypot(u.x - cx, u.y - cy)
+  // Aim a little ahead round the circle from where the craft is: it flies a smooth orbit at its
+  // own pace, drawn back onto the ring from inside or out, rather than chasing a point round.
+  const way = u.id % 2 ? 1 : -1
+  const ang = M.atan2(u.y - cy, u.x - cx) + way * 0.6
+  const back = clamp((d - r * 1.6) / (r * 2), 0, 1)
+  const pace = Math.min(max, max * (IDLE_PACE + (RETURN_PACE - IDLE_PACE) * back) + gv)
+  steer(u, cx + M.cos(ang) * r, cy + M.sin(ang) * r, pace, dt, false, IDLE_TURN + (1 - IDLE_TURN) * back)
 }
 
 const BOLT_SPEED: Record<WeaponKind, number> = { laser: 1100, flak: 1250, turbo: 850, missile: 480, ion: 700 }
@@ -4117,10 +4164,10 @@ function survey(w: World, dt: number) {
   }
 }
 
-/** What each team can see: anything within sensor range of one of its ships or structures. */
+/** What each team can see: anything within sensor range of one of its ships or structures, or of
+ * a beacon it holds (see eyesOf). */
 function sight(w: World) {
-  const eyes: Unit[][] = Array.from({ length: w.teams }, () => [])
-  for (const u of w.units) if (!u.dead) eyes[w.players[u.owner].team].push(u)
+  const eyes = Array.from({ length: w.teams }, (_, t) => eyesOf(w, t))
   for (const u of w.units) {
     if (u.dead) continue
     const own = w.players[u.owner].team
@@ -4137,8 +4184,7 @@ function sight(w: World) {
       }
       let s = false
       for (const e of eyes[t]) {
-        const r = sensorOf(e)
-        if (d2(u.x, u.y, e.x, e.y) < r * r) {
+        if (d2(u.x, u.y, e.x, e.y) < e.r * e.r) {
           s = true
           break
         }
@@ -4413,6 +4459,8 @@ function keepStation(w: World, u: Unit, g: Unit, max: number, dt: number) {
   const ca = M.cos(g.a)
   const sa = M.sin(g.a)
   if (t.tier === 'fighter') {
+    // The ship waiting: they hold station over it as idle craft do, slow and wide.
+    if (g.v < 4) return loiter(u, s.x, s.y, max, dt, 0.6)
     const ang = w.time * 1.2 + u.id
     const r = 40 + (u.id % 4) * 14
     steer(u, s.x + M.cos(ang) * r + ca * g.v * 0.5, s.y + M.sin(ang) * r + sa * g.v * 0.5, Math.min(max, max * 0.6 + g.v), dt)
@@ -5177,6 +5225,7 @@ export function stateHash(w: World): number {
     }
   }
   int(w.defense ?? -1)
+  int(oreGuns(w) ? 1 : 0)
   int(w.ruins?.length ?? -1)
   int(w.shots.length)
   for (const s of w.shots) {

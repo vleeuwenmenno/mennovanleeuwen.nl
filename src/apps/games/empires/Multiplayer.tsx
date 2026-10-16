@@ -4,7 +4,7 @@ import { DIFFICULTY, PROFILES, profileOf } from './ai'
 import { CREDIT_STEPS, DEFENSE_DEFAULT, FACTION_IDS, FACTIONS } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
-import { AiPicker, DefenseOptions, GenControls, LaunchBar, MapBlurb, MapLegend, MapPicker, MapPreview, Modal, ReinforceOptions, slotColor, type Slot } from './Menus'
+import { AiPicker, DefenseOptions, OreDefenseOptions, GenControls, LaunchBar, MapBlurb, MapLegend, MapPicker, MapPreview, Modal, ReinforceOptions, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
@@ -292,7 +292,7 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
     sound.click()
     net.send({ t: 'slot', i, patch })
   }
-  const setup = (m: { map?: string; gen?: MpLobby['gen']; credits?: number; reinforce?: Partial<Reinforce>; stations?: number }) => {
+  const setup = (m: { map?: string; gen?: MpLobby['gen']; credits?: number; reinforce?: Partial<Reinforce>; stations?: number; oreDefense?: boolean }) => {
     sound.click()
     net.send({ t: 'setup', ...m })
   }
@@ -350,6 +350,10 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
               <div className="ew-setting">
                 <h5>Defense stations</h5>
                 <DefenseOptions value={lobby.stations ?? DEFENSE_DEFAULT} onChange={host ? (n) => setup({ stations: n }) : undefined} />
+              </div>
+              <div className="ew-setting">
+                <h5>Defense platforms on ore</h5>
+                <OreDefenseOptions value={lobby.oreDefense === true} onChange={host ? (on) => setup({ oreDefense: on }) : undefined} />
               </div>
               {gen && (
                 <div className="ew-setting">

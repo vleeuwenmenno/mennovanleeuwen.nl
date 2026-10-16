@@ -12,10 +12,13 @@
 // the same way (its hash printed apart, so the first stays comparable), then six admirals, three
 // against three, on the first six-spawn map (a hash of its own too), and then a battle started rich,
 // so the admirals put up defense stations, upgrade them and fit their modules early, frozen while
-// they stand.
+// they stand, and one with defense platforms on ore turned on (off in a new lobby), where every
+// player puts one on the ore nearest its station at the start (the admirals fill their claims with
+// mines first), frozen with them standing.
 
 import { MAPS, type MapDef } from '../src/apps/games/empires/maps.ts'
-import { STEP, defensesOf, newWorld, stateHash, tick, type World } from '../src/apps/games/empires/sim.ts'
+import { STEP, cmdSite, defensesOf, newWorld, stateHash, tick, type World } from '../src/apps/games/empires/sim.ts'
+import { FACTIONS } from '../src/apps/games/empires/data.ts'
 import { PROFILE_IDS, newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { outdatedSnapshot, restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import type { FactionId } from '../src/apps/games/empires/data.ts'
@@ -27,9 +30,12 @@ const seatsOf = (sides: FactionId[], m: MapDef = map): Seat[] => m.spawns.map((_
 
 type Copy = { w: World; brains: Brain[] }
 /** How a battle is set up: its map, starting credits, and each seat's profile (PROFILE_IDS, by seat). */
-type Opts = { m?: MapDef; credits?: number; profiles?: number[] }
-const make = (seats: Seat[], { m = map, credits, profiles = [0, 2, 1, 1] }: Opts = {}): Copy => ({
-  w: newWorld(m, seats, { seed: 4242, ...(credits ? { credits } : {}) }),
+type Opts = { m?: MapDef; credits?: number; profiles?: number[]; oreDefense?: boolean
+  /** Orders of the check's own, the same in every copy at tick `t` (before the admirals think). */
+  script?: (w: World, t: number) => void
+}
+const make = (seats: Seat[], { m = map, credits, profiles = [0, 2, 1, 1], oreDefense }: Opts = {}): Copy => ({
+  w: newWorld(m, seats, { seed: 4242, ...(credits ? { credits } : {}), ...(oreDefense ? { oreDefense } : {}) }),
   // Every AI profile plays in it: defensive and balanced on one side, offensive and balanced on the other.
   brains: seats.map((_, i) => newBrain(i, i % 2 ? 'hard' : 'medium', PROFILE_IDS[profiles[i % 4]])),
 })
@@ -61,6 +67,7 @@ function lockstep(seats: Seat[], mins: number, label: string, opts: Opts & { fre
   const freezeAt = Math.floor(ticks * freeze)
   const started = performance.now()
   for (let t = 1; t <= ticks && a.w.winner === -1; t++) {
+    for (const x of c ? [a, b, c] : [a, b]) opts.script?.(x.w, t)
     step(a, forts)
     step(b)
     if (c) step(c)
@@ -108,6 +115,27 @@ if (!failed && (!f.built || !f.ups || !f.fitted || !f.frozen)) {
   console.error('the battle with defense stations never built, upgraded and fitted them before the freeze')
   failed = true
 }
+// Defense platforms on ore: the admirals build them when the lobby has them on, and the copies agree.
+const orePlatform = (w: World, t: number) => {
+  if (t !== 30) return
+  // Each player surveys the ore nearest its station at once and puts a defense platform on it.
+  w.players.forEach((p, o) => {
+    const st = w.byId.get(p.station)
+    if (!st) return
+    const n = w.nodes.filter((x) => !x.site).sort((x, y) => (x.x - st.x) ** 2 + (x.y - st.y) ** 2 - ((y.x - st.x) ** 2 + (y.y - st.y) ** 2))[0]
+    if (!n) return
+    n.owner = n.claim = p.team
+    n.progress = 1
+    cmdSite(w, o, n.id, `${FACTIONS[p.faction].prefix}-defense${['', '-flak', '-gun'][o % 3]}`)
+  })
+}
+const ore = lockstep(seatsOf(['republic', 'droid', 'swarm', 'droid']), Math.max(2, minutes / 2), 'with defense platforms on ore', { credits: 4000, profiles: [0, 2, 1, 1], oreDefense: true, freeze: 0.7, script: orePlatform })
+const plats = ore.w.units.filter((u) => !u.dead && u.t.tier === 'defense' && !u.t.orbital).length
+console.log(`defense platforms on ore: ${plats} standing`)
+if (!failed && !plats) {
+  console.error('the battle with defense platforms on ore never built one')
+  failed = true
+}
 // Battles saved before there was one ship size: one fought at Big sizes (snapshot version 1 with
 // `sizes: 'big'`) carries on; one fought at Classic sizes is refused, and said to be outdated.
 const saved = JSON.parse(snapshotWorld(a.w))
@@ -122,4 +150,4 @@ if (restoreWorld(asOld()) || restoreWorld(asOld('classic')) || !outdatedSnapshot
   failed = true
 }
 if (failed) process.exit(1)
-console.log('in sync (defense stations built, upgraded and fitted); old saves: Big carries on, Classic is refused')
+console.log('in sync (defense stations built, upgraded and fitted; defense platforms on ore); old saves: Big carries on, Classic is refused')
