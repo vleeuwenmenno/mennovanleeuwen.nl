@@ -2018,6 +2018,57 @@ The multiplayer client and server check each other's `PROTOCOL` version
 from another version would play another battle, so the server turns it away and the game asks for a
 reload.
 
+## Empires At War maps
+
+Skirmishes and multiplayer battles are fought on fifteen hand-made maps
+([`maps.ts`](src/apps/games/empires/maps.ts)) or on a generated one, for 2 to 6 players. Every
+map is symmetric: everything is placed for one side and copied to the others, so every spawn gets
+the same ore, beacons, terrain and lanes. The symmetries: `point` (two sides, turned half way
+round), `quad` (four corners, mirrored both ways), `tri`, `penta` and `hex` (three, five and six
+sides turned round the middle) and `tripair` (six: three pairs of mirror twins turned a third of
+the way round). Teams are always two sides, so a six-spawn map plays 3v3, 2v4, 1v5, a duel with
+empty spawns, or anything in between.
+
+A map's size class goes by its area at the battlefield's scale (`mapSize` in `Menus.tsx`, in
+millions of square units divided by `MAP_SCALE`²): **Small** under 30, **Medium** under 50,
+**Large** under 90, **Huge** from 90.
+
+| Map | Size | Spawns | The idea |
+| --- | --- | --- | --- |
+| Cinder Gate | Small | 2 | A tight duel over four ore, the middle beacon in a nebula |
+| Hadrel Narrows | Small | 2 | An asteroid wall with two narrow gaps, a beacon in each, and a derelict in the wall |
+| Tessaly Knot | Small | 3 | Walls between each pair of stations; every road runs through the one beacon in the middle |
+| Kessar Belt | Medium | 2 | The classic duel: three beacons down the middle |
+| Orvane Lanes | Medium | 2 | Three lanes split by long walls, open only at a crossroads in the middle |
+| Twin Reefs | Medium | 4 | Four lean corners, reefs in every quarter |
+| Ithra Archipelago | Medium | 4 | Four ore islands ringed by asteroids, each open towards its own corner |
+| Trinity Rift | Large | 3 | Three stations round a contested core in a nebula |
+| Shroud Expanse | Large | 3 | The richest ore in the clouds on the rim |
+| Vanth Crossing | Large | 4 | Four corners, five beacons |
+| Quintara Crown | Large | 5 | A crown of asteroids with a beacon in each gap, the richest ore inside |
+| Serrat Halo | Large | 6 | A ring round a dead heart of asteroids; neighbours share the beacons between them |
+| Velkar Core | Huge | 6 | A wide open field round a rich core ringed by six beacons |
+| Draxis Spiral | Huge | 6 | Asteroid arms wound like a pinwheel: every road to the core curves past a neighbour |
+| Tarsis Triad | Huge | 6 | Three pairs of twin stations sharing a beacon, three nebula fronts between the pairs |
+
+The huge maps are laid out for a duel on opposite spawns as well as for 3v3: the empty spawns'
+ore is there for the taking, and the beacons ring the middle rather than the stations. The
+generator builds maps for 2 to 6 players (five and six turned round the middle, like three).
+
+`pnpm empires:maps` plays the maps out with AI admirals, to see that a map is fair and that the AI
+expands, fights and finishes on it: duels on spawns as far apart as the map has and battles with
+every spawn taken (sides alternating round the map), each played from both sides. It reports how
+many games ended and how long they took, how often each spawn's side won, and the ore, beacons,
+expansions, ships and kills per admiral. `MAPS=hadrel,orvane pnpm empires:tournament` runs the AI
+profile tournament on those maps instead of the two-spawn ones. AI-only battles between equal admirals on the
+large and huge maps often run past 40 minutes without a winner, duels most of all (as on Vanth
+Crossing): with ore to spare both sides reach the fleet limit, and their waves reach the enemy
+station a few ships at a time.
+
+```sh
+pnpm empires:maps 40 3 velkar,draxis,tarsis      # minutes, seeds, maps (default all), layouts (1v1,near,full), difficulty, profile
+```
+
 ## Empires At War battlefield scale
 
 Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battle feels:
@@ -2951,9 +3002,9 @@ The reverse proxy in front of the site has to pass WebSocket upgrades through (n
 `proxy_set_header Connection "upgrade"`; Caddy and Traefik do it by default).
 
 ```sh
-pnpm check:empires                                              # two copies of a battle stay identical
+pnpm check:empires                                              # two copies of a battle stay identical (four seats, then six)
 pnpm check:empires-ws ws://localhost:5173/api/empires/ws        # names, limits and lobbies (needs pnpm dev)
-pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave
+pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave (add a map id, e.g. tarsis, for six seats)
 pnpm check:empires-restart                                      # a battle through a server restart (starts its own servers)
 pnpm check:empires-rejoin                                       # stepping away: rejoining, votes, teammate takeover, timeout
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
@@ -2976,7 +3027,8 @@ pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/
 ```
 
 **The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
-middle of the map, the camera panning across); a skirmish reloaded from the tab's resume snapshot
+middle of the map, the camera panning across); six admirals on a huge map (Velkar Core), 40 craft
+each sent at the middle, seen zoomed all the way out and then panning across the fight; a skirmish reloaded from the tab's resume snapshot
 with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
 view (the battle screen must never scroll, and the panels laid out round each other must settle:
 no React update loop, few commits); the galactic conquest map of a new and a late
