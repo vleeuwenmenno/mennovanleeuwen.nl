@@ -178,6 +178,19 @@ check("a guest can't change the host's spawn", /host/.test(notHost.why), notHost
 host.send({ t: 'setup', map: 'vanth' })
 const bigger = (await until(guest, 'lobby', (m) => m.lobby.map === 'vanth')).lobby
 check('host switches to a 4-spawn map, players keep their seats', bigger.map === 'vanth' && bigger.slots.length === 4 && bigger.slots[1].name === `Guest ${tag}`, bigger)
+// Six spawns: a huge map, and a generated map for six, each with six seats, the new ones open and
+// alternating sides; then back to four.
+host.send({ t: 'setup', map: 'velkar' })
+const six = (await until(guest, 'lobby', (m) => m.lobby.map === 'velkar')).lobby
+check('host switches to a 6-spawn map: six seats, the new ones open on alternating sides', six.slots.length === 6 && six.slots[1].name === `Guest ${tag}` && six.slots.slice(4).every((s: Msg, i: number) => s.kind === 'open' && s.team === i % 2), six.slots)
+host.send({ t: 'setup', map: 'generated', gen: { players: 6, size: 'large', seed: 7 } })
+const genSix = (await until(guest, 'lobby', (m) => m.lobby.map === 'generated')).lobby
+check('a generated map for six players has six seats', genSix.slots.length === 6 && genSix.gen.players === 6, genSix.gen)
+host.send({ t: 'setup', map: 'generated', gen: { players: 9 } })
+const genBad = (await until(guest, 'lobby', (m) => m.lobby.map === 'generated' && m.lobby.gen.players !== 6)).lobby
+check('a player count the generator has no layout for falls back to two', genBad.slots.length === 2 && genBad.gen.players === 2, genBad.gen)
+host.send({ t: 'setup', map: 'vanth' })
+await until(guest, 'lobby', (m) => m.lobby.map === 'vanth')
 guest.send({ t: 'ready', on: true })
 const readied = (await until(host, 'lobby', (m) => m.lobby.slots[1].ready)).lobby
 check('guest gets ready', readied.slots[1].ready === true, readied)
@@ -222,8 +235,8 @@ host.send({ t: 'setup', stations: 5 })
 const odd = (await until(guest, 'lobby')).lobby
 check('a limit that is not one of the steps is ignored', odd.stations === 0, odd.stations)
 host.send({ t: 'setup', stations: 6 })
-const six = (await until(guest, 'lobby', (m) => m.lobby.stations === 6)).lobby
-check('the host sets 6', six.stations === 6, six.stations)
+const sixForts = (await until(guest, 'lobby', (m) => m.lobby.stations === 6)).lobby
+check('the host sets 6', sixForts.stations === 6, sixForts.stations)
 guest.send({ t: 'setup', stations: 1 })
 const notTheirs2 = await until(guest, 'error')
 check("a guest can't change the defense station limit", /host/.test(notTheirs2.why), notTheirs2)

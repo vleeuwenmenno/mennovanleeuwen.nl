@@ -16,7 +16,7 @@
 // 4. Path finding stays cheap: the time per path and per grid on the biggest map.
 
 import { FACTION_IDS, UNITS, isShip, type UnitType } from '../src/apps/games/empires/data.ts'
-import { MAP, MAPS, generateMap, inside, type MapDef, type MapRules, type MapSize } from '../src/apps/games/empires/maps.ts'
+import { MAP, MAPS, PLAYER_COUNTS, generateMap, inside, type MapDef, type MapRules, type MapSize } from '../src/apps/games/empires/maps.ts'
 import * as S from '../src/apps/games/empires/sim.ts'
 import { STEP, cmdMove, newWorld, radius, spawn, tick, type World } from '../src/apps/games/empires/sim.ts'
 import { findPath, navGrid, type NavGrid } from '../src/apps/games/empires/nav.ts'
@@ -133,7 +133,7 @@ for (const m of MAPS) {
 const SIZES: MapSize[] = ['small', 'medium', 'large']
 const generated: [string, World][] = []
 for (let seed = 1; seed <= 12; seed++)
-  for (const players of [2, 3, 4] as const) {
+  for (const players of PLAYER_COUNTS) {
     const amount = (['none', 'few', 'many'] as const)[seed % 3]
     const rules: MapRules = { seed, players, size: SIZES[(seed + players) % 3], resources: (['scarce', 'normal', 'rich'] as const)[seed % 3], beacons: 'auto', asteroidFields: amount, nebulas: (['many', 'few', 'none'] as const)[seed % 3], wrecks: 'few' }
     generated.push([`generated ${players}p ${rules.size} seed ${seed}`, worldOf(generateMap(rules))])

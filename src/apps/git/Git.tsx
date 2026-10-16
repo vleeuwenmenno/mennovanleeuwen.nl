@@ -3,15 +3,17 @@ import type { GitRepoList, RepoHit } from '../../data/gitTypes'
 import { signIn, useAccount } from '../../os/account'
 import { localPref } from '../../os/localPref'
 import { useIsMobile } from '../../os/useIsMobile'
-import { useWM, type WinState } from '../../os/wm'
+import { setCloseGuard, useWM, type WinState } from '../../os/wm'
 import { forget, useGet } from './data'
+import { confirmLeave, hasUnsent, itemKey } from './Editor'
 import { repoApi, routeToView, sameRepo, stackFor, viewToRoute, type At, type GitView } from './route'
 import { CommitView, IssueView, PullView, RepoList, RepoView, type Nav } from './views'
 import './git.css'
 
 // The Git app: your repositories on GitHub and linked Gitea/Forgejo instances, and per repository
-// its README, pull requests (conversation, commits, changed files), issues and commits. It only
-// reads (server/git.ts); writing, reviewing and the rest are links out to the host's own pages.
+// its README, pull requests (conversation, commits, changed files), issues and commits
+// (server/git.ts). It writes comments, and edits the descriptions and comments you wrote
+// (Timeline.tsx, Editor.tsx); reviewing, merging and the rest are links out to the host's pages.
 //
 // Wide windows keep the repository list on the left; narrow ones and phones show one view at a
 // time, with Back. A window opened with props.route (src/apps/git/route.ts) starts on that
@@ -25,6 +27,13 @@ function initialStack(route: string | undefined): GitView[] {
   const v = routeToView(route) ?? routeToView(lastRepo.get())
   return v ? stackFor(v) : [{ v: 'list' }]
 }
+
+type ItemView = Extract<GitView, { v: 'pull' | 'issue' }>
+const isItem = (v: GitView): v is ItemView => v.v === 'pull' || v.v === 'issue'
+/** One pull request or issue, whichever view of it (an issue number may turn out to be a pull request). */
+const sameItem = (a: ItemView, b: GitView) => isItem(b) && sameRepo(a, b) && a.number === b.number
+/** The pull requests and issues in a stack with text that wasn't sent. */
+const unsentItems = (stack: GitView[]) => stack.filter(isItem).filter((v) => hasUnsent(itemKey(v, v.number)))
 
 const crumb = (v: GitView): string => (v.v === 'list' ? 'Repositories' : v.v === 'repo' ? `${v.owner}/${v.repo}` : v.v === 'pull' ? `PR #${v.number}` : v.v === 'issue' ? `Issue #${v.number}` : v.sha.slice(0, 7))
 
@@ -43,9 +52,31 @@ export function Git({ win }: { win: WinState }) {
   }, [account.status])
   const narrow = mobile || narrowWin
 
-  const [stack, setStack] = useState<GitView[]>(() => initialStack(win.props.route))
+  const [stack, setStackNow] = useState<GitView[]>(() => initialStack(win.props.route))
   const top = stack[stack.length - 1]
   const main = useRef<HTMLDivElement>(null)
+
+  // Moving around: leaving a pull request or issue with a comment or edit that wasn't sent asks
+  // first (the draft stays, see Editor.tsx). Going deeper (a commit from its conversation) or to
+  // another of its tabs keeps it on the stack, so that doesn't ask.
+  const stackRef = useRef(stack)
+  stackRef.current = stack
+  const setStack = useCallback(async (next: GitView[] | ((s: GitView[]) => GitView[])) => {
+    const cur = stackRef.current
+    const to = typeof next === 'function' ? next(cur) : next
+    const left = unsentItems(cur).filter((v) => !to.some((w) => sameItem(v, w)))
+    if (left.length && !(await confirmLeave(`#${left[0].number}`))) return
+    if (stackRef.current !== cur) return
+    stackRef.current = to
+    setStackNow(to)
+  }, [])
+  useEffect(() => {
+    setCloseGuard(win.pid, async () => {
+      const left = unsentItems(stackRef.current)
+      return !left.length || confirmLeave(`#${left[0].number}`)
+    })
+    return () => setCloseGuard(win.pid, null)
+  }, [win.pid])
 
   // Opened again with a route (Spotlight's "Open in Git"): go there.
   const opened = useRef(win.props.t)
@@ -53,8 +84,8 @@ export function Git({ win }: { win: WinState }) {
     if (win.props.t === opened.current) return
     opened.current = win.props.t
     const v = routeToView(win.props.route)
-    if (v) setStack(stackFor(v))
-  }, [win.props.route, win.props.t])
+    if (v) void setStack(stackFor(v))
+  }, [win.props.route, win.props.t, setStack])
 
   useEffect(() => {
     if (top.v !== 'list') lastRepo.set(viewToRoute({ v: 'repo', src: top.src, owner: top.owner, repo: top.repo, tab: 'overview' }))
@@ -65,21 +96,28 @@ export function Git({ win }: { win: WinState }) {
   const list = useGet<GitRepoList>(signedIn ? '/api/repos' : null)
   const sources = list.data?.sources
 
+  const user = account.user
   const nav: Nav = useMemo(
     () => ({
-      go: (v) => setStack((s) => [...s, v]),
-      replace: (v) => setStack((s) => [...s.slice(0, -1), v]),
+      go: (v) => void setStack((s) => [...s, v]),
+      replace: (v) => void setStack((s) => [...s.slice(0, -1), v]),
       hostLabel: (src) => sources?.find((s) => s.id === src)?.label ?? (src === 'github' ? 'GitHub' : 'the code host'),
       repoWeb: (at) => `${sources?.find((s) => s.id === at.src)?.web ?? 'https://github.com'}/${at.owner}/${at.repo}`,
+      login: (src) => sources?.find((s) => s.id === src)?.login ?? (src === 'github' ? (user?.login ?? null) : null),
+      // GitHub's default sign-in only reads; "Allow private" (repo) can write. A linked
+      // instance's token says no itself if it lacks write:issue, and the editor shows that.
+      canWrite: (src) =>
+        src !== 'github' || user?.githubScopes.some((s) => s === 'repo' || s === 'public_repo') ? { ok: true } : { ok: false, hint: 'Commenting needs write access to GitHub: allow private repositories in' },
+      openSettings: () => wm.open('settings', { section: 'instances', t: String(Date.now()) }),
     }),
-    [sources],
+    [sources, user, wm, setStack],
   )
-  const back = useCallback(() => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)), [])
+  const back = useCallback(() => void setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)), [setStack])
   const openRepo = (r: RepoHit) => {
     const [owner, repo] = r.fullName.split('/')
     const at: At = { src: r.source, owner, repo }
     // Already open: back to its overview.
-    setStack(stackFor({ v: 'repo', ...at, tab: top.v === 'repo' && sameRepo(top, at) ? top.tab : 'overview' }))
+    void setStack(stackFor({ v: 'repo', ...at, tab: top.v === 'repo' && sameRepo(top, at) ? top.tab : 'overview' }))
   }
   const reloadList = () => {
     forget('/api/repos')
@@ -147,7 +185,7 @@ export function Git({ win }: { win: WinState }) {
                     </span>
                   ) : narrow || i > 0 ? (
                     <span key={i}>
-                      <button className="git-crumb" onClick={() => setStack(stack.slice(0, i + 1))}>
+                      <button className="git-crumb" onClick={() => void setStack(stack.slice(0, i + 1))}>
                         {crumb(v)}
                       </button>
                       <span className="git-crumb-sep" aria-hidden>

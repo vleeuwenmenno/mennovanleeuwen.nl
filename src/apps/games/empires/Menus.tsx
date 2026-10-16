@@ -5,10 +5,10 @@ import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { NAME_MAX, nameProblem, tidyName } from './names'
 import { REJOIN_WAIT, mpName } from './net'
-import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
+import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, PLAYER_COUNTS, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Players, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
-import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
+import { empiresMapSort, empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresMapSort as MapSort } from '../prefs'
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Reinforce, type World } from './sim'
 import { MAP_SCALE } from './scale'
@@ -1055,24 +1055,28 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
         g.arc(ox + r.x * s, oy + r.y * s, Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
         g.fill()
       }
+      // Markers keep their size, except in a small thumbnail of a big map, where they'd run together:
+      // there they shrink as the map grows past a medium one, down to half.
+      const big = cw > 260
+      const k = big ? 1 : Math.max(0.5, Math.min(1, (7600 * MAP_SCALE) / Math.max(map.w, map.h)))
       g.fillStyle = '#f2c14a'
-      for (const h of map.wrecks) g.fillRect(ox + h.x * s - 2.5, oy + h.y * s - 2.5, 5, 5)
+      for (const h of map.wrecks) g.fillRect(ox + h.x * s - 2.5 * k, oy + h.y * s - 2.5 * k, 5 * k, 5 * k)
       g.fillStyle = '#4fe3d8'
       for (const n of map.ore) {
         const x = ox + n.x * s
         const y = oy + n.y * s
         g.beginPath()
-        g.moveTo(x, y - 4)
-        g.lineTo(x + 3, y)
-        g.lineTo(x, y + 4)
-        g.lineTo(x - 3, y)
+        g.moveTo(x, y - 4 * k)
+        g.lineTo(x + 3 * k, y)
+        g.lineTo(x, y + 4 * k)
+        g.lineTo(x - 3 * k, y)
         g.fill()
       }
       g.strokeStyle = '#c8d4ee'
       g.lineWidth = 1.5
       for (const b of map.beacons) {
         g.beginPath()
-        g.arc(ox + b.x * s, oy + b.y * s, 5, 0, Math.PI * 2)
+        g.arc(ox + b.x * s, oy + b.y * s, 5 * k, 0, Math.PI * 2)
         g.stroke()
       }
       // Start areas, under the spawn markers; the active one solid, the box being drawn on top.
@@ -1099,7 +1103,6 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
         g.strokeRect(ox + Math.min(d.x0, d.x1) * s, oy + Math.min(d.y0, d.y1) * s, Math.abs(d.x1 - d.x0) * s, Math.abs(d.y1 - d.y0) * s)
         g.setLineDash([])
       }
-      const big = cw > 260
       map.spawns.forEach((p, i) => {
         const slot = slots?.[i]
         if (areas && slot?.kind === 'closed') return
@@ -1108,7 +1111,7 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
         const at = !a || (p.x >= a.x && p.y >= a.y && p.x <= a.x + a.w && p.y <= a.y + a.h) ? p : { x: a.x + a.w / 2, y: a.y + a.h / 2 }
         const x = ox + at.x * s
         const y = oy + at.y * s
-        const r = big ? 11 : 6
+        const r = big ? 11 : 6 * k
         g.fillStyle = slot ? slotColor(slot) : '#c8d4ee'
         g.globalAlpha = slot?.kind === 'closed' ? 0.5 : 1
         g.beginPath()
@@ -1217,54 +1220,242 @@ const AMOUNTS: [Amount, string][] = [
 export function mapSize(m: MapDef) {
   // Measured against the battlefield's scale, so a map keeps its class whatever MAP_SCALE is.
   const area = (m.w * m.h) / 1e6 / MAP_SCALE ** 2
-  const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : 'Large'
+  const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : area < 90 ? 'Large' : 'Huge'
   return { cls, dims: `${(m.w / 1000).toFixed(1)}k × ${(m.h / 1000).toFixed(1)}k` }
 }
 
-/** A map in the picker: preview, size, what's on it, and its description. */
-export function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; blurb: string; on: boolean; onPick: () => void }) {
+/** One map in the picker's list: a thumbnail, its name and terrain, a one-line description, and
+ * its size, players, beacons and ore in columns. */
+function MapRow({ m, title, blurb, on, sel, onPick, onFocus }: { m: MapDef; title: string; blurb: string; on: boolean; sel: boolean; onPick: () => void; onFocus: () => void }) {
   const size = mapSize(m)
-  const terrain = [m.fields.length && 'asteroid fields', m.nebulas.length && 'nebulas'].filter(Boolean).join(' and ')
+  const terrain = [m.fields.length > 0 && 'Fields', m.nebulas.length > 0 && 'Nebulas', m.wrecks.length > 0 && 'Wrecks'].filter(Boolean) as string[]
   return (
-    <button className={`ew-mapcard ${on ? 'is-on' : ''}`} onClick={onPick} aria-pressed={on}>
+    <button className={`ew-maprow ${on ? 'is-on' : ''} ${sel ? 'is-sel' : ''}`} onClick={onPick} onFocus={onFocus} role="option" aria-selected={sel} aria-current={on || undefined} tabIndex={sel ? 0 : -1}>
       <MapPreview map={m} className="is-thumb" />
-      <span className="ew-mapcard-head">
-        <strong>{title}</strong>
-        <em data-tip={`${size.dims} units`}>{size.cls}</em>
+      <span className="ew-maprow-main">
+        <span className="ew-maprow-name">
+          <strong>{title}</strong>
+          {on && <em className="is-now">Current</em>}
+          {terrain.map((t) => (
+            <em key={t}>{t}</em>
+          ))}
+        </span>
+        <small className="ew-maprow-blurb">{blurb}</small>
+        <small className="ew-maprow-short">
+          {m.spawns.length} players · {size.cls}
+        </small>
       </span>
-      <span className="ew-mapcard-stats">
-        <b>{m.spawns.length} players</b>
-        <span>{size.dims}</span>
-        <span>{m.ore.length} ore</span>
-        <span>{m.beacons.length} beacons</span>
-        {m.wrecks.length > 0 && <span>{m.wrecks.length} wrecks</span>}
+      <span className="ew-maprow-size" data-tip={`${size.dims} units`}>
+        <b>{size.cls}</b>
+        <small>{size.dims}</small>
       </span>
-      {terrain && <small className="ew-mapcard-terrain">With {terrain}</small>}
-      <small className="ew-mapcard-blurb">{blurb}</small>
+      <span className="ew-maprow-n">{m.spawns.length}</span>
+      <span className="ew-maprow-n">{m.beacons.length}</span>
+      <span className="ew-maprow-n">{m.ore.length}</span>
     </button>
   )
 }
 
-/** What the marks on the preview are: only the kinds this map has. */
-export function MapLegend({ map }: { map: MapDef }) {
-  const items: [string, string][] = [
-    ['spawn', 'Spawn'],
-    ['ore', 'Ore'],
-    ['beacon', 'Beacon'],
-    ...(map.wrecks.length ? ([['wreck', 'Wreck']] as [string, string][]) : []),
+const SORTS: [MapSort['by'], string][] = [
+  ['name', 'Name'],
+  ['size', 'Size'],
+  ['players', 'Players'],
+]
+const mapArea = (m: MapDef) => m.w * m.h
+
+/**
+ * The map picker of both lobbies: the maps as a list to search (name and description) and sort
+ * (name, size or players; the last sort is remembered in this browser), with quick filters by
+ * player count. The generated map stays pinned at the foot, whatever the search. Arrow keys move
+ * through the list and Enter picks; the search box takes the keys while it has the focus.
+ */
+export function MapPicker({ current, generated, generatedBlurb, onPick, onClose }: { current: string; generated: MapDef; generatedBlurb: string; onPick: (id: string) => void; onClose: () => void }) {
+  const coarse = useCoarse()
+  const sort = empiresMapSort.use()
+  const [query, setQuery] = useState('')
+  const [players, setPlayers] = useState<number | null>(null)
+  const counts = useMemo(() => [...new Set(MAPS.map((m) => m.spawns.length))].sort((a, b) => a - b), [])
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const shown = MAPS.filter((m) => (players === null || m.spawns.length === players) && words.every((w) => `${m.name} ${m.blurb}`.toLowerCase().includes(w))).sort((a, b) => {
+    const by = sort.by === 'size' ? mapArea(a) - mapArea(b) : sort.by === 'players' ? a.spawns.length - b.spawns.length : 0
+    return (by || a.name.localeCompare(b.name)) * (sort.desc ? -1 : 1)
+  })
+  // Every row, the generated map last: what the arrow keys walk through.
+  const ids = [...shown.map((m) => m.id), GENERATED]
+  // The selected row, by its map (null: the first), so a new sort keeps it and a new search starts at the top.
+  const [selId, setSelId] = useState<string | null>(current)
+  const at = selId === null ? 0 : Math.max(0, ids.indexOf(selId))
+  const list = useRef<HTMLDivElement>(null)
+  const search = useRef<HTMLInputElement>(null)
+  // The current map in view when the picker opens; the selected one as it moves.
+  useEffect(() => {
+    list.current?.querySelector(`[data-id="${ids[at]}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [at, ids.join()])
+  // Typing on a desktop goes straight to the search; a phone's keyboard waits for a tap.
+  useEffect(() => {
+    if (!coarse) search.current?.focus({ preventScroll: true })
+  }, [coarse])
+  const move = (d: number, focusRow: boolean) => {
+    const next = Math.max(0, Math.min(ids.length - 1, at + d))
+    setSelId(ids[next])
+    if (focusRow) list.current?.querySelector<HTMLElement>(`[data-id="${ids[next]}"] > button`)?.focus()
+  }
+  const keys = (e: React.KeyboardEvent, inRows: boolean) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      move(e.key === 'ArrowDown' ? 1 : -1, inRows)
+    } else if (e.key === 'Enter' && !inRows) {
+      e.preventDefault()
+      onPick(ids[at])
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      onClose()
+    }
+  }
+  const setSort = (by: MapSort['by']) => empiresMapSort.set((s) => ({ by, desc: s.by === by ? !s.desc : false }))
+  const clear = () => {
+    setQuery('')
+    setPlayers(null)
+    setSelId(null)
+    search.current?.focus({ preventScroll: true })
+  }
+  const filtered = !!words.length || players !== null
+  return (
+    <Modal title="Choose a map" onClose={onClose} wide className="ew-mappicker-modal">
+      <div className="ew-mappicker">
+        <div className="ew-mappicker-tools">
+          <label className="ew-mapsearch">
+            <Icon name="search" size={15} />
+            <input
+              ref={search}
+              type="search"
+              value={query}
+              placeholder="Search maps"
+              aria-label="Search maps by name or description"
+              spellCheck={false}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                setSelId(null)
+              }}
+              onKeyDown={(e) => keys(e, false)}
+            />
+          </label>
+          <div className="ew-mappicker-opts">
+            <div className="ew-seg ew-mapfilter" role="group" aria-label="Players">
+              <button className={players === null ? 'is-on' : ''} aria-pressed={players === null} onClick={() => (setPlayers(null), setSelId(null))}>
+                All
+              </button>
+              {counts.map((n) => (
+                <button key={n} className={players === n ? 'is-on' : ''} aria-pressed={players === n} onClick={() => (setPlayers(players === n ? null : n), setSelId(null))} data-tip={`Maps for ${n} players`}>
+                  {n}P
+                </button>
+              ))}
+            </div>
+            <div className="ew-seg ew-mapsort" role="group" aria-label="Sort maps">
+              {SORTS.map(([by, label]) => {
+                const on = sort.by === by
+                return (
+                  <button key={by} className={on ? 'is-on' : ''} aria-pressed={on} onClick={() => setSort(by)} data-tip={on ? 'Click again to reverse' : `Sort by ${label.toLowerCase()}`}>
+                    {label}
+                    {on && <span aria-label={sort.desc ? 'descending' : 'ascending'}>{sort.desc ? ' ↓' : ' ↑'}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+        <div className="ew-maprow is-head" aria-hidden="true">
+          <span />
+          <span>Map</span>
+          <span>Size</span>
+          <span>Players</span>
+          <span>Beacons</span>
+          <span>Ore</span>
+        </div>
+        <div className="ew-maplist" ref={list} role="listbox" aria-label="Maps" onKeyDown={(e) => keys(e, true)}>
+          {/* The maps scroll; the generated map stays in view under them. */}
+          <div className="ew-maplist-maps" role="none">
+            {shown.map((m, i) => (
+              <div key={m.id} data-id={m.id} role="none">
+                <MapRow m={m} title={m.name} blurb={m.blurb} on={current === m.id} sel={at === i} onPick={() => onPick(m.id)} onFocus={() => setSelId(m.id)} />
+              </div>
+            ))}
+            {!shown.length && (
+              <div className="ew-mapempty">
+                <p>
+                  No maps match{words.length ? ` “${query.trim()}”` : ''}
+                  {players !== null ? ` with ${players} players` : ''}.
+                </p>
+                <button className="ew-chip" onClick={clear}>
+                  {words.length ? 'Clear search' : 'Show all maps'}
+                </button>
+              </div>
+            )}
+          </div>
+          <p className="ew-maplist-sep">{filtered && shown.length ? 'Or build your own' : 'Build your own'}</p>
+          <div data-id={GENERATED} role="none">
+            <MapRow m={generated} title="Generated" blurb={generatedBlurb} on={current === GENERATED} sel={at === shown.length} onPick={() => onPick(GENERATED)} onFocus={() => setSelId(GENERATED)} />
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/** What the marks on the preview are: only the kinds this map has. With `counts`, how many of each
+ * there are (the lobbies' map panel, where this is the map's facts too). */
+export function MapLegend({ map, counts = false }: { map: MapDef; counts?: boolean }) {
+  const items: [string, string, number?][] = [
+    ['spawn', 'Spawn', map.spawns.length],
+    ['ore', 'Ore', map.ore.length],
+    ['beacon', 'Beacon', map.beacons.length],
+    ...(map.wrecks.length ? ([['wreck', 'Wreck', map.wrecks.length]] as [string, string, number][]) : []),
     ['rock', 'Rocks'],
     ...(map.fields.length ? ([['field', 'Asteroid field']] as [string, string][]) : []),
     ...(map.nebulas.length ? ([['nebula', 'Nebula']] as [string, string][]) : []),
   ]
   return (
-    <ul className="ew-legend">
-      {items.map(([k, label]) => (
+    <ul className={`ew-legend ${counts ? 'has-counts' : ''}`}>
+      {items.map(([k, label, n]) => (
         <li key={k}>
           <i className={`is-${k}`} />
-          {label}
+          {counts && n !== undefined ? (
+            <>
+              <b>{n}</b> {n === 1 || label === 'Ore' ? label : `${label}s`}
+            </>
+          ) : (
+            label
+          )}
         </li>
       ))}
     </ul>
+  )
+}
+
+/** The map's description and size, under its preview in the lobbies. */
+export function MapBlurb({ map }: { map: MapDef }) {
+  const size = mapSize(map)
+  return (
+    <p className="ew-mapblurb">
+      {map.blurb} <span className="ew-small">{size.cls} map, {size.dims}.</span>
+    </p>
+  )
+}
+
+/** The foot of a lobby, always in view: what the battle is waiting for (or that it's ready), and
+ * the button that starts it (or says we're ready). */
+export function LaunchBar({ ok, note, summary, children }: { ok: boolean; note: string; summary?: string; children: ReactNode }) {
+  return (
+    <Frame className="ew-launchbar">
+      <div className={`ew-launch-note ${ok ? 'is-ok' : 'is-wait'}`} role="status">
+        <i className="ew-launch-dot" />
+        <span>
+          <span className="ew-launch-text">{note}</span>
+          {summary && <small className="ew-muted">{summary}</small>}
+        </span>
+      </div>
+      <div className="ew-launch-acts">{children}</div>
+    </Frame>
   )
 }
 
@@ -1297,7 +1488,7 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
       </div>
       <section>
         <h6>Layout</h6>
-        {field('Players', <Seg<2 | 3 | 4> label="Players" value={rules.players} options={[[2, '2'], [3, '3'], [4, '4']]} onChange={(v) => onChange({ players: v })} />)}
+        {field('Players', <Seg<Players> label="Players" value={rules.players} options={PLAYER_COUNTS.map((n): [Players, string] => [n, String(n)])} onChange={(v) => onChange({ players: v })} />)}
         {field('Size', <Seg label="Size" value={rules.size} options={[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]} onChange={(v) => onChange({ size: v })} />)}
       </section>
       <section>
@@ -1366,160 +1557,169 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   return (
     <div className="ew-root ew-deck ew-lobby" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
       <Tips />
-      <header className="ew-lobby-head">
-        <button onClick={() => (sound.click(), onBack())}>← Main menu</button>
-        <h2>Skirmish</h2>
-      </header>
-      <div className="ew-lobby-grid">
-        <Frame title="Players" className="ew-lobby-slots" aside={<span className="ew-muted ew-small">{map.spawns.length} spawns</span>}>
-          <div className="ew-slottable" role="table" aria-label="Players">
-            <div className="ew-slotrow is-head" role="row">
-              <span />
-              <span>Player</span>
-              <span>Faction</span>
-              <span>Side</span>
-              <span>AI level · style</span>
-            </div>
-            {setup.slots.map((s, i) => (
-              <div key={i} role="row" className={`ew-slotrow ${s.kind === 'closed' ? 'is-closed' : ''} ${i === act ? 'is-active' : ''}`}>
-                <button
-                  className="ew-spawnno"
-                  style={{ background: slotColor(s) }}
-                  disabled={s.kind === 'closed'}
-                  onClick={() => (sound.click(), setActive(i))}
-                  data-tip="Draw this player's start area on the map"
-                  aria-label={`Spawn ${i + 1}: draw its start area`}
-                  aria-pressed={i === act}
-                >
-                  {i + 1}
-                </button>
-                {s.kind === 'you' ? (
-                  <strong className="ew-slotwho">You</strong>
-                ) : (
-                  <select className="ew-slotwho" value={s.kind} onChange={(e) => setSlot(i, { kind: e.target.value as SlotKind })} aria-label={`Spawn ${i + 1}`}>
-                    <option value="ai">AI</option>
-                    <option value="closed">Closed</option>
-                  </select>
-                )}
-                {s.kind === 'closed' ? (
-                  <span className="ew-muted ew-small ew-slotopen">Open this spawn for a bigger battle</span>
-                ) : (
-                  <>
-                    <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
-                      {factions.map((f) => (
-                        <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} data-tip={FACTIONS[f].long} aria-pressed={s.faction === f}>
-                          <img src={FACTIONS[f].emblem} alt="" />
-                          <span>{FACTIONS[f].name}</span>
-                        </button>
-                      ))}
-                    </div>
+      <div className="ew-lobby-body">
+        <header className="ew-lobby-head">
+          <button onClick={() => (sound.click(), onBack())}>← Main menu</button>
+          <h2>Skirmish</h2>
+        </header>
+        <div className="ew-room">
+          <div className="ew-room-col is-main">
+            <Frame title="Players" className="ew-lobby-slots" aside={<span className="ew-muted ew-small">{setup.slots.filter((s) => s.kind !== 'closed').length} of {map.spawns.length} spawns</span>}>
+              <div className="ew-slottable" role="table" aria-label="Players">
+                <div className="ew-slotrow is-head" role="row">
+                  <span />
+                  <span>Player</span>
+                  <span>Faction</span>
+                  <span>Side</span>
+                  <span>AI level · style</span>
+                </div>
+                {setup.slots.map((s, i) => (
+                  <div key={i} role="row" className={`ew-slotrow ${s.kind === 'closed' ? 'is-closed' : ''} ${i === act ? 'is-active' : ''}`}>
+                    <button
+                      className="ew-spawnno"
+                      style={{ background: slotColor(s) }}
+                      disabled={s.kind === 'closed'}
+                      onClick={() => (sound.click(), setActive(i))}
+                      data-tip="Draw this player's start area on the map"
+                      aria-label={`Spawn ${i + 1}: draw its start area`}
+                      aria-pressed={i === act}
+                    >
+                      {i + 1}
+                    </button>
                     {s.kind === 'you' ? (
-                      <span className="ew-teamtag is-own">Your team</span>
+                      <strong className="ew-slotwho">You</strong>
                     ) : (
-                      <button className={`ew-teamtag ${s.team === 0 ? 'is-ally' : 'is-enemy'}`} onClick={() => setSlot(i, { team: s.team === 0 ? 1 : 0 })} data-tip="Click to switch sides">
-                        {s.team === 0 ? 'Ally' : 'Enemy'}
-                      </button>
+                      <select className="ew-slotwho" value={s.kind} onChange={(e) => setSlot(i, { kind: e.target.value as SlotKind })} aria-label={`Spawn ${i + 1}`}>
+                        <option value="ai">AI</option>
+                        <option value="closed">Closed</option>
+                      </select>
                     )}
-                    {s.kind === 'ai' ? (
-                      <AiPicker difficulty={s.difficulty} profile={s.profile} onChange={(patch) => setSlot(i, patch)} />
+                    {s.kind === 'closed' ? (
+                      <span className="ew-muted ew-small ew-slotopen">Open this spawn for a bigger battle</span>
                     ) : (
-                      <span />
+                      <>
+                        <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
+                          {factions.map((f) => (
+                            <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} data-tip={FACTIONS[f].long} aria-pressed={s.faction === f}>
+                              <img src={FACTIONS[f].emblem} alt="" />
+                              <span>{FACTIONS[f].name}</span>
+                            </button>
+                          ))}
+                        </div>
+                        {s.kind === 'you' ? (
+                          <span className="ew-teamtag is-own">Your team</span>
+                        ) : (
+                          <button className={`ew-teamtag ${s.team === 0 ? 'is-ally' : 'is-enemy'}`} onClick={() => setSlot(i, { team: s.team === 0 ? 1 : 0 })} data-tip="Click to switch sides">
+                            {s.team === 0 ? 'Ally' : 'Enemy'}
+                          </button>
+                        )}
+                        {s.kind === 'ai' ? (
+                          <AiPicker difficulty={s.difficulty} profile={s.profile} onChange={(patch) => setSlot(i, patch)} />
+                        ) : (
+                          <span />
+                        )}
+                      </>
                     )}
-                  </>
-                )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          {(() => {
-            const foe = setup.slots.find((s) => s.kind === 'ai' && s.team === 1)
-            return (
-              <p className="ew-muted ew-small">
-                {DIFFICULTY[foe?.difficulty ?? 'easy'].blurb} {PROFILES[foe?.profile ?? 'balanced'].name}: {PROFILES[foe?.profile ?? 'balanced'].blurb}
-              </p>
-            )
-          })()}
-          <h5>Starting credits</h5>
-          <label className="ew-range">
-            <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
-            <b>{setup.credits.toLocaleString('en-US')}</b>
-          </label>
-          <h5>Reinforcements</h5>
-          <ReinforceOptions value={setup.reinforce ?? REINFORCE} onChange={(patch) => update({ ...setup, reinforce: cleanReinforce({ ...cleanReinforce(setup.reinforce), ...patch }) })} />
-          <h5>Defense stations</h5>
-          <DefenseOptions value={setup.stations ?? DEFENSE_DEFAULT} onChange={(n) => update({ ...setup, stations: n })} />
-          <div className="ew-launch">
-            <span className="ew-muted ew-small">
-              {enemies ? `You${allies ? ` and ${allies} ${allies === 1 ? 'ally' : 'allies'}` : ''} against ${enemies} ${enemies === 1 ? 'enemy' : 'enemies'}` : 'Add at least one enemy.'}
-            </span>
-            <button className="ew-go" disabled={!enemies} onClick={() => (sound.unlock(), sound.click(), onLaunch(setup))}>
-              Launch battle
-            </button>
-          </div>
-        </Frame>
-        <Frame title={map.name} className="ew-lobby-preview" aside={
-            <span className="ew-chips">
+              {(() => {
+                const foe = setup.slots.find((s) => s.kind === 'ai' && s.team === 1)
+                return (
+                  <p className="ew-muted ew-small">
+                    {DIFFICULTY[foe?.difficulty ?? 'easy'].blurb} {PROFILES[foe?.profile ?? 'balanced'].name}: {PROFILES[foe?.profile ?? 'balanced'].blurb}
+                  </p>
+                )
+              })()}
+            </Frame>
+            <Frame title="Battle settings" className="ew-lobby-settings">
+              <div className="ew-setting">
+                <h5>Starting credits</h5>
+                <label className="ew-range">
+                  <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
+                  <b>{setup.credits.toLocaleString('en-US')}</b>
+                </label>
+              </div>
+              <div className="ew-setting">
+                <h5>Reinforcements</h5>
+                <ReinforceOptions value={setup.reinforce ?? REINFORCE} onChange={(patch) => update({ ...setup, reinforce: cleanReinforce({ ...cleanReinforce(setup.reinforce), ...patch }) })} />
+              </div>
+              <div className="ew-setting">
+                <h5>Defense stations</h5>
+                <DefenseOptions value={setup.stations ?? DEFENSE_DEFAULT} onChange={(n) => update({ ...setup, stations: n })} />
+              </div>
               {isGen && (
-                <button className="ew-chip" onClick={() => (sound.click(), setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) }))} data-tip="A different map with the same rules">
-                  <Icon name="dice" size={13} /> New seed
-                </button>
+                <div className="ew-setting">
+                  <h5>Generated map</h5>
+                  <GenControls
+                    rules={setup.gen}
+                    onChange={setRules}
+                    onReroll={() => {
+                      sound.click()
+                      setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) })
+                    }}
+                  />
+                </div>
               )}
-              <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>
-            </span>
-          }>
-          <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} fingerDraws={drawing || !coarse} />
-          <div className="ew-areahint">
-            <span className="ew-small">
-              <i className="ew-dot" style={{ background: slotColor(setup.slots[act]) }} />
-              {coarse ? (
-                <>
-                  {drawing ? 'Drag on the map' : 'Tap Draw areas, then drag on the map'} to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Tap an area, or a player's number, to switch.
-                </>
-              ) : (
-                <>
-                  Drag on the map to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Click an area, or a number on the left, to switch.
-                </>
-              )}
-            </span>
-            {coarse && (
-              <button className={`ew-chip ${drawing ? 'is-on' : ''}`} aria-pressed={drawing} onClick={() => (sound.click(), setDrawing(!drawing))}>
-                {drawing ? 'Done' : 'Draw areas'}
-              </button>
-            )}
-            <button className="ew-chip" disabled={!setup.areas.some(Boolean)} onClick={() => (sound.click(), update({ ...setup, areas: [] }))}>
-              Reset areas
-            </button>
+            </Frame>
           </div>
-          <MapLegend map={map} />
-          <p className="ew-muted">
-            {map.blurb} <span className="ew-small">{mapSize(map).cls} map ({mapSize(map).dims}) · {map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore.</span>
-          </p>
-          {isGen && (
-            <GenControls
-              rules={setup.gen}
-              onChange={setRules}
-              onReroll={() => {
-                sound.click()
-                setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) })
-              }}
-            />
-          )}
-        </Frame>
+          <div className="ew-room-col is-map">
+            <Frame title={map.name} className="ew-lobby-preview" aside={
+                <span className="ew-chips">
+                  {isGen && (
+                    <button className="ew-chip" onClick={() => (sound.click(), setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) }))} data-tip="A different map with the same rules">
+                      <Icon name="dice" size={13} /> New seed
+                    </button>
+                  )}
+                  <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>
+                </span>
+              }>
+              <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} fingerDraws={drawing || !coarse} />
+              <div className="ew-areahint">
+                <span className="ew-small">
+                  <i className="ew-dot" style={{ background: slotColor(setup.slots[act]) }} />
+                  {coarse ? (
+                    <>
+                      {drawing ? 'Drag on the map' : 'Tap Draw areas, then drag on the map'} to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Tap an area, or a player's number, to switch.
+                    </>
+                  ) : (
+                    <>
+                      Drag on the map to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Click an area, or a player's number, to switch.
+                    </>
+                  )}
+                </span>
+                {coarse && (
+                  <button className={`ew-chip ${drawing ? 'is-on' : ''}`} aria-pressed={drawing} onClick={() => (sound.click(), setDrawing(!drawing))}>
+                    {drawing ? 'Done' : 'Draw areas'}
+                  </button>
+                )}
+                <button className="ew-chip" disabled={!setup.areas.some(Boolean)} onClick={() => (sound.click(), update({ ...setup, areas: [] }))}>
+                  Reset areas
+                </button>
+              </div>
+              <MapLegend map={map} counts />
+              <MapBlurb map={map} />
+            </Frame>
+          </div>
+        </div>
+        <LaunchBar
+          ok={!!enemies}
+          note={enemies ? `You${allies ? ` and ${allies} ${allies === 1 ? 'ally' : 'allies'}` : ''} against ${enemies} ${enemies === 1 ? 'enemy' : 'enemies'}.` : 'Add at least one enemy.'}
+          summary={`${map.name} · ${setup.credits.toLocaleString('en-US')} credits`}
+        >
+          <button className="ew-go" disabled={!enemies} onClick={() => (sound.unlock(), sound.click(), onLaunch(setup))}>
+            Launch battle
+          </button>
+        </LaunchBar>
       </div>
       {picker && (
-        <Modal title="Choose a map" onClose={() => setPicker(false)} wide className="ew-mappicker-modal">
-          <div className="ew-mappicker">
-            {MAPS.map((m) => (
-              <MapCard key={m.id} m={m} title={m.name} blurb={m.blurb} on={!isGen && m.id === map.id} onPick={() => pickMap(m)} />
-            ))}
-            <MapCard
-              m={generated}
-              title="Generated"
-              blurb={`Built from your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them under the map after picking it.`}
-              on={isGen}
-              onPick={() => pickMap(generated, GENERATED)}
-            />
-          </div>
-        </Modal>
+        <MapPicker
+          current={isGen ? GENERATED : map.id}
+          generated={generated}
+          generatedBlurb={`From your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them in Battle settings after picking it.`}
+          onPick={(id) => (id === GENERATED ? pickMap(generated, GENERATED) : pickMap(MAP[id] ?? MAPS[0]))}
+          onClose={() => setPicker(false)}
+        />
       )}
     </div>
   )

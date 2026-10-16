@@ -7,7 +7,10 @@
 // surcharge cleaned (50%), and the server must drop warship reinforcements while strike craft ones
 // go through.
 //
-//   node scripts/empires-match.ts [seconds] [ws://localhost:5173/api/empires/ws]
+//   node scripts/empires-match.ts [seconds] [ws://localhost:5173/api/empires/ws] [map]
+//
+// The map is Vanth Crossing unless named (a map id): every spawn past the two players gets an AI,
+// so a six-spawn map plays two players and four AI.
 //
 // Exits 1 on a drift that isn't put right, a gap in the turns, or a missed step.
 
@@ -21,6 +24,7 @@ import type { Brain } from '../src/apps/games/empires/ai.ts'
 
 const seconds = Number(process.argv[2] ?? 40)
 const URL_ = process.argv[3] ?? 'ws://localhost:5173/api/empires/ws'
+const MAP_ID = process.argv[4] ?? 'vanth'
 const ORIGIN = URL_.replace(/^ws/, 'http').replace(/\/api.*/, '')
 type Msg = Record<string, any>
 let failed = false
@@ -136,7 +140,7 @@ const tag = Math.floor(Math.random() * 900 + 100)
 const a = await player(`Alpha ${tag}`)
 const b = await player(`Bravo ${tag}`)
 
-// Alpha hosts on a four-spawn map with two AI; Bravo joins on the other side.
+// Alpha hosts (on a four-spawn map, with two AI); Bravo joins on the other side.
 let lobbyId = ''
 await new Promise<void>((done) => {
   let step = 0
@@ -144,14 +148,13 @@ await new Promise<void>((done) => {
     lobbyId = l.id
     if (step === 0) {
       step = 1
-      a.send({ t: 'setup', map: 'vanth' })
+      a.send({ t: 'setup', map: MAP_ID })
       // A tampered surcharge (the server brings it down to 50%), and no warship reinforcements.
       a.send({ t: 'setup', reinforce: { surcharge: 999, ships: false } })
-    } else if (step === 1 && l.map === 'vanth') {
+    } else if (step === 1 && l.map === MAP_ID) {
       step = 2
-      a.send({ t: 'slot', i: 2, patch: { kind: 'ai', difficulty: 'hard' } })
-      a.send({ t: 'slot', i: 3, patch: { kind: 'ai', difficulty: 'medium' } })
-    } else if (step === 2 && l.slots[3].kind === 'ai') {
+      for (let i = 2; i < l.slots.length; i++) a.send({ t: 'slot', i, patch: { kind: 'ai', difficulty: i % 2 ? 'medium' : 'hard' } })
+    } else if (step === 2 && l.slots.slice(2).every((s: Msg) => s.kind === 'ai')) {
       step = 3
       b.send({ t: 'join', id: l.id })
     } else if (step === 3 && l.slots.some((s: Msg) => s.name === b.name)) {

@@ -4,7 +4,7 @@ import { DIFFICULTY, PROFILES, profileOf } from './ai'
 import { CREDIT_STEPS, DEFENSE_DEFAULT, FACTION_IDS, FACTIONS } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
-import { AiPicker, DefenseOptions, GenControls, MapCard, MapLegend, MapPreview, Modal, ReinforceOptions, mapSize, slotColor, type Slot } from './Menus'
+import { AiPicker, DefenseOptions, GenControls, LaunchBar, MapBlurb, MapLegend, MapPicker, MapPreview, Modal, ReinforceOptions, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
@@ -303,103 +303,110 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
   const blocker = !sides[0] || !sides[1] ? 'Both sides need someone on them.' : away.length ? `Waiting for ${away[0].name} to reconnect.` : waiting.length ? `Waiting for ${waiting.map((s) => s.name).join(', ')} to be ready.` : null
   const step = Math.max(0, CREDIT_STEPS.indexOf(lobby.credits))
   const ready = lobby.slots[mine]?.ready ?? false
+  const gen = lobby.map === GENERATED
+  const reroll = () => setup({ gen: { ...lobby.gen, seed: Math.floor(Math.random() * (MAX_SEED + 1)) } })
   return (
     <div className="ew-root ew-deck ew-lobby" style={BG} onContextMenu={noMenu}>
       <Tips />
-      <header className="ew-lobby-head">
-        <button onClick={() => (sound.click(), net.leave())}>← Leave</button>
-        <h2>{lobby.name}</h2>
-        <MeChip v={v} net={net} sound={sound} />
-      </header>
-      <Status v={v} />
-      <div className="ew-lobby-grid ew-mp-room">
-        <div className="ew-mp-left">
-          <Frame title="Players" className="ew-lobby-slots" aside={<span className="ew-muted ew-small">{map.spawns.length} spawns</span>}>
-            <div className="ew-slottable" role="table" aria-label="Players">
-              <div className="ew-slotrow is-head" role="row">
-                <span />
-                <span>Player</span>
-                <span>Faction</span>
-                <span>Side</span>
-                <span>Status</span>
+      <div className="ew-lobby-body">
+        <header className="ew-lobby-head">
+          <button onClick={() => (sound.click(), net.leave())}>← Leave</button>
+          <h2>{lobby.name}</h2>
+          <MeChip v={v} net={net} sound={sound} />
+        </header>
+        <Status v={v} />
+        <div className="ew-room ew-mp-room has-chat">
+          <div className="ew-room-col is-main">
+            <Frame title="Players" className="ew-lobby-slots" aside={<span className="ew-muted ew-small">{filled.length} of {map.spawns.length} spawns</span>}>
+              <div className="ew-slottable" role="table" aria-label="Players">
+                <div className="ew-slotrow is-head" role="row">
+                  <span />
+                  <span>Player</span>
+                  <span>Faction</span>
+                  <span>Side</span>
+                  <span>Status</span>
+                </div>
+                {lobby.slots.map((s, i) => (
+                  <SlotRow key={i} s={s} i={i} color={slotColor(asSlots[i])} me={me} mine={i === mine} host={host} isHost={s.player === lobby.host} myTeam={myTeam} onSlot={slot} onSeat={() => (sound.click(), net.send({ t: 'seat', i }))} />
+                ))}
               </div>
-              {lobby.slots.map((s, i) => (
-                <SlotRow key={i} s={s} i={i} color={slotColor(asSlots[i])} me={me} mine={i === mine} host={host} isHost={s.player === lobby.host} myTeam={myTeam} onSlot={slot} onSeat={() => (sound.click(), net.send({ t: 'seat', i }))} />
-              ))}
-            </div>
-            <h5>Starting credits</h5>
-            {host ? (
-              <label className="ew-range">
-                <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => setup({ credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
-                <b>{lobby.credits.toLocaleString('en-US')}</b>
-              </label>
-            ) : (
-              <p className="ew-mp-value">{lobby.credits.toLocaleString('en-US')}</p>
-            )}
-            <h5>Reinforcements</h5>
-            <ReinforceOptions value={lobby.reinforce ?? REINFORCE} onChange={host ? (patch) => setup({ reinforce: patch }) : undefined} />
-            <h5>Defense stations</h5>
-            <DefenseOptions value={lobby.stations ?? DEFENSE_DEFAULT} onChange={host ? (n) => setup({ stations: n }) : undefined} />
-            <div className="ew-launch">
-              <span className="ew-muted ew-small">{blocker ?? `${sides[0]} against ${sides[1]}. Ready to go.`}</span>
-              {host ? (
-                <button className="ew-go" disabled={!!blocker} data-tip={blocker ?? 'Start the battle for everyone'} onClick={() => (sound.unlock(), sound.click(), net.send({ t: 'start' }))}>
-                  Start battle
-                </button>
-              ) : (
-                <button className={ready ? 'is-on ew-mp-ready' : 'ew-go'} onClick={() => (sound.click(), net.send({ t: 'ready', on: !ready }))}>
-                  {ready ? 'Ready ✓' : "I'm ready"}
-                </button>
-              )}
-            </div>
-          </Frame>
-          <Chat v={v} net={net} />
-        </div>
-        <Frame
-          title={map.name}
-          className="ew-lobby-preview"
-          aside={
-            host && (
-              <span className="ew-chips">
-                {lobby.map === GENERATED && (
-                  <button className="ew-chip" onClick={() => setup({ gen: { ...lobby.gen, seed: Math.floor(Math.random() * (MAX_SEED + 1)) } })} data-tip="A different map with the same rules">
-                    <Icon name="dice" size={13} /> New seed
-                  </button>
+            </Frame>
+            <Frame title="Battle settings" className="ew-lobby-settings" aside={!host && <span className="ew-muted ew-small">Set by the host</span>}>
+              <div className="ew-setting">
+                <h5>Starting credits</h5>
+                {host ? (
+                  <label className="ew-range">
+                    <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => setup({ credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
+                    <b>{lobby.credits.toLocaleString('en-US')}</b>
+                  </label>
+                ) : (
+                  <p className="ew-mp-value">{lobby.credits.toLocaleString('en-US')}</p>
                 )}
-                <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>
-                  Change map
-                </button>
-              </span>
-            )
-          }
-        >
-          <MapPreview map={map} slots={asSlots} />
-          <MapLegend map={map} />
-          <p className="ew-muted">
-            {map.blurb}{' '}
-            <span className="ew-small">
-              {mapSize(map).cls} map ({mapSize(map).dims}) · {map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore.
-            </span>
-          </p>
-          {host && lobby.map === GENERATED && <GenControls rules={lobby.gen} onChange={(patch) => setup({ gen: { ...lobby.gen, ...patch } })} onReroll={() => setup({ gen: { ...lobby.gen, seed: Math.floor(Math.random() * (MAX_SEED + 1)) } })} />}
-          {!host && lobby.map === GENERATED && <p className="ew-muted ew-small">Generated map, seed {lobby.gen.seed}.</p>}
-        </Frame>
+              </div>
+              <div className="ew-setting">
+                <h5>Reinforcements</h5>
+                <ReinforceOptions value={lobby.reinforce ?? REINFORCE} onChange={host ? (patch) => setup({ reinforce: patch }) : undefined} />
+              </div>
+              <div className="ew-setting">
+                <h5>Defense stations</h5>
+                <DefenseOptions value={lobby.stations ?? DEFENSE_DEFAULT} onChange={host ? (n) => setup({ stations: n }) : undefined} />
+              </div>
+              {gen && (
+                <div className="ew-setting">
+                  <h5>Generated map</h5>
+                  {host ? <GenControls rules={lobby.gen} onChange={(patch) => setup({ gen: { ...lobby.gen, ...patch } })} onReroll={reroll} /> : <p className="ew-muted ew-small">Built from the host's rules, seed {lobby.gen.seed}.</p>}
+                </div>
+              )}
+            </Frame>
+          </div>
+          <div className="ew-room-col is-map">
+            <Frame
+              title={map.name}
+              className="ew-lobby-preview"
+              aside={
+                host && (
+                  <span className="ew-chips">
+                    {gen && (
+                      <button className="ew-chip" onClick={reroll} data-tip="A different map with the same rules">
+                        <Icon name="dice" size={13} /> New seed
+                      </button>
+                    )}
+                    <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>
+                      Change map
+                    </button>
+                  </span>
+                )
+              }
+            >
+              <MapPreview map={map} slots={asSlots} />
+              <MapLegend map={map} counts />
+              <MapBlurb map={map} />
+            </Frame>
+          </div>
+          <div className="ew-room-col is-chat">
+            <Chat v={v} net={net} />
+          </div>
+        </div>
+        <LaunchBar ok={!blocker} note={blocker ?? `${sides[0]} against ${sides[1]}. ${host ? 'Ready to go.' : 'The host starts the battle.'}`} summary={`${map.name} · ${lobby.credits.toLocaleString('en-US')} credits`}>
+          {host ? (
+            <button className="ew-go" disabled={!!blocker} data-tip={blocker ?? 'Start the battle for everyone'} onClick={() => (sound.unlock(), sound.click(), net.send({ t: 'start' }))}>
+              Start battle
+            </button>
+          ) : (
+            <button className={ready ? 'is-on ew-mp-ready' : 'ew-go'} onClick={() => (sound.click(), net.send({ t: 'ready', on: !ready }))}>
+              {ready ? 'Ready ✓' : "I'm ready"}
+            </button>
+          )}
+        </LaunchBar>
       </div>
       {picker && (
-        <Modal title="Choose a map" onClose={() => setPicker(false)} wide className="ew-mappicker-modal">
-          <div className="ew-mappicker">
-            {MAPS.map((m) => (
-              <MapCard key={m.id} m={m} title={m.name} blurb={m.blurb} on={lobby.map === m.id} onPick={() => (setPicker(false), setup({ map: m.id }))} />
-            ))}
-            <MapCard
-              m={generated}
-              title="Generated"
-              blurb={`Built from rules and a seed (now: ${generated.name}, seed ${lobby.gen.seed}). Change them under the map after picking it.`}
-              on={lobby.map === GENERATED}
-              onPick={() => (setPicker(false), setup({ map: GENERATED }))}
-            />
-          </div>
-        </Modal>
+        <MapPicker
+          current={lobby.map}
+          generated={generated}
+          generatedBlurb={`From rules and a seed (now: ${generated.name}, seed ${lobby.gen.seed}). Change them in Battle settings after picking it.`}
+          onPick={(id) => (setPicker(false), setup({ map: id }))}
+          onClose={() => setPicker(false)}
+        />
       )}
       {children}
     </div>

@@ -9,10 +9,12 @@
 //    This catches state the snapshot misses, which would break resyncs and reconnects.
 // It prints the final hash too: the same seed must give the same hash in every browser engine.
 // The Republic and the Confederacy play it; then a shorter battle with the Swarm in it is checked
-// the same way (its hash printed apart, so the first stays comparable); then one started rich, so the
-// admirals put up defense stations, upgrade them and fit their modules early, frozen while they stand.
+// the same way (its hash printed apart, so the first stays comparable), then six admirals, three
+// against three, on the first six-spawn map (a hash of its own too), and then a battle started rich,
+// so the admirals put up defense stations, upgrade them and fit their modules early, frozen while
+// they stand.
 
-import { MAPS } from '../src/apps/games/empires/maps.ts'
+import { MAPS, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { STEP, defensesOf, newWorld, stateHash, tick, type World } from '../src/apps/games/empires/sim.ts'
 import { PROFILE_IDS, newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { outdatedSnapshot, restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
@@ -21,11 +23,13 @@ import type { FactionId } from '../src/apps/games/empires/data.ts'
 const minutes = Number(process.argv[2] ?? 6)
 const map = MAPS.find((m) => m.spawns.length === 4) ?? MAPS[0]
 type Seat = { faction: FactionId; team: number; spawn: number }
-const seatsOf = (sides: FactionId[]): Seat[] => map.spawns.map((_, i) => ({ faction: sides[i % sides.length], team: i % 2, spawn: i }))
+const seatsOf = (sides: FactionId[], m: MapDef = map): Seat[] => m.spawns.map((_, i) => ({ faction: sides[i % sides.length], team: i % 2, spawn: i }))
 
 type Copy = { w: World; brains: Brain[] }
-const make = (seats: Seat[], credits?: number, profiles: number[] = [0, 2, 1, 1]): Copy => ({
-  w: newWorld(map, seats, { seed: 4242, ...(credits ? { credits } : {}) }),
+/** How a battle is set up: its map, starting credits, and each seat's profile (PROFILE_IDS, by seat). */
+type Opts = { m?: MapDef; credits?: number; profiles?: number[] }
+const make = (seats: Seat[], { m = map, credits, profiles = [0, 2, 1, 1] }: Opts = {}): Copy => ({
+  w: newWorld(m, seats, { seed: 4242, ...(credits ? { credits } : {}) }),
   // Every AI profile plays in it: defensive and balanced on one side, offensive and balanced on the other.
   brains: seats.map((_, i) => newBrain(i, i % 2 ? 'hard' : 'medium', PROFILE_IDS[profiles[i % 4]])),
 })
@@ -45,10 +49,13 @@ let failed = false
 /** What the defense stations went through in a battle: built, levels gained, modules fitted, and how
  * many stood (with work under way) when it was frozen. */
 type Forts = { built: number; ups: number; fitted: number; frozen: number; busy: number }
-function lockstep(seats: Seat[], mins: number, label: string, credits?: number, freeze = 0.5, profiles?: number[]): Copy & { forts: Forts } {
+/** `freeze`: how far into the battle the third copy is thawed from a snapshot. */
+function lockstep(seats: Seat[], mins: number, label: string, opts: Opts & { freeze?: number } = {}): Copy & { forts: Forts } {
   const ticks = Math.round((mins * 60) / STEP)
-  const a = make(seats, credits, profiles)
-  const b = make(seats, credits, profiles)
+  const m = opts.m ?? map
+  const freeze = opts.freeze ?? 0.5
+  const a = make(seats, opts)
+  const b = make(seats, opts)
   const forts: Forts = { built: 0, ups: 0, fitted: 0, frozen: 0, busy: 0 }
   let c: Copy | null = null
   const freezeAt = Math.floor(ticks * freeze)
@@ -81,7 +88,7 @@ function lockstep(seats: Seat[], mins: number, label: string, credits?: number, 
   }
   const secs = (performance.now() - started) / 1000
   const alive = a.w.units.filter((u) => !u.dead).length
-  console.log(`${map.name}, ${label}: ${(a.w.time / 60).toFixed(1)} min simulated in ${secs.toFixed(1)} s (3 copies), ${alive} units alive, winner ${a.w.winner}`)
+  console.log(`${m.name}, ${label}: ${(a.w.time / 60).toFixed(1)} min simulated in ${secs.toFixed(1)} s (3 copies), ${alive} units alive, winner ${a.w.winner}`)
   return { ...a, forts }
 }
 
@@ -89,7 +96,12 @@ const a = lockstep(seatsOf(['republic', 'droid']), minutes, 'Republic and Confed
 console.log(`final hash ${stateHash(a.w).toString(16)}`)
 const three = lockstep(seatsOf(['republic', 'droid', 'swarm', 'swarm']), Math.max(1, minutes / 2), 'with the Swarm')
 console.log(`final hash with the Swarm ${stateHash(three.w).toString(16)}`)
-const rich = lockstep(seatsOf(['republic', 'droid', 'swarm', 'droid']), Math.max(2, (minutes * 4) / 3), 'with defense stations', 10000, 0.7, [0, 0, 0, 1])
+const huge = MAPS.find((m) => m.spawns.length === 6)
+if (huge) {
+  const six = lockstep(seatsOf(['republic', 'droid', 'swarm'], huge), Math.max(1, minutes / 2), 'six admirals', { m: huge })
+  console.log(`final hash with six admirals ${stateHash(six.w).toString(16)}`)
+}
+const rich = lockstep(seatsOf(['republic', 'droid', 'swarm', 'droid']), Math.max(2, (minutes * 4) / 3), 'with defense stations', { credits: 10000, freeze: 0.7, profiles: [0, 0, 0, 1] })
 const f = rich.forts
 console.log(`defense stations: ${f.built} built, ${f.ups} upgrades, ${f.fitted} modules fitted; ${f.frozen} standing and ${f.busy} with work under way when frozen`)
 if (!failed && (!f.built || !f.ups || !f.fitted || !f.frozen)) {

@@ -638,8 +638,8 @@ its actions panel (Ctrl+K or right-click) has *Open in Git*, which shows it in t
 
 ### The Git app
 
-**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) is a read-only viewer for the same
-repositories: everything on your GitHub account (also through your organisations) and on the
+**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) browses the same repositories, and takes
+part in their conversations: everything on your GitHub account (also through your organisations) and on the
 Gitea/Forgejo instances you linked. The list on the left filters by name, owner or organisation and
 host, grouped by owner with your own first, and shows the language, when it was last pushed and
 whether it is private. Without "Allow private" in Settings → Code hosts only public GitHub
@@ -650,17 +650,33 @@ repositories show, and the list says so. A repository has four tabs:
   and images point into the repository on the host; the common HTML in READMEs (logos, badges,
   `<details>`) is turned into Markdown first, since the renderer never renders HTML.
 - **Pull requests** (open, merged, closed or all) and **Issues** (open, closed or all), a page at a
-  time with *Load more*. A pull request has *Conversation* (the description and comments),
-  *Commits* and *Files changed*; an issue shows its description and comments.
+  time with *Load more*. A pull request has *Conversation*, *Commits* and *Files changed*; an issue
+  shows its conversation.
 - **Commits**, per branch (a picker lists them), grouped by day. A commit shows its message, author,
   parents (click to walk back) and its changed files.
 
 Changed files are unified diffs, one collapsible box per file with line numbers and the additions
 and deletions tinted from the theme; a long line scrolls inside its box. Binary files and diffs
 too large to send (over 96 KB for a file, 2 MB in all) say so with a link to the host's page, as
-does anything past GitHub's limits (300 files). Anything the app doesn't do itself (commenting,
-reviewing, merging, a new issue or pull request, checks) is a button with an arrow-out icon that
-opens the host's web page.
+does anything past GitHub's limits (300 files).
+
+A conversation ([`Timeline.tsx`](src/apps/git/Timeline.tsx)) reads like the host's own page: the
+description, then in the order they happened the comments (marked when edited), reviews (approved,
+changes requested or commented, with their comments on lines listed under them as `file:line`),
+the commits pushed in between as one compact block per push (short hash and first line, each
+opening the commit), and one-line events: closed, reopened, merged (with its commit), force-pushed,
+title changed, labels, assignees, review requests, branch deleted and mentions from other issues
+and pull requests (which open in the app). The first 300 entries show; past that a link goes to
+the host. Below it is a box to **add a comment**: Markdown with *Write* and *Preview*, Ctrl+Enter
+(⌘+Enter) sends, and the new comment appears at once. The description and the comments **you
+wrote** have an *Edit* button that opens the same editor with *Save* and *Cancel*. What you type is
+kept as a draft per pull request or issue for as long as the tab is open (also across a reload,
+where the browser allows sessionStorage), and leaving one, or closing the window, with text that
+wasn't sent asks first. Writing to GitHub needs "Allow private" in Settings → Code hosts (the
+default sign-in can only read); without it the box is greyed out with a pointer there. A linked
+Gitea/Forgejo token needs the `write:issue` scope, and says so when it lacks it. Anything else
+(reviewing, merging, closing, labels, a new issue or pull request, checks) is a button with an
+arrow-out icon that opens the host's web page.
 
 A wide window keeps the list beside the open repository with breadcrumbs above it; a narrow window
 or a phone shows one view at a time with Back (Alt+← with a keyboard). The window takes a `route`
@@ -670,15 +686,25 @@ one it reopens the repository you had open last in this browser. Signed out, it 
 in. Open it from All apps, Spotlight, the dock or `open git` in the terminal.
 
 The server side is [`server/git.ts`](server/git.ts): a fixed set of `GET /api/repos/...` routes
-(repositories; a repository with its README; branches; pull requests, one with its comments, its
-commits and its files; issues and one with its comments; commits and one with its files), each
-part of the path checked (host id, owner, name, number, hash, branch), so it is no open proxy and
-never writes. It goes through the same code host sources as Spotlight
+(repositories; a repository with its README; branches; pull requests, one with its timeline, its
+commits and its files; issues and one with its timeline; commits and one with its files), and three
+that write: `POST …/issues/:n/comments` (a comment, on an issue or a pull request),
+`PATCH …/issues/:n` (the description) and `PATCH …/issues/comments/:id` (a comment), each taking
+`{ body }` as JSON (at most 65,536 characters, GitHub's limit). Every part of the path is checked
+(host id, owner, name, number, hash, branch, comment id) and each route answers only its own
+methods, so it is no open proxy. Before an edit the server reads the item or comment from the host
+and refuses unless its author is your login there; writes need a signed-in user, pass the same
+cross-site check as the site's other changes, and GitHub ones need the write scope before GitHub is
+asked. A refusal from the host comes back as what to fix (sign in again with private repositories
+allowed; a token with `write:issue`). Timelines come from GitHub's and Gitea's issue timeline APIs
+(Gitea before 1.20 has none: its comments and reviews are used instead), with the pull request's
+commits for logins and its review comments for the reviews. It goes through the same code host sources as Spotlight
 ([`server/forges.ts`](server/forges.ts)), so tokens, rate limits and the address checks for linked
 instances are shared. GitHub's and Gitea's answers are turned into one shape there
 ([`server/gitShapes.ts`](server/gitShapes.ts), types in
 [`src/data/gitTypes.ts`](src/data/gitTypes.ts)); Gitea's diffs come as a `.diff`, which is split
-into files on the server. Answers are kept a minute per user; Reload in the app asks the host again.
+into files on the server. Answers are kept a minute per user; Reload in the app asks the host
+again, and a write forgets that repository's answers so the next read is fresh.
 
 Your repositories include those of every organisation you are in: GitHub's own list
 (owned, collaborator and organisation repositories) plus the most recently pushed hundred of
@@ -1685,22 +1711,55 @@ click opens the Minecraft server window).
 
 ### Weather
 
-The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a forecast dashboard: current
-conditions, the next hour of precipitation, the coming hours (temperature, precipitation or wind), a
-10-day outlook, and tiles for UV, sunrise and sunset, wind, precipitation, feels like, humidity,
-pressure, visibility, the moon, a precipitation radar and air quality. A strip at the top of the
-window switches location and refreshes. On a wide window the tiles sit in a grid; on a tablet the
-10-day list sits beside the map; on a phone or a narrow pane they stack. Behind the cards the
-window keeps the sky from before: clear, night, cloud, fog, rain, snow or storm, from the current
-conditions. Each card opens a detail
-with a chart or the reading written out. It uses the same Open-Meteo fetch as the widget
-([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key, including
-15-minute precipitation. The map card is that radar, centred on the selected place: a quiet gray
-canvas (Esri's dark canvas in a dark theme, the light canvas when the document is in light mode)
-with the latest past [RainViewer](https://www.rainviewer.com/) frame on top. The card is one button
-and opens a larger copy of the same map. If RainViewer does not answer, the canvas stays and the
-map says the radar is unavailable; the rest of the forecast is unaffected. The line at the bottom
-of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
+The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx), with its parts in
+[`src/apps/weather/`](src/apps/weather)) is a forecast dashboard: current conditions, the next hour
+of precipitation, the coming hours (temperature, precipitation or wind), a 10-day outlook, and tiles
+for UV, sunrise and sunset, wind, precipitation, feels like, humidity, pressure, visibility, the
+moon, an animated precipitation radar and air quality. A strip at the top of the window switches
+location and refreshes. On a wide window the tiles sit in a grid; on a tablet the 10-day list sits
+beside the map; on a phone or a narrow pane they stack. It uses the same Open-Meteo fetch as the
+widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key:
+current conditions, every hour of the 10 days (temperature, feels like, precipitation and its
+chance, wind, gusts and direction, UV, humidity, dew point, pressure, visibility, cloud cover),
+15-minute precipitation for three hours, and hourly air quality (European AQI, PM2.5, PM10, ozone,
+NO₂) a few days ahead.
+
+**Looks.** Behind the cards the sky follows the current conditions, mixed from the theme's palette
+(deep in a dark theme, pale in a light one): drifting clouds, slanted rain, falling snow, twinkling
+stars and a moon glow at night, a lightning flicker in a storm, a slow sun glow on a clear day. The
+cards are layered glass with a soft shadow, rise in one after another, and lift on hover; the
+weather icons move a little, numbers count up, and the tiles carry small drawn-in sparklines (UV,
+precipitation, feels like, humidity, visibility, air quality), a swaying wind needle and a sun on
+its arc. All of it is CSS animation on transform and opacity (no frame loop, no React renders), and
+with *reduce motion* set in the system everything stands still.
+
+**Details.** Every card opens a detail with one shared interactive chart
+([`weather/Chart.tsx`](src/apps/weather/Chart.tsx), plain SVG): hover with a mouse or drag with a
+finger or pen along it and a crosshair, a tooltip with every series and the readout above follow
+that point; the handle under the axis drags too, and arrow keys, Page Up/Down, Home and End step
+through it when it has focus. What each shows: *hourly* temperature and feels like, precipitation
+amount and chance, or wind and gusts with direction arrows (switchable in the detail); *10 days*
+highs and lows as a band with the chance of precipitation, and a button into that day; *a day* its
+hours, with previous and next day; *next hour* three hours in 15-minute bars; *UV* by hour over
+the UV bands, with advice for the hour; *sun* a sun you drag through the day along its path (time,
+time to sunset or sunrise) and the daylight over 10 days; *wind* a compass that turns with the
+scrubbed hour; *precipitation* the next 24 hours or 10 days; *feels like*, *humidity* (with dew
+point and how muggy it feels), *pressure* (the gauge follows, with the trend) and *visibility*
+(with cloud cover) by hour; *moon* 30 days of illumination plus a phase calendar to tap through;
+*air quality* the AQI by hour over its bands with the pollutants for that hour.
+
+**Radar** ([`weather/Radar.tsx`](src/apps/weather/Radar.tsx)). The map card is a quiet gray canvas
+(Esri's dark canvas in a dark theme, the light canvas in light mode) with
+[RainViewer](https://www.rainviewer.com/)'s frames on top: the last two hours of scans, and its
+nowcast frames when it publishes them (it publishes none at the moment; the timeline then ends at
+the latest scan and says so). Each frame is its own stacked layer, loaded up front, so the loop and
+scrubbing only crossfade between layers. Radar tiles are 512 px from one zoom level down, a quarter
+of the requests. The card loops by itself while it is on screen and the page is visible, showing the
+frame's time; tap it for the big map: play and pause, a timeline to drag (past and forecast drawn
+differently, a *Now* mark, local time with "40 min ago" or "+30 min"), three speeds, drag to pan,
+zoom buttons or the wheel, and a button back to the place. If RainViewer does not answer, the canvas
+stays and the map says the radar is unavailable; the rest of the forecast is unaffected. The line at
+the bottom of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
 [OpenStreetMap](https://www.openstreetmap.org/copyright)). Saved cities and units sync with your
 account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
 dock, `weather` in the terminal, or from the weather widget.
@@ -1958,6 +2017,57 @@ The multiplayer client and server check each other's `PROTOCOL` version
 ([`protocol.ts`](src/apps/games/empires/protocol.ts)) when a connection opens: a copy of the game
 from another version would play another battle, so the server turns it away and the game asks for a
 reload.
+
+## Empires At War maps
+
+Skirmishes and multiplayer battles are fought on fifteen hand-made maps
+([`maps.ts`](src/apps/games/empires/maps.ts)) or on a generated one, for 2 to 6 players. Every
+map is symmetric: everything is placed for one side and copied to the others, so every spawn gets
+the same ore, beacons, terrain and lanes. The symmetries: `point` (two sides, turned half way
+round), `quad` (four corners, mirrored both ways), `tri`, `penta` and `hex` (three, five and six
+sides turned round the middle) and `tripair` (six: three pairs of mirror twins turned a third of
+the way round). Teams are always two sides, so a six-spawn map plays 3v3, 2v4, 1v5, a duel with
+empty spawns, or anything in between.
+
+A map's size class goes by its area at the battlefield's scale (`mapSize` in `Menus.tsx`, in
+millions of square units divided by `MAP_SCALE`²): **Small** under 30, **Medium** under 50,
+**Large** under 90, **Huge** from 90.
+
+| Map | Size | Spawns | The idea |
+| --- | --- | --- | --- |
+| Cinder Gate | Small | 2 | A tight duel over four ore, the middle beacon in a nebula |
+| Hadrel Narrows | Small | 2 | An asteroid wall with two narrow gaps, a beacon in each, and a derelict in the wall |
+| Tessaly Knot | Small | 3 | Walls between each pair of stations; every road runs through the one beacon in the middle |
+| Kessar Belt | Medium | 2 | The classic duel: three beacons down the middle |
+| Orvane Lanes | Medium | 2 | Three lanes split by long walls, open only at a crossroads in the middle |
+| Twin Reefs | Medium | 4 | Four lean corners, reefs in every quarter |
+| Ithra Archipelago | Medium | 4 | Four ore islands ringed by asteroids, each open towards its own corner |
+| Trinity Rift | Large | 3 | Three stations round a contested core in a nebula |
+| Shroud Expanse | Large | 3 | The richest ore in the clouds on the rim |
+| Vanth Crossing | Large | 4 | Four corners, five beacons |
+| Quintara Crown | Large | 5 | A crown of asteroids with a beacon in each gap, the richest ore inside |
+| Serrat Halo | Large | 6 | A ring round a dead heart of asteroids; neighbours share the beacons between them |
+| Velkar Core | Huge | 6 | A wide open field round a rich core ringed by six beacons |
+| Draxis Spiral | Huge | 6 | Asteroid arms wound like a pinwheel: every road to the core curves past a neighbour |
+| Tarsis Triad | Huge | 6 | Three pairs of twin stations sharing a beacon, three nebula fronts between the pairs |
+
+The huge maps are laid out for a duel on opposite spawns as well as for 3v3: the empty spawns'
+ore is there for the taking, and the beacons ring the middle rather than the stations. The
+generator builds maps for 2 to 6 players (five and six turned round the middle, like three).
+
+`pnpm empires:maps` plays the maps out with AI admirals, to see that a map is fair and that the AI
+expands, fights and finishes on it: duels on spawns as far apart as the map has and battles with
+every spawn taken (sides alternating round the map), each played from both sides. It reports how
+many games ended and how long they took, how often each spawn's side won, and the ore, beacons,
+expansions, ships and kills per admiral. `MAPS=hadrel,orvane pnpm empires:tournament` runs the AI
+profile tournament on those maps instead of the two-spawn ones. AI-only battles between equal admirals on the
+large and huge maps often run past 40 minutes without a winner, duels most of all (as on Vanth
+Crossing): with ore to spare both sides reach the fleet limit, and their waves reach the enemy
+station a few ships at a time.
+
+```sh
+pnpm empires:maps 40 3 velkar,draxis,tarsis      # minutes, seeds, maps (default all), layouts (1v1,near,full), difficulty, profile
+```
 
 ## Empires At War battlefield scale
 
@@ -2861,7 +2971,7 @@ the view and has no keys to bind.
 
 On phone-sized screens the game opens in fullscreen:
 - the HUD and galaxy panels become bottom sheets, with the minimap behind a button;
-- the menus and lobby scroll and fit;
+- the menus and lobby scroll and fit, with the lobby's launch bar always in view;
 - portrait shows a hint to turn the phone sideways.
 
 ## Empires At War multiplayer
@@ -2878,6 +2988,25 @@ show the remembered name, to change it for next time or *Forget* it, so the next
 host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI (with its difficulty and style) or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
+
+The lobby, and the single-player skirmish setup that shares its layout, is a panel centred on the
+screen: at most 1500 px wide and no taller than its contents, so a big or ultrawide window gets
+margins rather than a giant map. *Players* (the spawns) and *Battle settings* (starting credits,
+reinforcements and, on a generated map, its rules) sit on the left, the map with its legend in the
+middle, and the chat as a rail on the right. In a narrower window the chat moves under the map; on a
+phone everything is one column, with each player as a two-line card. A launch bar at the foot stays in
+view at every size. It says what the battle is still waiting for, and holds *Start battle* for the
+host, *I'm ready* for the others, or *Launch battle* in a skirmish.
+
+*Change map* opens the map picker. It lists the maps one to a row: a thumbnail, the name with its
+terrain (fields, nebulas, wrecks), a one-line description, and the map's size, players, beacons and
+ore. A search box filters by name and description; it takes the focus on a desktop, but not on a
+touch screen, where it would pop up the keyboard. Quick filters pick a player count. The list sorts
+by name, size or players; clicking the active sort again reverses it, and the last sort is
+remembered in this browser (`mvlos.empires.mapsort`). The current map is marked and scrolled into
+view. The arrow keys move through the list and Enter picks, so typing part of a name and pressing
+Enter picks the first match. The generated map stays pinned under the list, whatever the search. On
+a phone the picker fills the screen and each map takes two lines.
 
 Battles run in deterministic lockstep: every player's browser runs the whole battle, and only
 orders cross the network. The server ([`server/empires.ts`](server/empires.ts), on the WebSocket
@@ -2932,9 +3061,9 @@ The reverse proxy in front of the site has to pass WebSocket upgrades through (n
 `proxy_set_header Connection "upgrade"`; Caddy and Traefik do it by default).
 
 ```sh
-pnpm check:empires                                              # two copies of a battle stay identical
+pnpm check:empires                                              # two copies of a battle stay identical (four seats, then six)
 pnpm check:empires-ws ws://localhost:5173/api/empires/ws        # names, limits and lobbies (needs pnpm dev)
-pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave
+pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave (add a map id, e.g. tarsis, for six seats)
 pnpm check:empires-restart                                      # a battle through a server restart (starts its own servers)
 pnpm check:empires-rejoin                                       # stepping away: rejoining, votes, teammate takeover, timeout
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
@@ -2957,7 +3086,8 @@ pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/
 ```
 
 **The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
-middle of the map, the camera panning across); a skirmish reloaded from the tab's resume snapshot
+middle of the map, the camera panning across); six admirals on a huge map (Velkar Core), 40 craft
+each sent at the middle, seen zoomed all the way out and then panning across the fight; a skirmish reloaded from the tab's resume snapshot
 with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
 view (the battle screen must never scroll, and the panels laid out round each other must settle:
 no React update loop, few commits); the galactic conquest map of a new and a late

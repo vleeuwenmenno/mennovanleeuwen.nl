@@ -137,6 +137,77 @@
         "kind": "time"
       }
     },
+    "skirmish-huge": {
+      "canvas draw calls / frame": {
+        "baseline": 3189.95,
+        "budget": 3669,
+        "kind": "count"
+      },
+      "canvas drawImage / frame": {
+        "baseline": 1530.16,
+        "budget": 1760,
+        "kind": "count"
+      },
+      "canvas fill+stroke / frame": {
+        "baseline": 1524.87,
+        "budget": 1754,
+        "kind": "count"
+      },
+      "canvas save+restore / frame": {
+        "baseline": 1177.72,
+        "budget": 1355,
+        "kind": "count"
+      },
+      "canvas gradients / frame": {
+        "baseline": 6.59,
+        "budget": 9,
+        "kind": "count"
+      },
+      "canvas filters+shadows / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "canvas pixel reads / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "offscreen draw calls / frame": {
+        "baseline": 449.84,
+        "budget": 518,
+        "kind": "count"
+      },
+      "new canvases / sim s": {
+        "baseline": 155,
+        "budget": 179,
+        "kind": "count"
+      },
+      "zoomed out draw calls / frame": {
+        "baseline": 2374.33,
+        "budget": 2731,
+        "kind": "count"
+      },
+      "bitmap cache MB": {
+        "baseline": 49.31,
+        "budget": 57,
+        "kind": "count"
+      },
+      "React commits / sim s": {
+        "baseline": 7,
+        "budget": 9,
+        "kind": "count"
+      },
+      "DOM nodes": {
+        "baseline": 217,
+        "budget": 250,
+        "kind": "count"
+      },
+      "main thread ms / frame": {
+        "budget": 68,
+        "kind": "time"
+      }
+    },
     "skirmish-resume": {
       "React commits / sim s": {
         "baseline": 6.6,

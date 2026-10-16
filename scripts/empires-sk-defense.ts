@@ -14,12 +14,14 @@
 //   the Swarm's regeneration pool adds hull and regrowth.
 // - A repair crew (and engineers) rebuild shot-off modules.
 // - The AI builds them within the limit, and none when they're off.
+// - On a map with five or six spawns: every player has its own limit; the admirals build within it,
+//   each round its own station.
 // - A battle saved before them (no `defense` in the world) loads with them off; one saved with
 //   stations standing and work under way carries on in step.
 //
 // Every check prints a line; it exits with 1 if any of them failed.
 
-import { DEFENSE_DEFAULT, ORBITALS, REBUILD_MODULE, defenseId, defenseModTime, defenseTime, orbitalMod, orbitalSlots, type FactionId } from '../src/apps/games/empires/data.ts'
+import { BUILD_RADIUS, DEFENSE_DEFAULT, ORBITALS, REBUILD_MODULE, defenseId, defenseModTime, defenseTime, orbitalMod, orbitalSlots, type FactionId } from '../src/apps/games/empires/data.ts'
 import { MAPS } from '../src/apps/games/empires/maps.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import { cleanCmd } from '../src/apps/games/empires/commands.ts'
@@ -304,6 +306,51 @@ const aiBattle = (defense: number, mins: number) => {
   check('within the limit', on.most <= 1, `at most ${on.most}`)
   const off = aiBattle(0, 10)
   check('none when they are off', off.built === 0 && off.most === 0)
+}
+
+// --- A map with five or six spawns ---------------------------------------------------------------------------
+{
+  const big = MAPS.find((m) => m.spawns.length === 6) ?? MAPS.find((m) => m.spawns.length === 5)
+  check('there is a five- or six-spawn map', !!big)
+  if (big) {
+    const sides: FactionId[] = ['republic', 'droid', 'swarm']
+    const seats = big.spawns.map((_, i) => ({ faction: sides[i % 3], team: i % 2, spawn: i }))
+    const w = newWorld(big, seats, { seed: 12, credits: 30000, defense: 2 })
+    for (const p of w.players) p.level = 3
+    // Every player builds up to the limit round its own station, and no further.
+    let all = true
+    let capped = true
+    for (let o = 0; o < seats.length; o++) {
+      const at = spots(w, o, 3)
+      const e = engineers(w, o)
+      const id = defenseId(w.players[o].faction)
+      all &&= cmdPlace(w, o, ids(e), id, at[0].x, at[0].y) === null && cmdPlace(w, o, ids(e), id, at[1].x, at[1].y, true) === null
+      capped &&= (cmdPlace(w, o, ids(e), id, at[2].x, at[2].y) ?? '').includes('2/2')
+    }
+    check(`${big.name} (${big.spawns.length} spawns): every player places two`, all && w.players.every((_, o) => defensesOf(w, o).length === 2))
+    check(`${big.name}: a third is refused for each of them`, capped)
+    // The admirals, all of them, with a limit of 1 each: within it, and each one inside its own build radius.
+    const ai = newWorld(big, seats, { seed: 12, credits: 10000, defense: 1 })
+    const brains = seats.map((_, i) => newBrain(i, 'hard', i % 2 ? 'defensive' : 'balanced'))
+    let most = 0
+    let far = 0
+    let built = 0
+    for (let t = 0; t < (12 * 60) / STEP && ai.winner === -1; t++) {
+      for (const b of brains) think(ai, b, STEP)
+      tick(ai)
+      for (const e of ai.events) {
+        if (e.k !== 'built' || !e.unit.endsWith('-orbital')) continue
+        built++
+        const st = ai.byId.get(ai.players[e.owner].station)
+        if (st && Math.hypot(e.x - st.x, e.y - st.y) > BUILD_RADIUS + 1) far++
+      }
+      ai.events.length = 0
+      if (t % 30 === 0) most = Math.max(most, ...ai.players.map((_, o) => defensesOf(ai, o).length))
+    }
+    check(`${big.name}: the admirals build them`, built > 0, `${built} built`)
+    check(`${big.name}: within the limit of 1`, most <= 1, `at most ${most}`)
+    check(`${big.name}: each near its own station`, far === 0, `${far} far off`)
+  }
 }
 
 // --- Saved battles -----------------------------------------------------------------------------------------
