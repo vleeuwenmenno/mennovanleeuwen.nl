@@ -9,6 +9,7 @@ import { hash, rng as seeded } from './models/kit.ts'
 import { PALETTES } from './models/palettes.ts'
 import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
+import { AFTER, STREAK, WARP_STYLE, WarpFx, type Rift } from './warpfx.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships and structures (procedural cel-shaded
@@ -328,11 +329,9 @@ export function drawTerrainOverview(g: CanvasRenderingContext2D, map: MapDef, ox
   })
 }
 type Ping = { x: number; y: number; t: number; color: string }
-/** A ship jumping in, on the renderer's clock: charging from `start`, dropping out at `at`. */
-type Warp = { x: number; y: number; a: number; size: number; unit: string; glow: string; start: number; at: number }
-/** Seconds of the streak in before a ship drops out, and of the glow it leaves after. */
-const STREAK = 0.32
-const AFTER = 1.1
+/** A ship jumping in, on the renderer's clock: charging from `start`, dropping out at `at`. Its
+ * side picks how it looks (WARP_STYLE, see warpfx.ts); `rift`: a Confederacy crack's shape. */
+type Warp = { x: number; y: number; a: number; size: number; unit: string; faction: FactionId; glow: string; start: number; at: number; rift?: Rift }
 
 /** How each kind of gun's range ring looks: its colour (as r,g,b), dash pattern in screen pixels
  * (solid for lasers), and its name on the label. */
@@ -432,6 +431,8 @@ export class Renderer {
   private sparkT = 0
   /** Ships jumping out, on the renderer's clock from when they went. */
   private departs: Omit<Warp, 'at'>[] = []
+  /** The Swarm's wormholes and the Confederacy's rifts (warpfx.ts); the Republic's hyperspace is drawn here. */
+  private warpFx = new WarpFx((ctx, unit, x, y, rot, size, z, alpha, stretch) => this.drawShip(ctx, unit, x, y, rot, size, z, alpha, stretch))
   /** Procedural models' debris and broken hulls (all on screen only, see models/fx.ts). */
   private fx = new ModelFx()
   /** Every modelled unit seen last frame, with what had come off it then, so a part that comes
@@ -562,17 +563,22 @@ export class Renderer {
       } else if (e.k === 'warp') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
         const t = UNIT[e.unit]
-        this.warps.push({ x: e.x, y: e.y, a: e.a, size: t.size, unit: t.id, glow: FACTIONS[t.faction].glow, start: this.clock, at: this.clock + e.delay })
+        this.warps.push({ x: e.x, y: e.y, a: e.a, size: t.size, unit: t.id, faction: t.faction, glow: FACTIONS[t.faction].glow, start: this.clock, at: this.clock + e.delay })
       } else if (e.k === 'retreated') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
         const t = UNIT[e.unit]
         const glow = FACTIONS[t.faction].glow
-        this.departs.push({ x: e.x, y: e.y, a: e.a, size: t.size, unit: t.id, glow, start: this.clock })
-        this.add({ kind: 'flash', x: e.x, y: e.y, life: 0.3, size: t.size * 0.7, grow: t.size * 0.4, color: glow })
-        this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.6, size: t.size * 0.3, grow: t.size * 1.8, color: '#e8f6ff' })
+        const style = WARP_STYLE[t.faction]
+        // A rift goes on with the crack the ship was tearing open while it charged.
+        const rift = style === 'rift' ? this.warpFx.takeRift(e.x, e.y, t.size) : undefined
+        this.departs.push({ x: e.x, y: e.y, a: e.a, size: t.size, unit: t.id, faction: t.faction, glow, start: this.clock, rift })
+        if (style === 'hyperspace') {
+          this.add({ kind: 'flash', x: e.x, y: e.y, life: 0.3, size: t.size * 0.7, grow: t.size * 0.4, color: glow })
+          this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.6, size: t.size * 0.3, grow: t.size * 1.8, color: '#e8f6ff' })
+        }
       } else if (e.k === 'arrived') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        this.arrival(e.x, e.y, e.a, UNIT[e.unit].size, FACTIONS[UNIT[e.unit].faction].glow, e.field)
+        this.arrival(e.x, e.y, e.a, UNIT[e.unit].size, UNIT[e.unit].faction, e.field)
       } else if (e.k === 'rankUp') {
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.8, size: 20, grow: 90, color: '#f2c14a' })
       } else if (e.k === 'hpdown') {
@@ -1728,8 +1734,41 @@ export class Renderer {
   }
 
   /** The flash of a ship dropping out of hyperspace: a white burst, a shockwave, a spray of sparks
-   * thrown forward, and in an asteroid field shattered rock and fire. */
-  private arrival(x: number, y: number, a: number, size: number, glow: string, field: boolean) {
+   * thrown forward, and in an asteroid field shattered rock and fire. A Swarm ship out of its
+   * wormhole throws a wet spray from its mouth instead, and a Confederacy one out of its rift a red
+   * burst of sparks (their wormholes and rifts themselves: warpfx.ts). */
+  private arrival(x: number, y: number, a: number, size: number, faction: FactionId, field: boolean) {
+    const style = WARP_STYLE[faction]
+    if (style === 'hyperspace') this.hyperspaceArrival(x, y, a, size, FACTIONS[faction].glow)
+    else this.arrivalBurst(x, y, a, size, faction, style === 'rift')
+    if (field) {
+      for (let i = 0; i < 4; i++) this.pending.push({ at: this.clock + i * 0.08, x: x + (Math.random() - 0.5) * size * 0.6, y: y + (Math.random() - 0.5) * size * 0.6, size: size * 0.35, final: false })
+      this.debris(x, y, size * 1.4, '#7a6a5a')
+    }
+  }
+
+  /** Out of a wormhole (behind the ship: a ring and a spray of its engine colour thrown forward from
+   * the mouth) or a rift (a red flash where it tore, and sparks flung out round it). */
+  private arrivalBurst(x: number, y: number, a: number, size: number, f: FactionId, rift: boolean) {
+    const dx = Math.cos(a)
+    const dy = Math.sin(a)
+    const back = rift ? 0.58 : 0.85
+    const mx = x - dx * size * back
+    const my = y - dy * size * back
+    if (rift) {
+      this.add({ kind: 'flash', x: mx, y: my, life: 0.3, size: size * 0.8, grow: size * 0.3, color: '#ff3418' })
+      this.add({ kind: 'ring', x: mx, y: my, life: 0.5, size: size * 0.2, grow: size * 1.6, color: FACTIONS[f].bolt })
+    } else this.add({ kind: 'ring', x: mx, y: my, life: 0.8, size: size * 0.3, grow: size * 1.8, color: FACTIONS[f].glow })
+    const n = Math.round(12 + size / 14)
+    for (let i = 0; i < n; i++) {
+      const b = a + (Math.random() - 0.5) * (rift ? (Math.random() < 0.5 ? 1.2 : TAU) : 1.3)
+      const v = (rift ? 160 : 70) + Math.random() * (rift ? 260 + size : 140 + size * 0.5)
+      if (rift) this.add({ kind: 'spark', x: mx, y: my, vx: Math.cos(b) * v, vy: Math.sin(b) * v, life: 0.3 + Math.random() * 0.5, size: 1.4 + Math.random() * 1.6, color: Math.random() < 0.5 ? FACTIONS[f].bolt : '#ff3418' })
+      else this.add({ kind: 'fire', x: mx, y: my, vx: Math.cos(b) * v, vy: Math.sin(b) * v, life: 0.35 + Math.random() * 0.4, size: 2 + Math.random() * 3 + size * 0.01, grow: 4, color: Math.random() < 0.6 ? PALETTES[f].engine : FACTIONS[f].glow })
+    }
+  }
+
+  private hyperspaceArrival(x: number, y: number, a: number, size: number, glow: string) {
     this.add({ kind: 'flash', x, y, life: 0.35, size: size * 0.9, grow: size * 0.6, color: glow })
     this.add({ kind: 'ring', x, y, life: 0.7, size: size * 0.35, grow: size * 2.4, color: '#e8f6ff' })
     this.add({ kind: 'ring', x, y, life: 1.1, size: size * 0.2, grow: size * 1.4, color: glow })
@@ -1739,10 +1778,6 @@ export class Renderer {
       const b = a + (Math.random() - 0.5) * (Math.random() < 0.7 ? 0.9 : Math.PI * 2)
       const v = 120 + Math.random() * (260 + size)
       this.add({ kind: 'spark', x, y, vx: Math.cos(b) * v, vy: Math.sin(b) * v, life: 0.3 + Math.random() * 0.5, size: 1.4 + Math.random() * 1.6, color: Math.random() < 0.5 ? '#ffffff' : glow })
-    }
-    if (field) {
-      for (let i = 0; i < 4; i++) this.pending.push({ at: this.clock + i * 0.08, x: x + (Math.random() - 0.5) * size * 0.6, y: y + (Math.random() - 0.5) * size * 0.6, size: size * 0.35, final: false })
-      this.debris(x, y, size * 1.4, '#7a6a5a')
     }
   }
 
@@ -1796,6 +1831,7 @@ export class Renderer {
    * Ships on their way in from hyperspace. While the jump charges, light gathers where the ship will
    * be: a swirling glow, its outline flickering in, and streaks reaching out behind it along the way
    * it comes. Then it streaks in, stretched long, and snaps to a stop; a fading trail stays behind.
+   * Sides with a look of their own (WARP_STYLE) are drawn by warpFx.
    */
   private drawWarps(ctx: CanvasRenderingContext2D, z: number) {
     const now = this.clock
@@ -1803,6 +1839,10 @@ export class Renderer {
     if (!this.warps.length) return
     ctx.save()
     for (const v of this.warps) {
+      if (WARP_STYLE[v.faction] !== 'hyperspace') {
+        this.warpFx.warp(ctx, v, now, z)
+        continue
+      }
       const dx = Math.cos(v.a)
       const dy = Math.sin(v.a)
       const charge = Math.min(1, Math.max(0, (now - v.start) / Math.max(0.01, v.at - STREAK - v.start)))
@@ -2103,15 +2143,30 @@ export class Renderer {
 
   /**
    * A warship charging its drive to retreat: light gathering round it, rings tightening, and an arc
-   * filling as the drive charges.
+   * filling as the drive charges. A Swarm ship opens a wormhole ahead of it instead, a Confederacy
+   * one tears a rift (warpFx); the arc is the same for all.
    */
   private drawCharge(ctx: CanvasRenderingContext2D, u: Unit, z: number) {
     const total = RETREAT_TIME[u.t.tier] ?? 10
     const k = Math.min(1, Math.max(0, 1 - u.retreat / total))
-    const glow = FACTIONS[u.t.faction].glow
     const size = u.t.size
+    const own = WARP_STYLE[u.t.faction] !== 'hyperspace'
+    if (own) this.warpFx.charge(ctx, u.id, u.t.faction, u.x, u.y, u.a, size, k, this.clock, z)
     ctx.save()
     ctx.globalCompositeOperation = 'lighter'
+    if (!own) this.hyperspaceCharge(ctx, u, k, FACTIONS[u.t.faction].glow, size, z)
+    // How far along the charge is.
+    ctx.globalAlpha = 0.9
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = Math.max(2 / z, size * 0.012)
+    ctx.beginPath()
+    ctx.arc(u.x, u.y, size * 0.9, -Math.PI / 2, -Math.PI / 2 + k * TAU)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** The Republic's retreat charge: light gathering round the ship and two rings tightening. */
+  private hyperspaceCharge(ctx: CanvasRenderingContext2D, u: Unit, k: number, glow: string, size: number, z: number) {
     const pulse = 0.85 + 0.15 * Math.sin(this.clock * (6 + k * 20))
     const g = ctx.createRadialGradient(u.x, u.y, size * 0.2, u.x, u.y, size * 0.75)
     g.addColorStop(0, 'rgba(0,0,0,0)')
@@ -2134,17 +2189,10 @@ export class Renderer {
       ctx.stroke()
     }
     ctx.setLineDash([])
-    // How far along the charge is.
-    ctx.globalAlpha = 0.9
-    ctx.strokeStyle = '#ffffff'
-    ctx.lineWidth = Math.max(2 / z, size * 0.012)
-    ctx.beginPath()
-    ctx.arc(u.x, u.y, size * 0.9, -Math.PI / 2, -Math.PI / 2 + k * TAU)
-    ctx.stroke()
-    ctx.restore()
   }
 
-  /** Ships jumping out: stretched long and gone ahead in a streak, a wake fading behind them. */
+  /** Ships jumping out: stretched long and gone ahead in a streak, a wake fading behind them (or into
+   * their side's wormhole or rift, warpFx). */
   private drawDeparts(ctx: CanvasRenderingContext2D, z: number) {
     const now = this.clock
     this.departs = this.departs.filter((v) => now < v.start + AFTER)
@@ -2152,6 +2200,10 @@ export class Renderer {
     ctx.save()
     ctx.globalCompositeOperation = 'lighter'
     for (const v of this.departs) {
+      if (WARP_STYLE[v.faction] !== 'hyperspace') {
+        this.warpFx.depart(ctx, v, now, z)
+        continue
+      }
       const dx = Math.cos(v.a)
       const dy = Math.sin(v.a)
       const q = (now - v.start) / AFTER
