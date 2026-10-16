@@ -3316,6 +3316,50 @@ coordinates: ground (under units), units, fog (over trees) and an overlay.
 pnpm check:ground-map   # every ground map: builds the same twice, symmetric, spawns reach each other and every deposit, no blocking prop on ramps or build areas
 ```
 
+### The ground sim
+
+The ground battle has a sim of its own ([`ground/sim.ts`](src/apps/games/empires/ground/sim.ts)),
+run in lockstep like the space one: 30 ticks a second, its own seeded random stream, trigonometry
+from `detmath.ts`, orders as data ([`ground/commands.ts`](src/apps/games/empires/ground/commands.ts):
+`move` with shift-queue, `stop`; building orders come next) and a `stateHash`. It shares no state
+with the space sim, whose hash and saves are untouched. No DOM, so the server can run it.
+
+- **Movement.** A vehicle turns towards its next waypoint and drives once it faces near enough,
+  slower the further off it points, and brakes to stop on the last one. A group sent somewhere
+  spreads over spots round the point instead of fighting over it. Ground units that overlap push
+  each other apart gently, a parked unit giving way to a moving one. No unit drives onto a tile it
+  can't stand on: it slides along the wall instead. One that ends up somewhere it can't stand (a
+  building went up on it) is pushed onto the nearest open ground. A unit that makes no headway
+  finds its path again, and one held up close to its destination by others parked there counts as
+  arrived.
+- **Path finding** ([`ground/nav.ts`](src/apps/games/empires/ground/nav.ts)): A* on the tile grid,
+  8 ways, through the terrain's one stepping rule (`canStep`: no blocked tile, heights the same
+  unless one tile is a ramp, no cutting a corner), with whole-number costs and a fixed neighbour
+  order and tie-break, then pulled tight into straight legs that are checked tile by tile. Units
+  come in size classes, the square of tiles they need: small 1, vehicle 2, large 3. A clearance
+  map gives each tile the biggest open square (with no cliff inside) starting there, so a vehicle
+  never squeezes through a one-tile gap. Each class knows which pieces of ground connect, so a
+  destination that can't be reached becomes the reachable spot nearest it.
+- **Buildings** stamp the tiles under their footprint while they stand. A stamp waits until the
+  start of the next tick, where all of them are applied at once and the clearance map is worked out
+  again (under half a millisecond on a 48 × 36 map), so every copy of the battle changes its grid at
+  the same moment; units on the way find their paths again.
+- **Fog** ([`ground/fog.ts`](src/apps/games/empires/ground/fog.ts)) is kept in the sim, per team: a
+  count of the eyes on each tile and a bit for each tile ever explored. Each unit stamps a disc of
+  its sight radius in tiles, precomputed per radius, and moves it only when it changes tile, four
+  times a second. Height limits sight: a unit sees its own level and lower, plus the row of higher
+  tiles along the top of a cliff next to its level. A ramp counts as both levels it joins, and a
+  unit on one sees from the top. So a base on a plateau stays hidden until someone drives up.
+
+The checks run on small maps built tile by tile
+([`ground/testmaps.ts`](src/apps/games/empires/ground/testmaps.ts)), and on every generated ground
+map too once the terrain generator is in.
+
+```sh
+pnpm check:ground       # two copies of a scripted battle (many orders, buildings up and down) stay in step; a replay from the inputs matches
+pnpm check:ground-nav   # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
+```
+
 ## Performance guardrails
 
 The bar is the display's full refresh rate (up to 240 Hz) without giving up anything on screen.
