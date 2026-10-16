@@ -2961,6 +2961,14 @@ export function navRocks(w: World) {
 /** Where to head for on the way to (tx, ty): straight there, or round the first rock in the way,
  * on whichever side of it the ship already is. Without this, a ship aimed through the middle of
  * a big rock is pushed straight back out and sits there. */
+/** The structures standing (not those only planned), worked out once a tick. */
+const standing = new WeakMap<World, { t: number; list: Unit[] }>()
+function structuresOf(w: World) {
+  let c = standing.get(w)
+  if (!c || c.t !== w.time) standing.set(w, (c = { t: w.time, list: w.units.filter((o) => !o.dead && !isShip(o.t) && !planned(o)) }))
+  return c.list
+}
+
 function detour(w: World, u: Unit, tx: number, ty: number) {
   const dx = tx - u.x
   const dy = ty - u.y
@@ -2983,6 +2991,26 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
     first = along
     best = k
     side = off
+  }
+  // Structures (stations, platforms, yards) too: the way round the rocks knows nothing of them,
+  // and a flagship whose way led past its own mining platform pressed into it for good. Only those
+  // close ahead, and not the one it's going to.
+  if (u.t.tier !== 'fighter') {
+    const r0 = radius(u.t)
+    for (const o of structuresOf(w)) {
+      if (o.dead) continue
+      const kr = radius(o.t) + r0 * (1 - HULL_ROCK) + HULL_GAP
+      const R = kr + clear
+      const rx = o.x - u.x
+      const ry = o.y - u.y
+      const along = rx * ux + ry * uy
+      if (along < -R * 0.2 || along - R > Math.min(len, r0 + 600) || along >= first) continue
+      const off = rx * uy - ry * ux
+      if (Math.abs(off) >= R || d2(tx, ty, o.x, o.y) < R * R) continue
+      first = along
+      best = { x: o.x, y: o.y, r: kr }
+      side = off
+    }
   }
   if (!best) return { x: tx, y: ty }
   // Pass on our side of the rock: perpendicular to our line, a little beyond the rock's edge.
@@ -3564,9 +3592,16 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const ny = d > 1 ? (u.y - o.y) / d : M.sin(u.id)
       u.x += nx * push
       u.y += ny * push
-      if (!bigger) return
-      // Running into the bigger hull: the part of our way that heads into it turns into a slide
-      // round it, on the side we're already on (by id when dead centre), so we steer round it.
+      const solid = !isShip(o.t)
+      // The way round the rocks knows nothing of structures: a waypoint that lies under one we're
+      // up against can't be reached, so it counts as passed (else a flagship whose way led past a
+      // mining platform pressed into the platform for good, and the wave's cruisers behind it).
+      const route = u.route?.pts
+      if (solid && route && route.length > 1 && d2(route[0].x, route[0].y, o.x, o.y) < min * min) route.shift()
+      if (!bigger && !solid) return
+      // Running into the bigger hull, or a structure (which doesn't budge either): the part of our
+      // way that heads into it turns into a slide round it, on the side we're already on (by id
+      // when dead centre), so we steer round it.
       const hx = M.cos(u.a)
       const hy = M.sin(u.a)
       const into = -(hx * nx + hy * ny)

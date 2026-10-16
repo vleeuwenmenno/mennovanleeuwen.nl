@@ -2060,10 +2060,14 @@ expands, fights and finishes on it: duels on spawns as far apart as the map has 
 every spawn taken (sides alternating round the map), each played from both sides. It reports how
 many games ended and how long they took, how often each spawn's side won, and the ore, beacons,
 expansions, ships and kills per admiral. `MAPS=hadrel,orvane pnpm empires:tournament` runs the AI
-profile tournament on those maps instead of the two-spawn ones. AI-only battles between equal admirals on the
-large and huge maps often run past 40 minutes without a winner, duels most of all (as on Vanth
-Crossing): with ore to spare both sides reach the fleet limit, and their waves reach the enemy
-station a few ships at a time.
+profile tournament on those maps instead of the two-spawn ones. AI-only duels between equal hard
+admirals on the large and huge maps still mostly run past an hour (`pnpm empires:maps 60 3`: none
+on Quintara, Serrat, Velkar, Draxis or Tarsis ends, 1 in 6 on Vanth, Ithra and Orvane), though
+battles with every spawn taken end in 54 of 66. Both sides reach the fleet limit and bank tens of
+thousands of credits; two equal capped fleets trade evenly in the field, the loser builds its
+fleet again at home before the winner's wave can get through, and a station's repair crews (5% of
+its hull a second, every shot-off part rebuilt, for at most 1,500 credits) outlast what one equal
+fleet can bring to bear on it.
 
 ```sh
 pnpm empires:maps 40 3 velkar,draxis,tarsis      # minutes, seeds, maps (default all), layouts (1v1,near,full), difficulty, profile
@@ -2111,6 +2115,11 @@ straight legs. Strike craft fly straight.
   (`asNearAsItGets`) and fights from there, instead of flying at the rocks for good. A selected
   ship's route line ends there too. Each grid knows which pieces of open space connect, so this
   costs no search of the whole map.
+- **Structures** (stations, platforms, yards) aren't on the grid: they come and go during the
+  battle. Warships steer round the one close ahead on their way as they do round a rock (`detour`,
+  never the one they're headed for), slide round one they run into as they do round a bigger hull,
+  and count a waypoint under one they're up against as passed. Before, a flagship whose way led
+  past its own mining platform pressed into it for good, and the wave's cruisers piled up behind it.
 
 **Scattering the rocks.** Each battle scatters its rocks from its seed (`newWorld`), copied to every
 side by the map's symmetry. They keep clear of ore, beacons, wrecks, the build radius round each
@@ -2532,6 +2541,23 @@ Balanced. Every profile plays the same game, with a purpose:
   flagships badly hurt go home to the repair dock or the repair craft and rejoin once whole. It
   defends an outlying mine only when it can win there; against more it waits under the station's
   guns.
+- **Sieges** (medium and hard): a wave going for the enemy station gathers just out of reach of its
+  guns, on the side it comes from, and the ships that follow it out join it there rather than fly
+  into the guns a few at a time. It goes in once what has gathered is twice what it knows guards
+  the station and hits harder than the station's repair crews can mend (`SIEGE`), or after
+  90 seconds there with half as much again as it knows of. When the assault is down to 40% of what
+  went in, the rest pull back to the gathering spot and try again with the new ships. A wave that
+  comes no closer for two and a half minutes with nothing to fight (stuck) comes home to gather
+  again (`STALL`). With a wave out far from home and 3000 credits or more, it buys its new ships as
+  reinforcements and calls them in beside the wave, surcharge and all (`frontline`): on a big map the
+  side that lost a fight in the field had otherwise built its fleet again at home before the
+  winner's new ships had flown across. Ships with their engines shot off stay at home (a group flies
+  at its slowest ship's pace), and a ship slowed for a moment isn't given the group's order until
+  it's free.
+- **A big bank at the fleet limit** (8000 credits, within 6 of the limit; medium and hard): it picks
+  ships by what they're worth per place in the fleet rather than per credit, and sends its cheapest
+  gunships at home out through hyperspace (for part of their price back) to make room for cruisers
+  (`REFIT`); lamed ships go the same way.
 
 | | Defensive | Balanced | Offensive |
 | --- | --- | --- | --- |
