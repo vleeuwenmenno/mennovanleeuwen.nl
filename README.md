@@ -3321,7 +3321,8 @@ pnpm check:ground-map   # every ground map: builds the same twice, symmetric, sp
 The ground battle has a sim of its own ([`ground/sim.ts`](src/apps/games/empires/ground/sim.ts)),
 run in lockstep like the space one: 30 ticks a second, its own seeded random stream, trigonometry
 from `detmath.ts`, orders as data ([`ground/commands.ts`](src/apps/games/empires/ground/commands.ts):
-`move` with shift-queue, `stop`; building orders come next) and a `stateHash`. It shares no state
+`move` with shift-queue, `stop`, and the building orders `place`, `construct`, `train`, `cancel` and
+`rally`) and a `stateHash`. It shares no state
 with the space sim, whose hash and saves are untouched. No DOM, so the server can run it.
 
 - **Movement.** A vehicle turns towards its next waypoint and drives once it faces near enough,
@@ -3353,11 +3354,77 @@ with the space sim, whose hash and saves are untouched. No DOM, so the server ca
 
 The checks run on small maps built tile by tile
 ([`ground/testmaps.ts`](src/apps/games/empires/ground/testmaps.ts)), and on every generated ground
-map too once the terrain generator is in.
+map too.
+
+### Ground units, building and the AI
+
+**The first units** ([`ground/units.ts`](src/apps/games/empires/ground/units.ts)) are one Engineer
+and one Command Center a faction. Engineers are small vehicles and drones (no walking animation):
+size class 1, unarmed, sight 8 tiles. Command Centers stand on 6 × 6 tiles, see 10 tiles, earn 6
+credits a second and train their faction's engineer. Prices sit near the space game's: a battle starts
+with 1,600 credits.
+
+| Faction | Engineer | Cost, time | Command Center | Hull |
+| --- | --- | --- | --- | --- |
+| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 88) | 150, 12 s | Command Center | 5,200 |
+| Confederacy | Forger builder droid: a hovering fabricator with cutting arms (hull 110, speed 104) | 140, 11 s | Command Hub | 5,000 |
+| Swarm | Shaper drone: a low crawler that spits resin (hull 120, speed 96) | 130, 10 s | Hive Nexus | 5,400 |
+
+A Command Center costs 1,200 and takes one engineer 60 seconds. Their models are drawn like the
+ships ([`models/<faction>/ground.ts`](src/apps/games/empires/models), built by
+[`models/ground.ts`](src/apps/games/empires/models/ground.ts)): parts and facets in the faction's
+palette, cel shaded from straight above with the light top left. Buildings face south (their door)
+and never turn.
+
+**Starting** ([`ground/match.ts`](src/apps/games/empires/ground/match.ts)): each seat gets its
+Command Center in the middle of its spawn's plateau, one engineer in front of its door, and the
+starting credits. Every team knows where the others start: the enemy Command Centers are in its
+memory of buildings from the first second, drawn as ghosts under the fog. A turn runs the players'
+orders, then the AI, then the sim.
+
+**Placing a building** ([`ground/build.ts`](src/apps/games/empires/ground/build.ts), `placement`).
+The ghost checks every tile of the footprint and reports the first rule that fails, in this order:
+1. Every tile is explored, buildable (no ramp, cliff, water or blocking prop), off deposits, on one
+   level, and free of buildings and of the row in front of another building's door.
+2. It is inside the command range of one of our buildings (a Command Center reaches 14 tiles, others
+   6). A Command Center may instead go anywhere explored at least 20 tiles from an enemy building we
+   know of.
+3. No enemy unit we can see stands on it.
+4. The row of tiles in front of its door is open, so units can always roll out.
+5. There are enough credits.
+
+What the team knows decides it: enemy buildings it sees or remembers count, ones hidden in the fog
+don't. A site placed on top of a hidden building is given up, refunded in full, when its engineer
+gets there.
+
+**Building.** Placing pays for the site at once. Until work starts the site is the owner's secret:
+no stamp on the grid, no sight. Its engineers drive to spots round it (spread out, nearest first) and
+work starts when the first arrives: our own units standing on it are sent off it first (after 3
+seconds whatever is left is pushed off), enemy units on it hold the work up, then the footprint
+stamps the grid. The site's hull grows from a tenth with the work, and more engineers build faster:
+1, 1.7, 2.2 and 2.5 times as fast for one to four. Engineers also repair our damaged buildings, free,
+half again as fast as building. Calling a site off refunds it in full before work starts and the
+share not yet built after. A destroyed site or building frees its stamp.
+
+**Training.** A Command Center trains from a queue of up to 10 (shift queues five), each paid when
+queued and refunded in full when cancelled. A trained unit rolls out of the door, the middle of the
+south side, and drives to the rally point (or a little way out of the door). Income is 6 credits a
+second per standing Command Center, added each tick; the player's `income` is the figure for the top
+bar.
+
+**The AI** ([`ground/ai.ts`](src/apps/games/empires/ground/ai.ts)) is passive in the slice: every
+two seconds or so it trains engineers one at a time (two with one Command Center, four with two),
+saves up and expands with a second Command Center beside the deposit nearest home on its own side of
+the map (sending an engineer to scout the ground there first, since it may only build on explored
+ground), sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
+start within 90 seconds, and builds nothing hostile. It reads only what its team knows, takes its
+timing from the world's clock and random stream, and gives its orders through the order table, so
+every copy of a battle makes the same choices.
 
 ```sh
-pnpm check:ground       # two copies of a scripted battle (many orders, buildings up and down) stay in step; a replay from the inputs matches
-pnpm check:ground-nav   # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
+pnpm check:ground        # two copies of a scripted battle stay in step, a replay from the inputs matches; every placement rule refuses with its reason; a building battle places, builds, cancels, repairs and trains, and the AI expands
+pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
+pnpm check:ground-models # every ground unit has a model that builds, sound and the same every time
 ```
 
 ## Performance guardrails
