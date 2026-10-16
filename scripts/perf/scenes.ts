@@ -425,12 +425,14 @@ async function openGalaxy(page: Page, url: string, which: 'start' | 'late') {
 
 /**
  * The orbit view (Orbit.tsx) of the late campaign's capital, with both yards and two armed defense
- * stations round it: wheel zooms in and out inside it, then the slow orbit on its own. Its pictures
- * are painted once on the way in, so neither paints anything.
+ * stations round it and its battle map pinned beside it (PlanetMap.tsx): the wheel zooms a little
+ * out and back in, again and again, inside it (the panel fading and sliding with the zoom), then the
+ * slow orbit on its own. Its pictures and the map are painted once on the way in, so neither paints
+ * anything.
  */
 const galaxyOrbit: Scene = {
   name: 'galaxy-orbit',
-  about: 'Galaxy map, the orbit view of a planet with all its structures: wheel zoom in it, then the orbit idling',
+  about: 'Galaxy map, the orbit view of a planet with all its structures and its battle map: wheel zoom in it, then the orbit idling',
   async run(page, url) {
     await openGalaxy(page, url, 'late')
     await page.eval(`(() => {
@@ -445,16 +447,18 @@ const galaxyOrbit: Scene = {
       const r = document.querySelector('.ew-gview').getBoundingClientRect()
       window.__wheel = (notch) => document.querySelector('.ew-gview').dispatchEvent(new WheelEvent('wheel', { deltaY: -notch, deltaMode: 0, clientX: r.left + r.width * 0.4, clientY: r.top + r.height * 0.4, bubbles: true, cancelable: true }))
     })()`)
-    // In for 60 frames (to the orbit view's closest) and most of the way back out (it stays in it).
-    const zoom = await measure(page, 100, `__wheel(i < 60 ? 12 : -12)`)
+    // Out a little and back in to the orbit view's closest, five notches at a time (it stays in it).
+    const zoom = await measure(page, 100, `__wheel(Math.floor(i / 5) % 2 ? 12 : -12)`)
     await page.eval(`__perf.frames(120)`)
     const idle = await measure(page, 120)
-    const dom = await page.eval<{ all: number; orbit: number; structs: number }>(`(() => ({ all: document.getElementsByTagName('*').length, orbit: document.querySelectorAll('.ew-orbit *').length, structs: document.querySelectorAll('.ew-ostruct').length }))()`)
+    const dom = await page.eval<{ all: number; orbit: number; structs: number; map: number; placed: number }>(`(() => ({ all: document.getElementsByTagName('*').length, orbit: document.querySelectorAll('.ew-orbit *').length, structs: document.querySelectorAll('.ew-ostruct').length, map: document.querySelectorAll('.ew-pmap *').length, placed: document.querySelectorAll('.ew-pstruct').length }))()`)
     const shot = await pageShot(page, '.ew-gview', '.ew-gview')
     return {
       metrics: {
         'structures shown': strict(dom.structs),
         'orbit view DOM nodes': count(dom.orbit),
+        'structures on the battle map': strict(dom.placed),
+        'battle map DOM nodes': count(dom.map),
         'DOM nodes': count(dom.all),
         'React commits / sim s, zooming': commitsPerSec(zoom, 100),
         'React commits / sim s, idle': commitsPerSec(idle, 120),
