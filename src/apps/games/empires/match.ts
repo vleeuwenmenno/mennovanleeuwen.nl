@@ -14,7 +14,11 @@ export type MatchSeat = { kind: 'human' | 'ai'; player: string; name: string; fa
 /** `reinforce`: the lobby's reinforcement rules (sim.ts Reinforce); matches from before them have
  * none and get the defaults. `stations`: the defense stations each player may have (data.ts
  * DEFENSE_STEPS, 0: off); matches from before them have none: DEFENSE_DEFAULT. */
-export type MatchInfo = { id: string; seed: number; map: string; gen: MapRules; credits: number; seats: MatchSeat[]; reinforce?: Reinforce; stations?: number }
+export type MatchInfo = { id: string; seed: number; map: string; gen: MapRules; credits: number; seats: MatchSeat[]; reinforce?: Reinforce; stations?: number
+  /** Defense platforms on ore (World `oreDefense`). Matches from before the lobby had the choice
+   * have none: on, as they were then; the server always sets it (a new lobby has them off). */
+  oreDefense?: boolean
+}
 /** One tick's orders, by seat, in the order the server took them; `ai`: seats an AI admiral takes
  * over from this tick (their player left); `give`: [from, to] seats whose fleet goes to a teammate
  * from this tick (the player stepped away, and the others voted for that). */
@@ -26,7 +30,7 @@ export const matchMap = (m: MatchInfo): MapDef => (m.map === GENERATED ? generat
 export function matchWorld(m: MatchInfo): World {
   const map = matchMap(m)
   const seat = (s: MatchSeat, at: Pt) => ({ faction: s.faction, team: s.team, spawn: s.spawn, at, incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })
-  const opts = { seed: m.seed, credits: m.credits, reinforce: cleanReinforce(m.reinforce), defense: cleanDefense(m.stations) }
+  const opts = { seed: m.seed, credits: m.credits, reinforce: cleanReinforce(m.reinforce), defense: cleanDefense(m.stations), oreDefense: m.oreDefense !== false }
   const base = newWorld(map, m.seats.map((s) => seat(s, map.spawns[s.spawn])), opts)
   const starts: Pt[] = []
   for (const s of m.seats) starts.push(autoStart(base, defaultArea(map, s.spawn), map.spawns[s.spawn], starts))

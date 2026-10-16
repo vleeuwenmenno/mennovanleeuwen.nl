@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import type { DockId } from './dock'
 
 // Where the floating windows are. A window that hasn't been moved sits in its own default spot, so
 // a layout only holds the ones that were. Layouts can be saved by name, in this browser, and
@@ -9,7 +10,9 @@ import { useSyncExternalStore } from 'react'
 //  - On the galaxy map (its map, the planet dock, the fleets, the economy) the layout is kept as
 //    it is between visits.
 
-export type Pos = { x: number; y: number }
+/** Where a moved window sits: at a spot (pixels from the screen's top left), or on a dock point
+ * (dock.ts), which it keeps as the screen is resized. Layouts saved before dock points hold spots only. */
+export type Pos = { x: number; y: number } | { dock: DockId }
 export type Layout = Record<string, Pos>
 type Saved = { layouts: Record<string, Layout>; start: string | null; current?: Layout }
 

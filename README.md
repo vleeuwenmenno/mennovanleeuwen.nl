@@ -1764,6 +1764,17 @@ the bottom of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HE
 account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
 dock, `weather` in the terminal, or from the weather widget.
 
+### Changelog
+
+The **Changelog** app ([`src/apps/Changelog.tsx`](src/apps/Changelog.tsx)) lists MvL OS GitHub
+releases (`MvL OS X.Y.Z`) with their notes rendered as Markdown. It loads them through the site's
+cached `/api/git/…/releases` proxy ([`server/github.ts`](server/github.ts)), falling back to the
+public GitHub API when that proxy is absent. Open it from All apps, Spotlight, the dock, or
+`open changelog` in the terminal.
+
+The terminal's `changelog` command ([`src/terminal/commands.ts`](src/terminal/commands.ts)) prints
+the same releases as scrollable coloured text (`changelog`, `changelog 3`, `changelog 1.80.0`).
+
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
 for its frame colours and tilt (`useFrame`), its own menu items (`useMenu`) and how a new one is
@@ -2332,7 +2343,10 @@ lets go.
 on two defense sites round its Command Station, ordered in the planet's queue like a yard (paid when
 queued, refunded in full when called off), and on the shipyard's **Defense** page. Each has three
 levels, each upgrade ordered in the queue too, with 1, 2 and 4 **module slots**; the player picks
-the module for each slot (a module ordered into a full slot replaces what is there once it's done):
+the module for each slot (a module ordered into a full slot replaces what is there once it's done).
+On the Defense page each site is its own bordered group: the station's card on the left, its upgrade
+and its four slots to the right, the modules to pick from below. The groups sit side by side on a
+wide panel and stack on a narrow one or a phone (each at least 320 px wide):
 
 | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
 | --- | --- | --- | --- |
@@ -2520,6 +2534,11 @@ The AI plays like a person with limited hands, more limited the easier it is:
   older saves get one too): a defensive one wants to be 15% stronger than a planet's defence before
   it attacks, gathers 30% more first and leaves you alone 30% longer; an offensive one 12% less, 20%
   less and 30% sooner (`GALAXY_STYLE`). Its fleet battles are fought with the same profile.
+- **Fleet cap on the easy levels** (`cap` in `DIFFICULTY`, [`ai.ts`](src/apps/games/empires/ai.ts)):
+  Easy stops building warships at a fleet value of 2,800, Very easy at 4,000 (not counting scouts and
+  yard guards); Medium and Hard have none. Their long quiet start used to make the first wave bigger,
+  not weaker: they stockpiled the whole time and sent it all at once (Easy's first wave came out
+  larger than Medium's). Waves on those levels go out at 70% of the cap at most.
 - **Battles** ([`ai.ts`](src/apps/games/empires/ai.ts)): at most 25, 35, 60 or 100 actions a
   minute (a move for a group of ships is one), and it notices an attack on its base 6 to 1 seconds
   late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
@@ -2584,7 +2603,7 @@ Balanced. Every profile plays the same game, with a purpose:
 | Fights for an outlying mine with | 1× the attackers | 0.85× | 0.6× |
 | Station level 2 / 3 / 4 due at | 130 / 320 / 540 s | 170 / 400 / 680 s | 200 / 460 / 800 s |
 | Fleet value per station level before upgrading | 600 | 900 | 1000 |
-| Gun platforms (level 1-2 / 3 / 4) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
+| Gun platforms on ore (level 1-2 / 3 / 4; only with *Defense platforms on ore* on) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
 | Mines on top of its difficulty's (+1 from level 3) | 0 | +1 | +1 |
 | Raiders after your mines | none | none | 2 ships, from 4 min |
 | Counter-attacks | when your attack fails, or the fleet it has seen of yours is small | when your attack fails | no |
@@ -2951,6 +2970,45 @@ view and defense stations* above for the stations themselves).
 pnpm check:empires-sk-defense   # the lobby's limit and Off, placement, levels and slots, modules and swaps, refunds, combat, repairs, the AI, old saves
 ```
 
+## Empires At War beacons, idle strike craft and defense platforms on ore
+
+- **Beacons see.** A capture beacon a team holds is a pair of eyes for every player on it:
+  `BEACON_SENSOR` (900 as written, 990 at the battlefield's scale, a frigate's sensors about) round
+  it, on top of the fleet cap (`BEACON_POP`, +6) and income (`BEACON_INCOME`, 90 credits a minute)
+  it already gave. It counts wherever sight does (sim.ts `eyesOf`: the ships and structures, then
+  the beacons held): the fog of war and the fog grid, the minimap, what the AI sees (`sight`,
+  `canSee`), sparks and ruins drawn in the fog, and where reinforcements may be called in. A
+  neutral or half-taken beacon sees nothing, and one that is lost stops seeing for its old holder
+  at once. Hovering over a beacon (the action wheel's *Beacon info* on a touch screen) shows what it
+  gives; the top bar's fleet cell spells out the cap (base, station levels, beacons held) and the
+  beacon cell what each one gives.
+- **Idle strike craft hold station.** Fighters, bombers and the like with no orders and nothing to
+  fight (alone at their spot, round their carrier, or escorting a ship that waits) fly a slow, wide
+  circle round it (sim.ts `loiter`): `IDLE_PACE` (45%) of their speed, on a 130 to 208 radius by
+  craft, with half their turn rate (`IDLE_TURN`), where they used to buzz round a tight 70 to 124
+  ring at 65%. Further out than a couple of radii they come back quicker (up to 80%, full turns);
+  round a carrier under way the circle moves with it and they add its pace to theirs. A
+  target or an order takes them out of it straight away: picking up an enemy is as quick as ever
+  (the same look round every 0.4 to 0.7 s) and they're at full speed within a second. The engine
+  glow follows the speed. The defense wing still parks in its slots round the station.
+- **Defense platforms on ore** (the lobby's *Battle settings*, beside *Defense stations*; in the
+  multiplayer lobby only the host changes it): Off by default, and then surveyed ore takes only a
+  mining platform: the ore card has no gun, flak or all-round platform, the sim refuses one
+  (`cantSite`, World `oreDefense`, `oreGuns`) and so does the protocol (`cleanCmd`). On, it's as it
+  always was. It is part of the match config (`MatchInfo.oreDefense`, set by the server from the
+  lobby, only `true` or `false`). A skirmish setup saved before the choice comes back with it off,
+  as a new lobby has it; a battle saved before it (no `oreDefense` in its world) and a match from
+  before it play on with them on, as they were. Galactic conquest's fleet battles build nothing, so
+  it doesn't apply there. The AI builds none with them off, and the money goes to its fleet.
+  (Admirals fill their claims with mines first, so they seldom built one even before; a defense
+  station more in their place was tried and turned more of the AI-only tournaments into stalls.)
+  `ORE_DEFENSE=1 node scripts/empires-tournament.ts …` plays the tournament with them on.
+
+```sh
+pnpm check:empires-mechanics   # 13-15: beacon vision on capture and loss, idle strike craft pace and response, the ore switch, old saves, the AI
+pnpm check:empires             # also a battle with defense platforms on ore, frozen with them standing
+```
+
 ## Empires At War control groups and credits for allies
 
 **Control groups** ([`groups.ts`](src/apps/games/empires/groups.ts)), as in classic RTS games:
@@ -2993,6 +3051,22 @@ Keybinds and Multiplayer. Controls is edge scrolling, Camera is how fast the vie
 Gameplay is the battlefield and the shipyard. Key bindings live on the Keybinds tab, not as their
 own item on the main menu. How to play is off the main menu for now; the battle menu still opens it.
 
+## Empires At War dock points
+
+Dragging a floating window (the tactical map, economy, fleet inventory, players; on the galaxy map the
+map, planet dock, fleets, economy and selection) shows small anchors at the places it can snap to,
+the nearest one lit with an outline of where the window would land ([`src/apps/games/empires/dock.ts`](src/apps/games/empires/dock.ts),
+drawn by `Floating` in `Hud.tsx`). Let go within 44 px (64 px for a finger) of one and it sits there exactly;
+anywhere else it stays where it was dropped, as before. The places are the window's own **default spot**
+(always first: snapping there clears its moved entry, so it follows the default again) and eight dock
+points: the four corners, top centre, bottom centre and the left and right middles, 8 px from the edges
+and 56 px under the top. A window on a dock point is stored in the layout as `{ dock }`, not pixels, so
+it stays on that corner or edge when the screen is resized or the window grows; layouts saved with
+pixels load as they were. Hold **Shift** while dragging to place a window freely, with no anchors.
+*Settings → Apps → Empires At War → Snap windows to dock points* (and the game's Settings, Gameplay
+tab) turns it off; it is on by default. Windows the phone layout pins in place (the tactical map on touch
+screens) don't take part.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),
@@ -3032,7 +3106,7 @@ faction and side, chat, and say they're ready.
 The lobby, and the single-player skirmish setup that shares its layout, is a panel centred on the
 screen: at most 1500 px wide and no taller than its contents, so a big or ultrawide window gets
 margins rather than a giant map. *Players* (the spawns) and *Battle settings* (starting credits,
-reinforcements and, on a generated map, its rules) sit on the left, the map with its legend in the
+reinforcements, defense stations, defense platforms on ore and, on a generated map, its rules) sit on the left, the map with its legend in the
 middle, and the chat as a rail on the right. In a narrower window the chat moves under the map; on a
 phone everything is one column, with each player as a two-line card. A launch bar at the foot stays in
 view at every size. It says what the battle is still waiting for, and holds *Start battle* for the
@@ -3269,7 +3343,8 @@ non-root user on port 8080 (`PORT` changes it). Its API routes live in
 [`server/api.ts`](server/api.ts), shared with `pnpm dev`. It serves the built site, answers `/healthz`, serves
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
 `/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
-anonymous limit of 60 requests an hour), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+anonymous limit of 60 requests an hour), `/api/git/<owner>/<repo>/releases` (for the Changelog app,
+same cache and token), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.

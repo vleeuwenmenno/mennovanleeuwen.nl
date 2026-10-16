@@ -3,7 +3,7 @@ import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, REPAIR_TIME, REPAIR_FIRE, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -32,6 +32,9 @@ type Level = {
   think: number
   /** Fleet value it waits for before its first attack. */
   wave: number
+  /** Fleet value it stops building warships at (0: no limit). Without one, a long quiet start only
+   * made the first wave bigger: it stockpiled for the whole of it and sent the lot at once. */
+  cap: number
   mines: number
   /** Focuses its fleet's fire, and aims heavy guns at shield generators. */
   focus: boolean
@@ -53,19 +56,19 @@ type Level = {
 export const DIFFICULTY: Record<Difficulty, Level> = {
   veryEasy: {
     name: 'Very easy', blurb: 'A sleepy recruit: earns little, never researches, and leaves you alone for the first ten minutes.',
-    income: 0.55, think: 3.5, wave: 5000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false, apm: 25, react: 6, menders: 0, pace: 1.8,
+    income: 0.55, think: 3.5, wave: 3600, cap: 4000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false, apm: 25, react: 6, menders: 0, pace: 1.8,
   },
   easy: {
     name: 'Easy', blurb: 'Slow to react and slow to grow. No attacks for the first six minutes.',
-    income: 0.68, think: 3, wave: 4200, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4, menders: 0.03, pace: 1.35,
+    income: 0.68, think: 3, wave: 2500, cap: 2800, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4, menders: 0.03, pace: 1.35,
   },
   medium: {
     name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in (a minute and a half if it plays offensively, and less when it plays the Confederacy, which strikes early).',
-    income: 1, think: 1.5, wave: 2500, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2, menders: 0.08, pace: 1,
+    income: 1, think: 1.5, wave: 2500, cap: 0, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2, menders: 0.08, pace: 1,
   },
   hard: {
     name: 'Hard', blurb: 'Quick, greedy, aggressive from the start, and it goes for your shield generators.',
-    income: 1.25, think: 0.8, wave: 2000, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true, apm: 100, react: 1, menders: 0.16, pace: 0.85,
+    income: 1.25, think: 0.8, wave: 2000, cap: 0, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true, apm: 100, react: 1, menders: 0.16, pace: 0.85,
   },
 }
 
@@ -147,7 +150,7 @@ type Style = {
 export const PROFILES: Record<Profile, Style> = {
   defensive: {
     name: 'Defensive',
-    blurb: 'Turtles: more gun platforms and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
+    blurb: 'Turtles: more gun platforms (when the lobby allows them on ore) and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
     wave: 1.6, calm: 1.3, rest: 60, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.25, beaconReach: 3800, hold: 0.85, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [170, 400, 680], levelArmy: 900, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
     tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], forts: [0, 1, 1, 1], fortTop: 2, bail: 0.4, sally: 0.8,
   },
@@ -817,9 +820,12 @@ export function think(w: World, b: Brain, dt: number) {
   const mineToTake = (n: { x: number; y: number }) => enemyStations.every((e) => d2(n, st) < d2(n, e) * reach) && nearerUs(n)
   // Build on our team's claims nearest us; an ally's own patch is theirs (unless they're gone).
   const ours = w.nodes.filter((n) => n.owner === team && !n.site && nearerUs(n)).sort((a, c) => d2(a, st) - d2(c, st))
-  // Mining expands steadily, one more from station level 3; platforms by profile and level.
+  // Mining expands steadily, one more from station level 3; platforms by profile and level (none
+  // in a battle with them off: that money buys ships instead. A defense station more in their place
+  // turned more of the AI-only tournaments into stalls, and admirals fill their claims with mines
+  // first, so they seldom built a platform anyway).
   const mineGoal = D.mines + (D.research ? S.mines : 0) + (p.level >= 3 && D.research ? 1 : 0)
-  const platGoal = D.defenses ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
+  const platGoal = D.defenses && oreGuns(w) ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
   // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
   // (A gun platform goes up once a couple of mines are and there is a claim to spare for it, or
   // once every mine it wants is up: then the last free claim is its. A claim kept for a platform
@@ -987,7 +993,7 @@ export function think(w: World, b: Brain, dt: number) {
   // At its limit with money piling up: gunships make room for cruisers (see refit).
   if (D.focus && b.alarm < 0 && !saving && !yardSaving && !flagship) refit(w, b, army, mendingIds)
   // (A yard is one more to keep busy.)
-  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !modSaving && !fortSaving && !(savingForMine && p.credits < 500)) {
+  if (queued < (savingForMine || lean ? 1 : 2) + yards && !(D.cap && value(army.filter((u) => !b.scouts.has(u.id) && !b.guards.includes(u.id) && !b.escort.includes(u.id) && !worker(u))) >= D.cap) && !saving && !yardSaving && !modSaving && !fortSaving && !(savingForMine && p.credits < 500)) {
     if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits' && !(flagship && b.want === flag.id)) b.want = null
     b.want ??= pickShip(w, b)
     const want = b.want
@@ -1318,7 +1324,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   for (const [wx, wy, g] of Object.values(b.walls)) if (enemySt && sq(wx - enemySt.x) + sq(wy - enemySt.y) < sq(rangeDist(1400))) walls += g
   const ahead = mainValue >= Math.max(seenFoes, walls) * S.edge
   const Doc = doctrineOf(w, b)
-  const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= b.wave * Doc.wave && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
+  const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= Math.min(b.wave * Doc.wave, D.cap ? D.cap * 0.7 : Infinity) && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
   if (!b.attacking) {
     if (!ready) {
       b.muster = -1
@@ -1382,7 +1388,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
     b.attacking = false
     b.home = w.time
     // (A stuck wave wasn't too small, only spread out: the next one is everything it has.)
-    if (!stalled) b.wave = Math.min(9000, b.wave * 1.15)
+    if (!stalled) b.wave = Math.min(D.cap ? D.cap * 0.7 : 9000, b.wave * 1.15)
     b.troops = []
     b.focus = 0
     act(b, () => cmdMove(w, o, main.map((u) => u.id), p.rally.x, p.rally.y))

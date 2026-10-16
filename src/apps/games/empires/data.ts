@@ -523,8 +523,9 @@ export const isEngineer = (t: UnitType) => t.kind === 'engineer'
 export const roleOf = (t: UnitType) => t.role ?? ROLES[t.tier]
 export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense' && t.tier !== 'yard'
 /** What can go on a surveyed ore asteroid, one structure each: the mining platform, then the
- * defense platforms (balanced first). */
-export const siteOptions = (faction: FactionId) => UNITS.filter((u) => u.faction === faction && (u.tier === 'mine' || u.tier === 'defense'))
+ * defense platforms (balanced first), unless `guns` is false (the lobby turned them off: see the
+ * World's `oreDefense`). */
+export const siteOptions = (faction: FactionId, guns = true) => UNITS.filter((u) => u.faction === faction && (u.tier === 'mine' || (guns && u.tier === 'defense')))
 
 /** World size of a sprite: [width, height]. */
 export function dims(t: UnitType): [number, number] {
@@ -568,6 +569,10 @@ export const BEACON_INCOME = 1.5
 export const BASE_POP = 30
 export const POP_PER_LEVEL = 4
 export const BEACON_POP = 6
+/** How far a captured beacon sees for the team holding it (a frigate's sensors, about): it lights
+ * up its part of the map in the fog, on the minimap and for the AI. A neutral or contested beacon
+ * sees nothing; a lost one stops seeing for the old holder at once. */
+export const BEACON_SENSOR = reach(900)
 export const MAX_QUEUE = 6
 
 // --- Research ---------------------------------------------------------------------------------------

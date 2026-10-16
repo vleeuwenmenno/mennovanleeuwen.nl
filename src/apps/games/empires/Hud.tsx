@@ -1,9 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { battleLayout, type LayoutStore } from './layout'
+import { SNAP_MOUSE, SNAP_TOUCH, candidates, dockCentred, dockName, dockStyle, isDock, nearest, type At, type Cand } from './dock'
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
-  abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  BASE_POP, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
@@ -13,7 +15,7 @@ import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
 import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
-import { cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_FIRE, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, repairSlowed, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { oreGuns, cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_FIRE, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, repairSlowed, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -607,12 +609,12 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           <span className="ew-gold"><Icon name="give" size={18} /></span>
         </button>
       )}
-      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip="Fleet size / capacity. Capture beacons and upgrade the station for more.">
+      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip={`Fleet size / capacity: ${BASE_POP} to start with, +${POP_PER_LEVEL} per station level above 1${hud.level > 1 ? ` (+${(hud.level - 1) * POP_PER_LEVEL})` : ''}, and +${BEACON_POP} per beacon our team holds (${hud.beacons} held: +${hud.beacons * BEACON_POP}). Capture beacons and upgrade the station for more.`}>
         <Icon name="fleet" size={20} />
         <b className="ew-big">{hud.pop}</b>
         <small>/ {hud.popCap}</small>
       </div>
-      <div className="ew-top-cell ew-hide-narrow" data-tip="Mining platforms, and beacons held">
+      <div className="ew-top-cell ew-hide-narrow" data-tip={`Mining platforms, and beacons held. Each beacon our team holds: +${BEACON_POP} fleet capacity, +${fmt(BEACON_INCOME * 60)} credits a minute, and vision ${BEACON_SENSOR} round it.`}>
         <span className="ew-ore"><Icon name="ore" size={17} /></span>
         <b>{hud.mines}</b>
         <span className="ew-beacon"><Icon name="beacon" size={17} /></span>
@@ -1319,7 +1321,7 @@ function OreDetail(p: DetailProps & { n: OreNode }) {
         {!site && pct > 0 && pct < 100 && <Bar value={pct} max={100} kind="shield" />}
         {!site && (
           <div className="ew-siteopts">
-            {siteOptions(faction).map(option)}
+            {siteOptions(faction, oreGuns(w)).map(option)}
           </div>
         )}
       </div>
@@ -1602,7 +1604,7 @@ export function ReserveTray({ reserve, onGrab, onClose, launch = false }: { rese
 }
 
 /** Where a window sits until it's moved: distances from the screen's edges, like CSS. */
-export type Anchor = { left?: number; right?: number; top?: number; bottom?: number }
+export type Anchor = At
 
 /** What a drag can't start on: the controls inside a window. */
 const NO_DRAG = 'button, input, select, textarea, canvas, a, [data-nodrag]'
@@ -1630,10 +1632,14 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
   children: ReactNode
 }) {
   layout.useLayoutVersion()
+  const { snapWindows } = useSettings()
   const moved = layout.panelPos(id)
-  const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
+  // Moved to a spot (pixels), or onto a dock point (dock.ts), which it keeps as the screen is resized.
+  const spot = moved && 'x' in moved ? moved : undefined
+  const dock = moved && 'dock' in moved && isDock(moved.dock) ? moved.dock : undefined
+  const [drag, setDrag] = useState<DragState | null>(null)
   const box = useRef<HTMLDivElement>(null)
-  const pos = drag ?? moved
+  const fit = useDockFit(box, dock !== undefined && dockCentred(dock))
   /** A position (inside the screen's box) moved inside the screen with a margin, below the top
    * bar: where a drag can take it (see fit.ts). */
   const clamp = (x: number, y: number) => {
@@ -1697,16 +1703,27 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     const start = { px: e.clientX, py: e.clientY, x: r.left - rr.left, y: r.top - rr.top }
     let last = { x: start.x, y: start.y }
     let went = false
+    // Where it can be dropped to snap (dock.ts), worked out once: its default spot and the dock
+    // points. Not for a window the stylesheet pins (the phone layout) or when snapping is off.
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const touch = isTouch(e)
+    const snap: Snap | null = snapWindows && floatsFreely(el) ? { cands: candidates(homeOf(el, at, rr), at, w, h, root.clientWidth, root.clientHeight), w, h, reach: touch ? SNAP_TOUCH : SNAP_MOUSE, touch } : null
+    let near: Cand | null = null
     const move = (ev: PointerEvent) => {
       if (!went && Math.hypot(ev.clientX - start.px, ev.clientY - start.py) < 4) return
       went = true
       last = clamp(start.x + ev.clientX - start.px, start.y + ev.clientY - start.py)
-      setDrag(last)
+      // Shift held: a free drop, with no anchors.
+      const on = snap && !ev.shiftKey ? snap : null
+      near = on ? nearest(on.cands, last.x, last.y, on.w, on.h, at, on.reach) : null
+      setDrag({ ...last, snap: on, near })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      if (went) layout.setPanelPos(id, last)
+      // On the default spot: nothing kept, so it follows the default again (as the screen changes).
+      if (went) layout.setPanelPos(id, near ? (near.id === 'home' ? undefined : { dock: near.id }) : last)
       setDrag(null)
     }
     window.addEventListener('pointermove', move)
@@ -1716,9 +1733,11 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     if (lastPointer.current === 'touch') return
     if (!(e.target as Element).closest(NO_DRAG)) layout.setPanelPos(id, undefined)
   }
-  const style: React.CSSProperties = { ...(pos ? { left: pos.x, top: pos.y } : at), ...vars }
+  const style: React.CSSProperties = { ...(drag ? { left: drag.x, top: drag.y } : spot ? { left: spot.x, top: spot.y } : dock ? dockStyle(dock, fit) : at), ...vars }
+  const root = box.current?.parentElement
   return (
-    <div ref={box} className={`ew-float ${bare ? 'is-bare' : ''} ${pos ? 'is-moved' : ''} ${className}`} style={style} onPointerDown={grab} onDoubleClick={reset}>
+    <div ref={box} className={`ew-float ${bare ? 'is-bare' : ''} ${drag || moved ? 'is-moved' : ''} ${className}`} style={style} onPointerDown={grab} onDoubleClick={reset}>
+      {drag?.snap && root && createPortal(<DockGuides snap={drag.snap} near={drag.near} />, root)}
       {bare ? (
         children
       ) : (
@@ -1733,6 +1752,80 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
           </div>
         </section>
       )}
+    </div>
+  )
+}
+
+/** What a drag knows about where it can snap: the places, the dragged window's size, how near is
+ * near, and whether a finger is doing it (bigger anchors). */
+type Snap = { cands: Cand[]; w: number; h: number; reach: number; touch: boolean }
+type DragState = { x: number; y: number; snap: Snap | null; near: Cand | null }
+
+/** Whether the stylesheet lets the window sit where it is told (it doesn't on a phone, where
+ * panels are pinned with !important): nudged by a few pixels, does it follow? */
+function floatsFreely(el: HTMLElement): boolean {
+  const s = el.style
+  const keep = [s.left, s.right, s.top, s.bottom]
+  const cs = getComputedStyle(el)
+  const x = parseFloat(cs.left)
+  const y = parseFloat(cs.top)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false
+  const a = el.getBoundingClientRect()
+  s.right = ''
+  s.bottom = ''
+  s.left = `${x + 17}px`
+  s.top = `${y + 17}px`
+  const b = el.getBoundingClientRect()
+  ;[s.left, s.right, s.top, s.bottom] = keep
+  return Math.abs(b.left - a.left - 17) < 1 && Math.abs(b.top - a.top - 17) < 1
+}
+
+/** Where the window sits in its default spot (`at`), in its screen's coordinates: measured, so a
+ * stylesheet that nudges it is counted. */
+function homeOf(el: HTMLElement, at: At, root: DOMRect) {
+  const s = el.style
+  const keep = [s.left, s.right, s.top, s.bottom]
+  const px = (v?: number) => (v === undefined ? '' : `${v}px`)
+  ;[s.left, s.right, s.top, s.bottom] = [px(at.left), px(at.right), px(at.top), px(at.bottom)]
+  const r = el.getBoundingClientRect()
+  ;[s.left, s.right, s.top, s.bottom] = keep
+  return { x: Math.round(r.left - root.left), y: Math.round(r.top - root.top) }
+}
+
+/** The size of a window and of its screen while it is on a dock point it is centred on (dock.ts
+ * dockStyle needs them), kept up to date as either changes. */
+function useDockFit(box: RefObject<HTMLElement | null>, on: boolean) {
+  const [fit, setFit] = useState({ w: 0, h: 0, rw: 0, rh: 0 })
+  useLayoutEffect(() => {
+    const el = box.current
+    const root = el?.parentElement
+    if (!on || !el || !root) return
+    const measure = () => {
+      const n = { w: el.offsetWidth, h: el.offsetHeight, rw: root.clientWidth, rh: root.clientHeight }
+      setFit((f) => (f.w === n.w && f.h === n.h && f.rw === n.rw && f.rh === n.rh ? f : n))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    ro.observe(root)
+    return () => ro.disconnect()
+  }, [box, on])
+  return fit
+}
+
+/** While a window is dragged: an anchor at each place it can snap to, the one it would snap to
+ * lit, with an outline of where the window would land. Drawn in the screen, never in the way. */
+function DockGuides({ snap, near }: { snap: Snap; near: Cand | null }) {
+  return (
+    <div className={`ew-dockguides ${snap.touch ? 'is-touch' : ''}`} aria-hidden="true">
+      {near && (
+        <div className="ew-dockghost" style={{ left: near.x, top: near.y, width: snap.w, height: snap.h }}>
+          <span>{dockName(near.id)}</span>
+        </div>
+      )}
+      {snap.cands.map((c) => (
+        <i key={c.id} className={`ew-dockpin ${c.id === 'home' ? 'is-home' : ''} ${c === near ? 'is-near' : ''}`} style={{ left: c.px, top: c.py }} />
+      ))}
     </div>
   )
 }
@@ -1911,8 +2004,9 @@ export const unitTip = (t: UnitType, who: { who: string; rel: string }, note?: s
   ...(live ? { 'data-tip-uid': String(live.id) } : {}),
 })
 
-/** The unit card for something on the battlefield, beside the cursor, with its live hull and shields. */
-export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: number; x: number; y: number }) {
+/** The unit card for something on the battlefield, beside the cursor, with its live hull and shields;
+ * with `beacon`, what that capture beacon gives the team holding it instead. */
+export function FieldIntel({ w, me, id, x, y, beacon }: { w: World; me: Owner; id: number; x: number; y: number; beacon?: number }) {
   const box = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const b = box.current
@@ -1931,6 +2025,21 @@ export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: numbe
     b.style.top = `${p.y - rr.top}px`
     b.style.visibility = 'visible'
   })
+  const b = beacon !== undefined ? w.beacons[beacon] : undefined
+  if (b) {
+    const team = w.players[me].team
+    const held = b.owner === team ? 'Held by our team' : b.owner === -1 ? 'Neutral' : 'Held by the enemy'
+    const taking = b.progress > 0 && b.progress < 1 && b.claim >= 0 ? ` · ${b.claim === team ? 'we are' : 'the enemy is'} taking it (${Math.round(b.progress * 100)}%)` : ''
+    return (
+      <div ref={box} className="ew-tip" role="tooltip" style={{ visibility: 'hidden' }}>
+        <strong>Capture beacon</strong>
+        {'\n'}
+        {held}{taking}
+        {'\n\n'}
+        For every player on the team holding it: +{BEACON_POP} fleet cap, +{fmt(BEACON_INCOME * 60)} credits a minute, and vision {BEACON_SENSOR} round it (the fog lifts there, reinforcements can be called in). Hold ships near it, unopposed, to take it.
+      </div>
+    )
+  }
   const u = w.byId.get(id)
   if (!u || u.dead) return null
   const o = ownerTag(w, me, u.owner)
