@@ -119,9 +119,11 @@ const MENU = `[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textC
 
 /** A skirmish from the main menu to its first frames: our station placed, the battle started, on
  * the stepped clock from launch (seeded with `seed`). Returns the canvas's box. */
-async function startSkirmish(page: Page, url: string, seed: number) {
+async function startSkirmish(page: Page, url: string, seed: number, setup?: object) {
   await page.send('Page.navigate', { url: `${url}/play/empires` })
   await page.waitFor(MENU)
+  // The lobby as it was left: the map and seats to play, read when the skirmish setup opens.
+  if (setup) await page.eval(`localStorage.setItem('mvlos.empires.lobby', ${JSON.stringify(JSON.stringify(setup))})`)
   await press(page, '.ew-menu-btn', 'Single player')
   await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
   await press(page, '.ew-menu-btn', 'Skirmish')
@@ -214,6 +216,91 @@ function skirmish(n: number): Scene {
       }
     },
   }
+}
+
+// --- Six admirals on a huge map ---
+
+/** The first huge six-spawn map (maps.ts), every seat taken: you and five AI admirals, three
+ * against three, all three factions. */
+const HUGE_SETUP = {
+  map: 'velkar',
+  credits: 1600,
+  slots: [0, 1, 2, 3, 4, 5].map((i) => ({ kind: i ? 'ai' : 'you', faction: ['republic', 'droid', 'swarm'][Math.floor(i / 2)], team: i % 2, difficulty: 'easy', profile: 'balanced' })),
+}
+
+/**
+ * Six fleets on a huge map: a skirmish on Velkar Core with all six seats taken, 40 craft spawned
+ * for each admiral on its side of the middle and sent at it, where they meet. The camera
+ * starts zoomed all the way out, the whole map and its six bases on screen, then pans across the
+ * fight zoomed in.
+ */
+const skirmishHuge: Scene = {
+  name: 'skirmish-huge',
+  about: 'Skirmish on a huge map, six admirals with 40 craft each, zoomed out then panning',
+  async run(page, url) {
+    await startSkirmish(page, url, 6, HUGE_SETUP)
+    const spawned = await page.eval<number>(`(async () => {
+      const sim = await import('/src/apps/games/empires/sim.ts')
+      const data = await import('/src/apps/games/empires/data.ts')
+      const w = __ew.world
+      if (w.players.length !== 6) throw new Error('Not six players but ' + w.players.length)
+      const cx = w.w / 2, cy = w.h / 2
+      const MIX = [['fighter', .3], ['bomber', .1], ['gunship', .2], ['frigate', .2], ['cruiser', .12], ['capital', .08]]
+      let made = 0
+      w.players.forEach((p, o) => {
+        const pre = data.FACTIONS[p.faction].prefix
+        const dx = cx - p.start.x, dy = cy - p.start.y
+        const d = Math.hypot(dx, dy) || 1
+        // A block of ships on its way in, near the middle and facing it, so the six meet there.
+        const bx = cx - (dx / d) * 1100, by = cy - (dy / d) * 1100
+        let k = 0, got = 0
+        for (const [kind, share] of MIX) {
+          const id = pre + '-' + kind
+          if (!data.UNIT[id]) continue
+          let want = Math.max(1, Math.round(40 * share))
+          while (want > 0 && got < 40) {
+            const side = (k % 5 - 2) * 160, back = Math.floor(k / 5) * 160
+            const us = sim.spawnGroup(w, id, o, bx - (dx / d) * back - (dy / d) * side, by - (dy / d) * back + (dx / d) * side, Math.atan2(dy, dx))
+            want -= us.length
+            got += us.length
+            k++
+          }
+        }
+        made += got
+        const ids = w.units.filter((u) => !u.dead && u.owner === o && u.t.speed > 0 && !['station', 'mine', 'yard', 'defense'].includes(u.t.tier)).map((u) => u.id)
+        sim.cmdMove(w, o, ids, cx, cy, true, false)
+      })
+      Object.assign(__ew.cam, { x: cx, y: cy, zoom: 0.01 })
+      return made
+    })()`)
+    // Zoomed out over the whole map while the fleets set off (the zoom clamps to the map).
+    await page.eval(`__perf.frames(30)`)
+    const wide = await measure(page, 60)
+    // Then on the fight in the middle as the fleets arrive, panning across it.
+    await page.eval(`(() => { const w = __ew.world; Object.assign(__ew.cam, { x: w.w / 2 - 300, y: w.h / 2, zoom: Math.max(0.08, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 3000)) }) })()`)
+    await page.eval(`__perf.frames(240)`)
+    const fight = await measure(page, 60, `__ew.cam.x += 10`)
+    const after = await page.eval<{ mb: number; nodes: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, nodes: document.getElementsByTagName('*').length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 6 * 40 * 0.9) throw new Error(`Only ${spawned} of 240 ships spawned`)
+    const both: Raw = { counts: {}, frameMs: [...wide.frameMs, ...fight.frameMs], commitLog: [] }
+    for (const r of [wide, fight]) for (const [k, v] of Object.entries(r.counts)) both.counts[k] = (both.counts[k] ?? 0) + v
+    return {
+      metrics: {
+        ...canvasMetrics(both, 120),
+        'zoomed out draw calls / frame': count(['fill', 'stroke', 'fillRect', 'strokeRect', 'drawImage', 'fillText', 'strokeText'].reduce((s, n) => s + (wide.counts[`on.${n}`] ?? 0) + (wide.counts[`off.${n}`] ?? 0), 0) / 60),
+        'bitmap cache MB': count(after.mb),
+        'React commits / sim s': commitsPerSec(both, 120),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(both),
+      },
+      shots: { 'skirmish-huge': shot },
+    }
+  },
 }
 
 // --- A skirmish picked up again after a reload ---
@@ -505,7 +592,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishResume, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))

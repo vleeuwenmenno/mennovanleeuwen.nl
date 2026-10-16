@@ -8,7 +8,10 @@ import { MAP_SCALE } from './scale.ts'
 // and a seed. No DOM, so the headless sims load this too.
 
 export type Pt = { x: number; y: number }
-export type Symmetry = 'point' | 'quad' | 'tri'
+/** How a map's sides copy each other: 'point' (two, turned half way round the middle), 'quad'
+ * (four, mirrored left-right and top-bottom), 'tri', 'penta' and 'hex' (three, five and six, turned
+ * round the middle) and 'tripair' (six: three pairs of mirror twins, turned a third of the way round). */
+export type Symmetry = 'point' | 'quad' | 'tri' | 'penta' | 'hex' | 'tripair'
 /** A round patch of terrain. Fields and nebulas are built from a few overlapping ones, so they read
  * as blobs rather than perfect circles. */
 export type Patch = { x: number; y: number; r: number }
@@ -82,7 +85,18 @@ export function mirrored(m: Shape, p: Pt): Pt[] {
   if (m.sym === 'point') return [p, { x: w - p.x, y: h - p.y }]
   if (m.sym === 'quad') return [p, { x: w - p.x, y: p.y }, { x: p.x, y: h - p.y }, { x: w - p.x, y: h - p.y }]
   const c = { x: w / 2, y: h / 2 }
-  return [p, rot(p, c, (Math.PI * 2) / 3), rot(p, c, (Math.PI * 4) / 3)]
+  if (m.sym === 'tri') return [p, rot(p, c, (Math.PI * 2) / 3), rot(p, c, (Math.PI * 4) / 3)]
+  // Copies in turn round the middle (clockwise on screen), so neighbouring spawns get neighbouring
+  // numbers.
+  const turn = (q: Pt, n: number) => Array.from({ length: n }, (_, k) => (k ? rot(q, c, (Math.PI * 2 * k) / n) : q))
+  if (m.sym === 'penta') return turn(p, 5)
+  if (m.sym === 'hex') return turn(p, 6)
+  // tripair: the point and its twin across the upright line through the middle, both turned a
+  // third and two thirds round. A point left of the line gives the twins in order round the middle.
+  const twin = { x: w - p.x, y: p.y }
+  const a = turn(p, 3)
+  const b = turn(twin, 3)
+  return [a[0], b[0], a[1], b[1], a[2], b[2]]
 }
 
 /** The distinct copies of a point: a point on a mirror line or in the middle is its own copy. */
@@ -105,6 +119,27 @@ const reefs = { w: 6200, h: 4200, sym: 'quad' as const }
 const shroud = { w: 6000, h: 6000, sym: 'tri' as const }
 const tc = { x: trinity.w / 2, y: trinity.h / 2 }
 const sc = { x: shroud.w / 2, y: shroud.h / 2 }
+const hadrel = { w: 4600, h: 2700, sym: 'point' as const }
+const tessaly = { w: 4050, h: 4050, sym: 'tri' as const }
+const orvane = { w: 5800, h: 3200, sym: 'point' as const }
+const ithra = { w: 6000, h: 4000, sym: 'quad' as const }
+const quintara = { w: 6800, h: 6800, sym: 'penta' as const }
+const serrat = { w: 6800, h: 6800, sym: 'hex' as const }
+const velkar = { w: 8400, h: 8400, sym: 'hex' as const }
+const draxis = { w: 8000, h: 8000, sym: 'hex' as const }
+const tarsis = { w: 8600, h: 8600, sym: 'tripair' as const }
+const mid = (m: Shape): Pt => ({ x: m.w / 2, y: m.h / 2 })
+/** The point `r` from the middle of `m`, `deg` degrees clockwise from straight up. */
+const at = (m: Shape, r: number, deg: number): Pt => rot({ x: m.w / 2, y: m.h / 2 - r }, mid(m), (deg * Math.PI) / 180)
+/** The same as an [x, y, size] entry for patches, clouds and hulks. */
+const atR = (m: Shape, r: number, deg: number, size: number): [number, number, number] => {
+  const p = at(m, r, deg)
+  return [p.x, p.y, size]
+}
+/** Where the spiral arms of Draxis Spiral lie at `r` from the middle: they wind clockwise outwards. */
+const arm = (r: number) => 8 + ((r - 1000) / 1600) * 37
+/** How far each of Tarsis Triad's twin stations sits off the line between them. */
+const TWIN = 19.2
 
 /** How far every map is spread out from how it was drawn: positions and terrain grow, while ore,
  * beacons, wrecks and stations keep their size, so there's more open space between them and
@@ -302,6 +337,212 @@ export const MAPS: MapDef[] = ([
       ]),
     ],
   },
+  // --- Small ---
+  {
+    id: 'hadrel',
+    name: 'Hadrel Narrows',
+    blurb: 'A duel across an asteroid wall with two narrow gaps, a beacon in each. A derelict lies in the heart of the wall for anyone who braves the rocks.',
+    ...hadrel,
+    spawns: [
+      { x: 550, y: 1350 },
+      { x: 4050, y: 1350 },
+    ],
+    ore: all(hadrel, [
+      { x: 1100, y: 650 },
+      { x: 1100, y: 2050 },
+      { x: 1750, y: 1350 },
+    ]),
+    beacons: all(hadrel, [{ x: 2300, y: 760 }]),
+    rocks: 22,
+    seed: 7103,
+    wrecks: hulks(hadrel, [
+      [2300, 1350, 1000],
+      [1500, 250, 600],
+    ]),
+    fields: patches(hadrel, [
+      [2300, 1350, 300],
+      [2290, 1090, 170],
+      [2300, 190, 230],
+      [2350, 350, 140],
+    ]),
+    nebulas: clouds(hadrel, 30, [[1650, 2380, 230]]),
+  },
+  {
+    id: 'tessaly',
+    name: 'Tessaly Knot',
+    blurb: 'Three stations close together, asteroid walls between each pair. Every road runs through the knot in the middle: the only beacon and the richest ore, under a nebula.',
+    ...tessaly,
+    spawns: all(tessaly, [{ x: tessaly.w / 2, y: 520 }]),
+    ore: [
+      ...all(tessaly, [
+        { x: 1430, y: 1000 },
+        { x: 2620, y: 1000 },
+      ]),
+      ...all(tessaly, [at(tessaly, 560, 60)]),
+    ],
+    beacons: [mid(tessaly)],
+    rocks: 24,
+    seed: 7211,
+    wrecks: hulks(tessaly, [atR(tessaly, 1750, 88, 700)]),
+    fields: patches(tessaly, [atR(tessaly, 950, 60, 180), atR(tessaly, 1220, 60, 270), atR(tessaly, 1500, 60, 210)]),
+    nebulas: clouds(tessaly, 300, [[tessaly.w / 2, tessaly.h / 2, 330]]),
+  },
+  // --- Medium ---
+  {
+    id: 'orvane',
+    name: 'Orvane Lanes',
+    blurb: 'Three lanes split by two long asteroid walls, open to each other only at the crossroads in the middle. The beacons sit in the outer lanes under nebulas; the middle lane has the ore and a big derelict.',
+    ...orvane,
+    spawns: [
+      { x: 600, y: 1600 },
+      { x: 5200, y: 1600 },
+    ],
+    ore: all(orvane, [
+      { x: 1150, y: 900 },
+      { x: 1150, y: 2300 },
+      { x: 2250, y: 500 },
+      { x: 2100, y: 1600 },
+    ]),
+    beacons: all(orvane, [{ x: 2900, y: 430 }]),
+    rocks: 40,
+    seed: 8317,
+    wrecks: hulks(orvane, [[2900, 1600, 1200]]),
+    fields: patches(orvane, [
+      [1750, 1060, 170],
+      [2080, 1040, 190],
+      [2420, 1070, 170],
+      [3380, 1050, 170],
+      [3720, 1080, 190],
+      [4050, 1060, 170],
+    ]),
+    nebulas: clouds(orvane, 200, [[2900, 430, 260]]),
+  },
+  {
+    id: 'ithra',
+    name: 'Ithra Archipelago',
+    blurb: 'Four corners and four ore islands, each ringed by asteroids and open towards its own corner. Beacons on the top and bottom edges and in a nebula at the heart.',
+    ...ithra,
+    spawns: all(ithra, [{ x: 650, y: 600 }]),
+    ore: all(ithra, [
+      { x: 1350, y: 480 },
+      { x: 560, y: 1320 },
+      { x: 1800, y: 1380 },
+      { x: 2120, y: 1600 },
+    ]),
+    beacons: [mid(ithra), ...all(ithra, [{ x: ithra.w / 2, y: 480 }])],
+    rocks: 50,
+    seed: 8429,
+    wrecks: hulks(ithra, [[1150, ithra.h / 2, 800]]),
+    fields: patches(ithra, [
+      [2350, 1180, 160],
+      [2440, 1640, 170],
+      [1900, 1990, 170],
+      [ithra.w / 2 - 560, ithra.h / 2 - 420, 190],
+    ]),
+    nebulas: clouds(ithra, 160, [[ithra.w / 2, ithra.h / 2, 380]]),
+  },
+  // --- Large ---
+  {
+    id: 'quintara',
+    name: 'Quintara Crown',
+    blurb: 'Five stations round a crown of asteroids, a beacon in each gap and the richest ore inside, round a nebula with the sixth beacon. Three against two, or every admiral for a side.',
+    ...quintara,
+    spawns: all(quintara, [{ x: quintara.w / 2, y: 650 }]),
+    ore: [
+      ...all(quintara, [
+        { x: 2800, y: 1150 },
+        { x: 4000, y: 1150 },
+      ]),
+      ...all(quintara, [at(quintara, 2450, 36), at(quintara, 720, 36)]),
+    ],
+    beacons: [mid(quintara), ...all(quintara, [at(quintara, 1500, 36)])],
+    rocks: 70,
+    seed: 9001,
+    wrecks: hulks(quintara, [atR(quintara, 2000, 20, 700)]),
+    fields: patches(quintara, [atR(quintara, 1500, 0, 300), atR(quintara, 1450, 11, 200), atR(quintara, 1450, -11, 200)]),
+    nebulas: clouds(quintara, 45, [[quintara.w / 2, quintara.h / 2, 450]]),
+  },
+  {
+    id: 'serrat',
+    name: 'Serrat Halo',
+    blurb: 'Six stations on a ring round a dead heart of asteroids. Each pair of neighbours shares a beacon, so the fighting runs all the way round; a rich derelict waits in the heart.',
+    ...serrat,
+    spawns: all(serrat, [{ x: serrat.w / 2, y: 700 }]),
+    ore: [
+      ...all(serrat, [
+        { x: 2880, y: 1300 },
+        { x: 3920, y: 1300 },
+      ]),
+      ...all(serrat, [at(serrat, 1650, 0)]),
+    ],
+    beacons: all(serrat, [at(serrat, 2450, 30)]),
+    rocks: 70,
+    seed: 9127,
+    wrecks: hulks(serrat, [[serrat.w / 2, serrat.h / 2, 1500]]),
+    fields: patches(serrat, [
+      [serrat.w / 2, serrat.h / 2, 620],
+      atR(serrat, 820, 30, 320),
+    ]),
+    nebulas: clouds(serrat, 0, [[serrat.w / 2, serrat.h / 2, 420]]),
+  },
+  // --- Huge: six spawns each, laid out to play from a duel on opposite sides up to three against three ---
+  {
+    id: 'velkar',
+    name: 'Velkar Core',
+    blurb: 'Six stations round a wide open field and a rich core: six beacons ring the middle, a seventh sits in its nebula. Empty spawns leave their ore for whoever gets there first.',
+    ...velkar,
+    spawns: all(velkar, [{ x: velkar.w / 2, y: 700 }]),
+    ore: [
+      ...all(velkar, [
+        { x: 3620, y: 1250 },
+        { x: 4780, y: 1250 },
+      ]),
+      ...all(velkar, [at(velkar, 3000, 30), at(velkar, 800, 0)]),
+    ],
+    beacons: [mid(velkar), ...all(velkar, [at(velkar, 1900, 30)])],
+    rocks: 110,
+    seed: 9311,
+    wrecks: hulks(velkar, [atR(velkar, 2300, 0, 600)]),
+    fields: patches(velkar, [atR(velkar, 2500, 13, 230), atR(velkar, 2620, 18, 150)]),
+    nebulas: clouds(velkar, 200, [[velkar.w / 2, velkar.h / 2, 520]]),
+  },
+  {
+    id: 'draxis',
+    name: 'Draxis Spiral',
+    blurb: 'Six asteroid arms wind out from the middle like a pinwheel, so every road to the core curves past a neighbour. Beacons wait at the inner end of each lane and in the core.',
+    ...draxis,
+    spawns: all(draxis, [{ x: draxis.w / 2, y: 700 }]),
+    ore: [
+      ...all(draxis, [
+        { x: 3420, y: 1250 },
+        { x: 4580, y: 1250 },
+      ]),
+      ...all(draxis, [at(draxis, 2300, arm(2300) - 30), at(draxis, 3000, 30)]),
+    ],
+    beacons: [mid(draxis), ...all(draxis, [at(draxis, 1150, arm(1150) - 30)])],
+    rocks: 100,
+    seed: 9437,
+    wrecks: hulks(draxis, [atR(draxis, 1600, arm(1600) + 30, 700)]),
+    fields: patches(draxis, [1000, 1330, 1660, 1990, 2320, 2600].map((r, i) => atR(draxis, r, arm(r), i % 2 ? 210 : 240))),
+    nebulas: clouds(draxis, 320, [[draxis.w / 2, draxis.h / 2, 500]]),
+  },
+  {
+    id: 'tarsis',
+    name: 'Tarsis Triad',
+    blurb: 'Three pairs of twin stations, each pair sharing a beacon. Between the pairs lie three fronts, each a beacon in a nebula, and an open core with a seventh. Twins can fight for their beacon or stand together.',
+    ...tarsis,
+    spawns: all(tarsis, [at(tarsis, 3500, -TWIN)]),
+    ore: [
+      ...all(tarsis, [at(tarsis, 3650, -TWIN - 12.8), at(tarsis, 2700, -TWIN - 5.8), at(tarsis, 3000, -45)]),
+      ...all(tarsis, [at(tarsis, 900, 60)]),
+    ],
+    beacons: [mid(tarsis), ...all(tarsis, [at(tarsis, 3150, 0), at(tarsis, 2500, 60)])],
+    rocks: 120,
+    seed: 9551,
+    wrecks: hulks(tarsis, [atR(tarsis, 2000, -30, 800)]),
+    fields: patches(tarsis, [atR(tarsis, 3700, 60, 320), atR(tarsis, 3600, 50, 200)]),
+    nebulas: clouds(tarsis, 15, [atR(tarsis, 2500, 60, 620)]),
+  },
 ] as MapDef[]).map((m) => spread(m))
 
 export const MAP: Record<string, MapDef> = Object.fromEntries(MAPS.map((m) => [m.id, m]))
@@ -309,11 +550,14 @@ export const MAP: Record<string, MapDef> = Object.fromEntries(MAPS.map((m) => [m
 // --- Generated maps ------------------------------------------------------------------------------------
 
 export type MapSize = 'small' | 'medium' | 'large'
+/** How many players a generated map is for. */
+export type Players = 2 | 3 | 4 | 5 | 6
+export const PLAYER_COUNTS: readonly Players[] = [2, 3, 4, 5, 6]
 export type Resources = 'scarce' | 'normal' | 'rich'
 export type Amount = 'none' | 'few' | 'many'
 export type MapRules = {
   seed: number
-  players: 2 | 3 | 4
+  players: Players
   size: MapSize
   resources: Resources
   /** How many beacons, or 'auto' for one more than there are players. Snapped to what the
@@ -340,7 +584,7 @@ export function cleanRules(v: unknown): MapRules {
   const beacons = r.beacons === 'auto' ? 'auto' : typeof r.beacons === 'number' && Number.isFinite(r.beacons) ? Math.min(MAX_BEACONS, Math.max(0, Math.floor(r.beacons))) : d.beacons
   return {
     seed,
-    players: pick(r.players, [2, 3, 4] as const, d.players),
+    players: pick(r.players, PLAYER_COUNTS, d.players),
     size: pick(r.size, ['small', 'medium', 'large'] as const, d.size),
     resources: pick(r.resources, ['scarce', 'normal', 'rich'] as const, d.resources),
     beacons,
@@ -350,10 +594,13 @@ export function cleanRules(v: unknown): MapRules {
   }
 }
 
-const DIMS: Record<2 | 3 | 4, Record<MapSize, [number, number]>> = {
+const DIMS: Record<Players, Record<MapSize, [number, number]>> = {
   2: { small: [4600, 2900], medium: [5600, 3400], large: [6800, 4100] },
   3: { small: [5000, 5000], medium: [5800, 5800], large: [6800, 6800] },
   4: { small: [5600, 3800], medium: [6600, 4400], large: [7800, 5200] },
+  // Turned round the middle like three, with a ring big enough for the stations not to crowd.
+  5: { small: [5800, 5800], medium: [6600, 6600], large: [7600, 7600] },
+  6: { small: [6200, 6200], medium: [7000, 7000], large: [8000, 8000] },
 }
 const ORE_PER_PLAYER: Record<Resources, number> = { scarce: 2, normal: 4, rich: 6 }
 const NAME_A = ['Kel', 'Orun', 'Vesh', 'Tarn', 'Ilos', 'Myrr', 'Dath', 'Sorre', 'Quell', 'Ashen', 'Brin', 'Corva', 'Ytha', 'Mordu', 'Saren', 'Zeel']
@@ -363,8 +610,8 @@ const NEBULA_HUES = [285, 190, 330, 25, 160, 240]
 /**
  * A map built from rules and a seed: the same rules and seed always give the same map. Everything
  * is placed for the first player and copied to the others by the symmetry (point for two players,
- * three-way rotation for three, four-way mirror for four), so every spawn gets the same ore,
- * beacons and terrain around it.
+ * four-way mirror for four, and for three, five and six a turn round the middle), so every spawn
+ * gets the same ore, beacons and terrain around it.
  *
  * Each step draws from its own random stream, so turning nebulas up or down leaves the ore where
  * it was. Placement retries with looser spacing if a crowded map runs out of room, and gives up on
@@ -374,7 +621,9 @@ export function generateMap(rules: MapRules): MapDef {
   const R = cleanRules(rules)
   const n = R.players
   const [w, h] = DIMS[n][R.size]
-  const sym: Symmetry = n === 2 ? 'point' : n === 3 ? 'tri' : 'quad'
+  const sym: Symmetry = n === 2 ? 'point' : n === 3 ? 'tri' : n === 4 ? 'quad' : n === 5 ? 'penta' : 'hex'
+  /** Turned round the middle: three, five or six. */
+  const turned = n === 3 || n >= 5
   const m: Shape = { w, h, sym }
   const c = { x: w / 2, y: h / 2 }
   const stream = (k: number) => rng(R.seed * 7919 + n * 104729 + k * 15485863)
@@ -383,7 +632,7 @@ export function generateMap(rules: MapRules): MapDef {
   // Spawns: near the edge (or the corners), nudged a little so seeds differ.
   const rs = stream(1)
   const s0 =
-    n === 2 ? { x: 600 + rs() * 250, y: h / 2 + (rs() - 0.5) * h * 0.4 } : n === 3 ? rot({ x: c.x, y: 650 }, c, (rs() - 0.5) * 0.5) : { x: 650 + rs() * 250, y: 600 + rs() * 200 }
+    n === 2 ? { x: 600 + rs() * 250, y: h / 2 + (rs() - 0.5) * h * 0.4 } : turned ? rot({ x: c.x, y: 650 }, c, (rs() - 0.5) * 0.5) : { x: 650 + rs() * 250, y: 600 + rs() * 200 }
   const spawns = mirrored(m, s0)
   const inBounds = (p: Pt, margin: number) => p.x > margin && p.y > margin && p.x < w - margin && p.y < h - margin
   const toCentre = M.atan2(c.y - s0.y, c.x - s0.x)
@@ -425,8 +674,10 @@ export function generateMap(rules: MapRules): MapDef {
   const rb = stream(3)
   const auto = n + 1
   let want = Math.min(MAX_BEACONS, R.beacons === 'auto' ? auto : R.beacons)
-  if (n === 3 && want % 3 === 2) want-- // Two can't be split fairly between three; round down.
-  const centre = n === 3 ? want % 3 === 1 : want % 2 === 1
+  // Turned maps take beacons in groups of one each, and maybe the middle: two can't be split fairly
+  // between three, so round down.
+  if (turned && want % n > 1) want -= (want % n) - 1
+  const centre = turned ? want % n === 1 : want % 2 === 1
   const beacons: Pt[] = centre ? [{ ...c }] : []
   const beaconOk = (ps: Pt[], k: number) =>
     ps.every((p) => inBounds(p, 420) && spawns.every((s) => dist(p, s) > 1300 * k) && beacons.every((b) => dist(p, b) > 1000 * k) && ore.every((o) => dist(p, o) > 720 * k)) &&

@@ -5,7 +5,7 @@ import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { NAME_MAX, nameProblem, tidyName } from './names'
 import { REJOIN_WAIT, mpName } from './net'
-import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
+import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, PLAYER_COUNTS, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Players, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMapSort, empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresMapSort as MapSort } from '../prefs'
@@ -1027,24 +1027,28 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
         g.arc(ox + r.x * s, oy + r.y * s, Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
         g.fill()
       }
+      // Markers keep their size, except in a small thumbnail of a big map, where they'd run together:
+      // there they shrink as the map grows past a medium one, down to half.
+      const big = cw > 260
+      const k = big ? 1 : Math.max(0.5, Math.min(1, (7600 * MAP_SCALE) / Math.max(map.w, map.h)))
       g.fillStyle = '#f2c14a'
-      for (const h of map.wrecks) g.fillRect(ox + h.x * s - 2.5, oy + h.y * s - 2.5, 5, 5)
+      for (const h of map.wrecks) g.fillRect(ox + h.x * s - 2.5 * k, oy + h.y * s - 2.5 * k, 5 * k, 5 * k)
       g.fillStyle = '#4fe3d8'
       for (const n of map.ore) {
         const x = ox + n.x * s
         const y = oy + n.y * s
         g.beginPath()
-        g.moveTo(x, y - 4)
-        g.lineTo(x + 3, y)
-        g.lineTo(x, y + 4)
-        g.lineTo(x - 3, y)
+        g.moveTo(x, y - 4 * k)
+        g.lineTo(x + 3 * k, y)
+        g.lineTo(x, y + 4 * k)
+        g.lineTo(x - 3 * k, y)
         g.fill()
       }
       g.strokeStyle = '#c8d4ee'
       g.lineWidth = 1.5
       for (const b of map.beacons) {
         g.beginPath()
-        g.arc(ox + b.x * s, oy + b.y * s, 5, 0, Math.PI * 2)
+        g.arc(ox + b.x * s, oy + b.y * s, 5 * k, 0, Math.PI * 2)
         g.stroke()
       }
       // Start areas, under the spawn markers; the active one solid, the box being drawn on top.
@@ -1071,7 +1075,6 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
         g.strokeRect(ox + Math.min(d.x0, d.x1) * s, oy + Math.min(d.y0, d.y1) * s, Math.abs(d.x1 - d.x0) * s, Math.abs(d.y1 - d.y0) * s)
         g.setLineDash([])
       }
-      const big = cw > 260
       map.spawns.forEach((p, i) => {
         const slot = slots?.[i]
         if (areas && slot?.kind === 'closed') return
@@ -1080,7 +1083,7 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
         const at = !a || (p.x >= a.x && p.y >= a.y && p.x <= a.x + a.w && p.y <= a.y + a.h) ? p : { x: a.x + a.w / 2, y: a.y + a.h / 2 }
         const x = ox + at.x * s
         const y = oy + at.y * s
-        const r = big ? 11 : 6
+        const r = big ? 11 : 6 * k
         g.fillStyle = slot ? slotColor(slot) : '#c8d4ee'
         g.globalAlpha = slot?.kind === 'closed' ? 0.5 : 1
         g.beginPath()
@@ -1189,7 +1192,7 @@ const AMOUNTS: [Amount, string][] = [
 export function mapSize(m: MapDef) {
   // Measured against the battlefield's scale, so a map keeps its class whatever MAP_SCALE is.
   const area = (m.w * m.h) / 1e6 / MAP_SCALE ** 2
-  const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : 'Large'
+  const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : area < 90 ? 'Large' : 'Huge'
   return { cls, dims: `${(m.w / 1000).toFixed(1)}k × ${(m.h / 1000).toFixed(1)}k` }
 }
 
@@ -1457,7 +1460,7 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
       </div>
       <section>
         <h6>Layout</h6>
-        {field('Players', <Seg<2 | 3 | 4> label="Players" value={rules.players} options={[[2, '2'], [3, '3'], [4, '4']]} onChange={(v) => onChange({ players: v })} />)}
+        {field('Players', <Seg<Players> label="Players" value={rules.players} options={PLAYER_COUNTS.map((n): [Players, string] => [n, String(n)])} onChange={(v) => onChange({ players: v })} />)}
         {field('Size', <Seg label="Size" value={rules.size} options={[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]} onChange={(v) => onChange({ size: v })} />)}
       </section>
       <section>

@@ -64,6 +64,7 @@
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "empires:tournament": "node scripts/empires-tournament.ts",
+    "empires:maps": "node scripts/empires-maps.ts",
     "start": "node server/index.ts"
   },
   "dependencies": {

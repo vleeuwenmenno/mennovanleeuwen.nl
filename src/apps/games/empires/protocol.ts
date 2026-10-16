@@ -15,11 +15,12 @@ export const MP_PATH = '/api/empires/ws'
  * orders change in a way that would make copies from before and after drift apart (version 2: the
  * third faction and the faction mechanics; version 3: the three-faction rework, with the Swarm playable,
  * its research and the balance pass; version 4: the new ship classes, the Sentinel's shield aura and
- * the AI's flagship pick). The server turns away a client of another version,
+ * the AI's flagship pick; version 6: the new maps, five and six spawns, and generated maps for five
+ * and six players). The server turns away a client of another version,
  * closing with OUTDATED_CODE, and the game asks the player to reload. Clients from before there was
  * a version send none: they count as version 1.
  */
-export const PROTOCOL = 5
+export const PROTOCOL = 6
 /** WebSocket close code for a client whose PROTOCOL isn't the server's. */
 export const OUTDATED_CODE = 4001
 export const CHAT_MAX = 240
