@@ -18,6 +18,7 @@
     "check:markdown": "node scripts/markdown-check.ts",
     "icons:notify": "node scripts/notify-icons.ts",
     "check:empires": "node scripts/empires-sync.ts",
+    "check:ground-map": "node scripts/ground-map-check.ts",
     "check:empires-ws": "node scripts/empires-ws.ts",
     "check:empires-match": "node scripts/empires-match.ts",
     "check:empires-restart": "node scripts/empires-restart.ts",
