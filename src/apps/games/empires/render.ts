@@ -441,6 +441,9 @@ export class Renderer {
   /** Modelled warships that just died where we could see, until their wreck shows up: what had
    * already come off them carries over to the hulk. */
   private deaths: { x: number; y: number; det: number; at: number }[] = []
+  /** Where the battle's kills happened lately (its 'boom' events): a followed unit that's gone
+   * breaks up only if it was killed there. One that jumped out (or a cancelled site) just goes. */
+  private kills: { x: number; y: number; at: number }[] = []
   constructor() {
     for (const s of WORLD_SPRITES) this.imgs.set(s, load(`${BASE}world/${s}.webp`))
   }
@@ -540,6 +543,7 @@ export class Renderer {
           if (e.kind === 'turbo' || e.kind === 'missile') this.add({ kind: 'fire', x: e.x, y: e.y, life: 0.35, size: 6, grow: 22, color: '#ff8a3a' })
         }
       } else if (e.k === 'boom') {
+        this.kills.push({ x: e.x, y: e.y, at: this.clock })
         if (!seen(e.x, e.y)) continue
         const color = e.owner === undefined ? '#888' : FACTIONS[w.players[e.owner].faction].debris
         // A unit we saw breaks into its own fragments (see trackModels); flecks of debris for one we
@@ -1716,7 +1720,7 @@ export class Renderer {
       if (w.byId.get(id) === tr.u && !tr.u.dead) continue
       this.tracked.delete(id)
       const u = tr.u
-      if (!u.dead || !tr.vis) continue
+      if (!u.dead || !tr.vis || !this.kills.some((q) => Math.abs(q.x - u.x) < 1 && Math.abs(q.y - u.y) < 1)) continue
       if (BREAK_WEIGHTS[u.t.tier]) this.deaths.push({ x: u.x, y: u.y, det: tr.det, at: this.clock })
       else this.fx.shatter(tr.m, u.t.tier, u.x, u.y, u.a + Math.PI / 2, u.t.size, Math.cos(u.a) * u.v, Math.sin(u.a) * u.v, u.id, hullState(tr.m, u, u.t.tier))
     }
@@ -1731,6 +1735,7 @@ export class Renderer {
     }
     for (const id of this.fx.anchored()) if (!listed.has(id)) this.fx.release(id)
     if (this.deaths.length) this.deaths = this.deaths.filter((q) => this.clock - q.at < 1)
+    if (this.kills.length) this.kills = this.kills.filter((q) => this.clock - q.at < 1)
   }
 
   /** The flash of a ship dropping out of hyperspace: a white burst, a shockwave, a spray of sparks
