@@ -1589,15 +1589,15 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           else sound.shipReady(myFaction, t.tier)
           toast(t.tier === 'mine' ? `${t.name} is drilling` : t.orbital ? `${t.name} online: select it to fit modules into its slot` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: ${worksOf(t) === 'cyard' ? 'cruisers' : 'frigates and corvettes'} are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'warp') {
-          if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
+          if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay, UNIT[e.unit].faction)
         } else if (e.k === 'arrived') {
-          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size)
+          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size, UNIT[e.unit].faction)
           if (e.owner === me && e.field) toast(`${UNIT[e.unit].name} dropped out inside an asteroid field and took heavy damage`, 'bad', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
           else if (e.owner !== me && foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`Enemy ${UNIT[e.unit].name.toLowerCase()} out of hyperspace`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'retreating') {
-          if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.secs)
+          if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.secs, UNIT[e.unit].faction)
         } else if (e.k === 'retreated') {
-          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size)
+          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size, UNIT[e.unit].faction)
           if (e.owner === me) toast(e.refund > 0 ? `${UNIT[e.unit].name} jumped out: +${Math.round(e.refund)} credits in ${REFUND_DELAY} s` : `${UNIT[e.unit].name} jumped out`, 'good')
           else if (foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`An enemy ${UNIT[e.unit].name.toLowerCase()} escaped into hyperspace`, 'info', { x: e.x, y: e.y })
         } else if (e.k === 'upgraded' && e.owner === me) {

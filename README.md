@@ -2825,6 +2825,46 @@ rushed ship), the description gives way first, then the role line, and its ⓘ a
 (`useFitLines` in [`Hud.tsx`](src/apps/games/empires/Hud.tsx) measures when the card's rows change
 or it is resized, never per frame).
 
+## Empires At War jumps by faction
+
+Every side arrives and leaves its own way: reinforcements and reserve ships called in, fleets at the
+start of a fleet battle, and warships that retreat. Only the look and the sound differ; the timings
+are the battle's (the warp delay, `RETREAT_TIME`), the same for everyone, so lockstep battles are
+untouched. The style is picked from the ship's faction (`WARP_STYLE` in
+[`warpfx.ts`](src/apps/games/empires/warpfx.ts)); adding one is a new `WarpStyle`, its entry there,
+and its branch in `WarpFx` and in `JUMPS` in [`sound.ts`](src/apps/games/empires/sound.ts).
+
+- **Republic: hyperspace.** Light gathers where the ship will be, with turning rings and streaks
+  reaching back; it streaks in, stretched long, and snaps to a stop. A retreating ship gathers
+  light and tightening rings, then streaks away ahead. Drawn in
+  [`render.ts`](src/apps/games/empires/render.ts) (`drawWarps`, `drawCharge`, `drawDeparts`).
+- **Swarm: wormholes.** While the jump charges, a wormhole tears open behind the drop point: a
+  dark throat ringed by a bright, warbling rim, spiral arms turning into it, and the space round it
+  bending in (spokes curling harder the closer they get, ripples sinking inward). The ship shoots
+  out of its mouth, growing to full size, and the hole collapses behind it in a pulse, with a wet
+  spray of its engine colour. A retreating ship bends space ahead of it first, then the hole opens
+  from a pinprick, swirling and throbbing harder as the drive charges, with strands of light
+  spiralling off the bow into it; the ship flies in, shrinking and stretching into the throat, and
+  the hole swells, collapses and goes in a last pulse. Its sound is a deep organic drone that
+  throbs faster as it opens, and a wet whomp.
+- **Confederacy: rifts.** A jagged red crack forms across the ship's heading behind the drop
+  point, branch by branch, burning hotter, flickering and juddering, spitting embers. When the
+  jump lands it splits wide and the ship is shoved out of it (its stern hidden behind the crack's
+  jagged edge until it clears), overshoots and recoils onto its mark, and the tear snaps shut in a
+  red burst of sparks, leaving fading cracks and embers. A retreating ship tears one open ahead of
+  it while it charges; the rift gapes, the ship jolts back and lurches in, and it slams shut with a
+  red flash and sparks. Its sound is electrical crackle over a harsh, stuttering buzz, and a ripping
+  tear with a heavy thump.
+
+Each crack's shape is made once, from a seeded random number generator: from the drop point for a
+ship coming in, from the spot ahead of it for a retreat (the one it tears open on the way out is the
+one it was tearing while it charged). Only how much of it shows changes. The soft parts of a
+wormhole (its glow, throat, rim and swirl) are sprites painted once per side, the rest is a few
+strokes; a wormhole small on screen leaves out the bent space and the details. Line widths have a
+floor in screen pixels, so both read at every zoom. Twenty jumping in at once (a fleet battle's
+start) cost about as much to draw as twenty Republic jumps. The retreat's charge arc round the ship
+is the same for all three.
+
 ## Empires At War rush launch
 
 A desperate measure for a base under attack. Once **Rushed construction** (the droids' **Hasty

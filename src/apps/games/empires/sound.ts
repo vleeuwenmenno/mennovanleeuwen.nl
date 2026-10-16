@@ -1,6 +1,7 @@
 import { FACTIONS, type AbilityId, type FactionId, type Tier, type WeaponKind } from './data'
 import { MusicDirector, type MusicScene } from './music'
 import { RETREAT_TIME, WARP_RESERVE, WARP_YARD } from './sim'
+import { WARP_STYLE, type WarpStyle } from './warpfx.ts'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresBus, type EmpiresMix } from '../prefs'
 
 export type { MusicScene }
@@ -480,6 +481,107 @@ const warpArrive = (big: boolean): Recipe => (sr, r) => {
     const thump = Math.sin(TAU * glide(low * 1.6, low * 0.7, t, 0.5) * t) * Math.exp(-t * (big ? 2.2 : 4)) * fadeIn(t, 0.012)
     return soft((whoosh * 0.9 + tone * 0.55 + crack * 0.3 + thump * 0.9) * 1.1) * end
   })
+}
+
+/**
+ * A Swarm wormhole opening (for a jump in or a retreat): a deep, organic drone that throbs faster as
+ * it opens, a vowel-like warble sweeping with the throb, and a long inward suck of air. Lasts as
+ * long as the jump, like warpCharge.
+ */
+const wormCharge = (len: number): Recipe => (sr) => {
+  const a = new Osc()
+  const b = new Osc()
+  const sub = new Osc()
+  const lp = new Svf()
+  const vowel = new Svf()
+  const air = new Svf()
+  const tail = 0.15
+  return render(sr, len + tail, (t) => {
+    const rise = Math.min(1, t / len)
+    const env = rise * rise * (3 - 2 * rise) * (t > len ? Math.cos(((t - len) / tail) * Math.PI * 0.5) ** 2 : 1)
+    // The throb: 1.5 a second at first, 7.5 by the end.
+    const tt = Math.min(t, len)
+    const ph = TAU * (1.5 * tt + (3 * tt * tt) / len)
+    const wob = 0.5 + 0.5 * Math.sin(ph)
+    const f0 = glide(32, 58, t, len)
+    const drone = lp.run(a.saw(f0 * (1 + 0.035 * Math.sin(ph)), sr) + b.saw(f0 * 1.505, sr) * 0.5, 140 + 800 * wob * rise, 0.5, sr).low
+    const warble = vowel.run(drone, 260 + 520 * wob, 0.3, sr).band
+    const suck = air.run(noise(), glide(180, 1600, t, len), 0.35, sr).band * rise
+    return (drone * 0.4 + warble * 0.55 + sub.sin(f0 * 0.5, sr) * 0.35 + suck * 0.22) * env
+  })
+}
+
+/** A ship out of (or into) a Swarm wormhole: a deep wet whomp with a wobble, a bubble's gloop, and a
+ * rush of air falling away. Bigger ships whomp lower and longer. */
+const wormArrive = (big: boolean): Recipe => (sr) => {
+  const o = new Osc()
+  const o2 = new Osc()
+  const lp = new Svf()
+  const len = big ? 2 : 1.3
+  return render(sr, len, (t) => {
+    const end = Math.min(1, (len - t) / 0.3)
+    const fade = Math.min(1, t / 0.01)
+    const vib = 1 + 0.12 * Math.sin(TAU * 9 * t) * Math.exp(-t * 3)
+    const whomp = o.sin(glide(big ? 110 : 150, big ? 28 : 40, t, 0.5) * vib, sr) * Math.exp(-t * (big ? 2 : 3))
+    const gloop = o2.sin(glide(180, 900, t, 0.09), sr) * ad(t, 0.004, 0.06)
+    const rush = lp.run(noise(), glide(2400, 120, t, 0.6), 0.6, sr).low * Math.exp(-t * 4)
+    return soft((whomp * 1.1 + gloop * 0.35 + rush * 0.8) * fade) * end
+  })
+}
+
+/**
+ * A Confederacy rift tearing open: electrical crackle, sparse at first and a storm by the end, over
+ * a harsh buzz rising in pitch and stuttering, like something forced. Lasts as long as the jump.
+ */
+const riftCharge = (len: number): Recipe => (sr, r) => {
+  const o = new Osc()
+  const o2 = new Osc()
+  const buzzF = new Svf()
+  const crackF = new Svf()
+  const tail = 0.12
+  let crack = 0
+  let amp = 0
+  const decay = Math.exp(-1 / (0.004 * sr))
+  return render(sr, len + tail, (t) => {
+    const rise = Math.min(1, t / len)
+    const env = (0.25 + 0.75 * rise * rise) * Math.min(1, t / 0.05) * (t > len ? Math.cos(((t - len) / tail) * Math.PI * 0.5) ** 2 : 1)
+    if (r() < (15 + 420 * rise * rise) / sr) {
+      crack = 1
+      amp = 0.4 + r() * 0.6
+    }
+    crack *= decay
+    const crackle = crackF.run(noise(), 3200, 0.5, sr).band * crack * amp
+    const f = glide(46, 115, t, len)
+    const stutter = Math.sin(TAU * glide(9, 31, t, len) * t) > -0.3 ? 1 : 0.25
+    const buzz = buzzF.run(o.saw(f, sr) + o2.sqr(f * 2.01, sr) * 0.4, 600 + 1400 * rise, 0.6, sr).band
+    return (crackle * 1.4 + soft(buzz * 3) * 0.3 * stutter * rise) * env
+  })
+}
+
+/** A ship shoved out of (or lurching into) a Confederacy rift: a ripping tear stuttering as it goes, a
+ * crack, a heavy distorted thump, and a sizzle dying away. */
+const riftArrive = (big: boolean): Recipe => (sr) => {
+  const bp = new Svf()
+  const fz = new Svf()
+  const len = big ? 1.9 : 1.3
+  const low = big ? 40 : 58
+  return render(sr, len, (t) => {
+    const end = Math.min(1, (len - t) / 0.3)
+    const fade = Math.min(1, t / 0.006)
+    const jag = Math.sin(TAU * 62 * t) > 0 ? 1 : 0.35
+    const rip = bp.run(noise(), glide(700, 4200, t, 0.22), 0.5, sr).band * jag * ad(t, 0.01, 0.16)
+    const crack = noise() * Math.exp(-t * 50)
+    const thump = soft(Math.sin(TAU * glide(low * 1.8, low * 0.7, t, 0.4) * t) * 2.2) * Math.exp(-t * (big ? 2.4 : 3.6))
+    const sizzle = fz.run(noise(), 5200, 0.4, sr).band * (Math.sin(TAU * 23 * t) > 0.4 ? 1 : 0.2) * ad(t - 0.15, 0.05, 0.35)
+    return soft((rip * 0.9 + crack * 0.35 + thump * 0.9 + sizzle * 0.35) * fade * 1.1) * end
+  })
+}
+
+/** Each WarpStyle's sounds: the wind-up and the drop out, and its names' suffix. */
+const JUMPS: Record<WarpStyle, { charge: (len: number) => Recipe; arrive: (big: boolean) => Recipe; tag: string }> = {
+  hyperspace: { charge: warpCharge, arrive: warpArrive, tag: '' },
+  wormhole: { charge: wormCharge, arrive: wormArrive, tag: '-worm' },
+  rift: { charge: riftCharge, arrive: riftArrive, tag: '-rift' },
 }
 
 // The Confederacy: industrial and military ------------------------------------------------------------
@@ -1329,8 +1431,11 @@ export class EmpiresSound {
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2], ['boom0-hive', explosion(0, true), 3], ['boom1-hive', explosion(1, true), 3], ['boom2-hive', explosion(2, true), 2],
       ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3], ...(hive ? [['hatch', hatch, 3] as [string, Recipe, number]] : []),
       // Jumps: rendered ahead, so the first one in a battle doesn't stall a frame and come in late.
-      [`warp-${Math.round(WARP_YARD * 10)}`, warpCharge(WARP_YARD), 2], [`warp-${Math.round(WARP_RESERVE * 10)}`, warpCharge(WARP_RESERVE), 2], ['arrive', warpArrive(false), 2], ['arriveBig', warpArrive(true), 2],
-      ...Object.values(RETREAT_TIME).map((secs): [string, Recipe, number] => [`warp-${Math.round(secs * 10)}`, warpCharge(secs), 1]),
+      // Every side's jumps in (any side can be in the battle), our own side's retreats.
+      ...Object.values(JUMPS).flatMap((j): [string, Recipe, number][] => [
+        [`warp${j.tag}-${Math.round(WARP_YARD * 10)}`, j.charge(WARP_YARD), 2], [`warp${j.tag}-${Math.round(WARP_RESERVE * 10)}`, j.charge(WARP_RESERVE), 2], [`arrive${j.tag}`, j.arrive(false), 2], [`arriveBig${j.tag}`, j.arrive(true), 2],
+      ]),
+      ...Object.values(RETREAT_TIME).map((secs): [string, Recipe, number] => [`warp${JUMPS[WARP_STYLE[faction]].tag}-${Math.round(secs * 10)}`, JUMPS[WARP_STYLE[faction]].charge(secs), 1]),
       ['click', click, 3], ['arm', arm, 2], ['queue', queue(false), 2], ['unqueue', queue(true), 2], ['construct', construct, 2],
       ...(['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station'] as Tier[]).map((t): [string, Recipe, number] => [`sel-${faction}-${t}`, ack('select', faction, t), 4]),
       ...(['move', 'attack', 'attackMove'] as OrderKind[]).map((k): [string, Recipe, number] => [`ord-${k}-${faction}-frigate`, ack(k, faction, 'frigate'), 4]),
@@ -1387,18 +1492,21 @@ export class EmpiresSound {
     this.play(`boom${cls}${hive ? '-hive' : ''}`, explosion(cls, hive), { where, gain: [0.6, 0.85, 1][cls], verb: 0.5, takes: cls === 2 ? 2 : 3 })
   }
 
-  /** A jump starting somewhere we can see or hear; it winds up for `secs`, until the ship drops out. */
-  warp(where: Where, secs: number) {
-    const name = `warp-${Math.round(secs * 10)}`
-    if (this.ready() && where.gain > 0.05 && this.allow('warp', 2, 0.3)) this.play(name, warpCharge(secs), { where, gain: 0.175, verb: 0.3, takes: 2 })
+  /** A jump starting somewhere we can see or hear; it winds up for `secs`, until the ship drops out.
+   * `faction`: whose ship (each side jumps its own way, see WARP_STYLE). */
+  warp(where: Where, secs: number, faction: FactionId = 'republic') {
+    const j = JUMPS[WARP_STYLE[faction]]
+    const name = `warp${j.tag}-${Math.round(secs * 10)}`
+    if (this.ready() && where.gain > 0.05 && this.allow('warp', 2, 0.3)) this.play(name, j.charge(secs), { where, gain: j.tag ? 0.2 : 0.175, verb: 0.3, takes: 2 })
   }
 
-  /** A ship dropping out of hyperspace. */
-  arrive(where: Where, size: number) {
+  /** A ship dropping out of hyperspace (or its wormhole or rift), or jumping away into it. */
+  arrive(where: Where, size: number, faction: FactionId = 'republic') {
     if (!this.ready()) return
     const big = size > 200
+    const j = JUMPS[WARP_STYLE[faction]]
     this.feel(big ? 2.5 : 1, where)
-    if (where.gain > 0.03 && this.allow(big ? 'arriveBig' : 'arrive', 3, 0.1)) this.play(big ? 'arriveBig' : 'arrive', warpArrive(big), { where, gain: big ? 0.45 : 0.35, verb: 0.5, takes: 2 })
+    if (where.gain > 0.03 && this.allow(big ? 'arriveBig' : 'arrive', 3, 0.1)) this.play(`${big ? 'arriveBig' : 'arrive'}${j.tag}`, j.arrive(big), { where, gain: big ? 0.45 : 0.35, verb: 0.5, takes: 2 })
   }
 
   /** `faction`: whose part it was (a Swarm organ bursts wetly). */
