@@ -182,7 +182,7 @@ export default function GroundViewer({ onBack }: { onBack: () => void }) {
   return (
     <div className="ew-root ew-groundview">
       <div className="ew-groundview-bar">
-        <button onClick={onBack}>← Space</button>
+        <button onClick={onBack}>← Back</button>
         {GROUND_MAPS.length > 1 ? (
           <select value={mapId} onChange={(e) => setMapId(e.target.value)} aria-label="Ground map">
             {GROUND_MAPS.map((m) => (

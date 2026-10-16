@@ -1539,9 +1539,9 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
 }
 
 // Dev builds only, until ground units can fight: the Space / Ground switch in the skirmish setup and
-// the ground map viewer behind it. The condition is false in a production build, so the viewer's
-// chunk is never emitted.
-const GroundViewer = import.meta.env.DEV ? lazy(() => import('./ground/Viewer.tsx')) : null
+// the ground battle behind it (its setup, the battle, and the map viewer). The condition is false in
+// a production build, so the ground chunk is never emitted.
+const GroundBattle = import.meta.env.DEV ? lazy(() => import('./ground/Battle.tsx')) : null
 
 export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack: () => void; onLaunch: (s: Setup) => void }) {
   const [setup, setSetup] = useState(lastSetup)
@@ -1584,10 +1584,10 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const allies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 0).length
   const step = Math.max(0, CREDIT_STEPS.indexOf(setup.credits))
   const act = setup.slots[active]?.kind === 'closed' ? 0 : active
-  if (GroundViewer && mode === 'ground')
+  if (GroundBattle && mode === 'ground')
     return (
       <Suspense fallback={null}>
-        <GroundViewer onBack={() => (sound.click(), setMode('space'))} />
+        <GroundBattle sound={sound} onBack={() => setMode('space')} />
       </Suspense>
     )
   return (
@@ -1597,12 +1597,12 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <header className="ew-lobby-head">
           <button onClick={() => (sound.click(), onBack())}>← Main menu</button>
           <h2>Skirmish</h2>
-          {GroundViewer && (
+          {GroundBattle && (
             <div className="ew-seg" role="group" aria-label="Battle mode (dev builds only)">
               <button className="is-on" aria-pressed>
                 Space
               </button>
-              <button onClick={() => (sound.click(), setMode('ground'))} aria-pressed={false} data-tip="Ground battles: dev builds only, a map viewer for now">
+              <button onClick={() => (sound.click(), setMode('ground'))} aria-pressed={false} data-tip="Ground battles: dev builds only, a first slice with no combat yet">
                 Ground
               </button>
             </div>
