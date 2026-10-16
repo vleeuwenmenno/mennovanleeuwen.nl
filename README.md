@@ -2497,6 +2497,11 @@ The AI plays like a person with limited hands, more limited the easier it is:
   older saves get one too): a defensive one wants to be 15% stronger than a planet's defence before
   it attacks, gathers 30% more first and leaves you alone 30% longer; an offensive one 12% less, 20%
   less and 30% sooner (`GALAXY_STYLE`). Its fleet battles are fought with the same profile.
+- **Fleet cap on the easy levels** (`cap` in `DIFFICULTY`, [`ai.ts`](src/apps/games/empires/ai.ts)):
+  Easy stops building warships at a fleet value of 2,800, Very easy at 4,000 (not counting scouts and
+  yard guards); Medium and Hard have none. Their long quiet start used to make the first wave bigger,
+  not weaker: they stockpiled the whole time and sent it all at once (Easy's first wave came out
+  larger than Medium's). Waves on those levels go out at 70% of the cap at most.
 - **Battles** ([`ai.ts`](src/apps/games/empires/ai.ts)): at most 25, 35, 60 or 100 actions a
   minute (a move for a group of ships is one), and it notices an attack on its base 6 to 1 seconds
   late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
