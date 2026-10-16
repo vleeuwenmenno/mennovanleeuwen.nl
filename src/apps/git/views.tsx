@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { GitBranch, GitComment, GitCommit, GitCommitItem, GitFileList, GitIssue, GitIssueItem, GitPull, GitRepo, GitRepoList, GitRepoOverview, RepoHit } from '../../data/gitTypes'
+import type { GitBranch, GitCommit, GitCommitItem, GitFileList, GitIssue, GitIssueItem, GitPull, GitRepo, GitRepoList, GitRepoOverview, RepoHit } from '../../data/gitTypes'
 import { MarkdownPreview } from '../../data/markdown/MarkdownPreview'
 import { useGet, usePaged } from './data'
 import { DiffFiles } from './Diff'
-import { hostUrlResolver, htmlToMarkdown, repoUrlResolver } from './markdown'
+import { htmlToMarkdown, repoUrlResolver } from './markdown'
+import { Conversation } from './Timeline'
 import { repoApi, type At, type GitView, type PullTab, type RepoTab } from './route'
 import { ago, Avatar, copyText, ErrorBox, ExtLink, fullDate, Labels, Loading, MoreButton, StateBadge, Tabs, who } from './ui'
 
@@ -14,6 +15,12 @@ export type Nav = {
   hostLabel: (src: string) => string
   /** The repository's page on its host */
   repoWeb: (at: At) => string
+  /** The signed-in account's login on a host (null while unknown) */
+  login: (src: string) => string | null
+  /** Whether comments can be sent to a host, and if not, what to change */
+  canWrite: (src: string) => { ok: boolean; hint?: string }
+  /** Settings → Code hosts */
+  openSettings: () => void
 }
 
 const enc = encodeURIComponent
@@ -392,47 +399,6 @@ function CommitList({ view, nav, repo, web }: { view: Extract<GitView, { v: 'rep
 // ---------------------------------------------------------------------------------------------
 // One pull request, issue or commit
 
-function Comment({ author, date, body, url, host, resolve, first = false }: { author: GitComment['author']; date: string; body: string; url: string | null; host: string; resolve: (u: string) => string; first?: boolean }) {
-  const text = useMemo(() => htmlToMarkdown(body), [body])
-  return (
-    <article className={`git-comment ${first ? 'is-first' : ''}`}>
-      <header className="git-comment-head">
-        <Avatar p={author} size={20} />
-        <strong>{who(author)}</strong>
-        <span className="muted" title={fullDate(date)}>
-          {first ? 'opened' : 'commented'} {ago(date)}
-        </span>
-        {url && (
-          <a className="git-comment-link muted" href={url} target="_blank" rel="noopener noreferrer" title={`This comment on ${host}`} aria-label={`This comment on ${host}`}>
-            ↗
-          </a>
-        )}
-      </header>
-      <div className="git-md selectable">{body.trim() ? <MarkdownPreview text={text} resolveUrl={resolve} /> : <p className="muted">No description provided.</p>}</div>
-    </article>
-  )
-}
-
-function Conversation({ item, host, web }: { item: GitIssue; host: string; web: string }) {
-  const resolve = useMemo(() => hostUrlResolver(web), [web])
-  return (
-    <div className="git-thread">
-      <Comment first author={item.author} date={item.createdAt} body={item.body} url={item.url} host={host} resolve={resolve} />
-      {item.commentList.map((c) => (
-        <Comment key={c.id} author={c.author} date={c.createdAt} body={c.body} url={c.url} host={host} resolve={resolve} />
-      ))}
-      {item.moreComments && (
-        <p className="git-hint">
-          More comments than shown here. <ExtLink href={item.url} label={`Read them on ${host}`} small />
-        </p>
-      )}
-      <p className="git-hint">
-        {item.pull ? 'Reviews, review comments and checks are on the web.' : 'To reply, react or change it, go to the web.'} <ExtLink href={item.url} label={item.pull ? `Review on ${host}` : `Comment on ${host}`} small />
-      </p>
-    </div>
-  )
-}
-
 function ItemHead({ item, host, extra, children }: { item: GitIssue; host: string; extra?: ReactNode; children?: ReactNode }) {
   return (
     <header className="git-head">
@@ -496,7 +462,7 @@ export function PullView({ view, nav }: { view: Extract<GitView, { v: 'pull' }>;
         ]}
       />
       <div className="git-body">
-        {view.tab === 'conversation' && <Conversation item={p} host={host} web={new URL(repoWeb).origin} />}
+        {view.tab === 'conversation' && <Conversation item={p} at={view} host={host} web={new URL(repoWeb).origin} nav={nav} reloadItem={pull.reload} />}
         {view.tab === 'commits' && <PullCommits base={base} onOpen={(sha) => nav.go({ v: 'commit', src: view.src, owner: view.owner, repo: view.repo, sha })} />}
         {view.tab === 'files' && <PullFiles base={base} web={`${web}/files`} host={host} />}
       </div>
@@ -544,7 +510,7 @@ export function IssueView({ view, nav }: { view: Extract<GitView, { v: 'issue' }
         </span>
       </ItemHead>
       <div className="git-body">
-        <Conversation item={i} host={host} web={new URL(repoWeb).origin} />
+        <Conversation item={i} at={view} host={host} web={new URL(repoWeb).origin} nav={nav} reloadItem={issue.reload} />
       </div>
     </div>
   )
