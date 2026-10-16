@@ -325,9 +325,19 @@
         "budget": 26,
         "kind": "count"
       },
+      "structures on the battle map": {
+        "baseline": 5,
+        "budget": 5,
+        "kind": "strict"
+      },
+      "battle map DOM nodes": {
+        "baseline": 29,
+        "budget": 34,
+        "kind": "count"
+      },
       "DOM nodes": {
-        "baseline": 743,
-        "budget": 855,
+        "baseline": 774,
+        "budget": 891,
         "kind": "count"
       },
       "React commits / sim s, zooming": {

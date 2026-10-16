@@ -2,11 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useS
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
 import { FACTION_IDS, FACTIONS, MODULE, ORBITAL_MAX, ORBITAL_TOP, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, orbitalName, orbitalSprite, orbitalType, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
-  AUTO_SPOT, moveStruct, orbitalAt, orbitalsUp, parseOrbital, queueName, resetLayout, spotOf,
-  type StructId,
-  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
-  autoResolve, buildAt, buildWork, cantRushAt, queueShare, rushIntoBattle, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
-  galaxyProfile, rivalOf, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
+  orbitalAt, orbitalsUp, parseOrbital, queueName, resetLayout,
+  type StructId, type PlanetLayout,
+  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
+  autoResolve, clashBattle, buildAt, buildWork, cantRushAt, queueShare, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
+  galaxyProfile, rivalOf, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw,
   type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
 import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
@@ -16,8 +16,9 @@ import { FleetInventory } from './Inventory'
 import { galaxyLayout } from './layout'
 import type { BattleSnap } from './snapshot'
 import { loadCampaignBattle, saveCampaignBattle, setResume } from './keep'
-import { generateMap, DEFAULT_RULES, MAX_SEED, type MapDef } from './maps'
-import { mapDist } from './scale'
+import { MAX_SEED, type MapDef } from './maps'
+import { autoLayoutOf, mapToPolar, planetMap } from './conquestMap'
+import { PlanetMapPanel, orbitFrame, placesOf, useShownLayout, type OrbitFrame } from './PlanetMap'
 import { LayoutSection, Modal, SettingsPanel } from './Menus'
 import { actionFor, getSettings, keyName, useSettings, type Action } from './settings'
 import type { FleetSide, World } from './sim'
@@ -399,17 +400,28 @@ const ZOOM_PULL = 0.33
 /** Closest the map zooms in: a planet fills a good part of the view. */
 const K_MAX = 140
 /**
- * The orbit view (see Orbit.tsx): zooming in past a planet locks the camera onto it, and it can then
- * go in closer than K_MAX, up to K_ORBIT_MAX. It settles at the zoom where the planet and everything
- * round it (ORBIT_REACH planet radii out) fills the smaller side of the view; zooming in further than
- * ORBIT_SNAP of that (or of K_MAX, on a big screen) with the planet under the cursor snaps into it,
- * and zooming out below ORBIT_LEAVE of it lets go.
+ * The orbit view (see Orbit.tsx and PlanetMap.tsx): zooming in past a planet locks the camera onto
+ * it. It settles at the zoom where the planet and everything round it (ORBIT_REACH planet radii out)
+ * fits beside its battle map's panel, the planet a little smaller and to one side (above it on a tall
+ * screen), and goes no closer (K_ORBIT_MAX at most). Zooming in further than ORBIT_SNAP of that (or of
+ * K_MAX, on a big screen) with the planet under the cursor eases into it, the panel fading and sliding
+ * in as it comes, and zooming out below ORBIT_LEAVE of it lets go.
  */
 const K_ORBIT_MAX = 420
 const ORBIT_REACH = 3.05
 const ORBIT_SNAP = 0.85
 const ORBIT_LEAVE = 0.7
-const kOrbit = (p: Planet, size: { w: number; h: number }) => clamp((Math.min(size.w, size.h) * 0.5) / (ORBIT_REACH * planetR(p)), 30, K_ORBIT_MAX)
+/** Where planet `p` and its battle map sit in the orbit view, in a view of `size`. */
+const orbitFrameOf = (g: Galaxy, p: Planet, size: { w: number; h: number }): OrbitFrame => {
+  const m = planetMap(g, p.id).map
+  return orbitFrame(size, ORBIT_REACH * 2 * planetR(p), m.w / m.h, 20, K_ORBIT_MAX)
+}
+/** Where planet `p`'s structures are pictured round it: its layout on its battle map (as we know
+ * it: `layout`, else the default) turned back round the planet. */
+const ringSpots = (g: Galaxy, p: Planet, layout: PlanetLayout | undefined) => {
+  const pm = planetMap(g, p.id)
+  return mapToPolar(pm.map, { ...autoLayoutOf(pm), ...(layout ?? {}) })
+}
 const fitK = (w: number, h: number) => Math.min(w / W, h / H) * 0.94
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 /** How far into the systems the view is: 0 shows the galaxy's markers, 1 the planets themselves. */
@@ -1104,7 +1116,7 @@ function GalaxyView({ g, view, sel, mini = false, orbit = -1, on }: {
                           Orbit.tsx), at least a little way out past the planet's edge on screen. The
                           planet the orbit view shows has its real models instead. */}
                       {has(B_BASE) && pid !== orbit && k.station > 0 && k.owner >= 0 && orbitThings(g.sides[k.owner].faction, k.station, k.base, false).map((th) => {
-                        const s = k.live ? spotOf(p, th.id) : AUTO_SPOT[th.id]
+                        const s = ringSpots(g, p, k.layout)[th.id] ?? { a: 0, d: 2 }
                         const dist = `max(${n4(s.d * r)}px, calc(${n4(r)}px + var(--ik) * 20px))`
                         return over(`os${pid}${th.id}`, css({ transform: `translate(calc(${n4(q.x)}px + ${n4(Math.cos(s.a))} * ${dist}), calc(${n4(q.y)}px + ${n4(Math.sin(s.a))} * ${dist})) scale(var(--ik))`, opacity: `calc(var(--d) * ${k.live ? 1 : 0.6})` }), sysAt, (
                           <StructIcon th={th} stroke={color(g, k.owner)} level={k.station} faded={!k.live} />
@@ -1388,20 +1400,19 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const [orbit, setOrbitState] = useState(-1)
   const orbitRef = useRef(-1)
   const [orbitSel, setOrbitSel] = useState<StructId | null>(null)
-  /** The zoom the orbit view of planet `pid` settles at, for the view's size now. */
-  const orbitK = (pid: number) => kOrbit(g.planets[pid], view.size)
-  // Locked onto a planet, the camera may go in closer than K_MAX, and stays round the planet: on its
-  // middle at the orbit view's own zoom, and further in no further from it than what's round it.
+  /** Where the orbit view of planet `pid` puts it and its battle map, for the view's size now. */
+  const orbitAt = (pid: number) => orbitFrameOf(g, g.planets[pid], view.size)
+  /** The zoom the orbit view of planet `pid` settles at. */
+  const orbitK = (pid: number) => orbitAt(pid).k
+  // Locked onto a planet, the camera stays on it, the planet where the orbit view has it on screen
+  // (to one side of its battle map), and goes no closer than the orbit view's own zoom.
   const fix = (c: Cam): Cam => {
     const o = orbitRef.current
     if (o >= 0) {
-      const p = g.planets[o]
-      const q = planetAt(g, p)
-      const k = clamp(c.k, kMinRef.current, K_ORBIT_MAX)
-      const lim = Math.max(0, 1 - orbitK(o) / k) * ORBIT_REACH * planetR(p)
-      const d = Math.hypot(c.x - q.x, c.y - q.y)
-      const s = d > lim ? lim / d : 1
-      return { x: q.x + (c.x - q.x) * s, y: q.y + (c.y - q.y) * s, k }
+      const q = planetAt(g, g.planets[o])
+      const fr = orbitAt(o)
+      const k = clamp(c.k, kMinRef.current, fr.k)
+      return { x: q.x - fr.dx / k, y: q.y - fr.dy / k, k }
     }
     return { x: clamp(c.x, 0, W), y: clamp(c.y, 0, H), k: clamp(c.k, kMinRef.current, K_MAX) }
   }
@@ -1417,7 +1428,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     setSel(null)
     const q = planetAt(g, p)
     zoomTo.current = null
-    camGoal.current = { x: q.x, y: q.y, k: orbitK(pid) }
+    const fr = orbitAt(pid)
+    camGoal.current = { x: q.x - fr.dx / fr.k, y: q.y - fr.dy / fr.k, k: fr.k }
   }
   /** Out of the orbit view (the camera lets go where it is; `out`: and pulls back to the system). */
   const leaveOrbit = (out = false) => {
@@ -1707,6 +1719,20 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   // The orbit view's planet, as we know it.
   const orbitP = orbit >= 0 ? g.planets[orbit] : null
   const orbitKn = orbitP ? known(g, ME, orbitP) : null
+  // What stands on its battle map (PlanetMap.tsx), and so where it is pictured round the planet.
+  const orbitLay = useShownLayout(g, orbitP, orbitKn)
+  const orbitSpots = useMemo(() => (orbitLay ? mapToPolar(orbitLay.pm.map, placesOf(orbitLay.shown)) : {}), [orbitLay])
+  // Where the planet and its battle map sit (worked out again only when the view changes size).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const orbitFr = useMemo(() => (orbitP ? orbitAt(orbitP.id) : null), [orbitP, size.w, size.h])
+  // The view resized while in the orbit view: the planet back where the orbit view has it.
+  useEffect(() => {
+    if (orbitRef.current < 0) return
+    camGoal.current = null
+    zoomTo.current = null
+    moveCam(fix(camRef.current))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.w, size.h])
   // Something else selected (a fleet, a planet) lets go of what's picked in the orbit view.
   useEffect(() => {
     if (sel) setOrbitSel(null)
@@ -2019,29 +2045,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   }, [clashPlanet])
 
   const fight = (c: Clash, resume?: BattleSnap) => {
-    const p = g.planets[c.planet]
-    const base = generateMap({
-      ...DEFAULT_RULES,
-      seed: (c.planet * 7919 + Math.floor(g.time)) % 999999 || 1,
-      players: 2,
-      size: 'small',
-      beacons: 0,
-      asteroidFields: p.kind === 'barren' || p.kind === 'lava' || p.kind === 'crystal' ? 'many' : p.kind === 'city' ? 'none' : 'few',
-      nebulas: GIANTS.includes(p.kind) ? 'many' : p.kind === 'ice' || p.kind === 'ocean' || p.kind === 'swamp' || p.kind === 'toxic' ? 'few' : 'none',
-      wrecks: 'none',
-    })
-    const sp = base.spawns[0]
-    const map: MapDef = { ...base, id: 'conquest', name: p.name, ore: [], beacons: [], wrecks: [], planet: { kind: p.kind, x: base.w / 2 + (sp.x - base.w / 2) * 0.5, y: base.h / 2 + mapDist(1500), r: 560 } }
-    // Ships the fleets hold back start in the battle's reserve, to be called in from there.
-    const sides: FleetSide[] = [
-      // The planet's yards and expansions stand round its station (see newFleetBattle).
-      // Its defense stations stand in orbit beside it, and everything stands where the planet has it.
-      {
-        faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, rushed: rushIntoBattle(c.holderRush), station: c.station,
-        ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods], orbitals: orbitalsUp(c.base).map(({ i, o }) => ({ i, level: o.level, mods: [...o.mods] })), ...(c.spots ? { spots: c.spots } : {}) } : {}),
-      },
-      { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld, rushed: rushIntoBattle(c.attackerRush) },
-    ]
+    // The planet's own map, its base standing where its layout has it (see clashBattle).
+    const { map, sides } = clashBattle(g, c)
     const meSide = c.holder === ME ? 0 : 1
     const enemy = meSide === 0 ? c.attacker : c.holder
     onBattle({
@@ -2084,7 +2089,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const c = camRef.current
       const sx = e.clientX - r.left - el.clientWidth / 2
       const sy = e.clientY - r.top - el.clientHeight / 2
-      const raw = (zoomTo.current?.k ?? c.k) * Math.exp(step)
+      // (From where a glide under way is heading: easing into the orbit view, the zoom it settles at.)
+      const raw = (zoomTo.current?.k ?? (orbitRef.current >= 0 ? camGoal.current?.k : undefined) ?? c.k) * Math.exp(step)
       const o = orbitRef.current
       if (o >= 0) {
         // In the orbit view the zoom goes in closer than anywhere else, out to where it lets go.
@@ -2094,7 +2100,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
         const p = snapPlanet(c.x + sx / c.k, c.y + sy / c.k)
         if (p && raw >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) return enterOrbit(p.id)
       }
-      const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? K_ORBIT_MAX : K_MAX)
+      const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? orbitK(orbitRef.current) : K_MAX)
       // Zooming in draws the spot under the cursor towards the centre, under a tenth of the way a
       // notch; zooming out keeps it under the cursor.
       const pull = k > c.k && step > 0 ? Math.exp(-step * ZOOM_PULL) : 1
@@ -2218,7 +2224,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       }
     }
     if (o >= 0 && raw < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
-    const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? K_ORBIT_MAX : K_MAX)
+    const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? orbitK(orbitRef.current) : K_MAX)
     const sx = (a.x + b.x) / 2 - r.left - size.w / 2
     const sy = (a.y + b.y) / 2 - r.top - size.h / 2
     camGoal.current = null
@@ -2621,24 +2627,40 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
               live={orbitKn.live}
               base={orbitKn.base}
               station={orbitKn.station}
+              spots={orbitSpots}
               onPick={(id) => {
                 sound.click()
                 setOrbitSel(id)
                 if (id && sel) setSel(null)
               }}
-              onMove={(id, a, d) => {
-                const why = moveStruct(g, ME, orbitP.id, id, a, d)
-                if (why) {
-                  sound.error()
-                  toast(why, 'bad')
-                } else sound.click()
-                setFrame((n) => n + 1)
+            />
+          )}
+          {orbitP && orbitKn && orbitLay && orbitFr && (
+            <PlanetMapPanel
+              g={g}
+              p={orbitP}
+              kn={orbitKn}
+              lay={orbitLay}
+              view={view}
+              at={planetAt(g, orbitP)}
+              span={ORBIT_REACH * 2 * planetR(orbitP)}
+              kIn={orbitK(orbitP.id)}
+              frame={orbitFr}
+              sel={orbitSel}
+              coarse={compact}
+              sound={sound}
+              toast={toast}
+              onPick={(id) => {
+                sound.click()
+                setOrbitSel(id)
+                if (id && sel) setSel(null)
               }}
+              onChange={() => setFrame((n) => n + 1)}
             />
           )}
           {orbitP && (
             <div className="ew-orbithint" onPointerDown={(e) => e.stopPropagation()}>
-              <span><b>Orbit view</b> · {orbitP.name}{orbitP.owner === ME ? (compact ? ': tap a structure for its orders, drag it to move it' : ': click a structure for its orders, drag it to move it') : ''}</span>
+              <span><b>Orbit view</b> · {orbitP.name}{orbitP.owner === ME ? (compact ? ': tap a structure for its orders, drag it on the battle map to place it' : ': click a structure for its orders, drag it on the battle map to place it') : ''}</span>
               <button onClick={() => (sound.click(), leaveOrbit(true))} data-tip="Back out to the system (Esc)">{compact ? 'Leave' : 'Leave · Esc'}</button>
             </div>
           )}
@@ -3136,7 +3158,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
         {ours && (p.station > 0 || p.queue.length > 0) && <BuildQueue queue={queue} max={MAX_YARD} campaign rush={rush} onCancel={(i) => (cancelBuild(g, ME, p.id, i), sound.unqueued())} />}
         <Frame className={`ew-detail is-station ew-gplanet ${theirs ? 'is-enemy' : ''}`}>
           <div className="ew-detail-side">
-            <button className="ew-gp-look" onClick={onLook} data-tip="Orbit view: zoom right in on it, with its station, yards and defense stations">
+            <button className="ew-gp-look" onClick={onLook} data-tip="Orbit view: zoom right in on it, with its station, yards and defense stations, and the battle map it is fought on (place them there)">
               <img src={PLANET_ART(p.kind)} alt="" />
             </button>
             <div className="ew-side-info">
@@ -3298,8 +3320,8 @@ function OrbitCard({ g, p, id, sound, toast, onClose }: { g: Galaxy; p: Planet; 
           </div>
           {ours && (
             <footer className="ew-gorbit-foot">
-              <small className="ew-muted">{coarse ? 'Drag a structure to move it round the planet.' : 'Drag a structure to move it round the planet; battles here put it there.'}</small>
-              <button className="ew-gp-up" disabled={!p.layout} onClick={reset} data-tip="Put every structure back on its own spot round the planet">Reset layout</button>
+              <small className="ew-muted">{coarse ? 'Drag a structure on the battle map to place it.' : 'Drag a structure on the battle map to place it; battles here stand it there.'}</small>
+              <button className="ew-gp-up" disabled={!p.layout} onClick={reset} data-tip="Put every structure back where it stands by default on the planet's battle map">Reset layout</button>
             </footer>
           )}
         </Frame>

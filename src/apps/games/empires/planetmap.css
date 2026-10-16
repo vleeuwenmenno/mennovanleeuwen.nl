@@ -1,0 +1,190 @@
+/* --- Galactic conquest: the orbit view's battle map (PlanetMap.tsx) ---------------------------- */
+
+/* Pinned beside the planet: the camera places it (transform) and fades it in (opacity). */
+.ew-pmap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 6px 6px;
+  opacity: 0;
+  will-change: transform, opacity;
+  background: linear-gradient(180deg, var(--ew-glass-2), var(--ew-glass));
+  border: 1px solid var(--ew-rim);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ew-bg) 70%, transparent), inset 0 1px 0 color-mix(in srgb, var(--ew-text) 12%, transparent);
+  color: var(--ew-text);
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.ew-pmap.is-off {
+  pointer-events: none;
+}
+.ew-pmap-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ew-pmap-head b {
+  font: 700 13px/1 var(--ew-display);
+  letter-spacing: 0.04em;
+}
+.ew-pmap-sub {
+  color: var(--ew-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ew-pmap-note {
+  margin-left: auto;
+  color: var(--ew-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-pmap.is-fog .ew-pmap-note {
+  color: var(--ew-gold);
+}
+/* The map: space, its terrain, and everything on it at its place (in pixels from its corner). */
+.ew-pmap-map {
+  --pm-rock: color-mix(in srgb, var(--ew-muted) 75%, transparent);
+  position: relative;
+  overflow: hidden;
+  flex: none;
+  border-radius: 4px;
+  background: var(--ew-bg);
+  outline: 1px dashed color-mix(in srgb, var(--ew-accent) 30%, transparent);
+  outline-offset: -1px;
+  touch-action: none;
+}
+.ew-pmap-terrain {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--ew-muted);
+  pointer-events: none;
+}
+/* The planet, far below the battle. */
+.ew-pmap-planet {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  opacity: 0.3;
+  pointer-events: none;
+}
+/* An entry zone per lane: a dashed ring with the system it comes from. */
+.ew-pmap-entry {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.ew-pmap-entry i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px dashed color-mix(in srgb, var(--ew-bad) 75%, transparent);
+  background: color-mix(in srgb, var(--ew-bad) 10%, transparent);
+}
+.ew-pmap-entry span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 10px/1.2 var(--ew-display);
+  color: var(--ew-text);
+  text-shadow: 0 1px 2px var(--ew-bg);
+}
+.ew-pmap-entry:hover i {
+  border-style: solid;
+}
+/* The station's build radius, and (while it's moved) its home zone. */
+.ew-pmap-reach,
+.ew-pmap-home {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.ew-pmap-reach {
+  border: 1px dashed color-mix(in srgb, var(--ew-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--ew-accent) 5%, transparent);
+}
+.ew-pmap-home {
+  border: 1.5px solid color-mix(in srgb, var(--ew-good) 60%, transparent);
+  background: color-mix(in srgb, var(--ew-good) 8%, transparent);
+}
+/* A structure: its picture at its true size and heading, in a hit area big enough for a finger. */
+.ew-pstruct {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  cursor: pointer;
+  touch-action: none;
+}
+.ew-pmap.is-ours .ew-pstruct {
+  cursor: grab;
+}
+.ew-pstruct.is-dragging {
+  cursor: grabbing;
+  z-index: 1;
+}
+.ew-pstruct-in {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: block;
+  pointer-events: none;
+}
+.ew-pstruct-in img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  -webkit-user-drag: none;
+}
+.ew-pstruct.is-ruin img {
+  filter: grayscale(0.9) brightness(0.45) sepia(0.4);
+}
+.ew-pstruct.is-ghost .ew-pstruct-in {
+  outline: 1.5px dashed color-mix(in srgb, var(--ew-accent) 70%, transparent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+.ew-pstruct.is-ghost img {
+  opacity: 0.3;
+  filter: grayscale(1) brightness(1.4);
+}
+.ew-pmap.is-fog .ew-pstruct img {
+  opacity: 0.6;
+}
+.ew-pstruct:hover,
+.ew-pstruct.is-sel {
+  box-shadow: 0 0 0 1.5px var(--ew-accent), 0 0 10px color-mix(in srgb, var(--ew-accent) 50%, transparent);
+}
+.ew-pstruct.is-bad {
+  box-shadow: 0 0 0 1.5px var(--ew-bad), 0 0 10px color-mix(in srgb, var(--ew-bad) 50%, transparent);
+}
+/* The pictures round the planet are picked, not dragged: structures move on the battle map. */
+.ew-orbit .ew-ostruct.is-ours .ew-ostruct-in {
+  cursor: pointer;
+}

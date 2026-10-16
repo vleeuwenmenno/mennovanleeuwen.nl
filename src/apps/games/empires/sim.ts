@@ -3,6 +3,7 @@ import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { ROCK_HIT, clearLine, crosses, findPath, navCost, navGrid, reachCheck, rockStamp, stampRock, type NavGrid, type Soft } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
+import { autoLayout } from './conquestMap.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
   ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, BEACON_SENSOR, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
@@ -906,7 +907,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     const side = r() < 0.5 ? 'republic' : 'droid'
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
-  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, BUILD_RADIUS])]
+  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p, i) => [p.x, p.y, map.keep?.[i] ?? BUILD_RADIUS])]
   const bigClear = Math.max(...UNITS.filter(isShip).map(navClear))
   const lane = Math.max(240, bigClear + 100)
   const lanes: [Pt, Pt][] = []
@@ -2427,7 +2428,15 @@ export function partRebuildCost(t: UnitType, i: number) {
 /** Why yard `t` can't stand at (x, y) facing `a` round station `st`, or null when it can: inside the
  * build radius, clear of the map's edge, rocks, fields, ore, beacons, wrecks, other structures and
  * ruins (but `ruin`, the one it goes up on). */
-function siteProblem(w: World, owner: Owner, t: UnitType, st: Unit, x: number, y: number, a: number, ruin?: Ruin): string | null {
+function siteProblem(w: World, owner: Owner, t: UnitType, st: Pt, x: number, y: number, a: number, ruin?: Ruin): string | null {
+  return structProblem(w, owner, t, st, x, y, a, null, ruin)
+}
+/** A structure standing (or to stand) on the map, for the checks that keep others clear of it. */
+export type Standing = { t: UnitType; x: number; y: number; a: number }
+/** Why structure `t` can't stand at (x, y) facing `a` round station `st` (see siteProblem); with
+ * `others`, those are the structures it keeps clear of instead of the world's units (a conquest
+ * planet's layout, worked out before anything stands: see standBase). */
+function structProblem(w: World, owner: Owner, t: UnitType, st: Pt, x: number, y: number, a: number, others: readonly Standing[] | null, ruin?: Ruin): string | null {
   const r = radius(t)
   const { hl, hw } = yardBox(t)
   const gap = (px: number, py: number) => boxGap(px, py, x, y, a, hl, hw)
@@ -2443,14 +2452,14 @@ function siteProblem(w: World, owner: Owner, t: UnitType, st: Unit, x: number, y
   // Kept clear of other structures: a yard by its box, the rest by their longest side, a station by the size it grows to.
   // (A skirmish's defense station by the size it grows to; Galactic conquest's stand as they are.)
   const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o.orbital && !w.fleet ? orbitalType(o.faction, ORBITAL_TOP, []) : o)) * 0.5
-  const crowded = (u: Unit) => {
+  const crowded = (u: Standing) => {
     if (u.t.tier === 'yard') {
       const b = yardBox(u.t)
       return boxesNear(x, y, a, hl, hw, u.x, u.y, u.a, b.hl, b.hw, 60)
     }
     return gap(u.x, u.y) < half(u.t) + 60
   }
-  if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return 'Too close to another structure'
+  if (others ? others.some(crowded) : w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return 'Too close to another structure'
   if ((w.ruins ?? []).some((q) => q !== ruin && d2(x, y, q.x, q.y) < sq(r * 2))) return 'A ruin is in the way'
   return null
 }
@@ -4991,32 +5000,37 @@ export type FleetSide = { faction: FactionId; team: number; ships: string[]; res
   /** The holder's defense stations (a conquest planet's, see galaxy.ts OrbitalState): on which of its
    * two sites, at what level, with which module in each slot. */
   orbitals?: { i: number; level: number; mods: (OrbitalModId | null)[] }[]
-  /** Where the holder's structures sit round its planet in the galaxy (galaxy.ts Spot: a bearing and
-   * a distance in planet radii, by structure): its yards and defense stations stand that way round
-   * its station here, turned so the planet lies where this map has it. Left out, the yards stand
-   * away from the attackers (baseSpots). */
-  spots?: Partial<Record<LayoutId, { a: number; d: number }>> }
-/** The structures of a conquest planet's layout (galaxy.ts StructId). */
+  /** Where the holder's structures stand on this map (a conquest planet's layout, conquestMap.ts
+   * PlanetLayout: its station, yards and defense stations by id), as the player placed them on the
+   * planet's preview; any left out stand at their defaults (see standBase). */
+  layout?: Partial<Record<LayoutId, Pt>>
+  /** Which of the map's spawns the side starts at (left out: its own index). An attacker drops out
+   * of hyperspace at the entry zone of the lane it came down (conquestMap.ts entrySpawn). */
+  spawn?: number }
+/** The structures of a conquest planet's layout (galaxy.ts StructId), in the order a battle stands them. */
 export type LayoutId = 'station' | 'yard' | 'cyard' | 'def0' | 'def1'
+export const LAYOUT_IDS: LayoutId[] = ['station', 'yard', 'cyard', 'def0', 'def1']
 
 /**
- * A galactic conquest battle over a planet. The first side holds it: its station (if any) sits at
- * the first spawn with its fleet in front; the other fleets drop out of hyperspace at the other
- * spawns. Each side starts with up to `cap` fleet size on the field, biggest ships first, and the
- * rest waits in orbit to be called in from the reserve, with any ships its fleets held back.
+ * A galactic conquest battle over a planet. The first side holds it: its station (if any) stands
+ * where the planet's layout has it (at the first spawn by default) with its fleet in front; the
+ * other fleets drop out of hyperspace at their spawns (FleetSide `spawn`). Each side starts with up
+ * to `cap` fleet size on the field, biggest ships first, and the rest waits in orbit to be called in
+ * from the reserve, with any ships its fleets held back.
  *
  * A holder that brings its buildings (FleetSide `yards`, `exp`) fights with hybrid bases: its
- * Command Station carries its expansions and its yards stand round it (see baseSpots) with theirs,
+ * Command Station carries its expansions and its yards stand round it (see standBase) with theirs,
  * so a Drydock mends, an Armour works plates the frigates, a Shield core feeds the station's
  * shields and a Fighter wing flies, as in a skirmish. Nothing is built during the battle: a fleet
  * battle has no economy (cantBuild, placement and moduleLock refuse while `fleet` is set), so a
  * planet fights with what it has, and builds in the galaxy's queue.
  */
 export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number } = {}): World {
-  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
+  const at = (i: number) => map.spawns[sides[i].spawn ?? i] ?? map.spawns[i]
+  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: map.spawns[s.spawn ?? i] ? (s.spawn ?? i) : i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
   const cap = opts.cap ?? FLEET_CAP
   const c = { x: w.w / 2, y: w.h / 2 }
-  w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
+  w.fleet = { entry: sides.map((_, i) => ({ x: at(i).x, y: at(i).y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
   if (sides[0].station && (sides[0].yards || sides[0].exp || sides[0].orbitals)) {
     w.hybrid = true
     w.ruins = []
@@ -5024,15 +5038,24 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
   sides.forEach((s, o) => {
     const p = w.players[o]
     p.techs = [...(s.techs ?? [])]
-    const sp = map.spawns[o]
-    const face = M.atan2(c.y - sp.y, c.x - sp.x)
+    let sp = at(o)
     if (o === 0 && s.station) {
       p.level = s.station
-      const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
+      // Where the planet's layout stands everything: the station first, the rest round it.
+      const attackers = map.spawns.filter((q) => q !== sp)
+      const items: LayoutItem[] = w.hybrid ? [
+        ...YARD_IDS.filter((k) => s.yards?.includes(k)).map((id) => ({ id, t: yardOf(p.faction, id) })),
+        ...(s.orbitals ?? []).map((d) => ({ id: (d.i ? 'def1' : 'def0') as LayoutId, t: orbitalType(p.faction, d.level, d.mods, d.i) })),
+      ] : []
+      const stood = standBase(w, o, p.faction, sp, s.layout, attackers, items)
+      sp = stood[0]
+      p.start = { x: sp.x, y: sp.y }
+      const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, stood[0].a)
       p.station = st.id
       spawnWing(w, st)
-      if (w.hybrid) raiseBase(w, st, s.yards ?? [], s.exp ?? [], map.spawns.slice(1, sides.length), s.spots, s.orbitals ?? [])
+      if (w.hybrid) raiseBase(w, st, s.exp ?? [], stood.slice(1))
     }
+    const face = M.atan2(c.y - sp.y, c.x - sp.x)
     // Biggest first onto the field, up to the cap; the rest waits in orbit.
     const order = [...s.ships].sort((a, b) => UNIT[b].pop - UNIT[a].pop)
     let used = 0
@@ -5079,14 +5102,17 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
   return w
 }
 
+const YARD_IDS: ('yard' | 'cyard')[] = ['yard', 'cyard']
+
 /**
- * Where a conquest planet's yards stand round its station: on the side away from where the
- * attackers come in, inside the build radius, each facing away from the station (as an AI's yards
- * do). Each takes the first clear spot (see siteProblem) from a fixed list of bearings and
- * distances, the Frigate Yard trying one flank first and the Capital Yard the other, so the same
- * planet on the same map always looks the same, and nothing is left to chance (no `rand`).
+ * Where a conquest planet's yards would stand round its station with nothing to go by: on the side
+ * away from where the attackers come in, inside the build radius, each facing away from the station
+ * (as an AI's yards do). Each takes the first clear spot (see siteProblem; with `others`, clear of
+ * those) from a fixed list of bearings and distances, the Frigate Yard trying one flank first and the
+ * Capital Yard the other, so the same planet on the same map always looks the same, and nothing is
+ * left to chance (no `rand`).
  */
-export function baseSpots(w: World, st: Unit, kinds: ('yard' | 'cyard')[], attackers: Pt[]): { kind: 'yard' | 'cyard'; x: number; y: number; a: number }[] {
+export function baseSpots(w: World, st: Pick<Unit, 'x' | 'y' | 't'> & { owner?: Owner }, kinds: ('yard' | 'cyard')[], attackers: Pt[], others: readonly Standing[] | null = null): { kind: 'yard' | 'cyard'; x: number; y: number; a: number }[] {
   const from = attackers.length ? { x: attackers.reduce((s, q) => s + q.x, 0) / attackers.length, y: attackers.reduce((s, q) => s + q.y, 0) / attackers.length } : { x: w.w / 2, y: w.h / 2 }
   const away = M.atan2(st.y - from.y, st.x - from.x)
   const out: { kind: 'yard' | 'cyard'; x: number; y: number; a: number }[] = []
@@ -5105,7 +5131,7 @@ export function baseSpots(w: World, st: Unit, kinds: ('yard' | 'cyard')[], attac
           const y = st.y + M.sin(b) * d
           const a = M.atan2(y - st.y, x - st.x)
           // (Clear of the yards placed before it, too.)
-          if (siteProblem(w, st.owner, t, st, x, y, a) || out.some((q) => boxesNear(x, y, a, hl, hw, q.x, q.y, q.a, box(q.kind).hl, box(q.kind).hw, 60))) continue
+          if (structProblem(w, st.owner ?? 0, t, st, x, y, a, others) || out.some((q) => boxesNear(x, y, a, hl, hw, q.x, q.y, q.a, box(q.kind).hl, box(q.kind).hw, 60))) continue
           spot = { x, y, a }
         }
     if (spot) out.push({ kind, ...spot })
@@ -5113,37 +5139,95 @@ export function baseSpots(w: World, st: Unit, kinds: ('yard' | 'cyard')[], attac
   return out
 }
 
-/** Battle world units for each planet radius of a conquest planet's layout (galaxy.ts Spot), and how
- * near and far from the station a structure placed by it stands. */
-export const LAYOUT_SCALE = { unit: mapDist(560), min: mapDist(760), max: BUILD_RADIUS * 0.9 }
+// --- A conquest planet's layout ---------------------------------------------------------------------
+//
+// Every Galactic conquest planet has a battle map of its own (conquestMap.ts), and the player lays its
+// base out on the orbit view's preview of it: the Command Station within a home zone round the first
+// spawn, the yards and defense stations within its build radius, clear of the rocks, the fields, the
+// map's edge and each other. A battle there stands everything exactly where the preview shows it:
+// both work it out with standBase, on the same map with the same rocks.
+
+/** How far from the first spawn (its home) a conquest planet's Command Station may be moved. */
+export const HOME_R = mapDist(700)
+/** One structure of a conquest planet's base, by its place in the layout, and its type. */
+export type LayoutItem = { id: LayoutId; t: UnitType }
+/** One structure where it stands: its type, place and heading. */
+export type Stood = LayoutItem & Standing
+/** The biggest structure `id` of faction `f` grows to (the station at its last level, a defense
+ * station at its last), which a layout keeps room for whatever is built later. */
+export function layoutTop(f: FactionId, id: LayoutId): UnitType {
+  if (id === 'station') return stationType(f, MAX_LEVEL, [])
+  if (id === 'yard' || id === 'cyard') return yardOf(f, id)
+  return orbitalType(f, ORBITAL_TOP, [], id === 'def1' ? 1 : 0)
+}
+/** Which way a Command Station at (x, y) faces: towards the middle of the map, as a battle stands it. */
+export const stationFace = (w: Pick<World, 'w' | 'h'>, x: number, y: number) => M.atan2(w.h / 2 - y, w.w / 2 - x) - Math.PI / 2
+/** Why faction `f`'s Command Station can't stand at (x, y) on a planet whose home is `home`, or null:
+ * within HOME_R of it, clear of the map's edge, rocks and asteroid fields at its biggest. */
+export function stationProblem(w: World, f: FactionId, home: Pt, x: number, y: number): string | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Not a place'
+  if (d2(x, y, home.x, home.y) > sq(HOME_R + 1e-6)) return 'Outside the home zone: the Command Station stays on our side of the map'
+  const r = Math.max(...dims(stationType(f, MAX_LEVEL, []))) * 0.5
+  if (x < r + 120 || y < r + 120 || x > w.w - r - 120 || y > w.h - r - 120) return 'Too close to the edge of the map'
+  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + r + 30))) return 'An asteroid is in the way'
+  if (inside(w.map.fields, x, y, r)) return 'Inside an asteroid field'
+  return null
+}
+/** Why structure `t` (as `id` of the layout) can't stand at (x, y) round the station `st`, clear of
+ * `others` (what stands already), or null: the battle's own check (siteProblem). Yards face away
+ * from the station, defense stations as it does. */
+export function layoutProblem(w: World, owner: Owner, t: UnitType, st: Standing, x: number, y: number, others: readonly Standing[]): string | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Not a place'
+  return structProblem(w, owner, t, st, x, y, layoutFace(t, st, x, y), others)
+}
+const layoutFace = (t: UnitType, st: Standing, x: number, y: number) => (t.tier === 'yard' ? M.atan2(y - st.y, x - st.x) : st.a)
 
 /**
- * Where structure `id` of a conquest planet's layout (FleetSide `spots`) wants to stand in the
- * battle: where it sits from the station round the planet in the galaxy, turned so the planet lies
- * the way this map's planet lies from the station (below it on a map without one), LAYOUT_SCALE
- * world units per planet radius, and kept within reach of the station. Null without a layout.
+ * Where a conquest planet's base stands on its battle map: the Command Station where `plan` has it
+ * (else at `home`), then each of `items` in turn (yards, then defense stations), each where `plan`
+ * has it if it may stand there clear of the ones before it, else the nearest clear spot (clearNear).
+ * One the plan leaves out stands at its default: where conquestMap.ts autoLayout puts it,
+ * moved along with the station, worked out for every structure at its biggest (layoutTop) so the
+ * defaults never crowd each other whatever is built. The first entry is the station.
+ *
+ * Battles stand their bases this way (newFleetBattle), and the orbit view's preview shows them this
+ * way, on the same map with the same rocks: they always agree.
  */
-export function layoutPoint(w: World, st: Unit, spots: FleetSide['spots'], id: LayoutId): Pt | null {
-  const S = spots?.station
-  const X = spots?.[id]
-  if (!S || !X) return null
-  const sx = M.cos(S.a) * S.d
-  const sy = M.sin(S.a) * S.d
-  const rx = M.cos(X.a) * X.d - sx
-  const ry = M.sin(X.a) * X.d - sy
-  const pl = w.map.planet
-  const turn = (pl ? M.atan2(pl.y - st.y, pl.x - st.x) : Math.PI / 2) - M.atan2(-sy, -sx)
-  const c = M.cos(turn)
-  const s = M.sin(turn)
-  const len = M.hypot(rx, ry) || 1
-  const d = Math.max(LAYOUT_SCALE.min, Math.min(LAYOUT_SCALE.max, len * LAYOUT_SCALE.unit))
-  return { x: st.x + ((rx * c - ry * s) / len) * d, y: st.y + ((rx * s + ry * c) / len) * d }
+export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: Partial<Record<LayoutId, Pt>> | undefined, attackers: Pt[], items: LayoutItem[]): Stood[] {
+  const auto: Partial<Record<LayoutId, Pt>> = autoLayout(home, attackers)
+  const want = plan?.station
+  const sp = want && !stationProblem(w, f, home, want.x, want.y) ? want : home
+  const st: Stood = { id: 'station', t: stationType(f, MAX_LEVEL, []), x: sp.x, y: sp.y, a: stationFace(w, sp.x, sp.y) }
+  const dx = sp.x - home.x
+  const dy = sp.y - home.y
+  const stand = (list: LayoutItem[], wants: (id: LayoutId) => Pt | undefined): Stood[] => {
+    const out: Stood[] = [st]
+    for (const { id, t } of list) {
+      const face = (x: number, y: number) => layoutFace(t, st, x, y)
+      const q = wants(id)
+      let at: { x: number; y: number; a: number } | null = null
+      if (q && !layoutProblem(w, owner, t, st, q.x, q.y, out)) at = { x: q.x, y: q.y, a: face(q.x, q.y) }
+      if (!at && q) at = clearNear(w, st, t, q, face, out)
+      // Nowhere near where it wants: where it would stand with nothing to go by.
+      if (!at && t.tier === 'yard') at = baseSpots(w, st, [id as 'yard' | 'cyard'], attackers, out)[0] ?? null
+      if (!at) {
+        const from = attackers.length ? attackers[0] : { x: w.w / 2, y: w.h / 2 }
+        const b = M.atan2(st.y - from.y, st.x - from.x) + (id === 'def1' ? -1 : 1) * 1.9
+        at = clearNear(w, st, t, { x: st.x + M.cos(b) * mapDist(1000), y: st.y + M.sin(b) * mapDist(1000) }, face, out)
+      }
+      if (at) out.push({ id, t, ...at })
+    }
+    return out.slice(1)
+  }
+  const defaults = new Map(stand(LAYOUT_IDS.slice(1).map((id) => ({ id, t: layoutTop(f, id) })), (id) => (auto[id] ? { x: auto[id]!.x + dx, y: auto[id]!.y + dy } : undefined)).map((s) => [s.id, s]))
+  return [st, ...stand(items, (id) => plan?.[id] ?? defaults.get(id))]
 }
 
-/** The clear spot nearest `at` for structure `t` round station `st` (see siteProblem), searched in
- * rings round it, the same every time; null when there is none within reach. `face`: its heading
- * there, given where it stands. */
-function clearNear(w: World, st: Unit, t: UnitType, at: Pt, face: (x: number, y: number) => number, others: { x: number; y: number; a: number; t: UnitType }[]): { x: number; y: number; a: number } | null {
+/** The clear spot nearest `at` for structure `t` round station `st`, clear of `others` (see
+ * structProblem), searched in rings round it, the same every time; null when there is none within
+ * reach. `face`: its heading there, given where it stands. */
+function clearNear(w: World, st: Standing, t: UnitType, at: Pt, face: (x: number, y: number) => number, others: readonly Standing[]): { x: number; y: number; a: number } | null {
+  const owner = 0
   for (const r of [0, 140, 280, 420, 560, 760, 980]) {
     const n = r ? 10 : 1
     for (let k = 0; k < n; k++) {
@@ -5151,62 +5235,53 @@ function clearNear(w: World, st: Unit, t: UnitType, at: Pt, face: (x: number, y:
       const x = at.x + M.cos(b) * r
       const y = at.y + M.sin(b) * r
       const a = face(x, y)
-      const { hl, hw } = yardBox(t)
-      if (siteProblem(w, st.owner, t, st, x, y, a) || others.some((q) => boxesNear(x, y, a, hl, hw, q.x, q.y, q.a, yardBox(q.t).hl, yardBox(q.t).hw, 60))) continue
+      if (structProblem(w, owner, t, st, x, y, a, others)) continue
       return { x, y, a }
     }
   }
   return null
 }
 
+/** The clear spot nearest `at` for structure `t` (as a layout places it, see layoutProblem) round
+ * the station `st`, clear of `others`; null when there is none within reach. */
+export const nearestClear = (w: World, st: Standing, t: UnitType, at: Pt, others: readonly Standing[]) => clearNear(w, st, t, at, (x, y) => layoutFace(t, st, x, y), others)
+
+/** A conquest planet's battle map as a battle there starts out, before anything stands on it: its
+ * rocks scattered from the map's seed as the battle scatters them (newFleetBattle with the map's
+ * seed, as the game starts one). What the orbit view's preview lays the planet's base out on. */
+export function layoutWorld(map: MapDef): World {
+  const w = newWorld(map, [{ faction: 'republic', team: 0, spawn: 0, incomeMul: 0 }, { faction: 'droid', team: 1, spawn: 1, incomeMul: 0 }], { seed: map.seed, credits: 0, fleet: true })
+  w.fleet = { entry: [], cap: FLEET_CAP, holder: 0, endT: 3 }
+  return w
+}
+
 /** A conquest planet's base as it stands when the battle starts: the station's expansions, then each
- * yard at its spot, finished, with its own expansions (and a Fighter wing's squadron), then its
- * defense stations with their modules. With a layout (`spots`) everything stands where the planet
- * has it (see layoutPoint); without one the yards stand away from the attackers (baseSpots) and the
- * defense stations either side of the station. */
-function raiseBase(w: World, st: Unit, yards: ('yard' | 'cyard')[], exp: ModuleId[], attackers: Pt[], spots?: FleetSide['spots'], orbitals: NonNullable<FleetSide['orbitals']> = []) {
+ * yard where `stood` puts it (see standBase), finished, with its own expansions (and a Fighter wing's
+ * squadron), then its defense stations with their modules. */
+function raiseBase(w: World, st: Unit, exp: ModuleId[], stood: Stood[]) {
   const ids = Object.keys(MODULE) as ModuleId[]
   const onStation = ids.filter((id) => exp.includes(id) && MODULE[id].on === 'station')
   if (onStation.length) {
     st.xm = onStation
     restation(w, st)
   }
-  const away = (x: number, y: number) => M.atan2(y - st.y, x - st.x)
-  const raise = (s: { kind: 'yard' | 'cyard'; x: number; y: number; a: number }) => {
-    const y = spawn(w, yardOf(st.t.faction, s.kind).id, st.owner, s.x, s.y, s.a)
-    // Standing from the start: its queue open, but it says nothing of being built.
-    finishSite(w, y)
-    w.events.pop()
-    const mods = ids.filter((id) => exp.includes(id) && MODULE[id].on === s.kind)
-    if (!mods.length) return
-    y.xm = mods
-    retype(w, y, yardType(y.t.id, y.xm))
-    if (mods.includes('fighterWing')) spawnWing(w, y)
-  }
-  if (spots?.station) {
-    // As the planet lays them out: each where its layout puts it, or the nearest clear spot; one
-    // with no room there stands where it would without a layout. (Raised one by one, so each keeps
-    // clear of the ones before it.)
-    for (const kind of yards) {
-      const want = layoutPoint(w, st, spots, kind)
-      const at = want ? clearNear(w, st, yardOf(st.t.faction, kind), want, away, []) : null
-      const s = at ? { kind, ...at } : baseSpots(w, st, [kind], attackers)[0]
-      if (s) raise(s)
+  for (const s of stood) {
+    if (s.t.tier === 'yard') {
+      const kind = s.id as 'yard' | 'cyard'
+      const y = spawn(w, s.t.id, st.owner, s.x, s.y, s.a)
+      // Standing from the start: its queue open, but it says nothing of being built.
+      finishSite(w, y)
+      w.events.pop()
+      const mods = ids.filter((id) => exp.includes(id) && MODULE[id].on === kind)
+      if (!mods.length) continue
+      y.xm = mods
+      retype(w, y, yardType(y.t.id, y.xm))
+      if (mods.includes('fighterWing')) spawnWing(w, y)
+    } else {
+      // A defense station, turned as the station is, with its modules (and its hangars' squadron).
+      const u = spawn(w, s.t, st.owner, s.x, s.y, s.a)
+      u.stance = 'hold'
     }
-  } else for (const s of baseSpots(w, st, yards, attackers)) raise(s)
-  // The defense stations, turned as the station is, each with its modules (and its hangars' squadron).
-  for (const [n, d] of orbitals.entries()) {
-    const t = orbitalType(st.t.faction, d.level, d.mods, d.i)
-    const id: LayoutId = d.i ? 'def1' : 'def0'
-    const fallback = (): Pt => {
-      const from = attackers.length ? attackers[0] : { x: w.w / 2, y: w.h / 2 }
-      const b = M.atan2(st.y - from.y, st.x - from.x) + (n ? -1 : 1) * 1.9
-      return { x: st.x + M.cos(b) * mapDist(1000), y: st.y + M.sin(b) * mapDist(1000) }
-    }
-    const at = clearNear(w, st, t, layoutPoint(w, st, spots, id) ?? fallback(), () => st.a, []) ?? clearNear(w, st, t, fallback(), () => st.a, [])
-    if (!at) continue
-    const u = spawn(w, t, st.owner, at.x, at.y, at.a)
-    u.stance = 'hold'
   }
 }
 

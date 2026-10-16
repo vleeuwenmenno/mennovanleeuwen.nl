@@ -2304,39 +2304,69 @@ grid with a bar of how full it is, and an empty *New fleet* column while there a
 
 Zooming in past a planet on the galaxy map locks the camera onto it: the **orbit view**
 ([`Orbit.tsx`](src/apps/games/empires/Orbit.tsx), the camera in
-[`Conquest.tsx`](src/apps/games/empires/Conquest.tsx) `enterOrbit`). The camera eases onto the
-planet at the zoom where it and everything round it fill the view (`kOrbit`), and from there it goes
-in closer than anywhere else on the map (`K_ORBIT_MAX`, three times `K_MAX`), panning only as far as
-what stands round the planet. The wheel snaps into it once it would zoom past the planet under the
-cursor (`ORBIT_SNAP`), and so do a pinch, a double-click or a double tap on a planet, the zoom keys
-and buttons, *Orbit view* on a planet's action wheel and the planet picture in its shipyard.
-Zooming or pinching back out (`ORBIT_LEAVE`), Esc, the banner's *Leave* or a look anywhere else
-lets go.
+[`Conquest.tsx`](src/apps/games/empires/Conquest.tsx) `enterOrbit`, the panel in
+[`PlanetMap.tsx`](src/apps/games/empires/PlanetMap.tsx)). Zooming all the way in, the planet settles
+a little smaller and to one side, and its **battle map** sits pinned beside it (below it on a tall
+screen, a phone held upright), overlapping the planet's orbit by about 40% (`orbitFrame`). The panel
+has no handle: it moves with the planet, fading and sliding in over the last 15% of the zoom
+(`panelIn`), so going in and out is one continuous glide rather than a snap. The camera goes no
+closer than that (`K_ORBIT_MAX` at most) and keeps the planet where the frame puts it. The wheel
+eases into it once it would zoom past the planet under the cursor (`ORBIT_SNAP`), and so do a pinch,
+a double-click or a double tap on a planet, the zoom keys and buttons, *Orbit view* on a planet's
+action wheel and the planet picture in its shipyard. Zooming or pinching back out (`ORBIT_LEAVE`),
+Esc, the banner's *Leave* or a look anywhere else lets go.
 
-- **What it shows:** the planet with its Command Station, its Frigate Yard and Capital Yard (ruins
-  greyed) and its two defense stations, each drawn as its real model, modules and all, from the same
-  cached picture as the cards (one painted still per look, `structArt`: nothing is painted per
-  frame). They orbit the planet together, once in twelve minutes (held still while one is picked or
-  dragged, and for *reduce motion*). The camera places and fades the whole view with one transform,
-  as the map's own layer is, so zooming renders nothing. An enemy planet shows what stands there; a
-  hidden one what we last saw, faded.
+- **Every planet has its own battle map** ([`conquestMap.ts`](src/apps/games/empires/conquestMap.ts)
+  `planetMap`): generated from the galaxy's seed and the planet's id, its terrain by the planet's
+  kind (asteroid fields round barren, volcanic and crystal worlds, nebulas round gas giants), the
+  planet far below the battle. Every battle there is fought on it, and the panel shows the same map:
+  its terrain, its rocks (scattered from the map's seed, as the battle scatters them), the planet,
+  the Command Station's build radius and every structure as its real model at its true size and
+  heading. The holder starts on the left (the home spawn).
+- **Entry zones:** each hyperlane into the planet's system has an entry zone of its own along the
+  far side of the map, named after the system at its other end, in the order the lanes leave the
+  system (from the west round through north, east and south), and a planet with neighbours in its
+  system has one more for fleets coming from them. An attacking fleet drops out of hyperspace at the
+  zone of the lane it came down (`Fleet.via`, `entrySpawn`); one that hasn't flown down a lane (built
+  there, or from a save before the zones) comes in at the zone in the middle of the far side. The
+  terrain and the rocks leave the zones open, and the defender's side is kept clear of them. Every
+  zone is a spawn of the map (`MapDef.spawns`, home first) with its rocks kept back a little
+  (`MapDef.keep`), and the map's rocks are its own all over (`sym: 'none'`), so the map is the same
+  whichever lane the attack comes down.
+- **Placing structures** (our planets): drag a structure on the battle map, with a mouse or a finger.
+  The Command Station moves within its home zone round the home spawn (`HOME_R`) and takes the rest
+  along; the yards and defense stations move within its build radius, clear of rocks, asteroid
+  fields, the map's edge and each other, kept apart by the size each grows to (`layoutTop`). A drop
+  where one can't stand goes to the nearest clear spot (`nearestClear`), or is refused with the
+  reason. Empty yard and defense sites show as ghost outlines and can be placed before they are
+  built. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
+  the card's *Reset layout* puts everything back at its default.
+- **Exactly as in battle:** the panel and the battle both work out where everything stands with
+  `standBase` ([`sim.ts`](src/apps/games/empires/sim.ts)) on the same map with the same rocks: the
+  station first, then the yards and the defense stations, each at its place in the layout
+  (`Planet.layout`, in the map's world units) if it may stand there, else the nearest clear spot. A
+  structure left out of the layout stands at its default (`autoLayout`: the yards on either flank a
+  little behind the station, away from the entry zones, the defense stations either side in front of
+  it), worked out for every structure at its biggest, so the defaults never shift as more is built.
+  The galaxy AI's planets are laid out by default.
+- **Round the planet:** the planet with its Command Station, yards (ruins greyed) and defense
+  stations, each drawn as its real model from the same cached picture as the cards (`structArt`:
+  nothing is painted per frame), pictured where the battle map has them turned back round the planet
+  (`mapToPolar`, the station up and to the left of it). They orbit the planet together, once in
+  twelve minutes (held still while one is picked, and for *reduce motion*). Moving them happens on the
+  battle map only. The camera places and fades the whole view with one transform, as the map's own
+  layer is, so zooming renders nothing.
+- **Enemy and neutral planets** show read only: terrain and entry zones always, and their structures
+  as the fog of war allows (see below): where they stand now while we see the system, else where we
+  last saw them (`Intel.layout`), marked *Last seen day N* or *Pre-war charts*. A planet we never saw
+  laid out shows its default layout.
 - **Closer than the system, not yet in orbit** (zoom over 9, the map's `B_BASE` band): each planet
   with a station shows a small picture of each structure where it sits round it, at least a little
   way out past the planet's edge, the station's level on the station's picture.
-- **Orders:** a click or tap on a structure picks it and opens its card, built from the shipyard's
-  own pages: the station's upgrade and expansions, a yard (or the site to build it on, or its ruin to
-  rebuild) and its expansions, a defense station's levels and module slots, with the planet's
-  queue on top. Empty yard and defense sites show as dashed ghost outlines to order from (a site
-  being built pulses). A click on open space, or Esc, puts the card away.
-- **Positions:** each structure sits at its own bearing and distance round the planet by default
-  (galaxy.ts `AUTO_SPOT`, in planet radii). Ours can be dragged (mouse or finger) to another spot,
-  between 1.6 and 2.9 planet radii out (`SPOT_D`), clear of the planet and of the others at their
-  biggest (`structR`); one dropped too close to another is nudged round to the nearest clear spot
-  (`moveStruct`). The card's *Reset layout* puts them all back. The layout is the planet's
-  (`Planet.layout`, saved with the campaign; a captured planet starts its new owner's afresh), and a
-  fleet battle there stands the yards and defense stations the same way round the station
-  (sim.ts `layoutPoint`): turned so the planet lies where the battle's map has it, 700 world units
-  per planet radius, kept inside the build radius, on the nearest clear spot (`clearNear`).
+- **Orders:** a structure's card is built from the shipyard's own pages: the station's upgrade and
+  expansions, a yard (or the site to build it on, or its ruin to rebuild) and its expansions, a
+  defense station's levels and module slots, with the planet's queue on top. A click on open space,
+  or Esc, puts the card away.
 
 **Defense stations** ([`data/<faction>.ts`](src/apps/games/empires/data/) `orbital`,
 [`data.ts`](src/apps/games/empires/data.ts) `orbitalType`): up to two per planet (`ORBITAL_MAX`),
@@ -2383,11 +2413,13 @@ empty one shows its open port.
   modules for every one standing, the upgrades, and the second site; it rebuilds ruins with its
   yards. Its estimate of a planet's defence (`defence`, `baseGuard`) counts what was spent on the
   defense stations it knows of.
-- **Saves:** campaigns are version 4 (`PlanetBase.orb`, `Planet.layout`); older ones load with no
-  defense stations and every structure on its own spot.
+- **Saves:** campaigns are version 5 (`Planet.layout` on the planet's battle map, `Intel.layout`,
+  `Fleet.via`); version 4 (`PlanetBase.orb`) kept the layout as bearings round the planet, turned
+  onto the map on load where its battles stood them (`fromPolar`); older ones load with no defense
+  stations and every structure at its default. Looks from before version 5 know no layout.
 
 ```sh
-pnpm check:empires-gc-defense   # ordering, levels and slots, modules, ruins and rebuilds, auto-resolve, battle spawns at the layout, moving structures, the AI, old saves
+pnpm check:empires-gc-defense   # ordering, levels and slots, modules, ruins and rebuilds, auto-resolve, battles standing everything exactly where the planet's map has it, placing structures, the AI, old saves
 ```
 
 ## Galactic conquest fog of war
@@ -2397,10 +2429,11 @@ Each side sees only part of the galaxy ([`galaxy.ts`](src/apps/games/empires/gal
 a fleet there (in orbit, or flying between its planets), or the system is contested for it (one of
 its planets being taken, or a battle it's in). Everything else is **hidden**:
 - In a hidden system we see the star, the planets and their kinds, and **what we last saw**
-  (`Side.intel`): who held each planet, its station level and the enemy ships in its orbit, drawn
-  faded with dashed rings and "Last seen day N" under each planet (the planet dock and tips say the
-  same). A new campaign starts with the **pre-war charts**: who held what and their stations, no
-  word of any fleet. Never live fleets, stations being built, captures or shipyards.
+  (`Side.intel`): who held each planet, its station level, where its structures stood on its battle
+  map and the enemy ships in its orbit, drawn faded with dashed rings and "Last seen day N" under
+  each planet (the planet dock, tips and the orbit view's battle map say the same). A new campaign
+  starts with the **pre-war charts**: who held what and their stations, no word of any fleet. Never
+  live fleets, stations being built, captures or shipyards.
 - Enemy fleets show only inside systems we see; out on a lane they're in hyperspace and nobody sees
   them, so an attack shows up when it arrives. A fleet of ours flying through a system glimpses it
   on the way, and a side that loses a planet knows it even with nothing left there.
