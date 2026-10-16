@@ -3231,6 +3231,9 @@ span.ew-teamtag {
   .is-station .ew-detail-side {
     display: none;
   }
+  .ew-yardhead .ew-narrow-repair {
+    display: inline-flex;
+  }
   .ew-top-faction div,
   .ew-yardchip span,
   .ew-top-cell small {
@@ -3484,6 +3487,13 @@ span.ew-teamtag {
   width: 128px;
 }
 
+/* The station's repair button in its card's header, on a screen too narrow for the side column. */
+.ew-narrow-repair {
+  display: none;
+}
+.ew-narrow-repair:empty {
+  display: none !important;
+}
 /* A structure's repair button, and its progress while the crew works. */
 .ew-deck .ew-repair {
   position: relative;
@@ -3502,12 +3512,19 @@ span.ew-teamtag {
 .ew-deck .ew-repair.is-off {
   opacity: 0.5;
 }
+.ew-deck .ew-repair.is-slow {
+  color: var(--ew-gold);
+  border-color: color-mix(in srgb, var(--ew-gold) 45%, transparent);
+}
 .ew-repair.is-busy i {
   position: absolute;
   left: 0;
   bottom: 0;
   height: 2px;
   background: var(--ew-good);
+}
+.ew-repair.is-slow i {
+  background: var(--ew-gold);
 }
 
 /* Hyperspace retreat: under the command grid, lit while drives are charging. */
