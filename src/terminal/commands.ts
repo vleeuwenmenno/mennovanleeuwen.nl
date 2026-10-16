@@ -1,7 +1,9 @@
 import { contributions, headlines, profile, projects } from '../data/profile'
 import { countFor, levels, loadContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
+import { loadChangelog, type Release } from '../data/changelog'
 import { fetchStars, loadRecents, timeAgo } from '../data/recents'
+import { plain } from './ansi'
 import { appHere, cvMode } from '../os/cvMode'
 import { HANDLE, MENNO_PERSONA, SIGNED_IN_HANDLE } from '../os/identity'
 import type { AppId } from '../os/wm'
@@ -121,6 +123,8 @@ const APPS: Record<string, AppId> = {
   winamp: 'amp',
   music: 'amp',
   weather: 'weather',
+  changelog: 'changelog',
+  releases: 'changelog',
   git: 'git',
   trash: 'trash',
   notebook: 'notebook',
@@ -166,6 +170,7 @@ const APP_NAMES: Record<AppId, string> = {
   contacts: 'contacts',
   tasks: 'tasks',
   weather: 'weather',
+  changelog: 'changelog',
   git: 'git',
 }
 
@@ -323,6 +328,54 @@ function cowsay(text: string) {
 
 const KIND_ICON: Record<string, string> = { push: '↑', pr: '⇄', merge: '⑂', issue: '◎', release: '★', create: '+', star: '☆', comment: '…', fork: '⑂' }
 
+/** Light Markdown → terminal markup for release notes (headings, bullets, links, code, bold). */
+function inlineMd(text: string): string {
+  const re = /\[([^\]]+)\]\((https?:[^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*/g
+  let out = ''
+  let last = 0
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    out += plain(text.slice(last, m.index))
+    if (m[1] != null) out += link(m[2], plain(m[1]))
+    else if (m[3] != null) out += c('yellow', plain(m[3]))
+    else if (m[4] != null) out += c('bold', plain(m[4]))
+    else out += c('italic', plain(m[5]))
+    last = m.index + m[0].length
+  }
+  return out + plain(text.slice(last))
+}
+
+function bodyMd(body: string): string {
+  let inCode = false
+  return body
+    .split('\n')
+    .map((line) => {
+      if (/^```/.test(line)) {
+        inCode = !inCode
+        return c('muted', plain(line))
+      }
+      if (inCode) return c('yellow', plain(line))
+      const h = /^(#{1,3})\s+(.*)$/.exec(line)
+      if (h) return c(h[1].length === 1 ? 'accent' : 'cyan', plain(h[2]))
+      const li = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(line)
+      if (li) return `${li[1]}${c('green', '•')} ${inlineMd(li[3])}`
+      if (/^---+$/.test(line.trim())) return c('muted', '─'.repeat(40))
+      if (!line.trim()) return ''
+      return inlineMd(line)
+    })
+    .join('\n')
+}
+
+function formatRelease(r: Release): string {
+  const ver = r.name.replace(/^MvL OS\s+/i, '') || r.tag.replace(/^v/, '')
+  const when = new Date(r.publishedAt)
+  const date = Number.isNaN(when.getTime()) ? r.publishedAt : when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  const pre = r.prerelease ? ` ${c('yellow', '(pre-release)')}` : ''
+  const head = `${c('accent', '★')} ${c('bold', ver)}${pre}  ${c('muted', date)}  ${c('muted', r.tag)}`
+  const url = link(r.url, r.url.replace(/^https:\/\//, ''))
+  const notes = r.body ? bodyMd(r.body).trimEnd() : c('muted', '(no release notes)')
+  return `${head}\n${c('muted', url)}\n\n${notes}`
+}
+
 /** Quotes one argument for a command line run through the shell again (sudo, find -exec). */
 export { shellQuote }
 
@@ -355,7 +408,7 @@ export const commands: Record<string, Command> = {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
         ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'weather', 'games']],
-        ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
+        ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'changelog', 'git', 'heatmap', 'stars', 'contact']],
         ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
@@ -1186,6 +1239,31 @@ export const commands: Record<string, Command> = {
   contacts: { desc: 'open the Contacts app', run: (ctx) => openHere(ctx, 'contacts') },
   tasks: { desc: 'open the Tasks app', run: (ctx) => openHere(ctx, 'tasks') },
   weather: { desc: 'open the Weather app', run: (ctx) => openHere(ctx, 'weather') },
+  changelog: {
+    desc: 'MvL OS release notes from GitHub',
+    usage: 'changelog [count] [version]   e.g. changelog 3 · changelog 1.80.0',
+    run: async (ctx) => {
+      const nArg = ctx.args.find((a) => /^\d+$/.test(a))
+      const filter = ctx.args.find((a) => !/^\d+$/.test(a))?.replace(/^v/i, '').toLowerCase()
+      const limit = Math.min(30, Math.max(1, parseInt(nArg ?? (filter ? '1' : '5'), 10)))
+      let releases: Release[]
+      try {
+        releases = await loadChangelog()
+      } catch (err) {
+        throw new CmdError(`changelog: could not reach GitHub (${(err as Error).message})`)
+      }
+      const matched = filter
+        ? releases.filter((r) => r.tag.replace(/^v/i, '').toLowerCase() === filter || r.name.toLowerCase().includes(filter) || r.tag.toLowerCase().includes(filter))
+        : releases
+      if (!matched.length) throw new CmdError(filter ? `changelog: no release matches “${filter}”` : 'changelog: no releases yet')
+      const shown = matched.slice(0, limit)
+      const blocks = shown.map((r) => formatRelease(r))
+      const more = matched.length > shown.length ? `\n${c('muted', `…and ${matched.length - shown.length} more. Try changelog ${shown.length + 5} or changelog <version>.`)}` : ''
+      const tip = `\n${c('muted', 'open changelog opens the app · changelog <version> shows one release')}`
+      return blocks.join(`\n${c('muted', '─'.repeat(44))}\n`) + more + tip
+    },
+  },
+  releases: { desc: 'alias for changelog', hidden: true, run: (ctx) => commands.changelog.run(ctx) },
   nautilus: { desc: 'alias for files', hidden: true, run: (ctx) => commands.files.run(ctx) },
   calc: {
     desc: 'calculator with units and currencies',

@@ -1764,6 +1764,17 @@ the bottom of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HE
 account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
 dock, `weather` in the terminal, or from the weather widget.
 
+### Changelog
+
+The **Changelog** app ([`src/apps/Changelog.tsx`](src/apps/Changelog.tsx)) lists MvL OS GitHub
+releases (`MvL OS X.Y.Z`) with their notes rendered as Markdown. It loads them through the site's
+cached `/api/git/…/releases` proxy ([`server/github.ts`](server/github.ts)), falling back to the
+public GitHub API when that proxy is absent. Open it from All apps, Spotlight, the dock, or
+`open changelog` in the terminal.
+
+The terminal's `changelog` command ([`src/terminal/commands.ts`](src/terminal/commands.ts)) prints
+the same releases as scrollable coloured text (`changelog`, `changelog 3`, `changelog 1.80.0`).
+
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
 for its frame colours and tilt (`useFrame`), its own menu items (`useMenu`) and how a new one is
@@ -2309,7 +2320,10 @@ lets go.
 on two defense sites round its Command Station, ordered in the planet's queue like a yard (paid when
 queued, refunded in full when called off), and on the shipyard's **Defense** page. Each has three
 levels, each upgrade ordered in the queue too, with 1, 2 and 4 **module slots**; the player picks
-the module for each slot (a module ordered into a full slot replaces what is there once it's done):
+the module for each slot (a module ordered into a full slot replaces what is there once it's done).
+On the Defense page each site is its own bordered group: the station's card on the left, its upgrade
+and its four slots to the right, the modules to pick from below. The groups sit side by side on a
+wide panel and stack on a narrow one or a phone (each at least 320 px wide):
 
 | | Republic: Bastion | Confederacy: Bulwark | Swarm: Guardian |
 | --- | --- | --- | --- |
@@ -3292,7 +3306,8 @@ non-root user on port 8080 (`PORT` changes it). Its API routes live in
 [`server/api.ts`](server/api.ts), shared with `pnpm dev`. It serves the built site, answers `/healthz`, serves
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
 `/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
-anonymous limit of 60 requests an hour), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+anonymous limit of 60 requests an hour), `/api/git/<owner>/<repo>/releases` (for the Changelog app,
+same cache and token), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.
