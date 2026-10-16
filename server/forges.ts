@@ -19,6 +19,11 @@ export type Source = {
   api: <T>(path: string) => Promise<T | null>
   /** The same, for an answer that is plain text (a .diff) */
   text: (path: string) => Promise<string | null>
+  /**
+   * A change (the Git app's comments and descriptions): `json` sent with POST or PATCH, the host's
+   * JSON answer back. Refusals throw with a message saying what to fix (a token without write access).
+   */
+  send: <T>(method: 'POST' | 'PATCH', path: string, json: unknown) => Promise<T>
 }
 
 export type ForgeInfo = { id: number; label: string; baseUrl: string; username: string }
@@ -35,18 +40,39 @@ export const ORG_SSO = 'the organisation wants SAML single sign-on for this toke
 const blockedUntil = new Map<string, number>()
 const limitKey = (url: string, headers: Record<string, string>) => `${new URL(url).host}|${url.includes('/search/') ? 'search' : 'core'}|${headers.Authorization ?? ''}`
 
+/** What a host said was wrong, from its JSON error answer ({ message }), or "". */
+const hostMessage = async (res: Response) => String(((await res.json().catch(() => null)) as { message?: unknown } | null)?.message ?? '').slice(0, 300)
+
+/** A change: how it goes out, and what to say when the host refuses it for want of access. */
+type Write = { method: 'POST' | 'PATCH'; body: unknown; refused: string }
+
 /** `user` is who chose the address (a linked instance: checked by guardedFetch), null for GitHub's own API. */
-async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string, text = false): Promise<T | null> {
+async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string, text = false, write?: Write): Promise<T | null> {
   const key = limitKey(url, headers)
   const until = blockedUntil.get(key) ?? 0
   if (until > Date.now()) throw new HttpError(429, `${label} rate limit, back in ${Math.ceil((until - Date.now()) / 1000)} s`)
-  const init = { headers: { Accept: 'application/json', 'User-Agent': 'mvlos', ...headers }, signal: AbortSignal.timeout(TIMEOUT) }
+  const init: RequestInit = {
+    headers: { Accept: 'application/json', 'User-Agent': 'mvlos', ...(write ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    signal: AbortSignal.timeout(TIMEOUT),
+    ...(write ? { method: write.method, body: JSON.stringify(write.body) } : {}),
+  }
   const res = await (user ? guardedFetch(user, url, init) : fetch(url, init)).catch((e) => {
     rethrowEgress(e)
     throw new HttpError(502, `${label} did not answer`)
   })
-  if (res.status === 404) return null
+  if (res.status === 404 && !write) return null
   if (res.status === 401) throw new HttpError(502, `${label} rejected the token`)
+  // A change the host turned down: no access (GitHub answers 404 for that too), or something
+  // about the change itself (a locked conversation, a text it won't take).
+  if (write && (res.status === 403 || res.status === 404) && res.headers.get('x-ratelimit-remaining') !== '0' && !res.headers.get('retry-after')) {
+    const why = await hostMessage(res)
+    if (/lock/i.test(why)) throw new HttpError(403, `${label} refused: ${why}`)
+    throw new HttpError(403, write.refused)
+  }
+  if (write && (res.status === 400 || res.status === 409 || res.status === 422)) {
+    const why = await hostMessage(res)
+    throw new HttpError(400, `${label} refused this${why ? `: ${why}` : ''}`)
+  }
   if (res.status === 403 || res.status === 429) {
     const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000
     const retry = Number(res.headers.get('retry-after')) * 1000
@@ -63,8 +89,15 @@ async function get<T>(user: User | null, url: string, headers: Record<string, st
   }
   if (!res.ok) throw new HttpError(502, `${label} answered ${res.status}`)
   const body = (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  if (!text && !body.trim()) return null
   return (text ? body : JSON.parse(body)) as T
 }
+
+/** For a change, which never answers null: a host that sent nothing back answers {}. */
+const sent = <T>(p: Promise<T | null>) => p.then((v) => (v ?? {}) as T)
+
+/** What GitHub's refusal of a change usually means: the token was granted without write access. */
+const GITHUB_REFUSED = "GitHub didn't allow this — sign in again with private repositories allowed (Settings → Code hosts)"
 
 export function githubSource(user: User): Source {
   return {
@@ -75,6 +108,8 @@ export function githubSource(user: User): Source {
     login: user.login,
     api: (path) => get(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub'),
     text: (path) => get<string>(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github.diff', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub', true),
+    send: <T>(method: 'POST' | 'PATCH', path: string, json: unknown) =>
+      sent<T>(get<T>(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub', false, { method, body: json, refused: GITHUB_REFUSED })),
   }
 }
 
@@ -87,6 +122,8 @@ function giteaSource(user: User, id: number, label: string, base: string, userna
     login: username,
     api: (path) => get(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label),
     text: (path) => get<string>(user, `${base}/api/v1${path}`, { Authorization: `token ${token}`, Accept: 'text/plain' }, label, true),
+    send: <T>(method: 'POST' | 'PATCH', path: string, json: unknown) =>
+      sent<T>(get<T>(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label, false, { method, body: json, refused: `${label} didn't allow this — the token needs the write:issue scope (Settings → Code hosts)` })),
   }
 }
 

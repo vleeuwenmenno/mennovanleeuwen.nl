@@ -102,6 +102,15 @@ export function usePaged<T>(path: string | null) {
   }
 }
 
+/** A change (a comment, a description): the server's answer, or a throw with its message. */
+export const send = <T>(path: string, method: 'POST' | 'PATCH', json: unknown) => api<T>(path, { method, json })
+
+/** After a change in a repository: its pull request and issue lists (comment counts) load again. */
+export function forgetLists(repoPath: string) {
+  forget(`${repoPath}/pulls?`)
+  forget(`${repoPath}/issues?`)
+}
+
 /** Forget what was loaded under a path (Reload). */
 export function forget(prefix: string) {
   for (const k of memo.keys()) if (k.startsWith(prefix)) memo.delete(k)
