@@ -1384,6 +1384,9 @@ own watchers. `NOTIFY_WATCH=off` leaves the watchers off.
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
+Clicking an entry opens it in the Git app; when the app can't load it (no access, a host it doesn't
+know, no answer within a few seconds) it opens on the web instead. Ctrl-, Shift- and middle-clicks
+still open the web page in a new tab.
 
 ## Photos
 
