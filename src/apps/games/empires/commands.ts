@@ -1,8 +1,8 @@
-import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUpgradeId } from './data.ts'
+import { LEVEL_UP, MODULE, ORBITAL_MODS, SITE_UPGRADES, TECH, UNIT, defenseFaction, type ModuleId, type OrbitalModId, type SiteUpgradeId } from './data.ts'
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, GIFT_MAX, cantReinforce, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, GIFT_MAX, cantReinforce, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -10,7 +10,7 @@ import {
 // to run at the same tick; a malformed order from a tampered client never reaches anyone. The
 // owner is never part of an order: the server fills in the sender's own seat.
 
-type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module' | 'seat' | 'credits'
+type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module' | 'seat' | 'credits' | 'structure' | 'orbmod'
 
 /** The functions, by order name, with what each argument must be. */
 const TABLE = {
@@ -37,7 +37,7 @@ const TABLE = {
   cancelResearch: { run: cmdCancelResearch, args: ['int'] },
   site: { run: cmdSite, args: ['int', 'unit'] },
   // Hybrid bases: engineers place a yard, build or repair a structure; a site can be called off.
-  place: { run: cmdPlace, args: ['ids', 'unit', 'x', 'y', 'bool', 'angle'] },
+  place: { run: cmdPlace, args: ['ids', 'structure', 'x', 'y', 'bool', 'angle'] },
   construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
   // Repair ships: repair a damaged ship or station of ours or an ally's (the sim refuses an enemy's).
   mend: { run: cmdMend, args: ['ids', 'id', 'bool'] },
@@ -49,6 +49,10 @@ const TABLE = {
   rush: { run: cmdRush, args: ['id'] },
   // Credits for an ally: whose seat, and how many (whole credits; the sim says whether they may).
   give: { run: cmdGive, args: ['seat', 'credits'] },
+  // Defense stations: raise one a level, fit a module into one of its slots, or call off its work.
+  fortUp: { run: cmdFortUp, args: ['id'] },
+  fortFit: { run: cmdFortFit, args: ['id', 'int', 'orbmod'] },
+  cancelFort: { run: cmdCancelFort, args: ['id', 'int'] },
 } as const satisfies Record<string, { run: (w: World, owner: Owner, ...a: never[]) => unknown; args: readonly Arg[] }>
 
 export type CmdName = keyof typeof TABLE
@@ -103,6 +107,11 @@ function cleanArg(kind: Arg, v: unknown, w: World): unknown {
       return int(v, 0, w.players.length - 1)
     case 'credits':
       return int(v, 1, GIFT_MAX)
+    case 'structure':
+      // What engineers put up: a yard (any unit id; the sim says which may go up) or a defense station.
+      return typeof v === 'string' && (Object.hasOwn(UNIT, v) || defenseFaction(v) !== null) ? v : null
+    case 'orbmod':
+      return typeof v === 'string' && (ORBITAL_MODS as string[]).includes(v) ? (v as OrbitalModId) : null
     case 'module':
       return typeof v === 'string' && Object.hasOwn(MODULE, v) ? (v as ModuleId) : null
     case 'path': {
@@ -134,6 +143,8 @@ export function cleanCmd(raw: unknown, w: World): Cmd | null {
   }
   // A reinforcement of a class the lobby turned off is no order at all (the sim refuses it too).
   if (f === 'build' && out[1] === true && cantReinforce(w, out[0] as string)) return null
+  // Defense stations in a battle that has them off (or none at all): no order either.
+  if (!w.defense && (f === 'fortUp' || f === 'fortFit' || f === 'cancelFort' || (f === 'place' && defenseFaction(out[1] as string)))) return null
   return { f: f as CmdName, a: out }
 }
 

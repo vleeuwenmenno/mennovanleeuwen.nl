@@ -41,7 +41,8 @@
 @media (pointer: coarse) {
   /* Settings and the map generator. Rows wrap, so three choices fit a phone-wide panel. */
   .ew-root.ew-deck .ew-form .ew-seg button,
-  .ew-root.ew-deck .ew-gen .ew-seg button {
+  .ew-root.ew-deck .ew-gen .ew-seg button,
+  .ew-root.ew-deck .ew-reinf .ew-seg button {
     min-height: 36px;
     padding: 6px 12px;
     font-size: 13px;

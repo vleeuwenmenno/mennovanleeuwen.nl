@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
+import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, cleanDefense, defenseId, dims, isEngineer, isShip, placeType, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type OrbitalModId, type Tier } from './empires/data'
 import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type SettingsTab, type Setup, type Slot } from './empires/Menus'
@@ -297,7 +297,7 @@ function offlineSetup(info: MatchInfo, me: number): Setup {
     slots[s.spawn] = { kind: i === me ? 'you' : 'ai', faction: s.faction, team: s.team, difficulty: s.kind === 'ai' ? s.difficulty : OFFLINE_AI, profile: s.kind === 'ai' ? profileOf(s.profile) : 'balanced' }
     names[s.spawn] = i === me ? null : s.kind === 'ai' ? s.name : `${s.name} (AI)`
   })
-  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names, ...(info.reinforce ? { reinforce: info.reinforce } : {}) }
+  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names, ...(info.reinforce ? { reinforce: info.reinforce } : {}), stations: cleanDefense(info.stations) }
 }
 
 // --- Battle ---------------------------------------------------------------------------------------
@@ -449,7 +449,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     newWorld(
       map,
       seats.map((s, i) => ({ faction: s.faction, team: s.team, spawn: s.spawn, at: at[i], incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
-      { credits: setup?.credits, reinforce: setup?.reinforce },
+      { credits: setup?.credits, reinforce: setup?.reinforce, defense: setup?.stations },
     )
   /** Where each station starts. Everyone gets a sensible spot in their area to begin with; the
    * player may move theirs before the battle starts. */
@@ -1004,12 +1004,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
     renderer.current.ping(at.x, at.y, '#ffc86e')
     sound.constructing()
-    toast(`${UNIT[pl.unit].name}: the engineers are on their way`, 'info')
+    toast(`${placeType(pl.unit)?.name ?? 'The site'}: the engineers are on their way`, 'info')
     setMode('normal')
   }
   /** Touch (the action wheel): start placing a yard with its spot already pinned at `at`. */
-  const pinYard = (at: Pt) => {
-    startPlace(nextYard())
+  const pinYard = (at: Pt, unit = nextYard()) => {
+    startPlace(unit)
     if (placing.current) placing.current.at = { x: at.x, y: at.y }
     setUi((u) => ({ ...u }))
   }
@@ -1037,7 +1037,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const st = w.byId.get(w.players[me].station)
     if (!at || !st) return null
     const g = placement(w, me, pl.unit, at.x, at.y, pl.a ?? undefined)
-    return { t: UNIT[pl.unit], x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+    return { t: placeType(pl.unit) ?? yardOf(myFaction), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
   }
   /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
    * neither standing nor going up and the station is upgraded for, else the Frigate Yard (its ghost
@@ -1273,6 +1273,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const withAb = ships.filter((u) => u.t.ability)
       // Engineers: put a yard down here (pinned, for the confirm button).
       if (w.hybrid && ships.some((u) => isEngineer(u.t))) items.push(it('yard', 'Build yard', 'slip', () => pinYard(at)))
+      // ...or a defense station, in a battle that has them.
+      if (w.defense && ships.some((u) => isEngineer(u.t))) items.push(it('fort', 'Build defense station', 'hold', () => pinYard(at, defenseId(myFaction))))
       items.push(
         it('move', 'Move here', 'move', arm('move')),
         it('attackMove', 'Attack move', 'attack', () => {
@@ -1373,6 +1375,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     } else sound.queued()
   }
   /** Order an expansion on one of our buildings (hybrid bases), or call one off. */
+  /** A defense station: its next level (`slot` left out), a module into one of its slots, or with
+   * `cancel` the work at that place in its queue called off. */
+  const fort = (uid: number, job: { up: true } | { slot: number; mod: OrbitalModId } | { cancel: number }) => {
+    sound.unlock()
+    const why = 'up' in job ? order('fortUp', uid) : 'cancel' in job ? order('cancelFort', uid, job.cancel) : order('fortFit', uid, job.slot, job.mod)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+    } else if ('cancel' in job) sound.unqueued()
+    else sound.constructing()
+  }
   const expand = (uid: number, id: ModuleId) => {
     sound.unlock()
     const why = order('expand', uid, id)
@@ -1568,10 +1581,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           sound.hardpointDown(where(e.x, e.y), w.players[e.owner]?.faction)
           if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'built' && e.owner === me) {
-          const t = UNIT[e.unit]
+          const t = placeType(e.unit)
+          if (!t) continue
           if (t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard') sound.structureDone(t.tier)
           else sound.shipReady(myFaction, t.tier)
-          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: ${worksOf(t) === 'cyard' ? 'cruisers' : 'frigates and corvettes'} are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.orbital ? `${t.name} online: select it to fit modules into its slot` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: ${worksOf(t) === 'cyard' ? 'cruisers' : 'frigates and corvettes'} are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'warp') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
         } else if (e.k === 'arrived') {
@@ -1636,6 +1650,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const u = w.byId.get(e.unit)
           sound.structureDone('yard')
           if (u) toast(`${u.t.name} finished: every turret installed`, 'good', { x: e.x, y: e.y, unit: u.id })
+        } else if (e.k === 'fortified' && e.owner === me) {
+          sound.structureDone('defense')
+          toast(e.what, 'good', { x: e.x, y: e.y, unit: e.unit })
         } else if (e.k === 'expanded' && e.owner === me) {
           sound.structureDone('yard')
           toast(`${MODULE[e.id].name} finished on the ${WORKS_NAME[MODULE[e.id].on]}`, 'good', { x: e.x, y: e.y, unit: e.unit })
@@ -2624,7 +2641,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
                 : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
                 : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near. On a ship two classes bigger it escorts it: flies over its hull and moves with it.`
-                  : ui.mode === 'place' ? `${UNIT[placing.current?.unit ?? yardOf(myFaction).id].name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
+                  : ui.mode === 'place' ? `${(placeType(placing.current?.unit ?? '') ?? yardOf(myFaction)).name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
             {ui.mode === 'place'
               ? touchUi ? 'Turn it with the buttons. Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Wheel or <kbd>[</kbd> <kbd>]</kbd> turn it (Shift: finer), or drag to aim its mouth. Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
@@ -2687,6 +2704,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               }}
               onExpand={expand}
               onCancelExpand={cancelExpand}
+              onFort={fort}
               onRush={(id) => {
                 sound.unlock()
                 const why = order('rush', id)

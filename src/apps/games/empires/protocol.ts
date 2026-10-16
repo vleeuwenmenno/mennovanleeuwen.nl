@@ -16,11 +16,12 @@ export const MP_PATH = '/api/empires/ws'
  * third faction and the faction mechanics; version 3: the three-faction rework, with the Swarm playable,
  * its research and the balance pass; version 4: the new ship classes, the Sentinel's shield aura and
  * the AI's flagship pick; version 6: the new maps, five and six spawns, and generated maps for five
- * and six players). The server turns away a client of another version,
+ * and six players; version 7: defense stations in skirmishes, their orders and the lobby's limit of
+ * them). The server turns away a client of another version,
  * closing with OUTDATED_CODE, and the game asks the player to reload. Clients from before there was
  * a version send none: they count as version 1.
  */
-export const PROTOCOL = 6
+export const PROTOCOL = 7
 /** WebSocket close code for a client whose PROTOCOL isn't the server's. */
 export const OUTDATED_CODE = 4001
 export const CHAT_MAX = 240
@@ -59,6 +60,9 @@ export type MpLobby = {
   /** Reinforcements: which classes may be bought as one, and the surcharge (sim.ts Reinforce).
    * Lobbies from before them have none: the defaults. */
   reinforce?: Reinforce
+  /** Defense stations each player may have (data.ts DEFENSE_STEPS, 0: off). Lobbies from before
+   * them have none: DEFENSE_DEFAULT. */
+  stations?: number
   slots: MpSlot[]
   state: 'open' | 'playing'
 }
@@ -105,9 +109,9 @@ export type ClientMsg =
   /** Move to another open spawn. */
   | { t: 'seat'; i: number }
   | { t: 'slot'; i: number; patch: SlotPatch }
-  /** Host only: the map, the generator's rules, starting credits, the reinforcement rules (any of
-   * them; the server cleans them, see cleanReinforce). */
-  | { t: 'setup'; map?: string; gen?: MapRules; credits?: number; reinforce?: Partial<Reinforce> }
+  /** Host only: the map, the generator's rules, starting credits, the reinforcement rules, the
+   * defense station limit (any of them; the server cleans them, see cleanReinforce, DEFENSE_STEPS). */
+  | { t: 'setup'; map?: string; gen?: MapRules; credits?: number; reinforce?: Partial<Reinforce>; stations?: number }
   | { t: 'ready'; on: boolean }
   | { t: 'chat'; text: string }
   /** Host only: everyone's ready, go. */

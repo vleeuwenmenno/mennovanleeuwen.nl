@@ -12,7 +12,7 @@ import { onShutdown } from './shutdown.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
 import { DIFFICULTY, PROFILES, profileOf, type Brain, type Difficulty } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd } from '../src/apps/games/empires/commands.ts'
-import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires/data.ts'
+import { CREDIT_STEPS, DEFENSE_DEFAULT, DEFENSE_STEPS, FACTIONS, START_CREDITS, cleanDefense } from '../src/apps/games/empires/data.ts'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
@@ -280,6 +280,7 @@ function create(p: Player) {
     gen: { ...DEFAULT_RULES },
     credits: START_CREDITS,
     reinforce: { ...REINFORCE },
+    stations: DEFENSE_DEFAULT,
     slots: slotsFor(map, [])!,
     state: 'open',
   }
@@ -375,6 +376,8 @@ function changeSetup(p: Player, l: MpLobby, m: Extract<ClientMsg, { t: 'setup' }
   // Reinforcements: whatever is sent is cleaned (a surcharge onto its 5% steps from 0 to 50%, the
   // switches true or false), so a tampered client can't set a free or negative one.
   if (m.reinforce && typeof m.reinforce === 'object') l.reinforce = cleanReinforce({ ...cleanReinforce(l.reinforce), ...m.reinforce })
+  // Defense stations each player may have: one of the lobby's steps (0 turns them off), nothing else.
+  if (typeof m.stations === 'number' && DEFENSE_STEPS.includes(m.stations)) l.stations = m.stations
   if (m.map !== undefined || m.gen !== undefined) {
     const id = m.map === undefined ? l.map : m.map === GENERATED || (typeof m.map === 'string' && Object.hasOwn(MAP, m.map)) ? m.map : null
     if (!id) return send(p, { t: 'error', why: 'No such map.' })
@@ -432,6 +435,7 @@ function start(p: Player, l: MpLobby) {
     gen: l.gen,
     credits: l.credits,
     reinforce: cleanReinforce(l.reinforce),
+    stations: cleanDefense(l.stations),
     seats: l.slots.flatMap((s, spawn) =>
       s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} ${PROFILES[profileOf(s.profile)].name.toLowerCase()} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty, ...(s.kind === 'ai' ? { profile: profileOf(s.profile) } : {}) }] : [],
     ),

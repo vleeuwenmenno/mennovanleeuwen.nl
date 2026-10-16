@@ -1,4 +1,4 @@
-import { CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { ORBITAL_TOP, orbitalType, CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, projecting, radius, regrowOf, calm, SALVAGE_RANGE, sensorOf, shieldAuraOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
@@ -2730,7 +2730,9 @@ export class Renderer {
     const zdpr = z * canvasDpr()
     const col = g.ok ? '#7dffa0' : '#ff5a50'
     const rot = g.a + Math.PI / 2
-    const [sw, sh] = dims(g.t)
+    // A defense station shows the room it grows into (its last level's footprint), and has no mouth.
+    const fort = !!g.t.orbital
+    const [sw, sh] = dims(fort ? orbitalType(g.t.faction, ORBITAL_TOP, []) : g.t)
     const m = modelFor(g.t)
     if (m) drawHull(ctx, m, g.x, g.y, rot, g.t.size, zdpr, FRESH, { alpha: g.ok ? 0.6 : 0.3 })
     ctx.save()
@@ -2742,11 +2744,13 @@ export class Renderer {
     ctx.fillRect(-sw / 2, -sh / 2, sw, sh)
     ctx.strokeRect(-sw / 2, -sh / 2, sw, sh)
     // The slipway's mouth: where its ships come out.
-    ctx.beginPath()
-    ctx.moveTo(-14 / z, -sh / 2 - 6 / z)
-    ctx.lineTo(0, -sh / 2 - 22 / z)
-    ctx.lineTo(14 / z, -sh / 2 - 6 / z)
-    ctx.stroke()
+    if (!fort) {
+      ctx.beginPath()
+      ctx.moveTo(-14 / z, -sh / 2 - 6 / z)
+      ctx.lineTo(0, -sh / 2 - 22 / z)
+      ctx.lineTo(14 / z, -sh / 2 - 6 / z)
+      ctx.stroke()
+    }
     ctx.restore()
     const label = g.ok ? `${g.rebuild ? 'Rebuild' : g.t.name}: ${g.cost} credits` : (g.why ?? '')
     ctx.save()
