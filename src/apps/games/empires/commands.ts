@@ -2,7 +2,7 @@ import { LEVEL_UP, MODULE, ORBITAL_MODS, SITE_UPGRADES, TECH, UNIT, defenseFacti
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, GIFT_MAX, cantReinforce, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -145,6 +145,8 @@ export function cleanCmd(raw: unknown, w: World): Cmd | null {
   if (f === 'build' && out[1] === true && cantReinforce(w, out[0] as string)) return null
   // Defense stations in a battle that has them off (or none at all): no order either.
   if (!w.defense && (f === 'fortUp' || f === 'fortFit' || f === 'cancelFort' || (f === 'place' && defenseFaction(out[1] as string)))) return null
+  // A defense platform on ore in a battle that has them off: no order (the sim refuses it too).
+  if (f === 'site' && !oreGuns(w) && UNIT[out[1] as string]?.tier === 'defense') return null
   return { f: f as CmdName, a: out }
 }
 

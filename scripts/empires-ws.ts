@@ -240,6 +240,18 @@ check('the host sets 6', sixForts.stations === 6, sixForts.stations)
 guest.send({ t: 'setup', stations: 1 })
 const notTheirs2 = await until(guest, 'error')
 check("a guest can't change the defense station limit", /host/.test(notTheirs2.why), notTheirs2)
+// Defense platforms on ore: off on a new lobby; the host turns them on or off, junk is ignored,
+// and only the host may change it.
+check('a new lobby has defense platforms on ore off', made.oreDefense === false, made.oreDefense)
+host.send({ t: 'setup', oreDefense: true })
+const oreOn = (await until(guest, 'lobby', (m) => m.lobby.oreDefense === true)).lobby
+check('the host turns defense platforms on ore on', oreOn.oreDefense === true, oreOn.oreDefense)
+host.send({ t: 'setup', oreDefense: 'yes', stations: 4 })
+const oreJunk = (await until(guest, 'lobby', (m) => m.lobby.stations === 4)).lobby
+check('a switch that is not true or false is ignored', oreJunk.oreDefense === true, oreJunk.oreDefense)
+guest.send({ t: 'setup', oreDefense: false })
+const notTheirs3 = await until(guest, 'error')
+check("a guest can't change defense platforms on ore", /host/.test(notTheirs3.why), notTheirs3)
 host.send({ t: 'slot', i: 1, patch: { kind: 'open' } })
 const kicked = await until(guest, 'kicked')
 check('host can take a player out', /host/.test(kicked.why), kicked)

@@ -3,7 +3,7 @@ import { battleLayout, type LayoutStore } from './layout'
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
-  abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  BASE_POP, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
@@ -13,7 +13,7 @@ import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
 import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
-import { cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { oreGuns, cantFortify, defenseCap, defensesOf, fortJobLock, fortLock, fortWork, FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -603,12 +603,12 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           <span className="ew-gold"><Icon name="give" size={18} /></span>
         </button>
       )}
-      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip="Fleet size / capacity. Capture beacons and upgrade the station for more.">
+      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip={`Fleet size / capacity: ${BASE_POP} to start with, +${POP_PER_LEVEL} per station level above 1${hud.level > 1 ? ` (+${(hud.level - 1) * POP_PER_LEVEL})` : ''}, and +${BEACON_POP} per beacon our team holds (${hud.beacons} held: +${hud.beacons * BEACON_POP}). Capture beacons and upgrade the station for more.`}>
         <Icon name="fleet" size={20} />
         <b className="ew-big">{hud.pop}</b>
         <small>/ {hud.popCap}</small>
       </div>
-      <div className="ew-top-cell ew-hide-narrow" data-tip="Mining platforms, and beacons held">
+      <div className="ew-top-cell ew-hide-narrow" data-tip={`Mining platforms, and beacons held. Each beacon our team holds: +${BEACON_POP} fleet capacity, +${fmt(BEACON_INCOME * 60)} credits a minute, and vision ${BEACON_SENSOR} round it.`}>
         <span className="ew-ore"><Icon name="ore" size={17} /></span>
         <b>{hud.mines}</b>
         <span className="ew-beacon"><Icon name="beacon" size={17} /></span>
@@ -1310,7 +1310,7 @@ function OreDetail(p: DetailProps & { n: OreNode }) {
         {!site && pct > 0 && pct < 100 && <Bar value={pct} max={100} kind="shield" />}
         {!site && (
           <div className="ew-siteopts">
-            {siteOptions(faction).map(option)}
+            {siteOptions(faction, oreGuns(w)).map(option)}
           </div>
         )}
       </div>
@@ -1902,8 +1902,9 @@ export const unitTip = (t: UnitType, who: { who: string; rel: string }, note?: s
   ...(live ? { 'data-tip-uid': String(live.id) } : {}),
 })
 
-/** The unit card for something on the battlefield, beside the cursor, with its live hull and shields. */
-export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: number; x: number; y: number }) {
+/** The unit card for something on the battlefield, beside the cursor, with its live hull and shields;
+ * with `beacon`, what that capture beacon gives the team holding it instead. */
+export function FieldIntel({ w, me, id, x, y, beacon }: { w: World; me: Owner; id: number; x: number; y: number; beacon?: number }) {
   const box = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const b = box.current
@@ -1922,6 +1923,21 @@ export function FieldIntel({ w, me, id, x, y }: { w: World; me: Owner; id: numbe
     b.style.top = `${p.y - rr.top}px`
     b.style.visibility = 'visible'
   })
+  const b = beacon !== undefined ? w.beacons[beacon] : undefined
+  if (b) {
+    const team = w.players[me].team
+    const held = b.owner === team ? 'Held by our team' : b.owner === -1 ? 'Neutral' : 'Held by the enemy'
+    const taking = b.progress > 0 && b.progress < 1 && b.claim >= 0 ? ` · ${b.claim === team ? 'we are' : 'the enemy is'} taking it (${Math.round(b.progress * 100)}%)` : ''
+    return (
+      <div ref={box} className="ew-tip" role="tooltip" style={{ visibility: 'hidden' }}>
+        <strong>Capture beacon</strong>
+        {'\n'}
+        {held}{taking}
+        {'\n\n'}
+        For every player on the team holding it: +{BEACON_POP} fleet cap, +{fmt(BEACON_INCOME * 60)} credits a minute, and vision {BEACON_SENSOR} round it (the fog lifts there, reinforcements can be called in). Hold ships near it, unopposed, to take it.
+      </div>
+    )
+  }
   const u = w.byId.get(id)
   if (!u || u.dead) return null
   const o = ownerTag(w, me, u.owner)
