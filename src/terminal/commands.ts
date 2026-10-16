@@ -10,7 +10,7 @@ import { pepper } from './pepper'
 import { extraCommands } from './extra'
 import { findCommands } from './find'
 import { revealEmail } from '../data/email'
-import { SHORTCUTS } from '../data/shortcuts'
+import { shortcuts } from '../data/shortcuts'
 import { GAME_CATALOG } from '../apps/games/catalog'
 import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
@@ -121,6 +121,7 @@ const APPS: Record<string, AppId> = {
   winamp: 'amp',
   music: 'amp',
   weather: 'weather',
+  git: 'git',
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
@@ -165,6 +166,7 @@ const APP_NAMES: Record<AppId, string> = {
   contacts: 'contacts',
   tasks: 'tasks',
   weather: 'weather',
+  git: 'git',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
@@ -1204,7 +1206,7 @@ export const commands: Record<string, Command> = {
     desc: 'every keyboard and mouse shortcut',
     run: (ctx) => {
       ctx.openApp('keys')
-      return SHORTCUTS.map((g) => [c('accent', g.area), ...g.keys.map(([k, what]) => `  ${c('green', k.padEnd(20))} ${what}`)].join('\n')).join('\n\n')
+      return shortcuts().map((g) => [c('accent', g.area), ...g.keys.map(([k, what]) => `  ${c('green', k.padEnd(20))} ${what}`)].join('\n')).join('\n\n')
     },
   },
   shortcuts: { desc: 'alias for keys', hidden: true, run: (ctx) => commands.keys.run(ctx) },

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   APP_SKIES,
   aqiLabel,
@@ -6,7 +6,6 @@ import {
   compass,
   describe,
   feelsHint,
-  formatPressure,
   formatVis,
   locate,
   moonPhase,
@@ -28,10 +27,29 @@ import {
 import { Seg } from './AppSettings'
 import type { WinState } from '../os/wm'
 
-// Full Weather app: Apple Weather–inspired report for a place (device location or saved cities),
-// with hourly and 10-day forecasts and detail tiles. Data from src/data/weather.ts (Open-Meteo).
+// Forecast dashboard. Wide windows use a tile grid, tablets put the 10-day list beside the map,
+// and a phone stacks the same cards. The top strip switches place and refreshes. Each card opens
+// a detail built from the Open-Meteo forecast (src/data/weather.ts). The map is a RainViewer
+// precipitation radar on a quiet canvas, centred on the selected place.
 
 type HourMode = 'temp' | 'precip' | 'wind'
+type Layout = 'phone' | 'tablet' | 'wide'
+type Detail =
+  | { kind: 'hourly' }
+  | { kind: 'days' }
+  | { kind: 'day'; index: number }
+  | { kind: 'next' }
+  | { kind: 'uv' }
+  | { kind: 'sun' }
+  | { kind: 'wind' }
+  | { kind: 'precip' }
+  | { kind: 'feels' }
+  | { kind: 'humidity' }
+  | { kind: 'pressure' }
+  | { kind: 'visibility' }
+  | { kind: 'moon' }
+  | { kind: 'air' }
+  | { kind: 'map' }
 
 function placeFromProps(props: WinState['props']): Place | null {
   const lat = Number(props.lat)
@@ -43,33 +61,38 @@ function placeFromProps(props: WinState['props']): Place | null {
 export function Weather({ win }: { win: WinState }) {
   const prefs = weatherPrefs.use()
   const rootRef = useRef<HTMLDivElement>(null)
-  const [wide, setWide] = useState(false)
+  const [layout, setLayout] = useState<Layout>('phone')
   const [here, setHere] = useState<Place | null>(rememberedHere)
   const [listOpen, setListOpen] = useState(false)
   const [hourMode, setHourMode] = useState<HourMode>('temp')
+  const [detail, setDetail] = useState<Detail | null>(null)
   const seeded = useRef(false)
+  const closeDetail = useCallback(() => setDetail(null), [])
 
-  // Sidebar vs sheet follows this window's width, not the viewport (a narrow pane on a big screen stays stacked).
+  // Sidebar vs sheet follows this window's width, not the viewport.
   useEffect(() => {
     const el = rootRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const sync = () => setWide(el.clientWidth >= 720)
+    const sync = () => {
+      const w = el.clientWidth
+      setLayout(w >= 960 ? 'wide' : w >= 640 ? 'tablet' : 'phone')
+    }
     sync()
     const ro = new ResizeObserver(sync)
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
 
-  // A place handed in from the widget (or Spotlight) is selected / saved once.
   useEffect(() => {
     if (seeded.current) return
     const handed = placeFromProps(win.props)
     if (handed) {
       seeded.current = true
       weatherPrefs.set((p) => {
+        const units = win.props.units === 'f' || win.props.units === 'c' ? (win.props.units as Units) : p.units
         const i = p.places.findIndex((x) => samePlace(x, handed))
-        if (i >= 0) return { ...p, selected: i, units: win.props.units === 'f' || win.props.units === 'c' ? (win.props.units as Units) : p.units }
-        return { ...p, places: [...p.places, handed], selected: p.places.length, units: win.props.units === 'f' || win.props.units === 'c' ? (win.props.units as Units) : p.units }
+        if (i >= 0) return { ...p, selected: i, units }
+        return { ...p, places: [...p.places, handed], selected: p.places.length, units }
       })
     } else if (win.props.units === 'f' || win.props.units === 'c') {
       seeded.current = true
@@ -86,8 +109,12 @@ export function Weather({ win }: { win: WinState }) {
   const { forecast, air, error, refresh } = useForecast(place, prefs.units)
   const now = forecast?.now
   const skyKey = now ? describe(now.code, now.day).sky : 'cloudy'
-  const bg = now && !now.day && (skyKey === 'clear' || skyKey === 'cloudy') ? APP_SKIES.night : APP_SKIES[skyKey]
+  const sky = now && !now.day && (skyKey === 'clear' || skyKey === 'cloudy') ? APP_SKIES.night : APP_SKIES[skyKey]
   const isMine = prefs.selected < 0
+
+  useEffect(() => {
+    setDetail(null)
+  }, [place?.lat, place?.lon])
 
   const selectHere = () => weatherPrefs.set((p) => ({ ...p, selected: -1 }))
   const selectPlace = (i: number) => weatherPrefs.set((p) => ({ ...p, selected: i }))
@@ -99,20 +126,20 @@ export function Weather({ win }: { win: WinState }) {
       else if (selected > i) selected -= 1
       return { ...p, places, selected }
     })
-  const addPlace = (place: Place) =>
+  const addPlace = (next: Place) =>
     weatherPrefs.set((p) => {
-      const i = p.places.findIndex((x) => samePlace(x, place))
+      const i = p.places.findIndex((x) => samePlace(x, next))
       if (i >= 0) return { ...p, selected: i }
-      return { ...p, places: [...p.places, place], selected: p.places.length }
+      return { ...p, places: [...p.places, next], selected: p.places.length }
     })
   const setUnits = (units: Units) => weatherPrefs.set((p) => ({ ...p, units }))
 
-  // On wide windows, the city list is a sidebar; on phones / narrow panes, a sheet.
-  const showSidebar = wide && listOpen
+  const placeLabel = !place ? 'Choose a place' : isMine ? 'My location' : shortPlaceName(place.name)
+  const showSide = layout === 'wide' && listOpen
 
   return (
-    <div ref={rootRef} className={`wa ${wide ? 'is-wide' : ''} ${listOpen ? 'is-list' : ''}`} style={{ ['--wa-sky' as string]: bg }}>
-      {showSidebar && (
+    <div ref={rootRef} className={`wa is-${layout} ${listOpen ? 'is-list' : ''}`} style={{ ['--wa-sky' as string]: sky }}>
+      {showSide && (
         <aside className="wa-side" aria-label="Saved locations">
           <LocationList
             here={here}
@@ -124,17 +151,28 @@ export function Weather({ win }: { win: WinState }) {
             onRemove={removePlace}
             onAdd={addPlace}
             onClose={() => setListOpen(false)}
+            onUnits={setUnits}
             embedded
           />
         </aside>
       )}
 
       <div className="wa-main">
+        <header className="wa-strip">
+          <button type="button" className="wa-place" aria-expanded={listOpen} onClick={() => setListOpen((o) => !o)}>
+            <span>Location</span>
+            <strong>{placeLabel}</strong>
+          </button>
+          <button type="button" className="wa-refresh" onClick={refresh}>
+            Refresh
+          </button>
+        </header>
+
         <div className="wa-scroll">
           {!place ? (
             <div className="wa-empty">
               <p>{error ?? 'Finding where you are…'}</p>
-              <button type="button" className="wa-btn" onClick={() => setListOpen(true)}>
+              <button type="button" className="btn" onClick={() => setListOpen(true)}>
                 Pick a city
               </button>
             </div>
@@ -143,50 +181,12 @@ export function Weather({ win }: { win: WinState }) {
               <p>{error ?? 'Looking at the sky…'}</p>
             </div>
           ) : (
-            <Report
-              place={place}
-              isMine={isMine}
-              forecast={forecast}
-              air={air}
-              units={prefs.units}
-              hourMode={hourMode}
-              onHourMode={setHourMode}
-            />
+            <Report place={place} isMine={isMine} forecast={forecast} air={air} units={prefs.units} hourMode={hourMode} onHourMode={setHourMode} onOpen={setDetail} />
           )}
         </div>
-
-        <footer className="wa-bar">
-          <a
-            className="wa-bar-btn"
-            href={place ? `https://www.openstreetmap.org/#map=10/${place.lat}/${place.lon}` : undefined}
-            target="_blank"
-            rel="noreferrer"
-            title="Open in OpenStreetMap"
-            aria-label="Open map"
-            onClick={(e) => !place && e.preventDefault()}
-          >
-            <MapGlyph />
-          </a>
-          <div className="wa-dots" role="tablist" aria-label="Locations">
-            <button type="button" role="tab" aria-selected={isMine} className={isMine ? 'is-on' : ''} onClick={selectHere} title={here?.name ?? 'My location'} aria-label="My location">
-              <LocDot mine />
-            </button>
-            {prefs.places.map((p, i) => (
-              <button key={`${p.lat},${p.lon}`} type="button" role="tab" aria-selected={prefs.selected === i} className={prefs.selected === i ? 'is-on' : ''} onClick={() => selectPlace(i)} title={p.name} aria-label={p.name} />
-            ))}
-          </div>
-          <div className="wa-bar-right">
-            <button type="button" className="wa-bar-btn" onClick={refresh} title="Refresh" aria-label="Refresh">
-              ⟳
-            </button>
-            <button type="button" className="wa-bar-btn" onClick={() => setListOpen((o) => !o)} title="Locations" aria-label="Locations" aria-pressed={listOpen}>
-              <ListGlyph />
-            </button>
-          </div>
-        </footer>
       </div>
 
-      {listOpen && !wide && (
+      {listOpen && layout !== 'wide' && (
         <div className="wa-sheet" role="dialog" aria-label="Locations">
           <LocationList
             here={here}
@@ -211,6 +211,10 @@ export function Weather({ win }: { win: WinState }) {
           />
         </div>
       )}
+
+      {detail && forecast && place && (
+        <DetailPanel detail={detail} place={place} forecast={forecast} air={air} units={prefs.units} hourMode={hourMode} onClose={closeDetail} />
+      )}
     </div>
   )
 }
@@ -223,6 +227,7 @@ function Report({
   units,
   hourMode,
   onHourMode,
+  onOpen,
 }: {
   place: Place
   isMine: boolean
@@ -231,24 +236,23 @@ function Report({
   units: Units
   hourMode: HourMode
   onHourMode: (m: HourMode) => void
+  onOpen: (d: Detail) => void
 }) {
   const now = forecast.now
   const sky = describe(now.code, now.day)
   const today = forecast.days[0]
   const moon = moonPhase()
-  const unit = units === 'f' ? '°' : '°'
   const weekMin = Math.min(...forecast.days.map((d) => d.min))
   const weekMax = Math.max(...forecast.days.map((d) => d.max))
+  const next = nextHourCopy(now.code, forecast.minutes, units)
+  const hourTitle = hourMode === 'temp' ? 'Temperature' : hourMode === 'precip' ? 'Precipitation' : `Wind, ${windUnit(units)}`
 
   return (
-    <>
+    <div className="wa-board">
       <header className="wa-hero">
-        {isMine && <p className="wa-eyebrow">My Location</p>}
+        {isMine && <p className="wa-kicker">My location</p>}
         <h1>{shortPlaceName(place.name)}</h1>
-        <p className="wa-hero-temp">
-          {Math.round(now.temp)}
-          {unit}
-        </p>
+        <p className="wa-hero-temp">{Math.round(now.temp)}°</p>
         <p className="wa-hero-sum">
           {sky.text}
           {today && (
@@ -258,55 +262,58 @@ function Report({
             </>
           )}
         </p>
+        <p className="wa-summary">{outlook(forecast)}</p>
       </header>
 
+      <button type="button" className="wa-tile wa-next" onClick={() => onOpen({ kind: 'next' })}>
+        <h3>Next hour</h3>
+        <p className="wa-lead">{next.title}</p>
+        <p className="wa-tile-foot">{next.sub}</p>
+        <PrecipBars minutes={forecast.minutes} />
+      </button>
+
       <section className="wa-card wa-hourly" aria-label="Hourly forecast">
-        <div className="wa-card-head">
-          <span>
-            <small>Conditions</small>
-            <strong>{hourMode === 'temp' ? 'Temperature' : hourMode === 'precip' ? 'Precipitation' : 'Wind'}</strong>
+        <button type="button" className="wa-open" onClick={() => onOpen({ kind: 'hourly' })}>
+          <span className="wa-card-head">
+            <small>Hourly</small>
+            <strong>{hourTitle}</strong>
           </span>
-          <div className="wa-hour-modes" role="radiogroup" aria-label="Hourly metric">
-            {(
-              [
-                ['temp', '🌡'],
-                ['precip', '💧'],
-                ['wind', '🌬'],
-              ] as const
-            ).map(([m, icon]) => (
-              <button key={m} type="button" role="radio" aria-checked={hourMode === m} className={hourMode === m ? 'is-on' : ''} onClick={() => onHourMode(m)} title={m} aria-label={m}>
-                {icon}
-              </button>
-            ))}
-          </div>
+          <ol className="wa-hours">
+            {forecast.hours.map((h, i) => {
+              const d = describe(h.code, h.day)
+              const value = hourMode === 'temp' ? `${Math.round(h.temp)}°` : hourMode === 'precip' ? `${Math.round(h.precipProb)}%` : `${Math.round(h.wind)}`
+              return (
+                <li key={h.iso}>
+                  <span>{i === 0 ? 'Now' : String(Number(h.time.slice(0, 2)))}</span>
+                  <span className="wa-h-icon" aria-hidden>
+                    {hourMode === 'precip' && h.precipProb >= 20 ? '💧' : d.icon}
+                  </span>
+                  <span className="wa-h-val">{value}</span>
+                </li>
+              )
+            })}
+          </ol>
+        </button>
+        <div className="wa-hour-modes" role="radiogroup" aria-label="Hourly metric">
+          {(
+            [
+              ['temp', 'Temp'],
+              ['precip', 'Rain'],
+              ['wind', 'Wind'],
+            ] as const
+          ).map(([m, label]) => (
+            <button key={m} type="button" role="radio" aria-checked={hourMode === m} className={hourMode === m ? 'is-on' : ''} onClick={() => onHourMode(m)}>
+              {label}
+            </button>
+          ))}
         </div>
-        <ol className="wa-hours">
-          {forecast.hours.map((h, i) => {
-            const d = describe(h.code, h.day)
-            const label = i === 0 ? 'Now' : h.time.slice(0, 2)
-            const value =
-              hourMode === 'temp' ? `${Math.round(h.temp)}°` : hourMode === 'precip' ? `${Math.round(h.precipProb)}%` : `${Math.round(h.wind)}`
-            return (
-              <li key={h.iso}>
-                <span>{label}</span>
-                <span className="wa-h-icon" aria-hidden>
-                  {hourMode === 'precip' && h.precipProb >= 20 ? '💧' : d.icon}
-                </span>
-                {hourMode === 'precip' && h.precipProb >= 20 && <span className="wa-h-pop">{Math.round(h.precipProb)}%</span>}
-                <span className="wa-h-val">{value}{hourMode === 'wind' ? '' : ''}</span>
-              </li>
-            )
-          })}
-        </ol>
       </section>
 
       <section className="wa-card wa-daily" aria-label="10-day forecast">
-        <div className="wa-card-head">
-          <span>
-            <small>Forecast</small>
-            <strong>10 days</strong>
-          </span>
-        </div>
+        <button type="button" className="wa-card-hit" onClick={() => onOpen({ kind: 'days' })}>
+          <small>Forecast</small>
+          <strong>10 days</strong>
+        </button>
         <ol className="wa-days">
           {forecast.days.map((d, i) => {
             const desc = describe(d.code)
@@ -316,147 +323,480 @@ function Report({
             const cur = i === 0 ? ((now.temp - weekMin) / span) * 100 : null
             return (
               <li key={d.date}>
-                <span className="wa-d-day">{weekday(d.date, forecast.days[0]?.date)}</span>
-                <span className="wa-d-cond">
-                  <span aria-hidden>{desc.icon}</span>
-                  {d.precipProb >= 20 && <span className="wa-d-pop">{Math.round(d.precipProb)}%</span>}
-                </span>
-                <span className="wa-d-lo">{Math.round(d.min)}°</span>
-                <span className="wa-d-bar" aria-hidden>
-                  <i style={{ left: `${left}%`, width: `${Math.max(width, 4)}%` }} />
-                  {cur !== null && <b style={{ left: `${Math.min(100, Math.max(0, cur))}%` }} />}
-                </span>
-                <span className="wa-d-hi">{Math.round(d.max)}°</span>
+                <button type="button" className="wa-day" onClick={() => onOpen({ kind: 'day', index: i })}>
+                  <span className="wa-d-day">{weekday(d.date, forecast.days[0]?.date)}</span>
+                  <span className="wa-d-cond">
+                    <span aria-hidden>{desc.icon}</span>
+                    {d.precipProb >= 20 && <span className="wa-d-pop">{Math.round(d.precipProb)}%</span>}
+                  </span>
+                  <span className="wa-d-lo">{Math.round(d.min)}°</span>
+                  <span className="wa-d-bar" aria-hidden>
+                    <i style={{ left: `${left}%`, width: `${Math.max(width, 4)}%` }} />
+                    {cur !== null && <b style={{ left: `${Math.min(100, Math.max(0, cur))}%` }} />}
+                  </span>
+                  <span className="wa-d-hi">{Math.round(d.max)}°</span>
+                </button>
               </li>
             )
           })}
         </ol>
       </section>
 
-      <div className="wa-grid">
-        <Tile icon="☾" label={moon.name}>
-          <MoonDisc illumination={moon.illumination} />
-          <p className="wa-tile-foot">Illumination {Math.round(moon.illumination * 100)}%</p>
-        </Tile>
-        <Tile icon="☀" label={now.day ? 'Sunset' : 'Sunrise'}>
-          <p className="wa-tile-big">{now.day ? today?.sunset : today?.sunrise}</p>
-          <SunArc sunrise={today?.sunrise ?? '06:00'} sunset={today?.sunset ?? '18:00'} day={now.day} />
-          <p className="wa-tile-foot">{now.day ? `Sunrise: ${today?.sunrise}` : `Sunset: ${today?.sunset}`}</p>
-        </Tile>
+      <Tile className="wa-uv" label="UV index" onClick={() => onOpen({ kind: 'uv' })}>
+        <p className="wa-tile-big">
+          {Math.round(now.uv)} <span>{uvLabel(now.uv)}</span>
+        </p>
+        <Scale value={now.uv / 11} kind="uv" />
+        <p className="wa-tile-foot">{uvRest(forecast)}</p>
+      </Tile>
+      <Tile className="wa-sun" label={now.day ? 'Sunset' : 'Sunrise'} onClick={() => onOpen({ kind: 'sun' })}>
+        <p className="wa-tile-big">{now.day ? today?.sunset || '—' : today?.sunrise || '—'}</p>
+        <SunArc sunrise={today?.sunrise ?? ''} sunset={today?.sunset ?? ''} day={now.day} />
+        <p className="wa-tile-foot">{now.day ? `Sunrise ${today?.sunrise || '—'}` : `Sunset ${today?.sunset || '—'}`}</p>
+      </Tile>
+      <Tile className="wa-wind" label="Wind" onClick={() => onOpen({ kind: 'wind' })}>
+        <WindCompass deg={now.windDir} bft={beaufort(now.wind, units === 'c')} speed={now.wind} units={units} />
+        <p className="wa-tile-foot">
+          Gusts {Math.round(now.gusts)} {windUnit(units)} {compass(now.windDir)}
+        </p>
+      </Tile>
+      <Tile className="wa-precip" label="Precipitation" onClick={() => onOpen({ kind: 'precip' })}>
+        <p className="wa-tile-big">
+          {formatPrecip(today?.precipSum ?? now.precip, units)} <span>today</span>
+        </p>
+        <p className="wa-tile-foot">{forecast.days[1] ? `${formatPrecip(forecast.days[1].precipSum, units)} expected tomorrow.` : 'No further days.'}</p>
+      </Tile>
+      <Tile className="wa-feels" label="Feels like" onClick={() => onOpen({ kind: 'feels' })}>
+        <p className="wa-tile-big">{Math.round(now.feels)}°</p>
+        <p className="wa-tile-foot">{feelsHint(now.temp, now.feels)}</p>
+      </Tile>
+      <Tile className="wa-humidity" label="Humidity" onClick={() => onOpen({ kind: 'humidity' })}>
+        <p className="wa-tile-big">{Math.round(now.humidity)}%</p>
+        <p className="wa-tile-foot">The dew point is {Math.round(now.dewPoint)}° right now.</p>
+      </Tile>
+      <Tile className="wa-pressure" label="Pressure" onClick={() => onOpen({ kind: 'pressure' })}>
+        <PressureGauge hpa={now.pressure} />
+      </Tile>
+      <Tile className="wa-vis" label="Visibility" onClick={() => onOpen({ kind: 'visibility' })}>
+        <p className="wa-tile-big">{formatVis(now.visibility, units)}</p>
+        <p className="wa-tile-foot">{visibilityLabel(now.visibility)}</p>
+      </Tile>
+      <Tile className="wa-moon" label={moon.name} onClick={() => onOpen({ kind: 'moon' })}>
+        <MoonDisc age={moon.age} />
+        <p className="wa-tile-foot">Illumination {Math.round(moon.illumination * 100)}%</p>
+      </Tile>
 
-        <Tile icon="☀" label="UV Index">
-          <p className="wa-tile-big">
-            {Math.round(now.uv)} <span>{uvLabel(now.uv)}</span>
-          </p>
-          <GradientBar value={now.uv / 11} colors="linear-gradient(90deg,#3ddc84,#f5e04a,#f5a623,#e74c3c,#9b59b6)" />
-          <p className="wa-tile-foot">{uvLabel(now.uv)} for the rest of the day.</p>
-        </Tile>
-        <Tile icon="🌡" label="Feels Like">
-          <p className="wa-tile-big">
-            {Math.round(now.feels)}
-            {unit}
-          </p>
-          <p className="wa-tile-foot">{feelsHint(now.temp, now.feels)}</p>
-        </Tile>
+      <MapCard place={place} onOpen={() => onOpen({ kind: 'map' })} />
 
-        <Tile icon="💧" label="Precipitation">
-          <p className="wa-tile-big">
-            {formatPrecip(today?.precipSum ?? now.precip, units)} <span>Today</span>
-          </p>
-          <p className="wa-tile-foot">
-            {forecast.days[1] ? `${formatPrecip(forecast.days[1].precipSum, units)} expected tomorrow.` : 'No further days.'}
-          </p>
-        </Tile>
-        <Tile icon="👁" label="Visibility">
-          <p className="wa-tile-big">{formatVis(now.visibility, units)}</p>
-          <p className="wa-tile-foot">{visibilityLabel(now.visibility)}</p>
-        </Tile>
-
-        <Tile icon="💦" label="Humidity">
-          <p className="wa-tile-big">{Math.round(now.humidity)}%</p>
-          <p className="wa-tile-foot">
-            The dew point is {Math.round(now.dewPoint)}
-            {unit} right now.
-          </p>
-        </Tile>
-        <Tile icon="◎" label="Pressure">
-          <PressureGauge hpa={now.pressure} />
-        </Tile>
-
-        <Tile icon="🌬" label="Wind">
-          <WindCompass deg={now.windDir} bft={beaufort(now.wind, units === 'c')} speed={now.wind} units={units} />
-          <p className="wa-tile-foot">
-            Gusts: {Math.round(now.gusts)} {windUnit(units)} {compass(now.windDir)}
-          </p>
-        </Tile>
-        {air && (
-          <Tile icon="◉" label="Air Quality" wide>
-            <p className="wa-tile-big">
-              {Math.round(air.aqi)} <span>{air.label}</span>
-            </p>
-            <GradientBar value={Math.min(1, air.aqi / 100)} colors="linear-gradient(90deg,#50f0e6,#50ccaa,#f0e641,#f0a91e,#e63e11,#a01f7a)" />
-            <p className="wa-tile-foot">
-              European AQI is {Math.round(air.aqi)} ({aqiLabel(air.aqi)}).
-            </p>
-          </Tile>
-        )}
-      </div>
+      <Tile className="wa-aqi" label="Air quality" onClick={() => onOpen({ kind: 'air' })}>
+        <p className="wa-tile-big">
+          {air ? Math.round(air.aqi) : '—'} <span>{air ? air.label : 'Checking'}</span>
+        </p>
+        {air && <Scale value={Math.min(1, air.aqi / 100)} kind="aqi" />}
+        <p className="wa-tile-foot">{air ? `European AQI is ${Math.round(air.aqi)} (${aqiLabel(air.aqi)}).` : 'Checking the air.'}</p>
+      </Tile>
 
       <p className="wa-credit">
-        Data from{' '}
+        Forecast{' '}
         <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">
           Open-Meteo
         </a>
+        {' · '}
+        Radar{' '}
+        <a href="https://www.rainviewer.com/" target="_blank" rel="noreferrer">
+          RainViewer
+        </a>
+        {' · '}
+        Map ©{' '}
+        <a href="https://www.esri.com/" target="_blank" rel="noreferrer">
+          Esri
+        </a>
+        , HERE, Garmin, ©{' '}
+        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
+          OpenStreetMap
+        </a>{' '}
+        contributors
+      </p>
+    </div>
+  )
+}
+
+function Tile({ className, label, onClick, children }: { className?: string; label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className={`wa-tile ${className ?? ''}`} onClick={onClick}>
+      <h3>{label}</h3>
+      {children}
+    </button>
+  )
+}
+
+function DetailPanel({
+  detail,
+  place,
+  forecast,
+  air,
+  units,
+  hourMode,
+  onClose,
+}: {
+  detail: Detail
+  place: Place
+  forecast: Forecast
+  air: { aqi: number; label: string } | null
+  units: Units
+  hourMode: HourMode
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    ref.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  const title = detailTitle(detail, forecast, hourMode)
+  return (
+    <div className="wa-shade" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={ref} className="wa-detail" role="dialog" aria-modal="true" aria-labelledby="wa-detail-title">
+        <header className="wa-detail-head">
+          <h2 id="wa-detail-title">{title}</h2>
+          <button type="button" className="btn" data-autofocus onClick={onClose}>
+            Done
+          </button>
+        </header>
+        <DetailBody detail={detail} place={place} forecast={forecast} air={air} units={units} hourMode={hourMode} />
+      </div>
+    </div>
+  )
+}
+
+function DetailBody({
+  detail,
+  place,
+  forecast,
+  air,
+  units,
+  hourMode,
+}: {
+  detail: Detail
+  place: Place
+  forecast: Forecast
+  air: { aqi: number; label: string } | null
+  units: Units
+  hourMode: HourMode
+}) {
+  const now = forecast.now
+  const today = forecast.days[0]
+  const deg = (n: number) => `${Math.round(n)}°`
+  const hours = forecast.hours
+
+  if (detail.kind === 'hourly') {
+    const values = hours.map((h) => (hourMode === 'temp' ? h.temp : hourMode === 'precip' ? h.precipProb : h.wind))
+    const fmt = hourMode === 'precip' ? (n: number) => `${Math.round(n)}%` : hourMode === 'wind' ? (n: number) => `${Math.round(n)} ${windUnit(units)}` : deg
+    const name = hourMode === 'temp' ? 'Temperature' : hourMode === 'precip' ? 'Chance of precipitation' : 'Wind'
+    return (
+      <>
+        <LineChart series={[values]} />
+        <p className="wa-prose">{rangeText(name, values, fmt)} over the next {hours.length} hours.</p>
+      </>
+    )
+  }
+  if (detail.kind === 'days') {
+    return (
+      <>
+        <LineChart series={[forecast.days.map((d) => d.max), forecast.days.map((d) => d.min)]} />
+        <p className="wa-prose">
+          Highs from {deg(Math.min(...forecast.days.map((d) => d.max)))} to {deg(Math.max(...forecast.days.map((d) => d.max)))}. The lower line is the overnight low.
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'day') {
+    const d = forecast.days[detail.index]
+    if (!d) return <p className="wa-prose">That day is no longer in the forecast.</p>
+    const light = daylight(d.sunrise, d.sunset)
+    return (
+      <>
+        <p className="wa-lead">
+          {describe(d.code).icon} {describe(d.code).text}
+        </p>
+        <dl className="wa-facts">
+          <Fact k="High" v={`${Math.round(d.max)}°`} />
+          <Fact k="Low" v={`${Math.round(d.min)}°`} />
+          <Fact k="Precipitation" v={`${formatPrecip(d.precipSum, units)} · ${Math.round(d.precipProb)}%`} />
+          <Fact k="Wind" v={`${Math.round(d.windMax)} ${windUnit(units)}`} />
+          <Fact k="UV" v={`${Math.round(d.uvMax)} ${uvLabel(d.uvMax)}`} />
+          <Fact k="Sunrise" v={d.sunrise || '—'} />
+          <Fact k="Sunset" v={d.sunset || '—'} />
+          {light && <Fact k="Daylight" v={light} />}
+        </dl>
+      </>
+    )
+  }
+  if (detail.kind === 'next') {
+    const copy = nextHourCopy(now.code, forecast.minutes, units)
+    const sum = forecast.minutes.reduce((a, m) => a + m.precip, 0)
+    return (
+      <>
+        <PrecipBars minutes={forecast.minutes} />
+        <p className="wa-prose">
+          {copy.sub} {forecast.minutes.length ? `${formatPrecip(sum, units)} across these slots.` : 'The hourly forecast is below.'}
+        </p>
+        <LineChart series={[hours.slice(0, 6).map((h) => h.precip)]} />
+        <p className="wa-prose">Hourly amounts for the next few hours, in {precipUnit(units)}.</p>
+      </>
+    )
+  }
+  if (detail.kind === 'uv') {
+    return (
+      <>
+        <p className="wa-tile-big">
+          {Math.round(now.uv)} <span>{uvLabel(now.uv)}</span>
+        </p>
+        <Scale value={now.uv / 11} kind="uv" />
+        <LineChart series={[hours.map((h) => h.uv)]} />
+        <p className="wa-prose">{uvRest(forecast)}</p>
+      </>
+    )
+  }
+  if (detail.kind === 'sun') {
+    const light = today ? daylight(today.sunrise, today.sunset) : null
+    return (
+      <>
+        <p className="wa-tile-big">{now.day ? today?.sunset || '—' : today?.sunrise || '—'}</p>
+        <SunArc sunrise={today?.sunrise ?? ''} sunset={today?.sunset ?? ''} day={now.day} />
+        <dl className="wa-facts">
+          <Fact k="Sunrise" v={today?.sunrise || '—'} />
+          <Fact k="Sunset" v={today?.sunset || '—'} />
+          {light && <Fact k="Daylight" v={light} />}
+        </dl>
+      </>
+    )
+  }
+  if (detail.kind === 'wind') {
+    return (
+      <>
+        <WindCompass deg={now.windDir} bft={beaufort(now.wind, units === 'c')} speed={now.wind} units={units} />
+        <LineChart series={[hours.map((h) => h.wind)]} />
+        <p className="wa-prose">
+          {rangeText('Wind', hours.map((h) => h.wind), (n) => `${Math.round(n)} ${windUnit(units)}`)}. Gusts {Math.round(now.gusts)} {windUnit(units)}, from the {compass(now.windDir)}.
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'precip') {
+    const fmt = (n: number) => (units === 'f' ? `${n.toFixed(2)} ${precipUnit(units)}` : `${n < 10 ? n.toFixed(1) : Math.round(n)} ${precipUnit(units)}`)
+    return (
+      <>
+        <p className="wa-tile-big">
+          {formatPrecip(today?.precipSum ?? now.precip, units)} <span>today</span>
+        </p>
+        <LineChart series={[hours.map((h) => h.precip)]} />
+        <p className="wa-prose">
+          {rangeText('Precipitation', hours.map((h) => h.precip), fmt)}. {rangeText('The chance', hours.map((h) => h.precipProb), (n) => `${Math.round(n)}%`)}.
+          {forecast.days[1] ? ` ${formatPrecip(forecast.days[1].precipSum, units)} expected tomorrow.` : ''}
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'feels') {
+    return (
+      <>
+        <p className="wa-tile-big">{Math.round(now.feels)}°</p>
+        <LineChart series={[hours.map((h) => h.feels), hours.map((h) => h.temp)]} />
+        <p className="wa-prose">
+          {feelsHint(now.temp, now.feels)} {rangeText('Feels like', hours.map((h) => h.feels), deg)}. The faint line is the air temperature.
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'humidity') {
+    return (
+      <>
+        <p className="wa-tile-big">{Math.round(now.humidity)}%</p>
+        <LineChart series={[hours.map((h) => h.humidity)]} />
+        <p className="wa-prose">
+          {rangeText('Humidity', hours.map((h) => h.humidity), (n) => `${Math.round(n)}%`)}. The dew point is {Math.round(now.dewPoint)}° right now.
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'pressure') {
+    return (
+      <>
+        <PressureGauge hpa={now.pressure} />
+        <LineChart series={[hours.map((h) => h.pressure)]} />
+        <p className="wa-prose">{rangeText('Pressure', hours.map((h) => h.pressure), (n) => `${Math.round(n)} hPa`)}.</p>
+      </>
+    )
+  }
+  if (detail.kind === 'visibility') {
+    return (
+      <>
+        <p className="wa-tile-big">{formatVis(now.visibility, units)}</p>
+        <LineChart series={[hours.map((h) => h.visibility)]} />
+        <p className="wa-prose">
+          {visibilityLabel(now.visibility)} {rangeText('Visibility', hours.map((h) => h.visibility), (n) => formatVis(n, units))}.
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'moon') {
+    const moon = moonPhase()
+    return (
+      <>
+        <MoonDisc age={moon.age} />
+        <p className="wa-prose">
+          {moon.name}. Illumination {Math.round(moon.illumination * 100)}%, about {moon.age.toFixed(1)} days since the new moon.
+        </p>
+      </>
+    )
+  }
+  if (detail.kind === 'air') {
+    if (!air) return <p className="wa-prose">Air quality didn't come back for this place.</p>
+    return (
+      <>
+        <p className="wa-tile-big">
+          {Math.round(air.aqi)} <span>{air.label}</span>
+        </p>
+        <Scale value={Math.min(1, air.aqi / 100)} kind="aqi" />
+        <p className="wa-prose">European AQI is {Math.round(air.aqi)} ({aqiLabel(air.aqi)}). The scale runs from good, through fair and moderate, into poor.</p>
+      </>
+    )
+  }
+  return (
+    <>
+      <RadarMap place={place} zoom={RADAR_ZOOM} className="wa-detail-map" />
+      <p className="wa-prose">
+        {shortPlaceName(place.name)}. {today ? `${formatPrecip(today.precipSum, units)} of precipitation expected today.` : ''}
       </p>
     </>
   )
 }
 
-function formatPrecip(amount: number, units: Units): string {
-  if (units === 'f') return `${amount < 0.1 && amount > 0 ? amount.toFixed(2) : amount.toFixed(1)} ${precipUnit(units)}`
-  return `${Math.round(amount)} ${precipUnit(units)}`
+function detailTitle(detail: Detail, forecast: Forecast, hourMode: HourMode): string {
+  switch (detail.kind) {
+    case 'hourly':
+      return hourMode === 'temp' ? 'Temperature' : hourMode === 'precip' ? 'Precipitation' : 'Wind'
+    case 'days':
+      return '10-day forecast'
+    case 'day': {
+      const d = forecast.days[detail.index]
+      return d ? weekday(d.date, forecast.days[0]?.date) : 'Day'
+    }
+    case 'next':
+      return 'Next hour'
+    case 'uv':
+      return 'UV index'
+    case 'sun':
+      return forecast.now.day ? 'Sunset' : 'Sunrise'
+    case 'wind':
+      return 'Wind'
+    case 'precip':
+      return 'Precipitation'
+    case 'feels':
+      return 'Feels like'
+    case 'humidity':
+      return 'Humidity'
+    case 'pressure':
+      return 'Pressure'
+    case 'visibility':
+      return 'Visibility'
+    case 'moon':
+      return 'Moon'
+    case 'air':
+      return 'Air quality'
+    case 'map':
+      return 'Map'
+  }
 }
 
-function Tile({ icon, label, children, wide }: { icon: string; label: string; children: ReactNode; wide?: boolean }) {
+function Fact({ k, v }: { k: string; v: string }) {
   return (
-    <section className={`wa-tile ${wide ? 'is-wide' : ''}`}>
-      <h3>
-        <span aria-hidden>{icon}</span> {label}
-      </h3>
-      {children}
-    </section>
+    <div>
+      <dt>{k}</dt>
+      <dd>{v}</dd>
+    </div>
   )
 }
 
-function GradientBar({ value, colors }: { value: number; colors: string }) {
+function LineChart({ series }: { series: number[][] }) {
+  const values = series.flat().filter((n) => Number.isFinite(n))
+  if (values.length < 2) return null
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || 1
+  const w = 360
+  const h = 132
+  const line = (nums: number[]) =>
+    nums
+      .map((v, i) => {
+        const x = nums.length === 1 ? w / 2 : (i / (nums.length - 1)) * (w - 12) + 6
+        const y = 8 + (1 - (v - min) / span) * (h - 20)
+        return `${x.toFixed(1)},${y.toFixed(1)}`
+      })
+      .join(' ')
+  return (
+    <svg className="wa-chart" viewBox={`0 0 ${w} ${h}`} aria-hidden>
+      {series.map((nums, i) => (
+        <polyline key={i} points={line(nums)} fill="none" stroke="currentColor" strokeWidth={i === 0 ? 2 : 1.25} strokeOpacity={i === 0 ? 1 : 0.45} />
+      ))}
+    </svg>
+  )
+}
+
+function PrecipBars({ minutes }: { minutes: Forecast['minutes'] }) {
+  if (!minutes.length) return <p className="wa-tile-foot">15-minute precipitation is unavailable.</p>
+  const max = Math.max(...minutes.map((m) => m.precip), 0)
+  return (
+    <div className="wa-bars-wrap">
+      <div className="wa-bars" aria-hidden>
+        {minutes.map((m) => (
+          <i key={m.label} style={{ height: `${max <= 0 ? 8 : Math.max(8, (m.precip / max) * 100)}%` }} />
+        ))}
+      </div>
+      <div className="wa-bars-labels">
+        {minutes.map((m) => (
+          <span key={m.label}>{m.label}</span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function Scale({ value, kind }: { value: number; kind: 'uv' | 'aqi' }) {
   const pct = Math.min(100, Math.max(0, value * 100))
   return (
-    <div className="wa-gbar" style={{ background: colors }} aria-hidden>
+    <div className={`wa-scale is-${kind}`} aria-hidden>
       <i style={{ left: `${pct}%` }} />
     </div>
   )
 }
 
 function PressureGauge({ hpa }: { hpa: number }) {
-  // Typical surface pressure ~980–1040 hPa; map to a 180° arc.
   const t = Math.min(1, Math.max(0, (hpa - 980) / 60))
   const angle = -90 + t * 180
   return (
-    <div className="wa-pressure">
-      <svg viewBox="0 0 120 78" aria-hidden>
-        <path d="M10 70 A50 50 0 0 1 110 70" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="6" strokeLinecap="round" />
-        <path
-          d="M10 70 A50 50 0 0 1 110 70"
-          fill="none"
-          stroke="rgba(255,255,255,0.9)"
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeDasharray={`${t * 157} 157`}
-        />
-        <line x1="60" y1="70" x2="60" y2="28" stroke="white" strokeWidth="2.5" strokeLinecap="round" transform={`rotate(${angle} 60 70)`} />
-        <circle cx="60" cy="70" r="3.5" fill="white" />
-      </svg>
-      <p className="wa-tile-big wa-pressure-val">{formatPressure(hpa)} <span>hPa</span></p>
+    <div className="wa-pressure-gauge">
+      <div className="wa-pressure-face">
+        <svg viewBox="0 0 120 78" aria-hidden>
+          <path d="M10 70 A50 50 0 0 1 110 70" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="6" strokeLinecap="square" />
+          <path d="M10 70 A50 50 0 0 1 110 70" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="square" strokeDasharray={`${t * 157} 157`} />
+          {/* Rim only. A needle through the hub crosses the reading at every pressure. */}
+          <line x1="60" y1="30" x2="60" y2="22" stroke="currentColor" strokeWidth="3" strokeLinecap="square" transform={`rotate(${angle} 60 70)`} />
+          <circle cx="60" cy="70" r="3.5" fill="currentColor" />
+        </svg>
+        <p className="wa-pressure-val">
+          <span className="wa-pressure-num">{Math.round(hpa)}</span>
+          <span className="wa-pressure-unit">hPa</span>
+        </p>
+      </div>
       <div className="wa-pressure-labels">
         <span>Low</span>
         <span>High</span>
@@ -467,22 +807,20 @@ function PressureGauge({ hpa }: { hpa: number }) {
 
 function WindCompass({ deg, bft, speed, units }: { deg: number; bft: number; speed: number; units: Units }) {
   return (
-    <div className="wa-wind">
+    <div className="wa-wind-dial">
       <svg viewBox="0 0 100 100" aria-hidden>
-        <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" />
+        <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" />
         {['N', 'E', 'S', 'W'].map((d, i) => {
           const a = (i * Math.PI) / 2 - Math.PI / 2
-          const x = 50 + Math.cos(a) * 34
-          const y = 50 + Math.sin(a) * 34
           return (
-            <text key={d} x={x} y={y} textAnchor="middle" dominantBaseline="middle" fill="rgba(255,255,255,0.55)" fontSize="9">
+            <text key={d} x={50 + Math.cos(a) * 34} y={50 + Math.sin(a) * 34} textAnchor="middle" dominantBaseline="middle" fill="currentColor" opacity="0.55" fontSize="9">
               {d}
             </text>
           )
         })}
         <g transform={`rotate(${deg} 50 50)`}>
-          <path d="M50 18 L56 48 L50 44 L44 48 Z" fill="white" />
-          <path d="M50 82 L54 52 L50 56 L46 52 Z" fill="rgba(255,255,255,0.35)" />
+          <path d="M50 18 L56 48 L50 44 L44 48 Z" fill="currentColor" />
+          <path d="M50 82 L54 52 L50 56 L46 52 Z" fill="currentColor" opacity="0.35" />
         </g>
       </svg>
       <div className="wa-wind-read">
@@ -497,33 +835,53 @@ function WindCompass({ deg, bft, speed, units }: { deg: number; bft: number; spe
 }
 
 function SunArc({ sunrise, sunset, day }: { sunrise: string; sunset: string; day: boolean }) {
-  // Position on the arc from sunrise→sunset using local clock vs those times.
-  const toMin = (hhmm: string) => {
-    const [h, m] = hhmm.split(':').map(Number)
-    return h * 60 + m
-  }
+  const a = clockMinutes(sunrise)
+  const b = clockMinutes(sunset)
   const now = new Date()
   const cur = now.getHours() * 60 + now.getMinutes()
-  const a = toMin(sunrise)
-  const b = toMin(sunset)
-  const t = b > a ? Math.min(1, Math.max(0, (cur - a) / (b - a))) : 0.5
+  const t = a !== null && b !== null && b > a ? Math.min(1, Math.max(0, (cur - a) / (b - a))) : 0.5
   const x = 10 + t * 100
   const y = 40 - Math.sin(t * Math.PI) * 28
   return (
     <svg className="wa-sunarc" viewBox="0 0 120 48" aria-hidden>
-      <path d="M10 40 Q60 0 110 40" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeDasharray="4 4" />
-      <line x1="10" y1="40" x2="110" y2="40" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
-      <circle cx={x} cy={day ? y : 44} r="4" fill="#ffd56a" stroke="white" strokeWidth="1.5" />
+      <path d="M10 40 Q60 0 110 40" fill="none" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" />
+      <line x1="10" y1="40" x2="110" y2="40" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1" />
+      <circle cx={x} cy={day ? y : 44} r="4" fill="currentColor" />
     </svg>
   )
 }
 
-function MoonDisc({ illumination }: { illumination: number }) {
-  // Simple lit disc: shadow covers (1 - illumination) from the left or right by phase.
-  const phase = moonPhase()
-  const waxing = phase.age < 14.765
-  const style = { ['--moon-lit' as string]: `${Math.round(illumination * 100)}%` } as CSSProperties
-  return <div className="wa-moon" data-side={waxing ? 'right' : 'left'} style={style} aria-hidden />
+function MoonDisc({ age }: { age: number }) {
+  // Age runs 0–29.5 days from new moon to new moon. Illumination is not linear with that,
+  // so a 27% crescent is wider and more curved than half of 27%.
+  const phase = ((age % 29.53058867) + 29.53058867) % 29.53058867 / 29.53058867
+  const lit = moonLitPath(phase)
+  return (
+    <svg className="wa-moon-disc" viewBox="0 0 100 100" aria-hidden>
+      <circle className="wa-moon-night" cx="50" cy="50" r="46" />
+      {lit && <path className="wa-moon-lit" d={lit} />}
+      <circle className="wa-moon-limb" cx="50" cy="50" r="46" />
+    </svg>
+  )
+}
+
+/** Lit region of a phase in 0–1 (0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter). */
+function moonLitPath(phase: number): string {
+  if (phase < 0.02 || phase > 0.98) return ''
+  const R = 46
+  const cx = 50
+  const top = 50 - R
+  const bot = 50 + R
+  const c = Math.cos(2 * Math.PI * phase)
+  const rx = Math.max(0.6, Math.abs(c) * R)
+  // Waxing keeps the right limb; the terminator crosses to the left once it is past half.
+  // Waning keeps the left limb, and the shadow eats in from the right.
+  if (phase <= 0.5) {
+    const back = c >= 0 ? 0 : 1
+    return `M ${cx} ${top} A ${R} ${R} 0 0 1 ${cx} ${bot} A ${rx} ${R} 0 0 ${back} ${cx} ${top} Z`
+  }
+  const back = c >= 0 ? 1 : 0
+  return `M ${cx} ${top} A ${R} ${R} 0 0 0 ${cx} ${bot} A ${rx} ${R} 0 0 ${back} ${cx} ${top} Z`
 }
 
 function LocationList({
@@ -548,7 +906,7 @@ function LocationList({
   onRemove: (i: number) => void
   onAdd: (p: Place) => void
   onClose: () => void
-  onUnits?: (u: Units) => void
+  onUnits: (u: Units) => void
   embedded?: boolean
 }) {
   const [q, setQ] = useState('')
@@ -568,18 +926,23 @@ function LocationList({
     <div className={`wa-locs ${embedded ? 'is-embed' : ''}`}>
       <div className="wa-locs-head">
         <h2>Locations</h2>
-        {!embedded && (
-          <button type="button" className="wa-bar-btn" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        )}
+        <button type="button" className="btn btn-small" onClick={onClose}>
+          Close
+        </button>
       </div>
       <input ref={input} className="wa-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a city…" aria-label="Search a city" spellCheck={false} />
       {results.length > 0 && (
         <ul className="wa-results">
           {results.map((r) => (
             <li key={`${r.lat},${r.lon}`}>
-              <button type="button" onClick={() => (onAdd(r), setQ(''), setResults([]))}>
+              <button
+                type="button"
+                onClick={() => {
+                  onAdd(r)
+                  setQ('')
+                  setResults([])
+                }}
+              >
                 {r.name}
               </button>
             </li>
@@ -601,7 +964,7 @@ function LocationList({
               )
             }}
           >
-            <strong>📍 My Location</strong>
+            <strong>My location</strong>
             <span>{busy ? 'Finding…' : (here?.name ?? 'This device')}</span>
           </button>
         </li>
@@ -624,7 +987,7 @@ function LocationList({
             ['c', '°C, km/h'],
             ['f', '°F, mph'],
           ]}
-          onChange={(u) => (onUnits ? onUnits(u) : weatherPrefs.set((p) => ({ ...p, units: u })))}
+          onChange={onUnits}
           label="Units"
         />
       </div>
@@ -632,33 +995,229 @@ function LocationList({
   )
 }
 
-function MapGlyph() {
+// Regional radar: one 256px tile at this zoom is a few hundred kilometres, so the card shows the
+// weather around the place and the detail (same zoom, bigger box) shows more of it.
+const RADAR_ZOOM = 7
+const TILE = 256
+
+// CARTO Dark Matter raster tiles have required an API key since September 2026: without one the
+// CDN returns a blank tile that only says the key is required. Esri's gray canvas is the quiet
+// dark/light basemap that still serves plain tiles, and it follows :root[data-mode].
+const BASE_DARK = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile'
+const BASE_LIGHT = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile'
+
+type RadarFrame = { host: string; path: string }
+type RadarSnap = { frame: RadarFrame | null; failed: boolean }
+
+let radarSnap: RadarSnap | null = null
+let radarFlight: Promise<void> | null = null
+const radarWaiters = new Set<() => void>()
+
+function ensureRadar() {
+  if (radarSnap || radarFlight) return
+  radarFlight = fetch('https://api.rainviewer.com/public/weather-maps.json')
+    .then((res) => {
+      if (!res.ok) throw new Error('radar')
+      return res.json() as Promise<{ host?: unknown; radar?: { past?: { path?: unknown }[] } }>
+    })
+    .then((data) => {
+      const past = data.radar?.past
+      const latest = Array.isArray(past) ? past[past.length - 1] : undefined
+      const host = typeof data.host === 'string' ? data.host.replace(/\/$/, '') : ''
+      const path = latest && typeof latest.path === 'string' ? latest.path : ''
+      if (!host || !path) throw new Error('radar')
+      radarSnap = { frame: { host, path: path.startsWith('/') ? path : `/${path}` }, failed: false }
+    })
+    .catch(() => {
+      radarSnap = { frame: null, failed: true }
+    })
+    .finally(() => {
+      radarFlight = null
+      radarWaiters.forEach((fn) => fn())
+    })
+}
+
+function useRadar(): RadarSnap {
+  const [snap, setSnap] = useState<RadarSnap>(() => radarSnap ?? { frame: null, failed: false })
+  useEffect(() => {
+    const pull = () => {
+      if (radarSnap) setSnap(radarSnap)
+    }
+    radarWaiters.add(pull)
+    ensureRadar()
+    pull()
+    return () => {
+      radarWaiters.delete(pull)
+    }
+  }, [])
+  return snap
+}
+
+function useLightMap(): boolean {
+  const [light, setLight] = useState(() => document.documentElement.dataset.mode === 'light')
+  useEffect(() => {
+    const root = document.documentElement
+    const sync = () => setLight(root.dataset.mode === 'light')
+    const mo = new MutationObserver(sync)
+    mo.observe(root, { attributes: true, attributeFilter: ['data-mode'] })
+    sync()
+    return () => mo.disconnect()
+  }, [])
+  return light
+}
+
+function wrapTile(n: number, size: number) {
+  return ((n % size) + size) % size
+}
+
+function tileX(lon: number, z: number) {
+  return ((lon + 180) / 360) * 2 ** z
+}
+
+function tileY(lat: number, z: number) {
+  const clamped = Math.min(85.05112878, Math.max(-85.05112878, lat))
+  const r = (clamped * Math.PI) / 180
+  return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z
+}
+
+function visibleTiles(lat: number, lon: number, z: number, w: number, h: number) {
+  const n = 2 ** z
+  const leftWorld = tileX(lon, z) * TILE - w / 2
+  const topWorld = tileY(lat, z) * TILE - h / 2
+  const x0 = Math.floor(leftWorld / TILE)
+  const y0 = Math.floor(topWorld / TILE)
+  const x1 = Math.floor((leftWorld + Math.max(w, 1) - 1) / TILE)
+  const y1 = Math.floor((topWorld + Math.max(h, 1) - 1) / TILE)
+  const tiles: { key: string; x: number; y: number; left: number; top: number }[] = []
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      if (y < 0 || y >= n) continue
+      tiles.push({
+        key: `${x},${y}`,
+        x: wrapTile(x, n),
+        y,
+        left: Math.round(x * TILE - leftWorld),
+        top: Math.round(y * TILE - topWorld),
+      })
+    }
+  }
+  return tiles
+}
+
+function hideBrokenTile(e: { currentTarget: HTMLImageElement }) {
+  e.currentTarget.hidden = true
+}
+
+function MapCard({ place, onOpen }: { place: Place; onOpen: () => void }) {
+  const { failed } = useRadar()
+  const name = shortPlaceName(place.name)
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
-      <line x1="9" y1="3" x2="9" y2="18" />
-      <line x1="15" y1="6" x2="15" y2="21" />
-    </svg>
+    <article className="wa-card wa-map">
+      <h3>Map</h3>
+      <div className="wa-map-view" aria-hidden>
+        <RadarMap place={place} zoom={RADAR_ZOOM} />
+      </div>
+      <button type="button" className="wa-cover" aria-label={failed ? `Precipitation radar for ${name}, radar unavailable` : `Precipitation radar for ${name}`} onClick={onOpen} />
+    </article>
   )
 }
 
-function ListGlyph() {
+function RadarMap({ place, zoom, className }: { place: Place; zoom: number; className?: string }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 0, h: 0 })
+  const light = useLightMap()
+  const { frame, failed } = useRadar()
+
+  useEffect(() => {
+    const el = box.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const sync = () => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }))
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const tiles = size.w > 0 && size.h > 0 ? visibleTiles(place.lat, place.lon, zoom, size.w, size.h) : []
+  const base = light ? BASE_LIGHT : BASE_DARK
+
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-      <line x1="4" y1="7" x2="20" y2="7" />
-      <line x1="4" y1="12" x2="20" y2="12" />
-      <line x1="4" y1="17" x2="20" y2="17" />
-    </svg>
+    <div ref={box} className={`wa-radar${className ? ` ${className}` : ''}`}>
+      {tiles.map((t) => (
+        <img key={`b${t.key}`} className="wa-radar-tile" alt="" draggable={false} decoding="async" src={`${base}/${zoom}/${t.y}/${t.x}`} style={{ left: t.left, top: t.top }} onError={hideBrokenTile} />
+      ))}
+      {frame &&
+        tiles.map((t) => (
+          <img
+            key={`r${t.key}`}
+            className="wa-radar-tile is-radar"
+            alt=""
+            draggable={false}
+            decoding="async"
+            src={`${frame.host}${frame.path}/256/${zoom}/${t.x}/${t.y}/2/1_1.png`}
+            style={{ left: t.left, top: t.top }}
+            onError={hideBrokenTile}
+          />
+        ))}
+      {failed && <p className="wa-radar-miss">Radar unavailable</p>}
+    </div>
   )
 }
 
-function LocDot({ mine }: { mine?: boolean }) {
-  return mine ? (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <circle cx="5" cy="5" r="2" fill="currentColor" />
-      <circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" strokeWidth="1" />
-    </svg>
-  ) : null
+function outlook(forecast: Forecast): string {
+  const now = describe(forecast.now.code, forecast.now.day)
+  const next = forecast.hours.find((h, i) => i > 1 && describe(h.code, h.day).text !== now.text)
+  if (!next) return `${now.text} for the next hours.`
+  return `${now.text} now, ${describe(next.code, next.day).text.toLowerCase()} around ${next.time}.`
+}
+
+function nextHourCopy(code: number, minutes: Forecast['minutes'], units: Units): { title: string; sub: string } {
+  const snow = (code >= 71 && code <= 77) || code === 85 || code === 86
+  const noun = snow ? 'snow' : 'precipitation'
+  if (!minutes.length) return { title: 'Precipitation', sub: '15-minute precipitation is unavailable.' }
+  const sum = minutes.reduce((a, m) => a + m.precip, 0)
+  if (sum <= 0) return { title: snow ? 'Snow' : 'Precipitation', sub: `No ${noun} for the next hour.` }
+  const heavy = units === 'f' ? sum >= 0.15 : sum >= 4
+  const word = snow ? (heavy ? 'Heavy snow' : 'Snow') : heavy ? 'Heavy rain' : 'Rain'
+  return { title: word, sub: `${word} for the next hour.` }
+}
+
+function uvRest(forecast: Forecast): string {
+  const ahead = forecast.hours.filter((h) => h.day).map((h) => h.uv)
+  const peak = Math.max(forecast.now.uv, ...(ahead.length ? ahead : [0]))
+  if (peak < 3) return 'Low for the rest of the day.'
+  return `${uvLabel(forecast.now.uv)} now, up to ${uvLabel(peak)} later today.`
+}
+
+function rangeText(name: string, values: number[], fmt: (n: number) => string): string {
+  if (!values.length) return `No ${name.toLowerCase()} readings.`
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (Math.abs(max - min) < 0.05) return `${name} stays near ${fmt(min)}.`
+  return `${name} runs from ${fmt(min)} to ${fmt(max)}.`
+}
+
+function formatPrecip(amount: number, units: Units): string {
+  if (units === 'f') return `${amount < 0.1 && amount > 0 ? amount.toFixed(2) : amount.toFixed(1)} ${precipUnit(units)}`
+  return `${Math.round(amount)} ${precipUnit(units)}`
+}
+
+function clockMinutes(hhmm: string): number | null {
+  const [h, m] = hhmm.split(':').map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
+  return h * 60 + m
+}
+
+function daylight(sunrise: string, sunset: string): string | null {
+  const a = clockMinutes(sunrise)
+  const b = clockMinutes(sunset)
+  if (a === null || b === null || b <= a) return null
+  const span = b - a
+  return `${Math.floor(span / 60)}h ${span % 60}m`
 }
 
 /** Settings → Apps → Weather. */

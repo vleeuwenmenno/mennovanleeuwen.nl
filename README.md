@@ -70,6 +70,18 @@ Super is Omarchy's key, but the system keeps it, so a web page never sees it; th
 **Alt+1…9** goes to a workspace, **Alt+Shift+1…9** moves the focused window there (and goes with
 it, like Hyprland's `movetoworkspace`), **Ctrl+Alt+← →** steps through them. These work everywhere,
 the terminal included, except that on a Mac a text field keeps Option+digit for typing characters.
+**Ctrl+Space** opens Spotlight, and **Ctrl+K** (or Cmd+K) opens All apps — also from anywhere,
+including the terminal. Settings → Spotlight can point Ctrl+Space at All apps instead, which gives
+Ctrl+K back to Spotlight. Ctrl+Space is best-effort: some OSes and input methods keep that chord,
+so the page never sees it, the same way Super never reaches a web page.
+
+The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPrefs.ts`](src/os/topbarPrefs.ts))
+holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
+notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
+the earlier CV-only rule). Right-click the bar to **Unlock the top bar**, then drag a widget
+to reorder it, or use *Show or hide* for each widget; **Lock the top bar** when you are done. A
+click that does not move still activates the widget. The
+layout is kept in this browser, and follows your account when you are signed in.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
 number in the bar moves it there. Each window's workspace is saved with the window layout; which
 workspace is on screen is kept per browser. Phones have room for one workspace, so there the
@@ -546,7 +558,7 @@ service (API tokens, app passwords, a library's password) is a
 managers to leave alone, with a show/hide button, because browsers fill a saved password into any
 `type="password"` field and ignore `autocomplete="off"` there. Those apps' window menus have *… settings…*
 to jump to their pane.
-Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
+Settings → Spotlight chooses what **Ctrl+Space** toggles (Spotlight, the default, or All apps). All apps gives Ctrl+K (or Cmd+K) back to Spotlight. It also picks what the empty Spotlight shows (favourites, recently visited websites,
 status, apps, your repositories) and how many recent items of each, which kinds of results it searches (your
 contacts among them, and your mail after `mail:`; see *How the apps work together*), whether Enter on an unmatched query searches the
 web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites
@@ -559,7 +571,7 @@ favourites* there (or Ctrl+D) keeps it at the top of the empty box
 ([`src/data/spotlightFavourites.ts`](src/data/spotlightFavourites.ts)); Settings → Spotlight reorders
 them. The terminal's `visited` lists the same history (`visited <text>`, `visited open <#>`,
 `visited forget <#>`, `visited clear`).
-Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
+Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order, the top bar and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
 
@@ -621,7 +633,66 @@ and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo 
 | `repo@text`, `@text` | branches, with their last commit and pull request |
 
 Tab completes the highlighted result (`owner/repo`, then type `#` or `@`); Ctrl+Enter copies a
-clone command, link or branch name.
+clone command, link or branch name. Enter opens a repository, issue or pull request on the web;
+its actions panel (Ctrl+K or right-click) has *Open in Git*, which shows it in the Git app instead.
+
+### The Git app
+
+**Git** ([`src/apps/git/Git.tsx`](src/apps/git/Git.tsx)) is a read-only viewer for the same
+repositories: everything on your GitHub account (also through your organisations) and on the
+Gitea/Forgejo instances you linked. The list on the left filters by name, owner or organisation and
+host, grouped by owner with your own first, and shows the language, when it was last pushed and
+whether it is private. Without "Allow private" in Settings → Code hosts only public GitHub
+repositories show, and the list says so. A repository has four tabs:
+
+- **Overview**: description, stars, forks, open issues, default branch, licence, topics, the clone
+  addresses to copy, and the README rendered with the site's Markdown renderer. Its relative links
+  and images point into the repository on the host; the common HTML in READMEs (logos, badges,
+  `<details>`) is turned into Markdown first, since the renderer never renders HTML.
+- **Pull requests** (open, merged, closed or all) and **Issues** (open, closed or all), a page at a
+  time with *Load more*. A pull request has *Conversation* (the description and comments),
+  *Commits* and *Files changed*; an issue shows its description and comments.
+- **Commits**, per branch (a picker lists them), grouped by day. A commit shows its message, author,
+  parents (click to walk back) and its changed files.
+
+Changed files are unified diffs, one collapsible box per file with line numbers and the additions
+and deletions tinted from the theme; a long line scrolls inside its box. Binary files and diffs
+too large to send (over 96 KB for a file, 2 MB in all) say so with a link to the host's page, as
+does anything past GitHub's limits (300 files). Anything the app doesn't do itself (commenting,
+reviewing, merging, a new issue or pull request, checks) is a button with an arrow-out icon that
+opens the host's web page.
+
+A wide window keeps the list beside the open repository with breadcrumbs above it; a narrow window
+or a phone shows one view at a time with Back (Alt+← with a keyboard). The window takes a `route`
+prop (`github/owner/repo`, `…/pull/12`, `…/issue/4`, `…/commit/<sha>`, a linked instance as
+`forge:<id>`; see [`route.ts`](src/apps/git/route.ts)), which is how Spotlight opens it; without
+one it reopens the repository you had open last in this browser. Signed out, it asks you to sign
+in. Open it from All apps, Spotlight, the dock or `open git` in the terminal.
+
+The server side is [`server/git.ts`](server/git.ts): a fixed set of `GET /api/repos/...` routes
+(repositories; a repository with its README; branches; pull requests, one with its comments, its
+commits and its files; issues and one with its comments; commits and one with its files), each
+part of the path checked (host id, owner, name, number, hash, branch), so it is no open proxy and
+never writes. It goes through the same code host sources as Spotlight
+([`server/forges.ts`](server/forges.ts)), so tokens, rate limits and the address checks for linked
+instances are shared. GitHub's and Gitea's answers are turned into one shape there
+([`server/gitShapes.ts`](server/gitShapes.ts), types in
+[`src/data/gitTypes.ts`](src/data/gitTypes.ts)); Gitea's diffs come as a `.diff`, which is split
+into files on the server. Answers are kept a minute per user; Reload in the app asks the host again.
+
+Your repositories include those of every organisation you are in: GitHub's own list
+(owned, collaborator and organisation repositories) plus the most recently pushed hundred of
+each organisation, so typing an organisation's name (`acme`) lists its repositories too. Lists are
+kept a few minutes (GitHub 5, Gitea/Forgejo 15) and refreshed in the background; an issue, pull
+request or branch from a repository the list lacks refreshes it at once (at most once a minute),
+and signing in again starts over. Settings → Code hosts lists your GitHub organisations and
+whether the site can read them. Organisations can restrict OAuth apps (GitHub's default for new
+ones): until an owner approves the site, only their public repositories show. The *Grant access*
+button opens GitHub's page for the site's OAuth app, where owners click *Grant* and members
+*Request*; coming back to the tab checks again. GitHub hides an organisation that restricts the
+app from the site altogether when your membership is private, so it only shows up on that page.
+Sign-ins from before "Allow private" asked for `read:org` see only public memberships, and get a
+*Sign in again* button.
 
 Signed in, the dock is yours too ([`src/os/dockItems.ts`](src/os/dockItems.ts)): right-click a
 dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or repository in
@@ -1611,15 +1682,25 @@ click opens the Minecraft server window).
 
 ### Weather
 
-The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a full forecast window in the
-spirit of Apple Weather: current conditions, the next 24 hours (temperature, precipitation or wind),
-a 10-day outlook with temperature-range bars, and detail tiles for UV, feels like, precipitation,
-visibility, humidity, pressure, wind, sunrise/sunset, moon phase and air quality. It uses the same
-Open-Meteo fetch as the widget ([`src/data/weather.ts`](src/data/weather.ts)), called from the
-browser with no API key. On a wide window the layout grows to a multi-column tile grid and an optional
-locations sidebar; on a phone or a narrow pane it stays a single scrolling column with a locations
-sheet. Saved cities and units sync with your account; the browser's own location stays on that device.
-Open it from All apps, Spotlight, the dock, `weather` in the terminal, or from the weather widget.
+The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx)) is a forecast dashboard: current
+conditions, the next hour of precipitation, the coming hours (temperature, precipitation or wind), a
+10-day outlook, and tiles for UV, sunrise and sunset, wind, precipitation, feels like, humidity,
+pressure, visibility, the moon, a precipitation radar and air quality. A strip at the top of the
+window switches location and refreshes. On a wide window the tiles sit in a grid; on a tablet the
+10-day list sits beside the map; on a phone or a narrow pane they stack. Behind the cards the
+window keeps the sky from before: clear, night, cloud, fog, rain, snow or storm, from the current
+conditions. Each card opens a detail
+with a chart or the reading written out. It uses the same Open-Meteo fetch as the widget
+([`src/data/weather.ts`](src/data/weather.ts)), called from the browser with no API key, including
+15-minute precipitation. The map card is that radar, centred on the selected place: a quiet gray
+canvas (Esri's dark canvas in a dark theme, the light canvas when the document is in light mode)
+with the latest past [RainViewer](https://www.rainviewer.com/) frame on top. The card is one button
+and opens a larger copy of the same map. If RainViewer does not answer, the canvas stays and the
+map says the radar is unavailable; the rest of the forecast is unaffected. The line at the bottom
+of the page credits Open-Meteo, RainViewer, and the basemap (Esri, HERE, Garmin and
+[OpenStreetMap](https://www.openstreetmap.org/copyright)). Saved cities and units sync with your
+account; the browser's own location stays on that device. Open it from All apps, Spotlight, the
+dock, `weather` in the terminal, or from the weather widget.
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks

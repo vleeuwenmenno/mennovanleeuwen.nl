@@ -17,11 +17,17 @@ export type Source = {
   login: string
   /** GET an API path ("/repos/a/b"); resolves null on 404, throws on other errors. */
   api: <T>(path: string) => Promise<T | null>
+  /** The same, for an answer that is plain text (a .diff) */
+  text: (path: string) => Promise<string | null>
 }
 
 export type ForgeInfo = { id: number; label: string; baseUrl: string; username: string }
 
 const TIMEOUT = 8000
+
+/** Error texts for an organisation that blocks this OAuth app, or wants SAML sign-on first. */
+export const ORG_RESTRICTED = 'the organisation restricts OAuth app access'
+export const ORG_SSO = 'the organisation wants SAML single sign-on for this token'
 
 // When a host says "rate limited", stop asking it until the limit resets instead of failing on
 // every keystroke. GitHub limits its search API (30 a minute) apart from the rest, so search and
@@ -30,7 +36,7 @@ const blockedUntil = new Map<string, number>()
 const limitKey = (url: string, headers: Record<string, string>) => `${new URL(url).host}|${url.includes('/search/') ? 'search' : 'core'}|${headers.Authorization ?? ''}`
 
 /** `user` is who chose the address (a linked instance: checked by guardedFetch), null for GitHub's own API. */
-async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string): Promise<T | null> {
+async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string, text = false): Promise<T | null> {
   const key = limitKey(url, headers)
   const until = blockedUntil.get(key) ?? 0
   if (until > Date.now()) throw new HttpError(429, `${label} rate limit, back in ${Math.ceil((until - Date.now()) / 1000)} s`)
@@ -48,10 +54,16 @@ async function get<T>(user: User | null, url: string, headers: Record<string, st
       blockedUntil.set(key, retry ? Date.now() + retry : reset > Date.now() ? reset : Date.now() + 60_000)
       throw new HttpError(429, `${label} rate limit, back in ${Math.ceil(((blockedUntil.get(key) ?? 0) - Date.now()) / 1000)} s`)
     }
+    // GitHub says why when an organisation keeps this OAuth app out (its third-party access policy)
+    // or wants SAML single sign-on first; Settings → Code hosts tells those apart (search.ts).
+    const why = String(((await res.json().catch(() => null)) as { message?: unknown } | null)?.message ?? '')
+    if (/OAuth App access restrictions/i.test(why)) throw new HttpError(403, `${label}: ${ORG_RESTRICTED}`)
+    if (/SAML/i.test(why)) throw new HttpError(403, `${label}: ${ORG_SSO}`)
     throw new HttpError(502, `${label} refused (no permission)`)
   }
   if (!res.ok) throw new HttpError(502, `${label} answered ${res.status}`)
-  return JSON.parse((await readCapped(res, 16 * 1024 * 1024)).toString('utf8')) as T
+  const body = (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  return (text ? body : JSON.parse(body)) as T
 }
 
 export function githubSource(user: User): Source {
@@ -62,11 +74,20 @@ export function githubSource(user: User): Source {
     web: 'https://github.com',
     login: user.login,
     api: (path) => get(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub'),
+    text: (path) => get<string>(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github.diff', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub', true),
   }
 }
 
 function giteaSource(user: User, id: number, label: string, base: string, username: string, token: string): Source {
-  return { id: `forge:${id}`, label, kind: 'gitea', web: base, login: username, api: (path) => get(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label) }
+  return {
+    id: `forge:${id}`,
+    label,
+    kind: 'gitea',
+    web: base,
+    login: username,
+    api: (path) => get(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label),
+    text: (path) => get<string>(user, `${base}/api/v1${path}`, { Authorization: `token ${token}`, Accept: 'text/plain' }, label, true),
+  }
 }
 
 type ForgeRow = { id: number; label: string; base_url: string; username: string; token: string }

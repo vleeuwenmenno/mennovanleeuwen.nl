@@ -8,7 +8,9 @@ import { useAccount } from './account'
 export type CodeSearch = { loading: boolean; result: SearchResponse | null; error: string | null; for: string }
 
 const DELAY = 220
-const cache = new Map<string, SearchResponse>()
+/** Results are reused for a minute, so a repository the server finds meanwhile shows up when the same text is typed again. */
+const KEEP = 60_000
+const cache = new Map<string, { at: number; result: SearchResponse }>()
 
 export function useCodeSearch(q: string): CodeSearch {
   const account = useAccount()
@@ -19,7 +21,7 @@ export function useCodeSearch(q: string): CodeSearch {
   useEffect(() => {
     if (!active) return setState({ loading: false, result: null, error: null, for: query })
     const hit = cache.get(query)
-    if (hit) return setState({ loading: false, result: hit, error: null, for: query })
+    if (hit && Date.now() - hit.at < KEEP) return setState({ loading: false, result: hit.result, error: null, for: query })
     setState((s) => ({ ...s, loading: true }))
     const ctl = new AbortController()
     const t = setTimeout(() => {
@@ -30,7 +32,8 @@ export function useCodeSearch(q: string): CodeSearch {
           return body as SearchResponse
         })
         .then((result) => {
-          cache.set(query, result)
+          cache.delete(query)
+          cache.set(query, { at: Date.now(), result })
           if (cache.size > 100) cache.delete(cache.keys().next().value!)
           setState({ loading: false, result, error: null, for: query })
         })
@@ -46,5 +49,5 @@ export function useCodeSearch(q: string): CodeSearch {
   return state
 }
 
-/** Drops cached results (e.g. after linking an instance). */
+/** Drops cached results (e.g. after linking an instance, or an organisation letting the site in). */
 export const clearCodeSearch = () => cache.clear()
