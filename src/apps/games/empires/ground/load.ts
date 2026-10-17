@@ -7,20 +7,11 @@
 import './world.ts'
 import '../models/ground.ts'
 import { setGroundKit } from '../groundKit.ts'
-import { createGroundLayer2d } from './layer2d.ts'
+import { createGroundLayer } from './gl.ts'
 import { screenKit } from './screen.ts'
-import type { GroundLayer } from './types.ts'
 
-// The WebGL2 layer (gl.ts, createGroundLayer) once it is in; until then the 2D chunk renderer.
-const gl = import.meta.glob<{ createGroundLayer: () => GroundLayer }>('./gl.ts')
-let make: () => GroundLayer = createGroundLayer2d
-
-/** Ground battles, ready to play: resolves once every part is loaded. */
+/** Ground battles, ready to play: resolves once every part is loaded. The ground is drawn by the
+ * WebGL2 layer (gl.ts), which falls back to a flat 2D picture where WebGL2 is missing. */
 export async function loadGround() {
-  const mod = gl['./gl.ts']
-  if (mod) {
-    const { createGroundLayer } = await mod()
-    if (createGroundLayer) make = createGroundLayer
-  }
-  setGroundKit(screenKit(() => make()))
+  setGroundKit(screenKit(() => createGroundLayer()))
 }

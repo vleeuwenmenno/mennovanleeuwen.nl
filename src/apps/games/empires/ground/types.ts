@@ -85,7 +85,8 @@ export function canStep(g: TileGrid, a: number, b: number): boolean {
   return open(s1) && open(s2) && joins(a, s1) && joins(s1, b) && joins(a, s2) && joins(s2, b)
 }
 
-/** A placed prop (rock, tree, rubble). `kind` names its sprite in public/games/empires/ground/props/.
+/** A placed prop (rock, tree, rubble). `kind` names what it is; the ground layer (gl.ts) draws it
+ * into its forest and rock masks.
  * Position and size in world units; `blocks`: it stamps TF.blocked on the tiles under it (a tree,
  * a boulder), otherwise it is only drawn (rubble, cracked stone). */
 export type Prop = { kind: string; x: number; y: number; size: number; blocks: boolean }
