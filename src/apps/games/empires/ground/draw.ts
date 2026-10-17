@@ -261,8 +261,9 @@ const ROUTE_UNDER = 'rgba(6,10,14,0.55)'
  * waypoints its path really takes, from where the unit is now, as a smooth curve (each waypoint
  * pulls the line towards it, the line passing halfway between them), as the space battle draws its
  * move lines. A walled-in move ends where the unit will stop. Queued orders follow as straight legs
- * from one destination to the next, and each destination gets a small dot. Drawn over the fog: our
- * own routes give nothing away. Each line is stroked twice, dark and wide under the green.
+ * from one destination to the next, and each destination gets a small dot. They lie on the ground,
+ * under units and the fog, so they fade into the fog with the terrain. Each line is stroked twice,
+ * dark and wide under the green, so it reads on any ground.
  */
 export function drawRoutes(ctx: CanvasRenderingContext2D, w: GroundWorld, look: Look) {
   const px = 1 / look.zoom
