@@ -1637,6 +1637,15 @@ span.ew-teamtag {
   touch-action: none;
   cursor: default;
 }
+/* A ground battle's picture of the ground (groundKit.ts), right under the battle canvas. */
+.ew-groundlayer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
 .ew-canvas.is-targeting {
   cursor: crosshair;
 }

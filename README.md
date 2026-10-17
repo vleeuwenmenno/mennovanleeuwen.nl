@@ -3266,10 +3266,10 @@ Ground (land) battles are being built next to the space battles, in
 sim (see [The ground sim](#the-ground-sim)); a battle without terrain behaves and hashes as before.
 Until ground units can fight, the mode is in
 dev builds only: the Skirmish setup shows a **Space / Ground** switch when `import.meta.env.DEV` is
-set, and Ground opens a short setup for a ground battle against the AI (see
-[The ground battle screen](#the-ground-battle-screen)) with a **Map viewer** beside it (drag or one
-finger to pan, wheel or pinch to zoom, and a debug overlay of the tile grid, heights and tile flags;
-hovering or tapping a tile shows what it is). Production builds contain none of it but the ground units'
+set, and Ground plays the battle on the space game's own screen (see
+[The ground battle screen](#the-ground-battle-screen)), with a **Map viewer** for the ground maps
+(drag or one finger to pan, wheel or pinch to zoom, and a debug overlay of the tile grid, heights
+and tile flags; hovering or tapping a tile shows what it is). Production builds contain none of it but the ground units'
 entries in the factions' data and the sim's empty hooks.
 
 **Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
@@ -3461,66 +3461,40 @@ pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash prin
 
 ### The ground battle screen
 
-[`ground/Battle.tsx`](src/apps/games/empires/ground/Battle.tsx) is the ground battle (dev builds
-only). Its setup picks your faction, the AI's, the map (Dustfall Ridge) and the starting credits,
-kept in this browser. Each side starts with a Command Center on its plateau and an Engineer at its
-door.
+A ground battle is played on the space game's own battle screen
+([`EmpiresAtWar.tsx`](src/apps/games/EmpiresAtWar.tsx)) and set up in its own Skirmish lobby: in a
+dev build the lobby's **Space / Ground** switch loads ground battles
+([`ground/load.ts`](src/apps/games/empires/ground/load.ts)) and swaps the map list for the ground
+maps, each previewed from its tile map (terrain, height, water, crystal fields). The slots, factions,
+teams, spawns, starting credits and AI rows are the same; what doesn't apply on the ground hides:
+reinforcements, defense stations, defense platforms on ore, start areas and the map generator. A
+**Map viewer** chip opens the ground map viewer. The choice is remembered with the rest of the lobby.
 
-The battle runs as a multiplayer client would: the world ticks at the sim's fixed step (30 a
-second, at most eight steps a frame), and every order goes through the order table, cleaned as the
-server would, to run at the start of the next tick. What an order answers (why it can't be done)
-shows as a message under the top bar. The AI takes its turn each tick. Everything else is this
-player's view: camera, selection, control groups, the placement ghost, rally flags.
+Everything else comes from the space game: the camera, controls and shortcuts, the pause menu,
+selection (click, Shift-click, box, double-click), control groups, shift queues, order lines, the
+touch wheel and touch bar, the HUD panels and tooltips, and resuming after a reload. Where ground
+differs:
+- **The ground** is drawn on a canvas of its own right under the battle canvas, at the same size
+  and camera, first each frame, through the `GroundLayer` interface (`ground/types.ts`): the WebGL2
+  layer once `ground/gl.ts` is in, and until then a stand-in around the 2D chunk renderer
+  ([`ground/layer2d.ts`](src/apps/games/empires/ground/layer2d.ts)). The battle canvas then starts
+  clear: no backdrop, stars or map-edge dimming.
+- **Fog** is a half-dark veil by tile outside our sight, never black (the land is known from
+  orbit), over the units and everything on the ground, so route lines stay under it. Enemy
+  buildings we remember but don't see now are drawn as faded ghosts where we saw them. The minimap
+  shows the terrain under the same veil.
+- **Building:** an engineer's panel has a card for each building it puts up (B, or the touch wheel's
+  Build entry). The ghost under the pointer colours every tile of the footprint green or red, outlines
+  the row in front of its door, shows our command ranges for a building that needs one, and names
+  the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
+  opened, then **Build here** or **Cancel**.
+- **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
+  rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
+- The top bar leaves out ore, beacons and research.
 
-**Drawing** ([`ground/draw.ts`](src/apps/games/empires/ground/draw.ts)) goes through the
-renderer's hooks:
-- units and buildings are their models from `models/paint.ts` (bitmaps cached by size and light
-  heading, as ships are), or a plain marker in the faction's colour while a type has no model;
-- building sites show their footprint and the building fading in with its progress;
-- selection rings (corner brackets round buildings), health bars on damaged units, a site's
-  progress bar, rally flags, and a ring where a move went;
-- route lines for our selected units, as in space: the current move (or the drive to a building
-  site) along the path it really takes, a smooth curve round cliffs and up ramps ending where the
-  unit will stop, then any queued moves as straight legs, with a dot at each destination. They lie
-  on the ground, under units and the fog, so they fade out where the fog covers the ground: a thin
-  green line on a dark under-stroke so they read on any terrain;
-- the fog of war is a canvas of one pixel per tile, blurred a little and scaled up with smoothing:
-  clear in sight and a half-dark veil everywhere else, never black: a side always has eyes in orbit,
-  so the land (terrain, cliffs, props) shows everywhere, while units outside our sight stay hidden.
-  Enemy buildings stay under the veil as last seen, until you see that they're gone;
-- the enemy start spots are marked from the first second, over the fog;
-- the minimap has the terrain (all of it, veiled outside our sight), buildings and units as dots, and
-  the view's frame.
-
-**Controls (mouse and keyboard):**
-- click selects, Shift-click adds or drops one, a drag draws a selection box (vehicles before
-  buildings), and a double-click selects every unit of that kind on screen;
-- right-click: vehicles move there (Shift queues), engineers build or repair a site or building of
-  ours, a building alone sets its rally point;
-- control groups: Ctrl+number sets, Shift+number adds, the number selects, twice looks at it
-  (rebindable in Settings, as in space; Alt+number is left to the OS);
-- the camera pans with WASD or the arrows, the screen's edges (as the Settings say) and a middle- or
-  right-button drag, and zooms with the wheel; clicking or dragging on the minimap looks there, and a
-  right-click on it sends the selection;
-- H selects the Command Center (twice: looks at it), P pauses, Delete calls off a selected site,
-  Esc leaves placing, then the selection, then opens the menu (resume, restart, leave, and dev
-  switches for the debug overlay and a revealed map).
-
-**The HUD:** a top bar with credits and income a minute, your unit count, the clock with pause and
-speed, the minimap toggle and the menu. The selection panel shows what is selected (kinds to narrow
-to, hull, a site's progress with Cancel). For engineers it has build cards: one picks a building and
-a ghost follows the cursor, each tile of its footprint green or red with the first rule that fails
-written beside it; click places it (Shift-click to keep placing), Esc or right-click cancels. For a
-Command Center it has train cards (greyed with the reason when it can't train), the queue (click an
-item to cancel it) and rally by right-click.
-
-**Touch and phones:** tap selects (a second tap on a unit: all of its kind on screen), one finger
-pans, two pinch to zoom, and a long press opens the action wheel there: move, build (each building),
-build it (on a site), rally here, all of this kind, stop. Placing on touch puts the ghost in the
-middle of the view (or where the wheel opened); drag it or tap where it should go, then **Build
-here** or **Cancel**. The touch bar's Shift queues and keeps placing, its Box makes the next drag
-select. On a phone, or a screen held sideways, the minimap starts folded away (top left when shown),
-the selection opens from a small button on the right, and the touch bar keeps the bottom left.
+The ground screen's pieces reach the battle screen, the renderer and the lobby through
+[`groundKit.ts`](src/apps/games/empires/groundKit.ts), which `ground/load.ts` fills in; a
+production build never loads it.
 
 ## Performance guardrails
 
@@ -3543,9 +3517,10 @@ middle of the map, the camera panning across); six admirals on a huge map (Velka
 each sent at the middle, seen zoomed all the way out and then panning across the fight; a skirmish reloaded from the tab's resume snapshot
 with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
 view (the battle screen must never scroll, and the panels laid out round each other must settle:
-no React update loop, few commits); a ground battle on Dustfall Ridge (dev builds, as the check's
-server is) with three dozen vehicles of both sides driving across the low ground, fog on, the camera
-panning over the terrain; the galactic conquest map of a new and a late
+no React update loop, few commits); a ground battle on Dustfall Ridge on the battle screen (dev
+builds, as the check's server is) with three dozen vehicles of both sides driving across the low
+ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
+canvas's: the ground layer is a canvas of its own under it); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
 the desktop with a few apps open, left idle, then hidden.
 

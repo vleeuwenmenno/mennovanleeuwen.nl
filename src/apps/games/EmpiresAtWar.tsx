@@ -19,6 +19,8 @@ import { DoublePress, addToGroup, groupInfo, members, setGroup as putGroup, type
 import { HP_NAME, hpName } from './empires/icons'
 import { Renderer, drawRank, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
+import { groundKit } from './empires/groundKit'
+import type { GroundLayer } from './empires/ground/types'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
   STEP, RANKS, oreGuns, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantHeal, closedLoop, isRepairer, cantWarp, escorts, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
@@ -76,6 +78,13 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const [conquestAt, setConquestAt] = useState<'new' | 'load'>('new')
   const [setup, setSetup] = useState<Setup | null>(() => skirmish?.setup ?? null)
   const [round, setRound] = useState(0)
+  // A ground battle (dev builds only, ground/load.ts) needs ground battles loaded before it starts:
+  // one resumed after a reload loads them first.
+  const needsGround = import.meta.env.DEV && setup?.mode === 'ground'
+  const [groundOn, setGroundOn] = useState(() => !!groundKit())
+  useEffect(() => {
+    if (import.meta.env.DEV && needsGround && !groundOn) void import('./empires/ground/load.ts').then((m) => m.loadGround()).then(() => setGroundOn(true))
+  }, [needsGround, groundOn])
   const { best } = useHighScore('empires')
   const sound = useRef<EmpiresSound>(null as unknown as EmpiresSound)
   if (!sound.current) sound.current = new EmpiresSound()
@@ -258,6 +267,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
         }}
       />
     )
+  if (needsGround && !groundOn) return null
   return (
     <Battle
       key={round}
@@ -390,6 +400,7 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
     hybrid: !!w.hybrid,
+    ground: !!w.ground,
     yards: w.units
       .filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard')
       .map((u) => ({ id: u.id, unit: u.t.id, queue: (u.yq ?? []).map((q) => ({ ...q })), built: !u.site, progress: u.site ? 1 - u.building / u.t.build : 1 })),
@@ -433,7 +444,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         kind: (i === conquest.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team as 0 | 1, difficulty: conquest.ai, profile: profileOf(conquest.profile), spawn: i, name: conquest.names[i], area: defaultArea(map, i),
       }))
     const areas = setupAreas(setup!, map)
-    return setup!.slots.map((s, i) => ({ ...s, spawn: i, name: setup!.names?.[i] ?? slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
+    return setup!.slots.slice(0, map.spawns.length).map((s, i) => ({ ...s, spawn: i, name: setup!.names?.[i] ?? slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
   })
   const me: Owner = seats.findIndex((s) => s.kind === 'you')
   // Leaving a campaign battle (won, lost, or pulled out of) hands it back to the galaxy.
@@ -463,6 +474,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   if (!world.current && online) world.current = matchWorld(online.info)
   if (!world.current && conquest) world.current = newFleetBattle(map, conquest.sides, { seed: map.seed })
+  // A ground battle: every side starts on its spawn's plateau (there are no start areas).
+  if (!world.current && map.ground) world.current = makeWorld(seats.map((s) => map.spawns[s.spawn]))
   if (!world.current) {
     const base = makeWorld(seats.map((s) => map.spawns[s.spawn]))
     for (const s of seats) starts.current.push(autoStart(base, s.area, map.spawns[s.spawn], starts.current))
@@ -470,8 +483,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   /** Before the battle: time stands still while the player picks where to start. Our station
    * isn't placed (or shown) until they've clicked a spot. */
-  const deploying = useRef(!conquest && !online && !resumed.current)
-  const placed = useRef(!!conquest || !!online || !!resumed.current)
+  const deploying = useRef(!conquest && !online && !resumed.current && !map.ground)
+  const placed = useRef(!!conquest || !!online || !!resumed.current || !!map.ground)
   const myTeam = world.current.players[me].team
   const myFaction = world.current.players[me].faction
   const brains = useRef<Brain[]>(
@@ -966,7 +979,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const rallyAt = () => {
     const mine = mySelection()
     if (mine.some((u) => u.t.tier === 'station')) return 0
-    return mine.find((u) => u.t.tier === 'yard' && !!u.yq)?.id ?? 0
+    return mine.find((u) => (u.t.tier === 'yard' || u.t.tier === 'building') && !!u.yq)?.id ?? 0
   }
   /** Start placing a yard: with the engineers selected, or else every one of ours (idle ones
    * first). Without any, it says how to get some. */
@@ -976,7 +989,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const ours = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t))
     const chosen = mySelection().filter((u) => isEngineer(u.t))
     const crew = chosen.length ? chosen : ours
-    const why = !w.hybrid ? 'No yards in this battle' : !crew.length ? 'No engineers: build an engineer squadron at the Command Station first' : null
+    const why = w.ground
+      ? !crew.length ? 'No engineers: train one at a Command Center first' : null
+      : !w.hybrid ? 'No yards in this battle' : !crew.length ? 'No engineers: build an engineer squadron at the Command Station first' : null
     // The rest (level, credits, one at a time) shows on the ghost itself.
     if (why) {
       toast(why, 'bad')
@@ -1026,7 +1041,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   /** Turn the yard being placed by `deg` degrees (positive: clockwise on screen). */
   const rotatePlace = (deg: number) => {
     const pl = placing.current
-    if (!pl) return
+    // Ground buildings never turn: they face south.
+    if (!pl || world.current.ground) return
     pl.a = wrapAngle((pl.a ?? placeGhost()?.a ?? 0) + (deg * Math.PI) / 180)
     setUi((u) => ({ ...u }))
   }
@@ -1034,12 +1050,23 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const placeGhost = () => {
     const pl = placing.current
     const w = world.current
-    if (!pl || mode.current !== 'place') return null
+    if (!pl || mode.current !== 'place' || w.ground) return null
     const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
     const st = w.byId.get(w.players[me].station)
     if (!at || !st) return null
     const g = placement(w, me, pl.unit, at.x, at.y, pl.a ?? undefined)
     return { t: placeType(pl.unit) ?? yardOf(myFaction), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+  }
+  /** A ground battle's building being placed, for the renderer: its tiles under the pointer (or the
+   * pinned spot), green or red, with the first rule that fails. */
+  const groundGhost = () => {
+    const pl = placing.current
+    const w = world.current
+    const kit = groundKit()
+    if (!pl || mode.current !== 'place' || !w.ground || !kit) return null
+    const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
+    if (!at) return null
+    return { unit: pl.unit, p: kit.placement(w, me, pl.unit, at.x, at.y) }
   }
   /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
    * neither standing nor going up and the station is upgraded for, else the Frigate Yard (its ghost
@@ -1047,6 +1074,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const nextYard = () => {
     const w = world.current
     const p = w.players[me]
+    // A ground battle: the first building our engineers put up.
+    if (w.ground) return w.units.find((u) => !u.dead && u.owner === me && isEngineer(u.t))?.t.ground?.builds?.[0] ?? ''
     const lacking = yardsFor(p.faction).filter((t) => !w.units.some((u) => !u.dead && u.owner === me && u.t.id === t.id))
     return (lacking.find((t) => t.level <= p.level) ?? lacking[0] ?? yardOf(p.faction)).id
   }
@@ -1275,6 +1304,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const withAb = ships.filter((u) => u.t.ability)
       // Engineers: put a yard down here (pinned, for the confirm button).
       if (w.hybrid && ships.some((u) => isEngineer(u.t))) items.push(it('yard', 'Build yard', 'slip', () => pinYard(at)))
+      // A ground battle's engineers: each building they put up, pinned here.
+      if (w.ground) for (const id of [...new Set(ships.flatMap((u) => u.t.ground?.builds ?? []))]) items.push(it(`build:${id}`, `Build ${UNIT[id].name}`, 'slip', () => pinYard(at, id)))
       // ...or a defense station, in a battle that has them.
       if (w.defense && ships.some((u) => isEngineer(u.t))) items.push(it('fort', 'Build defense station', 'hold', () => pinYard(at, defenseId(myFaction))))
       items.push(
@@ -1439,6 +1470,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const m = mini.current!
     const ctx = c.getContext('2d')!
     const mctx = m.getContext('2d')!
+    // A ground battle: the picture of the ground on a canvas of its own right under this one, the
+    // same size and camera, drawn first each frame (groundKit.ts).
+    const kit = world.current.ground ? groundKit() : null
+    const layer: GroundLayer | null = kit ? kit.layer() : null
+    if (layer) {
+      layer.setMap(world.current.ground!.map)
+      layer.canvas.className = 'ew-groundlayer'
+      c.parentElement!.insertBefore(layer.canvas, c)
+      // Dev builds: the perf scene and the console reach it here.
+      if (import.meta.env.DEV) (window as unknown as { __ewGround: unknown }).__ewGround = layer
+    }
     sound.unlock()
     sound.setMusicScene('skirmish')
     const fit = () => {
@@ -1582,6 +1624,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         else if (e.k === 'hpdown') {
           sound.hardpointDown(where(e.x, e.y), w.players[e.owner]?.faction)
           if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
+        } else if (e.k === 'trained' && e.owner === me) {
+          const t = UNIT[e.unit]
+          sound.shipReady(myFaction, 'gunship')
+          toast(`${t.name} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+        } else if (e.k === 'built' && e.owner === me && UNIT[e.unit]?.tier === 'building') {
+          sound.structureDone('yard')
+          toast(`${UNIT[e.unit].name} complete`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'built' && e.owner === me) {
           const t = placeType(e.unit)
           if (!t) continue
@@ -1701,6 +1750,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         warpGhost: warpGhost(),
         hideOwner: deploying.current && !placed.current ? me : -1,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
+        groundPlace: groundGhost(),
         // A finger has no hover: the selection shows its ranges instead.
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
         place: placeGhost(),
@@ -1711,6 +1761,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
         })() : null,
       }
+      layer?.draw(cm, vw, vh, Math.min(2, window.devicePixelRatio || 1), now / 1000)
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       // The repair cursor, over what a right-click would repair (React's className leaves it be
       // until the mode changes, so it is checked on the element itself).
@@ -1748,6 +1799,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      layer?.canvas.remove()
+      layer?.dispose()
       // Parent screen effect restores menu / galaxy music.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2203,7 +2256,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // Lines or pages (some mice) rather than pixels: scale to about one notch's worth.
     const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
     // A yard being placed: the wheel turns it (15 degrees a notch, 5 with Shift) instead of zooming.
-    if (mode.current === 'place' && placing.current) {
+    if (mode.current === 'place' && placing.current && !world.current.ground) {
       wheelAcc.current += dy || e.deltaX
       const n = Math.trunc(wheelAcc.current / 90)
       if (n) {
@@ -2645,20 +2698,25 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
                 : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
                 : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near. On a ship two classes bigger it escorts it: flies over its hull and moves with it.`
+                  : ui.mode === 'place' && w.ground ? `${UNIT[placing.current?.unit ?? '']?.name ?? 'Building'}: ${click} a spot where every tile is green.${touchUi ? ' Then build it here.' : ''}`
                   : ui.mode === 'place' ? `${(placeType(placing.current?.unit ?? '') ?? yardOf(myFaction)).name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
-            {ui.mode === 'place'
+            {ui.mode === 'place' && w.ground
+              ? touchUi ? 'Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
+              : ui.mode === 'place'
               ? touchUi ? 'Turn it with the buttons. Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Wheel or <kbd>[</kbd> <kbd>]</kbd> turn it (Shift: finer), or drag to aim its mouth. Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
               : touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
             {ui.mode === 'place' && touchUi && placing.current?.at && (
               <div className="ew-placebar">
+                {!w.ground && <>
                 <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(-15)} aria-label="Turn it anticlockwise" data-tip="Turn 15 degrees anticlockwise">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
                 </button>
                 <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(15)} aria-label="Turn it clockwise" data-tip="Turn 15 degrees clockwise">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: 'scaleX(-1)' }}><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
                 </button>
-                <button className="ew-go" onClick={confirmPlace} disabled={!placeGhost()?.ok}>
+                </>}
+                <button className="ew-go" onClick={confirmPlace} disabled={w.ground ? !!groundGhost()?.p.why : !placeGhost()?.ok}>
                   Build here
                 </button>
                 <button className="ew-menu-btn" onClick={() => setMode('normal')}>

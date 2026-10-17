@@ -194,7 +194,7 @@ export const profileOf = (v: unknown): Profile => (typeof v === 'string' && (PRO
 
 export type Brain = {
   o: Owner
-  /** Ground battles (ground/ai.ts): the site of ours it is waiting on to be started, and since when
+  /** Ground battles (ground/think.ts): the site of ours it is waiting on to be started, and since when
    * (world seconds); one that never gets started is called off. Absent in space battles. */
   gSite?: number
   gSiteAt?: number
@@ -781,7 +781,7 @@ export function think(w: World, b: Brain, dt: number) {
   b.t = D.think * (0.8 + rand(w) * 0.4)
   const o = b.o
   const p = w.players[o]
-  // A ground battle has decisions of its own (ground/ai.ts).
+  // A ground battle has decisions of its own (ground/think.ts).
   if (w.ground) return groundHooks()!.think(w, b)
   const st = w.byId.get(p.station)
   if (!st || st.dead) return

@@ -306,9 +306,10 @@ const skirmishHuge: Scene = {
 // --- A ground battle ---
 
 /**
- * A ground battle (dev builds only, as the perf check's server is) on Dustfall Ridge: three dozen
- * vehicles of both sides driving across the low ground in sight of each other, fog of war on, the
- * camera panning over the terrain as they go.
+ * A ground battle (dev builds only, as the perf check's server is) on Dustfall Ridge, through the
+ * space game's battle screen: three dozen vehicles of both sides driving across the low ground in
+ * sight of each other, fog of war on, the camera panning over the terrain as they go. The ground is
+ * on its own canvas under the battle canvas (groundKit's layer); the metrics are the battle canvas's.
  */
 const groundBase: Scene = {
   name: 'ground-base',
@@ -316,36 +317,41 @@ const groundBase: Scene = {
   async run(page, url) {
     await page.send('Page.navigate', { url: `${url}/play/empires` })
     await page.waitFor(MENU)
-    await page.eval(`localStorage.setItem('mvlos.empires.groundsetup', JSON.stringify({ map: 'dustfall-ridge', you: 'republic', ai: 'droid', credits: 2000 }))`)
+    // The lobby as it was left: a ground battle on Dustfall Ridge, the Republic against the droids.
+    const setup = {
+      mode: 'ground', groundMap: 'dustfall-ridge', map: 'vanth', credits: 2500,
+      slots: [
+        { kind: 'you', faction: 'republic', team: 0, difficulty: 'easy', profile: 'balanced' },
+        { kind: 'ai', faction: 'droid', team: 1, difficulty: 'easy', profile: 'balanced' },
+      ],
+    }
+    await page.eval(`localStorage.setItem('mvlos.empires.lobby', ${JSON.stringify(JSON.stringify(setup))})`)
     await press(page, '.ew-menu-btn', 'Single player')
     await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
     await press(page, '.ew-menu-btn', 'Skirmish')
-    await page.waitFor(`[...document.querySelectorAll('.ew-seg button')].some((b) => b.textContent.includes('Ground'))`)
-    await press(page, '.ew-seg button', 'Ground')
-    await page.waitFor(`!!document.querySelector('.ew-landsetup .ew-go')`)
+    // Ground battles load in the lobby (the Ground switch lights once they have).
+    await page.waitFor(`[...document.querySelectorAll('.ew-seg button.is-on')].some((b) => b.textContent.includes('Ground')) && !!document.querySelector('.ew-go')`)
     await page.eval(`__perf.manual(11)`)
-    await press(page, '.ew-landsetup .ew-go', 'Launch battle')
+    await press(page, '.ew-go', 'Launch battle')
     // The terrain's pictures load in real time with the clock stopped.
-    await settleUntil(page, `!!window.__groundBattle && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth`)
-    await page.eval(`window.__groundBattle.renderer.ready.then(() => (window.__groundReady = true))`)
+    await settleUntil(page, `!!window.__ew && !!window.__ewGround && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth`)
+    await page.eval(`window.__ewGround.ready.then(() => (window.__groundReady = true))`)
     await settleUntil(page, `!!window.__groundReady`)
     const spawned = await page.eval<number>(`(async () => {
-      const sim = await import('/src/apps/games/empires/ground/sim.ts')
+      const sim = await import('/src/apps/games/empires/sim.ts')
       const nav = await import('/src/apps/games/empires/ground/nav.ts')
-      const g = window.__groundBattle
-      const w = g.world
+      const w = __ew.world
       // Each side's own vehicle type (its engineer), 24 of ours and 12 of theirs in two blocks on
       // the low ground between the bases, ours sent across theirs.
-      const typeOf = (o) => w.units.find((u) => u.owner === o && sim.GROUND_UNIT[u.type].kind === 'vehicle').type
+      const typeOf = (o) => w.units.find((u) => u.owner === o && u.t.tier === 'vehicle').t
       const cx = w.w * 0.45, cy = w.h * 0.55
       let made = 0
       const block = (o, n, x0, y0) => {
         const t = typeOf(o)
-        const k = sim.GROUND_UNIT[t].size
         const ids = []
         for (let i = 0; i < 400 && ids.length < n; i++) {
           const x = x0 + (i % 8) * 56, y = y0 + Math.floor(i / 8) * 56
-          if (nav.standsAt(w.nav, k, x, y)) ids.push(sim.spawnUnit(w, t, o, x, y, 0).id)
+          if (nav.standsAt(w.ground.nav, t.ground.size, x, y)) ids.push(sim.spawn(w, t.id, o, x, y, 0).id)
         }
         made += ids.length
         return ids
@@ -354,16 +360,16 @@ const groundBase: Scene = {
       const theirs = block(1, 12, cx - 40, cy + 120)
       sim.cmdMove(w, 0, ours, cx + 500, cy, false)
       sim.cmdMove(w, 1, theirs, cx - 500, cy, false)
-      Object.assign(g.view, { x: cx - 300, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 2400)) })
+      Object.assign(__ew.cam, { x: cx - 300, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 2400)) })
       return made
     })()`)
     // The terrain bakes and the fog clears round the vehicles, then a second is measured while
     // the camera pans across them.
     await page.eval(`__perf.frames(120)`)
-    const pan = await measure(page, 60, `window.__groundBattle.view.x += 10`)
+    const pan = await measure(page, 60, `__ew.cam.x += 10`)
     const after = await page.eval<{ mb: number; terrain: number; nodes: number }>(`(async () => {
       const p = await import('/src/apps/games/empires/models/paint.ts')
-      return { mb: p.cacheStats().mb, terrain: window.__groundBattle.renderer.cacheBytes / 1048576, nodes: document.getElementsByTagName('*').length }
+      return { mb: p.cacheStats().mb, terrain: (window.__ewGround.cacheBytes ?? 0) / 1048576, nodes: document.getElementsByTagName('*').length }
     })()`)
     await page.eval(`__perf.noText = true; __perf.frames(1)`)
     const shot = await canvasShot(page, 'canvas.ew-canvas')

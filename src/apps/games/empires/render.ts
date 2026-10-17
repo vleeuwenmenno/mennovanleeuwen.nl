@@ -10,6 +10,8 @@ import { PALETTES } from './models/palettes.ts'
 import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
 import { AFTER, STREAK, WARP_STYLE, WarpFx, type Rift } from './warpfx.ts'
+import { groundKit } from './groundKit.ts'
+import type { GroundPlacement } from './ground/world.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships and structures (procedural cel-shaded
@@ -92,6 +94,9 @@ export type View = {
   /** Hybrid bases: a yard being placed, its ghost where it would go (green where it can, red with
    * why where it can't) and the Command Station's build radius round it. */
   place?: { t: UnitType; x: number; y: number; a: number; ok: boolean; why: string | null; cost: number; rebuild: boolean; ring: { x: number; y: number; r: number } } | null
+  /** A ground battle's building being placed (ground/world.ts groundPlacement): its tiles under the
+   * pointer, green or red, the first rule that fails, and the building over them. */
+  groundPlace?: { unit: string; p: GroundPlacement } | null
   /** The build radius, faintly, while the station or engineers are selected. */
   buildRing?: { x: number; y: number; r: number } | null
   /** Guard armed, and the ship under the pointer is one the selection would escort: tagged "Escort". */
@@ -674,62 +679,68 @@ export class Renderer {
     this.trackModels(w, view, (x, y, r) => Math.abs(x - cam.x) < nx + r && Math.abs(y - cam.y) < ny + r)
     const zdpr = z * canvasDpr()
     ctx.save()
-    ctx.fillStyle = '#04060d'
-    ctx.fillRect(0, 0, vw, vh)
+    // A ground battle: the ground is on its own canvas under this one (groundKit's layer), so this
+    // one starts clear, with no space behind it.
+    const ground = w.ground ? groundKit() : null
+    if (w.ground) ctx.clearRect(0, 0, vw, vh)
+    else {
+      ctx.fillStyle = '#04060d'
+      ctx.fillRect(0, 0, vw, vh)
 
-    // Backdrop and stars, sliding slower than the battle for depth.
-    const bg = this.imgs.get('backdrop')
-    if (bg?.complete && bg.naturalWidth) {
-      const s = Math.max(vw / bg.naturalWidth, vh / bg.naturalHeight) * 1.25
-      const bw = bg.naturalWidth * s
-      const bh = bg.naturalHeight * s
-      const fx = (cam.x / w.w - 0.5) * (bw - vw)
-      const fy = (cam.y / w.h - 0.5) * (bh - vh)
-      ctx.globalAlpha = 0.9
-      ctx.drawImage(bg, (vw - bw) / 2 - fx, (vh - bh) / 2 - fy, bw, bh)
-      ctx.globalAlpha = 1
-    }
-    this.stars.forEach((tile, i) => {
-      this.patterns[i] ??= ctx.createPattern(tile, 'repeat')
-      const pat = this.patterns[i]
-      if (!pat) return
-      const par = i === 0 ? 0.12 : 0.3
-      const sc = 0.6 + z * (i === 0 ? 0.25 : 0.5)
-      ctx.save()
-      ctx.translate(vw / 2, vh / 2)
-      ctx.scale(sc, sc)
-      ctx.translate(-cam.x * par, -cam.y * par)
-      ctx.fillStyle = pat
-      const ext = Math.max(vw, vh) / sc
-      ctx.fillRect(cam.x * par - ext, cam.y * par - ext, ext * 2, ext * 2)
-      ctx.restore()
-    })
-
-    // A fleet battle's planet: huge and far off, sliding slower than the battle.
-    const pl = w.map.planet
-    if (pl) {
-      const key = `planet-${pl.kind}`
-      if (!this.imgs.has(key)) this.imgs.set(key, load(`${BASE}planets/${pl.kind}.webp`))
-      const img = this.imgs.get(key)!
-      if (img.complete && img.naturalWidth) {
-        const par = 0.3
-        const sc = 0.5 + z * 0.3
-        const x = vw / 2 + (pl.x - cam.x) * par * sc
-        const y = vh / 2 + (pl.y - cam.y) * par * sc
-        const rad = pl.r * sc
-        // Dimmed, so the ships in front of it stay easy to read.
-        ctx.globalAlpha = 0.62
-        ctx.drawImage(img, x - rad, y - rad, rad * 2, rad * 2)
-        // Its night side fades into space.
-        const shade = ctx.createRadialGradient(x - rad * 0.35, y - rad * 0.35, rad * 0.2, x, y, rad * 1.05)
-        shade.addColorStop(0, 'rgba(4,6,13,0.2)')
-        shade.addColorStop(0.75, 'rgba(4,6,13,0.4)')
-        shade.addColorStop(1, 'rgba(4,6,13,0.75)')
-        ctx.fillStyle = shade
-        ctx.beginPath()
-        ctx.arc(x, y, rad, 0, Math.PI * 2)
-        ctx.fill()
+      // Backdrop and stars, sliding slower than the battle for depth.
+      const bg = this.imgs.get('backdrop')
+      if (bg?.complete && bg.naturalWidth) {
+        const s = Math.max(vw / bg.naturalWidth, vh / bg.naturalHeight) * 1.25
+        const bw = bg.naturalWidth * s
+        const bh = bg.naturalHeight * s
+        const fx = (cam.x / w.w - 0.5) * (bw - vw)
+        const fy = (cam.y / w.h - 0.5) * (bh - vh)
+        ctx.globalAlpha = 0.9
+        ctx.drawImage(bg, (vw - bw) / 2 - fx, (vh - bh) / 2 - fy, bw, bh)
         ctx.globalAlpha = 1
+      }
+      this.stars.forEach((tile, i) => {
+        this.patterns[i] ??= ctx.createPattern(tile, 'repeat')
+        const pat = this.patterns[i]
+        if (!pat) return
+        const par = i === 0 ? 0.12 : 0.3
+        const sc = 0.6 + z * (i === 0 ? 0.25 : 0.5)
+        ctx.save()
+        ctx.translate(vw / 2, vh / 2)
+        ctx.scale(sc, sc)
+        ctx.translate(-cam.x * par, -cam.y * par)
+        ctx.fillStyle = pat
+        const ext = Math.max(vw, vh) / sc
+        ctx.fillRect(cam.x * par - ext, cam.y * par - ext, ext * 2, ext * 2)
+        ctx.restore()
+      })
+
+      // A fleet battle's planet: huge and far off, sliding slower than the battle.
+      const pl = w.map.planet
+      if (pl) {
+        const key = `planet-${pl.kind}`
+        if (!this.imgs.has(key)) this.imgs.set(key, load(`${BASE}planets/${pl.kind}.webp`))
+        const img = this.imgs.get(key)!
+        if (img.complete && img.naturalWidth) {
+          const par = 0.3
+          const sc = 0.5 + z * 0.3
+          const x = vw / 2 + (pl.x - cam.x) * par * sc
+          const y = vh / 2 + (pl.y - cam.y) * par * sc
+          const rad = pl.r * sc
+          // Dimmed, so the ships in front of it stay easy to read.
+          ctx.globalAlpha = 0.62
+          ctx.drawImage(img, x - rad, y - rad, rad * 2, rad * 2)
+          // Its night side fades into space.
+          const shade = ctx.createRadialGradient(x - rad * 0.35, y - rad * 0.35, rad * 0.2, x, y, rad * 1.05)
+          shade.addColorStop(0, 'rgba(4,6,13,0.2)')
+          shade.addColorStop(0.75, 'rgba(4,6,13,0.4)')
+          shade.addColorStop(1, 'rgba(4,6,13,0.75)')
+          ctx.fillStyle = shade
+          ctx.beginPath()
+          ctx.arc(x, y, rad, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.globalAlpha = 1
+        }
       }
     }
 
@@ -743,21 +754,47 @@ export class Renderer {
     const bottom = cam.y + vh / 2 / z + 300
     const onScreen = (x: number, y: number, r = 0) => x + r > left && x - r < right && y + r > top && y - r < bottom
 
-    // Past the map's edge (the camera may run out there): dim, so the edge reads at a glance.
-    if (left < 0 || top < 0 || right > w.w || bottom > w.h) {
+    // Past the map's edge (the camera may run out there): dim, so the edge reads at a glance. (The
+    // ground layer shows a ground battle's edge itself.)
+    if (!w.ground && (left < 0 || top < 0 || right > w.w || bottom > w.h)) {
       ctx.fillStyle = 'rgba(2,4,10,0.5)'
       ctx.beginPath()
       ctx.rect(left, top, right - left, bottom - top)
       ctx.rect(0, 0, w.w, w.h)
       ctx.fill('evenodd')
     }
-    ctx.strokeStyle = 'rgba(140,170,220,0.3)'
-    ctx.lineWidth = 2 / z
-    ctx.setLineDash([24 / z, 18 / z])
-    ctx.strokeRect(0, 0, w.w, w.h)
-    ctx.setLineDash([])
+    if (!w.ground) {
+      ctx.strokeStyle = 'rgba(140,170,220,0.3)'
+      ctx.lineWidth = 2 / z
+      ctx.setLineDash([24 / z, 18 / z])
+      ctx.strokeRect(0, 0, w.w, w.h)
+      ctx.setLineDash([])
+    }
 
     this.drawTerrain(ctx, w, z, onScreen)
+
+    // A ground battle: the building being placed (its tiles, the row before its door, our command
+    // ranges), and the enemy buildings we remember but don't see now, as ghosts where we saw them.
+    if (ground) {
+      const gp = view.groundPlace
+      if (gp) {
+        ground.ghost(ctx, w, view.me, gp.unit, gp.p, z)
+        const m = modelFor(UNIT[gp.unit])
+        if (m) drawHull(ctx, m, gp.p.x, gp.p.y, 0, UNIT[gp.unit].size, zdpr, FRESH, { alpha: gp.p.why ? 0.35 : 0.6 })
+      }
+      const team = w.players[view.me].team
+      for (const k of ground.known(w, view.me)) {
+        const u = w.byId.get(k.id)
+        if (u && !u.dead && u.seen[team]) continue
+        const t = UNIT[k.unit]
+        const [fw, fh] = t.ground!.foot!
+        const x = (k.tc + fw / 2) * 32
+        const y = (k.tr + fh / 2) * 32
+        if (!onScreen(x, y, t.size)) continue
+        const m = modelFor(t)
+        if (m) drawHull(ctx, m, x, y, 0, t.size, zdpr, FRESH, { alpha: 0.4 })
+      }
+    }
 
     // Picking start positions: each player's area, ours brighter, and the station's footprint
     // under the pointer (red where it can't go).
@@ -992,7 +1029,7 @@ export class Renderer {
     // Selected yards' own rally points, in the yard colour.
     for (const id of view.selected) {
       const y = w.byId.get(id)
-      if (!y || y.owner !== view.me || y.t.tier !== 'yard' || !y.yr) continue
+      if (!y || y.owner !== view.me || (y.t.tier !== 'yard' && y.t.tier !== 'building') || !y.yr) continue
       ctx.strokeStyle = 'rgba(255,200,110,0.55)'
       ctx.lineWidth = 1.5 / z
       ctx.setLineDash([8 / z, 8 / z])
@@ -1460,6 +1497,10 @@ export class Renderer {
     }
     ctx.globalAlpha = 1
 
+    // A ground battle's fog: a half-dark veil by tile outside our sight (never black: the land is known
+    // from orbit), over the units and everything on the ground, under the move markers.
+    if (ground) ground.fog(ctx, w, w.players[view.me].team, !!view.reveal)
+
     // Move markers.
     this.pings = this.pings.filter((g) => this.clock - g.t < 0.6)
     for (const g of this.pings) {
@@ -1475,30 +1516,34 @@ export class Renderer {
     ctx.restore()
 
     // Fog of war: dark everywhere except around our ships and structures and the beacons we hold.
-    const fs = 4
-    const fw = Math.ceil(vw / fs)
-    const fh = Math.ceil(vh / fs)
-    if (!fw || !fh) return
-    if (this.fog.width !== fw || this.fog.height !== fh) {
-      this.fog.width = fw
-      this.fog.height = fh
+    // (A ground battle's is drawn above, by tile.)
+    if (!w.ground) {
+      const fs = 4
+      const fw = Math.ceil(vw / fs)
+      const fh = Math.ceil(vh / fs)
+      if (fw && fh) {
+        if (this.fog.width !== fw || this.fog.height !== fh) {
+          this.fog.width = fw
+          this.fog.height = fh
+      }
+      const f = this.fog.getContext('2d')!
+      f.globalCompositeOperation = 'source-over'
+      f.clearRect(0, 0, fw, fh)
+      f.fillStyle = view.reveal ? 'rgba(2,4,12,0)' : 'rgba(2,4,12,0.55)'
+      f.fillRect(0, 0, fw, fh)
+      f.globalCompositeOperation = 'destination-out'
+      for (const e of eyesOf(w, w.players[view.me].team)) {
+        const r = (e.r * z) / fs
+        const sx = ((e.x - cam.x) * z + vw / 2) / fs
+        const sy = ((e.y - cam.y) * z + vh / 2) / fs
+        if (sx + r < 0 || sy + r < 0 || sx - r > fw || sy - r > fh) continue
+        f.drawImage(this.disc, sx - r, sy - r, r * 2, r * 2)
+      }
+      ctx.imageSmoothingEnabled = true
+      ctx.drawImage(this.fog, 0, 0, fw * fs, fh * fs)
+      if (view.fogGrid) this.drawFogGrid(ctx, w, cam, vw, vh, view.me)
+      }
     }
-    const f = this.fog.getContext('2d')!
-    f.globalCompositeOperation = 'source-over'
-    f.clearRect(0, 0, fw, fh)
-    f.fillStyle = view.reveal ? 'rgba(2,4,12,0)' : 'rgba(2,4,12,0.55)'
-    f.fillRect(0, 0, fw, fh)
-    f.globalCompositeOperation = 'destination-out'
-    for (const e of eyesOf(w, w.players[view.me].team)) {
-      const r = (e.r * z) / fs
-      const sx = ((e.x - cam.x) * z + vw / 2) / fs
-      const sy = ((e.y - cam.y) * z + vh / 2) / fs
-      if (sx + r < 0 || sy + r < 0 || sx - r > fw || sy - r > fh) continue
-      f.drawImage(this.disc, sx - r, sy - r, r * 2, r * 2)
-    }
-    ctx.imageSmoothingEnabled = true
-    ctx.drawImage(this.fog, 0, 0, fw * fs, fh * fs)
-    if (view.fogGrid) this.drawFogGrid(ctx, w, cam, vw, vh, view.me)
 
     // Drag box.
     if (view.box) {
@@ -3241,45 +3286,50 @@ export class Renderer {
     ctx.clearRect(0, 0, mw, mh)
     ctx.fillStyle = '#03050c'
     ctx.fillRect(0, 0, mw, mh)
-    const bg = this.imgs.get('backdrop')
-    if (bg?.complete && bg.naturalWidth) {
-      ctx.globalAlpha = 0.55
-      ctx.drawImage(bg, ox, oy, w.w * s, w.h * s)
-      ctx.globalAlpha = 1
-    }
-    // What we can see, lit up; the rest stays dim.
-    ctx.fillStyle = 'rgba(2,4,12,0.45)'
-    ctx.fillRect(ox, oy, w.w * s, w.h * s)
-    ctx.globalCompositeOperation = 'lighter'
-    ctx.fillStyle = 'rgba(70,110,170,0.09)'
-    for (const u of w.units) {
-      if (u.owner === hide) continue
-      if (w.players[u.owner].team !== w.players[me].team) continue
+    // A ground battle: its terrain under the fog veil (groundKit.ts); else space, lit where we see.
+    const ground = w.ground ? groundKit() : null
+    if (ground) ground.minimap(ctx, w, w.players[me].team, ox, oy, s, false)
+    else {
+      const bg = this.imgs.get('backdrop')
+      if (bg?.complete && bg.naturalWidth) {
+        ctx.globalAlpha = 0.55
+        ctx.drawImage(bg, ox, oy, w.w * s, w.h * s)
+        ctx.globalAlpha = 1
+      }
+      // What we can see, lit up; the rest stays dim.
+      ctx.fillStyle = 'rgba(2,4,12,0.45)'
+      ctx.fillRect(ox, oy, w.w * s, w.h * s)
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.fillStyle = 'rgba(70,110,170,0.09)'
+      for (const u of w.units) {
+        if (u.owner === hide) continue
+        if (w.players[u.owner].team !== w.players[me].team) continue
+        ctx.beginPath()
+        ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      // The beacons we hold see round themselves too.
+      for (const b of w.beacons) {
+        if (b.owner !== w.players[me].team) continue
+        ctx.beginPath()
+        ctx.arc(X(b.x), Y(b.y), BEACON_SENSOR * s, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.globalCompositeOperation = 'source-over'
+      // A faint grid.
+      ctx.strokeStyle = 'rgba(140,180,240,0.07)'
+      ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
-      ctx.fill()
+      for (let gx = 700; gx < w.w; gx += 700) {
+        ctx.moveTo(X(gx), oy)
+        ctx.lineTo(X(gx), oy + w.h * s)
+      }
+      for (let gy = 680; gy < w.h; gy += 680) {
+        ctx.moveTo(ox, Y(gy))
+        ctx.lineTo(ox + w.w * s, Y(gy))
+      }
+      ctx.stroke()
     }
-    // The beacons we hold see round themselves too.
-    for (const b of w.beacons) {
-      if (b.owner !== w.players[me].team) continue
-      ctx.beginPath()
-      ctx.arc(X(b.x), Y(b.y), BEACON_SENSOR * s, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.globalCompositeOperation = 'source-over'
-    // A faint grid.
-    ctx.strokeStyle = 'rgba(140,180,240,0.07)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    for (let gx = 700; gx < w.w; gx += 700) {
-      ctx.moveTo(X(gx), oy)
-      ctx.lineTo(X(gx), oy + w.h * s)
-    }
-    for (let gy = 680; gy < w.h; gy += 680) {
-      ctx.moveTo(ox, Y(gy))
-      ctx.lineTo(ox + w.w * s, Y(gy))
-    }
-    ctx.stroke()
     drawTerrainOverview(ctx, w.map, ox, oy, s)
     // Every rock in one path: one fill rather than one each.
     ctx.fillStyle = 'rgba(150,150,165,0.4)'

@@ -10,7 +10,7 @@ import type { Model } from './types.ts'
 // Models for the ground battle's units and buildings, in the same parts-and-vectors format as the
 // ships (models/types.ts): parts in the faction's palette, facets for the cel shading, lift shadows,
 // painted by models/paint.ts with the light from the top left. Each faction's designs are in
-// models/<faction>/ground.ts, by ground unit type id (ground/units.ts). No DOM here.
+// models/<faction>/ground.ts, by ground unit type id (data/<faction>.ts). No DOM here.
 //
 // Model space as for ships: origin in the middle of the box, nose up (-y). A building faces south
 // (its door at +y) and is drawn unturned; a vehicle with sim heading h is drawn turned by h + π/2.

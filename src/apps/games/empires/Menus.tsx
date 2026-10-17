@@ -11,6 +11,7 @@ import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetK
 import { empiresMapSort, empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresMapSort as MapSort } from '../prefs'
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Reinforce, type World } from './sim'
+import { groundKit } from './groundKit'
 import { MAP_SCALE } from './scale'
 import { Codex } from './Codex'
 import { score } from './Scoreboard'
@@ -37,6 +38,10 @@ export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules
   /** Defense platforms on ore (World `oreDefense`); setups saved before the choice get them off,
    * as a new lobby has them. */
   oreDefense?: boolean
+  /** Dev builds only, while ground battles are: a space battle or a ground one, and the ground map
+   * (ground/maps.ts) picked for one. */
+  mode?: 'space' | 'ground'
+  groundMap?: string
 }
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
@@ -49,8 +54,13 @@ export { CREDIT_STEPS }
 /** Each slot's start area: the one drawn in the lobby, or a square round its spawn point. */
 export const setupAreas = (s: Setup, map: MapDef): Rect[] => map.spawns.map((_, i) => (s.areasFor === areaKey(map) ? s.areas[i] : null) ?? defaultArea(map, i))
 
-/** The map a setup plays on. */
-export const setupMap = (s: Setup): MapDef => (s.map === GENERATED ? generateMap(s.gen) : (MAP[s.map] ?? MAPS[0]))
+/** The ground map a ground setup plays on (null when ground battles aren't loaded). */
+const groundOf = (s: Setup): MapDef | null => {
+  const maps = groundKit()?.maps()
+  return maps ? (maps.find((m) => m.id === s.groundMap) ?? maps[0] ?? null) : null
+}
+/** The map a setup plays on: a ground map for a ground setup, once ground battles are loaded. */
+export const setupMap = (s: Setup): MapDef => (s.mode === 'ground' && groundOf(s)) || (s.map === GENERATED ? generateMap(s.gen) : (MAP[s.map] ?? MAPS[0]))
 
 /** Slots for a map, keeping what was chosen before where the spawn still exists. */
 function slotsFor(map: MapDef, prev: Slot[] = []): Slot[] {
@@ -91,6 +101,9 @@ function lastSetup(): Setup {
       stations: cleanDefense(v?.stations),
       // Setups saved before the choice: off, as a new lobby has them.
       oreDefense: v?.oreDefense === true,
+      // Dev builds: a ground setup stays one (its slots are fitted to the ground map once it loads).
+      ...(v?.mode === 'ground' ? { mode: 'ground' as const } : {}),
+      ...(typeof v?.groundMap === 'string' ? { groundMap: v.groundMap } : {}),
     }
   } catch {
     return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE }, stations: DEFENSE_DEFAULT, oreDefense: false }
@@ -1048,7 +1061,8 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
     const c = ref.current
     if (!c) return
     let w = world.get(map.id)
-    if (!w) {
+    // A ground map has no rocks: its preview is its tile map.
+    if (!w && !map.ground) {
       // Rerolling a generated map makes a new one each time: keep only the last few.
       if (world.size > 12) world.clear()
       world.set(map.id, (w = newWorld(map, map.spawns.map((_, i) => ({ faction: 'republic', team: i, spawn: i })))))
@@ -1072,9 +1086,14 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
       const cell = 700 * MAP_SCALE
       for (let x = cell; x < map.w; x += cell) g.strokeRect(ox + x * s, oy, 0, map.h * s)
       for (let y = cell; y < map.h; y += cell) g.strokeRect(ox, oy + y * s, map.w * s, 0)
+      const ground = map.ground ? groundKit()?.thumb(map.ground) : null
+      if (ground) {
+        g.imageSmoothingEnabled = true
+        g.drawImage(ground, ox, oy, map.w * s, map.h * s)
+      }
       drawTerrainOverview(g, map, ox, oy, s)
       g.fillStyle = 'rgba(150,150,165,0.45)'
-      for (const r of w!.rocks) {
+      for (const r of w?.rocks ?? []) {
         g.beginPath()
         g.arc(ox + r.x * s, oy + r.y * s, Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
         g.fill()
@@ -1293,19 +1312,28 @@ const mapArea = (m: MapDef) => m.w * m.h
  * player count. The generated map stays pinned at the foot, whatever the search. Arrow keys move
  * through the list and Enter picks; the search box takes the keys while it has the focus.
  */
-export function MapPicker({ current, generated, generatedBlurb, onPick, onClose }: { current: string; generated: MapDef; generatedBlurb: string; onPick: (id: string) => void; onClose: () => void }) {
+export function MapPicker({ current, maps = MAPS, generated, generatedBlurb, onPick, onClose }: {
+  current: string
+  /** The maps to choose from: the space maps, or a ground battle's. */
+  maps?: MapDef[]
+  /** The generated map, pinned at the foot (none for ground battles). */
+  generated: MapDef | null
+  generatedBlurb: string
+  onPick: (id: string) => void
+  onClose: () => void
+}) {
   const coarse = useCoarse()
   const sort = empiresMapSort.use()
   const [query, setQuery] = useState('')
   const [players, setPlayers] = useState<number | null>(null)
-  const counts = useMemo(() => [...new Set(MAPS.map((m) => m.spawns.length))].sort((a, b) => a - b), [])
+  const counts = useMemo(() => [...new Set(maps.map((m) => m.spawns.length))].sort((a, b) => a - b), [maps])
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  const shown = MAPS.filter((m) => (players === null || m.spawns.length === players) && words.every((w) => `${m.name} ${m.blurb}`.toLowerCase().includes(w))).sort((a, b) => {
+  const shown = maps.filter((m) => (players === null || m.spawns.length === players) && words.every((w) => `${m.name} ${m.blurb}`.toLowerCase().includes(w))).sort((a, b) => {
     const by = sort.by === 'size' ? mapArea(a) - mapArea(b) : sort.by === 'players' ? a.spawns.length - b.spawns.length : 0
     return (by || a.name.localeCompare(b.name)) * (sort.desc ? -1 : 1)
   })
   // Every row, the generated map last: what the arrow keys walk through.
-  const ids = [...shown.map((m) => m.id), GENERATED]
+  const ids = [...shown.map((m) => m.id), ...(generated ? [GENERATED] : [])]
   // The selected row, by its map (null: the first), so a new sort keeps it and a new search starts at the top.
   const [selId, setSelId] = useState<string | null>(current)
   const at = selId === null ? 0 : Math.max(0, ids.indexOf(selId))
@@ -1416,10 +1444,14 @@ export function MapPicker({ current, generated, generatedBlurb, onPick, onClose 
               </div>
             )}
           </div>
-          <p className="ew-maplist-sep">{filtered && shown.length ? 'Or build your own' : 'Build your own'}</p>
-          <div data-id={GENERATED} role="none">
-            <MapRow m={generated} title="Generated" blurb={generatedBlurb} on={current === GENERATED} sel={at === shown.length} onPick={() => onPick(GENERATED)} onFocus={() => setSelId(GENERATED)} />
-          </div>
+          {generated && (
+            <>
+              <p className="ew-maplist-sep">{filtered && shown.length ? 'Or build your own' : 'Build your own'}</p>
+              <div data-id={GENERATED} role="none">
+                <MapRow m={generated} title="Generated" blurb={generatedBlurb} on={current === GENERATED} sel={at === shown.length} onPick={() => onPick(GENERATED)} onFocus={() => setSelId(GENERATED)} />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </Modal>
@@ -1429,7 +1461,8 @@ export function MapPicker({ current, generated, generatedBlurb, onPick, onClose 
 /** What the marks on the preview are: only the kinds this map has. With `counts`, how many of each
  * there are (the lobbies' map panel, where this is the map's facts too). */
 export function MapLegend({ map, counts = false }: { map: MapDef; counts?: boolean }) {
-  const items: [string, string, number?][] = [
+  // A ground map: its spawns and kyber crystal fields (its ore, on the preview).
+  const items: [string, string, number?][] = map.ground ? [['spawn', 'Spawn', map.spawns.length], ['ore', 'Crystal field', map.ore.length]] : [
     ['spawn', 'Spawn', map.spawns.length],
     ['ore', 'Ore', map.ore.length],
     ['beacon', 'Beacon', map.beacons.length],
@@ -1538,14 +1571,28 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
   )
 }
 
-// Dev builds only, until ground units can fight: the Space / Ground switch in the skirmish setup and
-// the ground battle behind it (its setup, the battle, and the map viewer). The condition is false in
-// a production build, so the ground chunk is never emitted.
-const GroundBattle = import.meta.env.DEV ? lazy(() => import('./ground/Battle.tsx')) : null
+// Dev builds only, until ground units can fight: the Space / Ground switch in the skirmish setup,
+// which loads ground battles (ground/load.ts) the first time. The condition is false in a production
+// build, so the ground chunk is never emitted.
+const loadGround = import.meta.env.DEV ? () => import('./ground/load.ts').then((m) => m.loadGround()) : null
+/** Dev builds: the ground map viewer (the tile grid, heights and flags), from the ground lobby. */
+const GroundViewer = import.meta.env.DEV ? lazy(() => import('./ground/Viewer.tsx')) : null
 
 export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack: () => void; onLaunch: (s: Setup) => void }) {
   const [setup, setSetup] = useState(lastSetup)
-  const [mode, setMode] = useState<'space' | 'ground'>('space')
+  // A ground setup left from last time loads ground battles first (dev builds only).
+  const [groundOn, setGroundOn] = useState(() => !!groundKit())
+  useEffect(() => {
+    if (setup.mode !== 'ground' || !loadGround) return
+    void (groundOn ? Promise.resolve() : loadGround()).then(() => {
+      setGroundOn(true)
+      // Its slots fitted to the ground map (a setup is saved with the space map's).
+      const to = groundOf(setup)
+      if (to) update({ ...setup, groundMap: to.id, slots: slotsFor(to, setup.slots.slice(0, to.spawns.length)) })
+    })
+  }, [])
+  const ground = !!loadGround && setup.mode === 'ground' && groundOn
+  const [viewer, setViewer] = useState(false)
   const factions = FACTION_IDS
   const [picker, setPicker] = useState(false)
   /** Whose start area a drag on the map redraws. */
@@ -1554,8 +1601,8 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const coarse = useCoarse()
   const [drawing, setDrawing] = useState(false)
   const generated = useMemo(() => generateMap(setup.gen), [setup.gen])
-  const isGen = setup.map === GENERATED
-  const map = isGen ? generated : (MAP[setup.map] ?? MAPS[0])
+  const isGen = !ground && setup.map === GENERATED
+  const map = ground ? setupMap(setup) : isGen ? generated : (MAP[setup.map] ?? MAPS[0])
   const areas = useMemo(() => setupAreas(setup, map), [setup, map])
   const update = (next: Setup) => {
     setSetup(next)
@@ -1567,7 +1614,20 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
     sound.click()
     setActive(0)
     setPicker(false)
-    update({ ...setup, map: id, areas: [], slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
+    if (ground) update({ ...setup, groundMap: id, slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
+    else update({ ...setup, map: id, areas: [], slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
+  }
+  /** Space or ground: the map and the slots follow (ground battles load the first time). */
+  const pickMode = async (m: 'space' | 'ground') => {
+    sound.click()
+    if (m === 'ground' && !groundKit()) {
+      await loadGround?.()
+      setGroundOn(true)
+    }
+    const next = { ...setup, mode: m }
+    const to = m === 'ground' ? (groundOf(next) ?? map) : setup.map === GENERATED ? generated : (MAP[setup.map] ?? MAPS[0])
+    setActive(0)
+    update({ ...next, groundMap: m === 'ground' ? to.id : setup.groundMap, slots: slotsFor(to, setup.slots.slice(0, to.spawns.length)) })
   }
   const setRules = (patch: Partial<MapRules>) => {
     const gen = cleanRules({ ...setup.gen, ...patch })
@@ -1584,10 +1644,10 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const allies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 0).length
   const step = Math.max(0, CREDIT_STEPS.indexOf(setup.credits))
   const act = setup.slots[active]?.kind === 'closed' ? 0 : active
-  if (GroundBattle && mode === 'ground')
+  if (GroundViewer && viewer)
     return (
       <Suspense fallback={null}>
-        <GroundBattle sound={sound} onBack={() => setMode('space')} />
+        <GroundViewer onBack={() => (sound.click(), setViewer(false))} />
       </Suspense>
     )
   return (
@@ -1597,12 +1657,12 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <header className="ew-lobby-head">
           <button onClick={() => (sound.click(), onBack())}>← Main menu</button>
           <h2>Skirmish</h2>
-          {GroundBattle && (
+          {loadGround && (
             <div className="ew-seg" role="group" aria-label="Battle mode (dev builds only)">
-              <button className="is-on" aria-pressed>
+              <button className={ground ? '' : 'is-on'} aria-pressed={!ground} onClick={() => ground && void pickMode('space')}>
                 Space
               </button>
-              <button onClick={() => (sound.click(), setMode('ground'))} aria-pressed={false} data-tip="Ground battles: dev builds only, a first slice with no combat yet">
+              <button className={ground ? 'is-on' : ''} aria-pressed={ground} onClick={() => !ground && void pickMode('ground')} data-tip="Ground battles: dev builds only, a first slice with no combat yet">
                 Ground
               </button>
             </div>
@@ -1626,8 +1686,8 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                       style={{ background: slotColor(s) }}
                       disabled={s.kind === 'closed'}
                       onClick={() => (sound.click(), setActive(i))}
-                      data-tip="Draw this player's start area on the map"
-                      aria-label={`Spawn ${i + 1}: draw its start area`}
+                      data-tip={ground ? `Spawn ${i + 1}: starts on its plateau` : "Draw this player's start area on the map"}
+                      aria-label={ground ? `Spawn ${i + 1}` : `Spawn ${i + 1}: draw its start area`}
                       aria-pressed={i === act}
                     >
                       {i + 1}
@@ -1686,6 +1746,9 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                   <b>{setup.credits.toLocaleString('en-US')}</b>
                 </label>
               </div>
+              {/* Space only: reinforcements, defense stations and platforms on ore. */}
+              {!ground && (
+                <>
               <div className="ew-setting">
                 <h5>Reinforcements</h5>
                 <ReinforceOptions value={setup.reinforce ?? REINFORCE} onChange={(patch) => update({ ...setup, reinforce: cleanReinforce({ ...cleanReinforce(setup.reinforce), ...patch }) })} />
@@ -1698,6 +1761,8 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                 <h5>Defense platforms on ore</h5>
                 <OreDefenseOptions value={setup.oreDefense === true} onChange={(on) => update({ ...setup, oreDefense: on })} />
               </div>
+                </>
+              )}
               {isGen && (
                 <div className="ew-setting">
                   <h5>Generated map</h5>
@@ -1721,11 +1786,16 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                       <Icon name="dice" size={13} /> New seed
                     </button>
                   )}
+                  {ground && GroundViewer && (
+                    <button className="ew-chip" onClick={() => (sound.click(), setViewer(true))} data-tip="Dev: the ground map viewer (tile grid, heights, flags)">
+                      Map viewer
+                    </button>
+                  )}
                   <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>
                 </span>
               }>
-              <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} fingerDraws={drawing || !coarse} />
-              <div className="ew-areahint">
+              <MapPreview map={map} slots={setup.slots} areas={ground ? undefined : areas} active={act} onArea={ground ? undefined : setArea} onPick={(i) => (sound.click(), setActive(i))} fingerDraws={drawing || !coarse} />
+              {!ground && <div className="ew-areahint">
                 <span className="ew-small">
                   <i className="ew-dot" style={{ background: slotColor(setup.slots[act]) }} />
                   {coarse ? (
@@ -1746,7 +1816,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                 <button className="ew-chip" disabled={!setup.areas.some(Boolean)} onClick={() => (sound.click(), update({ ...setup, areas: [] }))}>
                   Reset areas
                 </button>
-              </div>
+              </div>}
               <MapLegend map={map} counts />
               <MapBlurb map={map} />
             </Frame>
@@ -1765,9 +1835,10 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
       {picker && (
         <MapPicker
           current={isGen ? GENERATED : map.id}
-          generated={generated}
+          maps={ground ? groundKit()?.maps() : undefined}
+          generated={ground ? null : generated}
           generatedBlurb={`From your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them in Battle settings after picking it.`}
-          onPick={(id) => (id === GENERATED ? pickMap(generated, GENERATED) : pickMap(MAP[id] ?? MAPS[0]))}
+          onPick={(id) => (id === GENERATED ? pickMap(generated, GENERATED) : pickMap(ground ? (groundKit()?.maps().find((m) => m.id === id) ?? map) : (MAP[id] ?? MAPS[0])))}
           onClose={() => setPicker(false)}
         />
       )}

@@ -57,8 +57,10 @@ export function groundMapOf(id: string): GroundMap | null {
 }
 
 const defs = new Map<string, MapDef>()
-/** The space game's map for ground map `id`: its size and spawns from the ground map, no ore,
- * beacons, rocks, fields, nebulas or wrecks, and `ground` naming the terrain. Null when none. */
+/** The space game's map for ground map `id`: its size and spawns from the ground map, its kyber
+ * crystal fields as its ore (for the lobby's preview and counts: a ground battle mines nothing from
+ * them yet), no beacons, rocks, fields, nebulas or wrecks, and `ground` naming the terrain. Null when
+ * none. */
 export function groundMapDef(id: string): MapDef | null {
   let d = defs.get(id)
   if (!d) {
@@ -66,7 +68,7 @@ export function groundMapDef(id: string): MapDef | null {
     if (!g) return null
     d = {
       id, name: g.def.name, blurb: g.def.blurb, w: g.grid.cols * TILE, h: g.grid.rows * TILE, spawns: g.spawns.map((p) => ({ x: p.x, y: p.y })),
-      ore: [], beacons: [], sym: g.def.sym, rocks: 0, seed: g.def.seed, fields: [], nebulas: [], wrecks: [], ground: id,
+      ore: g.deposits.map((p) => ({ x: p.x, y: p.y })), beacons: [], sym: g.def.sym, rocks: 0, seed: g.def.seed, fields: [], nebulas: [], wrecks: [], ground: id,
     }
     defs.set(id, d)
   }
@@ -115,12 +117,16 @@ const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi 
 const TAU = Math.PI * 2
 const wrap = (a: number) => a - TAU * Math.floor((a + Math.PI) / TAU)
 
+/** Which way a building faces: its model's nose up, so it is drawn unturned (ships are drawn turned
+ * by their heading plus a quarter turn), its door to the south. */
+const FACING = -Math.PI / 2
+
 /** A new building of type `t` for `owner` with its footprint's top-left on tile (c, r): finished,
  * stamped on the nav grid (from the next flush), facing south. Whether it may stand there is the
  * caller's to check: the battle's start, the checks and the dev cheats use it. */
 export function raiseBuilding(w: World, t: UnitType, owner: Owner, c: number, r: number): Unit {
   const [fw, fh] = spec(t).foot!
-  const u = spawn(w, t.id, owner, (c + fw / 2) * TILE, (r + fh / 2) * TILE, Math.PI / 2)
+  const u = spawn(w, t.id, owner, (c + fw / 2) * TILE, (r + fh / 2) * TILE, FACING)
   u.foot = { c, r, on: false }
   u.yq = []
   stampDown(w, u)
@@ -908,7 +914,7 @@ export function groundPlace(w: World, owner: Owner, crew: Unit[], unitId: string
   if (pl.why) return pl.why
   const t = UNIT[unitId]
   spend(w, w.players[owner], pl.cost, 'structures', t.name)
-  const site = spawn(w, unitId, owner, pl.x, pl.y, Math.PI / 2)
+  const site = spawn(w, unitId, owner, pl.x, pl.y, FACING)
   site.building = t.build
   site.hull = site.hullMax * 0.1
   site.site = { paid: pl.cost, started: false }
