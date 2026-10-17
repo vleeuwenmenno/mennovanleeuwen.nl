@@ -26,7 +26,8 @@
   flex: 1;
   min-height: 0;
 }
-.ew-groundview-stage canvas {
+.ew-groundview-stage canvas,
+.ew-groundview-stage canvas.ew-groundview-ground {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -34,6 +35,9 @@
   display: block;
   touch-action: none;
   cursor: grab;
+}
+.ew-groundview-stage canvas.ew-groundview-ground {
+  pointer-events: none;
 }
 .ew-groundview-stage canvas:active {
   cursor: grabbing;

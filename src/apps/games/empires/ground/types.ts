@@ -111,6 +111,45 @@ export type GroundMapDef = {
   sketch: string[]
   /** Which textures and props the map uses (the first slice: 'temperate': dirt, grass, rocky). */
   biome: 'temperate'
+  /** A mirror the space maps' symmetries don't have: 'diagonal' mirrors a square map across the line
+   * from its top right corner to its bottom left, so two bases in the other corners face each other
+   * across it and anything lying on that line (a river's bridge and ford) is shared by both. When
+   * set, `sym` is 'none'. */
+  mirror?: 'diagonal'
+  /** Shapes drawn by hand over the sketch (round 2 maps), in tile units: see GroundFeatures. */
+  features?: GroundFeatures
+}
+
+/** A point in tile units: [column, row], fractions allowed. */
+export type TilePt = [number, number]
+
+/**
+ * A map's hand-drawn shapes, in tile units, laid over its sketch in this order: plateaus raise the
+ * ground (their edges become cliffs, wobbled by the seed), ramps cut slopes up them, rivers carve
+ * water (deep in the middle, shallow at the banks) with bridges and fords across, roads are dirt
+ * tracks, forests are solid woods (blocked), and deposits are kyber crystal fields. Shapes may be
+ * drawn over the whole map; the map's symmetry then copies one side's tiles onto the other, so the
+ * sides always match exactly.
+ */
+export type GroundFeatures = {
+  /** Raised ground: a polygon and the level it stands at (1 or 2). */
+  plateaus?: { level: number; pts: TilePt[] }[]
+  /** A ramp from `from` (its foot, on the lower ground) to `to` (its top), `width` tiles wide. */
+  ramps?: { from: TilePt; to: TilePt; width: number }[]
+  /** A river along a polyline, `width` tiles wide. */
+  rivers?: { pts: TilePt[]; width: number }[]
+  /** A bridge from bank to bank, `width` tiles wide. */
+  bridges?: { from: TilePt; to: TilePt; width: number }[]
+  /** A ford: the stretch of river within `radius` tiles of `at` is shallow and walkable. */
+  fords?: { at: TilePt; radius: number }[]
+  /** A dirt road along a polyline, `width` tiles wide. */
+  roads?: { pts: TilePt[]; width: number }[]
+  /** A forest: a polygon of solid wood. */
+  forests?: TilePt[][]
+  /** Kyber crystal fields: their middles. */
+  deposits?: TilePt[]
+  /** Start spots on the plateaus. */
+  spawns?: TilePt[]
 }
 
 /**
