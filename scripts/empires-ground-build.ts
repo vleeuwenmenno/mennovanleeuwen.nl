@@ -1,7 +1,7 @@
 // Building and training in ground battles, part of check:ground (scripts/empires-ground.ts runs it).
 //
 // 1. Placement: on Dustfall Ridge, every placement rule refuses somewhere with its own reason
-//    (unexplored, unbuildable, a deposit, uneven ground, built on, blocking a door, outside the
+//    (unbuildable, a deposit, uneven ground, built on, blocking a door, outside the
 //    command range, too near the enemy, enemy units on it, no room at its own door, credits), the
 //    failing tiles show red, and an order to place there is refused with the same reason.
 // 2. A scripted battle, two copies side by side plus a replay from the logged inputs, all hashing
@@ -42,10 +42,6 @@ function find(w: GroundWorld, owner: number, type: string, why: string | null, n
   return null
 }
 
-function exploreAll(w: GroundWorld) {
-  for (const ex of w.fog.explored) ex.fill(0xff)
-}
-
 // --- 1. Placement rules -----------------------------------------------------------------------------
 
 function placementRules(check: Check) {
@@ -65,10 +61,6 @@ function placementRules(check: Check) {
     // The ghost: every tile checked, and red ones only for the rules about tiles.
     check(`  ...and checks every tile of the footprint`, p.tiles.length === GROUND_UNIT[type].foot![0] * GROUND_UNIT[type].foot![1])
   }
-  // Before anything is explored beyond the base.
-  expect('unexplored', R.center, 'Unexplored ground')
-  // Explored everywhere from here on, so the other rules can be reached anywhere.
-  exploreAll(w)
   expect('terrain', R.center, 'Not on buildable ground')
   expect('deposit', 'test-block', 'A deposit is in the way')
   expect('built on', R.center, 'Something is built there')

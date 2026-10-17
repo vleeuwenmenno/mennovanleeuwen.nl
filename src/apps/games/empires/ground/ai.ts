@@ -5,9 +5,9 @@ import { TILE, type Pt } from './types.ts'
 
 // The ground battle's AI, passive for the slice (plan D11): on its seat it trains a few engineers,
 // expands with a second Command Center somewhere sensible (beside a deposit on its own side of the
-// map, scouting the ground there first), finishes its sites and repairs its buildings, and builds
-// nothing hostile. It reads only what its team knows (its own units, its explored ground and the
-// enemy buildings it remembers; placement goes by the same fog), takes its timing from the world's
+// map), finishes its sites and repairs its buildings, and builds
+// nothing hostile. It reads only what its team knows (its own units, the land, which every side
+// sees from orbit, and the enemy buildings it remembers; placement goes by the same knowledge), takes its timing from the world's
 // clock and random stream, and gives every order through the order table, as the space AI does, so
 // every copy of a battle makes the same choices.
 
@@ -15,15 +15,13 @@ export type GroundBrain = {
   o: Owner
   /** Seconds to its next decision. */
   t: number
-  /** The engineer it sent to scout an expansion spot (0: none). */
-  scout: number
   /** The site it is waiting on, and since when (world seconds): one that never gets started is
    * called off. */
   site: number
   siteAt: number
 }
 
-export const newGroundBrain = (o: Owner): GroundBrain => ({ o, t: 1.5, scout: 0, site: 0, siteAt: 0 })
+export const newGroundBrain = (o: Owner): GroundBrain => ({ o, t: 1.5, site: 0, siteAt: 0 })
 
 /** Seconds between decisions (give or take a fifth). */
 const THINK = 2
@@ -87,31 +85,18 @@ export function groundThink(w: GroundWorld, b: GroundBrain, dt: number) {
   if (centers.length >= CENTERS || !standing.length || centers.some((c) => c.site)) return
   const cost = GROUND_UNIT[ids.center].cost ?? 0
   if (p.credits < cost * 0.6) return
-  const { spot, scout } = expansionSpot(w, o, ids.center, standing[0])
+  const spot = expansionSpot(w, o, ids.center, standing[0])
+  if (!spot || p.credits < cost) return
   const free = engineers.filter((u) => !u.orders.some((x) => x.k === 'build'))
-  if (spot && p.credits >= cost) {
-    const builder = (free.length ? free : engineers).slice().sort((a, c) => d2(a, spot) - d2(c, spot) || a.id - c.id)[0]
-    if (builder) say(groundCmd('place', [builder.id], ids.center, spot.x, spot.y, false))
-    b.scout = 0
-    return
-  }
-  // Nowhere it knows of yet: send one engineer to look at the best spot.
-  const scouting = w.byId.get(b.scout)
-  if (scout && (!scouting || scouting.dead || !scouting.orders.length)) {
-    const who = free.sort((a, c) => d2(a, scout) - d2(c, scout) || a.id - c.id)[0]
-    if (who) {
-      say(groundCmd('move', [who.id], scout.x, scout.y, false))
-      b.scout = who.id
-    }
-  }
+  const builder = (free.length ? free : engineers).slice().sort((a, c) => d2(a, spot) - d2(c, spot) || a.id - c.id)[0]
+  if (builder) say(groundCmd('place', [builder.id], ids.center, spot.x, spot.y, false))
 }
 
 /**
  * Where to put a new Command Center: beside the deposits nearer home than any enemy building it
- * knows of, nearest home first, the first spot the placement accepts. `scout`: the first spot it
- * can't judge because the ground there is unexplored.
+ * knows of, nearest home first, the first spot the placement accepts.
  */
-function expansionSpot(w: GroundWorld, o: Owner, type: string, home: GroundUnit): { spot: Pt | null; scout: Pt | null } {
+function expansionSpot(w: GroundWorld, o: Owner, type: string, home: GroundUnit): Pt | null {
   const enemies = [...(w.memory[teamOf(w, o)]?.values() ?? [])].map((k) => {
     const [fw, fh] = GROUND_UNIT[k.type].foot!
     return { x: (k.tc + fw / 2) * TILE, y: (k.tr + fh / 2) * TILE }
@@ -120,14 +105,12 @@ function expansionSpot(w: GroundWorld, o: Owner, type: string, home: GroundUnit)
     .map((d, i) => ({ d, i, far: d2(d, home) }))
     .filter(({ d, far }) => enemies.every((e) => d2(d, e) > far))
     .sort((a, c) => a.far - c.far || a.i - c.i)
-  let scout: Pt | null = null
   for (const { d } of deposits)
     for (const [dx, dy] of AROUND) {
       const k = BESIDE / Math.sqrt(dx * dx + dy * dy)
       const at = { x: d.x + dx * k * TILE, y: d.y + dy * k * TILE }
       const pl = placement(w, o, type, at.x, at.y)
-      if (!pl.why) return { spot: at, scout }
-      if (!scout && pl.why === 'Unexplored ground') scout = at
+      if (!pl.why) return at
     }
-  return { spot: null, scout }
+  return null
 }

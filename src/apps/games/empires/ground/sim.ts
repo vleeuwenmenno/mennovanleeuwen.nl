@@ -62,7 +62,7 @@ export type GroundUnitType = {
   /** Buildings: how far its command range reaches, in tiles from its middle (DEFAULT_RANGE when
    * left out). */
   range?: number
-  /** Buildings: may go up anywhere explored at least STANDALONE_GAP tiles from a known enemy
+  /** Buildings: may go up anywhere at least STANDALONE_GAP tiles from a known enemy
    * building (build.ts), not only inside our command range: a Command Center starting a new base. */
   standalone?: boolean
   /** Buildings: the unit types it trains, in card order. */

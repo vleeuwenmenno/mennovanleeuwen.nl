@@ -2,7 +2,7 @@ import { FACTIONS } from '../data.ts'
 import { drawHull } from '../models/paint.ts'
 import type { HullState, Model } from '../models/types.ts'
 import { commandAreas, groundDrawSize, groundModel, shownTo, siteProgress, type Placement } from './build.ts'
-import { explored, sees } from './fog.ts'
+import { sees } from './fog.ts'
 import { GROUND_UNIT, teamOf, typeOf, type GroundUnit, type GroundWorld, type Owner } from './sim.ts'
 import { TF, TILE, type GroundMap } from './types.ts'
 
@@ -366,7 +366,7 @@ export function drawGhost(ctx: CanvasRenderingContext2D, w: GroundWorld, type: s
     return
   }
   // Our command range, where a building may go (a standalone one, such as a Command Center, may go
-  // anywhere explored away from the enemy instead).
+  // anywhere away from the enemy instead).
   if (!GROUND_UNIT[type]?.standalone) {
     ctx.strokeStyle = OWN
     ctx.globalAlpha = 0.45
@@ -446,11 +446,15 @@ export function drawBox(ctx: CanvasRenderingContext2D, a: { x: number; y: number
 
 /**
  * The fog of war as one pixel per tile, scaled up over the map with smoothing so its edges come out
- * soft for one drawImage a frame: black where the team has never looked, grey over explored ground
- * (with the buildings last seen there under it), clear in sight. Filled again after each fog refresh,
+ * soft for one drawImage a frame: clear in sight, and a half-dark veil everywhere else. Never black:
+ * a side always has eyes in orbit, so the land itself (terrain, cliffs, props) is known from the
+ * start; what moves on it is not. Enemy buildings show under the veil as last seen. Filled again after each fog refresh,
  * with a small blur first (a binomial kernel, five tiles wide) so a sight disc's stepped edge reads
  * as a round, soft one once scaled up.
  */
+/** The fog's alpha outside our sight (0-255): dims the land without hiding it. */
+const VEIL = 120
+
 export class FogShade {
   readonly canvas: HTMLCanvasElement
   private g: CanvasRenderingContext2D
@@ -479,7 +483,7 @@ export class FogShade {
   update(w: GroundWorld, team: number, reveal: boolean) {
     const { cols, rows, a, b } = this
     const n = cols * rows
-    for (let i = 0; i < n; i++) a[i] = reveal || sees(w.fog, team, i) ? 0 : explored(w.fog, team, i) ? 125 : 255
+    for (let i = 0; i < n; i++) a[i] = reveal || sees(w.fog, team, i) ? 0 : VEIL
     // Blur [1 4 6 4 1] / 16 across, then down (edges clamped).
     const cl = (k: number, hi: number) => (k < 0 ? 0 : k > hi ? hi : k)
     for (let r = 0; r < rows; r++) {

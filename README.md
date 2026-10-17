@@ -3401,11 +3401,12 @@ orders, then the AI, then the sim.
 
 **Placing a building** ([`ground/build.ts`](src/apps/games/empires/ground/build.ts), `placement`).
 The ghost checks every tile of the footprint and reports the first rule that fails, in this order:
-1. Every tile is explored, buildable (no ramp, cliff, water or blocking prop), off deposits, on one
+1. Every tile is buildable (no ramp, cliff, water or blocking prop), off deposits, on one
    level, and free of buildings and of the row in front of another building's door.
 2. It is inside the command range of one of our buildings (a Command Center reaches 14 tiles, others
-   6). A Command Center may instead go anywhere explored at least 20 tiles from an enemy building we
-   know of.
+   6). A Command Center may instead go anywhere at least 20 tiles from an enemy building we know of.
+   The land is known everywhere from the start (a side always has eyes in orbit), so no tile needs
+   exploring first; enemies only count where we see or remember them.
 3. No enemy unit we can see stands on it.
 4. The row of tiles in front of its door is open, so units can always roll out.
 5. There are enough credits.
@@ -3432,8 +3433,7 @@ bar.
 **The AI** ([`ground/ai.ts`](src/apps/games/empires/ground/ai.ts)) is passive in the slice: every
 two seconds or so it trains engineers one at a time (two with one Command Center, four with two),
 saves up and expands with a second Command Center beside the deposit nearest home on its own side of
-the map (sending an engineer to scout the ground there first, since it may only build on explored
-ground), sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
+the map, sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
 start within 90 seconds, and builds nothing hostile. It reads only what its team knows, takes its
 timing from the world's clock and random stream, and gives its orders through the order table, so
 every copy of a battle makes the same choices.
@@ -3470,10 +3470,12 @@ renderer's hooks:
   on the ground, under units and the fog, so they fade out where the fog covers the ground: a thin
   green line on a dark under-stroke so they read on any terrain;
 - the fog of war is a canvas of one pixel per tile, blurred a little and scaled up with smoothing:
-  black where your side never looked, grey over explored ground, clear in sight. Enemy buildings
-  stay on the explored ground as last seen, until you see that they're gone;
+  clear in sight and a half-dark veil everywhere else, never black: a side always has eyes in orbit,
+  so the land (terrain, cliffs, props) shows everywhere, while units outside our sight stay hidden.
+  Enemy buildings stay under the veil as last seen, until you see that they're gone;
 - the enemy start spots are marked from the first second, over the fog;
-- the minimap has the terrain, the fog, buildings and units as dots, and the view's frame.
+- the minimap has the terrain (all of it, veiled outside our sight), buildings and units as dots, and
+  the view's frame.
 
 **Controls (mouse and keyboard):**
 - click selects, Shift-click adds or drops one, a drag draws a selection box (vehicles before

@@ -3,7 +3,7 @@ import type { Model } from '../models/types.ts'
 import { groundModelFor } from '../models/ground.ts'
 import { TF, TILE, canStep } from './types.ts'
 import { onMap } from './nav.ts'
-import { explored, seesAt } from './fog.ts'
+import { seesAt } from './fog.ts'
 import { DEFAULT_RANGE } from './units.ts'
 import {
   GROUND_UNIT, GROUND_UNITS, MAX_ORDERS, addSite, footDist, needsWork, own, removeUnit, seesFoot, spotsTaken, teamOf, typeOf, workSpot,
@@ -15,8 +15,9 @@ import {
 // between the sim side and the battle screen (which only calls these). The work itself (sites that
 // start and grow, repairs, training queues, income) runs in the sim's tick (sim.ts, "Works").
 //
-// What a player knows decides what they may do: placement goes by the team's fog (explored ground,
-// enemy units it sees, enemy buildings it sees or remembers), never by what it can't see. A site on
+// What a player knows decides what they may do. The land itself is known everywhere (a side always
+// has eyes in orbit), so any ground may be built on; enemies go by the team's fog (enemy units it
+// sees, enemy buildings it sees or remembers), never by what it can't see. A site on
 // ground where a hidden enemy building already stands is accepted, and given up with a full refund
 // when its engineer gets there (sim.ts startSite).
 
@@ -81,10 +82,10 @@ const doorOf = (f: Foot, c: number, r: number) => r === f.tr + f.fh && c >= f.tc
 
 /** Why one tile can't be under a building, by the placement's first rule; '' when it can. In the
  * order the reasons are reported. */
-const TILE_RULES = ['Unexplored ground', 'Not on buildable ground', 'A deposit is in the way', 'The ground must be level', 'Something is built there', "It would block a building's door"] as const
+const TILE_RULES = ['Not on buildable ground', 'A deposit is in the way', 'The ground must be level', 'Something is built there', "It would block a building's door"] as const
 
 /** Where building `type` would go with its footprint centred as near (x, y) as the grid allows.
- * The rules, in order: every tile explored, buildable, on one level and free of deposits and
+ * The rules, in order: every tile buildable, on one level and free of deposits and
  * buildings (and of other buildings' doors); inside the command range of one of our buildings, or
  * for a standalone one (a Command Center) anywhere at least STANDALONE_GAP tiles from a known enemy
  * building; no enemy unit we see on it; its door row free; enough credits. */
@@ -108,19 +109,17 @@ export function placement(w: GroundWorld, owner: Owner, type: string, x: number,
     for (let c = tc; c < tc + fw; c++) {
       const i = r * cols + c
       const f = g.flags[i]
-      const rule = !explored(w.fog, team, i)
+      const rule = f & (TF.blocked | TF.water | TF.noBuild | TF.ramp)
         ? 0
-        : f & (TF.blocked | TF.water | TF.noBuild | TF.ramp)
+        : f & TF.deposit
           ? 1
-          : f & TF.deposit
+          : g.height[i] !== level
             ? 2
-            : g.height[i] !== level
+            : feet.some((k) => covers(k, c, r))
               ? 3
-              : feet.some((k) => covers(k, c, r))
+              : feet.some((k) => doorOf(k, c, r))
                 ? 4
-                : feet.some((k) => doorOf(k, c, r))
-                  ? 5
-                  : -1
+                : -1
       tiles.push({ tc: c, tr: r, ok: rule < 0 })
       if (rule >= 0) worst = Math.min(worst, rule)
     }
@@ -129,11 +128,11 @@ export function placement(w: GroundWorld, owner: Owner, type: string, x: number,
   const dr = tr + fh
   for (let c = tc; c < tc + fw; c++) {
     const i = dr * cols + c
-    const ok = dr < rows && explored(w.fog, team, i) && (g.flags[i] & TF.blocked) === 0 && canStep(g, i - cols, i) && !feet.some((k) => covers(k, c, dr))
+    const ok = dr < rows && (g.flags[i] & TF.blocked) === 0 && canStep(g, i - cols, i) && !feet.some((k) => covers(k, c, dr))
     door.push({ tc: c, tr: dr, ok })
   }
   const out = (why: string | null): Placement => ({ why, tc, tr, cost, tiles, door })
-  if (worst < TILE_RULES.length && worst !== 5) return out(TILE_RULES[worst])
+  if (worst < TILE_RULES.length && worst !== 4) return out(TILE_RULES[worst])
   // 2. Command range: near one of our buildings, or (standalone) away from the enemy's.
   const cx = (tc + fw / 2) * TILE
   const cy = (tr + fh / 2) * TILE
@@ -156,7 +155,7 @@ export function placement(w: GroundWorld, owner: Owner, type: string, x: number,
   }
   // 4. Doors: its own, and the ones it would stand in front of.
   if (!door.every((d) => d.ok)) return out('No room in front of its door')
-  if (worst === 5) return out(TILE_RULES[5])
+  if (worst === 4) return out(TILE_RULES[4])
   // 5. Credits.
   if (p.credits < cost) return out('Not enough credits')
   return out(null)
