@@ -351,7 +351,7 @@ const groundBase: Scene = {
         return ids
       }
       const ours = block(0, 24, cx - 520, cy - 160)
-      const theirs = block(1, 12, cx + 260, cy - 120)
+      const theirs = block(1, 12, cx - 40, cy + 120)
       sim.cmdMove(w, 0, ours, cx + 500, cy, false)
       sim.cmdMove(w, 1, theirs, cx - 500, cy, false)
       Object.assign(g.view, { x: cx - 300, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 2400)) })
