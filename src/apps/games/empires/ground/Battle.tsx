@@ -12,7 +12,7 @@ import type { EmpiresSound } from '../sound.ts'
 import { LongPress, TAP_SLOP, TouchBar, WheelHost, getTouchMods, isTouch, shiftOf, useWheel, type WheelItem, type WheelRequest } from '../Touch.tsx'
 import { buildable, cantTrain, incomeOf, placement, queueOf, siteProgress, trainable, type Placement } from './build.ts'
 import { cleanGroundCmd, groundCmd, type GroundCmd } from './commands.ts'
-import { FogShade, MiniMap, OWN, drawBox, drawGhost, drawPings, drawRally, drawRings, drawStarts, drawUnits, modelOf, seenNow, type Look, type Ping } from './draw.ts'
+import { FogShade, MiniMap, OWN, drawBox, drawGhost, drawPings, drawRally, drawRings, drawRoutes, drawStarts, drawUnits, modelOf, seenNow, type Look, type Ping } from './draw.ts'
 import { GROUND_MAPS } from './maps.ts'
 import { GroundRenderer, type GroundView } from './render.ts'
 import { startGroundBattle, stepGround, type GroundBattle as Match } from './match.ts'
@@ -569,6 +569,7 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
     const layers = {
       ground: (g: CanvasRenderingContext2D) => {
         drawRings(g, w, look)
+        drawRoutes(g, w, look)
         for (const id of sel()) {
           const u = w.byId.get(id)
           const r = u && !u.dead && u.owner === ME ? u.rally : null

@@ -251,6 +251,49 @@ export function drawRings(ctx: CanvasRenderingContext2D, w: GroundWorld, look: L
   ctx.globalAlpha = 1
 }
 
+/** The order lines' colour, as the space battle's move lines (render.ts). */
+const ROUTE = 'rgba(125,255,160,0.3)'
+
+/**
+ * Where our selected units are going: the current move (or the drive to a building site) along the
+ * waypoints its path really takes, from where the unit is now, as a smooth curve (each waypoint
+ * pulls the line towards it, the line passing halfway between them), as the space battle draws its
+ * move lines. A walled-in move ends where the unit will stop. Queued orders follow as straight legs
+ * from one destination to the next, and each destination gets a small dot.
+ */
+export function drawRoutes(ctx: CanvasRenderingContext2D, w: GroundWorld, look: Look) {
+  const px = 1 / look.zoom
+  ctx.strokeStyle = ROUTE
+  ctx.fillStyle = ROUTE
+  ctx.lineWidth = 1.5 * px
+  for (const id of look.selected) {
+    const u = w.byId.get(id)
+    if (!u || u.dead || u.owner !== look.me || !u.orders.length) continue
+    const o = u.orders[0]
+    // The path is the current order's (it is found again at the next tick after a new order).
+    const path = u.pv >= 0 ? u.path : []
+    const end = u.short && path.length ? path[path.length - 1] : { x: o.x, y: o.y }
+    const pts: { x: number; y: number }[] = [u]
+    for (const p of path) if (p.x !== end.x || p.y !== end.y) pts.push(p)
+    pts.push(end)
+    ctx.beginPath()
+    ctx.moveTo(u.x, u.y)
+    for (let i = 1; i < pts.length - 1; i++) ctx.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2)
+    ctx.lineTo(end.x, end.y)
+    // Queued orders: on from each destination to the next.
+    for (let i = 1; i < u.orders.length; i++) ctx.lineTo(u.orders[i].x, u.orders[i].y)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(end.x, end.y, 3.5 * px, 0, TAU)
+    for (let i = 1; i < u.orders.length; i++) {
+      const q = u.orders[i]
+      ctx.moveTo(q.x + 3.5 * px, q.y)
+      ctx.arc(q.x, q.y, 3.5 * px, 0, TAU)
+    }
+    ctx.fill()
+  }
+}
+
 /** Order markers: a ring that shrinks where a move or rally went, for a moment. */
 export type Ping = { x: number; y: number; at: number; col: string }
 const PING_S = 0.6
