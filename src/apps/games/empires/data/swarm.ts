@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -253,6 +253,20 @@ const BROODMOTHER: UnitType = {
 /** A warship's layout at its size: the same points and sizes as written. */
 const asWritten = (t: UnitType): Layout => t.hardpoints.map((h) => ({ x: h.x, y: h.y, s: h.s }))
 
+/** Ground battles: the Swarm's low crawler, which builds like the others for now, and its Hive Nexus. */
+const GROUND: UnitType[] = [
+  groundEngineer({
+    id: 's-g-engineer', faction: 'swarm', name: 'Shaper drone', sprite: 'swarm-g-engineer',
+    blurb: 'A low crawler with mandibles that spits resin. Cheap and quick to grow: it raises Hive Nexuses and knits damaged ones back together.',
+    hull: 120, cost: 130, build: 10, speed: 96, turn: 4.8, ground: { radius: 10, accel: 240, builds: ['s-g-center'] },
+  }),
+  groundCenter({
+    id: 's-g-center', faction: 'swarm', name: 'Hive Nexus', sprite: 'swarm-g-center',
+    blurb: 'A chitin mound round a glowing violet core. It grows Shaper drones, earns a steady trickle of credits, and buildings go up within 14 tiles of it.',
+    hull: 5400, cost: 1200, build: 60, ground: { trains: ['s-g-engineer'] },
+  }),
+]
+
 export const SWARM: FactionData = {
   id: 'swarm',
   info: {
@@ -438,6 +452,7 @@ export const SWARM: FactionData = {
     's-battleship': asWritten(BROODMOTHER),
   },
   // The Guardian (Galactic conquest): a living defense organism that grows weapon lobes as it matures.
+  ground: GROUND,
   orbital: {
     name: 'Guardian',
     blurb: 'A living defense organism anchored in orbit beside the Hive: a chitin bulb round a violet core that grows weapon lobes as it matures. Each level adds module slots, and each slot grows the organ we pick for it. No shields; its hull grows back between attacks.',

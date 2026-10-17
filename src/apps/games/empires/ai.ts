@@ -3,7 +3,7 @@ import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, REPAIR_TIME, REPAIR_FIRE, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World, groundHooks,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -194,6 +194,10 @@ export const profileOf = (v: unknown): Profile => (typeof v === 'string' && (PRO
 
 export type Brain = {
   o: Owner
+  /** Ground battles (ground/think.ts): the site of ours it is waiting on to be started, and since when
+   * (world seconds); one that never gets started is called off. Absent in space battles. */
+  gSite?: number
+  gSiteAt?: number
   diff: Difficulty
   /** How it plays (see PROFILES). Brains saved before profiles play Balanced. */
   profile: Profile
@@ -777,6 +781,8 @@ export function think(w: World, b: Brain, dt: number) {
   b.t = D.think * (0.8 + rand(w) * 0.4)
   const o = b.o
   const p = w.players[o]
+  // A ground battle has decisions of its own (ground/think.ts).
+  if (w.ground) return groundHooks()!.think(w, b)
   const st = w.byId.get(p.station)
   if (!st || st.dead) return
   const team = p.team

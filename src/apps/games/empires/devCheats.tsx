@@ -71,8 +71,10 @@ export type DevCtx = {
 }
 
 /** Ships and structures to spawn: every faction's, except stations (one per player) and mining
- * platforms (they need an ore asteroid). Yards only where the battle has hybrid bases. */
-const spawnable = (w: World) => Object.values(UNIT).filter((t) => t.tier !== 'station' && t.tier !== 'mine' && (t.tier !== 'yard' || w.hybrid))
+ * platforms (they need an ore asteroid). Yards only where the battle has hybrid bases. A ground
+ * battle spawns only its vehicles (its buildings stand on the tile grid, which a plain spawn doesn't
+ * do), and a space battle no ground units. */
+const spawnable = (w: World) => Object.values(UNIT).filter((t) => (t.ground ? !!w.ground && t.tier === 'vehicle' : !w.ground && t.tier !== 'station' && t.tier !== 'mine' && (t.tier !== 'yard' || w.hybrid)))
 
 /** Spawns `n` of a unit for `owner` in a loose grid round (x, y), facing the middle of the map. */
 function spawnAt(w: World, id: string, owner: Owner, x: number, y: number, n: number) {

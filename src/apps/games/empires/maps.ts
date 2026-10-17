@@ -44,6 +44,9 @@ export type MapDef = {
   /** How far round each spawn the scattered rocks keep clear (left out: a station's build radius
    * round every one). A Galactic conquest planet's entry zones need less than its home. */
   keep?: number[]
+  /** A ground battle's map: the id of its ground map (ground/maps.ts GROUND_MAP), whose terrain the
+   * battle is fought on (see ground/world.ts). Space maps have none. */
+  ground?: string
 }
 export type Wreckage = Pt & { value: number }
 

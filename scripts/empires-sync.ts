@@ -14,7 +14,9 @@
 // so the admirals put up defense stations, upgrade them and fit their modules early, frozen while
 // they stand, and one with defense platforms on ore turned on (off in a new lobby), where every
 // player puts one on the ore nearest its station at the start (the admirals fill their claims with
-// mines first), frozen with them standing.
+// mines first), frozen with them standing. Last, a ground battle (a map with terrain, ground/world.ts):
+// two admirals on Dustfall Ridge, frozen midway too, its hash printed apart, so the space ones stay
+// comparable; the admirals must train engineers and expand.
 
 import { MAPS, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { STEP, cmdSite, defensesOf, newWorld, stateHash, tick, type World } from '../src/apps/games/empires/sim.ts'
@@ -22,6 +24,7 @@ import { FACTIONS } from '../src/apps/games/empires/data.ts'
 import { PROFILE_IDS, newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { outdatedSnapshot, restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import type { FactionId } from '../src/apps/games/empires/data.ts'
+import { groundMapDef } from '../src/apps/games/empires/ground/world.ts'
 
 const minutes = Number(process.argv[2] ?? 6)
 const map = MAPS.find((m) => m.spawns.length === 4) ?? MAPS[0]
@@ -136,6 +139,17 @@ if (!failed && !plats) {
   console.error('the battle with defense platforms on ore never built one')
   failed = true
 }
+// A ground battle: the admirals train engineers and expand on Dustfall Ridge.
+const dust = groundMapDef('dustfall-ridge')!
+const land = lockstep(seatsOf(['republic', 'droid'], dust), Math.max(2, minutes / 2), 'a ground battle', { m: dust })
+console.log(`final hash on the ground ${stateHash(land.w).toString(16)}`)
+const centers = land.w.units.filter((u) => !u.dead && u.t.tier === 'building' && !u.site).length
+const engineers = land.w.units.filter((u) => !u.dead && u.t.tier === 'vehicle').length
+console.log(`on the ground: ${centers} Command Centers standing, ${engineers} engineers`)
+if (!failed && (centers < 3 || engineers < 4)) {
+  console.error('the admirals in the ground battle never trained engineers and expanded')
+  failed = true
+}
 // Battles saved before there was one ship size: one fought at Big sizes (snapshot version 1 with
 // `sizes: 'big'`) carries on; one fought at Classic sizes is refused, and said to be outdated.
 const saved = JSON.parse(snapshotWorld(a.w))
@@ -150,4 +164,4 @@ if (restoreWorld(asOld()) || restoreWorld(asOld('classic')) || !outdatedSnapshot
   failed = true
 }
 if (failed) process.exit(1)
-console.log('in sync (defense stations built, upgraded and fitted; defense platforms on ore); old saves: Big carries on, Classic is refused')
+console.log('in sync (defense stations built, upgraded and fitted; defense platforms on ore; a ground battle); old saves: Big carries on, Classic is refused')

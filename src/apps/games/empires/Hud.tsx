@@ -48,6 +48,8 @@ export type Hud = {
   mines: number
   /** Hybrid bases (sim.ts World.hybrid): the station is a Command Station with yards round it. */
   hybrid: boolean
+  /** A ground battle (no ore, beacons or research there yet). */
+  ground?: boolean
   /** Our yards: built ones with their queue, and sites with how far along they are (0 to 1). */
   yards: { id: number; unit: string; queue: QueueItem[]; built: boolean; progress: number }[]
 }
@@ -609,23 +611,23 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           <span className="ew-gold"><Icon name="give" size={18} /></span>
         </button>
       )}
-      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip={`Fleet size / capacity: ${BASE_POP} to start with, +${POP_PER_LEVEL} per station level above 1${hud.level > 1 ? ` (+${(hud.level - 1) * POP_PER_LEVEL})` : ''}, and +${BEACON_POP} per beacon our team holds (${hud.beacons} held: +${hud.beacons * BEACON_POP}). Capture beacons and upgrade the station for more.`}>
+      <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip={hud.ground ? `Units / capacity: ${hud.popCap}.` : `Fleet size / capacity: ${BASE_POP} to start with, +${POP_PER_LEVEL} per station level above 1${hud.level > 1 ? ` (+${(hud.level - 1) * POP_PER_LEVEL})` : ''}, and +${BEACON_POP} per beacon our team holds (${hud.beacons} held: +${hud.beacons * BEACON_POP}). Capture beacons and upgrade the station for more.`}>
         <Icon name="fleet" size={20} />
         <b className="ew-big">{hud.pop}</b>
         <small>/ {hud.popCap}</small>
       </div>
-      <div className="ew-top-cell ew-hide-narrow" data-tip={`Mining platforms, and beacons held. Each beacon our team holds: +${BEACON_POP} fleet capacity, +${fmt(BEACON_INCOME * 60)} credits a minute, and vision ${BEACON_SENSOR} round it.`}>
+      {!hud.ground && <div className="ew-top-cell ew-hide-narrow" data-tip={`Mining platforms, and beacons held. Each beacon our team holds: +${BEACON_POP} fleet capacity, +${fmt(BEACON_INCOME * 60)} credits a minute, and vision ${BEACON_SENSOR} round it.`}>
         <span className="ew-ore"><Icon name="ore" size={17} /></span>
         <b>{hud.mines}</b>
         <span className="ew-beacon"><Icon name="beacon" size={17} /></span>
         <b>{hud.beacons}</b>
         <small>/ {hud.beaconsAll}</small>
-      </div>
+      </div>}
       <div className="ew-top-right">
         {/* The shipyard and the lab: an icon each, a bar filling as the current job runs and a badge
             counting what's queued; the tooltip names it. */}
-        <button className={`ew-top-cell ew-jobbtn ${q ? 'is-busy' : ''}`} onClick={onShipyard} aria-label={hud.hybrid ? 'Command Station' : 'Shipyard'}
-          data-tip={q ? `${hud.hybrid ? 'Command Station' : 'Shipyard'}: ${UNIT[q.unit].name}, ${Math.ceil(q.left)} s left${hud.queue.length > 1 ? `, ${hud.queue.length - 1} more queued` : ''}.\nClick to select the station (H).` : `${hud.hybrid ? 'Command Station' : 'Shipyard'} idle.\nClick to select the station and build ships (H).`}>
+        <button className={`ew-top-cell ew-jobbtn ${q ? 'is-busy' : ''}`} onClick={onShipyard} aria-label={hud.ground ? 'Command Center' : hud.hybrid ? 'Command Station' : 'Shipyard'}
+          data-tip={hud.ground ? 'Command Center: click to select it and train engineers (H).' : q ? `${hud.hybrid ? 'Command Station' : 'Shipyard'}: ${UNIT[q.unit].name}, ${Math.ceil(q.left)} s left${hud.queue.length > 1 ? `, ${hud.queue.length - 1} more queued` : ''}.\nClick to select the station (H).` : `${hud.hybrid ? 'Command Station' : 'Shipyard'} idle.\nClick to select the station and build ships (H).`}>
           <Icon name="yard" size={18} />
           {hud.queue.length > 0 && <em>{hud.queue.length}</em>}
           {q && <i style={{ transform: `scaleX(${1 - q.left / q.total})` }} />}
@@ -643,12 +645,15 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
             </button>
           )
         })}
-        <button className={`ew-top-cell ew-jobbtn ${r ? 'is-busy' : ''}`} onClick={onTechTree} aria-label="Tech tree"
+{/* No research in ground battles yet. */}
+        {!hud.ground && (
+                <button className={`ew-top-cell ew-jobbtn ${r ? 'is-busy' : ''}`} onClick={onTechTree} aria-label="Tech tree"
           data-tip={r ? `Research: ${researchName(r.id, hud.level, hud.faction)}, ${Math.ceil(r.left)} s left${hud.research.length > 1 ? `, ${hud.research.length - 1} more queued` : ''}.\nClick for the tech tree (${keyName(keys.techTree)}).` : `Research idle.\nClick for the tech tree (${keyName(keys.techTree)}).`}>
           <Icon name="tree" size={18} />
           {hud.research.length > 0 && <em>{hud.research.length}</em>}
           {r && <i style={{ transform: `scaleX(${1 - r.left / r.total})` }} />}
         </button>
+        )}
         {/* Time: pause and play, the battle clock, and the speed, which cycles 1x, 2x, 3x. */}
         <div className={`ew-top-cell ew-timectl ${ui.paused ? 'is-paused' : ''} ${onPause ? '' : 'is-clockonly'}`} role="group" aria-label="Time">
           {onPause && (
@@ -938,6 +943,8 @@ export function DetailPanel(p: DetailProps) {
   if (station) return <StationDetail {...p} st={station} />
   const first = sel[0]
   if (first.owner === me && first.t.tier === 'yard' && sel.length === 1) return <YardDetail {...p} y={first} />
+  // A ground battle's building of ours: what it trains, its queue, or its site.
+  if (first.owner === me && first.t.tier === 'building' && sel.length === 1) return <GroundBuildingDetail {...p} b={first} />
   // A defense station of ours in a skirmish: its levels and module slots.
   if (first.owner === me && first.t.orbital && sel.length === 1 && !p.w.fleet) return <FortDetail key={first.id} {...p} u={first} />
   if (sel.every((u) => u.t.id === first.t.id)) return <UnitDetail {...p} u={first} squad={sel} />
@@ -2284,6 +2291,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
         )}
         {/* Engineers: the yards they can build, and how. */}
         {mine && isEngineer(t) && w.hybrid && <EngineerBuild w={w} me={me} crew={squad.filter((x) => x.owner === me && isEngineer(x.t))} onPlace={p.onPlace} onSelect={p.onSelect} />}
+        {mine && isEngineer(t) && !!t.ground && <GroundBuild w={w} me={me} crew={squad.filter((x) => x.owner === me && isEngineer(x.t))} onPlace={p.onPlace} />}
         {mine && one && !isShip(t) && u.guns.length > 0 && !building(u) && <FocusInfo w={w} u={u} pick={p.turretPick} onClear={p.onClearFocus} quiet />}
         {mine && one && t.tier === 'mine' && !building(u) && <SiteUpgrades w={w} me={me} u={u} onUpgrade={p.onUpgradeSite} onCancel={p.onCancelUpgradeSite} />}
         {techs.length > 0 && (
@@ -2444,6 +2452,105 @@ export function EngineerBuild({ w, me, crew, onPlace, onSelect }: { w: World; me
         {defenseCap(w) > 0 && <FortCard w={w} me={me} crew={crew.length} onPlace={onPlace} hint={hint} />}
       </div>
     </section>
+  )
+}
+
+// --- Ground battles ------------------------------------------------------------------------------------
+
+/** How much faster one to four engineers build together than one alone (ground/world.ts CREW_RATE). */
+const GROUND_CREW = [0, 1, 1.7, 2.2, 2.5]
+
+/** A ground battle's engineers: the buildings they put up, a card each (click, then a spot). */
+function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit[]; onPlace: (unit: string) => void }) {
+  const { keys } = useSettings()
+  const coarse = useCoarse()
+  const builds = [...new Set(crew.flatMap((u) => u.t.ground?.builds ?? []))].map((id) => UNIT[id]).filter(Boolean)
+  if (!builds.length) return null
+  const n = Math.min(crew.length, GROUND_CREW.length - 1)
+  const hint = coarse ? 'Tap a card, then a spot: green tiles can be built on' : `Click a card (${keyName(keys.build)}), then a spot: green tiles can be built on`
+  return (
+    <section className="ew-engbuild" aria-label="Build">
+      <header>
+        <strong>Build</strong>
+        <span className="ew-muted ew-small" data-tip={`${hint}. ${coarse ? 'Long-press' : 'Right-click'} one of our buildings to repair it.`}>{hint}</span>
+      </header>
+      <div className="ew-yard ew-engbuild-cards">
+        {builds.map((t) => {
+          const poor = w.players[me].credits < t.cost
+          const secs = Math.ceil(t.build / GROUND_CREW[Math.max(1, n)])
+          const tip = `${t.name}\n${t.blurb}\n${t.build} s for one engineer; two build it 1.7 times as fast, three 2.2, four 2.5. A Command Center may go anywhere at least 20 tiles from enemy buildings we know of; other buildings go up within the command range of ours.${poor ? `\n\nNot enough credits: ${Math.ceil(t.cost - w.players[me].credits)} more` : `\n\n${hint}.`}`
+          return (
+            <button key={t.id} className={`ew-shipcard ew-yardcard ${poor ? 'is-poor' : ''}`} onClick={() => onPlace(t.id)} {...unitTip(t, ownerTag(w, me, me), tip)}>
+              <ShipArt t={t} />
+              <strong>{t.name}</strong>
+              <span className="ew-yc-line">
+                <span className="ew-cost"><Icon name="credits" size={10} /> {t.cost}</span>
+                <span className="ew-time"><Icon name="time" size={10} /> {secs}s</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+/** A ground battle's site going up: how far along, who is building it, and a way to call it off. */
+function GroundSiteBox({ w, me, b, onCancelSite }: { w: World; me: Owner; b: Unit; onCancelSite: (id: number) => void }) {
+  const crews = w.units.filter((u) => !u.dead && u.gm?.busy === b.id).length
+  const coming = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'construct' && u.order.id === b.id).length
+  const progress = 1 - b.building / b.t.build
+  const rate = GROUND_CREW[Math.min(crews, GROUND_CREW.length - 1)]
+  return (
+    <div className="ew-sitebox" data-tip={`One engineer builds it in ${b.t.build} s; two 1.7 times as fast, three 2.2, four 2.5.`}>
+      <span className="ew-muted">
+        {!b.site!.started
+          ? coming
+            ? `Engineers on their way (${coming}).`
+            : 'Waiting for engineers: send some to build it.'
+          : crews
+            ? `Under construction: ${Math.round(progress * 100)}%, ${crews} engineer${crews === 1 ? '' : 's'} at work · ${Math.ceil(b.building / rate)} s left.`
+            : `Under construction: ${Math.round(progress * 100)}%, nobody at work.`}
+      </span>
+      <Bar value={progress} max={1} kind="shield" />
+      <button className="ew-repair" onClick={() => onCancelSite(b.id)} data-tip={b.site!.started ? 'Call it off: work has started, so only part of the price comes back.' : 'Call it off before work starts: the full price comes back.'}>
+        <Icon name="stop" size={13} /> Cancel <Icon name="credits" size={12} /> +{siteRefund(b)}
+      </button>
+    </div>
+  )
+}
+
+/** One of our ground buildings (a Command Center): while it goes up, its site; once built, what it
+ * trains, its queue, and its rally point (right-click to set it). */
+function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
+  const { w, me, b, hud } = p
+  const site = !!b.site
+  const trains = (b.t.ground?.trains ?? []).map((id) => UNIT[id]).filter(Boolean)
+  const queue = b.yq ?? []
+  const where = `the ${b.t.name}`
+  return (
+    <div className="ew-stationwrap">
+      {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, b.id)} at={where} launch />}
+      <Frame className="ew-detail is-station is-yard">
+        <div className="ew-detail-side">
+          <Schematic u={b} size={96} tip={unitTip(b.t, ownerTag(w, me, b.owner), undefined, b)} />
+          <SideName w={w} me={me} u={b} sub={site ? 'Going up' : `Earns ${b.t.ground?.income ?? 0} credits a second`} info={b.t.blurb} />
+          <Vitals u={b} now={w.time} />
+        </div>
+        <div className="ew-detail-main">
+          {site ? (
+            <GroundSiteBox w={w} me={me} b={b} onCancelSite={p.onCancelSite} />
+          ) : (
+            <div className="ew-yard" style={cardCols(trains.length)}>
+              {trains.map((t) => (
+                <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, b.id)} whyReserve={null} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}
+                  onBuild={(id, n) => p.onBuild(id, n, false, b.id)} onUnqueue={(id) => p.onUnqueue(id, b.id)} where={where} reinf={null} />
+              ))}
+            </div>
+          )}
+        </div>
+      </Frame>
+    </div>
   )
 }
 

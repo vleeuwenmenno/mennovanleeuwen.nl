@@ -3259,6 +3259,267 @@ pnpm check:empires-rejoin                                       # stepping away:
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
 ```
 
+## Empires At War ground battles
+
+Ground (land) battles are being built next to the space battles, in
+[`src/apps/games/empires/ground/`](src/apps/games/empires/ground). They run in the space game's own
+sim (see [The ground sim](#the-ground-sim)); a battle without terrain behaves and hashes as before.
+Until ground units can fight, the mode is in
+dev builds only: the Skirmish setup shows a **Space / Ground** switch when `import.meta.env.DEV` is
+set, and Ground plays the battle on the space game's own screen (see
+[The ground battle screen](#the-ground-battle-screen)), with a **Map viewer** for the ground maps
+(drag or one finger to pan, wheel or pinch to zoom, and a debug overlay of the tile grid, heights
+and tile flags; hovering or tapping a tile shows what it is). Production builds contain none of it but the ground units'
+entries in the factions' data and the sim's empty hooks.
+
+**Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
+Each tile has a terrain (dirt, grass, rocky, sand, mud, road, and later snow, ash, cracked earth and
+plating), a height of 0, 1 or 2, and flags: blocked, no building, ramp, deposit (a kyber crystal
+field), water, bridge, ford and forest. Cliffs stand where heights differ, and only ramps join two
+levels (`canStep`, the one rule the reach check, path finding and movement share). The tile at the
+foot of every cliff is blocked (the slope or the rubble covers it), on all four sides alike so
+mirrored maps stay fair. Water is blocked except where it is a bridge or a ford; forests are
+blocked. For drawing, the grid also carries `elev`, the land's elevation at every tile corner: each
+level stands 64 units higher, ramps climb evenly, riverbeds sink away from the banks, and the open
+ground is smoothed and given a gentle roll, so slopes stay steep at cliffs and soft elsewhere.
+
+**Maps** ([`maps.ts`](src/apps/games/empires/ground/maps.ts)) come in two forms. Round 2 maps are
+drawn with shapes in tile units (`features`, GroundFeatures in types.ts): plateau polygons with
+their level, ramps from foot to top, rivers along polylines (swelling and narrowing, deep in the
+middle), bridges and fords across them, dirt roads along polylines, forest polygons, crystal fields,
+ruins (old foundations, unbuildable but walkable) and spawns. A plateau that a ramp climbs keeps the
+low ground's grass; one with no way up is bare rock. Edges wobble with the seed. Shapes can be drawn over the whole map; the map's symmetry
+then copies one side's tiles onto the other, so both sides match exactly. Besides the space maps'
+symmetries, a square map can be mirrored across its diagonal (`mirror: 'diagonal'`, from the top
+right corner to the bottom left), which puts two bases in the other corners and lets a river on
+the mirror line carry one shared bridge and one shared ford. No props: woods are drawn by the
+ground layer.
+
+Round 1 maps are coarse sketches for one side,
+copied to the others by the same symmetries as space maps. Each character covers `cell` × `cell`
+tiles: `0` `1` `2` heights, `/` a ramp (it joins the levels on either side of it, and gets walls on
+its open sides), `~` water, `S` a spawn on the plateau, `d` a deposit on low ground, and `.` or a
+missing row for "take it from the mirror copy". [`terrain.ts`](src/apps/games/empires/ground/terrain.ts)
+builds the map from the sketch and its seed, the same on every machine (exactly rounded maths and a
+seeded random stream only):
+- cliff lines wobble: each tile reads the sketch at a position nudged by smooth noise, which fades
+  out near ramps so they meet their levels square, and a majority pass smooths away slivers;
+- terrain: rocky plateaus with dirt pockets away from the rim, rocky scree spilling one to three
+  tiles below every cliff foot, and dirt and grass by noise on the lower ground, grass kept back
+  from cliffs;
+- props by ground type, seeded and spaced: stone only on the plateau (never trees), rubble and heaps
+  on scree and along every cliff foot, trees and bushes on grass, rocks on dirt. They stay off
+  spawns and their build area (16 × 16 tiles), ramps and deposits. Trees, boulders and other big
+  props block the tiles under them; flat ones (rubble, cracked stone) only decorate.
+
+The first map is **Ashwater Crossing** (two players, 96 × 96 tiles, mirrored across the diagonal),
+after a Star Wars: Empire at War ground map (the look Menno picked): a river runs corner to corner
+between two bases on open ground, crossed only by a metal bridge and a rocky ford. A dirt road
+joins the bases over the bridge, past old ruins. Each side has a rocky mesa with one ramp and a
+crystal field on top, solid woods round the edges, and calm grass and dirt everywhere else; the
+third crystal field lies in the ford's shallows, shared. **Dustfall Ridge** (128 × 96, point symmetry, a round 1 sketch) is
+still there: each base on a plateau in a corner with one ramp down to a shelf of mid ground, the
+shelf with two ramps to the low ground, three deposits a side, and a mid-level hill and a pond in
+the middle.
+
+**The ground layer** ([`gl.ts`](src/apps/games/empires/ground/gl.ts), the GroundLayer in types.ts)
+draws the ground under a battle with WebGL2: one full-screen triangle a frame (one draw call, no
+texture uploads), its fragment shader working out each pixel's world point. Everything that
+doesn't move is baked once per map, in `setMap`: the corner elevations upsampled to 4 samples a
+tile and smoothed into slopes about two tiles wide, a shade map (where the sun, top left at 38°,
+is hidden behind higher ground, soft edged, and how deep each spot sits in a valley), and blend
+masks at 4 samples a tile, blurred a little: grass, dirt, sand, mud, road, rock, forest, crystals,
+water with its depth, ford and bridge. The shader warps the mask lookups with noise so edges come
+out organic, mixes muted colours with a little low-frequency variation and the round 1 textures as
+detail (warm grass and dirt, blue water, grey rock), lights the land from the heightmap in a few
+hard-ish tones (the game's cel-shaded look), with higher ground a touch brighter,
+puts rock on steep slopes and bare ridges (angular blocks, strata, strong light), casts shadows,
+and paints:
+- water darker away from the banks, with slow swells, a few glints and foam on the edge, moving;
+- boulders along the banks, thicker round the ford, each lit and casting a shadow;
+- the ford as clear shallow water over a stony bed, the crystals in it on top;
+- bridges straight from their shapes: steel plates on girders with bolts, round pylons at the
+  corners, a dark outline and a shadow on the water;
+- ruins: a foundation of flagstones with broken walls and corner columns, casting shadows;
+- forests as one canopy of crowns lit from the top left, a dark rim at the edge and a cast shadow,
+  loose trees round the woods' edges, and a few small groups of trees out on the grass;
+- crystal fields as pale gravel with blue shards;
+- past the map's edge, the map mirrored, greyed and darkened, with a faint line on the edge.
+
+There are no chunks, so no seams in any browser (checked in Chromium and Firefox). Round 1 maps
+draw through it too, their blocking trees and boulders becoming forest and rock in the masks.
+Where WebGL2 is missing, `createGroundLayer` returns a flat 2D layer (`gl: false`) that draws one
+baked picture of the same masks, lit by the same heightmap, with the same grey mirror round it.
+The viewer's **Flat** button shows it. The battle screen draws ground battles with this layer: its
+canvas sits under the battle canvas and is drawn first each frame with the same camera, while units,
+buildings, effects, fog and the HUD stay on the 2D canvas over it. (Round 1's chunk-baked 2D
+renderer and its rock-chunk cliffs are gone.)
+
+```sh
+pnpm check:ground-map   # every ground map: builds the same twice, symmetric (point or diagonal), spawns reach each other and every crystal field (over the bridge and the ford), no blocking prop on ramps or build areas
+```
+
+### The ground sim
+
+A ground battle is a space-game battle whose map has terrain: one sim
+([`sim.ts`](src/apps/games/empires/sim.ts)), one `World`, the same orders, multiplayer protocol,
+snapshots and AI framework. A ground map's `MapDef` names its terrain (`ground`, built from the map's
+id by [`ground/world.ts`](src/apps/games/empires/ground/world.ts) `groundMapDef`), and the world gets
+a terrain layer (`World.ground`: the tile map, its nav grid with building stamps and the fog),
+rebuilt from the map and never saved. The ground code reaches the sim through a few hooks
+(`GroundHooks`), each called only when the world has terrain, so a space battle behaves and hashes
+exactly as it did before. `ground/world.ts` fills the hooks in when it is imported (the dev lobby and
+the checks do), so a production build, where ground battles aren't offered yet, carries none of it.
+
+Ground units are ordinary unit types in each faction's data (`data/<faction>.ts`, UnitType
+`ground`), with tiers of their own (`vehicle` and `building`), so the space game's tier checks and
+the shield code leave them alone. Vehicles count as ships for orders and selection (`isShip`), so
+they take the same orders, queues, control groups and shortcuts; code for ships in space skips them
+with `isGround`.
+
+- **Movement.** A vehicle follows the space game's own orders (move, patrol, construct, stop, with
+  shift queues) on paths found on the tile grid, turns towards its next waypoint and drives once it
+  faces near enough, slower the further off it points, and brakes to stop on the last one. A group
+  sent somewhere spreads over spots round the point. Ground vehicles that overlap push each other
+  apart gently, a parked one giving way to a moving one. None drives onto a tile it can't stand on:
+  it slides along the wall instead. One that ends up somewhere it can't stand (a building went up on
+  it) is pushed onto the nearest open ground. A vehicle that makes no headway finds its path again,
+  and one held up close to its destination by others parked there counts as arrived.
+- **Path finding** ([`ground/nav.ts`](src/apps/games/empires/ground/nav.ts)): A* on the tile grid,
+  8 ways, through the terrain's one stepping rule (`canStep`: no blocked tile, heights the same
+  unless one tile is a ramp, no cutting a corner), with whole-number costs and a fixed neighbour
+  order and tie-break, then pulled tight into straight legs that are checked tile by tile. Units
+  come in size classes, the square of tiles they need: small 1, vehicle 2, large 3. A clearance
+  map gives each tile the biggest open square (with no cliff inside) starting there, so a vehicle
+  never squeezes through a one-tile gap. Each class knows which pieces of ground connect, so a
+  destination that can't be reached becomes the reachable spot nearest it.
+- **Buildings** stamp the tiles under their footprint while they stand. A stamp waits until the
+  start of the next tick, where all of them are applied at once and the clearance map is worked out
+  again (under half a millisecond on a 48 × 36 map), so every copy of the battle changes its grid at
+  the same moment; units on the way find their paths again.
+- **Fog** ([`ground/fog.ts`](src/apps/games/empires/ground/fog.ts)) takes the place of space's
+  sight circles: per team a count of the eyes on each tile. Each unit stamps a disc of its sight
+  radius in tiles, precomputed per radius, and moves it only when it changes tile, four times a
+  second (when space works out its sight). Height limits sight: a unit sees its own level and lower,
+  plus the row of higher tiles along the top of a cliff next to its level. A ramp counts as both
+  levels it joins, and a unit on one sees from the top. So a base on a plateau stays hidden until
+  someone drives up. A unit is seen (`seen`, as in space) when its tile is, a building when any tile
+  of its footprint is, and each team remembers the enemy buildings it has seen (`World.known`), as
+  last seen, until it sees their ground again with nothing there.
+- **Snapshots** keep the units and the memory as for any battle, plus the nav grid's version and
+  the stamps not yet applied; the terrain, the grid and the fog are rebuilt from those on loading.
+
+The checks run on Dustfall Ridge and on small maps built tile by tile
+([`ground/testmaps.ts`](src/apps/games/empires/ground/testmaps.ts)); their own test vehicles of every
+size class and a small test building are registered by the check scripts only.
+
+### Ground units, building and the AI
+
+**The first units** are one Engineer and one Command Center a faction. Engineers are small vehicles
+and drones (no walking animation): size class 1, unarmed, sight 8 tiles. Command Centers stand on
+6 × 6 tiles, see 10 tiles, earn 6 credits a second and train their faction's engineer. Prices sit
+near the space game's: a battle starts with 1,600 credits.
+
+| Faction | Engineer | Cost, time | Command Center | Hull |
+| --- | --- | --- | --- | --- |
+| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 88) | 150, 12 s | Command Center | 5,200 |
+| Confederacy | Forger builder droid: a hovering fabricator with cutting arms (hull 110, speed 104) | 140, 11 s | Command Hub | 5,000 |
+| Swarm | Shaper drone: a low crawler that spits resin (hull 120, speed 96) | 130, 10 s | Hive Nexus | 5,400 |
+
+A Command Center costs 1,200 and takes one engineer 60 seconds. Their models are drawn like the
+ships ([`models/<faction>/ground.ts`](src/apps/games/empires/models), built by
+[`models/ground.ts`](src/apps/games/empires/models/ground.ts), which loads them into the game's
+model lookup when imported): parts and facets in the faction's palette, cel shaded from straight
+above with the light top left. Buildings face south (their door) and never turn.
+
+**Starting:** each side gets its Command Center in the middle of its spawn's plateau (it is the
+player's station: the queue, income and AI go by it), one engineer in front of its door, the rally
+point a little way out, and the starting credits. Every team knows where the others start: the enemy
+Command Centers are in its memory of buildings from the first second.
+
+**Placing a building** (`groundPlacement`, through the space game's `place` order). The ghost checks
+every tile of the footprint and reports the first rule that fails, in this order:
+1. Every tile is buildable (no ramp, cliff, water or blocking prop), off crystal fields, on one
+   level, and free of buildings and of the row in front of another building's door.
+2. It is inside the command range of one of our buildings (a Command Center reaches 14 tiles, others
+   6). A Command Center may instead go anywhere at least 20 tiles from an enemy building we know of.
+   The land is known everywhere from the start (a side always has eyes in orbit), so no tile needs
+   exploring first; enemies only count where we see or remember them.
+3. No enemy unit we can see stands on it.
+4. The row of tiles in front of its door is open, so units can always roll out.
+5. There are enough credits.
+
+A site placed on top of a building hidden in the fog is given up, refunded in full, when its
+engineer gets there.
+
+**Building** uses the space game's sites: placing pays at once, and until work starts the site is
+the owner's secret (no stamp on the grid, no sight). Its engineers (`construct`) drive to spots round
+it, spread out, nearest first, and work starts when the first arrives: our own units standing on it
+are sent off it first (after 3 seconds whatever is left is pushed off), enemy units on it hold the
+work up, then the footprint stamps the grid. The site's hull grows from a tenth with the work, and
+more engineers build faster: 1, 1.7, 2.2 and 2.5 times as fast for one to four. Engineers also repair
+our damaged buildings, free, half again as fast as building. Calling a site off (`cancelSite`)
+refunds it as a space site: in full before work starts, less the further along it is. A destroyed
+site or building frees its stamp; a player with no building left, finished or going up, is out.
+
+**Training** uses the space game's `build` order at a building (as at a yard): a Command Center
+trains from its own queue of up to 10, each paid when queued and refunded in full when cancelled
+(`cancel`). A trained unit rolls out of the door, the middle of the south side, and drives to the
+building's rally point (`rally`). Income is 6 credits a second per standing Command Center, in the
+economy as the station's.
+
+**The AI** is the space game's (`ai.ts`: same brain, think clock and random stream) with decisions
+of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)), passive for
+now: it trains engineers one at a time (two with one Command Center, four with two), saves up and
+expands with a second Command Center beside the crystal field nearest home on its own side of the
+map, sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
+start within 90 seconds, and builds nothing hostile. It reads only what its team knows and gives the
+same orders a player does, so every copy of a battle makes the same choices.
+
+```sh
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
+pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
+pnpm check:ground-models # every ground unit has a model through the model lookup, sound and the same every time
+pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
+```
+
+### The ground battle screen
+
+A ground battle is played on the space game's own battle screen
+([`EmpiresAtWar.tsx`](src/apps/games/EmpiresAtWar.tsx)) and set up in its own Skirmish lobby: in a
+dev build the lobby's **Space / Ground** switch loads ground battles
+([`ground/load.ts`](src/apps/games/empires/ground/load.ts)) and swaps the map list for the ground
+maps, each previewed from its tile map (terrain, height, water, crystal fields). The slots, factions,
+teams, spawns, starting credits and AI rows are the same; what doesn't apply on the ground hides:
+reinforcements, defense stations, defense platforms on ore, start areas and the map generator. A
+**Map viewer** chip opens the ground map viewer. The choice is remembered with the rest of the lobby.
+
+Everything else comes from the space game: the camera, controls and shortcuts, the pause menu,
+selection (click, Shift-click, box, double-click), control groups, shift queues, order lines, the
+touch wheel and touch bar, the HUD panels and tooltips, and resuming after a reload. Where ground
+differs:
+- **The ground** is drawn on a canvas of its own right under the battle canvas, at the same size
+  and camera, first each frame, through the `GroundLayer` interface (`ground/types.ts`): the WebGL2
+  layer once `ground/gl.ts` is in, and until then a stand-in around the 2D chunk renderer
+  ([`ground/layer2d.ts`](src/apps/games/empires/ground/layer2d.ts)). The battle canvas then starts
+  clear: no backdrop, stars or map-edge dimming.
+- **Fog** is a half-dark veil by tile outside our sight, never black (the land is known from
+  orbit), over the units and everything on the ground, so route lines stay under it. Enemy
+  buildings we remember but don't see now are drawn as faded ghosts where we saw them. The minimap
+  shows the terrain under the same veil.
+- **Building:** an engineer's panel has a card for each building it puts up (B, or the touch wheel's
+  Build entry). The ghost under the pointer colours every tile of the footprint green or red, outlines
+  the row in front of its door, shows our command ranges for a building that needs one, and names
+  the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
+  opened, then **Build here** or **Cancel**.
+- **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
+  rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
+- The top bar leaves out ore, beacons and research.
+
+The ground screen's pieces reach the battle screen, the renderer and the lobby through
+[`groundKit.ts`](src/apps/games/empires/groundKit.ts), which `ground/load.ts` fills in; a
+production build never loads it.
+
 ## Performance guardrails
 
 The bar is the display's full refresh rate (up to 240 Hz) without giving up anything on screen.
@@ -3280,7 +3541,12 @@ middle of the map, the camera panning across); six admirals on a huge map (Velka
 each sent at the middle, seen zoomed all the way out and then panning across the fight; a skirmish reloaded from the tab's resume snapshot
 with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
 view (the battle screen must never scroll, and the panels laid out round each other must settle:
-no React update loop, few commits); the galactic conquest map of a new and a late
+no React update loop, few commits); a ground battle on Dustfall Ridge on the battle screen (dev
+builds, as the check's server is) with three dozen vehicles of both sides driving across the low
+ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
+canvas's: the ground layer is a canvas of its own under it); the WebGL2 ground layer alone on
+Ashwater Crossing, panning over the river with the water moving (it counts its own GL draw calls
+and texture uploads, which the canvas counters don't see); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
 the desktop with a few apps open, left idle, then hidden.
 
@@ -3294,7 +3560,7 @@ scenes reach into the game through its modules and the dev-only `window.__ew`.
 
 **What's measured**, per scene: canvas calls per frame (draw calls, `drawImage`, fills and strokes,
 save/restore, gradients, filters and shadows, pixel reads, and what's drawn off screen into bitmap
-caches), new canvases per second, the model bitmap cache's size, React commits per second (while
+caches), new canvases per second, the model bitmap cache's size (and the ground terrain's chunk cache), React commits per second (while
 zooming and panning, the galaxy map should hardly render), DOM nodes, map elements drawn through a
 CSS filter, and, idle, frame callbacks, timer callbacks and live intervals, shown and hidden.
 Budgets are the measurement plus 15%, or plus 2 for counts near zero.

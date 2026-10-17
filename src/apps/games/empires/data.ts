@@ -94,20 +94,20 @@ export const prefixOf = (faction: FactionId) => FACTIONS[faction].prefix
 // craft, turbolasers are too slow to track fighters, missiles go through shields (see sim).
 // Yards take hits as stations do.
 const VS: Record<WeaponKind, Record<Tier, number>> = {
-  laser: { fighter: 1, gunship: 0.9, frigate: 0.35, cruiser: 0.25, capital: 0.2, station: 0.2, mine: 0.4, defense: 0.25, yard: 0.2 },
-  flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3, defense: 0.2, yard: 0.15 },
-  turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
-  missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1, defense: 1, yard: 0.8 },
+  laser: { fighter: 1, gunship: 0.9, frigate: 0.35, cruiser: 0.25, capital: 0.2, station: 0.2, mine: 0.4, defense: 0.25, yard: 0.2, vehicle: 0.9, building: 0.2 },
+  flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3, defense: 0.2, yard: 0.15, vehicle: 1.4, building: 0.15 },
+  turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1, vehicle: 0.7, building: 1 },
+  missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1, defense: 1, yard: 0.8, vehicle: 0.6, building: 0.8 },
   // Against shields; ion barely touches a hull (see the sim's damage).
-  ion: { fighter: 0.3, gunship: 0.8, frigate: 1.2, cruiser: 1.3, capital: 1.3, station: 1.2, mine: 0.5, defense: 1.2, yard: 1.2 },
+  ion: { fighter: 0.3, gunship: 0.8, frigate: 1.2, cruiser: 1.3, capital: 1.3, station: 1.2, mine: 0.5, defense: 1.2, yard: 1.2, vehicle: 0.8, building: 1.2 },
 }
 /** Chance a shot connects: big guns can't follow fighters. */
 const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
-  laser: { fighter: 0.55, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
-  flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
-  turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1, defense: 0.95, yard: 1 },
-  missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
-  ion: { fighter: 0.15, gunship: 0.45, frigate: 0.9, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
+  laser: { fighter: 0.55, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1, vehicle: 0.7, building: 1 },
+  flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1, vehicle: 0.8, building: 1 },
+  turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1, defense: 0.95, yard: 1, vehicle: 0.35, building: 1 },
+  missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1, vehicle: 0.7, building: 1 },
+  ion: { fighter: 0.15, gunship: 0.45, frigate: 0.9, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1, vehicle: 0.45, building: 1 },
 }
 export const effect = (w: WeaponKind, t: Tier) => VS[w][t]
 export const accuracy = (w: WeaponKind, t: Tier) => ACCURACY[w][t]
@@ -473,7 +473,11 @@ const WRITTEN: UnitType[] = KITS.flatMap((k) => [...k.ships, stationType(k.id, 1
 export const BIG_LAYOUT: Record<string, Layout> = merged((k) => k.layout)
 /** Every unit, toughened and scaled (stations come out of stationType that way already), at its
  * size (models/sizes.ts). */
-export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : sized(finish(u), BIG_LAYOUT[u.id])))
+export const UNITS: UnitType[] = [
+  ...WRITTEN.map((u) => (u.tier === 'station' ? u : sized(finish(u), BIG_LAYOUT[u.id]))),
+  // Ground battles' units and buildings, after every space unit, as written (no space toughness or sizes).
+  ...KITS.flatMap((k) => k.ground),
+]
 
 const SHIELDED_MINE: Record<FactionId, UnitType> = byFaction((k) => finish(k.shieldedMine))
 /** A faction's mining platform as built, or with its Shield generator fitted. */
@@ -521,7 +525,13 @@ export const WORKS_NAME: Record<Works, string> = { station: 'Command Station', y
 export const isEngineer = (t: UnitType) => t.kind === 'engineer'
 /** A ship's job and counters: its own, or its tier's. */
 export const roleOf = (t: UnitType) => t.role ?? ROLES[t.tier]
-export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense' && t.tier !== 'yard'
+/** A unit that moves and takes orders: every ship, and in ground battles every vehicle (isGround
+ * tells those apart). Stations, platforms, yards and ground buildings are not. */
+export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense' && t.tier !== 'yard' && t.tier !== 'building'
+/** A ground battle's unit or building (UnitType `ground`): code for ships in space skips these. */
+export const isGround = (t: UnitType) => t.ground !== undefined
+/** A ground battle's building (a Command Center). */
+export const isGroundBuilding = (t: UnitType) => t.tier === 'building'
 /** What can go on a surveyed ore asteroid, one structure each: the mining platform, then the
  * defense platforms (balanced first), unless `guns` is false (the lobby turned them off: see the
  * World's `oreDefense`). */

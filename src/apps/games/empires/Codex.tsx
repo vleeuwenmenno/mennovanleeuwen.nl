@@ -783,7 +783,7 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.fillStyle = '#04060d'
       g.fillRect(0, 0, W, H)
-      const items = UNITS.filter((u) => u.faction === faction && isShip(u) && (u.tier !== 'fighter' || !u.kind)).map((t) => ({ t, m: modelFor(t) }))
+      const items = UNITS.filter((u) => u.faction === faction && isShip(u) && !u.ground && (u.tier !== 'fighter' || !u.kind)).map((t) => ({ t, m: modelFor(t) }))
       // One column per ship, everything at one scale, standing on one line.
       const gap = 28
       const dimsOf = (it: (typeof items)[number]) => (it.m ? [(it.m.w / it.m.long) * it.t.size, (it.m.h / it.m.long) * it.t.size] : [it.t.size, it.t.size])
@@ -853,7 +853,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   const sides = FACTION_IDS
   const faction: FactionId = side
   // (With its defense station, which isn't in UNITS: only bases build it.)
-  const list = useMemo(() => [...UNITS.filter((u) => u.faction === faction), defenseType(faction, 1, [])], [faction])
+  const list = useMemo(() => [...UNITS.filter((u) => u.faction === faction && !u.ground), defenseType(faction, 1, [])], [faction])
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
