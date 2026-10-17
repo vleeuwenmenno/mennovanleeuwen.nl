@@ -3304,14 +3304,30 @@ on phones, which also bake less densely), and drawn as a few `drawImage` calls a
 split into passes and runs at most about 3 ms a frame; until a chunk is ready, the nearest step
 already baked stands in, and every chunk is also baked small once so there's always something to
 show. A bake lays the textures (`public/games/empires/ground/terrain/`, one repeat per 8 tiles) as
-patterns cut by noise-broken masks, then water, a faint large-scale tint and a little shade by
-level, the ramps, the cliffs and the flat props. Cliffs follow the height contours, smoothed: faces
-looking south hang the cliff-face strip in thin columns, faces looking east or west use an upright
-strip of their own (darker facing east, away from the light), and edges looking north show only a
-lit lip. The face's height swells and shrinks along the edge. Props are sprites with a lift shadow
-drawn in code; stone props are warmed to match the cliff rock. Trees are drawn each frame above
-units (baked in when zoomed far out). The screen draws into the frame through hooks, in world
-coordinates: ground (under units), units, fog (over trees) and an overlay.
+patterns cut by noise-broken masks, then water, a faint large-scale tint, a little shade by level
+and a soft contact shade at each cliff's foot, the ramps (their dirt shaded by the slope, with faint
+ruts), the cliffs and the flat props.
+
+Cliffs are rock drawn in code, not images ([`cliffs.ts`](src/apps/games/empires/ground/cliffs.ts)),
+in the models' cel-shaded style: bold dark outline, hard tones, light from the top left. The height
+contours are traced and smoothed, and seeded rock chunks are set along them, overlapping: a main
+row, often a rock set back on the rim, a smaller rock at the foot, and rubble thinning out into the
+low ground. Each chunk is an irregular 5- to 9-sided top pushed down into a prism; the sides the
+camera sees are facets shaded by how they face the light, the top is split into a lit and a shaded
+half with a lit lip, and the rocky texture shows faintly inside. How tall the faces are follows the
+line's direction smoothly: tall basalt columns (stacked two high) where it looks south, shorter
+where it looks east or west, a low lip where it looks north. So corners, ramp walls (rocks growing
+from the ramp's top to its foot) and map edges come out of the same rule with no seams, and a dark
+band under the rocks keeps the ground from showing between them. Each rock shape is painted once
+per size step and stamped, so a chunk's cliffs are a few hundred `drawImage` calls, spread over
+frames if they need more than the bake's time slice. Stone props that only decorated cliff feet are
+left out; the rock's own rubble takes their place. `CLIFF_STYLES` holds the look (`dense`, the
+default; `blocks`, fewer bigger boulders, kept for comparing).
+
+Props are sprites with a lift shadow drawn in code; stone props are warmed to match the cliff rock.
+Trees are drawn each frame above units (baked in when zoomed far out). The screen draws into the
+frame through hooks, in world coordinates: ground (under units), units, fog (over trees) and an
+overlay.
 
 ```sh
 pnpm check:ground-map   # every ground map: builds the same twice, symmetric, spawns reach each other and every deposit, no blocking prop on ramps or build areas

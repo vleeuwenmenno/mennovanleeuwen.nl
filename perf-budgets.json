@@ -226,22 +226,22 @@
     },
     "ground-base": {
       "canvas draw calls / frame": {
-        "baseline": 194.3,
-        "budget": 224,
+        "baseline": 202.3,
+        "budget": 233,
         "kind": "count"
       },
       "canvas drawImage / frame": {
-        "baseline": 140.85,
-        "budget": 162,
+        "baseline": 148.75,
+        "budget": 172,
         "kind": "count"
       },
       "canvas fill+stroke / frame": {
-        "baseline": 7.82,
+        "baseline": 7.32,
         "budget": 10,
         "kind": "count"
       },
       "canvas save+restore / frame": {
-        "baseline": 75.57,
+        "baseline": 75.5,
         "budget": 87,
         "kind": "count"
       },
@@ -261,8 +261,8 @@
         "kind": "count"
       },
       "offscreen draw calls / frame": {
-        "baseline": 9.43,
-        "budget": 12,
+        "baseline": 17.43,
+        "budget": 21,
         "kind": "count"
       },
       "new canvases / sim s": {
@@ -291,7 +291,7 @@
         "kind": "count"
       },
       "main thread ms / frame": {
-        "budget": 3,
+        "budget": 4,
         "kind": "time"
       }
     },
