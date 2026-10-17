@@ -700,7 +700,10 @@ function inside(px: number, py: number, pts: TilePt[]) {
 }
 
 /** One tile's share of the shapes, worked out once per symmetric set and copied to the others. */
-type FeatureTile = { level: number; ramp: number; rampLo: number; rampHi: number; water: number; ford: boolean; bridge: boolean; road: boolean; forest: boolean; deposit: boolean; base: boolean }
+type FeatureTile = { level: number; ramp: number; rampLo: number; rampHi: number; water: number; ford: boolean; bridge: boolean; road: boolean; forest: boolean; deposit: boolean; bare: boolean; ruin: boolean }
+
+/** Half the size of a ruin's foundation, in tiles: wide as drawn, turned by the mirror. */
+export const RUIN_HALF: TilePt = [1.6, 1.15]
 
 /**
  * Builds a round 2 map from its shapes (GroundMapDef `features`): plateaus with wobbling edges, ramps,
@@ -722,8 +725,8 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
     for (const p of f.plateaus ?? []) if (inside(x, y, p.pts)) lv = Math.max(lv, p.level)
     return lv
   }
-  // Which plateaus carry a base: their ground is packed dirt, the others bare rock.
-  const basePlateaus = (f.plateaus ?? []).filter((p) => (f.spawns ?? []).some((s) => inside(s[0], s[1], p.pts)))
+  // Plateaus no ramp climbs are bare rock (ridges); the others have the low ground's grass and dirt.
+  const barePlateaus = (f.plateaus ?? []).filter((p) => !(f.ramps ?? []).some((r) => inside(r.to[0], r.to[1], p.pts)))
   const done = new Uint8Array(n)
   for (let r = 0; r < rows; r++)
     for (let c = 0; c < cols; c++) {
@@ -732,8 +735,8 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
       const px = c + 0.5, py = r + 0.5
       // Plateau edges wobble up to 1.6 tiles, forest edges more.
       const qx = px + (wobX(px / 6, py / 6) - 0.5) * 3.2, qy = py + (wobY(px / 6, py / 6) - 0.5) * 3.2
-      const t: FeatureTile = { level: levelAt(qx, qy), ramp: -1, rampLo: 0, rampHi: 0, water: 0, ford: false, bridge: false, road: false, forest: false, deposit: false, base: false }
-      t.base = t.level > 0 && basePlateaus.some((p) => inside(qx, qy, p.pts))
+      const t: FeatureTile = { level: levelAt(qx, qy), ramp: -1, rampLo: 0, rampHi: 0, water: 0, ford: false, bridge: false, road: false, forest: false, deposit: false, bare: false, ruin: false }
+      t.bare = t.level > 0 && barePlateaus.some((p) => inside(qx, qy, p.pts))
       for (const rp of f.ramps ?? []) {
         const s = segment(px, py, rp.from, rp.to)
         if (s.t < -0.05 || s.t > 1.05 || Math.abs(s.side) > rp.width / 2) continue
@@ -741,7 +744,7 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
         t.rampLo = levelAt(rp.from[0], rp.from[1])
         t.rampHi = levelAt(rp.to[0], rp.to[1])
         t.level = t.ramp >= 0.5 ? t.rampHi : t.rampLo
-        t.base = false
+        t.bare = false
       }
       for (const rv of f.rivers ?? []) {
         const s = polyline(px + (wobX(px / 3, py / 3) - 0.5) * 1.4, py + (wobY(px / 3, py / 3) - 0.5) * 1.4, rv.pts)
@@ -764,7 +767,8 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
         for (const fo of f.forests ?? []) if (inside(fx, fy, fo)) t.forest = true
       }
       for (const d of f.deposits ?? []) if (Math.hypot(px - d[0], py - d[1]) < 1.75) t.deposit = true
-      if (t.road || t.deposit) t.forest = false
+      for (const rn of f.ruins ?? []) if (Math.abs(px - rn[0]) < RUIN_HALF[0] + 0.5 && Math.abs(py - rn[1]) < RUIN_HALF[1] + 0.5) t.ruin = true
+      if (t.road || t.deposit || t.ruin) t.forest = false
       for (const k of tileCopies(cols, rows, def, c, r)) (done[k] = 1), (ft[k] = t)
     }
   // How high each ramp tile stands, for drawing: ramps here may run at any angle.
@@ -781,6 +785,7 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
     if (t.ramp >= 0) flags[i] |= TF.ramp | TF.noBuild
     if (t.forest) flags[i] |= TF.forest | TF.blocked | TF.noBuild
     if (t.deposit) flags[i] |= TF.deposit | TF.noBuild
+    if (t.ruin) flags[i] |= TF.noBuild
   }
   // A bridge's deck stands at its banks' level and keeps the river under it.
   const isRamp = (i: number) => (flags[i] & TF.ramp) !== 0
@@ -827,8 +832,10 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
       else if (t.deposit) ter = T('dirt')
       else if (t.ramp >= 0) ter = T('dirt')
       else if (slope) ter = T('rocky')
-      else if (t.level > 0 && !t.base) ter = T('rocky')
-      else if (t.base && toBase < 11 + patch(c / 4, r / 4) * 3) ter = T('dirt')
+      else if (t.bare) ter = T('rocky')
+      else if (t.ruin) ter = T('dirt')
+      else if (!t.forest && toBase < 11 + patch(c / 4, r / 4) * 3) ter = T('dirt')
+      else if (t.level > 0) ter = T('grass')
       else if (nearFord[i] <= 1) ter = T('mud')
       else if (nearWater[i] <= 1) ter = T('sand')
       else if (!t.forest && patch(c / 13, r / 13) > 0.63) ter = T('dirt')

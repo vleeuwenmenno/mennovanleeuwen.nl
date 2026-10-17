@@ -1,4 +1,4 @@
-import { LEVEL_H, valueNoise } from './terrain.ts'
+import { LEVEL_H, RUIN_HALF, valueNoise } from './terrain.ts'
 import { TERRAINS, TF, TILE, type GroundLayer, type GroundMap } from './types.ts'
 
 // The ground under a battle, drawn with WebGL2 (types.ts GroundLayer): one full-screen triangle a
@@ -43,6 +43,8 @@ type Fields = {
   shade: Uint8Array
   /** The bridges, in world units: x0, y0, x1, y1 and width, each (mirror copies included). */
   bridges: number[]
+  /** The ruins, in world units: middle x, y and half width, half height, each (mirror copies included). */
+  ruins: number[]
 }
 
 const T = (id: (typeof TERRAINS)[number]) => TERRAINS.indexOf(id)
@@ -227,7 +229,14 @@ function bakeFields(map: GroundMap): Fields {
         }
     }
   }
-  return { fw, fh, a, b, c, hw, hh, height, shade, bridges }
+  const ruins: number[] = []
+  for (const rn of map.def.features?.ruins ?? []) {
+    const copies = [[rn[0] * TILE, rn[1] * TILE, RUIN_HALF[0] * TILE, RUIN_HALF[1] * TILE]]
+    if (map.def.mirror === 'diagonal') copies.push([W - rn[1] * TILE, Hh - rn[0] * TILE, RUIN_HALF[1] * TILE, RUIN_HALF[0] * TILE])
+    else if (map.def.sym === 'point') copies.push([W - rn[0] * TILE, Hh - rn[1] * TILE, RUIN_HALF[0] * TILE, RUIN_HALF[1] * TILE])
+    for (const c of copies) if (ruins.length < 32 && !ruins.some((_, k) => k % 4 === 0 && Math.abs(ruins[k] - c[0]) + Math.abs(ruins[k + 1] - c[1]) < 2)) ruins.push(...c)
+  }
+  return { fw, fh, a, b, c, hw, hh, height, shade, bridges, ruins }
 }
 
 /** A tiling value-noise texture: four channels at four frequencies. */
@@ -268,6 +277,8 @@ uniform vec2 uHsize;
 uniform vec4 uBr[4];
 uniform float uBrW[4];
 uniform int uBrN;
+uniform vec4 uRuin[8];
+uniform int uRuinN;
 uniform sampler2D uH, uSh, uA, uB, uC, uN, uGrass, uDirt, uRock;
 out vec4 outColor;
 
@@ -305,6 +316,17 @@ vec4 cells(vec2 p) {
   return best;
 }
 
+// A round tree crown or boulder from a cell lookup: returns colour in rgb and coverage in a.
+vec4 crown(vec4 cc, float r, float aa, vec3 dark, vec3 mid, vec3 light, vec3 sun) {
+  float cover = 1.0 - smoothstep(r - aa, r + aa, cc.x);
+  if (cover <= 0.0) return vec4(0.0);
+  vec3 cn = normalize(vec3(-cc.y, -cc.z, max(0.0, r - cc.x) * 2.2 + 0.05 * r));
+  float lit = dot(cn, sun);
+  vec3 c = mix(dark, mix(mid, light, smoothstep(0.62, 0.74, lit)), smoothstep(0.15, 0.3, lit));
+  c = mix(c, dark * 0.55, smoothstep(r * 0.78, r * 0.95, cc.x));
+  return vec4(c, cover);
+}
+
 void main() {
   vec2 fc = vec2(gl_FragCoord.x, uView.y - gl_FragCoord.y);
   vec2 w = uCam + (fc - 0.5 * uView) / uScale;
@@ -321,7 +343,9 @@ void main() {
   // Roads follow a calmer line than the rest.
   float roadMask = texture(uB, (m + warp * 0.25) / TEX / uField).r;
   // Sharpen the ground's blends a little, so grass meets dirt along a clear (but soft) edge.
-  vec4 Ak = smoothstep(vec4(0.25), vec4(0.75), A);
+  // (Some raw weight stays in, so where every mask is thin, as under a road's edge, the blend never
+  // falls to nothing.)
+  vec4 Ak = A * 0.25 + smoothstep(vec4(0.25), vec4(0.75), A) * 0.75;
   vec4 C = texture(uC, (m + warp * 0.35) / TEX / uField);
   vec4 Bs = texture(uB, (m + warp - vec2(11.0, 13.0)) / TEX / uField);
 
@@ -338,13 +362,13 @@ void main() {
   // Ground: grass and dirt in big calm areas, sand and mud at the water, roads.
   vec3 gTex = texture(uGrass, m / 256.0).rgb, dTex = texture(uDirt, m / 256.0).rgb, rTex = texture(uRock, m / 200.0).rgb;
   float gd = (lum(gTex) - 0.38) * 0.55, dd = (lum(dTex) - 0.45) * 0.5, rd = (lum(rTex) - 0.45) * 0.6;
-  vec3 grass = mix(vec3(0.44, 0.53, 0.20), vec3(0.54, 0.59, 0.25), smoothstep(0.3, 0.7, n1.r)) * (1.0 + gd);
-  grass = mix(grass, vec3(0.38, 0.47, 0.20), smoothstep(0.55, 0.8, n2.g) * 0.35);
-  vec3 dirt = mix(vec3(0.62, 0.50, 0.33), vec3(0.69, 0.57, 0.39), n1.g) * (1.0 + dd);
+  vec3 grass = mix(vec3(0.50, 0.53, 0.22), vec3(0.60, 0.60, 0.27), smoothstep(0.3, 0.7, n1.r)) * (1.0 + gd);
+  grass = mix(grass, vec3(0.42, 0.48, 0.21), smoothstep(0.55, 0.8, n2.g) * 0.35);
+  vec3 dirt = mix(vec3(0.67, 0.53, 0.35), vec3(0.74, 0.60, 0.41), n1.g) * (1.0 + dd);
   vec3 sand = vec3(0.78, 0.69, 0.50) * (1.0 + dd * 0.6);
   vec3 mud = vec3(0.54, 0.46, 0.34) * (1.0 + dd * 0.8);
-  float sum = Ak.r + Ak.g + Ak.b + Ak.a + 0.001;
-  vec3 col = (grass * Ak.r + dirt * Ak.g + sand * Ak.b + mud * Ak.a) / sum;
+  float sum = Ak.r + Ak.g + Ak.b + Ak.a + 0.01;
+  vec3 col = (grass * Ak.r + dirt * (Ak.g + 0.01) + sand * Ak.b + mud * Ak.a) / sum;
   // A darker painted rim where grass ends.
   col *= 1.0 - 0.12 * (smoothstep(0.3, 0.45, A.r) - smoothstep(0.5, 0.7, A.r));
   float road = smoothstep(0.4, 0.5, roadMask);
@@ -353,7 +377,7 @@ void main() {
   col = mix(col, vec3(0.70, 0.59, 0.41) * (1.0 + dd * 0.7), road);
 
   // Rock: on steep slopes, and bare plateau tops, with strata and strong light.
-  vec3 rock = vec3(0.66, 0.62, 0.56) * (1.0 + rd * 0.45);
+  vec3 rock = vec3(0.60, 0.57, 0.52) * (1.0 + rd * 0.45);
   float strata = smoothstep(0.78, 0.9, fract(h / 9.0 + n3.b * 0.8));
   // Cliff rock broken into angular blocks, each lit by how its face turns to the sun.
   vec4 blk = cells(m / 15.0);
@@ -365,9 +389,14 @@ void main() {
   col = mix(col, rock * (1.0 - (strata * 0.22 + cracks * 0.3) * cliff), max(cliff, bare * 0.9));
 
   // Light: a few hard-ish tones, the sun hidden behind higher ground, valleys a little darker.
-  float tone = 1.0 + clamp(rel * (1.5 + cliff * 1.6), -0.5, 0.4);
+  float tone = 1.0 + clamp(rel * (1.5 + cliff * 1.6), -0.5, 0.4 - cliff * 0.16);
   tone = mix(tone, floor(tone * 5.0 + 0.5) / 5.0, 0.4 * cliff + 0.12);
-  tone *= mix(0.58, 1.0, sh.r) * mix(1.0, sh.g, 0.8);
+  tone *= mix(0.52, 1.0, sh.r) * mix(1.0, sh.g, 0.8);
+  // Where the riverbed dips under ground the water doesn't cover (round a bridge's ends), its
+  // slope isn't shaded: it would show as a dark hollow.
+  tone = mix(tone, 1.0, smoothstep(-1.0, -8.0, h) * (1.0 - smoothstep(0.3, 0.45, C.r)) * 0.85);
+  // Higher ground a touch brighter, so plateaus stand out from the land round them.
+  tone *= 1.0 + clamp(h, 0.0, 140.0) / 64.0 * 0.07;
   col *= tone;
 
   // Forest shadow on the ground beside it (the sun is top left, so it falls down and right).
@@ -379,7 +408,7 @@ void main() {
   if (water > 0.0) {
     vec4 r1 = nz(m + vec2(uTime * 9.0, -uTime * 6.0), 420.0), r2 = nz(m * 0.9 - vec2(uTime * 5.0, uTime * 8.0), 300.0);
     float depth = smoothstep(0.05, 0.7, C.a);
-    vec3 wcol = mix(vec3(0.30, 0.55, 0.57), vec3(0.12, 0.31, 0.45), depth);
+    vec3 wcol = mix(vec3(0.24, 0.53, 0.60), vec3(0.09, 0.29, 0.45), depth);
     float ripple = (r1.r + r2.g) * 0.5;
     wcol *= 0.97 + (ripple - 0.5) * 0.08;
     // Small glints drifting on the surface.
@@ -396,6 +425,23 @@ void main() {
     float foam = (smoothstep(0.42, 0.5, C.r) - smoothstep(0.5, 0.62, C.r)) * smoothstep(0.3, 0.6, r2.r + 0.15);
     wcol = mix(wcol, vec3(0.86, 0.90, 0.86), foam * 0.6);
     col = mix(col, wcol, water);
+  }
+
+  // Boulders along the banks and round the ford, each with a shadow.
+  float bank = smoothstep(0.16, 0.36, C.r) * (1.0 - smoothstep(0.58, 0.8, C.r));
+  float fordEdge = smoothstep(0.04, 0.3, C.g) * (1.0 - smoothstep(0.55, 0.85, C.g));
+  float wantRock = max(bank * 0.42, fordEdge * 0.8) * (1.0 - road) * (1.0 - smoothstep(0.02, 0.15, C.b));
+  if (wantRock > 0.01) {
+    float cs = 17.0;
+    vec4 sc = cells((m - vec2(5.0, 6.0)) / cs);
+    float sr = 0.26 + fract(sc.w * 3.7) * 0.2;
+    if (fract(sc.w * 13.7) < wantRock) col *= 1.0 - 0.3 * (1.0 - smoothstep(sr - 0.05, sr + 0.05, sc.x));
+    vec4 bc = cells(m / cs);
+    float br = 0.26 + fract(bc.w * 3.7) * 0.2;
+    if (fract(bc.w * 13.7) < wantRock) {
+      vec4 bo = crown(bc, br, 1.2 / uScale / cs, vec3(0.30, 0.29, 0.28), vec3(0.50, 0.49, 0.46), vec3(0.70, 0.68, 0.63), sun);
+      col = mix(col, bo.rgb, bo.a);
+    }
   }
 
   // Kyber crystals: pale gravel with blue shards.
@@ -427,35 +473,106 @@ void main() {
     vec3 bp = onBridge(i, m);
     float inDeck = (1.0 - smoothstep(hw - aa, hw + aa, abs(bp.y))) * smoothstep(-aa, aa, bp.x) * (1.0 - smoothstep(bp.z - aa, bp.z + aa, bp.x));
     if (inDeck <= 0.0) continue;
-    float pl = fract(bp.x / 12.0);
-    float seam = smoothstep(0.0, 0.1, pl) * (1.0 - smoothstep(0.88, 1.0, pl));
-    vec3 wood = mix(vec3(0.50, 0.40, 0.29), vec3(0.62, 0.51, 0.37), hash2(vec2(floor(bp.x / 12.0), float(i))).x) * mix(0.7, 1.0, seam);
-    wood *= 1.0 + (lum(dTex) - 0.45) * 0.4;
-    // Rails along both sides, with posts.
-    float rail = smoothstep(hw - 5.0, hw - 4.0, abs(bp.y));
-    float post = rail * (1.0 - smoothstep(2.5, 3.5, abs(fract(bp.x / 26.0) - 0.5) * 26.0 - 9.0));
-    vec3 railCol = mix(vec3(0.36, 0.28, 0.20), vec3(0.50, 0.40, 0.29), step(0.0, -bp.y));
-    wood = mix(wood, railCol, rail);
-    wood = mix(wood, vec3(0.28, 0.22, 0.16), post * 0.6);
-    // A dark outline round the deck.
+    // Steel plates with seams across and down the middle, girders along the sides.
+    float pl = fract(bp.x / 22.0);
+    float seam = smoothstep(0.0, 0.04, pl) * (1.0 - smoothstep(0.96, 1.0, pl)) * smoothstep(0.4, 1.1, abs(bp.y));
+    vec3 wood = mix(vec3(0.47, 0.49, 0.51), vec3(0.55, 0.57, 0.59), hash2(vec2(floor(bp.x / 22.0), step(0.0, bp.y) + float(i) * 3.0)).x) * mix(0.72, 1.0, seam);
+    wood *= 0.94 + n3.a * 0.12;
+    float girder = smoothstep(hw - 11.0, hw - 10.0, abs(bp.y));
+    vec3 girderCol = mix(vec3(0.30, 0.32, 0.34), vec3(0.44, 0.46, 0.48), step(0.0, -bp.y));
+    girderCol = mix(girderCol, vec3(0.72, 0.74, 0.74), (1.0 - smoothstep(0.8, 1.8, abs(abs(bp.y) - (hw - 6.0)))) * 0.55);
+    // Bolts along the girders.
+    girderCol *= 1.0 - 0.35 * (1.0 - smoothstep(0.9, 1.6, length(vec2(fract(bp.x / 11.0) * 11.0 - 5.5, abs(bp.y) - (hw - 3.0)))));
+    wood = mix(wood, girderCol, girder);
     float rim = smoothstep(hw - 1.6, hw - 0.4, abs(bp.y)) + (1.0 - smoothstep(0.4, 1.6, bp.x)) + smoothstep(bp.z - 1.6, bp.z - 0.4, bp.x);
-    wood = mix(wood, vec3(0.16, 0.12, 0.09), clamp(rim, 0.0, 1.0) * 0.85);
+    wood = mix(wood, vec3(0.14, 0.15, 0.16), clamp(rim, 0.0, 1.0) * 0.85);
     col = mix(col, wood, inDeck);
+  }
+  // Round pylons at the bridges' corners.
+  for (int i = 0; i < 4; i++) {
+    if (i >= uBrN) break;
+    vec3 bp = onBridge(i, m);
+    float hw = uBrW[i] * 0.5;
+    vec2 cn = vec2(bp.x < bp.z * 0.5 ? bp.x : bp.x - bp.z, abs(bp.y) - hw + 1.0);
+    float d = length(cn);
+    if (d < 14.0) {
+      vec4 py = crown(vec4(d / 13.0, -cn.x / 13.0, -cn.y * sign(bp.y + 0.001) / 13.0, 0.0), 0.9, aa / 13.0, vec3(0.20, 0.21, 0.22), vec3(0.42, 0.44, 0.46), vec3(0.74, 0.76, 0.76), sun);
+      col = mix(col, py.rgb, py.a);
+    }
+  }
+
+  // Ruins: an old foundation of flagstones with broken walls and corner columns, casting shadows.
+  for (int i = 0; i < 8; i++) {
+    if (i >= uRuinN) break;
+    vec2 hs = uRuin[i].zw;
+    vec2 q = m - uRuin[i].xy;
+    vec2 qs = q - vec2(6.0, 7.0);
+    vec2 e = abs(q) - hs, es = abs(qs) - hs;
+    if (max(es.x, es.y) > 12.0 && max(e.x, e.y) > 12.0) continue;
+    // Which stretch of wall a point is on (a side and a run along it), and whether that stretch stands.
+    float edge = abs(max(e.x, e.y)), edgeS = abs(max(es.x, es.y));
+    float runP = e.x > e.y ? q.y + 300.0 * sign(q.x) : q.x + 700.0 * sign(q.y);
+    float runS = es.x > es.y ? qs.y + 300.0 * sign(qs.x) : qs.x + 700.0 * sign(qs.y);
+    float stands = step(0.38, hash2(vec2(floor(runP / 15.0), float(i))).x);
+    float standsS = step(0.38, hash2(vec2(floor(runS / 15.0), float(i))).x);
+    float corner = step(max(abs(e.x), abs(e.y)), 7.0);
+    float cornerS = step(max(abs(es.x), abs(es.y)), 7.0);
+    float wallS = max((1.0 - smoothstep(3.0, 4.0, edgeS)) * standsS, cornerS);
+    col *= 1.0 - 0.32 * wallS;
+    if (max(e.x, e.y) < 0.0) {
+      vec4 fl = cells(q / 11.0);
+      vec3 flag = mix(vec3(0.62, 0.58, 0.50), vec3(0.70, 0.66, 0.57), fl.w);
+      flag *= 1.0 - smoothstep(0.55, 0.62, fl.x) * 0.25;
+      float moss = smoothstep(0.45, 0.7, nz(m, 60.0).r);
+      col = mix(col, mix(flag * tone, col, moss * 0.6), 0.85);
+    }
+    float wall = max((1.0 - smoothstep(3.0, 4.0, edge)) * stands, corner);
+    if (wall > 0.0) {
+      vec3 stone = mix(vec3(0.70, 0.66, 0.58), vec3(0.78, 0.74, 0.66), step(0.0, -q.x - q.y)) * (0.92 + n3.b * 0.16);
+      float outline = corner > 0.0 ? smoothstep(5.5, 7.0, max(abs(e.x), abs(e.y))) : smoothstep(2.6, 3.6, edge);
+      stone = mix(stone, vec3(0.22, 0.20, 0.17), outline * 0.9);
+      col = mix(col, stone, wall);
+    }
   }
 
   // Forest: one canopy of crowns lit from the top left, gaps dark, a dark rim at its edge.
   if (forest > 0.0) {
-    vec4 cr = cells(m / 21.0);
+    vec4 cr = cells(m / 25.0);
     float r = 0.62 + cr.w * 0.18;
     float crown = 1.0 - smoothstep(r * 0.85, r, cr.x);
     vec3 cn = normalize(vec3(-cr.y, -cr.z, max(0.0, r - cr.x) * 1.6 + 0.05));
     float lit = dot(cn, sun);
-    vec3 dark = vec3(0.10, 0.20, 0.10), mid = vec3(0.17, 0.32, 0.14), light = vec3(0.30, 0.46, 0.19);
+    vec3 dark = vec3(0.10, 0.20, 0.10), mid = mix(vec3(0.17, 0.32, 0.14), vec3(0.22, 0.34, 0.13), cr.w), light = mix(vec3(0.30, 0.46, 0.19), vec3(0.38, 0.50, 0.20), cr.w);
     vec3 canopy = mix(dark, mix(mid, light, smoothstep(0.55, 0.7, lit)), smoothstep(0.1, 0.25, lit) * crown);
     canopy *= 0.9 + cr.w * 0.2;
     float edge = smoothstep(0.44, 0.48, B.b) - smoothstep(0.5, 0.56, B.b);
     canopy = mix(canopy, vec3(0.06, 0.11, 0.06), edge * 0.85);
     col = mix(col, canopy, forest);
+  }
+
+  // Trees: loose ones round the woods' edges, and now and then a lone one out on the grass.
+  {
+    float nearWood = smoothstep(0.1, 0.4, B.b) * (1.0 - forest);
+    float open = smoothstep(0.55, 0.8, Ak.r) * (1.0 - road) * (1.0 - water) * (1.0 - crys) * (1.0 - cliff);
+    vec3 dk = vec3(0.10, 0.20, 0.10), md = vec3(0.19, 0.34, 0.14), lt = vec3(0.34, 0.50, 0.20);
+    vec4 ts = cells((m - vec2(7.0, 9.0)) / 26.0);
+    // Lone trees stand in a few small groups out on the grass, not scattered everywhere.
+    float clump = smoothstep(0.76, 0.86, n1.g) * smoothstep(0.4, 0.6, n1.b) * open * 1.4;
+    vec4 ls = cells((m - vec2(7.0, 9.0)) / 44.0);
+    float shadow = 0.0;
+    if (fract(ts.w * 7.3) < nearWood * 1.3) shadow = 1.0 - smoothstep(0.34, 0.42, ts.x);
+    if (fract(ls.w * 11.1) < clump) shadow = max(shadow, 1.0 - smoothstep(0.32, 0.4, ls.x));
+    col *= 1.0 - 0.3 * shadow;
+    vec4 tc = cells(m / 26.0);
+    if (fract(tc.w * 7.3) < nearWood * 1.3) {
+      vec4 t = crown(tc, 0.32 + fract(tc.w * 3.1) * 0.1, 1.2 / uScale / 26.0, dk, md, lt, sun);
+      col = mix(col, t.rgb, t.a);
+    }
+    vec4 lc = cells(m / 44.0);
+    if (fract(lc.w * 11.1) < clump) {
+      vec4 t = crown(lc, 0.3 + fract(lc.w * 5.3) * 0.08, 1.2 / uScale / 44.0, dk, md, lt, sun);
+      col = mix(col, t.rgb, t.a);
+    }
   }
 
   // Past the edge: greyed and darkened, with a faint line along the edge itself.
@@ -466,6 +583,9 @@ void main() {
   col = mix(col, vec3(0.82, 0.80, 0.72), (1.0 - smoothstep(0.0, 1.5, abs(outside) * uScale)) * 0.35);
   outColor = vec4(col, 1.0);
 }`
+
+/** Which texture goes in which sampler, by texture unit. */
+const UNITS: [string, string][] = [['uH', 'h'], ['uSh', 'sh'], ['uA', 'a'], ['uB', 'b'], ['uC', 'c'], ['uN', 'noise'], ['uGrass', 'grass'], ['uDirt', 'dirt'], ['uRock', 'rock']]
 
 class GlLayer implements GroundLayer {
   readonly canvas: HTMLCanvasElement
@@ -478,6 +598,10 @@ class GlLayer implements GroundLayer {
   private tex: Record<string, WebGLTexture> = {}
   private loc: Record<string, WebGLUniformLocation | null> = {}
   private fields: Fields | null = null
+  /** The bridges' and ruins' uniforms, made once per map. */
+  private brEnds = new Float32Array(16)
+  private brWidths = new Float32Array(4)
+  private ruinData = new Float32Array(32)
   private world = [1, 1]
   private base: string
   /** Settles once the detail textures are in. */
@@ -501,7 +625,7 @@ class GlLayer implements GroundLayer {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`ground program: ${gl.getProgramInfoLog(p)}`)
     this.prog = p
     this.vao = gl.createVertexArray()!
-    for (const u of ['uView', 'uCam', 'uScale', 'uWorld', 'uTime', 'uField', 'uHsize', 'uBr', 'uBrW', 'uBrN', 'uH', 'uSh', 'uA', 'uB', 'uC', 'uN', 'uGrass', 'uDirt', 'uRock']) this.loc[u] = gl.getUniformLocation(p, u)
+    for (const u of ['uView', 'uCam', 'uScale', 'uWorld', 'uTime', 'uField', 'uHsize', 'uBr', 'uBrW', 'uBrN', 'uRuin', 'uRuinN', 'uH', 'uSh', 'uA', 'uB', 'uC', 'uN', 'uGrass', 'uDirt', 'uRock']) this.loc[u] = gl.getUniformLocation(p, u)
     // Grey stand-ins until the detail textures load.
     for (const k of ['grass', 'dirt', 'rock']) this.tex[k] = this.texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([115, 115, 115, 255]), true)
     const N = 128
@@ -558,6 +682,11 @@ class GlLayer implements GroundLayer {
     this.tex.a = this.texture(f.fw, f.fh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, f.a, true)
     this.tex.b = this.texture(f.fw, f.fh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, f.b, true)
     this.tex.c = this.texture(f.fw, f.fh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, f.c, true)
+    this.brEnds.fill(0)
+    this.brWidths.fill(0)
+    for (let i = 0; i < Math.min(4, f.bridges.length / 5); i++) this.brEnds.set(f.bridges.slice(i * 5, i * 5 + 4), i * 4), (this.brWidths[i] = f.bridges[i * 5 + 4])
+    this.ruinData.fill(0)
+    this.ruinData.set(f.ruins.slice(0, 32))
   }
 
   draw(cam: { x: number; y: number; zoom: number }, w: number, h: number, dpr: number, time: number) {
@@ -580,12 +709,13 @@ class GlLayer implements GroundLayer {
     const n = Math.min(4, f.bridges.length / 5)
     gl.uniform1i(L.uBrN, n)
     if (n) {
-      const ends = new Float32Array(16), widths = new Float32Array(4)
-      for (let i = 0; i < n; i++) ends.set(f.bridges.slice(i * 5, i * 5 + 4), i * 4), (widths[i] = f.bridges[i * 5 + 4])
-      gl.uniform4fv(L.uBr, ends)
-      gl.uniform1fv(L.uBrW, widths)
+      gl.uniform4fv(L.uBr, this.brEnds)
+      gl.uniform1fv(L.uBrW, this.brWidths)
     }
-    const units: [string, string][] = [['uH', 'h'], ['uSh', 'sh'], ['uA', 'a'], ['uB', 'b'], ['uC', 'c'], ['uN', 'noise'], ['uGrass', 'grass'], ['uDirt', 'dirt'], ['uRock', 'rock']]
+    const nr = Math.min(8, f.ruins.length / 4)
+    gl.uniform1i(L.uRuinN, nr)
+    if (nr) gl.uniform4fv(L.uRuin, this.ruinData)
+    const units = UNITS
     for (let i = 0; i < units.length; i++) {
       gl.activeTexture(gl.TEXTURE0 + i)
       gl.bindTexture(gl.TEXTURE_2D, this.tex[units[i][1]])

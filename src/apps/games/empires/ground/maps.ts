@@ -9,18 +9,19 @@ import type { GroundMapDef } from './types.ts'
 
 export const GROUND_MAPS: GroundMapDef[] = [
   {
-    // After a Star Wars: Empire at War ground map: a river runs corner to corner between two bases
-    // on plateaus, with one bridge and one ford as the only crossings. A dirt road leads from each
-    // base down its ramp and over the bridge. Big woods, two bare rocky ridges a side, and calm
-    // grass and dirt everywhere else. Each base has a crystal field on its plateau and one below
-    // it; the third field lies in the ford's shallows, between the two.
+    // After a Star Wars: Empire at War ground map (the look Menno picked): a river runs corner to
+    // corner between two bases on open ground, crossed only by a metal bridge and a rocky ford. A
+    // dirt road joins the bases over the bridge, past old ruins. Each side has a rocky mesa with
+    // one ramp and a crystal field on top, solid woods round the edges, and calm grass and dirt
+    // everywhere else. Crystal fields: one by each base, one on each mesa, and one shared in the
+    // ford's shallows.
     //
     // Mirrored across the river (the line from the top right corner to the bottom left), so the
     // bridge and the ford, which lie on that line, are shared. The shapes below are drawn for the
     // top left side; the other side is its mirror image.
     id: 'ashwater-crossing',
     name: 'Ashwater Crossing',
-    blurb: 'A river between two plateau bases, crossed by one bridge and one ford.',
+    blurb: 'Two bases either side of a river, crossed by one bridge and one ford, with a mesa each.',
     cols: 96,
     rows: 96,
     cell: 1,
@@ -30,22 +31,21 @@ export const GROUND_MAPS: GroundMapDef[] = [
     biome: 'temperate',
     sketch: [],
     features: {
-      plateaus: [
-        { level: 1, pts: [[-2, -2], [35, -2], [37, 7], [33, 19], [29, 27], [19, 32], [8, 32], [-2, 29]] },
-        // Bare rocky ridges, no way up.
-        { level: 1, pts: [[58, 2], [68, 3], [72, 8], [66, 11], [59, 8]] },
-        { level: 1, pts: [[2, 60], [6, 58], [10, 64], [10, 72], [5, 76], [2, 70]] },
-      ],
-      ramps: [{ from: [28, 37], to: [24, 27], width: 6 }],
+      plateaus: [{ level: 1, pts: [[46, 8], [56, 4], [64, 8], [66, 16], [60, 22], [50, 22], [45, 16]] }],
+      ramps: [{ from: [53, 28], to: [54, 19], width: 5 }],
       rivers: [{ pts: [[100, -4], [48, 48], [-4, 100]], width: 9 }],
       bridges: [{ from: [29, 53], to: [43, 67], width: 5 }],
       fords: [{ at: [62, 34], radius: 6 }],
-      roads: [{ pts: [[16, 15], [20, 22], [24, 27], [28, 37], [30, 44], [31, 51], [36, 60]], width: 2.6 }],
+      roads: [{ pts: [[16, 15], [19, 24], [24, 34], [30, 44], [32, 51], [36, 60]], width: 2.8 }],
       forests: [
-        [[40, 6], [50, 4], [54, 10], [52, 19], [45, 23], [40, 19], [38, 12]],
-        [[4, 40], [14, 36], [21, 40], [22, 49], [16, 55], [6, 54], [3, 47]],
+        [[-1, 30], [8, 28], [14, 34], [13, 44], [6, 48], [-1, 47]],
+        [[26, -1], [38, -1], [40, 5], [34, 9], [27, 7]],
+        [[4, 58], [14, 54], [20, 60], [18, 66], [10, 70], [4, 66]],
+        [[70, -1], [80, -1], [82, 3], [76, 6], [70, 4]],
+        [[33, 12], [41, 10], [43, 16], [40, 24], [34, 25], [31, 19]],
       ],
-      deposits: [[27, 9], [44, 31], [62, 34]],
+      deposits: [[27, 22], [56, 12], [62, 34]],
+      ruins: [[31.5, 37]],
       spawns: [[16, 15]],
     },
   },

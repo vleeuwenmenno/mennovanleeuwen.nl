@@ -148,6 +148,8 @@ export type GroundFeatures = {
   forests?: TilePt[][]
   /** Kyber crystal fields: their middles. */
   deposits?: TilePt[]
+  /** Ruins: the middles of old foundations with broken walls, 3 × 2 tiles, unbuildable (walkable). */
+  ruins?: TilePt[]
   /** Start spots on the plateaus. */
   spawns?: TilePt[]
 }

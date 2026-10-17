@@ -3284,8 +3284,9 @@ ground is smoothed and given a gentle roll, so slopes stay steep at cliffs and s
 **Maps** ([`maps.ts`](src/apps/games/empires/ground/maps.ts)) come in two forms. Round 2 maps are
 drawn with shapes in tile units (`features`, GroundFeatures in types.ts): plateau polygons with
 their level, ramps from foot to top, rivers along polylines (swelling and narrowing, deep in the
-middle), bridges and fords across them, dirt roads along polylines, forest polygons, crystal fields
-and spawns. Edges wobble with the seed. Shapes can be drawn over the whole map; the map's symmetry
+middle), bridges and fords across them, dirt roads along polylines, forest polygons, crystal fields,
+ruins (old foundations, unbuildable but walkable) and spawns. A plateau that a ramp climbs keeps the
+low ground's grass; one with no way up is bare rock. Edges wobble with the seed. Shapes can be drawn over the whole map; the map's symmetry
 then copies one side's tiles onto the other, so both sides match exactly. Besides the space maps'
 symmetries, a square map can be mirrored across its diagonal (`mirror: 'diagonal'`, from the top
 right corner to the bottom left), which puts two bases in the other corners and lets a river on
@@ -3310,11 +3311,11 @@ seeded random stream only):
   props block the tiles under them; flat ones (rubble, cracked stone) only decorate.
 
 The first map is **Ashwater Crossing** (two players, 96 × 96 tiles, mirrored across the diagonal),
-after a Star Wars: Empire at War ground map: a river runs corner to corner between two bases on
-plateaus, crossed only by one bridge and one ford. A dirt road leads from each base down its ramp
-and over the bridge. Two big woods and two bare rocky ridges a side, calm grass and dirt
-everywhere else, and three crystal fields a side: one on the base's plateau, one below it, and one
-shared in the ford's shallows. **Dustfall Ridge** (128 × 96, point symmetry, a round 1 sketch) is
+after a Star Wars: Empire at War ground map (the look Menno picked): a river runs corner to corner
+between two bases on open ground, crossed only by a metal bridge and a rocky ford. A dirt road
+joins the bases over the bridge, past old ruins. Each side has a rocky mesa with one ramp and a
+crystal field on top, solid woods round the edges, and calm grass and dirt everywhere else; the
+third crystal field lies in the ford's shallows, shared. **Dustfall Ridge** (128 × 96, point symmetry, a round 1 sketch) is
 still there: each base on a plateau in a corner with one ramp down to a shelf of mid ground, the
 shelf with two ramps to the low ground, three deposits a side, and a mid-level hill and a pond in
 the middle.
@@ -3328,14 +3329,18 @@ is hidden behind higher ground, soft edged, and how deep each spot sits in a val
 masks at 4 samples a tile, blurred a little: grass, dirt, sand, mud, road, rock, forest, crystals,
 water with its depth, ford and bridge. The shader warps the mask lookups with noise so edges come
 out organic, mixes muted colours with a little low-frequency variation and the round 1 textures as
-detail, lights the land from the heightmap in a few hard-ish tones (the game's cel-shaded look),
+detail (warm grass and dirt, blue water, grey rock), lights the land from the heightmap in a few
+hard-ish tones (the game's cel-shaded look), with higher ground a touch brighter,
 puts rock on steep slopes and bare ridges (angular blocks, strata, strong light), casts shadows,
 and paints:
 - water darker away from the banks, with slow swells, a few glints and foam on the edge, moving;
+- boulders along the banks, thicker round the ford, each lit and casting a shadow;
 - the ford as clear shallow water over a stony bed, the crystals in it on top;
-- bridges straight from their shapes: a plank deck with rails, posts, a dark outline and a shadow
-  on the water;
-- forests as one canopy of crowns lit from the top left, a dark rim at the edge and a cast shadow;
+- bridges straight from their shapes: steel plates on girders with bolts, round pylons at the
+  corners, a dark outline and a shadow on the water;
+- ruins: a foundation of flagstones with broken walls and corner columns, casting shadows;
+- forests as one canopy of crowns lit from the top left, a dark rim at the edge and a cast shadow,
+  loose trees round the woods' edges, and a few small groups of trees out on the grass;
 - crystal fields as pale gravel with blue shards;
 - past the map's edge, the map mirrored, greyed and darkened, with a faint line on the edge.
 
