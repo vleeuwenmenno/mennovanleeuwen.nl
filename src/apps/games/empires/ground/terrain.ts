@@ -1,5 +1,5 @@
-import { mirrored, rng, type Pt, type Symmetry } from '../maps.ts'
-import { LEVELS, TF, TILE, terrainIndex, type GroundMap, type GroundMapDef, type Prop, type TileGrid } from './types.ts'
+import { mirrored, rng, type Pt } from '../maps.ts'
+import { LEVELS, TF, TILE, terrainIndex, type GroundMap, type GroundMapDef, type Prop, type TileGrid, type TilePt } from './types.ts'
 
 // Builds a ground map from its sketch (types.ts GroundMapDef): the tile grid with heights, ramps,
 // water, deposits and terrain, and the props scattered over it. This is sim data: the ground sim
@@ -119,9 +119,14 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 // --- Symmetry in tile space ----------------------------------------------------------------------
 
 /** Every copy of tile (c, r) under the map's symmetry, as tile indices, the tile itself first. */
-function tileCopies(cols: number, rows: number, sym: Symmetry, c: number, r: number): number[] {
+function tileCopies(cols: number, rows: number, def: GroundMapDef, c: number, r: number): number[] {
+  if (def.mirror === 'diagonal') {
+    const m = (rows - 1 - c) * cols + (cols - 1 - r)
+    const i = r * cols + c
+    return m === i ? [i] : [i, m]
+  }
   const out: number[] = []
-  for (const p of mirrored({ w: cols - 1, h: rows - 1, sym }, { x: c, y: r })) {
+  for (const p of mirrored({ w: cols - 1, h: rows - 1, sym: def.sym }, { x: c, y: r })) {
     const pc = Math.round(p.x)
     const pr = Math.round(p.y)
     if (pc < 0 || pr < 0 || pc >= cols || pr >= rows) continue
@@ -133,6 +138,11 @@ function tileCopies(cols: number, rows: number, sym: Symmetry, c: number, r: num
 
 /** Every copy of a world point, the point itself first, without duplicates. */
 function pointCopies(def: GroundMapDef, p: Pt): Pt[] {
+  const W = def.cols * TILE, H = def.rows * TILE
+  if (def.mirror === 'diagonal') {
+    const q = { x: W - p.y, y: H - p.x }
+    return Math.abs(q.x - p.x) < 1 && Math.abs(q.y - p.y) < 1 ? [p] : [p, q]
+  }
   const all = mirrored({ w: def.cols * TILE, h: def.rows * TILE, sym: def.sym }, p)
   return all.filter((q, i) => all.findIndex((o) => Math.abs(o.x - q.x) < 1 && Math.abs(o.y - q.y) < 1) === i)
 }
@@ -236,6 +246,12 @@ const levelOf = (ch: string) => (ch === 'S' ? 2 : ch === 'd' || ch === '~' ? 0 :
 
 /** Builds the map: the same result for the same def on every machine. */
 export function buildGroundMap(def: GroundMapDef): GroundMap {
+  const map = def.features ? buildFeatureMap(def) : buildSketchMap(def)
+  map.grid.elev = buildElev(map)
+  return map
+}
+
+function buildSketchMap(def: GroundMapDef): GroundMap {
   const { cols, rows, cell } = def
   const n = cols * rows
   const cells = expandSketch(def)
@@ -311,7 +327,7 @@ export function buildGroundMap(def: GroundMapDef): GroundMap {
       let ch = at(Math.floor((c + 0.5 + ox) / cell), Math.floor((r + 0.5 + oy) / cell))
       if (ch === '/') ch = at(Math.floor((c + 0.5) / cell), Math.floor((r + 0.5) / cell))
       if (ch === '/') ch = '0'
-      for (const k of tileCopies(cols, rows, def.sym, c, r)) {
+      for (const k of tileCopies(cols, rows, def, c, r)) {
         done[k] = 1
         if (fixed[k]) continue
         height[k] = levelOf(ch)
@@ -442,7 +458,7 @@ export function buildGroundMap(def: GroundMapDef): GroundMap {
         else if (height[t] > 0 && nPatch(c / 5, r / 5) > 0.8) ter = ROCKY
         else if (footDist[t] >= 4 && nGrass(c / 9, r / 9) > (height[t] > 0 ? 0.6 : 0.5)) ter = GRASS
       }
-      for (const k of tileCopies(cols, rows, def.sym, c, r)) (done[k] = 1), (terrain[k] = ter)
+      for (const k of tileCopies(cols, rows, def, c, r)) (done[k] = 1), (terrain[k] = ter)
     }
 
   const map: GroundMap = { def, grid, props: [], spawns, deposits }
@@ -546,7 +562,7 @@ function scatterProps(map: GroundMap, rimDist: Uint8Array): Prop[] {
   const canonical = (x: number, y: number) => {
     // Only spots whose tile is the first of its symmetric copies are tried; the copies follow.
     const c = Math.floor(x / TILE), r = Math.floor(y / TILE)
-    const copies = tileCopies(cols, rows, def.sym, c, r)
+    const copies = tileCopies(cols, rows, def, c, r)
     return copies.every((k) => k >= copies[0])
   }
   const place = (kind: string, x: number, y: number, size: number, blocks = PROP_INFO[kind].blocks) => {
@@ -644,4 +660,277 @@ function blockSpotFree(g: TileGrid, keepOut: Uint8Array, x: number, y: number, s
   const tiles = blockedTiles(g, { kind: '', x, y, size, blocks: true })
   const h = g.height[tiles[0]]
   return tiles.every((t) => !keepOut[t] && !(g.flags[t] & (TF.blocked | TF.ramp)) && g.height[t] === h)
+}
+
+// --- Round 2 maps: hand-drawn shapes -------------------------------------------------------------
+
+/** World units of elevation per height level, for drawing (TileGrid `elev`). */
+export const LEVEL_H = 64
+
+/** Distance from (px, py) to the segment a → b, and how far along it (0 to 1) the nearest point is. */
+function segment(px: number, py: number, a: TilePt, b: TilePt) {
+  const dx = b[0] - a[0], dy = b[1] - a[1]
+  const len2 = dx * dx + dy * dy || 1
+  const t = ((px - a[0]) * dx + (py - a[1]) * dy) / len2
+  const u = t < 0 ? 0 : t > 1 ? 1 : t
+  const ex = a[0] + dx * u - px, ey = a[1] + dy * u - py
+  return { d: Math.sqrt(ex * ex + ey * ey), t, side: ((px - a[0]) * dy - (py - a[1]) * dx) / Math.sqrt(len2) }
+}
+
+/** Distance from a point to a polyline, and the distance along it to the nearest point. */
+function polyline(px: number, py: number, pts: TilePt[]) {
+  let best = Infinity, at = 0, run = 0
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const s = segment(px, py, pts[i], pts[i + 1])
+    const len = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+    if (s.d < best) (best = s.d), (at = run + Math.min(1, Math.max(0, s.t)) * len)
+    run += len
+  }
+  return { d: best, along: at }
+}
+
+/** Whether a point lies inside a polygon (even-odd). */
+function inside(px: number, py: number, pts: TilePt[]) {
+  let inn = false
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j]
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inn = !inn
+  }
+  return inn
+}
+
+/** One tile's share of the shapes, worked out once per symmetric set and copied to the others. */
+type FeatureTile = { level: number; ramp: number; rampLo: number; rampHi: number; water: number; ford: boolean; bridge: boolean; road: boolean; forest: boolean; deposit: boolean; bare: boolean; ruin: boolean }
+
+/** Half the size of a ruin's foundation, in tiles: wide as drawn, turned by the mirror. */
+export const RUIN_HALF: TilePt = [1.6, 1.15]
+
+/**
+ * Builds a round 2 map from its shapes (GroundMapDef `features`): plateaus with wobbling edges, ramps,
+ * rivers with a bridge and a ford, dirt roads, solid forests and kyber crystal fields. Deterministic,
+ * and copied tile by tile across the map's symmetry, so both sides match exactly.
+ */
+function buildFeatureMap(def: GroundMapDef): GroundMap {
+  const f = def.features!
+  const { cols, rows } = def
+  const n = cols * rows
+  const height = new Uint8Array(n)
+  const flags = new Uint8Array(n)
+  const terrain = new Uint8Array(n)
+  const ft: FeatureTile[] = new Array(n)
+  const wobX = valueNoise(def.seed * 7 + 1), wobY = valueNoise(def.seed * 7 + 2)
+  const wide = valueNoise(def.seed * 7 + 3), woods = valueNoise(def.seed * 7 + 4)
+  const levelAt = (x: number, y: number) => {
+    let lv = 0
+    for (const p of f.plateaus ?? []) if (inside(x, y, p.pts)) lv = Math.max(lv, p.level)
+    return lv
+  }
+  // Plateaus no ramp climbs are bare rock (ridges); the others have the low ground's grass and dirt.
+  const barePlateaus = (f.plateaus ?? []).filter((p) => !(f.ramps ?? []).some((r) => inside(r.to[0], r.to[1], p.pts)))
+  const done = new Uint8Array(n)
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c
+      if (done[i]) continue
+      const px = c + 0.5, py = r + 0.5
+      // Plateau edges wobble up to 1.6 tiles, forest edges more.
+      const qx = px + (wobX(px / 6, py / 6) - 0.5) * 3.2, qy = py + (wobY(px / 6, py / 6) - 0.5) * 3.2
+      const t: FeatureTile = { level: levelAt(qx, qy), ramp: -1, rampLo: 0, rampHi: 0, water: 0, ford: false, bridge: false, road: false, forest: false, deposit: false, bare: false, ruin: false }
+      t.bare = t.level > 0 && barePlateaus.some((p) => inside(qx, qy, p.pts))
+      for (const rp of f.ramps ?? []) {
+        const s = segment(px, py, rp.from, rp.to)
+        if (s.t < -0.05 || s.t > 1.05 || Math.abs(s.side) > rp.width / 2) continue
+        t.ramp = Math.min(1, Math.max(0, s.t))
+        t.rampLo = levelAt(rp.from[0], rp.from[1])
+        t.rampHi = levelAt(rp.to[0], rp.to[1])
+        t.level = t.ramp >= 0.5 ? t.rampHi : t.rampLo
+        t.bare = false
+      }
+      for (const rv of f.rivers ?? []) {
+        const s = polyline(px + (wobX(px / 3, py / 3) - 0.5) * 1.4, py + (wobY(px / 3, py / 3) - 0.5) * 1.4, rv.pts)
+        // The river swells and narrows along its course.
+        const half = (rv.width / 2) * (0.8 + 0.45 * wide(s.along / 9, 0.5))
+        if (s.d < half) t.water = Math.max(t.water, Math.min(1, (half - s.d) / 2.5 + 0.15))
+      }
+      if (t.water) {
+        t.level = 0
+        t.ramp = -1
+        for (const fd of f.fords ?? []) if (Math.hypot(px - fd.at[0], py - fd.at[1]) < fd.radius) t.ford = true
+      }
+      for (const b of f.bridges ?? []) {
+        const s = segment(px, py, b.from, b.to)
+        if (s.t >= 0 && s.t <= 1 && Math.abs(s.side) <= b.width / 2) (t.bridge = true), (t.road = true)
+      }
+      for (const rd of f.roads ?? []) if (polyline(px, py, rd.pts).d < rd.width / 2) t.road = true
+      if (!t.water && t.ramp < 0) {
+        const fx = px + (woods(px / 5, py / 5) - 0.5) * 5, fy = py + (woods(px / 5 + 9, py / 5) - 0.5) * 5
+        for (const fo of f.forests ?? []) if (inside(fx, fy, fo)) t.forest = true
+      }
+      for (const d of f.deposits ?? []) if (Math.hypot(px - d[0], py - d[1]) < 1.75) t.deposit = true
+      for (const rn of f.ruins ?? []) if (Math.abs(px - rn[0]) < RUIN_HALF[0] + 0.5 && Math.abs(py - rn[1]) < RUIN_HALF[1] + 0.5) t.ruin = true
+      if (t.road || t.deposit || t.ruin) t.forest = false
+      for (const k of tileCopies(cols, rows, def, c, r)) (done[k] = 1), (ft[k] = t)
+    }
+  // How high each ramp tile stands, for drawing: ramps here may run at any angle.
+  const rampElev = new Float32Array(n).fill(-1)
+  for (let i = 0; i < n; i++) if (ft[i].ramp >= 0 && !ft[i].water) rampElev[i] = (ft[i].rampLo + (ft[i].rampHi - ft[i].rampLo) * ft[i].ramp) * LEVEL_H
+
+  // Flags and heights.
+  for (let i = 0; i < n; i++) {
+    const t = ft[i]
+    height[i] = t.level
+    if (t.water) flags[i] |= TF.water | TF.noBuild | (t.ford || t.bridge ? 0 : TF.blocked)
+    if (t.water && t.ford) flags[i] |= TF.ford
+    if (t.bridge) flags[i] |= TF.bridge | TF.noBuild
+    if (t.ramp >= 0) flags[i] |= TF.ramp | TF.noBuild
+    if (t.forest) flags[i] |= TF.forest | TF.blocked | TF.noBuild
+    if (t.deposit) flags[i] |= TF.deposit | TF.noBuild
+    if (t.ruin) flags[i] |= TF.noBuild
+  }
+  // A bridge's deck stands at its banks' level and keeps the river under it.
+  const isRamp = (i: number) => (flags[i] & TF.ramp) !== 0
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c
+      if (isRamp(i) || flags[i] & (TF.water | TF.bridge)) continue
+      // Cliff feet are blocked on all four sides alike (the slope covers them), rims unbuildable.
+      for (const [ox, oy] of N4) {
+        const nc = c + ox, nr = r + oy
+        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue
+        const u = nr * cols + nc
+        if (isRamp(u)) continue
+        if (height[u] > height[i]) flags[i] |= TF.blocked | TF.noBuild
+        if (height[u] < height[i]) flags[i] |= TF.noBuild
+      }
+    }
+  const nearRamp = chebyshevFrom(cols, rows, isRamp, 4)
+  for (let i = 0; i < n; i++) if (!isRamp(i) && nearRamp[i] <= 2) flags[i] |= TF.noBuild
+  for (let c = 0; c < cols; c++) (flags[c] |= TF.noBuild), (flags[(rows - 1) * cols + c] |= TF.noBuild)
+  for (let r = 0; r < rows; r++) (flags[r * cols] |= TF.noBuild), (flags[r * cols + cols - 1] |= TF.noBuild)
+
+  // Terrain: grass with big calm patches of dirt; packed dirt round the bases; rock on bare plateaus
+  // and cliff slopes; sand along the banks and mud by the ford; roads; dirt under the crystals.
+  const T = (id: Parameters<typeof terrainIndex>[0]) => terrainIndex(id)
+  const nearWater = chebyshevFrom(cols, rows, (i) => (flags[i] & TF.water) !== 0 && !(flags[i] & TF.bridge), 4)
+  const nearFord = chebyshevFrom(cols, rows, (i) => (flags[i] & TF.ford) !== 0, 4)
+  const patch = valueNoise(def.seed * 7 + 5)
+  const spawnPts = (f.spawns ?? []).flatMap((s) => pointCopies(def, { x: s[0] * TILE, y: s[1] * TILE }))
+  done.fill(0)
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c
+      if (done[i]) continue
+      const t = ft[i]
+      let ter = T('grass')
+      const slope = !(flags[i] & TF.water) && !isRamp(i) && N4.some(([ox, oy]) => {
+        const nc = c + ox, nr = r + oy
+        return nc >= 0 && nr >= 0 && nc < cols && nr < rows && !isRamp(nr * cols + nc) && height[nr * cols + nc] !== height[i]
+      })
+      const toBase = Math.min(...spawnPts.map((s) => Math.hypot((c + 0.5) * TILE - s.x, (r + 0.5) * TILE - s.y) / TILE))
+      if (t.water) ter = t.ford || nearFord[i] <= 1 ? T('mud') : T('sand')
+      else if (t.road) ter = T('road')
+      else if (t.deposit) ter = T('dirt')
+      else if (t.ramp >= 0) ter = T('dirt')
+      else if (slope) ter = T('rocky')
+      else if (t.bare) ter = T('rocky')
+      else if (t.ruin) ter = T('dirt')
+      else if (!t.forest && toBase < 11 + patch(c / 4, r / 4) * 3) ter = T('dirt')
+      else if (t.level > 0) ter = T('grass')
+      else if (nearFord[i] <= 1) ter = T('mud')
+      else if (nearWater[i] <= 1) ter = T('sand')
+      else if (!t.forest && patch(c / 13, r / 13) > 0.63) ter = T('dirt')
+      for (const k of tileCopies(cols, rows, def, c, r)) (done[k] = 1), (terrain[k] = ter)
+    }
+
+  const spawns: Pt[] = []
+  for (const s of f.spawns ?? []) for (const p of pointCopies(def, { x: s[0] * TILE, y: s[1] * TILE })) addUnique(spawns, p)
+  const deposits: Pt[] = []
+  for (const d of f.deposits ?? []) for (const p of pointCopies(def, { x: d[0] * TILE, y: d[1] * TILE })) addUnique(deposits, p)
+  const map: GroundMap = { def, grid: { cols, rows, terrain, height, flags }, props: [], spawns, deposits }
+  rampHints.set(map, rampElev)
+  return map
+}
+
+/** Ramp tile elevations a feature map worked out while it was built (buildElev uses them). */
+const rampHints = new WeakMap<GroundMap, Float32Array>()
+
+/**
+ * The land's shape for drawing (TileGrid `elev`, one value per tile corner): each tile stands at its
+ * level times LEVEL_H, ramps climb evenly from foot to top, water sinks into a bed that deepens away
+ * from the banks, and the corners take the average of the tiles round them. Then the ground is
+ * smoothed and given a gentle roll wherever no level changes nearby, so slopes stay steep at cliffs
+ * and soft everywhere else.
+ */
+function buildElev(map: GroundMap): Int16Array {
+  const g = map.grid
+  const { cols, rows } = g
+  const n = cols * rows
+  const tileH = new Float32Array(n)
+  for (let i = 0; i < n; i++) tileH[i] = g.height[i] * LEVEL_H
+  // Ramps: by how far each tile is along its ramp, foot to top.
+  const hint = rampHints.get(map)
+  if (hint) for (let i = 0; i < n; i++) if (hint[i] >= 0) tileH[i] = hint[i]
+  for (const r of hint ? [] : rampsOf(map)) {
+    for (let y = r.r0; y <= r.r1; y++)
+      for (let x = r.c0; x <= r.c1; x++) {
+        const i = y * cols + x
+        if (!(g.flags[i] & TF.ramp)) continue
+        const span = r.dx !== 0 ? r.c1 - r.c0 : r.r1 - r.r0
+        const pos = r.dx > 0 ? x - r.c0 : r.dx < 0 ? r.c1 - x : r.dy > 0 ? y - r.r0 : r.r1 - y
+        const t = span > 0 ? (pos + 0.5) / (span + 1) : 0.5
+        tileH[i] = (r.lo + (r.hi - r.lo) * t) * LEVEL_H
+      }
+  }
+  // Bare rocky heights (ridges with no way up) rise to a crest, higher the further from their edge.
+  const fromEdge = chebyshevFrom(cols, rows, (i) => g.height[i] === 0, 6)
+  const ROCKY = terrainIndex('rocky')
+  for (let i = 0; i < n; i++) if (g.height[i] > 0 && g.terrain[i] === ROCKY && !(g.flags[i] & TF.ramp) && map.def.features) tileH[i] += Math.max(0, fromEdge[i] - 1) * 16
+  // Water: a bed that deepens away from dry land; a ford stays shallow.
+  const fromLand = chebyshevFrom(cols, rows, (i) => !(g.flags[i] & TF.water), 4)
+  for (let i = 0; i < n; i++) {
+    // Under a bridge the bed stays at the banks' level, so no hollow shows beside the deck.
+    if (!(g.flags[i] & TF.water) || g.flags[i] & TF.bridge) continue
+    tileH[i] = g.flags[i] & TF.ford ? -5 : -6 - 6 * Math.min(3, fromLand[i])
+  }
+  const W = cols + 1, H = rows + 1
+  let e = new Float32Array(W * H)
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let sum = 0, k = 0
+      for (let dy = -1; dy <= 0; dy++)
+        for (let dx = -1; dx <= 0; dx++) {
+          const c = x + dx, r = y + dy
+          if (c < 0 || r < 0 || c >= cols || r >= rows) continue
+          sum += tileH[r * cols + c]
+          k++
+        }
+      e[y * W + x] = sum / k
+    }
+  // Smooth where the ground is gentle (no cliff within a corner), twice.
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Float32Array(e)
+    for (let y = 1; y < H - 1; y++)
+      for (let x = 1; x < W - 1; x++) {
+        let lo = Infinity, hi = -Infinity, sum = 0
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const v = e[(y + dy) * W + x + dx]
+            lo = Math.min(lo, v)
+            hi = Math.max(hi, v)
+            sum += v
+          }
+        if (hi - lo < LEVEL_H * 0.45) next[y * W + x] = sum / 9
+      }
+    e = next
+  }
+  // A gentle roll over open ground.
+  const roll = valueNoise(map.def.seed * 7 + 9)
+  const out = new Int16Array(W * H)
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const v = e[y * W + x]
+      const flat = y > 0 && x > 0 && y < H - 1 && x < W - 1 ? Math.abs(e[(y - 1) * W + x] - e[(y + 1) * W + x]) + Math.abs(e[y * W + x - 1] - e[y * W + x + 1]) < LEVEL_H * 0.3 : true
+      out[y * W + x] = Math.round(v + (flat ? (roll(x / 10, y / 10) - 0.5) * 12 : 0))
+    }
+  return out
 }

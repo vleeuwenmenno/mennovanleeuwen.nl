@@ -3273,13 +3273,29 @@ and tile flags; hovering or tapping a tile shows what it is). Production builds 
 entries in the factions' data and the sim's empty hooks.
 
 **Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
-Each tile has a terrain (dirt, grass, rocky, and later sand, snow, ash, cracked earth and plating),
-a height of 0, 1 or 2, and flags: blocked, no building, ramp, deposit, water. Cliffs stand where
-heights differ, and only ramps join two levels (`canStep`, the one rule the reach check, path finding
-and movement share). The tile at the foot of every cliff is blocked (the rock face or the rubble
-under a lip covers it), on all four sides alike so mirrored maps stay fair.
+Each tile has a terrain (dirt, grass, rocky, sand, mud, road, and later snow, ash, cracked earth and
+plating), a height of 0, 1 or 2, and flags: blocked, no building, ramp, deposit (a kyber crystal
+field), water, bridge, ford and forest. Cliffs stand where heights differ, and only ramps join two
+levels (`canStep`, the one rule the reach check, path finding and movement share). The tile at the
+foot of every cliff is blocked (the slope or the rubble covers it), on all four sides alike so
+mirrored maps stay fair. Water is blocked except where it is a bridge or a ford; forests are
+blocked. For drawing, the grid also carries `elev`, the land's elevation at every tile corner: each
+level stands 64 units higher, ramps climb evenly, riverbeds sink away from the banks, and the open
+ground is smoothed and given a gentle roll, so slopes stay steep at cliffs and soft elsewhere.
 
-**Maps** ([`maps.ts`](src/apps/games/empires/ground/maps.ts)) are coarse sketches for one side,
+**Maps** ([`maps.ts`](src/apps/games/empires/ground/maps.ts)) come in two forms. Round 2 maps are
+drawn with shapes in tile units (`features`, GroundFeatures in types.ts): plateau polygons with
+their level, ramps from foot to top, rivers along polylines (swelling and narrowing, deep in the
+middle), bridges and fords across them, dirt roads along polylines, forest polygons, crystal fields,
+ruins (old foundations, unbuildable but walkable) and spawns. A plateau that a ramp climbs keeps the
+low ground's grass; one with no way up is bare rock. Edges wobble with the seed. Shapes can be drawn over the whole map; the map's symmetry
+then copies one side's tiles onto the other, so both sides match exactly. Besides the space maps'
+symmetries, a square map can be mirrored across its diagonal (`mirror: 'diagonal'`, from the top
+right corner to the bottom left), which puts two bases in the other corners and lets a river on
+the mirror line carry one shared bridge and one shared ford. No props: woods are drawn by the
+ground layer.
+
+Round 1 maps are coarse sketches for one side,
 copied to the others by the same symmetries as space maps. Each character covers `cell` × `cell`
 tiles: `0` `1` `2` heights, `/` a ramp (it joins the levels on either side of it, and gets walls on
 its open sides), `~` water, `S` a spawn on the plateau, `d` a deposit on low ground, and `.` or a
@@ -3296,11 +3312,48 @@ seeded random stream only):
   spawns and their build area (16 × 16 tiles), ramps and deposits. Trees, boulders and other big
   props block the tiles under them; flat ones (rubble, cracked stone) only decorate.
 
-The first map is **Dustfall Ridge** (two players, 128 × 96 tiles, point symmetry): each base on a
-plateau in a corner with one ramp down to a shelf of mid ground, the shelf with two ramps to the low
-ground, three deposits a side, and a mid-level hill and a pond in the middle.
+The first map is **Ashwater Crossing** (two players, 96 × 96 tiles, mirrored across the diagonal),
+after a Star Wars: Empire at War ground map (the look Menno picked): a river runs corner to corner
+between two bases on open ground, crossed only by a metal bridge and a rocky ford. A dirt road
+joins the bases over the bridge, past old ruins. Each side has a rocky mesa with one ramp and a
+crystal field on top, solid woods round the edges, and calm grass and dirt everywhere else; the
+third crystal field lies in the ford's shallows, shared. **Dustfall Ridge** (128 × 96, point symmetry, a round 1 sketch) is
+still there: each base on a plateau in a corner with one ramp down to a shelf of mid ground, the
+shelf with two ramps to the low ground, three deposits a side, and a mid-level hill and a pond in
+the middle.
 
-**Drawing** ([`render.ts`](src/apps/games/empires/ground/render.ts)). The terrain is baked into
+**The ground layer** ([`gl.ts`](src/apps/games/empires/ground/gl.ts), the GroundLayer in types.ts)
+draws the ground under a battle with WebGL2: one full-screen triangle a frame (one draw call, no
+texture uploads), its fragment shader working out each pixel's world point. Everything that
+doesn't move is baked once per map, in `setMap`: the corner elevations upsampled to 4 samples a
+tile and smoothed into slopes about two tiles wide, a shade map (where the sun, top left at 38°,
+is hidden behind higher ground, soft edged, and how deep each spot sits in a valley), and blend
+masks at 4 samples a tile, blurred a little: grass, dirt, sand, mud, road, rock, forest, crystals,
+water with its depth, ford and bridge. The shader warps the mask lookups with noise so edges come
+out organic, mixes muted colours with a little low-frequency variation and the round 1 textures as
+detail (warm grass and dirt, blue water, grey rock), lights the land from the heightmap in a few
+hard-ish tones (the game's cel-shaded look), with higher ground a touch brighter,
+puts rock on steep slopes and bare ridges (angular blocks, strata, strong light), casts shadows,
+and paints:
+- water darker away from the banks, with slow swells, a few glints and foam on the edge, moving;
+- boulders along the banks, thicker round the ford, each lit and casting a shadow;
+- the ford as clear shallow water over a stony bed, the crystals in it on top;
+- bridges straight from their shapes: steel plates on girders with bolts, round pylons at the
+  corners, a dark outline and a shadow on the water;
+- ruins: a foundation of flagstones with broken walls and corner columns, casting shadows;
+- forests as one canopy of crowns lit from the top left, a dark rim at the edge and a cast shadow,
+  loose trees round the woods' edges, and a few small groups of trees out on the grass;
+- crystal fields as pale gravel with blue shards;
+- past the map's edge, the map mirrored, greyed and darkened, with a faint line on the edge.
+
+There are no chunks, so no seams in any browser (checked in Chromium and Firefox). Round 1 maps
+draw through it too, their blocking trees and boulders becoming forest and rock in the masks.
+Where WebGL2 is missing, `createGroundLayer` returns a flat 2D layer (`gl: false`) that draws one
+baked picture of the same masks, lit by the same heightmap, with the same grey mirror round it.
+The viewer's **Flat** button shows it. The ground battle screen still draws with the round 1
+renderer below until ground battles move into the space game's screen.
+
+**The round 1 renderer** ([`render.ts`](src/apps/games/empires/ground/render.ts)). The terrain is baked into
 16 × 16-tile chunks at the zoom's size step (√2 steps), kept in an LRU cache of about 48 MB (24 MB
 on phones, which also bake less densely), and drawn as a few `drawImage` calls a frame. A bake is
 split into passes and runs at most about 3 ms a frame; until a chunk is ready, the nearest step
@@ -3332,7 +3385,7 @@ frame through hooks, in world coordinates: ground (under units), units, fog (ove
 overlay.
 
 ```sh
-pnpm check:ground-map   # every ground map: builds the same twice, symmetric, spawns reach each other and every deposit, no blocking prop on ramps or build areas
+pnpm check:ground-map   # every ground map: builds the same twice, symmetric (point or diagonal), spawns reach each other and every crystal field (over the bridge and the ford), no blocking prop on ramps or build areas
 ```
 
 ### The ground sim
@@ -3520,7 +3573,9 @@ view (the battle screen must never scroll, and the panels laid out round each ot
 no React update loop, few commits); a ground battle on Dustfall Ridge on the battle screen (dev
 builds, as the check's server is) with three dozen vehicles of both sides driving across the low
 ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
-canvas's: the ground layer is a canvas of its own under it); the galactic conquest map of a new and a late
+canvas's: the ground layer is a canvas of its own under it); the WebGL2 ground layer alone on
+Ashwater Crossing, panning over the river with the water moving (it counts its own GL draw calls
+and texture uploads, which the canvas counters don't see); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
 the desktop with a few apps open, left idle, then hidden.
 

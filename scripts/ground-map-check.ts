@@ -74,7 +74,7 @@ function print(m: GroundMap) {
     for (let c = 0; c < g.cols; c++) {
       const t = r * g.cols + c
       const f = g.flags[t]
-      line += propAt.get(t) ?? (f & TF.water ? '~' : f & TF.ramp ? '/' : f & TF.blocked ? 'x' : f & TF.deposit ? 'd' : ' .:'[g.height[t]])
+      line += propAt.get(t) ?? (f & TF.bridge ? 'B' : f & TF.ford ? 'f' : f & TF.forest ? 'T' : f & TF.water ? '~' : f & TF.ramp ? '/' : f & TF.blocked ? 'x' : f & TF.deposit ? 'd' : ' .:'[g.height[t]])
     }
     rows.push(line)
   }
@@ -92,11 +92,12 @@ for (const def of GROUND_MAPS) {
   const ha = hashMap(a), hb = hashMap(b)
   check('builds the same twice', ha === hb, `hash ${ha}, ${ms.toFixed(0)} ms, ${a.props.length} props`)
 
-  // Symmetry (only point symmetry is checked tile by tile; it's the one the slice's map uses).
-  if (def.sym === 'point') {
+  // Symmetry, tile by tile, for point symmetry and the diagonal mirror.
+  if (def.sym === 'point' || def.mirror === 'diagonal') {
     let bad = 0
     for (let t = 0; t < g.cols * g.rows; t++) {
-      const m = g.cols * g.rows - 1 - t
+      const c = t % g.cols, r = (t - c) / g.cols
+      const m = def.mirror === 'diagonal' ? (g.rows - 1 - c) * g.cols + (g.cols - 1 - r) : g.cols * g.rows - 1 - t
       if (g.height[t] !== g.height[m] || g.flags[t] !== g.flags[m] || g.terrain[t] !== g.terrain[m]) bad++
     }
     check('every tile matches its mirror copy', bad === 0, bad ? `${bad} differ` : '')

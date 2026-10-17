@@ -388,6 +388,78 @@ const groundBase: Scene = {
   },
 }
 
+// --- The ground layer ---
+
+/**
+ * The WebGL2 ground layer (ground/gl.ts) on Ashwater Crossing, alone on the page at 1280 × 720:
+ * built once, then a second of frames panning across the river with the water moving. The canvas
+ * counters don't see WebGL, so the scene counts GL draw calls and texture uploads itself.
+ */
+const groundLayer: Scene = {
+  name: 'ground-layer',
+  about: 'WebGL2 ground layer on Ashwater Crossing, panning over the river, water moving',
+  async run(page, url) {
+    await page.send('Page.navigate', { url: `${url}/play/empires` })
+    await page.waitFor(MENU)
+    await page.eval(`(async () => {
+      const P = WebGL2RenderingContext.prototype
+      window.__glCount = { draws: 0, uploads: 0 }
+      for (const k of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced']) {
+        const f = P[k]
+        P[k] = function (...a) { window.__glCount.draws++; return f.apply(this, a) }
+      }
+      for (const k of ['texImage2D', 'texSubImage2D']) {
+        const f = P[k]
+        P[k] = function (...a) { window.__glCount.uploads++; return f.apply(this, a) }
+      }
+      const { createGroundLayer } = await import('/src/apps/games/empires/ground/gl.ts')
+      const { buildGroundMap } = await import('/src/apps/games/empires/ground/terrain.ts')
+      const { GROUND_MAP } = await import('/src/apps/games/empires/ground/maps.ts')
+      document.body.innerHTML = ''
+      const layer = createGroundLayer()
+      Object.assign(layer.canvas.style, { position: 'fixed', inset: '0', width: '1280px', height: '720px' })
+      layer.canvas.id = 'perf-ground'
+      document.body.appendChild(layer.canvas)
+      const map = buildGroundMap(GROUND_MAP['ashwater-crossing'])
+      layer.setMap(map)
+      const view = { x: 1100, y: 1500, zoom: 0.8 }
+      window.__groundLayer = { layer, view, frame: () => layer.draw(view, 1280, 720, 1, performance.now() / 1000) }
+      ;(layer.ready ?? Promise.resolve()).then(() => (window.__groundLayerReady = true))
+    })()`)
+    await settleUntil(page, `!!window.__groundLayerReady`)
+    const gl = await page.eval<boolean>(`window.__groundLayer.layer.gl`)
+    await page.eval(`__perf.frames(10, () => window.__groundLayer.frame())`)
+    await page.eval(`window.__glCount = { draws: 0, uploads: 0 }`)
+    const pan = await measure(page, 60, `window.__groundLayer.view.x += 8; window.__groundLayer.frame()`)
+    const counts = await page.eval<{ draws: number; uploads: number }>(`window.__glCount`)
+    // A snapshot drawn and read in one go (a WebGL canvas keeps its picture only until the frame ends).
+    const b64 = await page.eval<string>(`(() => {
+      window.__groundLayer.frame()
+      const c = document.createElement('canvas')
+      c.width = ${SHOT_W}
+      c.height = ${SHOT_H}
+      const g = c.getContext('2d')
+      g.imageSmoothingEnabled = true
+      g.imageSmoothingQuality = 'high'
+      g.drawImage(window.__groundLayer.layer.canvas, 0, 0, c.width, c.height)
+      const d = g.getImageData(0, 0, c.width, c.height).data
+      let s = ''
+      for (let i = 0; i < d.length; i += 8192) s += String.fromCharCode.apply(null, d.subarray(i, i + 8192))
+      return btoa(s)
+    })()`)
+    if (!gl) throw new Error('The ground layer fell back to flat: no WebGL2 in this browser')
+    return {
+      metrics: {
+        'GL draw calls / frame': count(counts.draws / 60),
+        'GL texture uploads / frame': count(counts.uploads / 60),
+        ...canvasMetrics(pan, 60),
+        'main thread ms / frame': msPerFrame(pan),
+      },
+      shots: { 'ground-layer': { width: SHOT_W, height: SHOT_H, data: new Uint8Array(Buffer.from(b64, 'base64')) } },
+    }
+  },
+}
+
 // --- A skirmish picked up again after a reload ---
 
 /** The window sizes the resumed battle is looked at in: a laptop, a small window (the map and the
@@ -681,7 +753,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, groundLayer, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))

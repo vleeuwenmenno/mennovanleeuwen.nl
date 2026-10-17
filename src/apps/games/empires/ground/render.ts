@@ -164,6 +164,7 @@ export class GroundRenderer {
   private fWater: Float32Array
   private fLevel: Float32Array
   private fFoot: Float32Array
+  private fForest: Float32Array
   private noise: ((x: number, y: number) => number)[]
   // Scratch for baking (one chunk bakes at a time).
   private scratch: HTMLCanvasElement | null = null
@@ -226,11 +227,14 @@ export class GroundRenderer {
     this.fWater = new Float32Array(cells)
     this.fLevel = new Float32Array(cells)
     this.fFoot = new Float32Array(cells)
+    this.fForest = new Float32Array(cells)
     const GRASS = terrainIndex('grass'), ROCKY = terrainIndex('rocky')
     for (let t = 0; t < cells; t++) {
       this.fGrass[t] = g.terrain[t] === GRASS ? 1 : 0
       this.fRocky[t] = g.terrain[t] === ROCKY ? 1 : 0
-      this.fWater[t] = g.flags[t] & TF.water ? 1 : 0
+      // A bridge's deck shows its road, not the river under it.
+      this.fWater[t] = g.flags[t] & TF.water && !(g.flags[t] & TF.bridge) ? 1 : 0
+      this.fForest[t] = g.flags[t] & TF.forest ? 1 : 0
       this.fLevel[t] = g.height[t]
     }
     // Contact shade at the foot of each cliff: strongest under faces looking south (the camera sees
@@ -633,6 +637,13 @@ export class GroundRenderer {
           const lv = this.field(this.fLevel, wx, wy)
           const s = data[1].data
           s[o] = 30; s[o + 1] = 22; s[o + 2] = 14
+          // Woods (round 2 maps; this renderer has no canopy of its own): a dark green mass.
+          const wood = cl((this.field(this.fForest, qx, qy) - 0.45) * 6)
+          if (wood > 0) {
+            s[o] = 22; s[o + 1] = 52; s[o + 2] = 20
+            s[o + 3] = 255 * Math.max(wood * 0.85, cl(0.2 * n8(wx / 500, wy / 500) + (LEVELS - 1 - lv) * 0.05))
+            continue
+          }
           const foot = this.field(this.fFoot, qx * 0.5 + wx * 0.5, qy * 0.5 + wy * 0.5)
           s[o + 3] = 255 * cl(0.2 * n8(wx / 500, wy / 500) + (LEVELS - 1 - lv) * 0.05 + foot * (0.28 + 0.16 * n6(wx / 25, wy / 25)))
         }

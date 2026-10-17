@@ -295,6 +295,67 @@
         "kind": "time"
       }
     },
+    "ground-layer": {
+      "GL draw calls / frame": {
+        "baseline": 1,
+        "budget": 3,
+        "kind": "count"
+      },
+      "GL texture uploads / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "canvas draw calls / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "canvas drawImage / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "canvas fill+stroke / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "canvas save+restore / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "canvas gradients / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "canvas filters+shadows / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "canvas pixel reads / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "offscreen draw calls / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "new canvases / sim s": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "main thread ms / frame": {
+        "budget": 2,
+        "kind": "time"
+      }
+    },
     "galaxy-start": {
       "React commits / sim s, zooming": {
         "baseline": 5.83,
