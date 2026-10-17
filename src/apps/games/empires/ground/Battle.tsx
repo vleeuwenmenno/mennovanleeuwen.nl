@@ -569,7 +569,6 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
     const layers = {
       ground: (g: CanvasRenderingContext2D) => {
         drawRings(g, w, look)
-        drawRoutes(g, w, look)
         for (const id of sel()) {
           const u = w.byId.get(id)
           const r = u && !u.dead && u.owner === ME ? u.rally : null
@@ -582,6 +581,8 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
         if (!look.reveal) fog.draw(g, w)
       },
       overlay: (g: CanvasRenderingContext2D) => {
+        // Our selection's routes, over the fog (our own routes give nothing away).
+        drawRoutes(g, w, look)
         drawStarts(g, w, look)
         const p = place.current
         if (p) {

@@ -3466,8 +3466,9 @@ renderer's hooks:
   progress bar, rally flags, and a ring where a move went;
 - route lines for our selected units, as in space: the current move (or the drive to a building
   site) along the path it really takes, a smooth curve round cliffs and up ramps ending where the
-  unit will stop, then any queued moves as straight legs, with a dot at each destination. They lie
-  on the ground, under units and the fog;
+  unit will stop, then any queued moves as straight legs, with a dot at each destination. They are
+  drawn over the fog (our own routes give nothing away), a thin green line on a dark under-stroke so
+  they read on any ground;
 - the fog of war is a canvas of one pixel per tile, blurred a little and scaled up with smoothing:
   black where your side never looked, grey over explored ground, clear in sight. Enemy buildings
   stay on the explored ground as last seen, until you see that they're gone;

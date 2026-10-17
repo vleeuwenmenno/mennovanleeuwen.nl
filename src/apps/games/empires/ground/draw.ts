@@ -251,21 +251,21 @@ export function drawRings(ctx: CanvasRenderingContext2D, w: GroundWorld, look: L
   ctx.globalAlpha = 1
 }
 
-/** The order lines' colour, as the space battle's move lines (render.ts). */
-const ROUTE = 'rgba(125,255,160,0.3)'
+/** The order lines' colour (the space battle's move lines' green, render.ts, a little stronger for
+ * the busy ground), and the thin dark line under it that keeps it readable on any terrain. */
+const ROUTE = 'rgba(125,255,160,0.8)'
+const ROUTE_UNDER = 'rgba(6,10,14,0.55)'
 
 /**
  * Where our selected units are going: the current move (or the drive to a building site) along the
  * waypoints its path really takes, from where the unit is now, as a smooth curve (each waypoint
  * pulls the line towards it, the line passing halfway between them), as the space battle draws its
  * move lines. A walled-in move ends where the unit will stop. Queued orders follow as straight legs
- * from one destination to the next, and each destination gets a small dot.
+ * from one destination to the next, and each destination gets a small dot. Drawn over the fog: our
+ * own routes give nothing away. Each line is stroked twice, dark and wide under the green.
  */
 export function drawRoutes(ctx: CanvasRenderingContext2D, w: GroundWorld, look: Look) {
   const px = 1 / look.zoom
-  ctx.strokeStyle = ROUTE
-  ctx.fillStyle = ROUTE
-  ctx.lineWidth = 1.5 * px
   for (const id of look.selected) {
     const u = w.byId.get(id)
     if (!u || u.dead || u.owner !== look.me || !u.orders.length) continue
@@ -282,15 +282,24 @@ export function drawRoutes(ctx: CanvasRenderingContext2D, w: GroundWorld, look: 
     ctx.lineTo(end.x, end.y)
     // Queued orders: on from each destination to the next.
     for (let i = 1; i < u.orders.length; i++) ctx.lineTo(u.orders[i].x, u.orders[i].y)
+    ctx.strokeStyle = ROUTE_UNDER
+    ctx.lineWidth = 4 * px
+    ctx.stroke()
+    ctx.strokeStyle = ROUTE
+    ctx.lineWidth = 2 * px
     ctx.stroke()
     ctx.beginPath()
-    ctx.arc(end.x, end.y, 3.5 * px, 0, TAU)
+    ctx.arc(end.x, end.y, 4 * px, 0, TAU)
     for (let i = 1; i < u.orders.length; i++) {
       const q = u.orders[i]
-      ctx.moveTo(q.x + 3.5 * px, q.y)
-      ctx.arc(q.x, q.y, 3.5 * px, 0, TAU)
+      ctx.moveTo(q.x + 4 * px, q.y)
+      ctx.arc(q.x, q.y, 4 * px, 0, TAU)
     }
+    ctx.fillStyle = ROUTE
     ctx.fill()
+    ctx.strokeStyle = ROUTE_UNDER
+    ctx.lineWidth = 1.5 * px
+    ctx.stroke()
   }
 }
 
