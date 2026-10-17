@@ -1,8 +1,10 @@
 import type { Pt, Symmetry } from '../maps.ts'
 export type { Pt, Symmetry }
 
-// The shapes the ground battle mode is built on, shared by its terrain, sim, render and screen.
-// Ground battles have a sim of their own (ground/sim.ts): the space sim (sim.ts) is not touched.
+// The shapes ground battles are built on, shared by the terrain builder, the sim, the ground layer
+// and the screen. Ground battles run in the space game's own sim, screen, lobby and multiplayer (a
+// ground battle is a battle whose map has terrain); these are the terrain's own shapes. A battle
+// without terrain must behave and hash exactly as before.
 //
 // Coordinates: units, props and shots live in world units (floats, maths through detmath.ts),
 // with x running right and y running down, as in space. The map is cut into square tiles of TILE
@@ -15,7 +17,7 @@ export const TILE = 32
 
 /** Ground textures by id; a tile's `terrain` byte is an index into this list (so never reorder it,
  * only append). The first slice draws dirt, grass and rocky. */
-export const TERRAINS = ['dirt', 'grass', 'rocky', 'sand', 'snow', 'ash', 'cracked', 'urban', 'metal'] as const
+export const TERRAINS = ['dirt', 'grass', 'rocky', 'sand', 'snow', 'ash', 'cracked', 'urban', 'metal', 'mud', 'road'] as const
 export type TerrainId = (typeof TERRAINS)[number]
 export const terrainIndex = (id: TerrainId) => TERRAINS.indexOf(id)
 
@@ -32,10 +34,17 @@ export const TF = {
   noBuild: 2,
   /** A ramp: joins two height levels, no cliff drawn across it, walkable both ways. */
   ramp: 4,
-  /** Part of a resource deposit (Extractors go here, phase 3). */
+  /** Part of a kyber crystal field: gathered by engineers, nothing built on it. */
   deposit: 8,
-  /** Water: blocked, drawn as water. */
+  /** Water: blocked unless it is also a bridge or a ford, drawn as water. */
   water: 16,
+  /** A bridge deck over water: walkable at the level of its banks, nothing built on it. */
+  bridge: 32,
+  /** A ford: shallow water, walkable but slow (the sim decides how slow), nothing built on it. */
+  ford: 64,
+  /** Inside a forest: blocked for vehicles and buildings, and blocks sight (the sim decides which
+   * units may pass, if any). Its trees are drawn by the ground layer, not as props. */
+  forest: 128,
 } as const
 
 /** The battlefield's tiles. All arrays have cols * rows entries. */
@@ -48,6 +57,14 @@ export type TileGrid = {
   height: Uint8Array
   /** TF bits. */
   flags: Uint8Array
+  /**
+   * The land's shape for drawing: the elevation at each tile corner, (cols + 1) × (rows + 1) values
+   * row by row, in whole world units (0 the lowest ground). It is smooth where the ground is (slopes,
+   * banks, riverbeds), and it rises steeply where `height` levels change, so cliffs are steep slopes
+   * shaded by the ground layer. The sim plays by `height` and `flags`; `elev` only draws (and may later
+   * aim shots over hills). Optional: tile maps built before it have none and draw flat.
+   */
+  elev?: Int16Array
 }
 
 /**
@@ -96,6 +113,27 @@ export type GroundMapDef = {
   biome: 'temperate'
 }
 
+/**
+ * The picture of the ground under a battle (WebGL2, with a flat 2D fallback where WebGL2 is
+ * missing). The battle screen owns one per ground battle, puts its canvas right under the 2D battle
+ * canvas at the same size, and calls `draw` each frame before drawing the 2D layer, with the same
+ * camera: (x, y) is the world point at the middle of the view and `zoom` CSS pixels per world unit,
+ * as the space renderer's Camera. Everything that moves or belongs to a player (units, buildings,
+ * effects, fog, the HUD) stays on the 2D canvas over it. Past the map's edge it draws the map
+ * mirrored, greyed and darkened, with a subtle edge line.
+ */
+export interface GroundLayer {
+  readonly canvas: HTMLCanvasElement
+  /** Whether it draws with WebGL2 (false: the flat fallback). */
+  readonly gl: boolean
+  /** Builds its textures for a map; call once per battle, before the first draw. */
+  setMap(map: GroundMap): void
+  /** `w`, `h`: the view in CSS pixels; `dpr`: device pixels per CSS pixel (the screen caps it at 2). */
+  draw(cam: { x: number; y: number; zoom: number }, w: number, h: number, dpr: number, time: number): void
+  /** Frees its GPU resources. */
+  dispose(): void
+}
+
 /** A ground map built from its def: the same on every machine for the same def. */
 export type GroundMap = {
   def: GroundMapDef
@@ -103,6 +141,6 @@ export type GroundMap = {
   props: Prop[]
   /** Start spots, in world units, one per side. */
   spawns: Pt[]
-  /** Deposits' centres, in world units (unused until phase 3). */
+  /** Kyber crystal fields' centres, in world units (their tiles carry TF.deposit). */
   deposits: Pt[]
 }
