@@ -1,7 +1,7 @@
 import { FACTIONS } from '../data.ts'
 import { drawHull } from '../models/paint.ts'
 import type { HullState, Model } from '../models/types.ts'
-import { groundModel, siteProgress, type Placement } from './build.ts'
+import { commandAreas, groundDrawSize, groundModel, shownTo, siteProgress, type Placement } from './build.ts'
 import { explored, sees } from './fog.ts'
 import { GROUND_UNIT, teamOf, typeOf, type GroundUnit, type GroundWorld, type Owner } from './sim.ts'
 import { TF, TILE, type GroundMap } from './types.ts'
@@ -33,17 +33,12 @@ export type Look = {
   bars: 'damaged' | 'always' | 'selected'
   /** Dev: the fog lifted, everything shown. */
   reveal: boolean
-  /** Enemy buildings this team has seen, as last seen. */
-  memory: Map<number, Seen>
   /** CSS pixels per world unit, and device pixels per world unit. */
   zoom: number
   zdpr: number
   /** Seconds, real time: for the markers that fade. */
   now: number
 }
-
-/** An enemy building as last seen (fog of war keeps it on the explored ground until it is seen gone). */
-export type Seen = { id: number; type: string; owner: Owner; tc: number; tr: number; x: number; y: number; site: number | null }
 
 /** A world rectangle: the view, with a margin. */
 export type Box = { x0: number; y0: number; x1: number; y1: number }
@@ -59,46 +54,25 @@ export function modelOf(type: string) {
   return m
 }
 
-/** How big a type is drawn: a building its footprint's long side, a vehicle a little over its body. */
-export function bodySize(type: string) {
-  const t = GROUND_UNIT[type]
-  if (!t) return TILE
-  return t.foot ? Math.max(t.foot[0], t.foot[1]) * TILE : t.radius * 2.4
-}
+/** How big a type is drawn, world units on its model's long side. */
+export const bodySize = groundDrawSize
 
 export const factionColor = (w: GroundWorld, o: Owner) => FACTIONS[w.players[o]?.faction ?? 'republic'].color
 
-/** Whether any tile of a footprint is in `team`'s sight now. */
-function footSeen(w: GroundWorld, team: number, tc: number, tr: number, fw: number, fh: number) {
-  const cols = w.map.grid.cols
-  for (let r = Math.max(0, tr); r < Math.min(w.map.grid.rows, tr + fh); r++)
-    for (let c = Math.max(0, tc); c < Math.min(cols, tc + fw); c++) if (sees(w.fog, team, r * cols + c)) return true
-  return false
-}
+/** Whether unit `u` shows to the viewer now (build.ts shownTo: their side's always, except a
+ * teammate's site nobody has started; anyone else's while in sight), or everything with the dev
+ * reveal. */
+export const seenNow = (w: GroundWorld, look: { me: Owner; reveal: boolean }, u: GroundUnit) => !u.dead && (look.reveal || shownTo(w, look.me, u))
 
-/** Whether `team` sees unit `u` now (its own side's always). */
-export function seenNow(w: GroundWorld, team: number, u: GroundUnit, reveal = false) {
-  if (reveal || teamOf(w, u.owner) === team) return true
-  const t = typeOf(u)
-  if (t.foot) return footSeen(w, team, u.tc, u.tr, t.foot[0], t.foot[1])
-  const c = Math.floor(u.x / TILE)
-  const r = Math.floor(u.y / TILE)
-  return c >= 0 && r >= 0 && c < w.map.grid.cols && r < w.map.grid.rows && sees(w.fog, team, r * w.map.grid.cols + c)
-}
-
-/** Brings the memory of enemy buildings up to date: those seen now as they are, and those whose
- * ground is seen again with nothing there any more forgotten. Run after each fog refresh. */
-export function updateMemory(w: GroundWorld, team: number, mem: Map<number, Seen>) {
-  for (const u of w.units) {
-    if (u.dead || teamOf(w, u.owner) === team || !typeOf(u).foot) continue
-    if (!seenNow(w, team, u)) continue
-    mem.set(u.id, { id: u.id, type: u.type, owner: u.owner, tc: u.tc, tr: u.tr, x: u.x, y: u.y, site: siteProgress(u) })
-  }
-  for (const [id, s] of mem) {
-    const u = w.byId.get(id)
-    if (u && !u.dead) continue
-    const f = GROUND_UNIT[s.type]?.foot ?? [1, 1]
-    if (footSeen(w, team, s.tc, s.tr, f[0], f[1])) mem.delete(id)
+/** The enemy buildings the viewer's side remembers but doesn't see now (as last seen: ghosts under
+ * the fog's grey). */
+export function* ghosts(w: GroundWorld, look: { me: Owner; team: number; reveal: boolean }) {
+  const mem = w.memory[look.team]
+  if (!mem) return
+  for (const k of mem.values()) {
+    const u = w.byId.get(k.id)
+    if (u && seenNow(w, look, u)) continue
+    yield k
   }
 }
 
@@ -192,12 +166,10 @@ export function drawUnits(ctx: CanvasRenderingContext2D, w: GroundWorld, look: L
   const px = 1 / look.zoom
   const inBox = (x: number, y: number, r: number) => x + r >= box.x0 && x - r <= box.x1 && y + r >= box.y0 && y - r <= box.y1
   // Remembered enemy buildings not in sight now.
-  for (const s of look.memory.values()) {
-    const u = w.byId.get(s.id)
-    if (u && !u.dead && seenNow(w, look.team, u, look.reveal)) continue
-    if (!inBox(s.x, s.y, bodySize(s.type))) continue
-    if (s.site !== null) site(ctx, w, s.type, s.owner, s.x, s.y, s.tc, s.tr, s.site, ENEMY, look)
-    else body(ctx, w, s.type, s.owner, s.x, s.y, Math.PI / 2, s.tc, s.tr, look, 0.85)
+  for (const k of ghosts(w, look)) {
+    const f = GROUND_UNIT[k.type]?.foot ?? [1, 1]
+    const x = (k.tc + f[0] / 2) * TILE, y = (k.tr + f[1] / 2) * TILE
+    if (inBox(x, y, bodySize(k.type))) body(ctx, w, k.type, k.owner, x, y, Math.PI / 2, k.tc, k.tr, look, 0.85)
   }
   // Buildings, then vehicles over them.
   for (let pass = 0; pass < 2; pass++)
@@ -205,16 +177,34 @@ export function drawUnits(ctx: CanvasRenderingContext2D, w: GroundWorld, look: L
       if (u.dead) continue
       const t = typeOf(u)
       if (!!t.foot !== (pass === 0)) continue
-      if (!inBox(u.x, u.y, bodySize(u.type)) || !seenNow(w, look.team, u, look.reveal)) continue
+      if (!inBox(u.x, u.y, bodySize(u.type)) || !seenNow(w, look, u)) continue
       const p = siteProgress(u)
       if (p !== null) site(ctx, w, u.type, u.owner, u.x, u.y, u.tc, u.tr, p, relColor(w, look.me, u.owner), look)
       else body(ctx, w, u.type, u.owner, u.x, u.y, u.heading, u.tc, u.tr, look, 1)
     }
+  // Engineers at work: a flickering welding spark at the nose.
+  for (const u of w.units) {
+    if (!u.busy || u.dead || !inBox(u.x, u.y, 40) || !seenNow(w, look, u)) continue
+    const flick = Math.sin(look.now * 37 + u.id * 3.1) * 0.5 + 0.5
+    const weld = FACTIONS[w.players[u.owner]?.faction ?? 'republic'].weld
+    const r = typeOf(u).radius
+    const x = u.x + Math.cos(u.heading) * r, y = u.y + Math.sin(u.heading) * r
+    ctx.globalAlpha = 0.35 + 0.5 * flick
+    ctx.fillStyle = weld.glow
+    ctx.beginPath()
+    ctx.arc(x, y, r * (0.45 + 0.25 * flick), 0, TAU)
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.fillStyle = weld.core
+    ctx.beginPath()
+    ctx.arc(x, y, r * 0.16, 0, TAU)
+    ctx.fill()
+  }
   // Bars: hull where it shows, a site's progress always.
   for (const u of w.units) {
     if (u.dead) continue
     const size = bodySize(u.type)
-    if (!inBox(u.x, u.y, size) || !seenNow(w, look.team, u, look.reveal)) continue
+    if (!inBox(u.x, u.y, size) || !seenNow(w, look, u)) continue
     const t = typeOf(u)
     const p = siteProgress(u)
     const wide = Math.max(28 * px, size * 0.7)
@@ -222,7 +212,8 @@ export function drawUnits(ctx: CanvasRenderingContext2D, w: GroundWorld, look: L
     const picked = look.selected.has(u.id) || look.hover === u.id
     const f = t.hull > 0 ? u.hull / t.hull : 1
     if (p !== null) bar(ctx, u.x, t.foot ? (u.tr + t.foot[1]) * TILE + 4 * px : top, wide, p, '#59c8ff', px)
-    if (look.bars === 'always' || picked || (look.bars === 'damaged' && f < 0.999)) bar(ctx, u.x, top, wide, f, hullCol(f), px)
+    // A site's hull grows with it: shown only when picked.
+    if (look.bars === 'always' || picked || (look.bars === 'damaged' && f < 0.999 && p === null)) bar(ctx, u.x, top, wide, f, hullCol(f), px)
   }
 }
 
@@ -253,10 +244,10 @@ export function drawRings(ctx: CanvasRenderingContext2D, w: GroundWorld, look: L
   }
   for (const id of look.selected) {
     const u = w.byId.get(id)
-    if (u && !u.dead && seenNow(w, look.team, u, look.reveal)) ring(u, relColor(w, look.me, u.owner), 0.95)
+    if (u && !u.dead && seenNow(w, look, u)) ring(u, relColor(w, look.me, u.owner), 0.95)
   }
   const h = look.hover && !look.selected.has(look.hover) ? w.byId.get(look.hover) : undefined
-  if (h && !h.dead && seenNow(w, look.team, h, look.reveal)) ring(h, relColor(w, look.me, h.owner), 0.45)
+  if (h && !h.dead && seenNow(w, look, h)) ring(h, relColor(w, look.me, h.owner), 0.45)
   ctx.globalAlpha = 1
 }
 
@@ -321,9 +312,30 @@ export function drawGhost(ctx: CanvasRenderingContext2D, w: GroundWorld, type: s
     ctx.strokeRect(tc * TILE, tr * TILE, f[0] * TILE, f[1] * TILE)
     return
   }
+  // Our command range, where a building may go (a standalone one, such as a Command Center, may go
+  // anywhere explored away from the enemy instead).
+  if (!GROUND_UNIT[type]?.standalone) {
+    ctx.strokeStyle = OWN
+    ctx.globalAlpha = 0.45
+    ctx.lineWidth = 1.5 * px
+    ctx.setLineDash([8 * px, 6 * px])
+    for (const a of commandAreas(w, look.me)) {
+      ctx.beginPath()
+      ctx.arc(a.x, a.y, a.r, 0, TAU)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+    ctx.globalAlpha = 1
+  }
   for (const t of p.tiles) {
     ctx.fillStyle = t.ok ? 'rgba(90, 255, 130, 0.32)' : 'rgba(255, 70, 60, 0.5)'
     ctx.fillRect(t.tc * TILE + 1, t.tr * TILE + 1, TILE - 2, TILE - 2)
+  }
+  // The row in front of its door, which must stay free: outlined only.
+  ctx.lineWidth = 1.5 * px
+  for (const t of p.door ?? []) {
+    ctx.strokeStyle = t.ok ? 'rgba(90, 255, 130, 0.7)' : 'rgba(255, 70, 60, 0.85)'
+    ctx.strokeRect(t.tc * TILE + 3, t.tr * TILE + 3, TILE - 6, TILE - 6)
   }
   const cx = (p.tc + f[0] / 2) * TILE, cy = (p.tr + f[1] / 2) * TILE
   if (GROUND_UNIT[type]) body(ctx, w, type, look.me, cx, cy, Math.PI / 2, p.tc, p.tr, look, 0.55)
@@ -476,9 +488,7 @@ export class MiniMap {
     const sx = cw / w.w, sy = ch / w.h
     const dpr = cw / Math.max(1, g.canvas.clientWidth || cw)
     const dot = 3 * dpr
-    for (const s of look.memory.values()) {
-      const u = w.byId.get(s.id)
-      if (u && !u.dead && seenNow(w, look.team, u, look.reveal)) continue
+    for (const s of ghosts(w, look)) {
       const f = GROUND_UNIT[s.type]?.foot ?? [1, 1]
       g.fillStyle = ENEMY
       g.globalAlpha = 0.6
@@ -486,7 +496,7 @@ export class MiniMap {
     }
     g.globalAlpha = 1
     for (const u of w.units) {
-      if (u.dead || !seenNow(w, look.team, u, look.reveal)) continue
+      if (!seenNow(w, look, u)) continue
       const t = typeOf(u)
       g.fillStyle = look.selected.has(u.id) ? '#ffffff' : relColor(w, look.me, u.owner)
       if (t.foot) g.fillRect(u.tc * TILE * sx, u.tr * TILE * sy, Math.max(dot, t.foot[0] * TILE * sx), Math.max(dot, t.foot[1] * TILE * sy))

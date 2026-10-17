@@ -10,14 +10,16 @@ import { thumbnail } from '../models/paint.ts'
 import { getSettings, groupKeyOf, modOf } from '../settings.ts'
 import type { EmpiresSound } from '../sound.ts'
 import { LongPress, TAP_SLOP, TouchBar, WheelHost, getTouchMods, isTouch, shiftOf, useWheel, type WheelItem, type WheelRequest } from '../Touch.tsx'
-import { SLICE_IDS, buildable, cantTrain, placement, queueOf, siteProgress, trainable, type Placement } from './build.ts'
-import { cleanGroundCmd, groundCmd, runGroundCmd, type GroundCmd } from './commands.ts'
-import { FogShade, MiniMap, OWN, drawBox, drawGhost, drawPings, drawRally, drawRings, drawStarts, drawUnits, modelOf, seenNow, updateMemory, type Look, type Ping, type Seen } from './draw.ts'
+import { buildable, cantTrain, incomeOf, placement, queueOf, siteProgress, trainable, type Placement } from './build.ts'
+import { cleanGroundCmd, groundCmd, type GroundCmd } from './commands.ts'
+import { FogShade, MiniMap, OWN, drawBox, drawGhost, drawPings, drawRally, drawRings, drawStarts, drawUnits, modelOf, seenNow, type Look, type Ping } from './draw.ts'
 import { GROUND_MAPS } from './maps.ts'
 import { GroundRenderer, type GroundView } from './render.ts'
-import { FOG_HZ, GROUND_UNIT, STEP, addStructure, newGroundWorld, spawnUnit, tick, typeOf, type GroundUnit, type GroundWorld, type Owner } from './sim.ts'
+import { startGroundBattle, stepGround, type GroundBattle as Match } from './match.ts'
+import { FOG_HZ, GROUND_UNIT, STEP, typeOf, type GroundUnit, type GroundWorld, type Owner } from './sim.ts'
 import { buildGroundMap } from './terrain.ts'
-import { TILE, type GroundMap } from './types.ts'
+import { TILE } from './types.ts'
+import { GROUND_START_CREDITS } from './units.ts'
 import './battle.css'
 
 // The ground battle screen (dev builds only, until ground units can fight): a short setup, then a
@@ -27,7 +29,7 @@ import './battle.css'
 // order goes through the order table (commands.ts), cleaned as the server would clean it, to run at
 // the start of the next tick. What an order answers (why it can't be done) shows as a message.
 // Everything else here is this player's view: the camera, the selection, control groups, the
-// placement ghost, the memory of enemy buildings seen, rally flags.
+// placement ghost.
 //
 // Drawing goes through GroundRenderer's hooks (draw.ts): units, sites, rings and bars, the fog, the
 // ghost and the enemy start spots. React renders the HUD a few times a second from a snapshot; the
@@ -36,12 +38,12 @@ import './battle.css'
 const GroundViewer = lazy(() => import('./Viewer.tsx'))
 
 type GroundSetup = { map: string; you: FactionId; ai: FactionId; credits: number }
-const CREDIT_STEPS = [1000, 2000, 5000, 20000]
-const setupPref = jsonPref<GroundSetup>('mvlos.empires.groundsetup', { map: GROUND_MAPS[0].id, you: 'republic', ai: 'droid', credits: 2000 }, (v) => ({
+const CREDIT_STEPS = [1000, GROUND_START_CREDITS, 5000, 20000]
+const setupPref = jsonPref<GroundSetup>('mvlos.empires.groundsetup', { map: GROUND_MAPS[0].id, you: 'republic', ai: 'droid', credits: GROUND_START_CREDITS }, (v) => ({
   map: GROUND_MAPS.some((m) => m.id === v.map) ? v.map : GROUND_MAPS[0].id,
   you: FACTION_IDS.includes(v.you) ? v.you : 'republic',
   ai: FACTION_IDS.includes(v.ai) ? v.ai : 'droid',
-  credits: CREDIT_STEPS.includes(v.credits) ? v.credits : 2000,
+  credits: CREDIT_STEPS.includes(v.credits) ? v.credits : GROUND_START_CREDITS,
 }))
 
 const noMenu = (e: React.MouseEvent) => e.preventDefault()
@@ -107,45 +109,13 @@ export default function GroundBattle({ sound, onBack }: { sound: EmpiresSound; o
 
 // --- Setting up a battle ------------------------------------------------------------------------
 
-/** The slice's unit types for a faction, or the sim's test types while the real ones are not in the
- * game yet (so the screen can be tried on its own). */
-function sliceTypes(f: FactionId) {
-  const ids = SLICE_IDS[f]
-  return { center: GROUND_UNIT[ids.center] ? ids.center : 'test-block', engineer: GROUND_UNIT[ids.engineer] ? ids.engineer : 'test-scout' }
-}
+/** A new battle (match.ts): seat 0 is the player, seat 1 the AI, each with its Command Center on
+ * its start spot, an Engineer at its door and the starting credits. */
+const startBattle = (map: ReturnType<typeof buildGroundMap>, setup: GroundSetup): Match =>
+  startGroundBattle(map, [{ faction: setup.you, team: 0 }, { faction: setup.ai, team: 1, ai: true }], { credits: setup.credits })
 
-/** A new battle: seat 0 is the player, seat 1 the AI, each with its Command Center on its start
- * spot and an Engineer at its door. */
-function startWorld(map: GroundMap, setup: GroundSetup): GroundWorld {
-  const factions = [setup.you, setup.ai]
-  const w = newGroundWorld(
-    map,
-    factions.map((faction, team) => ({ faction, team })),
-    { credits: setup.credits },
-  )
-  factions.forEach((f, owner) => {
-    const s = map.spawns[owner]
-    if (!s) return
-    const { center, engineer } = sliceTypes(f)
-    const [fw, fh] = GROUND_UNIT[center].foot ?? [3, 3]
-    const tc = Math.round(s.x / TILE - fw / 2)
-    const tr = Math.round(s.y / TILE - fh / 2)
-    addStructure(w, center, owner, tc, tr)
-    spawnUnit(w, engineer, owner, (tc + fw / 2) * TILE, (tr + fh + 1.5) * TILE, Math.PI / 2)
-  })
-  return w
-}
-
-/** The AI's turn each tick. ground/ai.ts (the building session's passive AI) plugs in here: until
- * it does, the AI's side stands still. */
-function runAi(_w: GroundWorld, _seat: Owner) {
-  // AI HOOK: call ground/ai.ts's per-tick function here once it exists.
-}
-
-const isEngineerType = (w: GroundWorld, u: GroundUnit) => {
-  const f = w.players[u.owner]?.faction
-  return !!f && u.type === sliceTypes(f).engineer
-}
+/** An engineer: a vehicle that builds. */
+const isEngineerType = (_w: GroundWorld, u: GroundUnit) => !!typeOf(u).builds?.length
 const typeName = (type: string) => GROUND_UNIT[type]?.name ?? type
 /** A thumbnail of a type's model, or '' while it has none. */
 const artOf = (type: string) => {
@@ -155,7 +125,7 @@ const artOf = (type: string) => {
 
 // --- The HUD's snapshot -------------------------------------------------------------------------
 
-type Card = { type: string; name: string; art: string; cost: number; why: string | null; queued: number }
+type Card = { type: string; name: string; art: string; cost: number; time: number; blurb: string; why: string | null; queued: number }
 type SelSnap = {
   ids: number[]
   kinds: { type: string; name: string; count: number }[]
@@ -222,8 +192,9 @@ function WheelBridge({ to }: { to: { current: (r: WheelRequest | null) => void }
 
 function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; sound: EmpiresSound; onLeave: () => void; onRestart: () => void }) {
   const map = useMemo(() => buildGroundMap(GROUND_MAPS.find((m) => m.id === setup.map) ?? GROUND_MAPS[0]), [setup.map])
-  const world = useRef<GroundWorld | null>(null)
-  if (!world.current) world.current = startWorld(map, setup)
+  const battle = useRef<Match | null>(null)
+  if (!battle.current) battle.current = startBattle(map, setup)
+  const world = useRef<GroundWorld>(battle.current.world)
   const team = world.current.players[ME].team
   // A phone, upright or held sideways (short): compact panels, the minimap folded away to start.
   const short = useMediaQuery('(max-height: 520px)')
@@ -235,8 +206,6 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
   const view = useRef<GroundView>({ x: map.spawns[ME]?.x ?? 0, y: map.spawns[ME]?.y ?? 0, zoom: 0.6, w: 1, h: 1, dpr: 1 })
   const selected = useRef(new Set<number>())
   const groups = useRef<Groups>(new Map())
-  const memory = useRef(new Map<number, Seen>())
-  const rallies = useRef(new Map<number, { x: number; y: number }>())
   const pings = useRef<Ping[]>([])
   const outbox = useRef<GroundCmd[]>([])
   const place = useRef<Place | null>(null)
@@ -246,7 +215,6 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
   const mouse = useRef({ x: 0, y: 0, inside: false })
   const touchLast = useRef(false)
   const flags = useRef({ paused: false, speed: 1, reveal: false })
-  const income = useRef<{ t: number; got: number }[]>([])
   const [ui, setUi] = useState({ paused: false, speed: 1, menu: false, placing: null as string | null, mapOpen: true, panel: false, debug: { grid: false, heights: false, flags: false }, reveal: false })
   const uiRef = useRef(ui)
   uiRef.current = ui
@@ -307,7 +275,8 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
     const v = view.current
     place.current = { type, x: at?.x ?? v.x, y: at?.y ?? v.y }
     hudSoon.current = true
-    setUi((u) => ({ ...u, placing: type }))
+    // On a phone the selection folds away, so the ghost has the view.
+    setUi((u) => ({ ...u, placing: type, panel: false }))
   }, [])
   const confirmPlace = useCallback(
     (keep = false) => {
@@ -372,15 +341,10 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
     const p = w.players[ME]
     let units = 0
     for (const u of w.units) if (!u.dead && u.owner === ME) units++
-    // Income: credits gained over the last ten seconds (spending and refunds set aside as best a
-    // screen can: only rises count), a minute's worth.
-    const inc = income.current
-    const got = inc.reduce((s, x) => s + x.got, 0)
-    const span = inc.length > 1 ? inc[inc.length - 1].t - inc[0].t : 0
     let sel: SelSnap | null = null
     const ids = [...selected.current].filter((id) => {
       const u = w.byId.get(id)
-      return u && !u.dead && seenNow(w, team, u, flags.current.reveal)
+      return u && seenNow(w, { me: ME, reveal: flags.current.reveal }, u)
     })
     if (ids.length !== selected.current.size) selected.current = new Set(ids)
     if (ids.length) {
@@ -389,9 +353,11 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
       for (const u of us) kinds.set(u.type, (kinds.get(u.type) ?? 0) + 1)
       const ours = us.filter((u) => u.owner === ME)
       const engineers = ours.some((u) => isEngineerType(w, u))
-      const v = view.current
-      const cards = (types: string[], cost: (t: string) => number, why: (t: string) => string | null, queued: (t: string) => number): Card[] =>
-        types.map((t) => ({ type: t, name: typeName(t), art: artOf(t), cost: cost(t), why: why(t), queued: queued(t) }))
+      const cards = (types: string[], why: (t: string) => string | null, queued: (t: string) => number): Card[] =>
+        types.map((t) => {
+          const ut = GROUND_UNIT[t]
+          return { type: t, name: typeName(t), art: artOf(t), cost: ut?.cost ?? 0, time: ut?.build ?? 0, blurb: ut?.blurb ?? '', why: why(t), queued: queued(t) }
+        })
       let one: SelSnap['one'] = null
       if (us.length === 1) {
         const u = us[0]
@@ -408,7 +374,7 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
           max: t.hull,
           site,
           queue: { items: [...q.items], progress: q.progress },
-          train: cards(trainTypes, () => 0, (x) => cantTrain(w, ME, u.id, x), (x) => q.items.filter((i) => i === x).length),
+          train: cards(trainTypes, (x) => cantTrain(w, ME, u.id, x), (x) => q.items.filter((i) => i === x).length),
           trains: trainTypes.length > 0,
         }
       }
@@ -417,7 +383,7 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
         kinds: [...kinds].map(([type, count]) => ({ type, name: typeName(type), count })),
         vehicles: ours.length === us.length && ours.some((u) => typeOf(u).kind === 'vehicle'),
         one,
-        build: engineers ? cards(buildable(w, ME), (x) => placement(w, ME, x, v.x, v.y).cost, () => null, () => 0) : null,
+        build: engineers ? cards(buildable(w, ME), () => null, () => 0) : null,
         sites: ours.filter((u) => siteProgress(u) !== null).map((u) => u.id),
       }
     }
@@ -425,7 +391,7 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
     const lp = lastPlace.current
     return {
       credits: Math.floor(p.credits),
-      income: span > 0.5 ? Math.round((got / span) * 60) : 0,
+      income: Math.round(incomeOf(w, ME) * 60),
       time: Math.floor(w.time),
       units,
       sel,
@@ -456,9 +422,8 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
     let hudT = 0
     let miniT = 0
     const miniWas = [0, 0, 0, 0, 0]
-    let lastCredits = w.players[ME].credits
     const keys = new Set<string>()
-    const look: Look = { me: ME, team, selected: selected.current, hover: 0, bars: getSettings().bars, reveal: false, memory: memory.current, zoom: 1, zdpr: 1, now: 0 }
+    const look: Look = { me: ME, team, selected: selected.current, hover: 0, bars: getSettings().bars, reveal: false, zoom: 1, zdpr: 1, now: 0 }
     const sel = () => look.selected
     const clampView = () => {
       v.zoom = Math.min(MAX_ZOOM, Math.max(minZoom, v.zoom))
@@ -498,21 +463,27 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
       clampView()
     }
 
-    // One tick: last tick's orders first (as the server would send them), the AI, then the sim.
+    // One tick (match.ts): last tick's orders first, cleaned as the server would send them, then the
+    // AI, then the sim. What happened to us shows as messages.
     const step = () => {
+      const orders: [Owner, GroundCmd][] = []
       for (const c of outbox.current.splice(0)) {
         const clean = cleanGroundCmd(JSON.parse(JSON.stringify(c)), w)
-        if (!clean) continue
-        const why = runGroundCmd(w, ME, clean)
-        if (typeof why === 'string' && why) toastRef.current(why)
+        if (clean) orders.push([ME, clean])
       }
-      for (let s = 0; s < w.players.length; s++) if (s !== ME) runAi(w, s)
-      tick(w)
+      stepGround(battle.current!, orders, (seat, _c, why) => {
+        if (seat === ME && typeof why === 'string' && why) toastRef.current(why)
+      })
+      for (const e of w.events) {
+        if (e.k === 'siteLost') {
+          if (e.owner === ME) toastRef.current('A site was given up: something else stands there now. Refunded.')
+          continue
+        }
+        const u = e.k === 'built' || e.k === 'trained' ? w.byId.get(e.id) : undefined
+        if (!u || u.owner !== ME) continue
+        toastRef.current(e.k === 'built' ? `${typeOf(u).name} built` : `${typeOf(u).name} ready`)
+      }
       w.events.length = 0
-      const c = w.players[ME].credits
-      if (c > lastCredits) income.current.push({ t: w.time, got: c - lastCredits })
-      lastCredits = c
-      while (income.current.length && income.current[0].t < w.time - 10) income.current.shift()
     }
 
     // Picking.
@@ -522,7 +493,7 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
       let bestD = Infinity
       let building: GroundUnit | null = null
       for (const u of w.units) {
-        if (u.dead || !seenNow(w, team, u, look.reveal)) continue
+        if (!seenNow(w, look, u)) continue
         const t = typeOf(u)
         if (t.foot) {
           if (x >= u.tc * TILE && x < (u.tc + t.foot[0]) * TILE && y >= u.tr * TILE && y < (u.tr + t.foot[1]) * TILE) building = u
@@ -589,7 +560,6 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
       const yards = us.filter((u) => typeOf(u).foot && siteProgress(u) === null)
       for (const u of yards) {
         order(groundCmd('rally', u.id, x, y))
-        rallies.current.set(u.id, { x, y })
       }
       if (yards.length) ping(x, y)
     }
@@ -601,7 +571,7 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
         drawRings(g, w, look)
         for (const id of sel()) {
           const u = w.byId.get(id)
-          const r = u && !u.dead && u.owner === ME ? rallies.current.get(u.id) : undefined
+          const r = u && !u.dead && u.owner === ME ? u.rally : null
           if (u && r) drawRally(g, u, r, look)
         }
         drawPings(g, pings.current, look)
@@ -661,7 +631,6 @@ function Battle({ setup, sound, onLeave, onRestart }: { setup: GroundSetup; soun
         fogReveal = st.reveal
         look.reveal = st.reveal
         fog.update(w, team, st.reveal)
-        updateMemory(w, team, memory.current)
         miniT = 0
       }
       look.selected = selected.current
@@ -1184,6 +1153,21 @@ function Art({ card }: { card: { art: string; name: string } }) {
   return card.art ? <img src={card.art} alt="" /> : <span className="ew-art ew-landart">{card.name.slice(0, 1)}</span>
 }
 
+function CardCost({ card }: { card: Card }) {
+  return (
+    <>
+      <span className="ew-cost">
+        <Icon name="credits" size={11} /> {fmt(card.cost)}
+      </span>
+      {card.time > 0 && (
+        <span className="ew-time">
+          <Icon name="time" size={11} /> {card.time}s
+        </span>
+      )}
+    </>
+  )
+}
+
 function Selection({ sel, phone, open, onOpen, onClear, onNarrow, onBuild, onTrain, onCancel, onStop, touch }: {
   sel: SelSnap
   phone: boolean
@@ -1254,14 +1238,10 @@ function Selection({ sel, phone, open, onOpen, onClear, onNarrow, onBuild, onTra
         {sel.build.length ? (
           <div className="ew-landcardrow">
             {sel.build.map((c) => (
-              <button key={c.type} className="ew-shipcard" onClick={() => onBuild(c.type)} data-tip={`${c.name}: ${touch ? 'tap, then drag the ghost and confirm' : 'click, then click where it goes'}`}>
+              <button key={c.type} className="ew-shipcard" onClick={() => onBuild(c.type)} data-tip={`${c.name}${c.blurb ? `\n${c.blurb}` : ''}\n${touch ? 'Tap, then drag the ghost and confirm.' : 'Click, then click where it goes.'}`}>
                 <Art card={c} />
                 <strong>{c.name}</strong>
-                {c.cost > 0 && (
-                  <span className="ew-cost">
-                    <Icon name="credits" size={11} /> {fmt(c.cost)}
-                  </span>
-                )}
+                <CardCost card={c} />
               </button>
             ))}
           </div>
@@ -1286,10 +1266,11 @@ function Selection({ sel, phone, open, onOpen, onClear, onNarrow, onBuild, onTra
                   const i = one.queue.items.lastIndexOf(c.type)
                   if (i >= 0) onCancel(one.id, i)
                 }}
-                data-tip={`${c.name}${c.why ? `\n${c.why}` : ''}\n${touch ? 'Tap to train one, Shift on for five.' : 'Click to train one, Shift-click for five, right-click to take one off the queue.'}`}
+                data-tip={`${c.name}${c.blurb ? `\n${c.blurb}` : ''}${c.why ? `\n${c.why}` : ''}\n${touch ? 'Tap to train one, Shift on for five.' : 'Click to train one, Shift-click for five, right-click to take one off the queue.'}`}
               >
                 <Art card={c} />
                 <strong>{c.name}</strong>
+                <CardCost card={c} />
                 {c.queued > 0 && <span className="ew-qbadge">{c.queued}</span>}
               </button>
             ))}
