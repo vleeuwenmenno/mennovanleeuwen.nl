@@ -13,6 +13,9 @@ export const reach = (r: number) => Math.round(r * RANGE_SCALE)
 
 export type FactionId = 'republic' | 'droid' | 'swarm'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense' | 'yard'
+  /** Ground battles (see UnitType `ground`): units that drive on the tile grid, and buildings that
+   * stand on it. The space game's tier checks never match them. */
+  | 'vehicle' | 'building'
 export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 /** The mount a module is drawn with (models/mounts.ts). */
@@ -134,6 +137,40 @@ export type UnitType = {
   /** An orbital defense station (Galactic conquest, see OrbitalPlan): its level, what each of its
    * slots holds (null: empty), and which of its planet's two defense sites it stands on. */
   orbital?: { level: number; slots: (OrbitalModId | null)[]; i?: number }
+  /** A ground battle's unit or building (ground/world.ts): how it stands and moves on the tile
+   * grid. Only units with it are in ground battles, and space battles never have them. */
+  ground?: GroundSpec
+}
+
+/**
+ * How a ground unit or building lives on the ground battle's tile grid (32-unit tiles). A vehicle
+ * drives (turns towards its next waypoint, then goes) on paths for its size class; a building
+ * stamps its footprint on the grid, faces south (its door the middle of its south side) and never
+ * turns.
+ */
+export type GroundSpec = {
+  /** Path finding size class: the square of tiles it needs (1 small, 2 vehicle, 3 large). */
+  size: 1 | 2 | 3
+  /** Body radius in world units: how close other ground units come. */
+  radius: number
+  /** Acceleration and braking, world units a second squared. */
+  accel: number
+  /** Sight radius in tiles. */
+  sight: number
+  /** Buildings: footprint in tiles, columns × rows. */
+  foot?: [number, number]
+  /** Buildings: credits a second it earns once built. */
+  income?: number
+  /** Buildings: how far its command range reaches, in tiles from its middle (other buildings go up
+   * inside one of ours). */
+  range?: number
+  /** Buildings: may also go up anywhere far enough from known enemy buildings (a Command Center
+   * starting a new base). */
+  standalone?: boolean
+  /** Buildings: what it trains, in card order. */
+  trains?: string[]
+  /** Engineers: the buildings it puts up, in card order. */
+  builds?: string[]
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
@@ -158,6 +195,33 @@ export const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?
 /** A module with a mount of its own, `s` as a share of the ship's longest side. */
 export const M = (kind: HardpointKind, art: ModuleArt, x: number, y: number, s: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, art, x, y, s, hp, weapon })
 export const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: number, hp: number, weapon: Weapon) => M('turret', art, x, y, s, hp, weapon)
+
+// --- Ground units -----------------------------------------------------------------------------------
+
+/** Ground battle units by role, each faction's written with these (see GroundSpec). Numbers in the
+ * space game's ballpark: an engineer squadron there costs 300 for three craft (one vehicle here,
+ * 150 or so); a station earns 6 credits a second at level 1, as a Command Center does; a yard costs
+ * 900 and a Command Center, a whole new base, 1,200. */
+type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number }
+
+/** An engineer: a small unarmed vehicle (size class 1) that puts up buildings and repairs them. */
+export const groundEngineer = (o: GroundWritten & { speed: number; turn: number }): UnitType => ({
+  tier: 'vehicle', kind: 'engineer', aspect: 0.8, size: Math.round((o.ground.radius ?? 11) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 8) * 32, weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Construction', strong: ['building', 'repairing buildings'], weak: ['anything that shoots'] },
+  ...o,
+  ground: { size: 1, radius: 11, accel: 220, sight: 8, ...o.ground },
+})
+
+/** A Command Center: a 6 × 6 base building that trains engineers, earns credits and holds the command
+ * range other buildings go up in; it may also start a new base on its own (standalone). */
+export const groundCenter = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 6 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 10 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Base', strong: ['training engineers', 'income'], weak: ['being left unguarded'] },
+  ...o,
+  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], income: 6, range: 14, standalone: true, ...o.ground },
+})
 
 // --- Stations ---------------------------------------------------------------------------------------
 
@@ -396,4 +460,6 @@ export type FactionData = {
   layout: Record<string, Layout>
   /** Its orbital defense station (Galactic conquest). */
   orbital: OrbitalPlan
+  /** Its ground battle units and buildings (UnitType `ground`): the Engineer, then the Command Center. */
+  ground: UnitType[]
 }

@@ -1,6 +1,6 @@
 import type { FactionId } from '../data.ts'
 import { GROUND as droid } from './droid/ground.ts'
-import { scorchSpots } from './index.ts'
+import { scorchSpots, setGroundModels } from './index.ts'
 import { seedOf } from './kit.ts'
 import { GROUND as republic } from './republic/ground.ts'
 import type { ModelSpec } from './spec.ts'
@@ -61,3 +61,6 @@ export function groundModelFor(id: string): Model | null {
   if (m === undefined) built.set(id, (m = id in DEFS ? buildGroundModel(id) : null))
   return m
 }
+
+// The game's model lookup (index.ts modelFor) has ground units' models from here on.
+setGroundModels({ ids: groundModelIds, build: buildGroundModel, model: groundModelFor })

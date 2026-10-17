@@ -10,6 +10,9 @@ import {
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind, DEFENSE_QUEUE, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, cleanDefense, defenseModTime, defenseTime, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, placeType,
 } from './data.ts'
+import type { Brain } from './ai.ts'
+import type { Eye } from './ground/fog.ts'
+import type { Foot, GroundMove, GroundSnap, GroundState, KnownBuilding } from './ground/world.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
 // economy and capture beacons. The game screen and the headless balance sims both drive it by
@@ -189,7 +192,7 @@ export type Unit = {
   /** A construction site (a yard placed by engineers, until it is finished): what was paid for it
    * (for a refund if it is cancelled), the ruin it went up on (given back if it is), and whether
    * building has started. Until it has, only its owner knows it is there. */
-  site?: { paid: number; started: boolean; ruin?: Ruin }
+  site?: { paid: number; started: boolean; ruin?: Ruin; /** Ground battles: seconds its engineer has waited for units to drive off the footprint. */ wait?: number }
   /** A Command Station's or a yard's expansions (hybrid bases): the ones built onto it (its type
    * carries their hardpoints), and the ones ordered, the first under way. Absent until it has any,
    * and in battles saved before expansions. */
@@ -207,6 +210,11 @@ export type Unit = {
   /** A new ship flying out of the yard's berth or the station's hangar door (see Launch). Absent once
    * it is out, and on every other unit. */
   launch?: Launch
+  /** Ground battles only (ground/world.ts): a building's footprint on the tile grid, a vehicle's
+   * movement state, and its fog disc. Absent on every space unit. */
+  foot?: Foot
+  gm?: GroundMove
+  eye?: Eye
 }
 
 /**
@@ -331,13 +339,13 @@ function note(w: World, p: Player, amount: number, kind: LedgerEntry['kind'], wh
   if (p.ledger.length > LEDGER_SIZE) p.ledger.shift()
 }
 /** Pay for something: taken off the credits, counted under its kind, and logged. */
-function spend(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
+export function spend(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
   p.credits -= amount
   p.spentBy[kind] += amount
   note(w, p, -amount, kind, what)
 }
 /** Money back for something cancelled before it was done. */
-function giveBack(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
+export function giveBack(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
   p.credits += amount
   p.spentBy[kind] -= amount
   note(w, p, amount, 'cancel', what)
@@ -416,6 +424,8 @@ export type SimEvent =
   | { k: 'gift'; from: Owner; to: Owner; amount: number }
   /** A defense station finished an upgrade or fitted a module (`what` says which). */
   | { k: 'fortified'; owner: Owner; unit: number; what: string; x: number; y: number }
+  /** Ground battles: a unit rolled out of building `from`'s door. */
+  | { k: 'trained'; owner: Owner; unit: string; x: number; y: number; from: number }
 
 export type World = {
   w: number
@@ -472,11 +482,54 @@ export type World = {
    * before the lobby had the choice (and in fleet battles, which build nothing): on, as they always
    * were there. See oreGuns. */
   oreDefense?: boolean
+  /** A ground battle's terrain layer (ground/world.ts): the tile map, its nav grid and the fog,
+   * rebuilt from the map (MapDef `ground`), never saved. Absent in space battles, which every ground
+   * code path is gated on. */
+  ground?: GroundState
+  /** Ground battles: each team's memory of other teams' buildings, as last seen. */
+  known?: KnownBuilding[][]
 }
 
 /** Whether defense platforms may go on ore in this battle (World `oreDefense`; on unless the lobby
  * turned them off). */
 export const oreGuns = (w: World) => w.oreDefense !== false
+
+/**
+ * Ground battles' part of the sim (ground/world.ts), called at a few points of a battle whose map has
+ * terrain. The ground code fills these in when it is loaded, so a build that never offers ground
+ * battles never carries it, and nothing here runs for a space battle.
+ */
+export type GroundHooks = {
+  /** The terrain layer for a new or restored world (World `ground`). */
+  layer(w: World): GroundState
+  /** Each side's Command Center and engineer at the start. */
+  start(w: World): void
+  /** Ground vehicles' movement and the buildings' work, early in the tick. */
+  tick(w: World, dt: number): void
+  /** The fog and what each team sees, in place of sight. */
+  sight(w: World): void
+  /** The dead's fog discs and stamps, before they leave the units. */
+  bury(w: World): void
+  income(w: World, p: Player, o: Owner): void
+  formation(w: World, us: Unit[], x: number, y: number): [Unit, Pt][]
+  place(w: World, owner: Owner, crew: Unit[], unitId: string, x: number, y: number, queued: boolean): string | null
+  queue(w: World, owner: Owner, id: string, at: number): { q: QueueItem[]; yard?: Unit } | string
+  cantBuild(w: World, owner: Owner, id: string, at: number): string | null
+  hash(w: World, int: (v: number) => void, num: (v: number) => void): void
+  snap(w: World): GroundSnap
+  restore(w: World, s: GroundSnap | undefined): void
+  /** The space map for a ground map's id, or null. */
+  mapDef(id: string): MapDef | null
+  /** The AI's decisions in a ground battle (ai.ts think). */
+  think(w: World, b: Brain): void
+}
+let groundCode: GroundHooks | null = null
+/** Loads ground battles into the sim (ground/world.ts calls it when it is imported). */
+export const setGroundHooks = (h: GroundHooks) => void (groundCode = h)
+/** The ground battles' code, once loaded. */
+export const groundHooks = () => groundCode
+/** The ground code in a battle that has terrain (only such a world calls it). */
+const G = () => groundCode!
 
 /**
  * Reinforcements, a battle's rules set in the lobby: whether strike craft (fighter-class: fighters,
@@ -564,7 +617,7 @@ const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
  * class's: the hook for an ability (a ram, a heavy tractor) that lets a ship push bigger ones.
  * Tractor lock only slows ships, so it doesn't touch this.
  */
-export const PUSH_CLASS: Record<Tier, number> = { fighter: 0, gunship: 1, frigate: 2, cruiser: 3, capital: 4, station: 10, mine: 10, defense: 10, yard: 10 }
+export const PUSH_CLASS: Record<Tier, number> = { fighter: 0, gunship: 1, frigate: 2, cruiser: 3, capital: 4, station: 10, mine: 10, defense: 10, yard: 10, vehicle: 1, building: 10 }
 export const pushClass = (u: Unit) => (isShip(u.t) ? (u.pushClass ?? PUSH_CLASS[u.t.tier]) : Infinity)
 
 /**
@@ -871,7 +924,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
     // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
     // New ships fly out of the yards, and reinforcements cost extra (see Reinforce).
-    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce), defense: cleanDefense(opts.defense), oreDefense: opts.oreDefense === true }),
+    ...(opts.fleet || map.ground ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce), defense: cleanDefense(opts.defense), oreDefense: opts.oreDefense === true }),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -889,6 +942,14 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
       escaped: [],
     }
   })
+  // A ground battle: the terrain layer, and each side's Command Center and engineer (ground/world.ts).
+  if (map.ground) {
+    if (!groundCode) throw new Error('Ground battles are not loaded (ground/world.ts)')
+    w.ground = G().layer(w)
+    G().start(w)
+    refreshPlayers(w)
+    return w
+  }
   const claim = { owner: -1, claim: -1, progress: 0 }
   w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
   w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
@@ -908,7 +969,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
   const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p, i) => [p.x, p.y, map.keep?.[i] ?? BUILD_RADIUS])]
-  const bigClear = Math.max(...UNITS.filter(isShip).map(navClear))
+  const bigClear = Math.max(...UNITS.filter((t) => isShip(t) && !t.ground).map(navClear))
   const lane = Math.max(240, bigClear + 100)
   const lanes: [Pt, Pt][] = []
   /** The spawns nearest `p` (all of them as near as the nearest, give or take 5%), `p` left out. */
@@ -1019,7 +1080,7 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
 
 /** Give a ship an order now, or, queued, after the ones it already has (straight away if it has
  * none). An order given now drops anything queued. */
-function issue(u: Unit, o: Order, queued = false) {
+export function issue(u: Unit, o: Order, queued = false) {
   if (queued && (u.order.k !== 'idle' || u.queue.length)) {
     u.queue.push(o)
     return
@@ -1052,7 +1113,7 @@ export function lastStop(w: World, u: Unit): Pt {
 }
 
 /** The current order is done: on to the next queued one, or wait at (x, y). */
-function nextOrder(u: Unit, x: number, y: number, face: number | null = null) {
+export function nextOrder(u: Unit, x: number, y: number, face: number | null = null) {
   const o = u.queue.shift()
   if (o) {
     u.order = o
@@ -1068,6 +1129,12 @@ function nextOrder(u: Unit, x: number, y: number, face: number | null = null) {
 function formation(w: World, owner: Owner, ids: number[], x: number, y: number, give: (u: Unit, tx: number, ty: number, pace: number) => void) {
   const us = ids.map((i) => w.byId.get(i)).filter((u) => commandable(u, owner))
   if (!us.length) return
+  // Ground vehicles take spots on a grid round the point (ground/world.ts), at the slowest one's pace.
+  if (w.ground) {
+    const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
+    for (const [u, p] of G().formation(w, us, x, y)) give(u, p.x, p.y, pace)
+    return
+  }
   const cx = us.reduce((s, u) => s + u.x, 0) / us.length
   const cy = us.reduce((s, u) => s + u.y, 0) / us.length
   const spread = Math.max(1, ...us.map((u) => M.hypot(u.x - cx, u.y - cy)))
@@ -1717,6 +1784,7 @@ export const FIELD_DAMAGE = 0.4
  */
 function queueFor(w: World, owner: Owner, id: string, at: number): { q: QueueItem[]; yard?: Unit } | string {
   const p = w.players[owner]
+  if (w.ground) return G().queue(w, owner, id, at)
   if (!w.hybrid) return at ? 'No yards in this battle' : { q: p.queue }
   const where = builtAt(UNIT[id])
   if (where === 'station') return at ? 'Built at the Command Station' : { q: p.queue }
@@ -1732,6 +1800,7 @@ function queueFor(w: World, owner: Owner, id: string, at: number): { q: QueueIte
 export function cantBuild(w: World, owner: Owner, id: string, reserve = false, at = 0): string | null {
   const p = w.players[owner]
   const t = UNIT[id]
+  if (w.ground) return G().cantBuild(w, owner, id, at)
   if (w.fleet) return 'No shipyard work during a fleet battle'
   if (reserve) {
     const why = cantReinforce(w, id)
@@ -2472,6 +2541,7 @@ function structProblem(w: World, owner: Owner, t: UnitType, st: Pt, x: number, y
 export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, x: number, y: number, queued = false, facing = NaN): string | null {
   const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t))
   if (!crew.length) return 'Select engineers to build it'
+  if (w.ground) return G().place(w, owner, crew, unitId, x, y, queued)
   const pl = placement(w, owner, unitId, x, y, facing)
   if (pl.why) return pl.why
   const t = placeType(unitId)!
@@ -2688,7 +2758,8 @@ function construction(w: World, dt: number) {
   // Who is welding each structure (the first crew's owner), who pays for what they rebuild.
   const payers = new Map<number, Owner>()
   for (const u of w.units) {
-    if (u.dead || !isEngineer(u.t)) continue
+    // Ground engineers build in groundTick.
+    if (u.dead || !isEngineer(u.t) || u.t.ground) continue
     u.mending = []
     if (u.order.k === 'construct') {
       const t = w.byId.get(u.order.id)
@@ -2970,6 +3041,10 @@ function refreshPlayers(w: World) {
     for (const a of w.arrivals) if (a.owner === o) pop += UNIT[a.unit].pop
     const beacons = w.beacons.filter((b) => b.owner === p.team).length
     p.pop = Math.round(pop)
+    if (w.ground) {
+      G().income(w, p, o)
+      continue
+    }
     p.popCap = BASE_POP + (p.level - 1) * POP_PER_LEVEL + beacons * BEACON_POP
     const ore = MINE_INCOME * (1 + (moduleUp(w.byId.get(p.station), 'refinery') ? (techBonus(p, stationOf(p)).mines ?? 0) : 0))
     p.incomeParts = { station: STATION_INCOME[p.level] * p.incomeMul, mines: mines * ore * p.incomeMul, beacons: beacons * BEACON_INCOME * p.incomeMul }
@@ -3379,7 +3454,7 @@ export const HULL_GAP = 8
  */
 let bigReach = 0
 const keepApartReach = () => {
-  if (!bigReach) bigReach = Math.max(240, ...UNITS.map((t) => radius(t) + HULL_GAP + 4))
+  if (!bigReach) bigReach = Math.max(240, ...UNITS.filter((t) => !t.ground).map((t) => radius(t) + HULL_GAP + 4))
   return bigReach
 }
 /** Room a warship leaves either side of itself on the arc, on top of its hull. */
@@ -4883,10 +4958,12 @@ export function tick(w: World, dt = STEP) {
   if (w.winner !== -1) return
   w.time += dt
   buildGrid(w)
+  if (w.ground) G().tick(w, dt)
   w.seenT -= dt
   if (w.seenT <= 0) {
     w.seenT = 0.25
-    sight(w)
+    if (w.ground) G().sight(w)
+    else sight(w)
     refreshPlayers(w)
   }
   economy(w, dt)
@@ -4916,6 +4993,8 @@ export function tick(w: World, dt = STEP) {
     if (u.dead) continue
     // A yard goes up only as fast as engineers build it (see construction).
     if (u.site) continue
+    // Ground units move and work in groundTick.
+    if (u.t.ground) continue
     if (u.building > 0) {
       u.building -= dt
       u.hull = Math.min(u.hullMax, u.hull + (u.hullMax * 0.75 * dt) / u.t.build)
@@ -4969,6 +5048,7 @@ export function tick(w: World, dt = STEP) {
     shoot(w, u, dt)
   }
   moveShots(w, dt)
+  if (w.ground) G().bury(w)
   if (w.units.some((u) => u.dead)) {
     for (const u of w.units) if (u.dead) w.byId.delete(u.id)
     w.units = w.units.filter((u) => !u.dead)
@@ -5385,5 +5465,6 @@ export function stateHash(w: World): number {
     int(p.research.length)
     int(p.armour ? 1 : 0)
   }
+  if (w.ground) G().hash(w, int, num)
   return h >>> 0
 }

@@ -2,16 +2,16 @@
 //
 //   node scripts/ground-models-check.ts
 //
-// 1. Every real ground unit type (ground/units.ts; the sim's test units aside) has a model, and
-//    every model is for a ground type of the same faction.
+// 1. Every ground unit type (data/<faction>.ts, UnitType `ground`) has a model through the normal
+//    model lookup (models/index.ts modelFor), and every model is for a ground type of the same faction.
 // 2. Each builds without errors, the same twice, and its geometry is sound: real polygons, no NaN,
 //    parts inside a sane box round the model's, unique part ids, parts sorted by z, facets and
 //    details with real points.
 // 3. Buildings fill their footprint (a model drawn on its footprint covers most of it) and vehicles
 //    are mostly hull, so neither is drawn as a speck on its box.
 
-import { GROUND_UNITS } from '../src/apps/games/empires/ground/sim.ts'
-import { groundModel } from '../src/apps/games/empires/ground/build.ts'
+import { UNITS } from '../src/apps/games/empires/data.ts'
+import { modelFor } from '../src/apps/games/empires/models/index.ts'
 import { buildGroundModel, groundModelIds } from '../src/apps/games/empires/models/ground.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
 import type { Pt } from '../src/apps/games/empires/models/types.ts'
@@ -24,11 +24,12 @@ const ok = (cond: boolean, msg: string) => {
   }
 }
 
-const real = GROUND_UNITS.filter((t) => !t.id.startsWith('test-'))
+const real = UNITS.filter((t) => !!t.ground)
+const groundModel = (id: string) => modelFor(real.find((t) => t.id === id)!)
 // 1. Coverage both ways.
 for (const t of real) ok(!!groundModel(t.id), `${t.id} (${t.name}) has no model`)
 for (const id of groundModelIds()) {
-  const t = GROUND_UNITS.find((u) => u.id === id)
+  const t = real.find((u) => u.id === id)
   ok(!!t, `model ${id} is for no ground unit type`)
   if (t) ok(buildGroundModel(id).faction === t.faction, `model ${id} is in ${buildGroundModel(id).faction}'s folder, the unit is ${t.faction}'s`)
 }
@@ -68,7 +69,7 @@ for (const t of real) {
       if (m.parts.some((p) => p.pts.length >= 3 && inPart(p, x, y))) hit++
     }
   const fill = hit / (N * N)
-  ok(fill >= (t.foot ? 0.55 : 0.3), `${t.id}: fills only ${Math.round(fill * 100)}% of its box`)
+  ok(fill >= (t.ground?.foot ? 0.55 : 0.3), `${t.id}: fills only ${Math.round(fill * 100)}% of its box`)
   console.log(`  ${t.id.padEnd(14)} ${String(m.parts.length).padStart(3)} parts, fills ${Math.round(fill * 100)}% of its box (${t.name})`)
 }
 

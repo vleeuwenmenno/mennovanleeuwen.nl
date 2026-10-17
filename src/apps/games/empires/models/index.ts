@@ -29,7 +29,13 @@ const FACTION_MODELS: Record<FactionId, FactionModels> = { republic, droid, swar
  * with the level. */
 const DEFS: Record<string, ModelDef> = Object.assign({}, ...FACTION_IDS.map((f) => FACTION_MODELS[f].defs))
 
-export const hasModel = (t: UnitType) => t.id in DEFS
+export const hasModel = (t: UnitType) => t.id in DEFS || (!!t.ground && !!groundModels?.ids().includes(t.id))
+
+/** Ground battles' models (models/ground.ts), once loaded: it fills this in when it is imported, so a
+ * build that never offers ground battles never carries them. */
+type GroundModelSet = { ids(): string[]; build(id: string): Model; model(id: string): Model | null }
+let groundModels: GroundModelSet | null = null
+export const setGroundModels = (g: GroundModelSet) => void (groundModels = g)
 
 /** A faction's models file (models/<faction>/index.ts), for what it says about its own models
  * beyond the designs: its part names (the Codex, codexInfo.ts), its design variants. */
@@ -40,6 +46,8 @@ const built = new WeakMap<UnitType, Map<string, Model | null>>()
  * type of its own (see stationType), so each level and set of modules gets its own model. `style`
  * picks a design variant (the station's level-4 frame); left out, the design's default. */
 export function modelFor(t: UnitType, style = ''): Model | null {
+  // Ground battles' units and buildings have models of their own (models/ground.ts).
+  if (t.ground) return groundModels?.model(t.id) ?? null
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
@@ -80,6 +88,10 @@ export function typeOfSprite(sprite: string): UnitType | null {
 const DETACH_BY_DEFAULT: AnyDesign[] = ['flak', 'pd', 'quad', 'spore', 'parasite']
 
 export function buildModel(t: UnitType, style?: string): Model {
+  if (t.ground) {
+    if (!groundModels) throw new Error(`Ground models are not loaded (models/ground.ts): ${t.id}`)
+    return groundModels.build(t.id)
+  }
   const def = DEFS[t.id]
   if (!def) throw new Error(`No model for ${t.id}`)
   let w: number

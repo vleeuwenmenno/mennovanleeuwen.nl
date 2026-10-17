@@ -954,7 +954,7 @@ function chitter(sr: number, r: Rnd, kind: OrderKind | 'select', pitch = 1) {
 /** A crew acknowledgement: what they say depends on the order and who they are. */
 const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'frigate'): Recipe => (sr, r) => {
   // Small craft answer higher and quicker, flagships lower.
-  const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0, yard: -3 }[tier]
+  const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0, yard: -3, vehicle: 2, building: -5 }[tier]
   const big = tier === 'cruiser' || tier === 'capital' || tier === 'station'
   // Each faction's crews have their own voice (see VOICE): clone crews beep over a squelchy radio,
   // the Confederacy's command net clacks and pulses, the Swarm chitters.

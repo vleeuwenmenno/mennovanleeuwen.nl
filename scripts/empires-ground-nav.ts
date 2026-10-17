@@ -24,7 +24,9 @@ import { TF, TILE, type GroundMap, type TileGrid } from '../src/apps/games/empir
 import { MESA, testMesa } from '../src/apps/games/empires/ground/testmaps.ts'
 import { NAV_CLASSES, anchorAt, findPath, flushStamps, lineOk, newNav, spotOf, stampFootprint, stands, type GroundNav, type NavClass } from '../src/apps/games/empires/ground/nav.ts'
 import { dropEye, explored, newFog, placeEye, sees, type Eye } from '../src/apps/games/empires/ground/fog.ts'
-import { STEP, cmdMove, newGroundWorld, spawnUnit, tick } from '../src/apps/games/empires/ground/sim.ts'
+import { STEP, cmdMove, newWorld, spawn, tick } from '../src/apps/games/empires/sim.ts'
+import { groundMapDef } from '../src/apps/games/empires/ground/world.ts'
+import './ground-test-units.ts'
 
 let failed = false
 const check = (what: string, ok: boolean, detail = '') => {
@@ -158,9 +160,10 @@ const nav = newNav(map)
     n++
   }
   check(`${n} random paths: every step legal (no cliffs, water or rocks)`, !bad, bad)
-  // A rover in the sim, driven from low ground onto the plateau.
-  const w = newGroundWorld(testMesa(), [{ faction: 'republic', team: 0 }])
-  const u = spawnUnit(w, 'test-rover', 0, low.x, low.y)
+  // A rover in the battle sim (sim.ts on Test Mesa's terrain), driven from low ground onto the plateau.
+  const w = newWorld(groundMapDef('test-mesa')!, [{ faction: 'republic', team: 0, spawn: 0 }])
+  const from = at(14, 18)
+  const u = spawn(w, 'test-rover', 0, from.x, from.y, 0)
   cmdMove(w, 0, [u.id], 38 * TILE, 22 * TILE)
   let jump = ''
   let arrived = -1
@@ -170,8 +173,7 @@ const nav = newNav(map)
     const tile = Math.floor(u.y / TILE) * g.cols + Math.floor(u.x / TILE)
     if (tile !== prevTile && !joined(g, prevTile, tile) && !jump) jump = `tick ${t}: (${prevTile % g.cols}, ${Math.floor(prevTile / g.cols)}) to (${tile % g.cols}, ${Math.floor(tile / g.cols)})`
     prevTile = tile
-    for (const e of w.events) if (e.k === 'arrived') arrived = t
-    w.events.length = 0
+    if (u.order.k === 'idle') arrived = t
   }
   check('a rover driven up the ramp in the sim arrives on the plateau, never crossing a cliff', arrived > 0 && !jump && g.height[prevTile] === 1, jump || (arrived > 0 ? `${(arrived * STEP).toFixed(1)} s` : 'never arrived'))
 }

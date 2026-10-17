@@ -3262,13 +3262,15 @@ pnpm empires:bot "Bot Rook"                                     # an opponent th
 ## Empires At War ground battles
 
 Ground (land) battles are being built next to the space battles, in
-[`src/apps/games/empires/ground/`](src/apps/games/empires/ground). They have a sim of their own; the
-space sim and its multiplayer hash are not touched. Until ground units can fight, the mode is in
+[`src/apps/games/empires/ground/`](src/apps/games/empires/ground). They run in the space game's own
+sim (see [The ground sim](#the-ground-sim)); a battle without terrain behaves and hashes as before.
+Until ground units can fight, the mode is in
 dev builds only: the Skirmish setup shows a **Space / Ground** switch when `import.meta.env.DEV` is
 set, and Ground opens a short setup for a ground battle against the AI (see
 [The ground battle screen](#the-ground-battle-screen)) with a **Map viewer** beside it (drag or one
 finger to pan, wheel or pinch to zoom, and a debug overlay of the tile grid, heights and tile flags;
-hovering or tapping a tile shows what it is). Production builds contain none of it.
+hovering or tapping a tile shows what it is). Production builds contain none of it but the ground units'
+entries in the factions' data and the sim's empty hooks.
 
 **Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
 Each tile has a terrain (dirt, grass, rocky, and later sand, snow, ash, cracked earth and plating),
@@ -3335,21 +3337,30 @@ pnpm check:ground-map   # every ground map: builds the same twice, symmetric, sp
 
 ### The ground sim
 
-The ground battle has a sim of its own ([`ground/sim.ts`](src/apps/games/empires/ground/sim.ts)),
-run in lockstep like the space one: 30 ticks a second, its own seeded random stream, trigonometry
-from `detmath.ts`, orders as data ([`ground/commands.ts`](src/apps/games/empires/ground/commands.ts):
-`move` with shift-queue, `stop`, and the building orders `place`, `construct`, `train`, `cancel` and
-`rally`) and a `stateHash`. It shares no state
-with the space sim, whose hash and saves are untouched. No DOM, so the server can run it.
+A ground battle is a space-game battle whose map has terrain: one sim
+([`sim.ts`](src/apps/games/empires/sim.ts)), one `World`, the same orders, multiplayer protocol,
+snapshots and AI framework. A ground map's `MapDef` names its terrain (`ground`, built from the map's
+id by [`ground/world.ts`](src/apps/games/empires/ground/world.ts) `groundMapDef`), and the world gets
+a terrain layer (`World.ground`: the tile map, its nav grid with building stamps and the fog),
+rebuilt from the map and never saved. The ground code reaches the sim through a few hooks
+(`GroundHooks`), each called only when the world has terrain, so a space battle behaves and hashes
+exactly as it did before. `ground/world.ts` fills the hooks in when it is imported (the dev lobby and
+the checks do), so a production build, where ground battles aren't offered yet, carries none of it.
 
-- **Movement.** A vehicle turns towards its next waypoint and drives once it faces near enough,
-  slower the further off it points, and brakes to stop on the last one. A group sent somewhere
-  spreads over spots round the point instead of fighting over it. Ground units that overlap push
-  each other apart gently, a parked unit giving way to a moving one. No unit drives onto a tile it
-  can't stand on: it slides along the wall instead. One that ends up somewhere it can't stand (a
-  building went up on it) is pushed onto the nearest open ground. A unit that makes no headway
-  finds its path again, and one held up close to its destination by others parked there counts as
-  arrived.
+Ground units are ordinary unit types in each faction's data (`data/<faction>.ts`, UnitType
+`ground`), with tiers of their own (`vehicle` and `building`), so the space game's tier checks and
+the shield code leave them alone. Vehicles count as ships for orders and selection (`isShip`), so
+they take the same orders, queues, control groups and shortcuts; code for ships in space skips them
+with `isGround`.
+
+- **Movement.** A vehicle follows the space game's own orders (move, patrol, construct, stop, with
+  shift queues) on paths found on the tile grid, turns towards its next waypoint and drives once it
+  faces near enough, slower the further off it points, and brakes to stop on the last one. A group
+  sent somewhere spreads over spots round the point. Ground vehicles that overlap push each other
+  apart gently, a parked one giving way to a moving one. None drives onto a tile it can't stand on:
+  it slides along the wall instead. One that ends up somewhere it can't stand (a building went up on
+  it) is pushed onto the nearest open ground. A vehicle that makes no headway finds its path again,
+  and one held up close to its destination by others parked there counts as arrived.
 - **Path finding** ([`ground/nav.ts`](src/apps/games/empires/ground/nav.ts)): A* on the tile grid,
   8 ways, through the terrain's one stepping rule (`canStep`: no blocked tile, heights the same
   unless one tile is a ramp, no cutting a corner), with whole-number costs and a fixed neighbour
@@ -3362,24 +3373,28 @@ with the space sim, whose hash and saves are untouched. No DOM, so the server ca
   start of the next tick, where all of them are applied at once and the clearance map is worked out
   again (under half a millisecond on a 48 × 36 map), so every copy of the battle changes its grid at
   the same moment; units on the way find their paths again.
-- **Fog** ([`ground/fog.ts`](src/apps/games/empires/ground/fog.ts)) is kept in the sim, per team: a
-  count of the eyes on each tile and a bit for each tile ever explored. Each unit stamps a disc of
-  its sight radius in tiles, precomputed per radius, and moves it only when it changes tile, four
-  times a second. Height limits sight: a unit sees its own level and lower, plus the row of higher
-  tiles along the top of a cliff next to its level. A ramp counts as both levels it joins, and a
-  unit on one sees from the top. So a base on a plateau stays hidden until someone drives up.
+- **Fog** ([`ground/fog.ts`](src/apps/games/empires/ground/fog.ts)) takes the place of space's
+  sight circles: per team a count of the eyes on each tile. Each unit stamps a disc of its sight
+  radius in tiles, precomputed per radius, and moves it only when it changes tile, four times a
+  second (when space works out its sight). Height limits sight: a unit sees its own level and lower,
+  plus the row of higher tiles along the top of a cliff next to its level. A ramp counts as both
+  levels it joins, and a unit on one sees from the top. So a base on a plateau stays hidden until
+  someone drives up. A unit is seen (`seen`, as in space) when its tile is, a building when any tile
+  of its footprint is, and each team remembers the enemy buildings it has seen (`World.known`), as
+  last seen, until it sees their ground again with nothing there.
+- **Snapshots** keep the units and the memory as for any battle, plus the nav grid's version and
+  the stamps not yet applied; the terrain, the grid and the fog are rebuilt from those on loading.
 
-The checks run on small maps built tile by tile
-([`ground/testmaps.ts`](src/apps/games/empires/ground/testmaps.ts)), and on every generated ground
-map too.
+The checks run on Dustfall Ridge and on small maps built tile by tile
+([`ground/testmaps.ts`](src/apps/games/empires/ground/testmaps.ts)); their own test vehicles of every
+size class and a small test building are registered by the check scripts only.
 
 ### Ground units, building and the AI
 
-**The first units** ([`ground/units.ts`](src/apps/games/empires/ground/units.ts)) are one Engineer
-and one Command Center a faction. Engineers are small vehicles and drones (no walking animation):
-size class 1, unarmed, sight 8 tiles. Command Centers stand on 6 × 6 tiles, see 10 tiles, earn 6
-credits a second and train their faction's engineer. Prices sit near the space game's: a battle starts
-with 1,600 credits.
+**The first units** are one Engineer and one Command Center a faction. Engineers are small vehicles
+and drones (no walking animation): size class 1, unarmed, sight 8 tiles. Command Centers stand on
+6 × 6 tiles, see 10 tiles, earn 6 credits a second and train their faction's engineer. Prices sit
+near the space game's: a battle starts with 1,600 credits.
 
 | Faction | Engineer | Cost, time | Command Center | Hull |
 | --- | --- | --- | --- | --- |
@@ -3389,19 +3404,18 @@ with 1,600 credits.
 
 A Command Center costs 1,200 and takes one engineer 60 seconds. Their models are drawn like the
 ships ([`models/<faction>/ground.ts`](src/apps/games/empires/models), built by
-[`models/ground.ts`](src/apps/games/empires/models/ground.ts)): parts and facets in the faction's
-palette, cel shaded from straight above with the light top left. Buildings face south (their door)
-and never turn.
+[`models/ground.ts`](src/apps/games/empires/models/ground.ts), which loads them into the game's
+model lookup when imported): parts and facets in the faction's palette, cel shaded from straight
+above with the light top left. Buildings face south (their door) and never turn.
 
-**Starting** ([`ground/match.ts`](src/apps/games/empires/ground/match.ts)): each seat gets its
-Command Center in the middle of its spawn's plateau, one engineer in front of its door, and the
-starting credits. Every team knows where the others start: the enemy Command Centers are in its
-memory of buildings from the first second, drawn as ghosts under the fog. A turn runs the players'
-orders, then the AI, then the sim.
+**Starting:** each side gets its Command Center in the middle of its spawn's plateau (it is the
+player's station: the queue, income and AI go by it), one engineer in front of its door, the rally
+point a little way out, and the starting credits. Every team knows where the others start: the enemy
+Command Centers are in its memory of buildings from the first second.
 
-**Placing a building** ([`ground/build.ts`](src/apps/games/empires/ground/build.ts), `placement`).
-The ghost checks every tile of the footprint and reports the first rule that fails, in this order:
-1. Every tile is buildable (no ramp, cliff, water or blocking prop), off deposits, on one
+**Placing a building** (`groundPlacement`, through the space game's `place` order). The ghost checks
+every tile of the footprint and reports the first rule that fails, in this order:
+1. Every tile is buildable (no ramp, cliff, water or blocking prop), off crystal fields, on one
    level, and free of buildings and of the row in front of another building's door.
 2. It is inside the command range of one of our buildings (a Command Center reaches 14 tiles, others
    6). A Command Center may instead go anywhere at least 20 tiles from an enemy building we know of.
@@ -3411,37 +3425,38 @@ The ghost checks every tile of the footprint and reports the first rule that fai
 4. The row of tiles in front of its door is open, so units can always roll out.
 5. There are enough credits.
 
-What the team knows decides it: enemy buildings it sees or remembers count, ones hidden in the fog
-don't. A site placed on top of a hidden building is given up, refunded in full, when its engineer
-gets there.
+A site placed on top of a building hidden in the fog is given up, refunded in full, when its
+engineer gets there.
 
-**Building.** Placing pays for the site at once. Until work starts the site is the owner's secret:
-no stamp on the grid, no sight. Its engineers drive to spots round it (spread out, nearest first) and
-work starts when the first arrives: our own units standing on it are sent off it first (after 3
-seconds whatever is left is pushed off), enemy units on it hold the work up, then the footprint
-stamps the grid. The site's hull grows from a tenth with the work, and more engineers build faster:
-1, 1.7, 2.2 and 2.5 times as fast for one to four. Engineers also repair our damaged buildings, free,
-half again as fast as building. Calling a site off refunds it in full before work starts and the
-share not yet built after. A destroyed site or building frees its stamp.
+**Building** uses the space game's sites: placing pays at once, and until work starts the site is
+the owner's secret (no stamp on the grid, no sight). Its engineers (`construct`) drive to spots round
+it, spread out, nearest first, and work starts when the first arrives: our own units standing on it
+are sent off it first (after 3 seconds whatever is left is pushed off), enemy units on it hold the
+work up, then the footprint stamps the grid. The site's hull grows from a tenth with the work, and
+more engineers build faster: 1, 1.7, 2.2 and 2.5 times as fast for one to four. Engineers also repair
+our damaged buildings, free, half again as fast as building. Calling a site off (`cancelSite`)
+refunds it as a space site: in full before work starts, less the further along it is. A destroyed
+site or building frees its stamp; a player with no building left, finished or going up, is out.
 
-**Training.** A Command Center trains from a queue of up to 10 (shift queues five), each paid when
-queued and refunded in full when cancelled. A trained unit rolls out of the door, the middle of the
-south side, and drives to the rally point (or a little way out of the door). Income is 6 credits a
-second per standing Command Center, added each tick; the player's `income` is the figure for the top
-bar.
+**Training** uses the space game's `build` order at a building (as at a yard): a Command Center
+trains from its own queue of up to 10, each paid when queued and refunded in full when cancelled
+(`cancel`). A trained unit rolls out of the door, the middle of the south side, and drives to the
+building's rally point (`rally`). Income is 6 credits a second per standing Command Center, in the
+economy as the station's.
 
-**The AI** ([`ground/ai.ts`](src/apps/games/empires/ground/ai.ts)) is passive in the slice: every
-two seconds or so it trains engineers one at a time (two with one Command Center, four with two),
-saves up and expands with a second Command Center beside the deposit nearest home on its own side of
-the map, sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
-start within 90 seconds, and builds nothing hostile. It reads only what its team knows, takes its
-timing from the world's clock and random stream, and gives its orders through the order table, so
-every copy of a battle makes the same choices.
+**The AI** is the space game's (`ai.ts`: same brain, think clock and random stream) with decisions
+of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)), passive for
+now: it trains engineers one at a time (two with one Command Center, four with two), saves up and
+expands with a second Command Center beside the crystal field nearest home on its own side of the
+map, sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
+start within 90 seconds, and builds nothing hostile. It reads only what its team knows and gives the
+same orders a player does, so every copy of a battle makes the same choices.
 
 ```sh
-pnpm check:ground        # two copies of a scripted battle stay in step, a replay from the inputs matches; every placement rule refuses with its reason; a building battle places, builds, cancels, repairs and trains, and the AI expands
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
-pnpm check:ground-models # every ground unit has a model that builds, sound and the same every time
+pnpm check:ground-models # every ground unit has a model through the model lookup, sound and the same every time
+pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
 ```
 
 ### The ground battle screen

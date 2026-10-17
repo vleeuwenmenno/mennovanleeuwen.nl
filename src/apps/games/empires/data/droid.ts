@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -138,6 +138,20 @@ const DOMINATOR: At[] = [
   { x: 3.39, y: 2.4, s: 0.07 }, { x: 6.61, y: 2.4, s: 0.07 }, { x: 2.26, y: 4.4, s: 0.07 }, { x: 7.74, y: 4.4, s: 0.07 }, { x: 2.74, y: 6.8, s: 0.07 }, { x: 7.26, y: 6.8, s: 0.07 },
   { x: 4.03, y: 1, s: 0.04 }, { x: 5.97, y: 1, s: 0.04 }, { x: 0.81, y: 5.4, s: 0.04 }, { x: 9.19, y: 5.4, s: 0.04 },
   { x: 3.87, y: 5.4, s: 0.06 }, { x: 6.13, y: 5.4, s: 0.06 }, { x: 5, y: 9.4 }, { x: 5, y: 7.6, s: 0.1 },
+]
+
+/** Ground battles: the Confederacy's hovering fabricator droid, quick and light, and its Command Hub. */
+const GROUND: UnitType[] = [
+  groundEngineer({
+    id: 'd-g-engineer', faction: 'droid', name: 'Forger builder droid', sprite: 'droid-g-engineer',
+    blurb: 'A hovering fabricator droid with cutting arms and a plate rack. Unarmed and light, but quick: it raises Command Hubs and patches damaged buildings.',
+    hull: 110, cost: 140, build: 11, speed: 104, turn: 5.2, ground: { radius: 10, accel: 260, builds: ['d-g-center'] },
+  }),
+  groundCenter({
+    id: 'd-g-center', faction: 'droid', name: 'Command Hub', sprite: 'droid-g-center',
+    blurb: 'An eight-sided industrial deck round a sphere core. It trains builder droids, earns a steady trickle of credits, and buildings go up within 14 tiles of it.',
+    hull: 5000, cost: 1200, build: 60, ground: { trains: ['d-g-engineer'] },
+  }),
 ]
 
 export const DROID: FactionData = {
@@ -372,6 +386,7 @@ export const DROID: FactionData = {
     'd-battleship': TYRANT,
   },
   // The Bulwark defense station (Galactic conquest): an armoured gun hub that grows sponsons on girders.
+  ground: GROUND,
   orbital: {
     name: 'Bulwark defense station',
     blurb: 'A fortified gun hub in orbit beside the Command Hub, bolted together from the Dominion\'s armoured blocks. Each level adds module slots, and each slot takes the module we pick for it.',

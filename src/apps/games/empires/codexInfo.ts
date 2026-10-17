@@ -15,7 +15,7 @@ export function weaponName(kind: WeaponKind, f: FactionId, turret = false) {
   const own = FACTIONS[f].names
   return turret ? own?.mount?.[kind] ?? `${WEAPON_NAME[kind]} turret` : own?.weapon?.[kind] ?? WEAPON_NAME[kind]
 }
-const TIER_NAME: Record<Tier, string> = { fighter: 'fighters', gunship: 'gunships', frigate: 'frigates', cruiser: 'cruisers', capital: 'flagships', station: 'stations', mine: 'mining platforms', defense: 'defense platforms', yard: 'yards' }
+const TIER_NAME: Record<Tier, string> = { fighter: 'fighters', gunship: 'gunships', frigate: 'frigates', cruiser: 'cruisers', capital: 'flagships', station: 'stations', mine: 'mining platforms', defense: 'defense platforms', yard: 'yards', vehicle: 'ground vehicles', building: 'ground buildings' }
 const TIERS = Object.keys(TIER_NAME) as Tier[]
 
 /** What a gun is good and poor against: its damage against each class times how often it hits. */

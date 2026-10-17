@@ -26,6 +26,9 @@ export const SIZE_CLASSES: Record<Tier, number> = {
   /** Yards go by what they build (see sizeClass): the Frigate Yard as a frigate, the Capital Yard
    * as a flagship, so the biggest ship of each fits its berth. */
   yard: 1,
+  /** Ground units and buildings are written at their size. */
+  vehicle: 1,
+  building: 1,
 }
 
 /** How much bigger a unit is than written: its class's, a yard's by what it builds. */
@@ -45,6 +48,8 @@ export const HANDLING: Record<Tier, { turn: number; accel: number; speed: number
   mine: { turn: 1, accel: 1, speed: 1 },
   defense: { turn: 1, accel: 1, speed: 1 },
   yard: { turn: 1, accel: 1, speed: 1 },
+  vehicle: { turn: 1, accel: 1, speed: 1 },
+  building: { turn: 1, accel: 1, speed: 1 },
 }
 
 /** How much further apart a fleet sits than its ships' sizes alone would put it: formations and the

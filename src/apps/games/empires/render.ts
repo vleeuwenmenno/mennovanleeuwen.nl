@@ -342,7 +342,7 @@ const RANGE_STYLE: Record<WeaponKind, { rgb: string; dash: number[]; name: strin
   missile: { rgb: '255,140,222', dash: [3, 6], name: 'Missiles' },
   ion: { rgb: '176,146,255', dash: [14, 5, 3, 5], name: 'Ion cannon' },
 }
-const TIER_ORDER: Record<Tier, number> = { station: 0, yard: 0.5, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
+const TIER_ORDER: Record<Tier, number> = { station: 0, yard: 0.5, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6, building: 0, vehicle: 5 }
 /** How high a unit is drawn: structures lowest, then ships from the biggest class up to fighters, so
  * a smaller ship is always drawn over a bigger one it flies over. Equals go by id (the order they
  * came), so the stacking never flickers. Clicks pick the same way: the topmost first. */
