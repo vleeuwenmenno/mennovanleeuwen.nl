@@ -67,6 +67,9 @@
 //    (each faction's foot squad and fast vehicle) fight each other in step the same way, every one
 //    of them firing; and the six tier 2 units (anti-swarm) against a crowd of tier 1 twice their
 //    number, all six firing, splash catching several at once, the anti-swarm side ahead.
+// 7. Spread out: a squad spreads at once (its members walking out wider) or, Shift-queued, after its
+//    move, and closes up again, in step across two copies, a snapshot thaw and a replay, the flag in
+//    the hash; spread out it takes clearly less from splash and moves at SPREAD.speed of its pace.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
@@ -79,7 +82,9 @@ import { cleanCmd, cmd, runCmd, type Cmd } from '../src/apps/games/empires/comma
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import { SITE_DRAW, powerReport } from '../src/apps/games/empires/ground/power.ts'
 import { cantJob } from '../src/apps/games/empires/ground/jobs.ts'
-import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, speedOf, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { squadReach } from '../src/apps/games/empires/ground/squad.ts'
+import { SPREAD } from '../src/apps/games/empires/data.ts'
 import { anchorAt, footprintOpen, stands, standsAt } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
 import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, fieldLeft, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
@@ -1644,6 +1649,79 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const through = (squad.crew ?? []).every((m) => m.x > (c0 + 3) * TILE)
   check('through a gap one tile wide, the squad files through and every member gets past', inGap > 10 && gapWidest <= TILE / 2 + 1 && through, `${inGap} ticks in the gap, ${Math.round(gapWidest)} from its middle at most, ${through ? 'all' : 'not all'} through`)
   check('beyond the gap the squad fans out again', beyond > s * 1.5, `${Math.round(beyond)} wide`)
+}
+
+// --- 7. Spread out --------------------------------------------------------------------------------------
+
+{
+  // Two trooper squads: one spreads out at once, the other Shift-queues it behind a move; later the
+  // first closes up. In step across two copies, a snapshot thaw and a replay.
+  const make = (): Copy => ({ w: newWorld(groundMapDef('test-field')!, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 71, credits: 0 }), brains: [] })
+  const ids: number[] = []
+  const at: Record<string, number> = {}
+  let reachShut = 0
+  let reachOpen = 0
+  let waited = false
+  const final = lockstep('spread battle', make, Math.round(40 / STEP), ({ w }, t, say) => {
+    const x = w.w * 0.4
+    const y = w.h / 2
+    if (t === 1) {
+      say({ t, k: 'spawn', unit: TIER1.republic.foot, owner: 0, x, y: y - 3 * TILE })
+      say({ t, k: 'spawn', unit: TIER1.republic.foot, owner: 0, x, y: y + 3 * TILE })
+    }
+    if (t === 2) ids.push(...w.units.filter((u) => u.owner === 0 && u.t.ground?.squad).map((u) => u.id))
+    if (t === 90) {
+      reachShut = squadReach(w.byId.get(ids[0])!)
+      say({ t, k: 'cmd', owner: 0, json: JSON.stringify(cmd('spread', [ids[0]], true, false)) })
+      say({ t, k: 'cmd', owner: 0, json: JSON.stringify(cmd('move', [ids[1]], x + 8 * TILE, y + 3 * TILE, false, false)) })
+      say({ t, k: 'cmd', owner: 0, json: JSON.stringify(cmd('spread', [ids[1]], true, true)) })
+    }
+    const b = w.byId.get(ids[1])
+    if (t > 90 && b && b.order.k === 'move' && !b.spread) waited = true
+    if (b?.spread && at.queued === undefined) at.queued = t
+    if (t === 330) reachOpen = squadReach(w.byId.get(ids[0])!)
+    if (t === 900) say({ t, k: 'cmd', owner: 0, json: JSON.stringify(cmd('spread', [ids[0]], false, false)) })
+    w.events.length = 0
+  })
+  const a = final.w.byId.get(ids[0])!
+  const b = final.w.byId.get(ids[1])!
+  check('spread out: the squad spreads at once, its members walking out wider', reachOpen > reachShut * 1.4, `members within ${Math.round(reachShut)} closed, ${Math.round(reachOpen)} spread`)
+  check('spread out: Shift-queued behind a move, it waits for the move, then spreads', waited && !!b.spread && at.queued > 90, `spread at tick ${at.queued}`)
+  check('spread out: used again it closes up, members back to their usual spacing', !a.spread && squadReach(a) < reachOpen * 0.8, `members within ${Math.round(squadReach(a))}`)
+  // The spread flag is in the hash.
+  const h = stateHash(final.w)
+  b.spread = !b.spread
+  check("spread out is in the hash", stateHash(final.w) !== h)
+  b.spread = !b.spread
+}
+
+{
+  // Evasion: the same artillery barrage on a squad spread out and on one closed up; the spread one
+  // takes clearly less. Spread out it moves at SPREAD.speed of its pace.
+  registerWeaponTest()
+  const field = groundMapDef('test-field')!
+  const taken = (spread: boolean) => {
+    const w = newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 72, credits: 0 })
+    const cy = field.h / 2
+    const sq = spawn(w, TIER1.republic.foot, 0, field.w * 0.5, cy, 0)
+    sq.hull = sq.hullMax = 1e6
+    sq.stance = 'hold'
+    sq.guns.length = 0
+    sq.spread = spread
+    const art = spawn(w, testWeaponId('droid', 'artillery'), 1, field.w * 0.5 + 12 * TILE, cy, Math.PI)
+    art.stance = 'hold'
+    const swarm = spawn(w, testWeaponId('droid', 'swarm'), 1, field.w * 0.5 + 6 * TILE, cy + 2 * TILE, Math.PI)
+    swarm.stance = 'hold'
+    for (let t = 0; t < 60 * 30; t++) {
+      tick(w)
+      w.events.length = 0
+    }
+    return { lost: sq.hullMax - sq.hull, speed: speedOf(sq) }
+  }
+  const shut = taken(false)
+  const open = taken(true)
+  check('spread out: a squad spread out takes clearly less from splash', open.lost < shut.lost * 0.8 && shut.lost > 0, `${Math.round(open.lost)} against ${Math.round(shut.lost)} closed up`)
+  check('spread out: it moves at its share of its pace', Math.abs(open.speed / shut.speed - SPREAD.speed) < 1e-9, `${(open.speed / shut.speed).toFixed(2)}`)
 }
 
 if (failed) {

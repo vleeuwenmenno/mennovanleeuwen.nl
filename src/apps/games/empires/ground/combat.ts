@@ -17,12 +17,13 @@
 //   in a short cone and leaves a burn.
 // - Squads (ground/squad.ts): each member standing fires the squad's weapon from where it stands,
 //   on its own reload and at a target of its own (a beam or spray pours each member's share from
-//   the middle), and members fall as the hull drops.
+//   the middle), and members fall as the hull drops. A squad spread out (data/kit.ts SPREAD) is
+//   missed more often, above all by splash and sprays, and reloads more slowly.
 //
 // Lockstep as the rest of the sim: the world's random stream, detmath, units in `w.units` order.
 
 import * as M from '../detmath.ts'
-import { GROUND_ACC, GROUND_VS, type Armour, type GroundWeaponKind, type UnitType } from '../data/kit.ts'
+import { GROUND_ACC, GROUND_VS, type Armour, type GroundWeaponKind, type UnitType, SPREAD } from '../data/kit.ts'
 import { RANK_BONUS, damage, foes, hpPos, near, rand, sees, type Gun, type Owner, type Unit, type World } from '../sim.ts'
 import { TILE } from './types.ts'
 import { crewOf, crewTick, membersLeft, squadHash, squadsTick } from './squad.ts'
@@ -218,6 +219,12 @@ export function giveUp(u: Unit) {
 /** Damage `amount` of weapon kind `g` dealt to `e` by unit `from` of `owner`, through its armour. */
 function hurt(w: World, e: Unit, g: GroundWeaponKind, amount: number, owner: Owner, from: number, sx: number, sy: number, look: Gun['w']['kind']) {
   if (e.dead) return
+  // A squad spread out: a shot or splash may miss it, and it escapes some of a beam or a spray.
+  if (e.spread) {
+    const ev = SPREAD.evade[g]
+    if (g === 'beam' || g === 'spray') amount *= 1 - ev
+    else if (rand(w) < ev) return
+  }
   // For the screen only: how a squad member that falls to it falls (ground/deaths.ts).
   e.gHit = g
   e.gHitX = sx
@@ -369,7 +376,7 @@ function shoot(w: World, u: Unit, dt: number) {
 }
 
 /** How many of the best targets in its reach a squad member picks among. */
-const SPREAD = 3
+const PICK_AMONG = 3
 
 /**
  * Gun `g` (the unit's gun `gi`) of squad `u`, for each member standing: its own reload (each
@@ -396,7 +403,7 @@ function crewFire(w: World, u: Unit, g: Gun, gi: number, primary: Unit | undefin
         best.push({ e: o, s: (worth(g, o) + 0.05) / (Math.sqrt(d2(o.x, o.y, from.x, from.y)) + 100) })
       })
       best.sort((a, b) => b.s - a.s || a.e.id - b.e.id)
-      if (best.length) e = best[Math.floor(rand(w) * Math.min(SPREAD, best.length))].e
+      if (best.length) e = best[Math.floor(rand(w) * Math.min(PICK_AMONG, best.length))].e
     }
     if (!e) {
       m.t[gi] = 0
@@ -407,7 +414,7 @@ function crewFire(w: World, u: Unit, g: Gun, gi: number, primary: Unit | undefin
     g.target = e.id
     g.aim = M.atan2(e.y - from.y, e.x - from.x)
     fireFrom(w, u, g, e, from)
-    m.cd[gi] = g.w.cooldown * (0.8 + rand(w) * 0.4)
+    m.cd[gi] = g.w.cooldown * (0.8 + rand(w) * 0.4) * (u.spread ? SPREAD.reload : 1)
   }
 }
 
@@ -459,7 +466,7 @@ function burns(w: World, dt: number) {
   for (const u of w.units) {
     const b = u.burn
     if (!b || u.dead) continue
-    damage(w, u, b.dps * GROUND_VS.spray[armourOf(u.t)] * dt, 'flak', -1, u.x, u.y, b.by, b.from)
+    damage(w, u, b.dps * GROUND_VS.spray[armourOf(u.t)] * (u.spread ? 1 - SPREAD.evade.spray : 1) * dt, 'flak', -1, u.x, u.y, b.by, b.from)
     b.left -= dt
     if (b.left <= 0) delete u.burn
   }

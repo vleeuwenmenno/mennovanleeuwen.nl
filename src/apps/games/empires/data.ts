@@ -27,7 +27,7 @@ import { SPEED_SCALE, mapDist } from './scale.ts'
 export type {
   Ability, AbilityId, BaseModule, FactionId, FactionInfo, Hardpoint, HardpointKind, ModuleArt, ModuleId, OrbitalModId, OrbitalModule, OrbitalPlan, OrbitalStage, StationModule, StationPlan, Tech, TechEffect, Tier, UnitType, Weapon, WeaponKind, Works,
 } from './data/kit.ts'
-export { ORBITAL_FRAME, ORBITAL_MODS } from './data/kit.ts'
+export { ORBITAL_FRAME, ORBITAL_MODS, SPREAD } from './data/kit.ts'
 
 /** Every faction's data, in the order the menus list them (and their units go into UNITS). */
 const KITS: FactionData[] = [REPUBLIC, DROID, SWARM]
@@ -43,6 +43,12 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: reach(650) },
   broadside: { name: 'Full broadside', blurb: 'Turbolasers deal 60% more damage for 10 s.', cooldown: 50, duration: 10 },
   launchSwarm: { name: 'Scramble', blurb: 'Empties the hangars: two extra squadrons of its strike craft at once.', cooldown: 60, duration: 0 },
+  spreadOut: {
+    name: 'Spread out',
+    blurb: 'Infantry squads only: its members spread out to a wider, looser spacing (and close up again when it is used once more). Spread out, hits miss it more often, above all splash, artillery, swarm rockets and sprays, but it moves a fifth slower and reloads more slowly.',
+    cooldown: 1.5,
+    duration: 0,
+  },
   fieldRepair: {
     name: 'Field repair',
     blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, and it rebuilds destroyed station modules one at a time (a ship\'s shot-off modules stay lost). Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',

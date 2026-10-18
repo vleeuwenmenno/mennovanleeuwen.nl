@@ -1,5 +1,6 @@
 import * as M from '../detmath.ts'
-import { rand, type Unit, type World } from '../sim.ts'
+import { SPREAD } from '../data.ts'
+import { nextOrder, rand, type Unit, type World } from '../sim.ts'
 import { standsAt } from './nav.ts'
 import { TILE } from './types.ts'
 
@@ -11,7 +12,8 @@ import { TILE } from './types.ts'
 // squad files through in a column and fans out again after. The hull is the squad's; members fall
 // one by one as it drops (the last one with the unit), and each member still standing fires the
 // unit's weapons from where it stands, on its own reload and at a target of its own (ground/combat.ts),
-// so fewer members means less firepower. Part of the lockstep sim: detmath and the world's random
+// so fewer members means less firepower. Spread out (the squad's ability, data/kit.ts SPREAD), its
+// formation is wider, its members walk out to it, and it is harder to hit, slower and slower to fire. Part of the lockstep sim: detmath and the world's random
 // stream only, and the members (`crew`) are in the hash and the snapshots.
 
 /** One member of a squad: its number in the squad (`k`, kept as others fall), where it stands and
@@ -61,7 +63,8 @@ export const membersLeft = (u: Unit) => u.crew?.length ?? u.members ?? u.t.groun
 /** Where formation place `k` of squad `u` is now, with drift (`ox`, `oy`), in world units. */
 function placeOf(u: Unit, k: number, ox = 0, oy = 0) {
   const sq = u.t.ground!.squad!
-  const [f, r] = formation(sq.n, sq.spacing)[k]
+  // Spread out, the formation is wider (data/kit.ts SPREAD).
+  const [f, r] = formation(sq.n, u.spread ? sq.spacing * SPREAD.spacing : sq.spacing)[k]
   const c = M.cos(u.a)
   const sn = M.sin(u.a)
   return { x: u.x + c * (f + ox) - sn * (r + oy), y: u.y + sn * (f + ox) + c * (r + oy) }
@@ -141,7 +144,14 @@ export function crewTick(w: World, dt: number) {
     const sq = u.t.ground?.squad
     if (!sq || u.dead) continue
     const crew = crewOf(w, u)
+    // A Shift-queued Spread out (or close up) when its turn comes, then on to the next order.
+    while (u.order.k === 'spread') {
+      u.spread = u.order.on
+      nextOrder(u, u.x, u.y)
+    }
     const s = sq.spacing
+    // How far apart its members keep, wider spread out.
+    const apart = u.spread ? s * SPREAD.spacing : s
     // The trail: where the middle has been, newest first, a point every half spacing.
     const tr = (u.trail ??= [])
     if (!tr.length || (tr[0] - u.x) * (tr[0] - u.x) + (tr[1] - u.y) * (tr[1] - u.y) > s * s * 0.25) {
@@ -152,7 +162,7 @@ export function crewTick(w: World, dt: number) {
     for (let i = 0; i < crew.length; i++) {
       const m = crew[i]
       m.wait -= dt
-      if (m.wait <= 0) drift(w, m, s)
+      if (m.wait <= 0) drift(w, m, apart)
       if ((m.x - u.x) * (m.x - u.x) + (m.y - u.y) * (m.y - u.y) > STRAY * STRAY) {
         m.x = u.x
         m.y = u.y
@@ -169,7 +179,7 @@ export function crewTick(w: World, dt: number) {
         const dx = m.x - o.x
         const dy = m.y - o.y
         const d2 = dx * dx + dy * dy
-        const min = s * 0.6
+        const min = apart * 0.6
         if (d2 < min * min && d2 > 1e-6) {
           const d = Math.sqrt(d2)
           goal = { x: goal.x + (dx / d) * (min - d) * 0.5, y: goal.y + (dy / d) * (min - d) * 0.5 }
@@ -226,6 +236,7 @@ export function squadHash(w: World, int: (v: number) => void, num: (v: number) =
   for (const u of w.units) {
     if (!u.crew || u.dead) continue
     int(u.crew.length)
+    int(u.spread ? 1 : 0)
     for (const m of u.crew) {
       int(m.k)
       num(m.x)

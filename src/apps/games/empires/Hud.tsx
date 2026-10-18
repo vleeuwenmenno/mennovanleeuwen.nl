@@ -3224,6 +3224,9 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick }: {
   const withAb = ships.filter((u) => u.t.ability)
   const ready = withAb.filter((u) => u.abilityCd <= 0)
   const ab = withAb[0]?.t.ability ? abilityOf(withAb[0].t.ability, withAb[0].t.faction) : null
+  // Ground squads' Spread out, a toggle: on once every one of them is spread out.
+  const spreading = withAb.length > 0 && withAb.every((u) => u.t.ability === 'spreadOut')
+  const spread = spreading && withAb.every((u) => u.spread)
   // The stance button shows the selection's stance (if they share one) and cycles to the next.
   const stance = ships.length && ships.every((u) => u.stance === ships[0].stance) ? ships[0].stance : null
   const armed = mine.some((u) => !isShip(u.t) && u.guns.length > 0)
@@ -3265,12 +3268,16 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick }: {
           )
         })}
         {/* The third row: the ships' ability, a hyperspace retreat, and guard. */}
-        <button className="ew-cmdbtn ew-abilitybtn" disabled={!ready.length} onClick={() => onCommand('ability')}
-          data-tip={ab ? `${ab.name}: ${ab.blurb} (${keyName(keys.ability)})` : 'Ability: none of the selected ships has one'}>
+        <button className={`ew-cmdbtn ew-abilitybtn ${spread ? 'is-on' : ''}`} disabled={!ready.length && !spreading} onClick={() => onCommand('ability')}
+          data-tip={
+            spreading
+              ? `${spread ? 'Close up: back to their usual spacing' : `${ab!.name}: ${ab!.blurb}`} (${keyName(keys.ability)}; Shift: after their other orders)`
+              : ab ? `${ab.name}: ${ab.blurb} (${keyName(keys.ability)})` : 'Ability: none of the selected ships has one'
+          }>
           <Icon name="ability" size={20} />
           <span>
-            {!ab ? 'Ability' : withAb.length > 1 && new Set(withAb.map((u) => u.t.ability)).size > 1 ? 'Abilities' : ab.name}
-            {ab && (ready.length ? ` ${ready.length}/${withAb.length}` : ` ${Math.ceil(Math.min(...withAb.map((u) => u.abilityCd)))}s`)}
+            {spreading ? (spread ? 'Close up' : 'Spread out') : !ab ? 'Ability' : withAb.length > 1 && new Set(withAb.map((u) => u.t.ability)).size > 1 ? 'Abilities' : ab.name}
+            {ab && !spreading && (ready.length ? ` ${ready.length}/${withAb.length}` : ` ${Math.ceil(Math.min(...withAb.map((u) => u.abilityCd)))}s`)}
           </span>
           <kbd>{keyName(keys.ability)}</kbd>
         </button>

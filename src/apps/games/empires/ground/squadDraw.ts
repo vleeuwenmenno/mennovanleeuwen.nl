@@ -8,7 +8,7 @@ import { memberPos, squadReach } from './squad.ts'
 // How squads and walkers look on the battle screen (groundKit's squad, ring, pose, fell and bodies):
 // a squad's members, each its member model where it stands in the sim (ground/squad.ts), turned the
 // way it faces, stepping through its own walk cycle as it goes, with a shadow and a rim in its side's
-// colour at its feet; a walker's legs the same way; and the members that fell (ground/deaths.ts:
+// colour at its feet, and a dashed ring round them while it is spread out; a walker's legs the same way; and the members that fell (ground/deaths.ts:
 // each falls its own way, by its faction and the weapon that got it). All on screen only: how far each has walked is kept here, from where it was drawn
 // last.
 
@@ -90,6 +90,16 @@ export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, z: number, zdp
     ctx.ellipse(p.x, p.y, size * 0.46, size * 0.4, 0, 0, Math.PI * 2)
   }
   ctx.stroke()
+  // Spread out: a dashed ring round the members, wherever they stand.
+  if (u.spread) {
+    const r = squadReach(u) * k + size * 0.7
+    ctx.setLineDash([5 / z, 4 / z])
+    ctx.globalAlpha = alpha * 0.7
+    ctx.beginPath()
+    ctx.arc(u.x, u.y, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
   ctx.restore()
   for (const q of u.crew) {
     const p = now.get(q.k)!

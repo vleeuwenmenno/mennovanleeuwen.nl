@@ -1227,6 +1227,8 @@ const swoosh = (open: boolean): Recipe => (sr) => {
 }
 
 const abilitySound = (id: AbilityId, set: SoundSet = 'republic'): Recipe => (sr, r) => {
+  // A ground squad spreading out or closing up: a quick shuffle of feet, a soft rush of air.
+  if (id === 'spreadOut') return layers(sr, [{ data: swoosh(false)(sr, r), gain: 0.45 }, { data: swoosh(true)(sr, r), at: 0.12, gain: 0.3 }])
   if (id === 'shieldBoost') {
     const shimmer = bells(sr, 440, [0, 4, 7, 12, 16], 1.0, 0.04)
     return layers(sr, [{ data: shimmer }, { data: swoosh(true)(sr, r), gain: 0.6 }])

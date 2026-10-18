@@ -6,7 +6,7 @@ import { mapDist, rangeDist } from './scale.ts'
 import { autoLayout } from './conquestMap.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, BEACON_SENSOR, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, FACTIONS, SPREAD, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, BEACON_SENSOR, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, GROUND_TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind, DEFENSE_QUEUE, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, cleanDefense, defenseModTime, defenseTime, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, placeType,
 } from './data.ts'
@@ -71,6 +71,9 @@ export type Order =
    * the same site or building, gather the same field, and follow it on to its next job, until told
    * otherwise. `job`: what it is helping with now (ground/world.ts), none while it only follows. */
   | { k: 'assist'; id: number; job?: { k: 'construct'; id: number } | { k: 'gather'; f: number } }
+  /** Ground battles, squads (a Shift-queued Spread out): spread out (`on`) or close up, then on to
+   * the next order. */
+  | { k: 'spread'; on: boolean }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
 export type Mods = {
@@ -240,6 +243,8 @@ export type Unit = {
   carry?: number
   /** Ground battles, squads (GroundSpec `squad`): how many of its members are still standing. */
   members?: number
+  /** Ground battles, squads: spread out (the Spread out ability, data/kit.ts SPREAD). */
+  spread?: boolean
   /** Ground battles, squads: its members, each walking and shooting on its own (ground/squad.ts). */
   crew?: Member[]
   /** Ground battles, squads: where its middle has been lately, newest first, as x, y pairs; members
@@ -753,7 +758,7 @@ export const sensorOf = (u: Unit) =>
 /** A construction site nobody has started on yet: only its owner knows it is there, nothing bumps
  * into it, and it sees nothing. */
 export const planned = (u: Unit) => !!u.site && !u.site.started
-export const speedOf = (u: Unit) => u.t.speed * u.mods.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
+export const speedOf = (u: Unit) => u.t.speed * u.mods.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1) * (u.spread ? SPREAD.speed : 1)
 
 /** A factory's job in a ground battle (Unit `gj`): `id` 'tier' (the upgrade to its next tier) or a
  * GROUND_TECH id, with the seconds left and the research points and kyber paid for it. */
@@ -1205,7 +1210,12 @@ export function lastStop(w: World, u: Unit): Pt {
 
 /** The current order is done: on to the next queued one, or wait at (x, y). */
 export function nextOrder(u: Unit, x: number, y: number, face: number | null = null) {
-  const o = u.queue.shift()
+  let o = u.queue.shift()
+  // A queued Spread out (a ground squad's) takes no time: done on the way to the next order.
+  while (o?.k === 'spread') {
+    u.spread = o.on
+    o = u.queue.shift()
+  }
   if (o) {
     u.order = o
     u.target = o.k === 'attack' ? o.id : 0
@@ -1551,6 +1561,14 @@ export function cmdAbility(w: World, owner: Owner, ids: number[], target = 0) {
     const u = w.byId.get(i)
     if (!u || u.dead || u.owner !== owner || !u.t.ability || u.abilityCd > 0) continue
     const ab = ABILITIES[u.t.ability]
+    // A ground squad's Spread out is a toggle.
+    if (u.t.ability === 'spreadOut') {
+      u.spread = !u.spread
+      u.abilityCd = ab.cooldown
+      w.events.push({ k: 'ability', owner, id: u.t.ability, x: u.x, y: u.y })
+      used++
+      continue
+    }
     if (u.t.ability === 'fieldRepair') {
       if (building(u)) continue
       const given = w.byId.get(target)
@@ -1574,6 +1592,26 @@ export function cmdAbility(w: World, owner: Owner, ids: number[], target = 0) {
     used++
   }
   return used
+}
+
+/**
+ * Ground battles: squads `ids` of ours spread out (`on`) or close up (Spread out, data/kit.ts
+ * SPREAD). `queued` (Shift): once each is done with the orders it has, else at once. Answers how many
+ * took it.
+ */
+export function cmdSpread(w: World, owner: Owner, ids: number[], on: boolean, queued = false) {
+  let n = 0
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!u || u.dead || u.owner !== owner || u.t.ability !== 'spreadOut') continue
+    if (queued && (u.order.k !== 'idle' || u.queue.length)) u.queue.push({ k: 'spread', on })
+    else {
+      if (u.spread !== on) w.events.push({ k: 'ability', owner, id: 'spreadOut', x: u.x, y: u.y })
+      u.spread = on
+    }
+    n++
+  }
+  return n
 }
 
 /** Set where new ships gather: the station's rally point, or with `at` one of our yards'. */

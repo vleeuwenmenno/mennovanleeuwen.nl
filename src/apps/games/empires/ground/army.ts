@@ -1,6 +1,6 @@
 import { DIFFICULTY, PROFILES, calmOf, type Brain } from '../ai.ts'
 import { UNIT, type UnitType } from '../data.ts'
-import { cantBuild, cmdAttack, cmdBuild, cmdMove, rand, type Unit, type World } from '../sim.ts'
+import { cantBuild, cmdAttack, cmdBuild, cmdMove, cmdSpread, rand, type Unit, type World } from '../sim.ts'
 import { TILE, type Pt } from './types.ts'
 import { seesAt } from './fog.ts'
 import { POP_MAX, knownBuildings, tierNeeded, trainsOf } from './world.ts'
@@ -21,6 +21,8 @@ import { POP_MAX, knownBuildings, tierNeeded, trainsOf } from './world.ts'
 //   is met by everything at home, and a wave out is called back if the attack is big enough.
 // - Damaged heavies (tier 2 and 3, below its style's share of their hull) are pulled out of a
 //   wave and sent home to guard the base.
+// - Its squads spread out when an enemy that hurts groups (artillery, swarm rockets, sprays) comes
+//   near, and close up again once it is gone.
 // Only what its team knows, the world's random stream, the same orders a player gives.
 
 /** Scouts it keeps, and the engineers it has before it trains any. */
@@ -42,6 +44,10 @@ const GROW_TIME = 600
 /** Seconds between batches of reinforcements sent after a wave, and the least a batch holds. */
 const FOLLOW = 25
 const FOLLOW_MIN = 3
+/** How near (tiles) an enemy that hurts groups makes its squads spread out, and how far it must be
+ * before they close up again. */
+const SPREAD_NEAR = 14
+const SPREAD_CLEAR = 20
 /** Its hunt for the last enemy buildings: the grid it looks over (tiles apart), and how long it
  * tries to reach one place before it moves on. */
 const HUNT_GRID = 14
@@ -137,6 +143,7 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
   const rally = { x: home.x + ((enemy.start.x - home.x) / away) * RALLY * TILE, y: home.y + ((enemy.start.y - home.y) / away) * RALLY * TILE }
 
   scoutThink(w, b, mine, engineers, calm)
+  spreadThink(w, b, mine)
 
   const army = mine.filter(isFighter)
   const ids = new Set(army.map((u) => u.id))
@@ -252,6 +259,26 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
     b.gWaveAt = w.time
     b.gFollowAt = w.time
   }
+}
+
+/** Weapons that hurt groups: what a squad spreads out against. */
+const SPLASHY = new Set(['artillery', 'swarm', 'spray'])
+
+/** Its squads spread out while an enemy that hurts groups (artillery, swarm rockets, sprays) it sees
+ * is within SPREAD_NEAR tiles of them, and close up once none is within SPREAD_CLEAR. */
+function spreadThink(w: World, b: Brain, mine: Unit[]) {
+  const team = w.players[b.o].team
+  const splashers = w.units.filter((e) => !e.dead && w.players[e.owner].team !== team && e.seen[team] && e.guns.some((g) => SPLASHY.has(g.w.ground ?? '')))
+  const on: number[] = []
+  const off: number[] = []
+  for (const u of mine) {
+    if (u.t.ability !== 'spreadOut') continue
+    const near = (r: number) => splashers.some((e) => d2(e, u) < r * TILE * r * TILE)
+    if (!u.spread && near(SPREAD_NEAR)) on.push(u.id)
+    else if (u.spread && !near(SPREAD_CLEAR)) off.push(u.id)
+  }
+  if (on.length) cmdSpread(w, b.o, on, true)
+  if (off.length) cmdSpread(w, b.o, off, false)
 }
 
 /** The middle of some units. */

@@ -29,7 +29,7 @@ export type ModuleArt = 'turbo' | 'flak' | 'ion' | 'shield' | 'hangar' | 'refine
 export type MountExtra =
   | 'torpedo' | 'pd' | 'triple' | 'missileBox' | 'strike' | 'railgun' | 'beam' | 'quad'
   | 'spore' | 'acid' | 'lance' | 'bioturret' | 'parasite' | 'regen' | 'engineSac' | 'broodSac' | 'spine' | 'projector'
-export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair'
+export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair' | 'spreadOut'
 
 export type Weapon = {
   kind: WeaponKind
@@ -402,13 +402,27 @@ export const groundHeavy = (o: GroundWritten & { speed: number; turn: number; we
   ground: { size: 2, radius: 32, accel: 110, sight: 10, armour: 'heavy', tier: 3, ...o.ground },
 })
 
+/**
+ * Spread out (a squad's ability, a toggle; ground/squad.ts and ground/combat.ts): its members walk
+ * out to `spacing` times their usual spacing; incoming hits miss it by weapon (`evade`: the chance a
+ * shot or splash misses it, or for a beam or spray the share of its damage it escapes, burns too),
+ * most against splash and sprays; while spread it moves at `speed` of its pace and its members reload
+ * `reload` times slower.
+ */
+export const SPREAD = {
+  spacing: 1.8,
+  speed: 0.8,
+  reload: 1.2,
+  evade: { pulse: 0.1, beam: 0.1, rocket: 0.1, shell: 0.1, artillery: 0.4, swarm: 0.4, spray: 0.3 } as Record<GroundWeaponKind, number>,
+}
+
 /** A tier 1 squad, the fast unit of a foot factory: a few members on foot (GroundSpec `squad`),
  * one unit with one hull, light armour, each member firing the squad's weapons; cheap. Drawn as its
  * members (the member's model). */
 export const groundSquad = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role']; squad: NonNullable<GroundSpec['squad']> }): UnitType => {
   const { squad, ...rest } = o
   return {
-    tier: 'vehicle', aspect: 1, size: 36, shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+    tier: 'vehicle', aspect: 1, size: 36, shield: 0, regen: 0, pop: 1, level: 1, squad: 1, ability: 'spreadOut',
     sensor: (o.ground.sight ?? 8) * 32, hardpoints: [], engines: [],
     ...rest,
     ground: { size: 1, radius: 14, accel: 200, sight: 8, armour: 'light', tier: 1, look: squad.member, squad, ...o.ground },

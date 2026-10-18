@@ -1256,11 +1256,21 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
     if (mySelection().length) sound.select(myFaction, voice())
   }
-  /** `target`: what Field repair should mend; the ship or station under the pointer when left out. */
-  const useAbility = (target = hover.current.unit) => {
-    const ready = mySelection().filter((u) => u.t.ability && u.abilityCd <= 0)
+  /** `target`: what Field repair should mend; the ship or station under the pointer when left out.
+   * `queued` (Shift): a ground squad's Spread out waits for the orders it has. */
+  const useAbility = (target = hover.current.unit, queued = shiftOf()) => {
+    // Ground squads' Spread out is a toggle: all of them spread out, or (all spread already) close up.
+    const squads = mySelection().filter((u) => u.t.ability === 'spreadOut')
+    if (squads.length) {
+      const on = !squads.every((u) => u.spread)
+      order('spread', squads.map((u) => u.id), on, queued)
+      sound.ability('spreadOut', undefined, myFaction)
+      toast(on ? 'Spreading out: harder to hit, above all by splash, but slower' : 'Closing up', 'info')
+      if (squads.length === mySelection().length) return
+    }
+    const ready = mySelection().filter((u) => u.t.ability && u.t.ability !== 'spreadOut' && u.abilityCd <= 0)
     // Online the count isn't known yet: the abilities that are ready will fire.
-    const n = order('ability', mySelection().map((u) => u.id), target) ?? ready.length
+    const n = order('ability', mySelection().filter((u) => u.t.ability !== 'spreadOut').map((u) => u.id), target) ?? ready.length
     if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id, undefined, myFaction)
     else if (mySelection().some((u) => u.t.ability)) {
       sound.error()
@@ -1423,7 +1433,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         ...(several ? [it('face', 'Face', 'roam', () => setDraw('face'))] : []),
         it('stance', 'Stance', 'hold', () => runCommand('hold')),
         it('stop', 'Stop', 'stop', () => runCommand('stop')),
-        ...(withAb.length ? [it('ability', 'Ability', 'ability', () => runCommand('ability'), !withAb.some((u) => u.abilityCd <= 0) && 'Not ready yet')] : []),
+        // (Ground squads' Spread out reads as what it will do: spread out, or close up.)
+        ...(withAb.length
+          ? [withAb.every((u) => u.t.ability === 'spreadOut')
+              ? it('ability', withAb.every((u) => u.spread) ? 'Close up' : 'Spread out', 'ability', () => runCommand('ability'))
+              : it('ability', 'Ability', 'ability', () => runCommand('ability'), !withAb.some((u) => u.abilityCd <= 0) && 'Not ready yet')]
+          : []),
         ...(mine.some(canRetreat) ? [{ ...it('retreat', 'Retreat', 'jump', () => runCommand('retreat')), danger: true }] : []),
         ...info,
       )
@@ -1981,7 +1996,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           pickedNode.current = -1
         } else openMenu()
       } else if (action === 'attack' || action === 'move' || action === 'patrol' || action === 'rally' || action === 'hold' || action === 'stop' || action === 'retreat' || action === 'guard') runCommand(action)
-      else if (action === 'ability') useAbility()
+      else if (action === 'ability') useAbility(undefined, e.shiftKey || shiftOf())
       else if (action === 'station' || k === 'home') selectStation()
       else if (action === 'yard') selectYard()
       else if (action === 'cyard') selectCapitalYard()

@@ -3911,6 +3911,18 @@ pathed and counted as one unit; its members walk on their own round it:
   selection ring takes in the members wherever they stand, and clicking any member picks the squad.
   When zoomed far out the members grow and spread so the squad stays about 24 pixels across.
 
+- **Spread out** (the ability of every squad from a foot factory, all tiers; data/kit.ts `SPREAD`): a
+  toggle on the ability key (F), the command card's ability button (it reads Spread out or Close up)
+  and the touch action wheel; with Shift it waits until the squads have done the orders they have.
+  Spread out, the members walk out to 1.8 times their usual spacing, and incoming hits miss the
+  squad more often: 40% of artillery shells and swarm rockets (their splash too), 10% of direct fire
+  (pulse, rockets, shells), and it escapes 30% of a spray (its burn too) and 10% of a beam. The price:
+  it moves at 80% of its pace and its members reload a fifth slower. A dashed ring round the members
+  shows it. Used again, they close back up. The rolls come from the battle's random stream, the
+  order goes through the referee like any other (`spread`), and the flag is in the hash and
+  snapshots. The AI spreads its squads out while an enemy with artillery, swarm rockets or a spray
+  is within 14 tiles of them, and closes them up once none is within 20.
+
 Squads are light armour and path on size class 1. Their members (where each stands and faces, its
 drift, its reloads and targets) and the squad's trail are in the battle's hash and snapshots; a
 squad from a save made before members walked on their own gets them in their places.
