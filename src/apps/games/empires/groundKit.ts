@@ -46,6 +46,10 @@ export type GroundKit = {
   power(w: World, owner: Owner): PowerReport
   /** Power a construction site draws while it is built. */
   siteDraw: number
+  /** Why factory `s` can't start job `job` ('tier' or a GROUND_TECH id) for `owner` now, or null
+   * (ground/jobs.ts); and the most tiers a factory reaches. */
+  cantJob(w: World, owner: Owner, s: Unit, job: string): string | null
+  tierMax: number
   /** The ground weapons' shots, beams, sprays and burns (ground/effects.ts), in world coordinates;
    * `clock`: the screen's seconds, for flicker. */
   effects(ctx: CanvasRenderingContext2D, w: World, me: Owner, zoom: number, clock: number): void

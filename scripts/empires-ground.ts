@@ -5,7 +5,7 @@
 //
 // 1. The ground code uses no Math.random, Date, clock, DOM or engine-dependent maths.
 // 2. Placement on Dustfall Ridge: every rule refuses somewhere with its own reason (unbuildable, a
-//    crystal field, uneven ground, built on, blocking a door, too near the enemy (any building), enemy units on it, no room at its own door, credits), the ghost checks every tile, an
+//    crystal field, uneven ground, built on, blocking a building's exit, too near the enemy (any building), enemy units on it, no room for its own exit, credits), the ghost checks every tile, an
 //    order to place there is refused with the same reason, and a building hidden in the fog doesn't
 //    stop a placement.
 // 3. A building battle on Dustfall Ridge, seat 0 scripted (Republic) and seat 1 a peaceful AI (Swarm: no fighters), two
@@ -45,6 +45,13 @@
 //    refused at a tier 1 factory, and an id the game doesn't know is refused, not trained. The
 //    factories' tier 1 units are stand-ins until they are added (ground-test-units.ts). Then a longer
 //    AI run: it builds a foot and a vehicle factory, keeps its power up and trains a mix of both.
+// 3f. An upgrade battle on Ashwater Crossing, seat 0 scripted (Republic), seat 1 the AI, checked
+//    the same way: a unit needing tier 2 and research needing tier 2 are refused at a tier 1
+//    Vehicle Factory; its upgrade to tier 2 is paid in research points and kyber, draws its power
+//    only while it runs, and is called off with both refunded in full; started again while power is
+//    short it runs at made / used of its speed, to the tick; done, the factory stands at tier 2 with
+//    more hull and trains the tier 2 unit; research there (weapons) reaches the unit already out and
+//    the one trained after. Then a long AI run: it upgrades a factory and takes research.
 // 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
 //    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
@@ -64,7 +71,8 @@ import { UNIT, UNITS } from '../src/apps/games/empires/data.ts'
 import { newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd, cmd, runCmd, type Cmd } from '../src/apps/games/empires/commands.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
-import { SITE_DRAW } from '../src/apps/games/empires/ground/power.ts'
+import { SITE_DRAW, powerReport } from '../src/apps/games/empires/ground/power.ts'
+import { cantJob } from '../src/apps/games/empires/ground/jobs.ts'
 import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { anchorAt, footprintOpen, stands, standsAt } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
@@ -88,7 +96,7 @@ import { TIER1 as TIER1_PAIRS, TIER2_TEST } from './ground-test-units.ts'
 
 {
   const dir = new URL('../src/apps/games/empires/ground/', import.meta.url)
-  const sim = ['world.ts', 'nav.ts', 'fog.ts', 'think.ts']
+  const sim = ['world.ts', 'nav.ts', 'fog.ts', 'think.ts', 'power.ts', 'jobs.ts']
   const bad: string[] = []
   const banned = /Math\.(random|sin|cos|tan|atan2?|hypot|exp|pow|log)\b|\bDate\b|performance\.|\bdocument\b|\bwindow\b|localStorage|requestAnimationFrame|\*\*/
   for (const f of readdirSync(dir).filter((f) => sim.includes(f)))
@@ -145,7 +153,7 @@ const FACTION_LIST = ['republic', 'droid', 'swarm'] as const
   expect('terrain', R.center, 'Not on buildable ground')
   expect('crystal field', 'test-block', 'A deposit is in the way')
   expect('built on', R.center, 'Something is built there')
-  expect('door blocked', R.center, "It would block a building's door")
+  expect('exit blocked', R.center, "It would block a building's exit")
   expect('enemy near, any building', 'test-block', 'Too close to an enemy building (keep 20 tiles away)')
   {
     // No command range: a small building as far from our Command Center as the map allows (and still
@@ -155,7 +163,24 @@ const FACTION_LIST = ['republic', 'droid', 'swarm'] as const
     check('a building may go up far from our Command Centers (no command range)', !!far && tiles > 40, `${tiles.toFixed(0)} tiles out`)
   }
   expect('enemy near', R.center, 'Too close to an enemy building (keep 20 tiles away)')
-  expect('own door', R.center, 'No room in front of its door')
+  expect('own exit', R.center, 'No room for its exit: the row in front of its door must stay clear')
+  {
+    // Exits only where units come out: a Command Center and a factory have one, a power generator,
+    // a research station and a supply building none, and nothing keeps the row in front of theirs clear.
+    const exit = (type: string) => groundPlacement(w, 0, type, home.x, home.y + 14 * TILE).door.length
+    check('a building that trains has an exit (the row in front of its door), one that trains nothing has none',
+      exit(R.center) === 6 && exit(R.vfactory) === 5 && exit(R.barracks) === 4 && exit(R.generator) === 0 && exit(R.research) === 0 && exit(R.supply) === 0,
+      [R.center, R.vfactory, R.barracks, R.generator, R.research, R.supply].map((t) => `${t} ${exit(t)}`).join(', '))
+    const at = find(w, 0, R.supply, null, { x: home.x - 14 * TILE, y: home.y + 10 * TILE })!
+    const pl = groundPlacement(w, 0, R.supply, at.x, at.y)
+    const depot = raiseBuilding(w, UNIT[R.supply], 0, pl.tc, pl.tr)
+    tick(w)
+    // A generator right against the depot's south side, where a door row would be.
+    const why = groundPlacement(w, 0, R.generator, (pl.tc + 1) * TILE, (pl.tr + 4) * TILE).why
+    check('a building may stand right in front of one that trains nothing', why !== "It would block a building's exit", String(why))
+    kill(w, depot)
+    tick(w)
+  }
   {
     const p = groundPlacement(w, 0, R.center, home.x + 3 * TILE, home.y)
     const red = p.tiles.filter((t) => !t.ok).length
@@ -219,6 +244,7 @@ type Input =
   | { t: number; k: 'kyber'; f: number; each: number }
   | { t: number; k: 'spawn'; unit: string; owner: number; x: number; y: number }
   | { t: number; k: 'credits'; owner: number; value: number }
+  | { t: number; k: 'rp'; owner: number; value: number }
 
 function apply(w: World, x: Input): unknown {
   if (x.k === 'cmd') {
@@ -228,6 +254,7 @@ function apply(w: World, x: Input): unknown {
   if (x.k === 'add') return raiseBuilding(w, UNIT[x.unit], x.owner, x.c, x.r)
   if (x.k === 'spawn') return spawn(w, x.unit, x.owner, x.x, x.y, 0)
   if (x.k === 'credits') return void (w.players[x.owner].credits = x.value)
+  if (x.k === 'rp') return void (w.players[x.owner].rp = x.value)
   if (x.k === 'kyber') {
     for (const c of w.crystals!) if (c.f === x.f && c.left > 0) c.left = Math.min(c.left, x.each)
     return
@@ -868,6 +895,128 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('the AI builds a foot factory and a vehicle factory', n('d-g-botfactory') >= 1 && n('d-g-foundry') >= 1, `${n('d-g-botfactory')} Bot Factories, ${n('d-g-foundry')} Vehicle Foundries`)
   check('the AI trains a mix of both factories\' units', n(foot) >= 1 && n(vehicle) >= 1, `${n(foot)} ${foot}, ${n(vehicle)} ${vehicle}`)
   check('the AI keeps its power up while its factories train', worst >= 0.75, `worst ratio after 4 min ${worst.toFixed(2)}, power now ${w.players[1].power!.made}/${w.players[1].power!.used}`)
+}
+
+// --- 3f. The upgrade battle -----------------------------------------------------------------------------
+
+{
+  const make = (): Copy => ({ w: newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 63, credits: 6000 }), brains: [newBrain(1, 'medium')] })
+  const ticks = Math.round(Math.max(seconds, 200) / STEP)
+  const got: Record<string, [boolean, string]> = {}
+  const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
+  const bad: Record<string, number> = {}
+  const miss = (k: string) => (bad[k] = (bad[k] ?? 0) + 1)
+  const [, raider] = TIER1_PAIRS.republic
+  const vt = UNIT[R.vfactory]
+  const trainsWas = vt.ground!.trains!
+  vt.ground!.trains = [...trainsWas, TIER2_TEST]
+  const up = vt.ground!.tierUp![0]
+  const weapons = `${R.vfactory}-weapons`
+  let home: Unit | undefined
+  let fac: Unit | undefined
+  let prev: { left: number; job: object } | null = null
+  let short = 0
+  let tierAt = -1
+  let techAt = -1
+  let first = 0
+  let after = 0
+  let afterQueued = false
+  const final = lockstep('upgrade battle', make, ticks, ({ w }, t, say) => {
+    home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
+    const order = (c: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(c) })
+    const p = w.players[0]
+    for (const e of w.events) {
+      if (e.k === 'tierUp' && e.owner === 0 && tierAt < 0) tierAt = t
+      if (e.k === 'tech' && e.owner === 0 && e.id === weapons && techAt < 0) techAt = t
+      if (e.k === 'trained' && e.owner === 0 && e.unit === raider) {
+        const id = w.units.filter((u) => u.owner === 0 && u.t.id === raider).reduce((a, u) => (u.id > a ? u.id : a), 0)
+        if (!first) first = id
+        else if (techAt >= 0 && !after) after = id
+      }
+    }
+    w.events.length = 0
+    // Last tick's job, as the power said.
+    const pw = p.power
+    if (fac?.gj && prev && prev.job === fac.gj && pw && fac.gj.left > 0) {
+      if (Math.abs(prev.left - fac.gj.left - STEP * pw.ratio) > 1e-9) miss('job')
+      else if (pw.ratio < 1) short++
+    }
+    // 1/3 s: a Supply Depot and the Vehicle Factory, raised; research points to spend (a cheat).
+    if (t === 10) {
+      for (const [type, dx, dy] of [[R.supply, -9, 0], [R.vfactory, 10, 2]] as const) {
+        const at = find(w, 0, type, null, { x: home.x + dx * TILE, y: home.y + dy * TILE })!
+        const pl = groundPlacement(w, 0, type, at.x, at.y)
+        say({ t, k: 'add', unit: type, owner: 0, c: pl.tc, r: pl.tr })
+      }
+      say({ t, k: 'rp', owner: 0, value: 1000 })
+      fac = w.units.find((u) => u.owner === 0 && u.t.id === R.vfactory)
+    }
+    if (!fac) return
+    // 1/2 s: one vehicle trained before any research.
+    if (t === 15) order(cmd('build', raider, false, fac.id))
+    // 2/3 s: the tier gate; then the upgrade, paid.
+    if (t === 20) {
+      pass('a unit needing tier 2 is refused at a tier 1 factory', /tier 2/.test(cantBuild(w, 0, TIER2_TEST, false, fac.id) ?? ''), `${cantBuild(w, 0, TIER2_TEST, false, fac.id)}`)
+      pass('research needing tier 2 is refused at a tier 1 factory', /tier 2/.test(cantJob(w, 0, fac, `${R.vfactory}-speed`) ?? ''), `${cantJob(w, 0, fac, `${R.vfactory}-speed`)}`)
+      const rp = p.rp!
+      const kyber = p.credits
+      order(cmd('groundJob', fac.id, 'tier'))
+      pass('the upgrade to tier 2 is paid in research points and kyber', fac.gj?.id === 'tier' && rp - p.rp! === up.rp && kyber - p.credits === up.cost, `${rp - p.rp!} points, ${kyber - p.credits} kyber`)
+      pass('a second job at a busy factory is refused', !!cantJob(w, 0, fac, weapons))
+    }
+    if (t === 21) pass('an upgrade under way draws its power', powerReport(w, 0).upgrades === up.draw, `${powerReport(w, 0).upgrades} drawn for upgrades`)
+    // 1.3 s: called off, both refunded in full.
+    if (t === 40) {
+      const rp = p.rp!
+      const kyber = p.credits
+      order(cmd('cancelGroundJob', fac.id))
+      pass('an upgrade called off refunds its research points and kyber in full', !fac.gj && p.rp! - rp === up.rp && p.credits - kyber === up.cost, `${p.rp! - rp} points, ${p.credits - kyber} kyber`)
+    }
+    if (t === 41) pass('a factory with no job draws nothing for upgrades', powerReport(w, 0).upgrades === 0)
+    // 1.7 s: started again, and a research station raised: short of power while it runs.
+    if (t === 50) {
+      order(cmd('groundJob', fac.id, 'tier'))
+      const at = find(w, 0, R.research, null, { x: home.x, y: home.y + 10 * TILE })!
+      const pl = groundPlacement(w, 0, R.research, at.x, at.y)
+      say({ t, k: 'add', unit: R.research, owner: 0, c: pl.tc, r: pl.tr })
+    }
+    // Done: tier 2, more hull, the tier 2 unit allowed; then the weapons research.
+    if (tierAt >= 0 && t === tierAt + 1) {
+      pass('the upgrade done, the factory stands at tier 2 with more hull', fac.t.ground!.tier === 2 && fac.hullMax > vt.hull * 1.2, `tier ${fac.t.ground!.tier}, hull ${Math.round(fac.hullMax)} of ${vt.hull} at tier 1`)
+      pass('at tier 2 it trains the tier 2 unit', !/tier/.test(cantBuild(w, 0, TIER2_TEST, false, fac.id) ?? ''), `${cantBuild(w, 0, TIER2_TEST, false, fac.id)}`)
+      pass('at tier 2 the tier 2 research is open', !/tier/.test(cantJob(w, 0, fac, `${R.vfactory}-speed`) ?? ''))
+      order(cmd('groundJob', fac.id, weapons))
+    }
+    // The research done: one more vehicle.
+    if (techAt >= 0 && !afterQueued) {
+      afterQueued = true
+      const u = w.byId.get(first)
+      pass('research done reaches the units of that factory already out', !!u && Math.abs(u.mods.damage - 1.15) < 1e-9, `damage x${u?.mods.damage}`)
+      order(cmd('build', raider, false, fac.id))
+    }
+    prev = fac.gj ? { left: fac.gj.left, job: fac.gj } : null
+  })
+  vt.ground!.trains = trainsWas
+  for (const [k, [ok, detail]] of Object.entries(got)) check(`upgrade battle: ${k}`, ok, detail)
+  check('upgrade battle: short of power, the upgrade runs at made / used of its speed, to the tick', short > 0 && !bad.job, `${short} short ticks; misses ${JSON.stringify(bad)}`)
+  check('upgrade battle: the upgrade and the research were done', tierAt > 0 && techAt > 0, `tier 2 at ${(tierAt * STEP).toFixed(1)} s, weapons at ${(techAt * STEP).toFixed(1)} s`)
+  const late = final.w.byId.get(after)
+  check('upgrade battle: a unit trained after the research has it too', !!late && Math.abs(late.mods.damage - 1.15) < 1e-9, late ? `damage x${late.mods.damage}` : 'none trained')
+}
+{
+  // The AI's factory upgrades and research, over a long battle against nobody in a hurry.
+  const w = newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 62, credits: 1600 })
+  const brains = [newBrain(1, 'medium')]
+  let tiers = 0
+  let techs = 0
+  for (let t = 0; t < Math.round(900 / STEP); t++) {
+    for (const b of brains) think(w, b, STEP)
+    tick(w)
+    for (const e of w.events) if (e.owner === 1 && e.k === 'tierUp') tiers++
+    else if (e.k === 'tech' && e.owner === 1) techs++
+    w.events.length = 0
+  }
+  check('the AI upgrades a factory and takes research there', tiers >= 1 && techs >= 1, `${tiers} tier upgrades, ${techs} research done in 15 min`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

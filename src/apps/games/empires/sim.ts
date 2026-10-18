@@ -7,7 +7,7 @@ import { autoLayout } from './conquestMap.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
   ABILITIES, FACTIONS, moduleFits, siteUpgradeOf, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, BEACON_SENSOR, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
+  SURVEY_RADIUS, SURVEY_TIME, TECH, GROUND_TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, orbitalKey, orbitalType, stationType, unitOf, type AbilityId, type FactionId, type OrbitalModId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind, DEFENSE_QUEUE, ORBITAL_MODS, ORBITAL_TOP, ORBITALS, cleanDefense, defenseModTime, defenseTime, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, placeType,
 } from './data.ts'
 import type { Brain } from './ai.ts'
@@ -233,6 +233,9 @@ export type Unit = {
   /** Ground battles, squads: where its middle has been lately, newest first, as x, y pairs; members
    * follow it in file through narrow ground. */
   trail?: number[]
+  /** Ground battles, factories: the upgrade to the next tier or the research (a GROUND_TECH id) under
+   * way there (ground/jobs.ts), with the seconds left and what it was paid, for a refund. */
+  gj?: GroundJob
   /** Ground battles: a spray's burn still eating at it (hull points a second, seconds left, whose). */
   burn?: { dps: number; left: number; by: Owner; from: number }
 }
@@ -434,6 +437,8 @@ export type SimEvent =
   | { k: 'alarm'; owner: Owner; x: number; y: number; what: string }
   | { k: 'level'; owner: Owner; level: number }
   | { k: 'tech'; owner: Owner; id: string }
+  /** Ground battles: a factory reached a new tier. */
+  | { k: 'tierUp'; owner: Owner; unit: string; tier: number; x: number; y: number }
   | { k: 'ability'; owner: Owner; id: AbilityId; x: number; y: number }
   | { k: 'launch'; owner: Owner; x: number; y: number }
   | { k: 'shieldsDown'; owner: Owner; x: number; y: number }
@@ -579,6 +584,9 @@ export type GroundHooks = {
   think(w: World, b: Brain): void
   /** Engineers `crew` gather kyber at the crystal field at (x, y). */
   gather(w: World, owner: Owner, crew: Unit[], x: number, y: number, queued: boolean): string | null
+  /** A factory of ours starts job `job` ('tier' or a GROUND_TECH id) or calls its job off (ground/jobs.ts). */
+  job(w: World, owner: Owner, at: Unit, job: string): string | null
+  cancelJob(w: World, owner: Owner, at: Unit): string | null
 }
 let groundCode: GroundHooks | null = null
 /** Loads ground battles into the sim (ground/world.ts calls it when it is imported). */
@@ -735,12 +743,17 @@ export const sensorOf = (u: Unit) =>
 export const planned = (u: Unit) => !!u.site && !u.site.started
 export const speedOf = (u: Unit) => u.t.speed * u.mods.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
 
-/** Everything a player has researched for one unit type (or for its station), added up. */
+/** A factory's job in a ground battle (Unit `gj`): `id` 'tier' (the upgrade to its next tier) or a
+ * GROUND_TECH id, with the seconds left and the research points and kyber paid for it. */
+export type GroundJob = { id: string; left: number; total: number; rp: number; cost: number }
+
+/** Everything a player has researched for one unit type (or for its station), added up. Ground
+ * research (GROUND_TECH) is done at a factory and counts for every unit type the factory trains. */
 export function techBonus(p: Player, unitId: string): TechEffect {
   const out: TechEffect = {}
   for (const id of p.techs) {
-    const t = TECH[id]
-    if (t?.for !== unitId) continue
+    const t = TECH[id] ?? GROUND_TECH[id]
+    if (!t || (TECH[id] ? t.for !== unitId : !UNIT[t.for]?.ground?.trains?.includes(unitId))) continue
     for (const [k, v] of Object.entries(t.effect) as [keyof TechEffect, number][]) out[k] = (out[k] ?? 0) + v
   }
   return out
@@ -2275,7 +2288,7 @@ function finishResearch(w: World, o: Owner, id: string) {
 
 /** A unit's bonuses worked out again (research done, the Armour works up or down): hull and shields
  * grow or shrink with them, keeping the share it has. */
-function remod(w: World, u: Unit) {
+export function remod(w: World, u: Unit) {
   const next = modsFor(w.players[u.owner], u.t)
   const grow = next.hull / u.mods.hull
   const shields = next.shield / u.mods.shield
@@ -2637,6 +2650,21 @@ export function cmdGather(w: World, owner: Owner, ids: number[], x: number, y: n
   const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t))
   if (!crew.length) return 'Only engineers gather kyber'
   return G().gather(w, owner, crew, x, y, queued)
+}
+
+/** Ground battles: factory `id` of ours upgrades to its next tier (`job` 'tier') or researches
+ * GROUND_TECH `job`, paid with research points and kyber. */
+export function cmdGroundJob(w: World, owner: Owner, id: number, job: string): string | null {
+  const at = w.byId.get(id)
+  if (!w.ground || !at || at.dead || at.owner !== owner || !at.foot) return 'No factory of ours'
+  return G().job(w, owner, at, job)
+}
+
+/** Ground battles: factory `id` of ours calls its upgrade or research off, refunded in full. */
+export function cmdCancelGroundJob(w: World, owner: Owner, id: number): string | null {
+  const at = w.byId.get(id)
+  if (!w.ground || !at || at.dead || at.owner !== owner || !at.foot) return 'No factory of ours'
+  return G().cancelJob(w, owner, at)
 }
 
 export function cmdConstruct(w: World, owner: Owner, ids: number[], id: number, queued = false): string | null {

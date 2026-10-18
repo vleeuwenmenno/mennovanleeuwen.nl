@@ -1,4 +1,5 @@
 import type { Unit, World } from '../sim.ts'
+import { jobDraw } from './jobs.ts'
 
 // Power and research points in a ground battle, per side, worked out once a tick by the buildings'
 // work (world.ts works). Lockstep rules as in sim.ts: units in `w.units` order, no Math.random, no
@@ -8,8 +9,8 @@ import type { Unit, World } from '../sim.ts'
 //   power generator more. A generator burns `burn` kyber a second to run; when the side can't pay a
 //   tick's burn it makes nothing that tick.
 // - Power is drawn by whatever is busy (`busyDraw`): a construction site while engineers build it
-//   (SITE_DRAW), a building with `draw` while it trains or upgrades (its queue isn't empty; the
-//   factories of later phases draw the same way), and a research station all the time.
+//   (SITE_DRAW), a building with `draw` while it trains (its queue isn't empty), a factory's upgrade
+//   or research its own draw while it runs (ground/jobs.ts), and a research station all the time.
 // - Short of power, every consumer of that side runs at made / used of its speed: the same ratio for
 //   all, so nothing depends on the order they are in.
 // - Research stations make research points (`research` a second each, at the side's ratio), banked
@@ -22,13 +23,14 @@ export const SITE_DRAW = 3
 export type PowerState = { made: number; used: number; ratio: number }
 
 /** The power building `s` draws now: a site being built (by `crew` engineers), a building with a
- * draw while it is busy (training or upgrading), and a research station always. */
+ * draw while it trains, a factory's upgrade or research while it runs, and a research station
+ * always. */
 export function busyDraw(s: Unit, crew: number): number {
   const g = s.t.ground
   if (!g || s.dead) return 0
   if (s.site) return s.site.started && crew > 0 ? SITE_DRAW : 0
   if (g.research) return g.draw ?? 0
-  return g.draw && s.yq?.length ? g.draw : 0
+  return (g.draw && s.yq?.length ? g.draw : 0) + jobDraw(s)
 }
 
 /**
@@ -79,22 +81,25 @@ export type PowerReport = {
   centers: number
   generators: number
   stopped: number
-  /** Power drawn by sites being built, training (and later upgrading), and research stations. */
+  /** Power drawn by sites being built, training, the factories' upgrades and research, and research
+   * stations. */
   sites: number
   training: number
+  upgrades: number
   research: number
   /** Kyber a second the generators burn, and research points a second the stations make now. */
   burn: number
   rpRate: number
-  /** Research points banked. */
+  /** Research points banked, and those paid for the upgrades and research under way. */
   rp: number
+  rpSpent: number
 }
 
 export function powerReport(w: World, owner: number): PowerReport {
   const p = w.players[owner]
   const crews = new Map<number, number>()
   for (const u of w.units) if (!u.dead && u.gm?.busy) crews.set(u.gm.busy, (crews.get(u.gm.busy) ?? 0) + 1)
-  const r: PowerReport = { made: p.power?.made ?? 0, used: p.power?.used ?? 0, ratio: p.power?.ratio ?? 1, centers: 0, generators: 0, stopped: 0, sites: 0, training: 0, research: 0, burn: 0, rpRate: 0, rp: p.rp ?? 0 }
+  const r: PowerReport = { made: p.power?.made ?? 0, used: p.power?.used ?? 0, ratio: p.power?.ratio ?? 1, centers: 0, generators: 0, stopped: 0, sites: 0, training: 0, upgrades: 0, research: 0, burn: 0, rpRate: 0, rp: p.rp ?? 0, rpSpent: 0 }
   for (const s of w.units) {
     if (s.dead || !s.foot || s.owner !== owner) continue
     const g = s.t.ground!
@@ -103,7 +108,12 @@ export function powerReport(w: World, owner: number): PowerReport {
     else if (g.research) {
       r.research += draw
       r.rpRate += g.research * r.ratio
-    } else r.training += draw
+    } else {
+      const job = jobDraw(s)
+      r.upgrades += job
+      r.training += draw - job
+      r.rpSpent += s.gj?.rp ?? 0
+    }
     if (s.site || !g.power) continue
     if (g.burn) {
       if (p.credits < g.burn / 30) r.stopped++

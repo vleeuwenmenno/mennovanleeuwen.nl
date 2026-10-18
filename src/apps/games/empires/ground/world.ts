@@ -38,6 +38,7 @@ import {
 } from './nav.ts'
 import { buildGroundMap } from './terrain.ts'
 import { groundPower } from './power.ts'
+import { cancelJob, jobsTick, startJob } from './jobs.ts'
 import { groundThink } from './think.ts'
 import { combatHash, engage, giveUp, groundCombat } from './combat.ts'
 import { testField, testMesa } from './testmaps.ts'
@@ -575,7 +576,8 @@ function steer(w: World, u: Unit) {
     g.stuck = 0
     g.best = Infinity
   }
-  let aim = t.speed * Math.max(0, 1 - left * 1.25)
+  // Research at its factory (sim.ts techBonus) speeds it up.
+  let aim = t.speed * u.mods.speed * Math.max(0, 1 - left * 1.25)
   if (last) aim = Math.min(aim, Math.sqrt(2 * accel * Math.max(0, d - ARRIVE * 0.5)) + 4)
   if (u.order.k === 'move' && u.order.speed < aim) aim = u.order.speed
   u.v = u.v < aim ? Math.min(aim, u.v + accel * STEP) : Math.max(aim, u.v - accel * STEP)
@@ -1060,6 +1062,8 @@ function works(w: World, dt: number) {
   for (const u of w.units) if (!u.dead && u.gm?.busy) crews.set(u.gm.busy, (crews.get(u.gm.busy) ?? 0) + 1)
   // Power (ground/power.ts): short of it, sites, training and research run slower, by owner.
   const power = groundPower(w, dt, crews)
+  // The factories' upgrades and research (ground/jobs.ts), at the same share of their speed.
+  jobsTick(w, dt, power)
   // Units trained this tick are added to the end of the list: they have nothing to do yet.
   const n = w.units.length
   for (let i = 0; i < n; i++) {
@@ -1238,8 +1242,13 @@ export type GroundPlacement = { why: string | null; tc: number; tr: number; x: n
  * our engineers can reach, however far from our Command Centers. */
 export const ENEMY_GAP = 20
 
-/** A footprint a team knows of: its tiles, and whether it is an enemy's. */
-type Known = { c: number; r: number; fw: number; fh: number; enemy: boolean }
+/** A footprint a team knows of: its tiles, whether it is an enemy's, and whether it has an exit (a
+ * building that trains: the row in front of its door is kept clear). */
+type Known = { c: number; r: number; fw: number; fh: number; enemy: boolean; exit: boolean }
+
+/** Whether buildings of type `t` have an exit: the row in front of their door kept clear so the
+ * units they train can leave (the Command Center, the factories). Those that train nothing have none. */
+export const hasExit = (t: UnitType | undefined) => !!t?.ground?.trains?.length
 
 /** The buildings `owner`'s team knows stand: all of its own team's (sites nobody has started
  * included, but another seat's are a secret even from its teammates), the enemy's it sees now, and
@@ -1255,27 +1264,28 @@ function knownFeet(w: World, owner: Owner): Known[] {
     if (!mine && !(u.foot.on && u.seen[tm])) continue
     seen.add(u.id)
     const [fw, fh] = spec(u.t).foot!
-    out.push({ c: u.foot.c, r: u.foot.r, fw, fh, enemy: !mine })
+    out.push({ c: u.foot.c, r: u.foot.r, fw, fh, enemy: !mine, exit: hasExit(u.t) })
   }
   for (const k of w.known?.[tm] ?? []) {
     if (seen.has(k.id)) continue
     const [fw, fh] = spec(UNIT[k.unit]).foot!
-    out.push({ c: k.tc, r: k.tr, fw, fh, enemy: true })
+    out.push({ c: k.tc, r: k.tr, fw, fh, enemy: true, exit: hasExit(UNIT[k.unit]) })
   }
   return out
 }
 
 const covers = (f: Known, c: number, r: number) => c >= f.c && c < f.c + f.fw && r >= f.r && r < f.r + f.fh
-const doorOf = (f: Known, c: number, r: number) => r === f.r + f.fh && c >= f.c && c < f.c + f.fw
+const doorOf = (f: Known, c: number, r: number) => f.exit && r === f.r + f.fh && c >= f.c && c < f.c + f.fw
 
 /** Why one tile can't be under a building, in the order the reasons are reported. */
-const TILE_RULES = ['Not on buildable ground', 'A deposit is in the way', 'The ground must be level', 'Something is built there', "It would block a building's door"] as const
+const TILE_RULES = ['Not on buildable ground', 'A deposit is in the way', 'The ground must be level', 'Something is built there', "It would block a building's exit"] as const
 
 /**
  * Where building `unitId` would go with its footprint centred as near (x, y) as the grid allows. The
  * rules, in order: every tile buildable, on one level and free of deposits, buildings and other
- * buildings' doors; at least ENEMY_GAP tiles from a known enemy building (but anywhere else, however
- * far from our Command Centers); no enemy unit we see on it; its door row free; enough kyber. What a team doesn't see doesn't stop it (the land itself is
+ * buildings' exits; at least ENEMY_GAP tiles from a known enemy building (but anywhere else, however
+ * far from our Command Centers); no enemy unit we see on it; its exit free (a building that trains:
+ * `hasExit`); enough kyber. What a team doesn't see doesn't stop it (the land itself is
  * known everywhere): a site on ground where a hidden enemy building stands is given up, refunded,
  * when its engineer gets there.
  */
@@ -1314,10 +1324,11 @@ export function groundPlacement(w: World, owner: Owner, unitId: string, x: numbe
       tiles.push({ tc: c, tr: r, ok: rule < 0 })
       if (rule >= 0) worst = Math.min(worst, rule)
     }
-  // The row in front of the door: open ground, joined to the footprint's edge, nothing built on it.
+  // Its exit, the row in front of the door, for a building that trains: open ground, joined to the
+  // footprint's edge, nothing built on it. One that trains nothing has none.
   const door: TileCheck[] = []
   const dr = tr + fh
-  for (let c = tc; c < tc + fw; c++) {
+  for (let c = tc; c < tc + fw && hasExit(t); c++) {
     const i = dr * cols + c
     const ok = dr < rows && (g.flags[i] & TF.blocked) === 0 && canStep(g, i - cols, i) && !feet.some((k) => covers(k, c, dr))
     door.push({ tc: c, tr: dr, ok })
@@ -1341,7 +1352,7 @@ export function groundPlacement(w: World, owner: Owner, unitId: string, x: numbe
     const dy = Math.max(y0 - u.y, 0, u.y - (y0 + fh * TILE))
     if (dx * dx + dy * dy < spec(u.t).radius * spec(u.t).radius) return out('Enemy units are in the way')
   }
-  if (!door.every((d) => d.ok)) return out('No room in front of its door')
+  if (!door.every((d) => d.ok)) return out('No room for its exit: the row in front of its door must stay clear')
   if (worst === 4) return out(TILE_RULES[4])
   if (p.credits < cost) return out('Not enough kyber')
   return out(null)
@@ -1400,7 +1411,7 @@ function trainerFor(w: World, owner: Owner, id: string, at: number): Unit | stri
   if (at) {
     const u = w.byId.get(at)
     if (!can(u)) return "That building can't train it"
-    return tierOf(u) >= tierNeeded(t) ? u : `Needs the ${u.t.name} at tier ${tierNeeded(t)}`
+    return tierOf(u) >= tierNeeded(t) ? u : `Needs the ${u.t.name} at tier ${tierNeeded(t)}: upgrade it on its Upgrades page`
   }
   let best: Unit | undefined
   for (const u of w.units) if (ok(u) && (!best || u.yq!.length < best.yq!.length)) best = u
@@ -1449,6 +1460,8 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
       num(u.building)
       int(u.yq?.length ?? -1)
       for (const q of u.yq ?? []) num(q.left)
+      int(u.t.ground?.tier ?? 0)
+      if (u.gj) num(u.gj.left)
     }
     if (u.gm) {
       int(u.gm.pv)
@@ -1471,6 +1484,7 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
   for (const p of w.players) {
     num(p.rp ?? 0)
     num(p.burnt ?? 0)
+    int(p.techs.length)
   }
   for (const mem of w.known ?? []) {
     int(mem.length)
@@ -1546,4 +1560,6 @@ setGroundHooks({
   mapDef: groundMapDef,
   think: (w, b) => groundThink(w, b),
   gather: groundGather,
+  job: startJob,
+  cancelJob,
 })

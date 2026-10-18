@@ -202,7 +202,7 @@ export const GROUND: GroundModels = {
   's-g-brood': {
     w: 100,
     h: 100,
-    spec: () => {
+    spec: ({ tier }) => {
       const mound = lumps(0, -2, 44, 3.5, 12)
       const ribs = [-2.6, -2.05, -1.5, -1.0, -0.5, 0.0, 0.5].map((a, i) => {
         const p = (r: number): Pt => [Math.cos(a - 0.55) * r, -2 + Math.sin(a - 0.55) * r]
@@ -225,6 +225,26 @@ export const GROUND: GroundModels = {
             lift: 1,
             details: [{ k: 'lights', pts: [[-12, 40], [0, 42], [12, 40]], r: 1.4, tone: 'glow' }],
           }),
+          // Tier 2: more nutrient sacs and a maw grown wider; tier 3: horns round the rim and a ring
+          // of glowing eggs in a second pit.
+          ...(tier >= 2
+            ? [
+                ...[3.6, 4.4, 5.6].map((a, i) => part(`sacT${i}`, circle(Math.cos(a) * 36, Math.sin(a) * 36 - 2, 4, 12), 'aid', 3.2, { lift: 5, sphere: true })),
+                // Two side chambers swelling out of the mound, glowing through their skin.
+                ...[-1, 1].flatMap((side) => [
+                  part(`chamber${side < 0 ? 'L' : 'R'}`, circle(side * 36, 16, 10, 18), 'hull', 3.3, { lift: 6, sphere: true, details: [{ k: 'line', pts: circle(side * 36, 16, 7, 14) }] }),
+                  part(`chamberGlow${side < 0 ? 'L' : 'R'}`, circle(side * 36, 16, 4, 12), 'aid', 3.4, { lift: 6.5, glow: true }),
+                ]),
+                part('mawWide', spline([[tier >= 3 ? -34 : -28, 33], [0, 28], [tier >= 3 ? 34 : 28, 33], [tier >= 3 ? 28 : 23, 45], [0, 48], [tier >= 3 ? -28 : -23, 45]] as Pt[], 3, true), 'dark', 2.95, { lift: 1 }),
+              ]
+            : []),
+          ...(tier >= 3
+            ? [
+                ...[-2.7, -2.0, -1.3, -0.6, 0.1].map((a, i) => part(`horn${i}`, capsule([Math.cos(a) * 38, -2 + Math.sin(a) * 38], [Math.cos(a) * 50, -2 + Math.sin(a) * 50], 3, 0.8), 'accent', 3, { lift: 9 })),
+                part('pit2', circle(0, -26, 8, 18), 'dark', 4, { lift: 6 }),
+                part('pool2', circle(0, -26, 6, 16), 'glow', 5, { lift: 6.5, glow: true }),
+              ]
+            : []),
         ],
       }
     },
@@ -235,7 +255,7 @@ export const GROUND: GroundModels = {
   's-g-nest': {
     w: 100,
     h: 100,
-    spec: () => {
+    spec: ({ tier }) => {
       const mound = lumps(0, 0, 46, 3, 13)
       const plates = Array.from({ length: 8 }, (_, i) => {
         const a0 = (i / 8) * Math.PI * 2 - Math.PI / 2 + 0.1 + Math.PI / 8
@@ -267,6 +287,20 @@ export const GROUND: GroundModels = {
             lift: 1,
             details: [{ k: 'lights', pts: [[-14, 39], [0, 41], [14, 39]], r: 1.5, tone: 'glow' }],
           }),
+          // Tier 2: the maw grown wider and spines on the plates; tier 3: a crown of great horns and
+          // a second beast stirring in the pool.
+          ...(tier >= 2
+            ? [
+                part('mawWide', spline([[tier >= 3 ? -38 : -32, 31], [0, 25], [tier >= 3 ? 38 : 32, 31], [tier >= 3 ? 32 : 27, 45], [0, 49], [tier >= 3 ? -32 : -27, 45]] as Pt[], 3, true), 'dark', 2.95, { lift: 1 }),
+                ...[-2.05, -1.0, 0.35, 2.85].map((a, i) => part(`spineT${i}`, capsule([Math.cos(a) * 30, Math.sin(a) * 30], [Math.cos(a) * 42, Math.sin(a) * 42], 2.4, 0.7), 'accent', 3.5, { lift: 10 })),
+              ]
+            : []),
+          ...(tier >= 3
+            ? [
+                ...[-2.6, -1.6, -0.55, 0.45].map((a, i) => part(`crown${i}`, capsule([Math.cos(a) * 36, Math.sin(a) * 36], [Math.cos(a) * 52, Math.sin(a) * 52], 4.5, 1), 'hull2', 4, { lift: 12 })),
+                part('beast2', thick(spline([[8, 8], [-2, 12], [-10, 6], [-8, -2]], 4), 6, 3), 'hull', 5.5, { lift: 6.5 }),
+              ]
+            : []),
         ],
       }
     },

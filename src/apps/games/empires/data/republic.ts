@@ -301,12 +301,12 @@ const GROUND: UnitType[] = [
   groundFactory({
     id: 'r-g-barracks', faction: 'republic', name: 'Barracks', sprite: 'republic-g-barracks', makes: 'foot',
     blurb: 'A white blast-walled hall with a red-striped drop door and an armoury on its roof. It trains clone trooper squads, who march out of its wide door; it draws power while it trains.',
-    hull: 2600, cost: 250, build: 35, ground: { trains: ['r-g-troopers'] },
+    hull: 2600, cost: 250, build: 35, ground: { trains: ['r-g-troopers', 'r-g-repeaters', 'r-g-lancers'] },
   }),
   groundFactory({
     id: 'r-g-vfactory', faction: 'republic', name: 'Vehicle Factory', sprite: 'republic-g-vfactory', makes: 'vehicle',
     blurb: 'A long assembly hangar with a gantry crane over its roof and a wide armoured gate. It builds the Republic\'s walkers and speeders, which roll out of the gate; it draws power while it builds.',
-    hull: 3400, cost: 400, build: 45, ground: { trains: ['r-g-raider'] },
+    hull: 3400, cost: 400, build: 45, ground: { trains: ['r-g-raider', 'r-g-hailstorm', 'r-g-bastion'] },
   }),
   groundScout({
     id: 'r-g-scout', faction: 'republic', name: 'Pathfinder speeder', sprite: 'republic-g-scout',

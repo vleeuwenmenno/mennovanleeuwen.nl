@@ -210,7 +210,7 @@ export const GROUND: GroundModels = {
   'd-g-botfactory': {
     w: 100,
     h: 100,
-    spec: () => {
+    spec: ({ tier }) => {
       const rim = ngon(0, 0, 50, 8, OCT)
       const heads: Pt[] = [-14, -4, 6, 16].flatMap((y) => [[-7, y], [7, y]] as Pt[])
       return {
@@ -248,6 +248,22 @@ export const GROUND: GroundModels = {
               { k: 'lights', pts: along([-17, 35], [17, 35], 6), r: 1.2, tone: 'trim' },
             ],
           }),
+          // Tier 2: assembly arms over the line, spires on the south corners and a wider shutter.
+          ...(tier >= 2
+            ? [
+                ...sym(part('arm', capsule([-24, -14], [-8, -6], 2.6, 1.8), 'metal', 5, { lift: 10, details: [{ k: 'lights', pts: [[-8, -6]], r: 1.2, tone: 'trim' }] })),
+                ...sym(part('spireS', capsule([-26, 28], [-33, 37], 2.2, 1), 'metal', 5, { lift: 16, details: [{ k: 'lights', pts: [[-33, 37]], r: 1.2, tone: 'trim' }] })),
+                part('doorWide', box(0, 42, tier >= 3 ? 60 : 52, 10), 'dark', 2.95, { lift: 1, details: [{ k: 'lights', pts: along([tier >= 3 ? -26 : -22, 46], [tier >= 3 ? 26 : 22, 46], 8), r: 1, tone: 'trim', minPx: 60 }] }),
+              ]
+            : []),
+          // Tier 3: a twin blaster turret on the deck's north side.
+          ...(tier >= 3
+            ? [
+                part('turretBase', ngon(0, -42, 8, 6, 0), 'hull', 6, { lift: 16, facets: rimFacets(ngon(0, -42, 8, 6, 0), 0, -42, 0.5) }),
+                ...[-2.4, 2.4].map((dx, i) => part(`barrel${i}`, capsule([dx, -44], [dx, -54], 1.3, 1), 'metal', 7, { lift: 17 })),
+                part('turretEye', circle(0, -41, 2.4, 10), 'glass', 7, { lift: 17, glow: true }),
+              ]
+            : []),
         ],
       }
     },
@@ -258,7 +274,7 @@ export const GROUND: GroundModels = {
   'd-g-foundry': {
     w: 100,
     h: 100,
-    spec: () => {
+    spec: ({ tier }) => {
       const yard = chamfer(0, 0, 98, 98, 16)
       return {
         breakStyle: 'pie',
@@ -301,6 +317,24 @@ export const GROUND: GroundModels = {
               { k: 'lights', pts: along([-24, 33], [24, 33], 7), r: 1.2, tone: 'trim' },
             ],
           }),
+          // Tier 2: a third smokestack, a casting line along the west side and a wider shutter.
+          ...(tier >= 2
+            ? [
+                part('stack2', circle(4, -34, 6, 16), 'metal', 5, { lift: 20, sphere: true }),
+                part('flue2', circle(4, -34, 3.4, 12), 'dark', 6, { lift: 21, details: [{ k: 'lights', pts: [[4, -34]], r: 1.4, tone: 'ember' }] }),
+                part('line', box(-40, 4, 8, 50), 'metal', 3, { lift: 5, details: [...treads(-43, -37, -20, 28, 7), { k: 'lights', pts: along([-40, -18], [-40, 26], 4), r: 1.1, tone: 'ember', minPx: 60 }] }),
+                part('doorWide', box(0, 41, tier >= 3 ? 82 : 70, 11), 'dark', 2.95, { lift: 1, details: [{ k: 'shape', pts: box(tier >= 3 ? -40 : -34, 41, 3, 11), tone: 'accent' }, { k: 'shape', pts: box(tier >= 3 ? 40 : 34, 41, 3, 11), tone: 'accent' }] }),
+              ]
+            : []),
+          // Tier 3: a heavy crane over the casting pit and a cannon turret on the south-east corner.
+          ...(tier >= 3
+            ? [
+                part('crane', capsule([-38, -36], [-8, -20], 2.6, 2), 'hull2', 7, { lift: 26, details: [{ k: 'shape', pts: box(-24, -28, 4, 3), tone: 'accent' }] }),
+                part('ladle', circle(-10, -20, 5, 14), 'metal', 8, { lift: 24, details: [{ k: 'shape', pts: circle(-10, -20, 2.6, 10), tone: 'ember' }] }),
+                part('turretBase', circle(36, 32, 8, 18), 'hull', 5, { lift: 12, sphere: true, details: [{ k: 'shape', pts: box(36, 32, 6, 2), tone: 'accent' }] }),
+                part('barrel', capsule([36, 30], [36, 16], 2, 1.5), 'metal', 6, { lift: 13 }),
+              ]
+            : []),
         ],
       }
     },

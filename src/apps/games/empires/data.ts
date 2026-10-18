@@ -592,6 +592,8 @@ export const TECHS: Tech[] = KITS.flatMap((k) => k.techs)
 
 export const TECH: Record<string, Tech> = Object.fromEntries(TECHS.map((t) => [t.id, t]))
 export const techsFor = (unitId: string) => TECHS.filter((t) => t.for === unitId)
+/** Ground battles' research, done at the factories (data/groundTech.ts). */
+export { GROUND_TECH, GROUND_TECHS, RESEARCH_DRAW, groundTechsFor, type GroundTech } from './data/groundTech.ts'
 export const MAX_RESEARCH = 4
 /** The station-level upgrade shares the research queue under this id. */
 export const LEVEL_UP = 'level'

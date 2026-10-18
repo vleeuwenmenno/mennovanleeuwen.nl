@@ -15,12 +15,15 @@
 //    legs of its own, the rest pose (0) with its own legs, and nothing posed outside the walk. The
 //    dev test walker (ground/testWeapons.ts) is checked with the rest, and each squad's member model
 //    is in its own faction's folder.
+// 6. Every factory's model at tiers 2 and 3 (ground/jobs.ts factoryType): sound the same way, with
+//    more parts than the tier below (it grows as the factory upgrades).
 
 import { UNIT } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
 import { buildGroundModel, crystalModel, crystalShapes, groundModelIds } from '../src/apps/games/empires/models/ground.ts'
 import { registerWalkerTest } from '../src/apps/games/empires/ground/testWeapons.ts'
 import { CRYSTAL_SHAPES } from '../src/apps/games/empires/ground/world.ts'
+import { TIER_MAX, factoryType } from '../src/apps/games/empires/ground/jobs.ts'
 import type { Model } from '../src/apps/games/empires/models/types.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
 import type { Pt } from '../src/apps/games/empires/models/types.ts'
@@ -97,6 +100,17 @@ function sound(label: string, build: () => Model, minFill: number, name: string)
 for (const t of real) if (groundModel(t.id) && !t.ground?.squad) sound(t.id, () => buildGroundModel(t.id), t.ground?.foot ? 0.55 : 0.3, t.name)
 // A squad's member, alone on its own box.
 for (const [id, t] of memberOf) sound(id, () => buildGroundModel(id), 0.3, `a member of ${t.name}`)
+// 6. Factories at each tier.
+for (const t of real.filter((x) => x.ground?.factory)) {
+  let parts = buildGroundModel(t.id, t).parts.length
+  for (let tier = 2; tier <= TIER_MAX; tier++) {
+    const tt = factoryType(t.id, tier)
+    sound(`${t.id}:${tier}`, () => buildGroundModel(t.id, tt), 0.55, `${t.name}, tier ${tier}`)
+    const n = buildGroundModel(t.id, tt).parts.length
+    ok(n > parts, `${t.id}: its tier ${tier} model doesn't grow (${n} parts, ${parts} at the tier below)`)
+    parts = n
+  }
+}
 
 // 4. The crystal clusters.
 ok(crystalShapes() === CRYSTAL_SHAPES, `the sim lays out ${CRYSTAL_SHAPES} cluster shapes, there are ${crystalShapes()} models`)

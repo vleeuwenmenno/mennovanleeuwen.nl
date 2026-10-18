@@ -193,6 +193,10 @@ export type GroundSpec = {
    * out). Tier 1 units are small and simple, tier 2 medium, tier 3 the big ones.
    */
   tier?: number
+  /** Factories: what upgrading to each next tier costs (index 0: to tier 2, 1: to tier 3), in
+   * research points and kyber, the seconds it takes and the power it draws while it runs
+   * (ground/jobs.ts). */
+  tierUp?: { rp: number; cost: number; time: number; draw: number }[]
   /** Engineers: the buildings it puts up, in card order. */
   builds?: string[]
   /** Armour class (ground/combat.ts, GROUND_VS): vehicles light unless they say, buildings structure. */
@@ -350,7 +354,13 @@ export const groundFactory = (o: GroundWritten & { makes: 'foot' | 'vehicle' }):
       ? { role: 'Infantry', strong: ['training foot squads'], weak: ['being left unguarded', 'a power cut'] }
       : { role: 'Vehicles', strong: ['training vehicles'], weak: ['being left unguarded', 'a power cut'] },
     ...rest,
-    ground: { size: 3, radius: n * 16, accel: 0, sight: n + 2, foot: [n, n], factory: makes, tier: 1, draw: makes === 'foot' ? 3 : 5, ...rest.ground },
+    ground: {
+      size: 3, radius: n * 16, accel: 0, sight: n + 2, foot: [n, n], factory: makes, tier: 1, draw: makes === 'foot' ? 3 : 5,
+      tierUp: makes === 'foot'
+        ? [{ rp: 100, cost: 250, time: 35, draw: 4 }, { rp: 250, cost: 500, time: 50, draw: 6 }]
+        : [{ rp: 150, cost: 350, time: 45, draw: 4 }, { rp: 350, cost: 700, time: 60, draw: 6 }],
+      ...rest.ground,
+    },
   }
 }
 

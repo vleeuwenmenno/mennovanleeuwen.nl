@@ -1,16 +1,18 @@
 import type { Brain } from '../ai.ts'
 import * as M from '../detmath.ts'
-import { UNIT } from '../data.ts'
-import { cmdBuild, cmdCancelSite, cmdConstruct, cmdGather, cmdPlace, cantBuild, type Unit, type World } from '../sim.ts'
+import { GROUND_TECH, UNIT, groundTechsFor } from '../data.ts'
+import { cmdBuild, cmdGroundJob, cmdCancelSite, cmdConstruct, cmdGather, cmdPlace, cantBuild, type Unit, type World } from '../sim.ts'
 import { TILE, type Pt } from './types.ts'
 import { armyThink } from './army.ts'
 import { SITE_DRAW } from './power.ts'
+import { TIER_MAX, cantJob, jobCost } from './jobs.ts'
 import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, knownBuildings, tierNeeded, tierOf, trainsOf } from './world.ts'
 
 // The AI's decisions in a ground battle: a branch of ai.ts's think (same brain, clock and random
 // stream): on its seat it keeps its engineers gathering kyber, puts up supply before it reaches its
 // unit cap, builds power generators to keep power ahead of what it needs, a foot factory, a vehicle
-// factory and a research station or two, trains more engineers and a mix of the factories' units, expands with a second Command Center towards the crystal fields on
+// factory and a research station or two, upgrades its factories' tiers and takes a research or two
+// there, trains more engineers and a mix of the factories' units, expands with a second Command Center towards the crystal fields on
 // its own side of the map, finishes its sites and repairs its buildings, and fields a few Scouts that
 // scout, defend its buildings and raid the enemy's engineers and buildings (army.ts). It reads only
 // what its team knows (its own units, the land and its crystal fields, which every side sees from
@@ -50,6 +52,10 @@ const ARMY_RICH = 12
 const ARMY_MIN = 1
 const RICH = 900
 const ARMY_RESERVE = 150
+/** Research it takes at its factories (on top of their tier upgrades), and kyber it keeps back from
+ * upgrades. */
+const AI_TECHS = 2
+const JOB_RESERVE = 300
 /** A crystal field this near (tiles) one of its Command Centers is already served by it. */
 const SERVED = 13
 
@@ -180,6 +186,20 @@ export function groundThink(w: World, b: Brain) {
       const have = (id: string) => mine.filter((u) => u.t.id === id).length
       const pick = kinds.slice().sort((a, c) => have(a.id) - have(c.id))[0]
       if (pick && p.credits >= pick.cost + ARMY_RESERVE && !cantBuild(w, o, pick.id, false, f.id)) cmdBuild(w, o, pick.id, false, f.id)
+    }
+  }
+
+  // 4c. Upgrades at its factories, one job a factory: the next tier when it can pay for it (research
+  // points, and kyber with some kept back), then a research or two for their units.
+  const researched = p.techs.filter((id) => GROUND_TECH[id]).length + mine.filter((u) => u.gj && u.gj.id !== 'tier').length
+  for (const f of [...barracks, ...vfactories]) {
+    if (f.site || f.gj) continue
+    const options = [...((f.t.ground!.tier ?? 1) < TIER_MAX ? ['tier'] : []), ...(researched < AI_TECHS ? groundTechsFor(f.t.id).map((t) => t.id) : [])]
+    for (const job of options) {
+      const c = jobCost(f, job)
+      if (!c || p.credits < c.cost + JOB_RESERVE || cantJob(w, o, f, job)) continue
+      cmdGroundJob(w, o, f.id, job)
+      break
     }
   }
 
