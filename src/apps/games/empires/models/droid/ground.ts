@@ -1,4 +1,4 @@
-import { arcBand, along, box, capsule, chamfer, circle, ngon, part, rimFacets, stride, sym, treads } from '../kit.ts'
+import { arcBand, along, bevel, box, capsule, chamfer, circle, ngon, part, rimFacets, stride, sym, treads } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -325,6 +325,50 @@ export const GROUND: GroundModels = {
         ...sym(part('arm', capsule([-6, 6], [-10, -12], 2.2, 2), 'trim', 4, { lift: 12 })),
         part('rider', box(0, 8, 14, 12), 'trim', 4, { lift: 12 }),
         part('head', capsule([0, 2], [0, -16], 4.6, 3.4), 'trim', 5, { lift: 14 }),
+      ],
+    }),
+  },
+  // The Salvo droid (tier 2, Bot Factory): a two-legged grey walker, its sensor head forward, a
+  // boxy swarm rocket pod on each shoulder with its tubes showing; its feet step out in turn.
+  'd-g-salvo': {
+    w: 84,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...[0, 1, 2].flatMap((pose) => {
+          const fy = (side: number) => (pose === 0 ? 6 : pose === 1 ? (side < 0 ? -30 : 34) : side < 0 ? 34 : -30)
+          return [-1, 1].flatMap((side) => [
+            part(`foot${side < 0 ? 'L' : 'R'}${pose}`, [[side * 24 - 9, fy(side) - 12], [side * 24 + 9, fy(side) - 12], [side * 24 + 7, fy(side) + 12], [side * 24 - 7, fy(side) + 12]], 'hull2', 1, { lift: 2, pose }),
+            part(`strut${side < 0 ? 'L' : 'R'}${pose}`, capsule([side * 20, 4], [side * 24, fy(side)], 4.5, 3.5), 'metal', 2, { lift: 8, pose }),
+          ])
+        }),
+        part('body', chamfer(0, 4, 34, 42, 8), 'hull', 3, { lift: 12, facets: bevel(0, 4, 34, 42, 5), details: [{ k: 'shape', pts: box(0, 20, 22, 4), tone: 'accent' }] }),
+        ...sym(part('pod', chamfer(-27, 0, 20, 30, 4), 'hull2', 4, {
+          lift: 14,
+          details: [-1, 1].flatMap((r) => [-1, 0, 1].map((c) => ({ k: 'shape' as const, pts: circle(-27 + r * 4.5, c * 8 - 2, 2.4, 8), tone: 'dark' as const }))),
+        })),
+        part('head', capsule([0, -12], [0, -36], 7, 5), 'hull2', 5, { lift: 13, details: [{ k: 'lights', pts: [[0, -32]], r: 2.2, tone: 'accent' }] }),
+      ],
+    }),
+  },
+  // The Breaker tank (tier 2, Vehicle Foundry): a broad grey hull on two tracks, orange bands, an
+  // angular nose and exhausts at the back; its swarm rocket battery turret turns on its own.
+  'd-g-breaker': {
+    w: 84,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        ...sym(part('track', box(-32, 2, 18, 94), 'dark', 1, { lift: 2, details: treads(-40, -24, -44, 46, 14) })),
+        part('hull', [[-14, -46], [14, -46], [26, -32], [26, 40], [18, 47], [-18, 47], [-26, 40], [-26, -32]], 'hull', 2, {
+          lift: 9,
+          facets: [{ pts: [[-14, -46], [14, -46], [10, -36], [-10, -36]], slope: [0, -0.8] }, { pts: [[14, -46], [26, -32], [20, -28], [10, -36]], slope: [0.6, -0.6] }, { pts: [[-14, -46], [-26, -32], [-20, -28], [-10, -36]], slope: [-0.6, -0.6] }],
+          details: [{ k: 'shape', pts: box(0, -26, 40, 4), tone: 'accent' }, { k: 'shape', pts: box(0, 30, 40, 4), tone: 'accent' }, { k: 'line', pts: [[-20, 20], [20, 20]], minPx: 60 }],
+        }),
+        ...sym(part('exhaust', capsule([-12, 38], [-12, 46], 3.5, 3.5), 'metal', 3, { lift: 10, details: [{ k: 'lights', pts: [[-12, 45]], r: 1.6, tone: 'accent' }] })),
+        ...sym(part('plate', box(-20, 6, 8, 30), 'hull2', 3, { lift: 10 })),
       ],
     }),
   },

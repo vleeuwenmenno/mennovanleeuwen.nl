@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundMedium } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -314,6 +314,22 @@ const GROUND: UnitType[] = [
     hull: 320, cost: 105, build: 11, speed: 160, turn: 4, ground: { radius: 13 },
     role: { role: 'Raider', strong: ['armour (spine darts)', 'speed'], weak: ['light units', 'massed fire'] },
     weapons: [groundWeapon('rocket', 46, { range: 224, cooldown: 1.6, arc: 0.6 }), groundWeapon('pulse', 9, { range: 40, cooldown: 0.7, arc: 0.8 })],
+  }),
+  // Tier 2: the anti-swarm units of the Brood Chamber and the Vehicle Nest (once they reach tier 2).
+  groundMedium({
+    id: 's-g-spewer', faction: 'swarm', name: 'Spewer', sprite: 'swarm-g-spewer',
+    blurb: 'A squat six-legged beast that sprays a cone of acid from its maw, burning everything in front of it. Murderous to packs up close; it has to get there first.',
+    hull: 600, cost: 220, build: 22, speed: 74, turn: 3.2, ground: { radius: 17 },
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['range', 'heavy armour', 'buildings'] },
+    weapons: [groundWeapon('spray', 9, { range: 104, arc: 0.5 })],
+  }),
+  groundMedium({
+    id: 's-g-spores', faction: 'swarm', name: 'Spore carrier', sprite: 'swarm-g-spores',
+    blurb: 'A lumbering four-legged carrier with a spore sac on its back that turns and looses swarms of spores. They burst over packs of light units; armour shrugs them off.',
+    hull: 720, cost: 290, build: 27, speed: 78, turn: 2.6, ground: {},
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['heavy armour', 'fast raiders'] },
+    hardpoints: [{ ...baseGun('flak', 5, 4.8, 0.36, 500, groundWeapon('swarm', 5.5, { burst: 8, range: 288, splash: 40, cooldown: 4 })), key: 'tur', look: 'spore' }],
+    weapons: [],
   }),
 ]
 

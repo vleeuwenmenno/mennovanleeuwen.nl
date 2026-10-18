@@ -1,4 +1,4 @@
-import { arcBand, capsule, circle, part, rimFacets, spline, sym, thick } from '../kit.ts'
+import { arcBand, capsule, circle, gait, part, rimFacets, spline, sym, thick } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -316,6 +316,48 @@ export const GROUND: GroundModels = {
         ],
       }
     },
+  },
+  // The Spewer (tier 2, Brood Chamber): a squat six-legged beast with a heavy purple carapace, a
+  // wide maw at the front glowing with acid, and acid glands on its sides. Tripod gait.
+  's-g-spewer': {
+    w: 96,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 2],
+      parts: [
+        ...gait('leg', [{ hx: 14, hy: -14, fx: -42, fy: -32 }, { hx: 16, hy: 2, fx: -46, fy: 2 }, { hx: 14, hy: 18, fx: -42, fy: 34 }], 10, 5, 'metal', 'dark'),
+        part('body', capsule([0, -16], [0, 30], 22, 18), 'hull2', 3, { lift: 8 }),
+        part('shell', capsule([0, -6], [0, 30], 18, 15), 'accent', 4, {
+          lift: 11,
+          details: [{ k: 'line', pts: [[-16, 6], [16, 6]] }, { k: 'line', pts: [[-15, 18], [15, 18]] }, { k: 'line', pts: [[0, -6], [0, 40]], minPx: 50 }],
+        }),
+        ...sym(part('gland', circle(-19, 0, 6, 12), 'hull', 5, { lift: 12, sphere: true, details: [{ k: 'lights', pts: [[-19, 0]], r: 2.4, tone: 'aid' }] })),
+        part('head', capsule([0, -22], [0, -36], 14, 11), 'hull', 5, { lift: 10 }),
+        part('maw', [[-11, -38], [11, -38], [8, -47], [-8, -47]], 'dark', 6, { lift: 10, details: [{ k: 'lights', pts: [[-4, -43], [0, -44], [4, -43]], r: 1.8, tone: 'aid' }] }),
+      ],
+    }),
+  },
+  // The Spore carrier (tier 2, Vehicle Nest): a lumbering four-legged beast with a broad plated back
+  // and a spore sac turret on it that turns on its own; a small head low at the front. It trots.
+  's-g-spores': {
+    w: 90,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 2],
+      parts: [
+        ...gait('leg', [{ hx: 16, hy: -18, fx: -40, fy: -32 }, { hx: 16, hy: 22, fx: -40, fy: 32 }], 10, 6, 'metal', 'dark'),
+        part('tail', capsule([0, 30], [0, 48], 6, 2), 'hull2', 2, { lift: 6 }),
+        part('body', capsule([0, -22], [0, 30], 26, 22), 'hull2', 3, { lift: 9 }),
+        part('back', capsule([0, -14], [0, 28], 22, 18), 'accent', 4, {
+          lift: 12,
+          details: [{ k: 'line', pts: [[-20, -12], [20, -12]] }, { k: 'line', pts: [[-20, 18], [20, 18]] }],
+        }),
+        ...sym(part('vent', circle(-17, 22, 4, 10), 'hull', 5, { lift: 13, details: [{ k: 'lights', pts: [[-17, 22]], r: 1.6, tone: 'aid' }] })),
+        part('head', capsule([0, -30], [0, -46], 9, 6), 'hull', 5, { lift: 10, details: [{ k: 'lights', pts: [[-4, -42], [4, -42]], r: 1.5, tone: 'aid' }] }),
+      ],
+    }),
   },
   // A swarmling, one bug of a pack (GroundSpec `squad`): a purple carapace over its abdomen, a pale
   // thorax and head, mandibles, six legs. It scuttles on alternate tripods (poses 1 and 2: one

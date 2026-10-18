@@ -445,3 +445,25 @@ export function stride(id: string, hx: number, hy: number, rest: [number, number
     }
   return out
 }
+
+/**
+ * Legs that walk in two alternating sets (Part `pose`), for beasts and bugs: each leg from its hip
+ * (`hx` either side of the middle, at `hy`) to its foot (`fx`, `fy` on the left side, mirrored on
+ * the right), standing in pose 0; in pose 1 the legs of set A swing `swing` forward and the others
+ * back, in pose 2 the other way round. Set A holds the left legs at even indices and the right legs
+ * at odd ones, a trot on four legs and a tripod gait on six. A claw at each foot.
+ */
+export function gait(id: string, legs: { hx: number; hy: number; fx: number; fy: number }[], swing: number, r: number, tone: Tone, claw: Tone): Part[] {
+  const out: Part[] = []
+  for (const pose of [0, 1, 2])
+    for (const side of [-1, 1])
+      legs.forEach((l, j) => {
+        const a = (j % 2 === 0) === side < 0
+        const fy = l.fy + (pose === 0 ? 0 : (pose === 1) === a ? -swing : swing)
+        const fx = side * Math.abs(l.fx)
+        const name = `${id}${side < 0 ? 'L' : 'R'}${j}${pose}`
+        out.push(part(name, capsule([side * l.hx, l.hy], [fx, fy], r, r * 0.6), tone, 1, { lift: 5, pose }))
+        out.push(part(`${name}claw`, circle(fx, fy, r * 0.8, 8), claw, 2, { lift: 5, pose }))
+      })
+  return out
+}

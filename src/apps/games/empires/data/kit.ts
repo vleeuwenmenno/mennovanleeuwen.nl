@@ -295,7 +295,7 @@ export const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: numb
  * kyber, which engineers gather from crystal fields (a ground battle's credits), in the space game's
  * ballpark: an engineer squadron there costs 300 for three craft (one vehicle here, 150 or so); a
  * yard costs 900 and a Command Center, a whole new base, 1,200. */
-type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number; hardpoints?: Hardpoint[] }
+type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; pop?: number; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number; hardpoints?: Hardpoint[] }
 
 /** An engineer: a small unarmed vehicle (size class 1) that gathers kyber, puts up buildings and
  * repairs them. */
@@ -394,6 +394,17 @@ export const groundSquad = (o: GroundWritten & { speed: number; turn: number; we
     ground: { size: 1, radius: 14, accel: 200, sight: 8, armour: 'light', tier: 1, look: squad.member, squad, ...o.ground },
   }
 }
+
+/** A tier 2 unit, the anti-swarm unit of a factory: medium size and armour, more parts, usually a
+ * turret that turns on its own, weapons that hurt groups (splash, salvos, sprays); about twice a
+ * tier 1 unit's cost, time and pop. (A tier 2 squad is a groundSquad with `tier: 2`: squads stay
+ * light.) */
+export const groundMedium = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role'] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.8, size: Math.round((o.ground.radius ?? 19) * 2.5), shield: 0, regen: 0, pop: 2, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 9) * 32, hardpoints: [], engines: [],
+  ...o,
+  ground: { size: 2, radius: 19, accel: 180, sight: 9, armour: 'medium', tier: 2, ...o.ground },
+})
 
 // --- Stations ---------------------------------------------------------------------------------------
 
