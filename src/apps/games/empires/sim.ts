@@ -13,6 +13,7 @@ import {
 import type { Brain } from './ai.ts'
 import type { Eye } from './ground/fog.ts'
 import type { Crystal, Foot, GroundMove, GroundSnap, GroundState, KnownBuilding } from './ground/world.ts'
+import type { GroundShot } from './ground/combat.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
 // economy and capture beacons. The game screen and the headless balance sims both drive it by
@@ -78,7 +79,10 @@ export type Mods = {
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
  * `focus` is a target this one gun was told to fire on first. */
-export type Gun = { w: Weapon; hp: number; cd: number; burst: number; burstT: number; target: number; aim: number; focus: number }
+export type Gun = { w: Weapon; hp: number; cd: number; burst: number; burstT: number; target: number; aim: number; focus: number
+  /** Ground battles: seconds a beam or a spray has held on (ground/combat.ts). Absent on every space gun. */
+  hold?: number
+}
 
 export type Unit = {
   id: number
@@ -221,6 +225,8 @@ export type Unit = {
   eye?: Eye
   /** Ground battles, engineers: the kyber it carries to a Command Center. */
   carry?: number
+  /** Ground battles: a spray's burn still eating at it (hull points a second, seconds left, whose). */
+  burn?: { dps: number; left: number; by: Owner; from: number }
 }
 
 /**
@@ -448,6 +454,8 @@ export type SimEvent =
   | { k: 'gift'; from: Owner; to: Owner; amount: number }
   /** A defense station finished an upgrade or fitted a module (`what` says which). */
   | { k: 'fortified'; owner: Owner; unit: number; what: string; x: number; y: number }
+  /** Ground battles: an artillery shell or a swarm rocket burst over (x, y), hurting what is within `r`. */
+  | { k: 'splash'; x: number; y: number; r: number; owner: Owner }
   /** Ground battles: a unit rolled out of building `from`'s door. */
   | { k: 'trained'; owner: Owner; unit: string; x: number; y: number; from: number }
   /** Ground battles: kyber crystal field `field` (at x, y) ran dry. */
@@ -514,6 +522,8 @@ export type World = {
   ground?: GroundState
   /** Ground battles: each team's memory of other teams' buildings, as last seen. */
   known?: KnownBuilding[][]
+  /** Ground battles: shots in flight (ground/combat.ts). */
+  gshots?: GroundShot[]
   /** Ground battles: the kyber crystal clusters standing on the crystal fields, with the kyber each
    * has left (ground/world.ts Crystal). */
   crystals?: Crystal[]
@@ -3151,7 +3161,7 @@ function salvage(w: World, dt: number) {
   if (w.wrecks.some((h) => h.left <= 0 || h.decay <= 0)) w.wrecks = w.wrecks.filter((h) => h.left > 0 && h.decay > 0)
 }
 
-function kill(w: World, u: Unit, by: Owner | -1) {
+export function kill(w: World, u: Unit, by: Owner | -1) {
   if (u.dead) return
   u.dead = true
   w.events.push({ k: 'boom', x: u.x, y: u.y, tier: u.t.tier, owner: u.owner, size: u.t.size })

@@ -38,6 +38,7 @@ import {
 } from './nav.ts'
 import { buildGroundMap } from './terrain.ts'
 import { groundThink } from './think.ts'
+import { combatHash, engage, giveUp, groundCombat } from './combat.ts'
 import { testField, testMesa } from './testmaps.ts'
 import { TF, TILE, canStep, type GroundMap, type Pt } from './types.ts'
 
@@ -451,7 +452,7 @@ function done(u: Unit) {
 /** Where the current order sends `u`: a point, a building to work on (`job`), a Command Center to
  * drop kyber off at (`drop`), or a spot on a crystal field to mine (`mine`, the field). Null: it has
  * nowhere to go. */
-type Goal = { x: number; y: number; job?: Unit; drop?: Unit; mine?: number }
+type Goal = { x: number; y: number; job?: Unit; drop?: Unit; mine?: number; /** After a target, or back to its spot (combat.ts engage). */ fight?: boolean }
 function goal(w: World, u: Unit): Goal | null {
   const o = u.order
   // A new order (another building, another field) starts afresh: no spot or load run left over.
@@ -482,25 +483,32 @@ function steer(w: World, u: Unit) {
   const t = u.t
   const g = moveOf(u)
   const nav = gs(w).nav
-  if (u.order.k === 'idle' || u.order.k === 'guard') {
+  // The fight comes first (combat.ts): an attack order whose target is gone is done; in reach, the
+  // unit stands and fires (turning to bring fixed guns to bear); else it drives after the target.
+  const fight = engage(w, u)
+  if (fight === 'done') return done(u)
+  if ((fight && fight.hold) || (!fight && (u.order.k === 'idle' || u.order.k === 'guard'))) {
     u.v = Math.max(0, u.v - spec(t).accel * STEP)
     if (u.v > 0) drive(w, u, u.x + M.cos(u.a) * u.v * STEP, u.y + M.sin(u.a) * u.v * STEP)
+    if (fight?.face !== undefined) u.a = wrap(u.a + clamp(wrap(fight.face - u.a), -t.turn * STEP, t.turn * STEP))
     return
   }
-  const to = goal(w, u)
+  const to: Goal | null = fight ? { x: fight.x, y: fight.y, fight: true } : goal(w, u)
   if (!to) return done(u)
   if (to.job && footDist(to.job, u.x, u.y) <= REACH) return work(u, to.job)
   if (to.drop && footDist(to.drop, u.x, u.y) <= REACH) return dropOff(w, u)
   if (to.mine !== undefined && M.hypot(to.x - u.x, to.y - u.y) <= MINE_REACH) return mine(w, u, to.mine)
-  if (g.pv !== nav.ver || !u.route || u.route.x !== to.x || u.route.y !== to.y) {
+  // (After a moving target, the way is found again only once it has moved a tile off it.)
+  const stale = !u.route || (to.fight ? (u.route.x - to.x) * (u.route.x - to.x) + (u.route.y - to.y) * (u.route.y - to.y) > TILE * TILE : u.route.x !== to.x || u.route.y !== to.y)
+  if (g.pv !== nav.ver || stale) {
     const p = findPath(nav, size(u), u.x, u.y, to.x, to.y)
     u.route = { x: to.x, y: to.y, pts: p.pts, short: p.short }
     g.pv = nav.ver
     g.stuck = 0
     g.best = Infinity
-    if (!p.pts.length) return done(u)
+    if (!p.pts.length) return to.fight ? giveUp(u) : done(u)
   }
-  const pts = u.route.pts
+  const pts = u.route!.pts
   let p = pts[0]
   let last = pts.length === 1
   let dx = p.x - u.x
@@ -542,7 +550,7 @@ function steer(w: World, u: Unit) {
     }
     if (++g.tries > TRIES) {
       u.v = 0
-      return done(u)
+      return to.fight ? giveUp(u) : done(u)
     }
     g.pv = -1
     g.stuck = 0
@@ -563,6 +571,11 @@ function steer(w: World, u: Unit) {
 function arrive(w: World, u: Unit, to: Goal) {
   const o = u.order
   const { job } = to
+  // A chase or a way back ends where it is: the fight decides again next tick.
+  if (to.fight) {
+    u.route = null
+    return
+  }
   if (job) {
     if (footDist(job, u.x, u.y) <= REACH) return work(u, job)
     return done(u)
@@ -927,8 +940,8 @@ export function groundFormation(w: World, us: Unit[], x: number, y: number): [Un
  * add nothing. */
 export const CREW_RATE = [0, 1, 1.7, 2.2, 2.5]
 /** A repair goes this many times as fast as building the same thing (one engineer, from nothing to
- * a whole hull). Repairs are free. */
-const REPAIR_RATE = 1.5
+ * a whole hull): half as fast, so a building under fire can be outgunned. Repairs are free. */
+const REPAIR_RATE = 0.5
 /** Seconds an engineer waits for our own units to drive off a site before it starts work anyway
  * (whatever is still on it is then pushed off). Enemy units on it hold the work up while they stay. */
 const CLEAR_WAIT = 3
@@ -1094,6 +1107,7 @@ export function groundTick(w: World, dt: number) {
     if (!unstick(w, u)) steer(w, u)
   }
   separate(w)
+  groundCombat(w, dt)
   works(w, dt)
 }
 
@@ -1433,6 +1447,7 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
     for (const e of eyes) n += e
     int(n)
   }
+  combatHash(w, int, num)
 }
 
 /** What a snapshot keeps of the terrain layer: the nav grid's version and its stamps not yet applied

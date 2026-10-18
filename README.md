@@ -3484,7 +3484,7 @@ size class and a small test building are registered by the check scripts only.
 **The first units** are one Engineer, one Command Center and one supply building a faction.
 Engineers are small vehicles and drones (no walking animation): size class 1, unarmed, sight 8
 tiles; they gather kyber, build and repair. Command Centers stand on 6 × 6 tiles, see 10 tiles, train
-their faction's engineer, take in the kyber engineers gather and support 5 units. Supply buildings
+their faction's engineer and Scout (see Ground combat), take in the kyber engineers gather and support 5 units. Supply buildings
 stand on 3 × 3 tiles and support 10 more each. Prices are in kyber (see
 below), near the space game's: a battle starts with 1,600.
 
@@ -3530,7 +3530,8 @@ it, spread out, nearest first, and work starts when the first arrives: our own u
 are sent off it first (after 3 seconds whatever is left is pushed off), enemy units on it hold the
 work up, then the footprint stamps the grid. The site's hull grows from a tenth with the work, and
 more engineers build faster: 1, 1.7, 2.2 and 2.5 times as fast for one to four. Engineers also repair
-our damaged buildings, free, half again as fast as building. Calling a site off (`cancelSite`)
+our damaged buildings, free, at half the speed of building (so a building under fire can be
+outgunned). Calling a site off (`cancelSite`)
 refunds it as a space site: in full before work starts, less the further along it is. A destroyed
 site or building frees its stamp; a player with no building left, finished or going up, is out.
 
@@ -3566,18 +3567,97 @@ to its field once the building is done. A battle saved before clusters gets them
 loads, each field's kyber shared out as it was.
 
 **The AI** is the space game's (`ai.ts`: same brain, think clock and random stream) with decisions
-of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)), passive for
-now: it keeps every idle engineer gathering at the crystal field nearest its Command Centers, puts
+of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)): it keeps every idle engineer gathering at the crystal field nearest its Command Centers, puts
 up a supply building beside a Command Center (away from the fields) once fewer than three more units
 fit under its cap, trains engineers where the queue is shortest (seven a Command Center, fourteen at
 most), saves up and expands with a second Command Center beside a crystal field on its own side that
 none of its Command Centers serves yet, sends idle engineers to its sites and damaged buildings
 (taking a gatherer off its field for a site nobody is building), calls off a site nobody manages to
-start within 90 seconds, and builds nothing hostile. It reads only what its team knows and gives the
-same orders a player does, so every copy of a battle makes the same choices.
+start within 90 seconds, and fields a few Scouts (see Ground combat below). It reads only what its
+team knows and gives the same orders a player does, so every copy of a battle makes the same choices.
+
+### Ground combat
+
+Ground units fight with the space game's machinery
+([`ground/combat.ts`](src/apps/games/empires/ground/combat.ts), run from the ground tick): attack
+and attack-move orders, stances (hold, maneuver, roam), focus fire, target picking, hits and misses,
+kills, veterancy and rank-ups, health bars, wrecks and debris all work as in space. What is the
+ground's own:
+- **Sight.** A unit only fires at what its team sees. Artillery is the exception: it fires at
+  anything an ally sees, so a Scout can spot for it.
+- **Turrets and fixed guns.** Turrets turn through the hardpoints and mounts the models carry; guns
+  in a hull (a Scout's) fire only within their arc, so the unit turns to face its target.
+- **Chasing.** An idle unit takes on enemies that come within 4 tiles, chases them up to 9 tiles
+  from where it was, then drives back. A unit sent at a building turns on enemy units in its reach
+  first.
+- **Dying.** A destroyed unit breaks up into a wreck and debris; a building burns as it loses hull
+  and collapses when destroyed. Its stamp comes off the nav grid at the next tick's flush, the same
+  fixed point as a mined-out crystal cluster's.
+
+**Seven weapons** (`GROUND_WEAPONS` in
+[`data/kit.ts`](src/apps/games/empires/data/kit.ts)), each borrowing a space weapon's sound and
+sparks, in the firing side's colours:
+
+| Weapon | Reach, reload | How it works |
+| --- | --- | --- |
+| Pulse | 6 tiles, 0.6 s | Fast bolts in the side's bolt colour |
+| Beam | 4 tiles, continuous | Holds on its target; its damage ramps up to twice over 2 seconds |
+| Rockets | 8 tiles, 2.6 s | Slow, homing, with smoke trails |
+| Heavy shell | 8 tiles, 2.8 s | A fast cannon shell, poor against light vehicles |
+| Artillery | 20 tiles, 4.5 s | Lobbed in an arc, 2-tile splash, no closer than 6 tiles, lands with a scatter that grows with range |
+| Swarm rockets | 8 tiles, 4 s | A salvo of 6 small rockets, each with a small splash |
+| Spray | 3 tiles, continuous | A cone (flame, gas or acid by faction) that hurts everything in it and leaves it burning for 2 seconds |
+
+**Armour.** Every ground unit has an armour class: light, medium, heavy, or structure for
+buildings. The ground has its own damage and accuracy tables (`GROUND_VS` and `GROUND_ACC`), so the
+space game's tables, tiers and hashes are untouched. Damage is multiplied by:
+
+| Weapon | Light | Medium | Heavy | Structure |
+| --- | --- | --- | --- | --- |
+| Pulse | 1 | 0.7 | 0.35 | 0.4 |
+| Beam | 0.6 | 1.1 | 1.3 | 0.8 |
+| Rockets | 0.5 | 1 | 1.4 | 1.3 |
+| Heavy shell | 0.6 | 1 | 1.4 | 1 |
+| Artillery | 0.8 | 0.9 | 0.7 | 1.5 |
+| Swarm rockets | 1.3 | 0.8 | 0.4 | 0.5 |
+| Spray | 1.4 | 0.9 | 0.5 | 0.3 |
+
+Shots miss light vehicles more often: rockets hit them 55% of the time and heavy shells 40%, while
+pulse bolts hit 90%. Beams, sprays, artillery and swarm rockets don't roll to hit (artillery and
+swarm rockets land where they were aimed, give or take their scatter). A miss flies wide.
+
+**Scouts** are the first fighters, trained at the Command Center: fast, light armour, sight 12
+tiles, pop 1, cheap, and small and simple (tier 1 is small and simple, tier 2 medium, tier 3 the
+big ones).
+
+| Faction | Scout | Hull | Cost, time | Speed | Guns |
+| --- | --- | --- | --- | --- | --- |
+| Republic | Pathfinder speeder: a slim repulsor wedge | 140 | 90, 9 s | 165 | Twin pulse lasers along its nose (6 each) |
+| Confederacy | Probe droid: a hovering sensor head (sight 13) | 120 | 85, 8 s | 150 | Pulse blaster (11, 0.7 s) |
+| Swarm | Skitterling: a six-legged runner | 110 | 80, 8 s | 175 | Spit bolts (8, 0.5 s) |
+
+**Command Centers** carry a light defence turret on their roof: pulse, 14 damage, 10 tiles, every
+0.8 seconds.
+
+**Winning.** A side is out once every one of its buildings is destroyed, finished or going up; the
+last side standing wins ("Every enemy building is destroyed.").
+
+**The AI's Scouts** ([`ground/army.ts`](src/apps/games/empires/ground/army.ts)): once it has four
+engineers it trains three Scouts (six once it has 700 kyber), one at a time, keeping 200 kyber back.
+It turns all of them on any enemy that comes within 12 tiles of its buildings or engineers. One
+Scout scouts: the enemy's start first, then the map's spawns and crystal fields. The rest, two or
+more at a time, go after enemy engineers they see, else the enemy buildings they know of, unarmed
+ones first and armed ones too once there are four.
+
+**The weapon test** (dev builds only, the F9 cheat panel's *Weapon test* in a ground battle,
+[`ground/testWeapons.ts`](src/apps/games/empires/ground/testWeapons.ts)) spawns one test unit per
+weapon for us and for the first enemy at the camera, in two rows facing each other (artillery
+further back), and sends them at each other: every weapon's effects side by side. The test units
+are each faction's Scout with the weapon on a turret, medium armour and 600 hull, and appear in no
+lobby or Codex.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), each in step across two copies, a snapshot thaw and a replay; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
 pnpm check:ground-models # every ground unit has a model through the model lookup, and every crystal cluster shape one, sound and the same every time
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
@@ -3671,7 +3751,8 @@ view (the battle screen must never scroll, and the panels laid out round each ot
 no React update loop, few commits); a ground battle on Dustfall Ridge on the battle screen (dev
 builds, as the check's server is) with three dozen vehicles of both sides driving across the low
 ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
-canvas's: the ground layer is a canvas of its own under it); the WebGL2 ground layer alone on
+canvas's: the ground layer is a canvas of its own under it); the same battle with the dev weapon
+test spawned three times over, 42 test units fighting with all seven ground weapons; the WebGL2 ground layer alone on
 Ashwater Crossing, panning over the river with the water moving (it counts its own GL draw calls
 and texture uploads, which the canvas counters don't see); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and

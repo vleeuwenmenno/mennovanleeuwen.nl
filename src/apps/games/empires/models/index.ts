@@ -29,11 +29,11 @@ const FACTION_MODELS: Record<FactionId, FactionModels> = { republic, droid, swar
  * with the level. */
 const DEFS: Record<string, ModelDef> = Object.assign({}, ...FACTION_IDS.map((f) => FACTION_MODELS[f].defs))
 
-export const hasModel = (t: UnitType) => t.id in DEFS || (!!t.ground && !!groundModels?.ids().includes(t.id))
+export const hasModel = (t: UnitType) => t.id in DEFS || (!!t.ground && !!groundModels?.has(t))
 
 /** Ground battles' models (models/ground.ts), once loaded: it fills this in when it is imported, so a
  * build that never offers ground battles never carries them. */
-type GroundModelSet = { ids(): string[]; build(id: string): Model; model(id: string): Model | null }
+type GroundModelSet = { ids(): string[]; has(t: UnitType): boolean; build(t: UnitType): Model; model(t: UnitType): Model | null }
 let groundModels: GroundModelSet | null = null
 export const setGroundModels = (g: GroundModelSet) => void (groundModels = g)
 
@@ -47,7 +47,7 @@ const built = new WeakMap<UnitType, Map<string, Model | null>>()
  * picks a design variant (the station's level-4 frame); left out, the design's default. */
 export function modelFor(t: UnitType, style = ''): Model | null {
   // Ground battles' units and buildings have models of their own (models/ground.ts).
-  if (t.ground) return groundModels?.model(t.id) ?? null
+  if (t.ground) return groundModels?.model(t) ?? null
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
@@ -90,7 +90,7 @@ const DETACH_BY_DEFAULT: AnyDesign[] = ['flak', 'pd', 'quad', 'spore', 'parasite
 export function buildModel(t: UnitType, style?: string): Model {
   if (t.ground) {
     if (!groundModels) throw new Error(`Ground models are not loaded (models/ground.ts): ${t.id}`)
-    return groundModels.build(t.id)
+    return groundModels.build(t)
   }
   const def = DEFS[t.id]
   if (!def) throw new Error(`No model for ${t.id}`)

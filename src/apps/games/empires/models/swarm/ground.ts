@@ -131,4 +131,29 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // The Skitterling: a quick six-legged bug, a low armoured back, long forelegs, and a glowing acid
+  // gland at its mouth that it spits bolts from.
+  's-g-scout': {
+    w: 70,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        // Six long, thin legs, the front pair reaching forward.
+        ...[[-14, -26, -34, -33], [0, -30, -4, -33], [16, -28, 34, -33]].flatMap(([y, x1, y1, x2], i) =>
+          sym(part(`leg${i}`, thick([[-8, y], [x1, y + y1 / 6], [x2, y + 14 + i * 4]], 3.5, 1.5), 'metal', 1, { lift: 2 })),
+        ),
+        // The abdomen, a pale plated back, then the head.
+        part('abdomen', circle(0, 20, 18, 22, 26), 'hull2', 2, {
+          lift: 4,
+          sphere: true,
+          details: [{ k: 'line', pts: [[-12, 12], [12, 12]] }, { k: 'line', pts: [[-12, 24], [12, 24]] }],
+        }),
+        part('back', circle(0, -8, 15, 20, 18), 'hull', 3, { lift: 5, sphere: true, details: [{ k: 'shape', pts: circle(0, -8, 3, 10, 6), tone: 'accent' }] }),
+        part('head', circle(0, -30, 8, 16, 9), 'metal', 4, { lift: 5, sphere: true }),
+        ...sym(part('mandible', capsule([-4, -36], [-8, -46], 2.4, 1.2), 'accent', 4, { lift: 5 })),
+        part('gland', circle(0, -42, 4, 12), 'aid', 5, { lift: 6, glow: true }),
+      ],
+    }),
+  },
 }

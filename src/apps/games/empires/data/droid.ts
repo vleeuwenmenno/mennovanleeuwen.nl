@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundScout, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -151,12 +151,20 @@ const GROUND: UnitType[] = [
   groundCenter({
     id: 'd-g-center', faction: 'droid', name: 'Command Hub', sprite: 'droid-g-center',
     blurb: 'An eight-sided industrial deck round a sphere core. It trains builder droids, takes in the kyber they cut and supports 5 units.',
-    hull: 5000, cost: 1200, build: 60, ground: { trains: ['d-g-engineer'] },
+    hull: 5000, cost: 1200, build: 60, ground: { trains: ['d-g-engineer', 'd-g-scout'] },
+    // A light defence turret on its roof (ground/combat.ts).
+    hardpoints: [{ ...gun('flak', 2.9, 7.1, 0.13, 900, groundWeapon('pulse', 14, { range: 320, cooldown: 0.8 })), key: 'tur' }],
   }),
   groundSupply({
     id: 'd-g-supply', faction: 'droid', name: 'Supply Relay', sprite: 'droid-g-supply',
     blurb: 'A hexagonal power and parts relay with a humming mast. Each one supports 10 more units.',
     hull: 1400, cost: 100, build: 25, ground: {},
+  }),
+  groundScout({
+    id: 'd-g-scout', faction: 'droid', name: 'Probe droid', sprite: 'droid-g-scout',
+    blurb: 'A hovering probe droid with a pulse blaster under its sensor head. Fast and far-sighted, cheap and thin-skinned: a scout and an engineer hunter.',
+    hull: 120, cost: 85, build: 8, speed: 150, turn: 5.5, ground: { radius: 10, sight: 13 },
+    weapons: [groundWeapon('pulse', 11, { arc: 0.4, cooldown: 0.7 })],
   }),
 ]
 

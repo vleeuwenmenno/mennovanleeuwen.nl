@@ -141,4 +141,29 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // The probe droid: a dark round sensor head on its repulsors, a red photoreceptor, four thin arms
+  // trailing behind and the pulse blaster slung under its front.
+  'd-g-scout': {
+    w: 64,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        // The trailing arms, bent back and out.
+        ...sym(part('armOut', capsule([-12, 10], [-30, 40], 2.4, 1.6), 'metal', 1, { lift: 6 })),
+        ...sym(part('armIn', capsule([-6, 16], [-12, 46], 2, 1.4), 'metal', 1, { lift: 6 })),
+        // The blaster under its chin.
+        part('blaster', capsule([0, -18], [0, -46], 4, 3), 'dark', 2, { lift: 10, details: [{ k: 'shape', pts: box(0, -40, 5, 3), tone: 'accent' }] }),
+        // The head: a sphere of dark plating with an orange band, its repulsor collar under it.
+        part('collar', circle(0, 0, 27, 24), 'hull2', 3, { lift: 10 }),
+        part('head', circle(0, -2, 22, 26), 'hull', 4, {
+          lift: 14,
+          sphere: true,
+          details: [{ k: 'line', pts: circle(0, -2, 15, 20), minPx: 40 }, { k: 'shape', pts: box(0, 10, 22, 3), tone: 'accent' }],
+        }),
+        part('eye', circle(0, -14, 5, 14), 'glass', 5, { lift: 15, details: [{ k: 'lights', pts: [[0, -14]], r: 2, tone: 'ember' }] }),
+        part('antenna', capsule([8, 4], [16, 18], 1, 0.7), 'metal', 5, { lift: 16 }),
+      ],
+    }),
+  },
 }

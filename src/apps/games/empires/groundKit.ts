@@ -40,6 +40,9 @@ export type GroundKit = {
   crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }, me: Owner, color: string): void
   /** Kyber an engineer carries in one load. */
   carry: number
+  /** The ground weapons' shots, beams, sprays and burns (ground/effects.ts), in world coordinates;
+   * `clock`: the screen's seconds, for flicker. */
+  effects(ctx: CanvasRenderingContext2D, w: World, me: Owner, zoom: number, clock: number): void
 }
 
 let kit: GroundKit | null = null

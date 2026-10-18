@@ -305,6 +305,33 @@ const skirmishHuge: Scene = {
 
 // --- A ground battle ---
 
+/** Launches a ground battle on Dustfall Ridge (the Republic against the droids) through the lobby
+ * and waits until its terrain has loaded, the clock stopped (manual frames). */
+async function launchGround(page: Page, url: string) {
+  await page.send('Page.navigate', { url: `${url}/play/empires` })
+  await page.waitFor(MENU)
+  // The lobby as it was left: a ground battle on Dustfall Ridge, the Republic against the droids.
+  const setup = {
+    mode: 'ground', groundMap: 'dustfall-ridge', map: 'vanth', credits: 2500,
+    slots: [
+      { kind: 'you', faction: 'republic', team: 0, difficulty: 'easy', profile: 'balanced' },
+      { kind: 'ai', faction: 'droid', team: 1, difficulty: 'easy', profile: 'balanced' },
+    ],
+  }
+  await page.eval(`localStorage.setItem('mvlos.empires.lobby', ${JSON.stringify(JSON.stringify(setup))})`)
+  await press(page, '.ew-menu-btn', 'Single player')
+  await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
+  await press(page, '.ew-menu-btn', 'Skirmish')
+  // Ground battles load in the lobby (the Ground switch lights once they have).
+  await page.waitFor(`[...document.querySelectorAll('.ew-seg button.is-on')].some((b) => b.textContent.includes('Ground')) && !!document.querySelector('.ew-go')`)
+  await page.eval(`__perf.manual(11)`)
+  await press(page, '.ew-go', 'Launch battle')
+  // The terrain's pictures load in real time with the clock stopped.
+  await settleUntil(page, `!!window.__ew && !!window.__ewGround && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth`)
+  await page.eval(`window.__ewGround.ready.then(() => (window.__groundReady = true))`)
+  await settleUntil(page, `!!window.__groundReady`)
+}
+
 /**
  * A ground battle (dev builds only, as the perf check's server is) on Dustfall Ridge, through the
  * space game's battle screen: three dozen vehicles of both sides driving across the low ground in
@@ -315,28 +342,7 @@ const groundBase: Scene = {
   name: 'ground-base',
   about: 'Ground battle on Dustfall Ridge, 36 vehicles driving over terrain, fog on, camera panning',
   async run(page, url) {
-    await page.send('Page.navigate', { url: `${url}/play/empires` })
-    await page.waitFor(MENU)
-    // The lobby as it was left: a ground battle on Dustfall Ridge, the Republic against the droids.
-    const setup = {
-      mode: 'ground', groundMap: 'dustfall-ridge', map: 'vanth', credits: 2500,
-      slots: [
-        { kind: 'you', faction: 'republic', team: 0, difficulty: 'easy', profile: 'balanced' },
-        { kind: 'ai', faction: 'droid', team: 1, difficulty: 'easy', profile: 'balanced' },
-      ],
-    }
-    await page.eval(`localStorage.setItem('mvlos.empires.lobby', ${JSON.stringify(JSON.stringify(setup))})`)
-    await press(page, '.ew-menu-btn', 'Single player')
-    await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
-    await press(page, '.ew-menu-btn', 'Skirmish')
-    // Ground battles load in the lobby (the Ground switch lights once they have).
-    await page.waitFor(`[...document.querySelectorAll('.ew-seg button.is-on')].some((b) => b.textContent.includes('Ground')) && !!document.querySelector('.ew-go')`)
-    await page.eval(`__perf.manual(11)`)
-    await press(page, '.ew-go', 'Launch battle')
-    // The terrain's pictures load in real time with the clock stopped.
-    await settleUntil(page, `!!window.__ew && !!window.__ewGround && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth`)
-    await page.eval(`window.__ewGround.ready.then(() => (window.__groundReady = true))`)
-    await settleUntil(page, `!!window.__groundReady`)
+    await launchGround(page, url)
     const spawned = await page.eval<number>(`(async () => {
       const sim = await import('/src/apps/games/empires/sim.ts')
       const nav = await import('/src/apps/games/empires/ground/nav.ts')
@@ -384,6 +390,51 @@ const groundBase: Scene = {
         'main thread ms / frame': msPerFrame(pan),
       },
       shots: { 'ground-base': shot },
+    }
+  },
+}
+
+// --- A ground fight ---
+
+/**
+ * The same ground battle with a fight in it: the dev weapon test (ground/testWeapons.ts) three times
+ * over on the low ground, 42 test units of both sides carrying all seven ground weapons (pulse,
+ * beam, rockets, shells, artillery, swarm rockets, spray) shooting it out, with their shots, beams,
+ * spray cones, splashes, burns and wrecks. The camera holds on the fight.
+ */
+const groundCombat: Scene = {
+  name: 'ground-combat',
+  about: 'Ground battle on Dustfall Ridge, 42 test units fighting with all seven ground weapons',
+  async run(page, url) {
+    await launchGround(page, url)
+    const spawned = await page.eval<number>(`(async () => {
+      const test = await import('/src/apps/games/empires/ground/testWeapons.ts')
+      const w = __ew.world
+      const cx = w.w * 0.45, cy = w.h * 0.55
+      let made = 0
+      for (const dy of [-260, 0, 260]) made += test.spawnWeaponTest(w, 0, 1, cx, cy + dy).length
+      Object.assign(__ew.cam, { x: cx, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 1800)) })
+      return made
+    })()`)
+    // They close and open fire, then a second of the fight is measured.
+    await page.eval(`__perf.frames(240)`)
+    const fight = await measure(page, 60)
+    const after = await page.eval<{ mb: number; nodes: number; shots: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, nodes: document.getElementsByTagName('*').length, shots: (__ew.world.gshots ?? []).length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 42) throw new Error(`Only ${spawned} of 42 test units spawned`)
+    return {
+      metrics: {
+        ...canvasMetrics(fight, 60),
+        'bitmap cache MB': count(after.mb),
+        'React commits / sim s': commitsPerSec(fight, 60),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(fight),
+      },
+      shots: { 'ground-combat': shot },
     }
   },
 }
@@ -753,7 +804,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, groundLayer, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, groundCombat, groundLayer, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))
