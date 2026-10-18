@@ -1,5 +1,5 @@
 import { mirrored, rng, type Pt } from '../maps.ts'
-import { LEVELS, TF, TILE, terrainIndex, type GroundMap, type GroundMapDef, type Prop, type TileGrid, type TilePt } from './types.ts'
+import { LEVELS, TF, TILE, terrainIndex, type GroundFeatures, type GroundMap, type GroundMapDef, type Prop, type TileGrid, type TilePt } from './types.ts'
 
 // Builds a ground map from its sketch (types.ts GroundMapDef): the tile grid with heights, ramps,
 // water, deposits and terrain, and the props scattered over it. This is sim data: the ground sim
@@ -705,13 +705,56 @@ type FeatureTile = { level: number; ramp: number; rampLo: number; rampHi: number
 /** Half the size of a ruin's foundation, in tiles: wide as drawn, turned by the mirror. */
 export const RUIN_HALF: TilePt = [1.6, 1.15]
 
+/** A map's shapes with every symmetric copy added (and copies that land on themselves dropped);
+ * `ruinTurn` says which ruins the mirror turned (their foundation is tall, not wide). */
+export type ExpandedFeatures = Required<GroundFeatures> & { ruinTurn: boolean[] }
+
+const expanded = new WeakMap<GroundMapDef, ExpandedFeatures>()
+/**
+ * The map's shapes, each copied by the map's symmetry, so a map (or the editor) may draw them on
+ * any side: buildGroundMap and the ground layer both read these. Copies that fall on top of each
+ * other (anything on a mirror line) are kept once.
+ */
+export function expandFeatures(def: GroundMapDef): ExpandedFeatures {
+  const hit = expanded.get(def)
+  if (hit) return hit
+  const f = def.features ?? {}
+  const n = def.cols
+  const turns = (p: TilePt): TilePt[] =>
+    def.mirror === 'diagonal' ? [p, [n - p[1], def.rows - p[0]]] : mirrored({ w: def.cols, h: def.rows, sym: def.sym }, { x: p[0], y: p[1] }).map((q) => [q.x, q.y] as TilePt)
+  const k = turns([0, 0]).length
+  const at = (p: TilePt, i: number): TilePt => turns(p)[i] ?? p
+  const key = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === 'number' ? Math.round(x * 2) / 2 : x))
+  const uniq = <T>(list: T[], id: (t: T) => string) => list.filter((t, i) => list.findIndex((o) => id(o) === id(t)) === i)
+  const sorted = (pts: TilePt[]) => key([...pts].map((q) => [Math.round(q[0] * 2) / 2, Math.round(q[1] * 2) / 2]).sort((a, b) => a[0] - b[0] || a[1] - b[1]))
+  const ends = (a: TilePt, b: TilePt) => [key(a), key(b)].sort().join('|')
+  const all = <T>(list: T[] | undefined, fn: (t: T, i: number) => T) => (list ?? []).flatMap((t) => Array.from({ length: k }, (_, i) => fn(t, i)))
+  const ruins = (f.ruins ?? []).flatMap((p) => Array.from({ length: k }, (_, i) => ({ p: at(p, i), turn: def.mirror === 'diagonal' && i === 1 })))
+  const ruinsU = uniq(ruins, (r) => key(r.p))
+  const out: ExpandedFeatures = {
+    plateaus: uniq(all(f.plateaus, (p, i) => ({ level: p.level, pts: p.pts.map((q) => at(q, i)) })), (p) => p.level + sorted(p.pts)),
+    ramps: uniq(all(f.ramps, (r, i) => ({ from: at(r.from, i), to: at(r.to, i), width: r.width })), (r) => key([r.from, r.to])),
+    rivers: uniq(all(f.rivers, (r, i) => ({ pts: r.pts.map((q) => at(q, i)), width: r.width })), (r) => ends(r.pts[0], r.pts[r.pts.length - 1]) + sorted(r.pts) + r.width),
+    bridges: uniq(all(f.bridges, (b, i) => ({ from: at(b.from, i), to: at(b.to, i), width: b.width })), (b) => ends(b.from, b.to)),
+    fords: uniq(all(f.fords, (d, i) => ({ at: at(d.at, i), radius: d.radius })), (d) => key(d.at)),
+    roads: uniq(all(f.roads, (r, i) => ({ pts: r.pts.map((q) => at(q, i)), width: r.width })), (r) => sorted(r.pts)),
+    forests: uniq(all(f.forests, (p, i) => p.map((q) => at(q, i))), sorted),
+    deposits: uniq(all(f.deposits, (p, i) => at(p, i)), key),
+    ruins: ruinsU.map((r) => r.p),
+    ruinTurn: ruinsU.map((r) => r.turn),
+    spawns: uniq(all(f.spawns, (p, i) => at(p, i)), key),
+  }
+  expanded.set(def, out)
+  return out
+}
+
 /**
  * Builds a round 2 map from its shapes (GroundMapDef `features`): plateaus with wobbling edges, ramps,
  * rivers with a bridge and a ford, dirt roads, solid forests and kyber crystal fields. Deterministic,
  * and copied tile by tile across the map's symmetry, so both sides match exactly.
  */
 function buildFeatureMap(def: GroundMapDef): GroundMap {
-  const f = def.features!
+  const f = expandFeatures(def)
   const { cols, rows } = def
   const n = cols * rows
   const height = new Uint8Array(n)
@@ -767,7 +810,10 @@ function buildFeatureMap(def: GroundMapDef): GroundMap {
         for (const fo of f.forests ?? []) if (inside(fx, fy, fo)) t.forest = true
       }
       for (const d of f.deposits ?? []) if (Math.hypot(px - d[0], py - d[1]) < 1.75) t.deposit = true
-      for (const rn of f.ruins ?? []) if (Math.abs(px - rn[0]) < RUIN_HALF[0] + 0.5 && Math.abs(py - rn[1]) < RUIN_HALF[1] + 0.5) t.ruin = true
+      f.ruins.forEach((rn, k) => {
+        const [hx, hy] = f.ruinTurn[k] ? [RUIN_HALF[1], RUIN_HALF[0]] : RUIN_HALF
+        if (Math.abs(px - rn[0]) < hx + 0.5 && Math.abs(py - rn[1]) < hy + 0.5) t.ruin = true
+      })
       if (t.road || t.deposit || t.ruin) t.forest = false
       for (const k of tileCopies(cols, rows, def, c, r)) (done[k] = 1), (ft[k] = t)
     }

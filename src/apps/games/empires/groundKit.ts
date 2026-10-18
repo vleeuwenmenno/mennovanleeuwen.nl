@@ -11,6 +11,8 @@ import type { GroundPlacement, KnownBuilding } from './ground/world.ts'
 export type GroundKit = {
   /** The ground maps a battle can be fought on, as space maps (MapDef `ground`). */
   maps(): MapDef[]
+  /** Any ground map by its id, a generated one (`gen:…`, ground/generate.ts) too; null when none. */
+  map(id: string): MapDef | null
   /** A ground map's look at one pixel a tile (terrain, height, water), for the lobby's previews and
    * the minimap. */
   thumb(id: string): HTMLCanvasElement | null

@@ -1,4 +1,4 @@
-import { LEVEL_H, RUIN_HALF, valueNoise } from './terrain.ts'
+import { LEVEL_H, RUIN_HALF, expandFeatures, valueNoise } from './terrain.ts'
 import { TERRAINS, TF, TILE, type GroundLayer, type GroundMap } from './types.ts'
 
 // The ground under a battle, drawn with WebGL2 (types.ts GroundLayer): one full-screen triangle a
@@ -18,6 +18,9 @@ import { TERRAINS, TF, TILE, type GroundLayer, type GroundMap } from './types.ts
 // Where WebGL2 is missing, createGroundLayer returns a flat 2D layer (`gl: false`) that draws one
 // baked picture of the same masks, lit by the same heightmap.
 
+/** The most bridges and ruins the shader draws. */
+const MAX_BRIDGES = 8
+const MAX_RUINS = 16
 /** Mask samples per tile, both ways. */
 const S = 4
 /** World units per mask sample. */
@@ -209,33 +212,15 @@ function bakeFields(map: GroundMap): Fields {
       shade[(y * hw + x) * 2] = Math.round(sun * 255)
       shade[(y * hw + x) * 2 + 1] = Math.round(valley * 255)
     }
-  // Bridges are drawn from their shapes, straight-edged: each one and its mirror copies.
+  // Bridges and ruins are drawn from their shapes (every symmetric copy), straight-edged.
+  const ex = expandFeatures(map.def)
   const bridges: number[] = []
-  const W = cols * TILE, Hh = rows * TILE
-  for (const br of map.def.features?.bridges ?? []) {
-    const ends = [[br.from[0] * TILE, br.from[1] * TILE, br.to[0] * TILE, br.to[1] * TILE]]
-    if (map.def.mirror === 'diagonal') ends.push([W - br.from[1] * TILE, Hh - br.from[0] * TILE, W - br.to[1] * TILE, Hh - br.to[0] * TILE])
-    else if (map.def.sym === 'point') ends.push([W - br.from[0] * TILE, Hh - br.from[1] * TILE, W - br.to[0] * TILE, Hh - br.to[1] * TILE])
-    for (const e of ends) {
-      // A copy lying on its original (a bridge on the mirror line) is drawn once.
-      if (bridges.length && [0, 5, 10, 15].some((k) => k < bridges.length && Math.abs(bridges[k] - e[0]) + Math.abs(bridges[k + 1] - e[1]) + Math.abs(bridges[k + 2] - e[2]) + Math.abs(bridges[k + 3] - e[3]) < 2)) continue
-      if (Math.abs(e[0] - e[2]) + Math.abs(e[1] - e[3]) < 1) continue
-      if (bridges.length < 20) bridges.push(e[0], e[1], e[2], e[3], br.width * TILE)
-      // The same bridge listed with its ends swapped is still the same bridge.
-      for (let k = 0; k + 5 <= bridges.length - 5; k += 5)
-        if (Math.abs(bridges[k] - e[2]) + Math.abs(bridges[k + 1] - e[3]) + Math.abs(bridges[k + 2] - e[0]) + Math.abs(bridges[k + 3] - e[1]) < 2) {
-          bridges.length -= 5
-          break
-        }
-    }
-  }
+  for (const br of ex.bridges.slice(0, MAX_BRIDGES)) bridges.push(br.from[0] * TILE, br.from[1] * TILE, br.to[0] * TILE, br.to[1] * TILE, br.width * TILE)
   const ruins: number[] = []
-  for (const rn of map.def.features?.ruins ?? []) {
-    const copies = [[rn[0] * TILE, rn[1] * TILE, RUIN_HALF[0] * TILE, RUIN_HALF[1] * TILE]]
-    if (map.def.mirror === 'diagonal') copies.push([W - rn[1] * TILE, Hh - rn[0] * TILE, RUIN_HALF[1] * TILE, RUIN_HALF[0] * TILE])
-    else if (map.def.sym === 'point') copies.push([W - rn[0] * TILE, Hh - rn[1] * TILE, RUIN_HALF[0] * TILE, RUIN_HALF[1] * TILE])
-    for (const c of copies) if (ruins.length < 32 && !ruins.some((_, k) => k % 4 === 0 && Math.abs(ruins[k] - c[0]) + Math.abs(ruins[k + 1] - c[1]) < 2)) ruins.push(...c)
-  }
+  ex.ruins.slice(0, MAX_RUINS).forEach((rn, k) => {
+    const [hx, hy] = ex.ruinTurn[k] ? [RUIN_HALF[1], RUIN_HALF[0]] : RUIN_HALF
+    ruins.push(rn[0] * TILE, rn[1] * TILE, hx * TILE, hy * TILE)
+  })
   return { fw, fh, a, b, c, hw, hh, height, shade, bridges, ruins }
 }
 
@@ -274,10 +259,10 @@ uniform vec2 uWorld;
 uniform float uTime;
 uniform vec2 uField;
 uniform vec2 uHsize;
-uniform vec4 uBr[4];
-uniform float uBrW[4];
+uniform vec4 uBr[8];
+uniform float uBrW[8];
 uniform int uBrN;
-uniform vec4 uRuin[8];
+uniform vec4 uRuin[16];
 uniform int uRuinN;
 uniform sampler2D uH, uSh, uA, uB, uC, uN, uGrass, uDirt, uRock, uKy;
 out vec4 outColor;
@@ -466,7 +451,7 @@ void main() {
     float deck = smoothstep(0.45, 0.58, C.b);
     col = mix(col, vec3(0.58, 0.47, 0.35), deck);
   }
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 8; i++) {
     if (i >= uBrN) break;
     float hw = uBrW[i] * 0.5;
     vec3 sp = onBridge(i, m - vec2(7.0, 9.0));
@@ -491,7 +476,7 @@ void main() {
     col = mix(col, wood, inDeck);
   }
   // Round pylons at the bridges' corners.
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 8; i++) {
     if (i >= uBrN) break;
     vec3 bp = onBridge(i, m);
     float hw = uBrW[i] * 0.5;
@@ -504,7 +489,7 @@ void main() {
   }
 
   // Ruins: an old foundation of flagstones with broken walls and corner columns, casting shadows.
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < 16; i++) {
     if (i >= uRuinN) break;
     vec2 hs = uRuin[i].zw;
     vec2 q = m - uRuin[i].xy;
@@ -601,9 +586,9 @@ class GlLayer implements GroundLayer {
   private loc: Record<string, WebGLUniformLocation | null> = {}
   private fields: Fields | null = null
   /** The bridges' and ruins' uniforms, made once per map. */
-  private brEnds = new Float32Array(16)
-  private brWidths = new Float32Array(4)
-  private ruinData = new Float32Array(32)
+  private brEnds = new Float32Array(MAX_BRIDGES * 4)
+  private brWidths = new Float32Array(MAX_BRIDGES)
+  private ruinData = new Float32Array(MAX_RUINS * 4)
   private world = [1, 1]
   private kyCols = 1
   private kyRows = 1
@@ -694,9 +679,9 @@ class GlLayer implements GroundLayer {
     this.tex.c = this.texture(f.fw, f.fh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, f.c, true)
     this.brEnds.fill(0)
     this.brWidths.fill(0)
-    for (let i = 0; i < Math.min(4, f.bridges.length / 5); i++) this.brEnds.set(f.bridges.slice(i * 5, i * 5 + 4), i * 4), (this.brWidths[i] = f.bridges[i * 5 + 4])
+    for (let i = 0; i < f.bridges.length / 5; i++) this.brEnds.set(f.bridges.slice(i * 5, i * 5 + 4), i * 4), (this.brWidths[i] = f.bridges[i * 5 + 4])
     this.ruinData.fill(0)
-    this.ruinData.set(f.ruins.slice(0, 32))
+    this.ruinData.set(f.ruins)
   }
 
   draw(cam: { x: number; y: number; zoom: number }, w: number, h: number, dpr: number, time: number) {
@@ -716,13 +701,13 @@ class GlLayer implements GroundLayer {
     gl.uniform1f(L.uTime, time)
     gl.uniform2f(L.uField, f.fw, f.fh)
     gl.uniform2f(L.uHsize, f.hw, f.hh)
-    const n = Math.min(4, f.bridges.length / 5)
+    const n = f.bridges.length / 5
     gl.uniform1i(L.uBrN, n)
     if (n) {
       gl.uniform4fv(L.uBr, this.brEnds)
       gl.uniform1fv(L.uBrW, this.brWidths)
     }
-    const nr = Math.min(8, f.ruins.length / 4)
+    const nr = f.ruins.length / 4
     gl.uniform1i(L.uRuinN, nr)
     if (nr) gl.uniform4fv(L.uRuin, this.ruinData)
     const units = UNITS
