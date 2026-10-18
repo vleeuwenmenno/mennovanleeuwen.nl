@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundScout, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -146,7 +146,7 @@ const GROUND: UnitType[] = [
   groundEngineer({
     id: 'd-g-engineer', faction: 'droid', name: 'Forger builder droid', sprite: 'droid-g-engineer',
     blurb: 'A hovering fabricator droid with cutting arms and a plate rack. Unarmed and light, but quick: it cuts kyber crystals and ferries them to a Command Hub, raises buildings and patches damaged ones.',
-    hull: 110, cost: 140, build: 11, speed: 104, turn: 5.2, ground: { radius: 10, accel: 260, builds: ['d-g-supply', 'd-g-center'] },
+    hull: 110, cost: 140, build: 11, speed: 104, turn: 5.2, ground: { radius: 10, accel: 260, builds: ['d-g-supply', 'd-g-generator', 'd-g-research', 'd-g-center'] },
   }),
   groundCenter({
     id: 'd-g-center', faction: 'droid', name: 'Command Hub', sprite: 'droid-g-center',
@@ -159,6 +159,16 @@ const GROUND: UnitType[] = [
     id: 'd-g-supply', faction: 'droid', name: 'Supply Relay', sprite: 'droid-g-supply',
     blurb: 'A hexagonal power and parts relay with a humming mast. Each one supports 10 more units.',
     hull: 1400, cost: 100, build: 25, ground: {},
+  }),
+  groundGenerator({
+    id: 'd-g-generator', faction: 'droid', name: 'Power Relay', sprite: 'droid-g-generator',
+    blurb: 'A squat reactor stack with heavy conduits. It powers the base and burns a trickle of kyber to run.',
+    hull: 1100, cost: 150, build: 20, ground: {},
+  }),
+  groundResearch({
+    id: 'd-g-research', faction: 'droid', name: 'Data Core', sprite: 'droid-g-research',
+    blurb: 'A shielded computing block round a glowing core. It makes research points while powered; the factories spend them on upgrades.',
+    hull: 1600, cost: 200, build: 30, ground: {},
   }),
   groundScout({
     id: 'd-g-scout', faction: 'droid', name: 'Probe droid', sprite: 'droid-g-scout',

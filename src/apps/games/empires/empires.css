@@ -8172,3 +8172,23 @@ span.ew-teamtag {
   font-style: normal;
   text-align: center;
 }
+
+/* --- Ground battles: power and research points in the top bar (TopBar in Hud.tsx). --- */
+.ew-top-cell.ew-powercell,
+.ew-top-cell.ew-rpcell {
+  gap: 5px;
+}
+.ew-power {
+  color: #ffd36e;
+}
+.ew-top-cell.ew-powercell.is-short b,
+.ew-top-cell.ew-powercell.is-short .ew-power {
+  color: var(--ew-bad);
+}
+.ew-rp {
+  color: #b08cff;
+}
+/* A consumer slowed for want of power (a site, training, research). */
+.ew-lowpower {
+  color: var(--ew-bad);
+}

@@ -1,4 +1,4 @@
-import { along, bevel, box, capsule, chamfer, circle, part, sym, treads } from '../kit.ts'
+import { along, arcBand, bevel, box, capsule, chamfer, circle, part, sym, treads } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -192,6 +192,62 @@ export const GROUND: GroundModels = {
         }),
         // The canopy.
         part('canopy', capsule([0, -6], [0, 12], 6, 6), 'glass', 4, { lift: 11 }),
+      ],
+    }),
+  },
+  // A compact fusion plant (2 × 2 tiles): a bevelled white housing with red bands, cooling fins
+  // down both sides, and a glowing blue reactor core under a ringed cap.
+  'r-g-generator': {
+    w: 100,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'pie',
+      parts: [
+        part('pad', chamfer(0, 2, 96, 94, 12), 'hull2', 1, { lift: 2, details: [{ k: 'line', pts: chamfer(0, 2, 86, 84, 10) }, { k: 'shape', pts: box(0, 44, 30, 4), tone: 'accent' }] }),
+        ...sym(part('fins', box(-36, 0, 14, 64), 'metal', 2, { lift: 5, details: treads(-43, -29, -30, 30, 8) })),
+        part('housing', chamfer(0, 0, 56, 72, 10), 'hull', 3, {
+          lift: 9,
+          facets: bevel(0, 0, 56, 72, 7),
+          details: [
+            { k: 'shape', pts: box(0, -28, 40, 4), tone: 'accent' },
+            { k: 'shape', pts: box(0, 26, 40, 4), tone: 'accent' },
+          ],
+        }),
+        part('cap', circle(0, -2, 19, 24), 'hull2', 4, { lift: 12, details: [{ k: 'line', pts: circle(0, -2, 15, 22) }] }),
+        part('core', circle(0, -2, 11, 20), 'glow', 5, { lift: 13, glow: true, details: [{ k: 'shape', pts: circle(-3, -5, 4, 10), tone: 'glass' }] }),
+        part('coil', arcBand(0, -2, 13, 16, -2.6, -0.5, 8), 'accent', 6, { lift: 13 }),
+        part('door', box(0, 38, 22, 6), 'dark', 4, { lift: 1, details: [{ k: 'lights', pts: along([-8, 34], [8, 34], 3), r: 1.1, tone: 'glow' }] }),
+      ],
+    }),
+  },
+  // A research station (3 × 3 tiles): a lab dome and a data spire on a bevelled block, two sensor
+  // dishes turned to the sky, blue window strips and red markings.
+  'r-g-research': {
+    w: 100,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'pie',
+      parts: [
+        part('pad', chamfer(0, 2, 96, 94, 10), 'hull2', 1, {
+          lift: 2,
+          details: [{ k: 'line', pts: chamfer(0, 2, 88, 86, 8) }, { k: 'lights', pts: [[-43, -40], [43, -40], [-43, 44], [43, 44]], r: 1.4, tone: 'glow', minPx: 50 }],
+        }),
+        part('block', chamfer(0, 4, 78, 64, 8), 'hull', 2, {
+          lift: 7,
+          facets: bevel(0, 4, 78, 64, 6),
+          details: [
+            { k: 'shape', pts: box(0, 30, 60, 3), tone: 'accent' },
+            { k: 'shape', pts: box(-20, 22, 26, 4), tone: 'glass' },
+            { k: 'shape', pts: box(20, 22, 26, 4), tone: 'glass' },
+          ],
+        }),
+        part('dome', circle(-14, 0, 20, 28), 'hull', 3, { lift: 12, sphere: true, details: [{ k: 'line', pts: circle(-14, 0, 13, 22) }, { k: 'shape', pts: box(-14, -6, 22, 3), tone: 'glass' }] }),
+        part('spire', circle(20, -8, 8, 16), 'hull2', 4, { lift: 20, sphere: true, details: [{ k: 'lights', pts: [[20, -8]], r: 2, tone: 'glow' }] }),
+        ...[[-30, -30], [32, 18]].flatMap(([x, y], i) => [
+          part(`dishArm${i}`, capsule([x * 0.8, y * 0.8], [x, y], 1.5), 'metal', 4, { lift: 9 }),
+          part(`dish${i}`, circle(x, y, 9, 18), 'hull2', 5, { lift: 12, sphere: true, details: [{ k: 'line', pts: circle(x, y, 5.5, 14) }, { k: 'shape', pts: circle(x, y, 2, 8), tone: 'dark' }] }),
+        ]),
+        part('door', box(0, 38, 22, 6), 'dark', 4, { lift: 1, details: [{ k: 'line', pts: [[0, 35], [0, 41]] }] }),
       ],
     }),
   },

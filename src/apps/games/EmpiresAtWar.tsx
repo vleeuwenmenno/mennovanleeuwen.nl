@@ -391,6 +391,20 @@ const ToastStack = memo(function ToastStack({ store, low, look }: { store: Toast
   )
 })
 
+/** A ground battle's power and research points for the top bar, with the tips that break them down. */
+function groundPowerHud(w: World, me: Owner): Pick<Hud, 'power' | 'rp' | 'powerTip' | 'rpTip'> {
+  const r = groundKit()?.power(w, me)
+  if (!r) return {}
+  const n = (v: number) => Math.round(v * 10) / 10
+  const powerTip = [
+    `Power: ${n(r.made)} made, ${n(r.used)} used${r.ratio < 1 ? `. Short: everything that uses power runs at ${Math.round(r.ratio * 100)}% speed. Build a power generator.` : '.'}`,
+    `Made: Command Centers ${n(r.centers)}, generators ${n(r.generators)}${r.stopped ? ` (${r.stopped} stopped: no kyber)` : ''}, burning ${n(r.burn * 60)} kyber a minute.`,
+    `Used: construction ${n(r.sites)}, training ${n(r.training)}, research ${n(r.research)}.`,
+  ].join('\n')
+  const rpTip = `Research points: ${Math.floor(r.rp)} banked, ${n(r.rpRate * 60)} a minute from research stations. The factories will spend them on upgrades.`
+  return { power: { made: r.made, used: r.used, ratio: r.ratio }, rp: r.rp, powerTip, rpTip }
+}
+
 function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
   const p = w.players[me]
   return {
@@ -398,7 +412,8 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
     idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && u.stance !== 'hold').length,
     idleEngineers: w.ground ? w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'idle' && !u.queue.length).length : 0,
     // A ground battle earns only what its engineers gather: the rate lately, for the top bar.
-    credits: p.credits, income: w.ground ? (p.gatherRate ?? 0) : p.income, pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
+    credits: p.credits, income: w.ground ? (p.gatherRate ?? 0) : p.income,
+    ...(w.ground ? groundPowerHud(w, me) : {}), pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
     hybrid: !!w.hybrid,

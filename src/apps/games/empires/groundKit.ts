@@ -2,6 +2,7 @@ import type { MapDef } from './maps.ts'
 import type { Owner, World } from './sim.ts'
 import type { GroundLayer } from './ground/types.ts'
 import type { GroundPlacement, KnownBuilding } from './ground/world.ts'
+import type { PowerReport } from './ground/power.ts'
 
 // What the battle screen, the renderer and the lobby use of ground battles (ground/screen.ts),
 // reached through here: ground/load.ts fills it in when ground battles are loaded (the dev lobby's
@@ -40,6 +41,10 @@ export type GroundKit = {
   crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }, me: Owner, color: string): void
   /** Kyber an engineer carries in one load. */
   carry: number
+  /** What `owner`'s power is made of and spent on now, and its research points (ground/power.ts). */
+  power(w: World, owner: Owner): PowerReport
+  /** Power a construction site draws while it is built. */
+  siteDraw: number
   /** The ground weapons' shots, beams, sprays and burns (ground/effects.ts), in world coordinates;
    * `clock`: the screen's seconds, for flicker. */
   effects(ctx: CanvasRenderingContext2D, w: World, me: Owner, zoom: number, clock: number): void

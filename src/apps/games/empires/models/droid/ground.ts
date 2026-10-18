@@ -166,4 +166,42 @@ export const GROUND: GroundModels = {
       ],
     }),
   },
+  // A Power Relay (2 × 2 tiles): a squat reactor stack, three heavy conduits fanning out to the
+  // corners, orange hazard bands, and a teal glow at the top of the stack.
+  'd-g-generator': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const rim = ngon(0, 0, 48, 8, Math.PI / 8)
+      return {
+        breakStyle: 'pie',
+        parts: [
+          part('deck', rim, 'hull2', 1, { lift: 3, facets: rimFacets(rim, 0, 0, 0.84) }),
+          ...[-2.4, -0.7, 0.9, 2.5].map((a, i) => part(`conduit${i}`, capsule([Math.cos(a) * 14, Math.sin(a) * 14], [Math.cos(a) * 40, Math.sin(a) * 40], 6, 4), 'metal', 2, { lift: 5, details: [{ k: 'shape', pts: box(Math.cos(a) * 30, Math.sin(a) * 30, 6, 6), tone: 'accent' }] })),
+          part('stack', ngon(0, -2, 24, 8, Math.PI / 8), 'hull', 3, { lift: 12, facets: rimFacets(ngon(0, -2, 24, 8, Math.PI / 8), 0, -2, 0.6) }),
+          part('band', ngon(0, -2, 16, 8, Math.PI / 8), 'accent', 4, { lift: 14 }),
+          part('glow', circle(0, -2, 9, 18), 'glass', 5, { lift: 15, glow: true, details: [{ k: 'lights', pts: [[0, -2]], r: 3, tone: 'glow' }] }),
+          part('door', box(0, 40, 18, 6), 'dark', 3, { lift: 1, details: [{ k: 'lights', pts: along([-6, 36], [6, 36], 3), r: 1.1, tone: 'trim' }] }),
+        ],
+      }
+    },
+  },
+  // A Data Core (3 × 3 tiles): a shielded computing block in steel plates round a glowing core,
+  // server racks either side, antenna masts and orange markings.
+  'd-g-research': {
+    w: 100,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'pie',
+      parts: [
+        part('pad', box(0, 2, 96, 92), 'hull2', 1, { lift: 2, details: [{ k: 'line', pts: box(0, 2, 86, 82) }, { k: 'shape', pts: box(0, 44, 30, 3), tone: 'accent' }] }),
+        ...sym(part('rack', box(-32, 2, 18, 60), 'metal', 2, { lift: 6, details: [...treads(-40, -24, -26, 30, 7), { k: 'lights', pts: along([-32, -24], [-32, 26], 5), r: 1.2, tone: 'glass', minPx: 50 }] })),
+        part('block', ngon(0, 0, 30, 6, 0), 'hull', 3, { lift: 10, facets: rimFacets(ngon(0, 0, 30, 6, 0), 0, 0, 0.7), details: [{ k: 'shape', pts: box(0, 18, 20, 3), tone: 'accent' }] }),
+        part('core', circle(0, 0, 13, 20), 'dark', 4, { lift: 12 }),
+        part('glow', circle(0, 0, 9, 18), 'glass', 5, { lift: 13, glow: true, details: [{ k: 'lights', pts: [[0, 0]], r: 3, tone: 'glow' }] }),
+        ...sym(part('mast', capsule([-20, -30], [-26, -42], 2.2, 1.1), 'metal', 5, { lift: 16, details: [{ k: 'lights', pts: [[-26, -42]], r: 1.3, tone: 'trim' }] })),
+        part('door', box(0, 38, 20, 6), 'dark', 3, { lift: 1, details: [{ k: 'lights', pts: along([-7, 34], [7, 34], 3), r: 1.1, tone: 'trim' }] }),
+      ],
+    }),
+  },
 }

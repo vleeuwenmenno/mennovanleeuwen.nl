@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundScout, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -259,7 +259,7 @@ const GROUND: UnitType[] = [
   groundEngineer({
     id: 's-g-engineer', faction: 'swarm', name: 'Shaper drone', sprite: 'swarm-g-engineer',
     blurb: 'A low crawler with mandibles that spits resin. Cheap and quick to grow: it chews kyber crystals loose and carries them to a Hive Nexus, raises buildings and knits damaged ones back together.',
-    hull: 120, cost: 130, build: 10, speed: 96, turn: 4.8, ground: { radius: 10, accel: 240, builds: ['s-g-supply', 's-g-center'] },
+    hull: 120, cost: 130, build: 10, speed: 96, turn: 4.8, ground: { radius: 10, accel: 240, builds: ['s-g-supply', 's-g-generator', 's-g-research', 's-g-center'] },
   }),
   groundCenter({
     id: 's-g-center', faction: 'swarm', name: 'Hive Nexus', sprite: 'swarm-g-center',
@@ -272,6 +272,16 @@ const GROUND: UnitType[] = [
     id: 's-g-supply', faction: 'swarm', name: 'Brood Cache', sprite: 'swarm-g-supply',
     blurb: 'A cluster of resin pods full of nutrient. Each one supports 10 more units.',
     hull: 1600, cost: 100, build: 25, ground: {},
+  }),
+  groundGenerator({
+    id: 's-g-generator', faction: 'swarm', name: 'Bio-reactor', sprite: 'swarm-g-generator',
+    blurb: 'A pulsing sac that digests kyber into power. It powers the hive and burns a trickle of kyber to live.',
+    hull: 1100, cost: 150, build: 20, ground: {},
+  }),
+  groundResearch({
+    id: 's-g-research', faction: 'swarm', name: 'Mind Node', sprite: 'swarm-g-research',
+    blurb: 'A ganglion of nerve pods round a thinking core. It makes research points while fed power; the factories spend them on upgrades.',
+    hull: 1600, cost: 200, build: 30, ground: {},
   }),
   groundScout({
     id: 's-g-scout', faction: 'swarm', name: 'Skitterling', sprite: 'swarm-g-scout',

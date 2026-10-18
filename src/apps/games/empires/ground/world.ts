@@ -37,6 +37,7 @@ import {
   anchorAt, findPath, flushStamps, footprintOpen, movesTo, nearestStand, newNav, onMap, spotOf, stampFootprint, stands, standsAt, tileAt, type GroundNav, type NavClass,
 } from './nav.ts'
 import { buildGroundMap } from './terrain.ts'
+import { groundPower } from './power.ts'
 import { groundThink } from './think.ts'
 import { combatHash, engage, giveUp, groundCombat } from './combat.ts'
 import { testField, testMesa } from './testmaps.ts'
@@ -279,13 +280,16 @@ export function newGround(w: World): GroundState {
   return { map, nav: newNav(map), fog: newFog(map.grid, w.teams), fields: fieldsOf(map) }
 }
 
-/** The ground unit types of `faction`: its engineer, its Command Center and its supply building. */
-export function groundIds(faction: string): { engineer: string; center: string; supply: string } {
+/** The ground unit types of `faction`: its engineer, its Command Center, its supply building, its
+ * power generator and its research station. */
+export function groundIds(faction: string): { engineer: string; center: string; supply: string; generator: string; research: string } {
   const own = Object.values(UNIT).filter((t) => t.faction === faction && t.ground)
   return {
     engineer: own.find((t) => isEngineer(t))!.id,
     center: own.find((t) => isGroundBuilding(t) && t.ground!.trains?.length)!.id,
     supply: own.find((t) => isGroundBuilding(t) && !t.ground!.trains?.length && t.ground!.supply)!.id,
+    generator: own.find((t) => isGroundBuilding(t) && !!t.ground!.burn)?.id ?? '',
+    research: own.find((t) => isGroundBuilding(t) && !!t.ground!.research)?.id ?? '',
   }
 }
 
@@ -1039,6 +1043,8 @@ function works(w: World, dt: number) {
   // How many engineers work on each building this tick (steer set `busy`).
   const crews = new Map<number, number>()
   for (const u of w.units) if (!u.dead && u.gm?.busy) crews.set(u.gm.busy, (crews.get(u.gm.busy) ?? 0) + 1)
+  // Power (ground/power.ts): short of it, sites, training and research run slower, by owner.
+  const power = groundPower(w, dt, crews)
   // Units trained this tick are added to the end of the list: they have nothing to do yet.
   const n = w.units.length
   for (let i = 0; i < n; i++) {
@@ -1053,7 +1059,7 @@ function works(w: World, dt: number) {
         startSite(w, s)
         continue
       }
-      const step = Math.min(s.building, dt * rate)
+      const step = Math.min(s.building, dt * rate * power[s.owner])
       s.building -= step
       s.hull = Math.min(s.hullMax, s.hull + (s.hullMax * 0.9 * step) / t.build)
       if (s.building <= 1e-9) {
@@ -1067,7 +1073,7 @@ function works(w: World, dt: number) {
     if (crew && s.hull < s.hullMax) s.hull = Math.min(s.hullMax, s.hull + (s.hullMax / t.build) * REPAIR_RATE * rate * dt)
     const q = s.yq?.[0]
     if (q) {
-      q.left = Math.max(0, q.left - dt)
+      q.left = Math.max(0, q.left - dt * power[s.owner])
       // Done: out of the door (it waits, done, while the door is walled in).
       if (q.left <= 0 && rollOut(w, s, q.unit)) {
         s.yq!.shift()
@@ -1437,6 +1443,11 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
   for (const c of w.crystals ?? []) {
     num(c.left)
     int(c.on ? 1 : 0)
+  }
+  // Research points and the kyber burnt for power (power itself is worked out afresh each tick).
+  for (const p of w.players) {
+    num(p.rp ?? 0)
+    num(p.burnt ?? 0)
   }
   for (const mem of w.known ?? []) {
     int(mem.length)

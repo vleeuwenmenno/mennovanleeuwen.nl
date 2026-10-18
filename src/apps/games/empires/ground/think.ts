@@ -4,11 +4,13 @@ import { UNIT } from '../data.ts'
 import { cmdBuild, cmdCancelSite, cmdConstruct, cmdGather, cmdPlace, cantBuild, type Unit, type World } from '../sim.ts'
 import { TILE, type Pt } from './types.ts'
 import { armyThink } from './army.ts'
+import { SITE_DRAW } from './power.ts'
 import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, knownBuildings } from './world.ts'
 
 // The AI's decisions in a ground battle: a branch of ai.ts's think (same brain, clock and random
 // stream): on its seat it keeps its engineers gathering kyber, puts up supply before it reaches its
-// unit cap, trains more engineers, expands with a second Command Center towards the crystal fields on
+// unit cap, builds power generators to keep power ahead of what it needs and a research station or
+// two, trains more engineers, expands with a second Command Center towards the crystal fields on
 // its own side of the map, finishes its sites and repairs its buildings, and fields a few Scouts that
 // scout, defend its buildings and raid the enemy's engineers and buildings (army.ts). It reads only
 // what its team knows (its own units, the land and its crystal fields, which every side sees from
@@ -31,6 +33,11 @@ const SITE_PATIENCE = 90
 /** How far from a crystal field's middle it puts an expansion's middle, in tiles, and the ways it tries. */
 const BESIDE = 8
 const AROUND: [number, number][] = [[0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1]]
+/** Engineers it has before it builds its first generator, and before its research stations. */
+const POWER_AT = 3
+const RESEARCH_AT = 5
+/** Research stations it keeps: one a standing Command Center, at most this many. */
+const LABS_MAX = 2
 /** A crystal field this near (tiles) one of its Command Centers is already served by it. */
 const SERVED = 13
 
@@ -66,6 +73,25 @@ export function groundThink(w: World, b: Brain) {
     const spot = supplySpot(w, o, ids.supply, standing[0])
     const who = spot && spare(spot)
     if (spot && who) cmdPlace(w, o, [who.id], ids.supply, spot.x, spot.y)
+  }
+
+  // 1b. Power ahead of what it needs (a site going up, and the research stations it wants), one
+  // generator at a time; then a research station a Command Center (two at most), once a generator
+  // runs.
+  const gens = mine.filter((u) => u.t.id === ids.generator)
+  const labs = mine.filter((u) => u.t.id === ids.research)
+  const pw = p.power ?? { made: 0, used: 0, ratio: 1 }
+  const wantLabs = Math.min(LABS_MAX, standing.length)
+  const labDraw = ids.research ? (UNIT[ids.research].ground!.draw ?? 0) : 0
+  const ahead = SITE_DRAW + (labs.length < wantLabs ? labDraw : 0)
+  if (ids.generator && standing.length && engineers.length >= POWER_AT && !gens.some((u) => u.site) && (pw.ratio < 1 || pw.made - pw.used < ahead) && p.credits >= UNIT[ids.generator].cost) {
+    const spot = supplySpot(w, o, ids.generator, standing[0])
+    const who = spot && spare(spot)
+    if (spot && who) cmdPlace(w, o, [who.id], ids.generator, spot.x, spot.y)
+  } else if (ids.research && labs.length < wantLabs && !labs.some((u) => u.site) && gens.some((u) => !u.site) && engineers.length >= RESEARCH_AT && p.credits >= UNIT[ids.research].cost) {
+    const spot = supplySpot(w, o, ids.research, standing[labs.length % standing.length])
+    const who = spot && spare(spot)
+    if (spot && who) cmdPlace(w, o, [who.id], ids.research, spot.x, spot.y)
   }
 
   // 2. Engineers: up to a few a Command Center, trained where the queue is shortest, unless it is

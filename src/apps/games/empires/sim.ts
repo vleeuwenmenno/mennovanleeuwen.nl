@@ -325,6 +325,11 @@ export type Player = {
    * worked out. */
   gatherRate?: number
   gatheredAt?: number
+  /** Ground battles (ground/power.ts): power made and drawn this tick and the share of speed its
+   * consumers run at, the research points banked, and the kyber its generators have burnt. */
+  power?: { made: number; used: number; ratio: number }
+  rp?: number
+  burnt?: number
   /** Fleet battles: ships that jumped out alive, back to the fleet they came from. */
   escaped: string[]
   /** Fleet battles: ships of ours rush-launched unfinished that are waiting in the reserve (called in

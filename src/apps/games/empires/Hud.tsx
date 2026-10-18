@@ -55,6 +55,12 @@ export type Hud = {
   hybrid: boolean
   /** A ground battle (no ore, beacons or research there yet; credits are kyber). */
   ground?: boolean
+  /** A ground battle: power made and used (and the share of speed consumers run at), research points
+   * banked, and the tips that break them down (ground/power.ts). */
+  power?: { made: number; used: number; ratio: number }
+  rp?: number
+  powerTip?: string
+  rpTip?: string
   /** Our yards: built ones with their queue, and sites with how far along they are (0 to 1). */
   yards: { id: number; unit: string; queue: QueueItem[]; built: boolean; progress: number }[]
 }
@@ -73,6 +79,10 @@ export const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s
 const ICONS = {
   // A cluster of three kyber crystals: a ground battle's credits.
   kyber: 'M12 2.5l3 5.5l-3 13l-3-13z M9 8h6 M6.5 8.5l2 2.5l-1.5 8l-3-4.5z M17.5 8.5l-2 2.5l1.5 8l3-4.5z',
+  // A lightning bolt: a ground battle's power.
+  power: 'M13.5 2.5L5 13.5h6l-1.5 8 8.5-11h-6z',
+  // A flask: research points.
+  research: 'M9.5 3h5 M10.5 3v6l-5.5 9.5a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3L13.5 9V3 M7.5 15h9',
   // An engineer's rig: a body on tracks with a crane arm.
   engineer: 'M4 14h12v5H4z M4 19h12 M7 14v-3h5v3 M12 11l6-6 M18 5l2 2',
   credits: 'M12 2.5l8.2 4.75v9.5L12 21.5l-8.2-4.75v-9.5z M12 7.5v9 M9.5 9.5h4a1.75 1.75 0 0 1 0 3.5h-3a1.75 1.75 0 0 0 0 3.5h4',
@@ -636,6 +646,19 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
         <b className="ew-big">{hud.pop}</b>
         <small>/ {hud.popCap}</small>
       </div>
+      {hud.ground && hud.power && (
+        <button className={`ew-top-cell ew-powercell ${hud.power.ratio < 1 ? 'is-short' : ''}`} onClick={onEconomy} data-tip={hud.powerTip ?? 'Power made / used.'} aria-label={`Power: ${hud.power.made} made, ${hud.power.used} used`}>
+          <span className="ew-power"><Icon name="power" size={18} /></span>
+          <b>{fmt(hud.power.made)}</b>
+          <small>/ {fmt(hud.power.used)}</small>
+        </button>
+      )}
+      {hud.ground && (
+        <button className="ew-top-cell ew-rpcell ew-hide-narrow" onClick={onEconomy} data-tip={hud.rpTip ?? 'Research points.'} aria-label={`Research points: ${Math.floor(hud.rp ?? 0)}`}>
+          <span className="ew-rp"><Icon name="research" size={17} /></span>
+          <b>{fmt(hud.rp ?? 0)}</b>
+        </button>
+      )}
       {hud.ground && onIdleEngineer && (
         <button className={`ew-top-cell ew-top-btn ew-idlebtn ${hud.idleEngineers ? 'is-idle' : ''}`} onClick={onIdleEngineer} aria-label={`Idle engineers: ${hud.idleEngineers ?? 0}`}
           data-tip={hud.idleEngineers ? `${hud.idleEngineers} idle engineer${hud.idleEngineers === 1 ? '' : 's'}: click to select the next one and look at it.` : 'No idle engineers: every one is gathering, building or on its way.'}>
@@ -1954,6 +1977,7 @@ export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; o
   const gathering = ground ? w.units.filter((u) => !u.dead && u.owner === me && u.order.k === 'gather').length : 0
   const carried = ground ? w.units.reduce((n, u) => n + (!u.dead && u.owner === me ? (u.carry ?? 0) : 0), 0) : 0
   const fieldsLeft = (w.crystals ?? []).reduce((n, c) => n + c.left, 0)
+  const power = ground ? groundKit()?.power(w, me) : undefined
   const clustersLeft = (w.crystals ?? []).filter((c) => c.left > 0).length
   return (
     <Floating id="economy" title="Economy" at={{ left: 120, top: 56 }} onClose={onClose} className="ew-econ">
@@ -1979,6 +2003,23 @@ export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; o
             { label: 'Carried, on its way in', color: '#d9661c', value: carried },
             { label: 'Left in the fields', color: '#c8d4ee', value: fieldsLeft, note: `${clustersLeft} crystal cluster${clustersLeft === 1 ? '' : 's'}` },
           ]} />
+          {power && (
+            <>
+              <h5>Power · {fmt(power.made)} made, {fmt(power.used)} used{power.ratio < 1 ? <span className="ew-lowpower"> · {Math.round(power.ratio * 100)}% speed</span> : null}</h5>
+              <Breakdown rows={[
+                { label: 'Made by Command Centers', color: '#ffd36e', value: power.centers },
+                { label: 'Made by generators', color: '#ffb84a', value: power.generators, note: `${fmt(power.burn * 60)} kyber a minute${power.stopped ? `, ${power.stopped} stopped` : ''}` },
+                { label: 'Used by construction', color: '#ff9a6e', value: power.sites },
+                { label: 'Used by training', color: '#7dffa0', value: power.training },
+                { label: 'Used by research', color: '#b08cff', value: power.research },
+              ]} />
+              <h5>Research points · {fmt(power.rp)} banked</h5>
+              <Breakdown rows={[
+                { label: 'Made a minute', color: '#b08cff', value: power.rpRate * 60, note: 'the factories will spend them' },
+                { label: 'Kyber burnt for power so far', color: '#ff9a3c', value: p.burnt ?? 0 },
+              ]} />
+            </>
+          )}
         </>
       ) : (
         <>
@@ -2514,6 +2555,22 @@ export function EngineerBuild({ w, me, crew, onPlace, onSelect }: { w: World; me
 /** How much faster one to four engineers build together than one alone (ground/world.ts CREW_RATE). */
 const GROUND_CREW = [0, 1, 1.7, 2.2, 2.5]
 
+/** A ground building's power: what it makes (a Command Center, a generator, and the kyber a
+ * generator burns) or draws while busy (training, research), short for a card and long for its tip.
+ * Null when it has nothing to do with power. */
+function powerLine(t: UnitType): { short: string; tip: string; made: boolean } | null {
+  const g = t.ground
+  if (!g || (!g.power && !g.draw)) return null
+  const made = !!g.power && !g.burn ? `makes ${g.power}${g.draw ? `, draws ${g.draw} while training` : ''}` : g.power ? `makes ${g.power}, burning ${Math.round(g.burn! * 60)} kyber a minute` : `draws ${g.draw}${g.research ? ' all the time' : ' while busy'}`
+  return { short: g.power ? `+${g.power}` : `−${g.draw}`, tip: made, made: !!g.power }
+}
+
+/** Why a ground building of ours works slower now: short of power. Null at full speed. */
+const lowPower = (w: World, owner: Owner) => {
+  const r = w.players[owner].power?.ratio ?? 1
+  return r < 1 ? `Low power: ${Math.round(r * 100)}% speed` : null
+}
+
 /** A ground battle's engineers: the buildings they put up, a card each (click, then a spot). */
 function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit[]; onPlace: (unit: string) => void }) {
   const { keys } = useSettings()
@@ -2536,7 +2593,8 @@ function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit
         {builds.map((t) => {
           const poor = w.players[me].credits < t.cost
           const secs = Math.ceil(t.build / GROUND_CREW[Math.max(1, n)])
-          const tip = `${t.name}\n${t.blurb}\n${t.build} s for one engineer; two build it 1.7 times as fast, three 2.2, four 2.5. Buildings go up anywhere our engineers can reach, at least 20 tiles from enemy buildings we know of.${poor ? `\n\nNot enough kyber: ${Math.ceil(t.cost - w.players[me].credits)} more` : `\n\n${hint}.`}`
+          const pw = powerLine(t)
+          const tip = `${t.name}\n${t.blurb}\n${t.build} s for one engineer; two build it 1.7 times as fast, three 2.2, four 2.5. Buildings go up anywhere our engineers can reach, at least 20 tiles from enemy buildings we know of.${pw ? `\nPower: ${pw.tip}` : ''}${poor ? `\n\nNot enough kyber: ${Math.ceil(t.cost - w.players[me].credits)} more` : `\n\n${hint}.`}`
           return (
             <button key={t.id} className={`ew-shipcard ew-yardcard ${poor ? 'is-poor' : ''}`} onClick={() => onPlace(t.id)} {...unitTip(t, ownerTag(w, me, me), tip)}>
               <ShipArt t={t} />
@@ -2544,6 +2602,7 @@ function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit
               <span className="ew-yc-line">
                 <span className="ew-cost"><Icon name="credits" size={10} /> {t.cost}</span>
                 <span className="ew-time"><Icon name="time" size={10} /> {secs}s</span>
+                {pw && <span className={pw.made ? 'ew-power' : 'ew-lowpower'}><Icon name="power" size={10} /> {pw.short}</span>}
               </span>
             </button>
           )
@@ -2567,9 +2626,10 @@ function GroundSiteBox({ w, me, b, onCancelSite }: { w: World; me: Owner; b: Uni
             ? `Engineers on their way (${coming}).`
             : 'Waiting for engineers: send some to build it.'
           : crews
-            ? `Under construction: ${Math.round(progress * 100)}%, ${crews} engineer${crews === 1 ? '' : 's'} at work · ${Math.ceil(b.building / rate)} s left.`
+            ? `Under construction: ${Math.round(progress * 100)}%, ${crews} engineer${crews === 1 ? '' : 's'} at work · ${Math.ceil(b.building / (rate * (w.players[me].power?.ratio ?? 1)))} s left.`
             : `Under construction: ${Math.round(progress * 100)}%, nobody at work.`}
       </span>
+      {crews > 0 && b.site!.started && lowPower(w, me) && <span className="ew-lowpower ew-small" data-tip="Construction draws power. Build a power generator, or wait for the other work to finish.">{lowPower(w, me)}</span>}
       <Bar value={progress} max={1} kind="shield" />
       <button className="ew-repair" onClick={() => onCancelSite(b.id)} data-tip={b.site!.started ? 'Call it off: work has started, so only part of the price comes back.' : 'Call it off before work starts: the full price comes back.'}>
         <Icon name="stop" size={13} /> Cancel <Icon name="credits" size={12} /> +{siteRefund(b)}
@@ -2592,21 +2652,29 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
       <Frame className="ew-detail is-station is-yard">
         <div className="ew-detail-side">
           <Schematic u={b} size={96} tip={unitTip(b.t, ownerTag(w, me, b.owner), undefined, b)} />
-          <SideName w={w} me={me} u={b} sub={site ? 'Going up' : [b.t.ground?.dropOff ? 'Takes in kyber' : '', b.t.ground?.supply ? `Supports ${b.t.ground.supply} units` : ''].filter(Boolean).join(' · ')} info={b.t.blurb} />
+          <SideName w={w} me={me} u={b} sub={site ? 'Going up' : [b.t.ground?.dropOff ? 'Takes in kyber' : '', b.t.ground?.supply ? `Supports ${b.t.ground.supply} units` : '', b.t.ground?.power ? `+${b.t.ground.power} power` : '', b.t.ground?.research ? 'Research points' : ''].filter(Boolean).join(' · ')} info={b.t.blurb} />
           <Vitals u={b} now={w.time} />
         </div>
         <div className="ew-detail-main">
           {site ? (
             <GroundSiteBox w={w} me={me} b={b} onCancelSite={p.onCancelSite} />
           ) : !trains.length ? (
-            <p className="ew-muted ew-sitebox">Supports {b.t.ground?.supply ?? 0} units. Your units: {hud.pop} of {hud.popCap}{hud.pop >= hud.popCap ? ': at the cap, build more supply to train again.' : '.'}</p>
+            <p className="ew-muted ew-sitebox">
+              {b.t.ground?.supply ? <>Supports {b.t.ground.supply} units. Your units: {hud.pop} of {hud.popCap}{hud.pop >= hud.popCap ? ': at the cap, build more supply to train again.' : '.'}</> : null}
+              {b.t.ground?.burn ? <>Makes {b.t.ground.power} power, burning {Math.round(b.t.ground.burn * 60)} kyber a minute{w.players[me].credits < b.t.ground.burn / 30 ? ': stopped, no kyber left.' : '.'} Your power: {fmt(hud.power?.made ?? 0)} made, {fmt(hud.power?.used ?? 0)} used.</> : null}
+              {b.t.ground?.research ? <>Makes {Math.round(b.t.ground.research * 60 * (w.players[me].power?.ratio ?? 1))} research points a minute, drawing {b.t.ground.draw} power. {fmt(hud.rp ?? 0)} points banked: the factories will spend them on upgrades.</> : null}
+              {b.t.ground?.research && lowPower(w, me) ? <> <span className="ew-lowpower">{lowPower(w, me)}</span></> : null}
+            </p>
           ) : (
+            <>
+            {queue.length > 0 && lowPower(w, me) && <p className="ew-lowpower ew-small" data-tip="Training draws power. Build a power generator.">{lowPower(w, me)}</p>}
             <div className="ew-yard" style={cardCols(trains.length)}>
               {trains.map((t) => (
                 <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, b.id)} whyReserve={null} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}
                   onBuild={(id, n) => p.onBuild(id, n, false, b.id)} onUnqueue={(id) => p.onUnqueue(id, b.id)} where={where} reinf={null} />
               ))}
             </div>
+            </>
           )}
         </div>
       </Frame>

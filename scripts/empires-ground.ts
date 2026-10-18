@@ -31,6 +31,12 @@
 //    building destroyed and a win, its stamp freed; artillery holds fire at what its team can't see,
 //    fires past its own sight at what an ally sees, and never closer than its minimum range; a shot
 //    lands as its damage times GROUND_VS for the armour; the dev weapon test fires all seven weapons.
+// 3d. A power battle on Ashwater Crossing, seat 0 scripted (Republic), seat 1 the AI (Confederacy),
+//    checked the same way: the base starts on its Command Center's power alone; training and two
+//    research stations draw more than it makes, and then training, research points and a site going
+//    up all run at made / used of their speed, to the tick; a power generator puts it right, burning
+//    its kyber every tick; with no kyber left it stops, and the shortage is back. The AI builds a
+//    generator and a research station and banks research points.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
@@ -41,6 +47,7 @@ import { UNIT } from '../src/apps/games/empires/data.ts'
 import { newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd, cmd, runCmd, type Cmd } from '../src/apps/games/empires/commands.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
+import { SITE_DRAW } from '../src/apps/games/empires/ground/power.ts'
 import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { anchorAt, footprintOpen, stands } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
@@ -83,7 +90,7 @@ import './ground-test-units.ts'
 const dustfall = groundMapDef('dustfall-ridge')!
 const mesa = groundMapDef('test-mesa')!
 const ashwater = groundMapDef('ashwater-crossing')!
-const R = { engineer: 'r-g-engineer', center: 'r-g-center', supply: 'r-g-supply' }
+const R = { engineer: 'r-g-engineer', center: 'r-g-center', supply: 'r-g-supply', generator: 'r-g-generator', research: 'r-g-research' }
 const S = { engineer: 's-g-engineer', center: 's-g-center', supply: 's-g-supply' }
 const D = { engineer: 'd-g-engineer', center: 'd-g-center', supply: 'd-g-supply' }
 
@@ -193,6 +200,7 @@ type Input =
   | { t: number; k: 'kill'; id: number }
   | { t: number; k: 'kyber'; f: number; each: number }
   | { t: number; k: 'spawn'; unit: string; owner: number; x: number; y: number }
+  | { t: number; k: 'credits'; owner: number; value: number }
 
 function apply(w: World, x: Input): unknown {
   if (x.k === 'cmd') {
@@ -201,6 +209,7 @@ function apply(w: World, x: Input): unknown {
   }
   if (x.k === 'add') return raiseBuilding(w, UNIT[x.unit], x.owner, x.c, x.r)
   if (x.k === 'spawn') return spawn(w, x.unit, x.owner, x.x, x.y, 0)
+  if (x.k === 'credits') return void (w.players[x.owner].credits = x.value)
   if (x.k === 'kyber') {
     for (const c of w.crystals!) if (c.f === x.f && c.left > 0) c.left = Math.min(c.left, x.each)
     return
@@ -426,7 +435,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const aiCenters = ai.filter((u) => u.t.id === S.center && !u.site).length
   const aiEngs = ai.filter((u) => u.t.id === S.engineer).length
   check('building battle: the AI trained engineers and expanded to a second Command Center', aiCenters >= 2 && aiEngs >= 3, `${aiCenters} Hive Nexuses, ${aiEngs} Shaper drones`)
-  check('building battle: the AI built nothing but engineers, Command Centers, supply and Scouts', ai.every((u) => u.t.id === S.center || u.t.id === S.engineer || u.t.id === S.supply || u.t.id === 's-g-scout'))
+  check('building battle: the AI built nothing but engineers, Command Centers, supply, power, research and Scouts', ai.every((u) => [S.center, S.engineer, S.supply, 's-g-generator', 's-g-research', 's-g-scout'].includes(u.t.id)))
   check('building battle: each side knows where the other started', !!w.known?.[0].some((k) => k.owner === 1) && !!w.known?.[1].some((k) => k.owner === 0))
   console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}`)
 }
@@ -596,6 +605,120 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('economy battle: the AI kept its engineers gathering', w.players[1].earnedBy.mines > 0 && aiGatherMax >= 4, `${Math.round(w.players[1].earnedBy.mines)} kyber gathered, up to ${aiGatherMax} gathering at once`)
   check('economy battle: the AI builds supply before its cap and never trains past it', !aiOverCap && w.units.some((u) => !u.dead && u.owner === 1 && u.t.id === D.supply) && aiCapped <= aiCapSupply + 30 * 10, `cap ${w.players[1].popCap}, at the cap ${(aiCapped * STEP).toFixed(1)} s (${(aiCapSupply * STEP).toFixed(1)} s of it with supply going up)`)
   console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}; kyber left by field ${w.ground!.fields.map((_, f) => Math.round(fieldLeft(w, f))).join(', ')}`)
+}
+
+// --- 3d. The power battle -------------------------------------------------------------------------------
+
+{
+  const make = (): Copy => ({ w: newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 57, credits: 3000 }), brains: [newBrain(1, 'medium')] })
+  const ticks = Math.round(Math.max(seconds, 180) / STEP)
+  const got: Record<string, [boolean, string]> = {}
+  const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
+  const bad: Record<string, number> = {}
+  const miss = (k: string) => (bad[k] = (bad[k] ?? 0) + 1)
+  let home: Unit | undefined
+  let first: Unit | undefined
+  let prev: { rp: number; burnt: number; credits: number; q?: { item: object; left: number }; site?: { id: number; building: number; crew: number } } | null = null
+  let short = 0
+  let siteShort = 0
+  let trainShort = 0
+  let burns = 0
+  let siteId = 0
+  let stopped = 0
+  let restored = 0
+  const ccPower = UNIT[R.center].ground!.power!
+  const genPower = UNIT[R.generator].ground!.power!
+  const burn = UNIT[R.generator].ground!.burn!
+  const rate = UNIT[R.research].ground!.research!
+  lockstep('power battle', make, ticks, ({ w }, t, say) => {
+    home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
+    first ??= w.units.find((u) => u.owner === 0 && u.t.id === R.engineer)!
+    w.events.length = 0
+    const p = w.players[0]
+    const pw = p.power
+    const order = (c: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(c) })
+    if (t === 1) pass('a new base runs on its Command Center\'s power alone', !!pw && pw.made === ccPower && pw.used === 0 && pw.ratio === 1, JSON.stringify(pw))
+    // Last tick, as the power said: training, research, a site and the generators' burn.
+    if (prev && pw) {
+      const labs = w.units.filter((u) => !u.dead && u.owner === 0 && u.t.id === R.research && !u.site).length
+      if (Math.abs(p.rp! - prev.rp - labs * rate * pw.ratio * STEP) > 1e-9) miss('research')
+      const q = home.yq?.[0]
+      if (q && prev.q && prev.q.item === q && Math.abs(prev.q.left - q.left - STEP * pw.ratio) > 1e-9 && q.left > 0) miss('training')
+      if (q && prev.q && prev.q.item === q && pw.ratio < 1) trainShort++
+      const gens = w.units.filter((u) => !u.dead && u.owner === 0 && u.t.id === R.generator && !u.site).length
+      const paid = prev.credits >= burn * STEP
+      if (gens && paid) {
+        if (Math.abs((p.burnt ?? 0) - prev.burnt - gens * burn * STEP) > 1e-9) miss('burn')
+        else burns++
+      }
+      if (gens && prev.credits < burn * STEP) {
+        if (pw.made === ccPower) stopped++
+        else miss('stop')
+      }
+      if (gens && paid && pw.made === ccPower + gens * genPower) restored++
+      const site = prev.site && w.byId.get(prev.site.id)
+      if (site?.site?.started && prev.site!.crew > 0) {
+        const want = Math.min(prev.site!.building, STEP * CREW_RATE[Math.min(prev.site!.crew, 4)] * pw.ratio)
+        if (Math.abs(prev.site!.building - site.building - want) > 1e-9) miss('site')
+        else if (pw.ratio < 1) siteShort++
+      }
+      if (pw.ratio < 1) short++
+    }
+    // 1/3 s: three engineers queued (the Command Center draws while it trains).
+    if (t === 10) for (let i = 0; i < 3; i++) order(cmd('build', R.engineer, false, home.id))
+    // 2/3 s: two research stations, finished (as the dev cheats raise them): more draw than it makes.
+    if (t === 20)
+      for (let k = 0; k < 2; k++) {
+        const at = find(w, 0, R.research, null, { x: home.x + (k ? 9 : -9) * TILE, y: home.y })!
+        const pl = groundPlacement(w, 0, R.research, at.x, at.y)
+        say({ t, k: 'add', unit: R.research, owner: 0, c: pl.tc, r: pl.tr })
+      }
+    // 13 s: a Supply Depot, built by the first engineer while power is short.
+    if (t === 400) {
+      const at = find(w, 0, R.supply, null, { x: home.x, y: home.y + 9 * TILE })!
+      const id = w.nextId
+      order(cmd('place', [first.id], R.supply, at.x, at.y, false, NaN))
+      siteId = w.byId.get(id)?.site ? id : 0
+    }
+    // 30 s: a power generator, finished: enough power again, its kyber burnt every tick.
+    if (t === 900) {
+      const at = find(w, 0, R.generator, null, { x: home.x, y: home.y - 9 * TILE })!
+      const pl = groundPlacement(w, 0, R.generator, at.x, at.y)
+      say({ t, k: 'add', unit: R.generator, owner: 0, c: pl.tc, r: pl.tr })
+    }
+    // 40 s: no kyber left (a cheat): the generator stops; 50 s: kyber back, it runs again.
+    if (t === 1200) say({ t, k: 'credits', owner: 0, value: 0 })
+    if (t === 1500) say({ t, k: 'credits', owner: 0, value: 2000 })
+    const site = w.byId.get(siteId)
+    const q = home.yq?.[0]
+    prev = {
+      rp: p.rp ?? 0, burnt: p.burnt ?? 0, credits: p.credits,
+      q: q ? { item: q, left: q.left } : undefined,
+      site: site ? { id: site.id, building: site.building, crew: w.units.filter((u) => !u.dead && u.gm?.busy === site.id).length } : undefined,
+    }
+  })
+  for (const [k, [ok, detail]] of Object.entries(got)) check(`power battle: ${k}`, ok, detail)
+  check('power battle: short of power, training and research run at made / used of their speed, to the tick', short > 0 && trainShort > 0 && !bad.research && !bad.training, `${short} short ticks, ${trainShort} training; misses ${JSON.stringify(bad)}`)
+  check('power battle: a site going up while power is short is slowed by the same share', siteShort > 0 && !bad.site, `${siteShort} ticks`)
+  check('power battle: a generator burns its kyber every tick and puts the power right', burns > 0 && restored > 0 && !bad.burn, `${burns} ticks burnt, ${restored} with full power`)
+  check('power battle: with no kyber left the generator stops', stopped > 0 && !bad.stop, `${stopped} ticks`)
+  console.log(`  power: research ${UNIT[R.research].ground!.draw} draw, ${rate}/s; generator +${genPower} for ${burn} kyber/s; Command Center +${ccPower}, ${UNIT[R.center].ground!.draw} while training; a site ${SITE_DRAW} while being built`)
+}
+{
+  // The AI's power and research, over a longer battle against nobody in a hurry.
+  const w = newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 58, credits: 1600 })
+  const brains = [newBrain(1, 'medium')]
+  for (let t = 0; t < Math.round(360 / STEP); t++) {
+    for (const b of brains) think(w, b, STEP)
+    tick(w)
+    w.events.length = 0
+  }
+  const ai = w.units.filter((u) => !u.dead && u.owner === 1)
+  const gens = ai.filter((u) => u.t.id === 'd-g-generator' && !u.site).length
+  const labs = ai.filter((u) => u.t.id === 'd-g-research' && !u.site).length
+  const pw = w.players[1].power!
+  check('the AI builds power generators and a research station, and banks research points', gens >= 1 && labs >= 1 && (w.players[1].rp ?? 0) > 0, `${gens} generators, ${labs} research stations, ${Math.round(w.players[1].rp ?? 0)} points, power ${pw.made}/${pw.used}`)
+  check('the AI keeps power ahead of what it uses', pw.ratio === 1, `${pw.made} made, ${pw.used} used`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

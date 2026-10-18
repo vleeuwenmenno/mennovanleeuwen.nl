@@ -4,6 +4,7 @@ import type { Owner, World } from '../sim.ts'
 import { sees } from './fog.ts'
 import { TF, TILE, type GroundLayer } from './types.ts'
 import { crystalModel } from '../models/ground.ts'
+import { SITE_DRAW, powerReport } from './power.ts'
 import { drawHull } from '../models/paint.ts'
 import { drawEffects } from './effects.ts'
 import { CARRY, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
@@ -279,5 +280,7 @@ export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   crystalUnder,
   crystals,
   carry: CARRY,
+  power: powerReport,
+  siteDraw: SITE_DRAW,
   effects: drawEffects,
 })

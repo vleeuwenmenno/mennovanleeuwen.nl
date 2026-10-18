@@ -173,6 +173,15 @@ export type GroundSpec = {
   supply?: number
   /** Buildings: engineers drop off the kyber they gather here (a Command Center). */
   dropOff?: boolean
+  /** Buildings: power it makes once built (ground/power.ts), for as long as it can pay its `burn`. */
+  power?: number
+  /** Buildings: kyber a second it burns to make its power (a generator); with none left it stops. */
+  burn?: number
+  /** Buildings: power it draws while busy (ground/power.ts busy: training or upgrading, or for a
+   * research station, all the time). Construction sites draw SITE_DRAW besides, while being built. */
+  draw?: number
+  /** Buildings: research points a second it makes while powered (a research station). */
+  research?: number
   /** Buildings: what it trains, in card order. */
   trains?: string[]
   /** Engineers: the buildings it puts up, in card order. */
@@ -289,7 +298,27 @@ export const groundCenter = (o: GroundWritten): UnitType => ({
   weapons: [], hardpoints: [], engines: [],
   role: { role: 'Base', strong: ['training engineers', 'taking in kyber'], weak: ['being left unguarded'] },
   ...o,
-  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], supply: 5, dropOff: true, ...o.ground },
+  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], supply: 5, dropOff: true, power: 6, draw: 2, ...o.ground },
+})
+
+/** A power generator: a 2 × 2 plant that makes power for the side's base (ground/power.ts), burning
+ * a trickle of kyber to run; with no kyber left it stops. */
+export const groundGenerator = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 2 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 4 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Power', strong: ['powering the base'], weak: ['being left unguarded', 'running out of kyber'] },
+  ...o,
+  ground: { size: 2, radius: 32, accel: 0, sight: 4, foot: [2, 2], power: 10, burn: 0.25, ...o.ground },
+})
+
+/** A research station: a 3 × 3 building that trains nothing but makes research points while it has
+ * power (ground/power.ts); more stations make them faster. */
+export const groundResearch = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 3 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 5 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Research', strong: ['research points'], weak: ['being left unguarded', 'a power cut'] },
+  ...o,
+  ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], draw: 4, research: 0.5, ...o.ground },
 })
 
 /** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does. */

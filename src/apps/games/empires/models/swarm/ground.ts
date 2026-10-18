@@ -156,4 +156,45 @@ export const GROUND: GroundModels = {
       ],
     }),
   },
+  // A Bio-reactor (2 × 2 tiles): a pulsing sac of acid-green fluid digesting kyber, ribbed with dark
+  // chitin, fed by veins, a violet node at its heart.
+  's-g-generator': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const mound = lumps(0, 2, 44, 3, 9)
+      return {
+        breakStyle: 'pie',
+        parts: [
+          part('mound', mound, 'metal', 1, { lift: 2, facets: rimFacets(mound, 0, 2, 0.55, 0.7) }),
+          ...[0.6, 2.2, 3.8, 5.3].map((a, i) => part(`vein${i}`, thick([[Math.cos(a) * 18, Math.sin(a) * 18], [Math.cos(a + 0.3) * 32, Math.sin(a + 0.3) * 32], [Math.cos(a + 0.2) * 44, Math.sin(a + 0.2) * 44]], 5, 1.5), 'dark', 2, { lift: 2 })),
+          part('sac', circle(0, -2, 26, 26, 24), 'aid', 3, { lift: 10, sphere: true, details: [...[-12, 0, 12].map((x) => ({ k: 'line' as const, pts: [[x, -24], [x * 1.1, 20]] as Pt[] }))] }),
+          part('glow', circle(-4, -8, 9, 16), 'aid', 4, { lift: 12, glow: true }),
+          part('node', circle(6, 6, 5, 12), 'glass', 5, { lift: 12, glow: true }),
+          part('maw', spline([[-9, 38], [0, 35], [9, 38], [6, 45], [0, 47], [-6, 45]] as Pt[], 3, true), 'dark', 3, { lift: 1 }),
+        ],
+      }
+    },
+  },
+  // A Mind Node (3 × 3 tiles): a ganglion of nerve pods round a violet thinking core on a chitin
+  // mound, linked by glowing strands.
+  's-g-research': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const mound = lumps(0, 2, 45, 3.5, 10)
+      const pods: [number, number, number][] = [[-24, -20, 11], [22, -22, 12], [28, 12, 10], [-26, 16, 10], [0, 28, 9]]
+      return {
+        breakStyle: 'pie',
+        parts: [
+          part('mound', mound, 'metal', 1, { lift: 3, facets: rimFacets(mound, 0, 2, 0.55, 0.7) }),
+          ...pods.map(([x, y], i) => part(`strand${i}`, thick([[x * 0.3, y * 0.3], [x, y]], 3, 1.5), 'glow', 2, { lift: 4, glow: true })),
+          ...pods.map(([x, y, r], i) => part(`pod${i}`, circle(x, y, r, 18), i % 2 ? 'hull2' : 'hull', 3, { lift: 7, sphere: true, details: [{ k: 'shape', pts: circle(x - r * 0.2, y - r * 0.2, r * 0.4, 10), tone: 'accent' }] })),
+          part('coreRing', circle(0, 0, 17, 22), 'dark', 4, { lift: 8 }),
+          part('core', circle(0, 0, 12, 22), 'glow', 5, { lift: 10, glow: true, details: [{ k: 'shape', pts: circle(-3, -3, 5, 12), tone: 'glass' }] }),
+          part('maw', spline([[-10, 40], [0, 37], [10, 40], [7, 46], [0, 48], [-7, 46]] as Pt[], 3, true), 'dark', 3, { lift: 1 }),
+        ],
+      }
+    },
+  },
 }

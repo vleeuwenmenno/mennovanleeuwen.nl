@@ -3573,8 +3573,33 @@ fit under its cap, trains engineers where the queue is shortest (seven a Command
 most), saves up and expands with a second Command Center beside a crystal field on its own side that
 none of its Command Centers serves yet, sends idle engineers to its sites and damaged buildings
 (taking a gatherer off its field for a site nobody is building), calls off a site nobody manages to
-start within 90 seconds, and fields a few Scouts (see Ground combat below). It reads only what its
+start within 90 seconds, builds a power generator whenever its power isn't ahead of a site going up
+(and of the research stations it wants), then a research station for each Command Center (two at
+most) once a generator runs, and fields a few Scouts (see Ground combat below). It reads only what its
 team knows and gives the same orders a player does, so every copy of a battle makes the same choices.
+
+**Power and research points** ([`ground/power.ts`](src/apps/games/empires/ground/power.ts)), per
+side, worked out once a tick by the buildings' work:
+
+| Building | Republic | Confederacy | Swarm | Size | Cost, time | Power |
+| --- | --- | --- | --- | --- | --- | --- |
+| Command Center | Command Center | Command Hub | Hive Nexus | 6 × 6 | 1,200, 60 s | makes 6; draws 2 while training |
+| Power generator | Power Generator | Power Relay | Bio-reactor | 2 × 2 | 150, 20 s | makes 10, burning 0.25 kyber a second (15 a minute) |
+| Research station | Research Station | Data Core | Mind Node | 3 × 3 | 200, 30 s | draws 4 all the time; makes 0.5 research points a second (30 a minute) |
+| Any site | | | | | | draws 3 while engineers build it |
+
+- **Made:** finished buildings with power (GroundSpec `power`). A generator burns its kyber every
+  tick; when the side can't pay a tick's burn, it makes nothing that tick, and starts again once
+  there is kyber.
+- **Used:** whatever is busy (`busyDraw`): a site while engineers build it, a building with a `draw`
+  while its queue isn't empty (the Command Center while it trains; the factories of later phases
+  draw the same way while producing or upgrading), and a research station all the time.
+- **Short of power,** every consumer of that side runs at made / used of its speed: sites, training
+  and research points alike, the same share for all, so nothing depends on their order. A new base
+  runs on its Command Center alone (training and one site draw 5 of its 6); a second job at once, or
+  a research station while training or building, needs a generator.
+- **Research points** are banked per side (Player `rp`, in the hash and in snapshots, with the kyber
+  burnt), for the factories' upgrades of later phases to spend.
 
 ### Ground combat
 
@@ -3657,7 +3682,7 @@ are each faction's Scout with the weapon on a turret, medium armour and 600 hull
 lobby or Codex.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), each in step across two copies, a snapshot thaw and a replay; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), each in step across two copies, a snapshot thaw and a replay; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
 pnpm check:ground-models # every ground unit has a model through the model lookup, and every crystal cluster shape one, sound and the same every time
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
@@ -3707,6 +3732,13 @@ differs:
   orbit), and as orange dots on the minimap and the lobby's preview. An engineer carrying kyber
   shows an orange crystal on its back, bigger as its load fills, and sparks while it mines. A field
   running dry is a toast. Kyber's icon and the economy panel's kyber are orange too.
+- **Power and research points** sit in the top bar after the units: power as made / used (red
+  when short), its tip breaking it down (Command Centers and generators, those stopped for want of
+  kyber, the kyber burnt a minute; construction, training and research), and the research points
+  banked, their tip saying how fast they come. Build cards show a building's power (+10, −4), a site
+  or a building slowed for want of power says so ("Low power: 70% speed"), a generator's and a
+  research station's panels say what they make, and the economy panel adds power and research
+  points.
 - The top bar shows kyber with its crystal icon and what was gathered a minute lately, the units
   against the cap, and an **idle engineer** button (with a count) that selects the next idle
   engineer and looks at it, round them all in turn. It leaves out ore, beacons and research. The
