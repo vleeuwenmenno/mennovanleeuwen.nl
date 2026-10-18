@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -146,7 +146,7 @@ const GROUND: UnitType[] = [
   groundEngineer({
     id: 'd-g-engineer', faction: 'droid', name: 'Forger builder droid', sprite: 'droid-g-engineer',
     blurb: 'A hovering fabricator droid with cutting arms and a plate rack. Unarmed and light, but quick: it cuts kyber crystals and ferries them to a Command Hub, raises buildings and patches damaged ones.',
-    hull: 110, cost: 140, build: 11, speed: 104, turn: 5.2, ground: { radius: 10, accel: 260, builds: ['d-g-supply', 'd-g-generator', 'd-g-research', 'd-g-center'] },
+    hull: 110, cost: 140, build: 11, speed: 104, turn: 5.2, ground: { radius: 10, accel: 260, builds: ['d-g-supply', 'd-g-generator', 'd-g-botfactory', 'd-g-foundry', 'd-g-research', 'd-g-center'] },
   }),
   groundCenter({
     id: 'd-g-center', faction: 'droid', name: 'Command Hub', sprite: 'droid-g-center',
@@ -169,6 +169,16 @@ const GROUND: UnitType[] = [
     id: 'd-g-research', faction: 'droid', name: 'Data Core', sprite: 'droid-g-research',
     blurb: 'A shielded computing block round a glowing core. It makes research points while powered; the factories spend them on upgrades.',
     hull: 1600, cost: 200, build: 30, ground: {},
+  }),
+  groundFactory({
+    id: 'd-g-botfactory', faction: 'droid', name: 'Bot Factory', sprite: 'droid-g-botfactory', makes: 'foot',
+    blurb: 'An eight-sided assembly deck round a stamping press, with a wide shutter in its side. Battle droids march out of it in squads, fresh off the line; it draws power while it works.',
+    hull: 2300, cost: 230, build: 32, ground: { trains: ['d-g-droids'] },
+  }),
+  groundFactory({
+    id: 'd-g-foundry', faction: 'droid', name: 'Vehicle Foundry', sprite: 'droid-g-foundry', makes: 'vehicle',
+    blurb: 'A heavy smelting block with glowing furnace vents and a wide hangar shutter. It casts the Confederacy\'s tanks and speeders, which roll out of the shutter; it draws power while it works.',
+    hull: 3100, cost: 380, build: 42, ground: { trains: ['d-g-razor'] },
   }),
   groundScout({
     id: 'd-g-scout', faction: 'droid', name: 'Probe droid', sprite: 'droid-g-scout',

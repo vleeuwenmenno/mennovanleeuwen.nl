@@ -1792,7 +1792,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                 // On the ground the AI doesn't fight yet: its own words, not the space admiral's.
                 if (ground) return (
                   <p className="ew-muted ew-small">
-                    On the ground the AI builds up but doesn't attack yet: it keeps its engineers gathering kyber, puts up supply before it reaches its unit cap, trains more engineers, and expands with a second Command Center towards the crystal fields. Difficulty and style don't change it yet.
+                    On the ground the AI builds up but doesn't attack yet: it keeps its engineers gathering kyber, puts up supply before it reaches its unit cap, keeps its power up, builds a foot and a vehicle factory and trains a few of their units to guard its base, trains more engineers, and expands with a second Command Center towards the crystal fields. Difficulty and style don't change it yet.
                   </p>
                 )
                 return (

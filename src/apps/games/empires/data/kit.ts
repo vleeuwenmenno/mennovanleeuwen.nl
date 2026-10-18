@@ -182,8 +182,17 @@ export type GroundSpec = {
   draw?: number
   /** Buildings: research points a second it makes while powered (a research station). */
   research?: number
-  /** Buildings: what it trains, in card order. */
+  /** Buildings: what it trains, in card order. Ids the game doesn't know (a unit not added yet) are
+   * left out of its cards and can't be ordered. */
   trains?: string[]
+  /** Factories: whether it trains foot units (squads) or vehicles; the AI picks its factories by it. */
+  factory?: 'foot' | 'vehicle'
+  /**
+   * Tiers. For a building that trains: the tier it stands at once built (1 when left out; upgrades
+   * raise it later). For a unit: the tier its trainer must have reached to train it (1 when left
+   * out). Tier 1 units are small and simple, tier 2 medium, tier 3 the big ones.
+   */
+  tier?: number
   /** Engineers: the buildings it puts up, in card order. */
   builds?: string[]
   /** Armour class (ground/combat.ts, GROUND_VS): vehicles light unless they say, buildings structure. */
@@ -327,6 +336,23 @@ export const groundResearch = (o: GroundWritten): UnitType => ({
   ...o,
   ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], draw: 4, research: 0.5, ...o.ground },
 })
+
+/** A factory: a building that trains a faction's fighting units, foot units (squads) at a 4 × 4 one
+ * and vehicles at a 5 × 5 one, out of a wide door in its south side. It draws power while it trains
+ * (ground/power.ts) and stands at tier 1 once built. */
+export const groundFactory = (o: GroundWritten & { makes: 'foot' | 'vehicle' }): UnitType => {
+  const { makes, ...rest } = o
+  const n = makes === 'foot' ? 4 : 5
+  return {
+    tier: 'building', aspect: 1, size: n * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: (n + 2) * 32,
+    weapons: [], hardpoints: [], engines: [],
+    role: makes === 'foot'
+      ? { role: 'Infantry', strong: ['training foot squads'], weak: ['being left unguarded', 'a power cut'] }
+      : { role: 'Vehicles', strong: ['training vehicles'], weak: ['being left unguarded', 'a power cut'] },
+    ...rest,
+    ground: { size: 3, radius: n * 16, accel: 0, sight: n + 2, foot: [n, n], factory: makes, tier: 1, draw: makes === 'foot' ? 3 : 5, ...rest.ground },
+  }
+}
 
 /** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does. */
 export const groundSupply = (o: GroundWritten): UnitType => ({

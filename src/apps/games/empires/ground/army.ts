@@ -8,6 +8,8 @@ import { knownBuildings } from './world.ts'
 // Scouts once its economy is going, sends one off to scout (the enemy's start first, then the map's
 // spawns and crystal fields), turns them all on anything that comes near its buildings, and with the
 // rest goes after the enemy engineers it sees and the enemy buildings it knows of, unarmed ones first.
+// The units its factories train (think.ts) only defend for now: they wait at their rally points and
+// join the Scouts against anything that comes near.
 // Only what its team knows, the world's random stream, the same orders a player gives.
 
 /** Scouts it keeps (more once it is rich), and the engineers it has before it trains any. */
@@ -34,6 +36,7 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
   const scoutId = Object.values(UNIT).find((t) => t.faction === p.faction && t.ground && t.tier === 'vehicle' && t.role?.role === 'Scout')?.id
   if (!scoutId) return
   const scouts = mine.filter((u) => u.t.id === scoutId)
+  const guards = mine.filter((u) => !u.foot && u.t.id !== scoutId && u.t.weapons.length > 0 && !u.t.ground?.builds?.length)
   const engineers = mine.filter((u) => !!u.t.ground?.builds?.length)
   const buildings = mine.filter((u) => !!u.foot)
   const centers = buildings.filter((u) => !u.site && !!u.t.ground?.trains?.includes(scoutId))
@@ -45,9 +48,9 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
     const at = centers.find((c) => !cantBuild(w, o, scoutId, false, c.id))
     if (at) cmdBuild(w, o, scoutId, false, at.id)
   }
-  if (!scouts.length) return
+  if (!scouts.length && !guards.length) return
 
-  // 2. Defence: every Scout on the enemy nearest our buildings or engineers, when one comes near.
+  // 2. Defence: every Scout and factory unit on the enemy nearest our buildings or engineers, when one comes near.
   let threat: Unit | undefined
   let td = Infinity
   const guarded = [...buildings, ...engineers]
@@ -62,10 +65,11 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
     }
   }
   if (threat) {
-    const free = scouts.filter((u) => !(u.order.k === 'attack' && u.order.id === threat!.id))
+    const free = [...scouts, ...guards].filter((u) => !(u.order.k === 'attack' && u.order.id === threat!.id))
     if (free.length) cmdAttack(w, o, free.map((u) => u.id), threat.id)
     return
   }
+  if (!scouts.length) return
 
   // 3. Scouting: the first Scout goes round the map, the enemy's start first.
   const scout = scouts.find((u) => u.id === b.gScout) ?? scouts[0]

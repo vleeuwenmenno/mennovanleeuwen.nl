@@ -281,16 +281,31 @@ export function newGround(w: World): GroundState {
 }
 
 /** The ground unit types of `faction`: its engineer, its Command Center, its supply building, its
- * power generator and its research station. */
-export function groundIds(faction: string): { engineer: string; center: string; supply: string; generator: string; research: string } {
+ * power generator, its research station and its foot and vehicle factories ('' for one it lacks). */
+export function groundIds(faction: string): { engineer: string; center: string; supply: string; generator: string; research: string; barracks: string; vfactory: string } {
   const own = Object.values(UNIT).filter((t) => t.faction === faction && t.ground)
   return {
     engineer: own.find((t) => isEngineer(t))!.id,
-    center: own.find((t) => isGroundBuilding(t) && t.ground!.trains?.length)!.id,
+    center: own.find((t) => isGroundBuilding(t) && t.ground!.dropOff)!.id,
     supply: own.find((t) => isGroundBuilding(t) && !t.ground!.trains?.length && t.ground!.supply)!.id,
     generator: own.find((t) => isGroundBuilding(t) && !!t.ground!.burn)?.id ?? '',
     research: own.find((t) => isGroundBuilding(t) && !!t.ground!.research)?.id ?? '',
+    barracks: own.find((t) => isGroundBuilding(t) && t.ground!.factory === 'foot')?.id ?? '',
+    vfactory: own.find((t) => isGroundBuilding(t) && t.ground!.factory === 'vehicle')?.id ?? '',
   }
+}
+
+/** The tier building `s` stands at (GroundSpec `tier`: 1 until upgrades raise it). */
+export const tierOf = (s: Unit) => s.t.ground?.tier ?? 1
+
+/** The tier a building must stand at to train ground unit `t` (GroundSpec `tier`, 1 when left out). */
+export const tierNeeded = (t: UnitType | undefined) => t?.ground?.tier ?? 1
+
+/** What building `s` trains that the game knows, in card order: a `trains` id with no unit type yet is
+ * left out. */
+export const trainsOf = (s: { t: UnitType } | UnitType): UnitType[] => {
+  const t = 't' in s ? s.t : s
+  return (t.ground?.trains ?? []).map((id) => UNIT[id]).filter((x): x is UnitType => !!x)
 }
 
 const gs = (w: World) => w.ground!
@@ -1378,14 +1393,22 @@ export const QUEUE_MAX = 10
 /** The building that trains `id` for `owner`: `at` when it is one of ours that does, else the one of
  * ours with the shortest queue (the first on a tie). Why not, when there is none. */
 function trainerFor(w: World, owner: Owner, id: string, at: number): Unit | string {
-  const ok = (u: Unit | undefined): u is Unit => !!u && !u.dead && u.owner === owner && !!u.foot && !u.site && !!u.yq && !!u.t.ground?.trains?.includes(id)
+  const t = UNIT[id]
+  const can = (u: Unit | undefined): u is Unit => !!u && !u.dead && u.owner === owner && !!u.foot && !u.site && !!u.yq && !!u.t.ground?.trains?.includes(id)
+  // A trainer whose tier is too low for it (phase 5's upgrades raise it).
+  const ok = (u: Unit | undefined): u is Unit => can(u) && tierOf(u) >= tierNeeded(t)
   if (at) {
     const u = w.byId.get(at)
-    return ok(u) ? u : "That building can't train it"
+    if (!can(u)) return "That building can't train it"
+    return tierOf(u) >= tierNeeded(t) ? u : `Needs the ${u.t.name} at tier ${tierNeeded(t)}`
   }
   let best: Unit | undefined
   for (const u of w.units) if (ok(u) && (!best || u.yq!.length < best.yq!.length)) best = u
-  return best ?? 'No building of ours trains that'
+  if (best) return best
+  const low = w.units.find((u) => can(u))
+  if (low) return `Needs a ${low.t.name} at tier ${tierNeeded(t)}`
+  const maker = Object.values(UNIT).find((m) => m.faction === w.players[owner].faction && m.ground?.trains?.includes(id))
+  return maker ? `Build a ${maker.name} to train it` : 'No building of ours trains that'
 }
 
 /** The queue a ground unit is trained in (sim.ts queueFor), or why there is none. */

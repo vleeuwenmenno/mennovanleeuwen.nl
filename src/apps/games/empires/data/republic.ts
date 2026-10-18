@@ -3,7 +3,7 @@
 // data.ts. Points on a ship are on the 0-10 grid over its box, x from the left and y from the nose
 // (see data.ts).
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] }
 
@@ -274,7 +274,7 @@ const GROUND: UnitType[] = [
   groundEngineer({
     id: 'r-g-engineer', faction: 'republic', name: 'Mason field engineer', sprite: 'republic-g-engineer',
     blurb: 'A tracked utility rig with a crane arm and a welding torch. Unarmed: it mines kyber crystals and hauls them to a Command Center, raises buildings and welds damaged ones back together.',
-    hull: 150, cost: 150, build: 12, speed: 88, turn: 4, ground: { radius: 11, builds: ['r-g-supply', 'r-g-generator', 'r-g-research', 'r-g-center'] },
+    hull: 150, cost: 150, build: 12, speed: 88, turn: 4, ground: { radius: 11, builds: ['r-g-supply', 'r-g-generator', 'r-g-barracks', 'r-g-vfactory', 'r-g-research', 'r-g-center'] },
   }),
   groundCenter({
     id: 'r-g-center', faction: 'republic', name: 'Command Center', sprite: 'republic-g-center',
@@ -297,6 +297,16 @@ const GROUND: UnitType[] = [
     id: 'r-g-research', faction: 'republic', name: 'Research Station', sprite: 'republic-g-research',
     blurb: 'Sensor dishes and a lab dome round a data spire. It makes research points while powered; the factories spend them on upgrades.',
     hull: 1600, cost: 200, build: 30, ground: {},
+  }),
+  groundFactory({
+    id: 'r-g-barracks', faction: 'republic', name: 'Barracks', sprite: 'republic-g-barracks', makes: 'foot',
+    blurb: 'A white blast-walled hall with a red-striped drop door and an armoury on its roof. It trains clone trooper squads, who march out of its wide door; it draws power while it trains.',
+    hull: 2600, cost: 250, build: 35, ground: { trains: ['r-g-troopers'] },
+  }),
+  groundFactory({
+    id: 'r-g-vfactory', faction: 'republic', name: 'Vehicle Factory', sprite: 'republic-g-vfactory', makes: 'vehicle',
+    blurb: 'A long assembly hangar with a gantry crane over its roof and a wide armoured gate. It builds the Republic\'s walkers and speeders, which roll out of the gate; it draws power while it builds.',
+    hull: 3400, cost: 400, build: 45, ground: { trains: ['r-g-raider'] },
   }),
   groundScout({
     id: 'r-g-scout', faction: 'republic', name: 'Pathfinder speeder', sprite: 'republic-g-scout',

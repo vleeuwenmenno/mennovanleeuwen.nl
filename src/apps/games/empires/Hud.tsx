@@ -2561,7 +2561,7 @@ const GROUND_CREW = [0, 1, 1.7, 2.2, 2.5]
 function powerLine(t: UnitType): { short: string; tip: string; made: boolean } | null {
   const g = t.ground
   if (!g || (!g.power && !g.draw)) return null
-  const made = !!g.power && !g.burn ? `makes ${g.power}${g.draw ? `, draws ${g.draw} while training` : ''}` : g.power ? `makes ${g.power}, burning ${Math.round(g.burn! * 60)} kyber a minute` : `draws ${g.draw}${g.research ? ' all the time' : ' while busy'}`
+  const made = !!g.power && !g.burn ? `makes ${g.power}${g.draw ? `, draws ${g.draw} while training` : ''}` : g.power ? `makes ${g.power}, burning ${Math.round(g.burn! * 60)} kyber a minute` : `draws ${g.draw}${g.research ? ' all the time' : ' while training'}`
   return { short: g.power ? `+${g.power}` : `−${g.draw}`, tip: made, made: !!g.power }
 }
 
@@ -2638,8 +2638,9 @@ function GroundSiteBox({ w, me, b, onCancelSite }: { w: World; me: Owner; b: Uni
   )
 }
 
-/** One of our ground buildings (a Command Center): while it goes up, its site; once built, what it
- * trains, its queue, and its rally point (right-click to set it). */
+/** One of our ground buildings (a Command Center, a factory, …): while it goes up, its site; once
+ * built, what it trains (the unit types the game knows), its queue, and its rally point (right-click
+ * to set it). */
 function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
   const { w, me, b, hud } = p
   const site = !!b.site
@@ -2652,7 +2653,7 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
       <Frame className="ew-detail is-station is-yard">
         <div className="ew-detail-side">
           <Schematic u={b} size={96} tip={unitTip(b.t, ownerTag(w, me, b.owner), undefined, b)} />
-          <SideName w={w} me={me} u={b} sub={site ? 'Going up' : [b.t.ground?.dropOff ? 'Takes in kyber' : '', b.t.ground?.supply ? `Supports ${b.t.ground.supply} units` : '', b.t.ground?.power ? `+${b.t.ground.power} power` : '', b.t.ground?.research ? 'Research points' : ''].filter(Boolean).join(' · ')} info={b.t.blurb} />
+          <SideName w={w} me={me} u={b} sub={site ? 'Going up' : [b.t.ground?.dropOff ? 'Takes in kyber' : '', b.t.ground?.factory ? `Tier ${b.t.ground.tier ?? 1} · ${b.t.ground.factory === 'foot' ? 'Foot units' : 'Vehicles'}` : '', b.t.ground?.supply ? `Supports ${b.t.ground.supply} units` : '', b.t.ground?.power ? `+${b.t.ground.power} power` : '', b.t.ground?.research ? 'Research points' : ''].filter(Boolean).join(' · ')} info={b.t.blurb} />
           <Vitals u={b} now={w.time} />
         </div>
         <div className="ew-detail-main">
@@ -2664,6 +2665,7 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
               {b.t.ground?.burn ? <>Makes {b.t.ground.power} power, burning {Math.round(b.t.ground.burn * 60)} kyber a minute{w.players[me].credits < b.t.ground.burn / 30 ? ': stopped, no kyber left.' : '.'} Your power: {fmt(hud.power?.made ?? 0)} made, {fmt(hud.power?.used ?? 0)} used.</> : null}
               {b.t.ground?.research ? <>Makes {Math.round(b.t.ground.research * 60 * (w.players[me].power?.ratio ?? 1))} research points a minute, drawing {b.t.ground.draw} power. {fmt(hud.rp ?? 0)} points banked: the factories will spend them on upgrades.</> : null}
               {b.t.ground?.research && lowPower(w, me) ? <> <span className="ew-lowpower">{lowPower(w, me)}</span></> : null}
+              {b.t.ground?.trains?.length ? <>It trains {b.t.ground.factory === 'foot' ? 'foot units' : 'vehicles'}, drawing {b.t.ground.draw ?? 0} power while it does; none are ready to train here yet.</> : null}
             </p>
           ) : (
             <>

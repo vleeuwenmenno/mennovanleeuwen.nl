@@ -197,6 +197,80 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // The Brood Chamber (4 × 4 tiles): a ribbed mound of resin round a warm brood pit of eggs, green
+  // nutrient sacs, tendrils into the ground and a wide maw to the south that the packs crawl out of.
+  's-g-brood': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const mound = lumps(0, -2, 44, 3.5, 12)
+      const ribs = [-2.6, -2.05, -1.5, -1.0, -0.5, 0.0, 0.5].map((a, i) => {
+        const p = (r: number): Pt => [Math.cos(a - 0.55) * r, -2 + Math.sin(a - 0.55) * r]
+        return part(`rib${i}`, thick(spline([p(20), p(30), p(41)], 3), 6, 3), i % 2 ? 'hull2' : 'hull', 2, { lift: 6, slope: [Math.cos(a - 0.55) * 0.7, Math.sin(a - 0.55) * 0.7] })
+      })
+      const eggs: Pt[] = [[-6, -8], [5, -9], [-9, 2], [8, 1], [0, -1], [-2, 9], [7, 9]]
+      return {
+        breakStyle: 'pie',
+        parts: [
+          ...[0.9, 2.3, 3.9, 5.4].map((a, i) => part(`tendril${i}`, thick(spline([[Math.cos(a) * 34, Math.sin(a) * 34], [Math.cos(a + 0.12) * 42, Math.sin(a + 0.12) * 42], [Math.cos(a + 0.2) * 49, Math.sin(a + 0.2) * 49]], 3), 6, 1.5), 'metal', 0.6, { lift: 1.5 })),
+          part('mound', mound, 'metal', 1, { lift: 4, facets: rimFacets(mound, 0, -2, 0.55, 0.7) }),
+          ...ribs,
+          ...[1.0, 2.2, 0.3].map((a, i) => part(`sac${i}`, circle(Math.cos(a + 1.6) * 33, Math.sin(a + 1.6) * 33, 4.5, 12), 'aid', 3, { lift: 4, sphere: true })),
+          // The brood pit and its eggs.
+          part('pit', circle(0, 0, 20, 24), 'dark', 3, { lift: 3, details: [{ k: 'line', pts: circle(0, 0, 17, 22) }] }),
+          part('pool', circle(0, 0, 15, 22), 'aid', 4, { lift: 3.5, glow: true }),
+          ...eggs.map(([x, y], i) => part(`egg${i}`, circle(x, y, 4, 12, 4.8), i % 2 ? 'hull2' : 'hull', 5, { lift: 5, sphere: true, details: [{ k: 'shape', pts: circle(x - 1, y - 1.4, 1.4, 8), tone: 'glow' }] })),
+          // The wide maw to the south.
+          part('maw', spline([[-22, 34], [0, 30], [22, 34], [18, 44], [0, 47], [-18, 44]] as Pt[], 3, true), 'dark', 3, {
+            lift: 1,
+            details: [{ k: 'lights', pts: [[-12, 40], [0, 42], [12, 40]], r: 1.4, tone: 'glow' }],
+          }),
+        ],
+      }
+    },
+  },
+  // The Vehicle Nest (5 × 5 tiles): a great shell of chitin plates round a violet birthing pool, a
+  // half-grown beast curled in it, spines along the shell's rim, tendrils into the ground, and a maw
+  // to the south wide enough for the beasts it grows.
+  's-g-nest': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const mound = lumps(0, 0, 46, 3, 13)
+      const plates = Array.from({ length: 8 }, (_, i) => {
+        const a0 = (i / 8) * Math.PI * 2 - Math.PI / 2 + 0.1 + Math.PI / 8
+        const a1 = a0 + Math.PI / 4 - 0.2
+        const am = (a0 + a1) / 2
+        return part(`plate${i}`, arcBand(0, 0, 24, 41, a0, a1, 6), i % 2 ? 'hull2' : 'hull', 2, {
+          lift: 7,
+          slope: [Math.cos(am) * 0.8, Math.sin(am) * 0.8],
+          details: [{ k: 'line', pts: arcBand(0, 0, 28, 37, a0 + 0.07, a1 - 0.07, 4).slice(0, 5) }],
+        })
+      })
+      // The plates leave the south open: the maw.
+      const shell = plates.filter((_, i) => i !== 3)
+      const spines = [-2.4, -1.9, -1.2, -0.7, 0.1, 0.6, 2.6, 3.1].map((a, i) => part(`spine${i}`, capsule([Math.cos(a) * 40, Math.sin(a) * 40], [Math.cos(a) * 49, Math.sin(a) * 49], 2.6, 0.8), 'accent', 3, { lift: 9 }))
+      return {
+        breakStyle: 'pie',
+        parts: [
+          ...[0.2, 1.1, 2.0, 3.4, 4.3, 5.3].map((a, i) => part(`tendril${i}`, thick(spline([[Math.cos(a) * 36, Math.sin(a) * 36], [Math.cos(a - 0.15) * 44, Math.sin(a - 0.15) * 44], [Math.cos(a - 0.22) * 50, Math.sin(a - 0.22) * 50]], 3), 7, 1.5), 'metal', 0.6, { lift: 1.5 })),
+          part('mound', mound, 'metal', 1, { lift: 4, facets: rimFacets(mound, 0, 0, 0.6, 0.7) }),
+          ...shell,
+          ...spines,
+          // The birthing pool, violet, with a half-grown beast curled in it.
+          part('poolRing', circle(0, 0, 22, 26), 'dark', 3, { lift: 3 }),
+          part('pool', circle(0, 0, 18, 26), 'glow', 4, { lift: 3.5, glow: true }),
+          part('beast', thick(spline([[-9, -6], [2, -11], [10, -2], [6, 8], [-4, 7]], 4), 9, 4), 'hull2', 5, { lift: 6, details: [{ k: 'line', pts: [[-2, -9], [9, 1]] }] }),
+          ...[0.6, 2.5, 4.0].map((a, i) => part(`sac${i}`, circle(Math.cos(a) * 31, Math.sin(a) * 31 - 8, 4.5, 12), 'aid', 3, { lift: 8, sphere: true })),
+          // The wide maw to the south.
+          part('maw', spline([[-26, 32], [0, 27], [26, 32], [22, 44], [0, 48], [-22, 44]] as Pt[], 3, true), 'dark', 3, {
+            lift: 1,
+            details: [{ k: 'lights', pts: [[-14, 39], [0, 41], [14, 39]], r: 1.5, tone: 'glow' }],
+          }),
+        ],
+      }
+    },
+  },
   // A swarmling, one bug of a pack (GroundSpec `squad`): a purple carapace over its abdomen, a pale
   // thorax and head, mandibles, six legs. It scuttles on alternate tripods (poses 1 and 2: one
   // front leg, the other side's middle one and the back one forward together).

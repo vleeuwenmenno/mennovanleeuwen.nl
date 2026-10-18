@@ -37,6 +37,14 @@
 //    up all run at made / used of their speed, to the tick; a power generator puts it right, burning
 //    its kyber every tick; with no kyber left it stops, and the shortage is back. The AI builds a
 //    generator and a research station and banks research points.
+// 3e. A factory battle on Ashwater Crossing, seat 0 scripted (Republic), seat 1 the AI (Confederacy),
+//    checked the same way: an engineer builds a Barracks; a Vehicle Factory (raised) takes five
+//    units in a queue, one cancelled and refunded in full; they roll out of its door one by one and
+//    drive to its rally point; it draws its power only while its queue isn't empty, and short of
+//    power its training runs at made / used of its speed, to the tick; a unit needing tier 2 is
+//    refused at a tier 1 factory, and an id the game doesn't know is refused, not trained. The
+//    factories' tier 1 units are stand-ins until they are added (ground-test-units.ts). Then a longer
+//    AI run: it builds a foot and a vehicle factory, keeps its power up and trains a mix of both.
 // 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
 //    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
@@ -70,7 +78,7 @@ const check = (what: string, ok: boolean, detail = '') => {
 }
 
 // The checks' own test units (a vehicle of each size class, a small building).
-import './ground-test-units.ts'
+import { TIER1, TIER2_TEST } from './ground-test-units.ts'
 
 // --- 1. Sources -------------------------------------------------------------------------------------
 
@@ -95,7 +103,7 @@ import './ground-test-units.ts'
 const dustfall = groundMapDef('dustfall-ridge')!
 const mesa = groundMapDef('test-mesa')!
 const ashwater = groundMapDef('ashwater-crossing')!
-const R = { engineer: 'r-g-engineer', center: 'r-g-center', supply: 'r-g-supply', generator: 'r-g-generator', research: 'r-g-research' }
+const R = { engineer: 'r-g-engineer', center: 'r-g-center', supply: 'r-g-supply', generator: 'r-g-generator', research: 'r-g-research', barracks: 'r-g-barracks', vfactory: 'r-g-vfactory' }
 const S = { engineer: 's-g-engineer', center: 's-g-center', supply: 's-g-supply' }
 const D = { engineer: 'd-g-engineer', center: 'd-g-center', supply: 'd-g-supply' }
 
@@ -440,7 +448,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const aiCenters = ai.filter((u) => u.t.id === S.center && !u.site).length
   const aiEngs = ai.filter((u) => u.t.id === S.engineer).length
   check('building battle: the AI trained engineers and expanded to a second Command Center', aiCenters >= 2 && aiEngs >= 3, `${aiCenters} Hive Nexuses, ${aiEngs} Shaper drones`)
-  check('building battle: the AI built nothing but engineers, Command Centers, supply, power, research and Scouts', ai.every((u) => [S.center, S.engineer, S.supply, 's-g-generator', 's-g-research', 's-g-scout'].includes(u.t.id)))
+  check('building battle: the AI built nothing but engineers, Command Centers, supply, power, research, factories and their units, and Scouts', ai.every((u) => [S.center, S.engineer, S.supply, 's-g-generator', 's-g-research', 's-g-scout', 's-g-brood', 's-g-nest', ...TIER1.swarm].includes(u.t.id)))
   check('building battle: each side knows where the other started', !!w.known?.[0].some((k) => k.owner === 1) && !!w.known?.[1].some((k) => k.owner === 0))
   console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}`)
 }
@@ -724,6 +732,137 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const pw = w.players[1].power!
   check('the AI builds power generators and a research station, and banks research points', gens >= 1 && labs >= 1 && (w.players[1].rp ?? 0) > 0, `${gens} generators, ${labs} research stations, ${Math.round(w.players[1].rp ?? 0)} points, power ${pw.made}/${pw.used}`)
   check('the AI keeps power ahead of what it uses', pw.ratio === 1, `${pw.made} made, ${pw.used} used`)
+}
+
+// --- 3e. The factory battle -----------------------------------------------------------------------------
+
+{
+  const make = (): Copy => ({ w: newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 61, credits: 5000 }), brains: [newBrain(1, 'medium')] })
+  const ticks = Math.round(Math.max(seconds, 150) / STEP)
+  const got: Record<string, [boolean, string]> = {}
+  const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
+  const bad: Record<string, number> = {}
+  const miss = (k: string) => (bad[k] = (bad[k] ?? 0) + 1)
+  const [, raider] = TIER1.republic
+  const vt = UNIT[R.vfactory]
+  // For the tier rule and unknown ids: a tier 2 unit and an id nobody defines, on the factory's list.
+  const trainsWas = vt.ground!.trains!
+  vt.ground!.trains = [...trainsWas, TIER2_TEST, 'r-g-no-such-unit']
+  let home: Unit | undefined
+  let first: Unit | undefined
+  let fac: Unit | undefined
+  let barracksSite = 0
+  let barracksBuilt = -1
+  let rallyAt: { x: number; y: number } | null = null
+  let prev: { q?: { item: object; left: number }; ratio: number } | null = null
+  let trained = 0
+  let outDoor = 0
+  let arrived = 0
+  let drawn = 0
+  let idle = 0
+  let short = 0
+  const draw = vt.ground!.draw!
+  lockstep('factory battle', make, ticks, ({ w }, t, say) => {
+    home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
+    first ??= w.units.find((u) => u.owner === 0 && u.t.id === R.engineer)!
+    const order = (c: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(c) })
+    const p = w.players[0]
+    for (const e of w.events) {
+      if (e.k === 'built' && e.unit === R.barracks && barracksBuilt < 0) barracksBuilt = t
+      if (e.k === 'trained' && fac && e.from === fac.id) {
+        trained++
+        // Out of its door: the middle of the factory's south side, just beyond it.
+        const [fw, fh] = vt.ground!.foot!
+        const bottom = (fac.foot!.r + fh) * TILE
+        if (e.y > bottom && e.y < bottom + 2 * TILE && Math.abs(e.x - (fac.foot!.c + fw / 2) * TILE) < TILE * 1.5) outDoor++
+      }
+    }
+    w.events.length = 0
+    // Last tick's training at the factory, as the power said.
+    const pw = p.power
+    if (fac && pw && prev) {
+      const q = fac.yq![0]
+      if (q && prev.q && prev.q.item === q && q.left > 0 && Math.abs(prev.q.left - q.left - STEP * pw.ratio) > 1e-9) miss('training')
+      if (q && prev.q && prev.q.item === q && pw.ratio < 1) short++
+    }
+    // 1/3 s: a Supply Depot and the Vehicle Factory, finished (as the dev cheats raise them).
+    if (t === 10) {
+      for (const [type, dx, dy] of [[R.supply, -9, 0], [R.vfactory, 10, 2]] as const) {
+        const at = find(w, 0, type, null, { x: home.x + dx * TILE, y: home.y + dy * TILE })!
+        const pl = groundPlacement(w, 0, type, at.x, at.y)
+        say({ t, k: 'add', unit: type, owner: 0, c: pl.tc, r: pl.tr })
+      }
+      fac = w.units.find((u) => u.owner === 0 && u.t.id === R.vfactory)
+    }
+    // 2/3 s: the first engineer puts up a Barracks.
+    if (t === 20) {
+      const at = find(w, 0, R.barracks, null, { x: home.x, y: home.y - 10 * TILE })!
+      const id = w.nextId
+      const before = p.credits
+      order(cmd('place', [first.id], R.barracks, at.x, at.y, false, NaN))
+      barracksSite = w.byId.get(id)?.site ? id : 0
+      pass('placing a Barracks pays for its site', barracksSite > 0 && before - p.credits === UNIT[R.barracks].cost, `${before - p.credits}`)
+    }
+    // 1 s: the factory idle draws nothing; a rally point, then five vehicles queued (shift-click).
+    if (t === 30 && fac) {
+      pass('an idle factory draws no power', pw!.used === 0, `${pw!.used} used`)
+      pass('a unit needing tier 2 is refused at a tier 1 factory', /tier 2/.test(cantBuild(w, 0, TIER2_TEST, false, fac.id) ?? ''), `${cantBuild(w, 0, TIER2_TEST, false, fac.id)}`)
+      const before = p.credits
+      order(cmd('build', 'r-g-no-such-unit', false, fac.id))
+      pass('an id the game doesn\'t know is refused, nothing paid or queued', fac.yq!.length === 0 && p.credits === before && !!cantBuild(w, 0, 'r-g-no-such-unit', false, fac.id))
+      rallyAt = find(w, 0, R.vfactory, null, { x: fac.x + 6 * TILE, y: fac.y + 9 * TILE })!
+      order(cmd('rally', rallyAt.x, rallyAt.y, fac.id))
+      for (let i = 0; i < 5; i++) order(cmd('build', raider, false, fac.id))
+      pass('five units queue at the factory, each paid', fac.yq!.length === 5 && before - p.credits === 5 * UNIT[raider].cost, `queue ${fac.yq!.length}, paid ${before - p.credits}`)
+    }
+    if (t === 31 && fac) pass('a busy factory draws its power', pw!.used >= draw, `${pw!.used} used, ${draw} its draw`)
+    // 1.5 s: the last one cancelled, refunded in full.
+    if (t === 45 && fac) {
+      const before = p.credits
+      order(cmd('cancel', 4, fac.id))
+      pass('a unit cancelled at the factory is refunded in full', fac.yq!.length === 4 && p.credits - before === UNIT[raider].cost, `${p.credits - before}`)
+    }
+    // 3 s to 15 s: two research stations raised: the base is short of power while the factory trains.
+    if (t === 90)
+      for (let k = 0; k < 2; k++) {
+        const at = find(w, 0, R.research, null, { x: home.x + (k ? -6 : 6) * TILE, y: home.y + 12 * TILE })!
+        const pl = groundPlacement(w, 0, R.research, at.x, at.y)
+        say({ t, k: 'add', unit: R.research, owner: 0, c: pl.tc, r: pl.tr })
+      }
+    if (fac && pw) {
+      if (fac.yq!.length) drawn++
+      else if (t > 60) idle++
+    }
+    // Units trained there that reached the rally point.
+    if (rallyAt) arrived = Math.max(arrived, w.units.filter((u) => !u.dead && u.owner === 0 && u.t.id === raider && u.order.k === 'idle' && Math.hypot(u.x - rallyAt!.x, u.y - rallyAt!.y) < 3 * TILE).length)
+    const q = fac?.yq?.[0]
+    prev = { q: q ? { item: q, left: q.left } : undefined, ratio: pw?.ratio ?? 1 }
+  })
+  vt.ground!.trains = trainsWas
+  for (const [k, [ok, detail]] of Object.entries(got)) check(`factory battle: ${k}`, ok, detail)
+  check('factory battle: an engineer builds a Barracks', barracksBuilt > 0, barracksBuilt > 0 ? `${(barracksBuilt * STEP).toFixed(1)} s in` : 'never built')
+  check('factory battle: the four left are trained, each out of the factory\'s door', trained === 4 && outDoor === 4, `${trained} trained, ${outDoor} by the door`)
+  check('factory battle: they drive to the factory\'s rally point', arrived >= 3, `${arrived} there`)
+  check('factory battle: short of power, the factory trains at made / used of its speed, to the tick', short > 0 && !bad.training, `${short} short ticks; misses ${JSON.stringify(bad)}`)
+  console.log(`  factories: Barracks ${UNIT[R.barracks].cost} kyber, ${UNIT[R.barracks].build} s, draws ${UNIT[R.barracks].ground!.draw}; Vehicle Factory ${vt.cost} kyber, ${vt.build} s, draws ${draw}; ${drawn} ticks busy, ${idle} idle`)
+}
+{
+  // The AI's factories, over a longer battle against nobody in a hurry.
+  const w = newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 62, credits: 1600 })
+  const brains = [newBrain(1, 'medium')]
+  let worst = 1
+  for (let t = 0; t < Math.round(480 / STEP); t++) {
+    for (const b of brains) think(w, b, STEP)
+    tick(w)
+    w.events.length = 0
+    if (t > 240 / STEP) worst = Math.min(worst, w.players[1].power?.ratio ?? 1)
+  }
+  const ai = w.units.filter((u) => !u.dead && u.owner === 1)
+  const [foot, vehicle] = TIER1.droid
+  const n = (id: string) => ai.filter((u) => u.t.id === id && !u.site).length
+  check('the AI builds a foot factory and a vehicle factory', n('d-g-botfactory') >= 1 && n('d-g-foundry') >= 1, `${n('d-g-botfactory')} Bot Factories, ${n('d-g-foundry')} Vehicle Foundries`)
+  check('the AI trains a mix of both factories\' units', n(foot) >= 1 && n(vehicle) >= 1, `${n(foot)} ${foot}, ${n(vehicle)} ${vehicle}`)
+  check('the AI keeps its power up while its factories train', worst >= 0.75, `worst ratio after 4 min ${worst.toFixed(2)}, power now ${w.players[1].power!.made}/${w.players[1].power!.used}`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

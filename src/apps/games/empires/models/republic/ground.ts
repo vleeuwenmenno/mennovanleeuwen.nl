@@ -252,6 +252,108 @@ export const GROUND: GroundModels = {
     }),
   },
 
+  // The Barracks (4 × 4 tiles): a white blast-walled hall with red bands, an armoury on its roof
+  // (vents and a weapons rack), a comms mast, and a wide drop door on its south side, striped red,
+  // that the trooper squads march out of.
+  'r-g-barracks': {
+    w: 100,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'pie',
+      parts: [
+        part('apron', chamfer(0, 2, 98, 96, 12), 'hull2', 1, {
+          lift: 2,
+          details: [
+            { k: 'line', pts: chamfer(0, 2, 90, 88, 10) },
+            { k: 'lights', pts: [...along([-44, -34], [-44, 30], 4), ...along([44, -34], [44, 30], 4)], r: 1.3, tone: 'glow', minPx: 70 },
+          ],
+        }),
+        // Blast walls either side of the door.
+        ...sym(part('wall', chamfer(-33, 34, 18, 16, 3), 'hull', 2, { lift: 4, facets: bevel(-33, 34, 18, 16, 3), details: [{ k: 'shape', pts: box(-33, 38, 14, 3), tone: 'accent' }] })),
+        // The hall: bevelled edges, red bands, blue window strips down its sides.
+        part('hall', chamfer(0, -8, 84, 62, 8), 'hull', 2, {
+          lift: 7,
+          facets: bevel(0, -8, 84, 62, 6),
+          details: [
+            { k: 'shape', pts: box(0, -34, 66, 4), tone: 'accent' },
+            { k: 'shape', pts: box(0, 18, 66, 4), tone: 'accent' },
+            { k: 'shape', pts: box(-36, -8, 3, 34), tone: 'glass' },
+            { k: 'shape', pts: box(36, -8, 3, 34), tone: 'glass' },
+            { k: 'line', pts: [[-30, -8], [30, -8]], minPx: 60 },
+          ],
+        }),
+        // The armoury on the roof: a raised block with vents and a rack of rifles.
+        part('armoury', chamfer(-12, -12, 40, 30, 5), 'hull2', 3, {
+          lift: 10,
+          facets: bevel(-12, -12, 40, 30, 4),
+          details: [...treads(-28, -8, -24, 0, 5), { k: 'shape', pts: box(4, -12, 6, 22), tone: 'metal' }],
+        }),
+        part('rack', box(20, -16, 14, 22), 'metal', 3, { lift: 8, details: treads(14, 26, -26, -6, 6) }),
+        // A comms mast on the north-east corner, a blue light on its tip.
+        part('mast', capsule([30, -26], [36, -38], 1.6, 1), 'metal', 4, { lift: 16, details: [{ k: 'lights', pts: [[36, -38]], r: 1.4, tone: 'glow' }] }),
+        // The wide drop door: dark, its shutter slats, red hazard stripes and a strip of blue light.
+        part('door', box(0, 32, 46, 14), 'dark', 3, {
+          lift: 1,
+          details: [
+            ...treads(-21, 21, 26, 38, 4),
+            { k: 'shape', pts: box(-21, 32, 3, 14), tone: 'accent' },
+            { k: 'shape', pts: box(21, 32, 3, 14), tone: 'accent' },
+            { k: 'lights', pts: along([-18, 23], [18, 23], 6), r: 1.2, tone: 'glow' },
+          ],
+        }),
+      ],
+    }),
+  },
+  // The Vehicle Factory (5 × 5 tiles): a long assembly hangar, its ribbed roof under a gantry crane
+  // on two rails, fuel tanks on its east side, vents on its west, and a wide armoured gate on its
+  // south side that the vehicles roll out of, lit along its top.
+  'r-g-vfactory': {
+    w: 100,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'pie',
+      parts: [
+        part('apron', chamfer(0, 1, 98, 98, 12), 'hull2', 1, {
+          lift: 2,
+          details: [
+            { k: 'line', pts: chamfer(0, 1, 90, 90, 10) },
+            // Guide lines out of the gate.
+            { k: 'line', pts: [[-16, 42], [-16, 50]] },
+            { k: 'line', pts: [[16, 42], [16, 50]] },
+            { k: 'lights', pts: [...along([-46, -36], [-46, 34], 5), ...along([46, -36], [46, 34], 5)], r: 1.3, tone: 'glow', minPx: 70 },
+          ],
+        }),
+        // Fuel tanks on the east side, vents on the west.
+        ...[-24, -4].map((y, i) => part(`tank${i}`, circle(37, y, 8, 18), 'hull', 2, { lift: 7, sphere: true, details: [{ k: 'shape', pts: box(37, y, 10, 2), tone: 'accent' }] })),
+        part('vents', box(-38, -14, 10, 34), 'metal', 2, { lift: 4, details: treads(-42, -34, -30, 2, 7) }),
+        // The hangar: bevelled, red bands, its roof ribbed.
+        part('hangar', chamfer(-1, -4, 66, 80, 8), 'hull', 3, {
+          lift: 9,
+          facets: bevel(-1, -4, 66, 80, 6),
+          details: [
+            { k: 'shape', pts: box(-1, -40, 52, 4), tone: 'accent' },
+            ...treads(-26, 24, -34, 26, 8),
+            { k: 'shape', pts: box(-1, 30, 52, 3), tone: 'glass' },
+          ],
+        }),
+        // The gantry crane: two rails along the hangar and a bridge across with its hoist.
+        ...sym(part('rail', box(-30, -4, 4, 78), 'metal', 4, { lift: 12 })),
+        part('bridge', box(0, -14, 66, 7), 'hull2', 5, { lift: 15, details: [{ k: 'shape', pts: box(-24, -14, 8, 4), tone: 'accent' }, { k: 'shape', pts: box(24, -14, 8, 4), tone: 'accent' }] }),
+        part('hoist', box(6, -14, 12, 11), 'metal', 6, { lift: 16, details: [{ k: 'lights', pts: [[6, -14]], r: 1.6, tone: 'glow' }] }),
+        // The wide armoured gate.
+        part('gate', box(-1, 40, 54, 10), 'dark', 4, {
+          lift: 1,
+          details: [
+            ...treads(-26, 24, 36, 45, 3),
+            { k: 'shape', pts: box(-27, 40, 3, 10), tone: 'accent' },
+            { k: 'shape', pts: box(25, 40, 3, 10), tone: 'accent' },
+            { k: 'lights', pts: along([-22, 34], [20, 34], 7), r: 1.2, tone: 'glow' },
+          ],
+        }),
+      ],
+    }),
+  },
+
   // A trooper, one member of a squad (GroundSpec `squad`): white armour, the T visor of the helmet,
   // a backpack, a rifle held forward in both hands. It walks: standing, its boots show under it;
   // mid-stride one leg is out in front and the other behind (poses 1 and 2).

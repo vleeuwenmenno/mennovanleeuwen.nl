@@ -204,6 +204,107 @@ export const GROUND: GroundModels = {
       ],
     }),
   },
+  // The Bot Factory (4 × 4 tiles): an eight-sided assembly deck round a stamping press, a line
+  // carrying fresh battle droids (pale heads in rows) to the wide shutter in its south side, an
+  // antenna spire on each north corner and orange hazard markings.
+  'd-g-botfactory': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const rim = ngon(0, 0, 50, 8, OCT)
+      const heads: Pt[] = [-14, -4, 6, 16].flatMap((y) => [[-7, y], [7, y]] as Pt[])
+      return {
+        breakStyle: 'ring',
+        parts: [
+          part('deck', rim, 'hull2', 1, { lift: 3, facets: rimFacets(rim, 0, 0, 0.86) }),
+          part('plates', ngon(0, 0, 43, 8, OCT), 'hull', 2, {
+            lift: 1,
+            details: [
+              ...[1, 3, 5, 7].map((i) => {
+                const a = (i * Math.PI) / 4
+                return { k: 'shape' as const, pts: ngon(Math.cos(a) * 36, Math.sin(a) * 36, 5, 4, a), tone: 'accent' as const }
+              }),
+              { k: 'lights', pts: ngon(0, 0, 40, 8, 0), r: 1.4, tone: 'glass', minPx: 60 },
+            ],
+          }),
+          // Parts bins either side of the line.
+          ...sym(part('bins', box(-26, 4, 14, 34), 'metal', 3, { lift: 5, details: treads(-32, -20, -12, 20, 5) })),
+          // The line from the press to the door, with droids on it.
+          part('line', box(0, 4, 24, 46), 'dark', 3, { lift: 2, details: treads(-12, 12, -18, 26, 8) }),
+          ...heads.map((h, i) => part(`droid${i}`, circle(h[0], h[1], 3.2, 10), 'trim', 4, { lift: 4, sphere: true })),
+          // The stamping press at the line's head: a six-sided block with a glowing die.
+          part('press', ngon(0, -26, 17, 6, 0), 'hull', 4, {
+            lift: 13,
+            facets: rimFacets(ngon(0, -26, 17, 6, 0), 0, -26, 0.6),
+            details: [{ k: 'shape', pts: box(0, -14, 14, 3), tone: 'accent' }],
+          }),
+          part('die', circle(0, -26, 7, 16), 'glass', 5, { lift: 14, glow: true }),
+          ...sym(part('spire', capsule([-26, -28], [-33, -37], 2.4, 1.1), 'metal', 5, { lift: 18, details: [{ k: 'lights', pts: [[-33, -37]], r: 1.3, tone: 'trim' }] })),
+          // The wide shutter on the south side, under its orange guide lights.
+          part('door', box(0, 41, 42, 9), 'dark', 3, {
+            lift: 1,
+            details: [
+              ...treads(-19, 19, 37, 46, 3),
+              { k: 'lights', pts: along([-17, 35], [17, 35], 6), r: 1.2, tone: 'trim' },
+            ],
+          }),
+        ],
+      }
+    },
+  },
+  // The Vehicle Foundry (5 × 5 tiles): a heavy smelting block on a plated yard, two smokestacks and
+  // a row of furnace vents glowing ember, a casting pit, conduits round it and a wide hangar shutter
+  // on its south side.
+  'd-g-foundry': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const yard = chamfer(0, 0, 98, 98, 16)
+      return {
+        breakStyle: 'pie',
+        parts: [
+          part('yard', yard, 'hull2', 1, { lift: 3, facets: rimFacets(yard, 0, 0, 0.9) }),
+          part('plates', chamfer(0, 0, 86, 86, 13), 'hull', 2, {
+            lift: 1,
+            details: [
+              { k: 'line', pts: [[-43, -14], [43, -14]], minPx: 60 },
+              { k: 'line', pts: [[-43, 14], [43, 14]], minPx: 60 },
+              ...[[-34, -34], [34, -34], [-34, 34], [34, 34]].map(([x, y]) => ({ k: 'shape' as const, pts: ngon(x, y, 4.5, 4, Math.PI / 4), tone: 'accent' as const })),
+            ],
+          }),
+          // Conduits along the east side.
+          ...[30, 36].map((x, i) => part(`conduit${i}`, capsule([x, -30], [x, 26], 2.4), 'metal', 3, { lift: 4 })),
+          // The smelting block, its furnace vents glowing.
+          part('block', chamfer(-6, -10, 62, 52, 8), 'hull', 3, {
+            lift: 11,
+            facets: rimFacets(chamfer(-6, -10, 62, 52, 8), -6, -10, 0.82),
+            details: [
+              { k: 'shape', pts: box(-6, 12, 46, 3), tone: 'accent' },
+              ...[-24, -12, 0, 12].map((x) => ({ k: 'shape' as const, pts: box(x, 6, 7, 5), tone: 'ember' as const })),
+            ],
+          }),
+          // The casting pit, molten.
+          part('pit', circle(-14, -18, 11, 20), 'dark', 4, { lift: 12, details: [{ k: 'line', pts: circle(-14, -18, 8.5, 18) }] }),
+          part('melt', circle(-14, -18, 7, 18), 'ember', 5, { lift: 12.5, glow: true, details: [{ k: 'shape', pts: circle(-16, -20, 3, 10), tone: 'trim' }] }),
+          // Two smokestacks.
+          ...[[12, -26], [22, -16]].flatMap(([x, y], i) => [
+            part(`stack${i}`, circle(x, y, 7, 18), 'metal', 5, { lift: 22, sphere: true }),
+            part(`flue${i}`, circle(x, y, 4, 14), 'dark', 6, { lift: 23, details: [{ k: 'lights', pts: [[x, y]], r: 1.6, tone: 'ember' }] }),
+          ]),
+          // The wide hangar shutter.
+          part('door', box(0, 40, 56, 10), 'dark', 3, {
+            lift: 1,
+            details: [
+              ...treads(-26, 26, 35, 45, 4),
+              { k: 'shape', pts: box(-28, 40, 3, 10), tone: 'accent' },
+              { k: 'shape', pts: box(28, 40, 3, 10), tone: 'accent' },
+              { k: 'lights', pts: along([-24, 33], [24, 33], 7), r: 1.2, tone: 'trim' },
+            ],
+          }),
+        ],
+      }
+    },
+  },
   // A battle droid, one member of a squad (GroundSpec `squad`): a thin tan frame, its long head
   // jutting forward, a backpack, a blaster held out in front. It walks on long thin legs (poses 1
   // and 2 mid-stride).
