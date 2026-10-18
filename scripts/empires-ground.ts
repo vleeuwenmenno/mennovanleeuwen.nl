@@ -16,6 +16,14 @@
 //    one off before work starts (full refund) and one some way in (the space game's site refund), has
 //    a unit standing on a site pushed off when work starts, repairs a damaged building, sets a rally
 //    point, and loses a building (its stamp freed). The AI must train engineers and expand.
+// 3b. An economy battle on Ashwater Crossing, seat 0 scripted (Republic) and seat 1 the AI
+//    (Confederacy), checked the same way: seat 0 trains up to its unit cap (the next one refused with
+//    the supply reason), sends four engineers to gather the crystal field by its base, builds a Supply
+//    Depot and trains on past the old cap, and a field run nearly dry (as a dev cheat would) runs out:
+//    its engineers move on to the nearest other field. All along, the kyber gone from the fields is
+//    exactly what was dropped off plus what is being carried, no load is over the carry size, and
+//    several engineers mine one field at once. The AI must keep its engineers gathering, build supply
+//    before it reaches its cap, and never train past it.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
@@ -26,10 +34,10 @@ import { UNIT } from '../src/apps/games/empires/data.ts'
 import { newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd, cmd, runCmd, type Cmd } from '../src/apps/games/empires/commands.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
-import { STEP, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
+import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { anchorAt, footprintOpen, stands } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
-import { CREW_RATE, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
+import { CARRY, CREW_RATE, FIELD_KYBER, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
@@ -64,8 +72,10 @@ import './ground-test-units.ts'
 
 const dustfall = groundMapDef('dustfall-ridge')!
 const mesa = groundMapDef('test-mesa')!
-const R = { engineer: 'r-g-engineer', center: 'r-g-center' }
-const S = { engineer: 's-g-engineer', center: 's-g-center' }
+const ashwater = groundMapDef('ashwater-crossing')!
+const R = { engineer: 'r-g-engineer', center: 'r-g-center', supply: 'r-g-supply' }
+const S = { engineer: 's-g-engineer', center: 's-g-center', supply: 's-g-supply' }
+const D = { engineer: 'd-g-engineer', center: 'd-g-center', supply: 'd-g-supply' }
 
 /** Every position on the map (a tile's middle), nearest `near` first, where `type` placed by `owner`
  * gets `why` (null: accepted). */
@@ -141,7 +151,7 @@ const seat = (faction: Seat['faction'], team: number, spawn: number): Seat => ({
     w.players[0].credits = 100
     const why = groundPlacement(w, 0, R.center, at.x, at.y).why
     w.players[0].credits = 5000
-    check('placement refuses with "Not enough credits"', why === 'Not enough credits', String(why))
+    check('placement refuses with "Not enough kyber"', why === 'Not enough kyber', String(why))
     check('and accepts a good spot with enough credits', groundPlacement(w, 0, R.center, at.x, at.y).why === null)
   }
   {
@@ -158,12 +168,13 @@ const seat = (faction: Seat['faction'], team: number, spawn: number): Seat => ({
 // --- Lockstep -------------------------------------------------------------------------------------
 
 /** One input to a battle: an order from a seat (as sent on the wire), a building's hull set (as the
- * dev cheats do), a building put up, or a unit destroyed. */
+ * dev cheats do), a building put up, a unit destroyed, or a crystal field's kyber set (a cheat too). */
 type Input =
   | { t: number; k: 'cmd'; owner: number; json: string }
   | { t: number; k: 'hull'; id: number; share: number }
   | { t: number; k: 'add'; unit: string; owner: number; c: number; r: number }
   | { t: number; k: 'kill'; id: number }
+  | { t: number; k: 'kyber'; f: number; left: number }
 
 function apply(w: World, x: Input): unknown {
   if (x.k === 'cmd') {
@@ -171,6 +182,7 @@ function apply(w: World, x: Input): unknown {
     return c ? runCmd(w, x.owner, c) : 'junk'
   }
   if (x.k === 'add') return raiseBuilding(w, UNIT[x.unit], x.owner, x.c, x.r)
+  if (x.k === 'kyber') return void (w.kyber![x.f] = x.left)
   const u = w.byId.get(x.id)
   if (!u || u.dead) return
   if (x.k === 'hull') u.hull = u.hullMax * x.share
@@ -265,21 +277,28 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     for (const e of w.events) {
       events[e.k] = (events[e.k] ?? 0) + 1
       if (e.k === 'built' && e.unit === R.center && builtA < 0 && w.byId.get(siteA) && !w.byId.get(siteA)!.site) builtA = t
-      if (e.k === 'trained' && e.from === home.id && rallyAt && !rallyUnit) rallyUnit = w.units[w.units.length - 1].id
+      if (e.k === 'trained' && e.from === home.id && rallyAt && !rallyUnit) rallyUnit = w.units.filter((u) => u.owner === 0 && u.t.id === e.unit).reduce((a, u) => (u.id > a ? u.id : a), 0)
     }
     w.events.length = 0
     const order = (c: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(c) })
     const credits = () => w.players[0].credits
     const engs = () => w.units.filter((u) => !u.dead && u.owner === 0 && u.t.id === R.engineer)
     const before = credits()
-    // 1 s: five engineers; 1.5 s: the fifth cancelled.
+    // 1 s: engineers up to the cap (the Command Center supports 5: one is out, four more fit);
+    // 1.5 s: the fourth cancelled.
     if (t === 30) {
       for (let i = 0; i < 5; i++) order(cmd('build', R.engineer, false, home.id))
-      pass('five engineers queued at the Command Center', home.yq!.length === 5 && before - credits() === 750, `queue ${home.yq!.length}, paid ${before - credits()}`)
+      pass('engineers queue up to the unit cap, the next refused for supply', home.yq!.length === 4 && before - credits() === 600 && /^Needs more supply: build a Supply Depot/.test(cantBuild(w, 0, R.engineer, false, home.id) ?? ''), `queue ${home.yq!.length}, paid ${before - credits()}, ${cantBuild(w, 0, R.engineer, false, home.id)}`)
     }
     if (t === 45) {
-      order(cmd('cancel', 4, home.id))
-      pass('a cancelled queue item is refunded in full', home.yq!.length === 4 && credits() - before === 150)
+      order(cmd('cancel', 3, home.id))
+      pass('a cancelled queue item is refunded in full', home.yq!.length === 3 && credits() - before === 150)
+    }
+    // Just after: a Supply Depot beside the Command Center, after the first site (so the rally test
+    // later has room to train).
+    if (t === 61) {
+      const at = find(w, 0, R.supply, null, { x: home.x - 8 * TILE, y: home.y })
+      if (at) order(cmd('place', [first.id], R.supply, at.x, at.y, true, NaN))
     }
     // 2 s: a Command Center on the nearest good spot, built by the first engineer.
     if (t === 60) {
@@ -306,8 +325,8 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
       order(cmd('construct', rolled.slice(0, 2).map((u) => u.id), siteA, false))
       crewSent = true
     }
-    // The third parks on a good spot, and a fourth places a Command Center right on it.
-    if (rolled.length >= 4 && !parked && t > 60) {
+    // The third parks on a good spot, and another places a Command Center right on it.
+    if (rolled.length >= 3 && !parked && t > 60) {
       parkAt = find(w, 0, R.center, null, { x: home.x, y: home.y + 20 * TILE })!
       parked = rolled[2].id
       order(cmd('move', [parked], parkAt.x, parkAt.y, false, false))
@@ -335,9 +354,10 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
       say({ t, k: 'hull', id: siteA, share: 0.4 })
       damagedAt = t
     }
-    if (damagedAt >= 0 && t === damagedAt + 15) order(cmd('construct', engs().slice(0, 2).map((u) => u.id), siteA, false))
-    // A rally point, then one more engineer, which drives there.
-    if (t === 900) {
+    // (Not the first engineer: it has the Supply Depot to build.)
+    if (damagedAt >= 0 && t === damagedAt + 15) order(cmd('construct', engs().filter((u) => u.id !== first!.id).slice(0, 2).map((u) => u.id), siteA, false))
+    // 80 s, the queue long empty: a rally point, then one more engineer, which drives there.
+    if (t === 2400) {
       rallyAt = find(w, 0, R.center, null, { x: home.x + 8 * TILE, y: home.y + 6 * TILE })!
       order(cmd('rally', rallyAt.x, rallyAt.y, home.id))
       order(cmd('build', R.engineer, false, home.id))
@@ -360,7 +380,8 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
       if (crew && last !== undefined && last !== sA.building) rates.set(crew, last - sA.building)
       rates.set(-1, sA.building)
     }
-    if (sA && damagedAt >= 0 && repairedAt < 0 && sA.hull >= sA.hullMax) repairedAt = t
+    // Whole as the sim counts it (within half a point: engineers stop there).
+    if (sA && damagedAt >= 0 && repairedAt < 0 && sA.hull >= sA.hullMax - 0.5) repairedAt = t
     const sB = w.byId.get(siteB)
     if (sB?.site && !sB.site.started) pass('an unstarted site has no stamp, sees nothing and is hidden from the enemy', !sB.foot!.on && !sB.eye && !sB.seen[1])
     const sC = w.byId.get(siteC)
@@ -377,14 +398,133 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('building battle: a unit stood on a site before work started', onSite)
   check('building battle: a unit trained after a rally point is set drives to it', rallyOff >= 0 && rallyOff < TILE, rallyOff >= 0 ? `arrived ${(rallyOff / TILE).toFixed(2)} tiles from it` : 'never arrived')
   check('building battle: a destroyed building frees its stamp', !!removedFoot && footprintOpen(w.ground!.nav, removedFoot.c, removedFoot.r, 6, 6))
-  check('building battle: income counts each standing Command Center', w.players[0].income === 6 * w.units.filter((u) => u.owner === 0 && u.t.id === R.center && !u.site).length, `${w.players[0].income}/s`)
+  const supply = 5 * w.units.filter((u) => u.owner === 0 && u.t.id === R.center && !u.site).length + 10 * w.units.filter((u) => u.owner === 0 && u.t.id === R.supply && !u.site).length
+  check('building battle: no income trickles in, and the unit cap is the buildings\' supply', w.players[0].income === 0 && w.players[0].popCap === supply, `income ${w.players[0].income}/s, cap ${w.players[0].popCap} of ${supply}`)
   const ai = w.units.filter((u) => u.owner === 1)
   const aiCenters = ai.filter((u) => u.t.id === S.center && !u.site).length
   const aiEngs = ai.filter((u) => u.t.id === S.engineer).length
   check('building battle: the AI trained engineers and expanded to a second Command Center', aiCenters >= 2 && aiEngs >= 3, `${aiCenters} Hive Nexuses, ${aiEngs} Shaper drones`)
-  check('building battle: the AI built nothing but engineers and Command Centers', ai.every((u) => u.t.id === S.center || u.t.id === S.engineer))
+  check('building battle: the AI built nothing but engineers, Command Centers and supply', ai.every((u) => u.t.id === S.center || u.t.id === S.engineer || u.t.id === S.supply))
   check('building battle: each side knows where the other started', !!w.known?.[0].some((k) => k.owner === 1) && !!w.known?.[1].some((k) => k.owner === 0))
   console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}`)
+}
+
+// --- 3b. The economy battle ------------------------------------------------------------------------------
+
+{
+  const make = (): Copy => ({ w: newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 31, credits: 1600 }), brains: [newBrain(1, 'medium')] })
+  const ticks = Math.round(Math.max(seconds, 180) / STEP)
+  const got: Record<string, [boolean, string]> = {}
+  const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
+  let home: Unit | undefined
+  let field = -1
+  let sentFour = false
+  let supplyAt = -1
+  let supplier = 0
+  let cappedAt = -1
+  let dryAt = -1
+  let dryField = -1
+  let cheatGap = 0
+  let moved = -1
+  let lostKyber = 0
+  let overCarry = 0
+  let mostMiners = 0
+  let drops = 0
+  let aiOverCap = 0
+  let aiCapped = 0
+  let aiCapSupply = 0
+  let aiGatherMax = 0
+  const events: Record<string, number> = {}
+  const final = lockstep('economy battle', make, ticks, ({ w }, t, say) => {
+    home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
+    const fields = w.ground!.fields
+    if (field < 0) field = fields.map((f, i) => ({ i, d: (f.x - home!.x) ** 2 + (f.y - home!.y) ** 2 })).sort((a, b) => a.d - b.d)[0].i
+    for (const e of w.events) {
+      events[e.k] = (events[e.k] ?? 0) + 1
+      if (e.k === 'dry' && e.field === dryField && dryAt < 0) dryAt = t
+    }
+    w.events.length = 0
+    const order = (c: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(c) })
+    const engs = () => w.units.filter((u) => !u.dead && u.owner === 0 && u.t.id === R.engineer)
+    const p = w.players[0]
+    // 0.5 s: engineers up to the cap; the next one is refused for supply.
+    if (t === 15) {
+      for (let i = 0; i < 5; i++) order(cmd('build', R.engineer, false, home.id))
+      pass('training stops at the unit cap with the supply reason', home.yq!.length === 4 && /^Needs more supply/.test(cantBuild(w, 0, R.engineer, false, home.id) ?? ''), `queue ${home.yq!.length}: ${cantBuild(w, 0, R.engineer, false, home.id)}`)
+    }
+    // Once four are out: all four gather the field by the base (as a right-click there orders it).
+    const es = engs()
+    if (!sentFour && es.length >= 4) {
+      const f = fields[field]
+      order(cmd('gather', es.slice(0, 4).map((u) => u.id), f.x, f.y, false))
+      sentFour = true
+    }
+    // With 100 kyber in hand, one of the gatherers (mid-run: it leaves its field for this) puts up a
+    // Supply Depot; idle ones go back to gathering.
+    if (sentFour && supplyAt < 0 && p.credits >= 100 && es[0].gm?.spot) {
+      const builder = es[0]
+      const at = find(w, 0, R.supply, null, { x: home.x - 9 * TILE, y: home.y - 2 * TILE })
+      if (at && builder) {
+        order(cmd('place', [builder.id], R.supply, at.x, at.y, false, NaN))
+        supplyAt = t
+        supplier = builder.id
+      }
+    }
+    // Two seconds after the depot is up, its builder is back at its field.
+    if (p.popCap >= 15 && cappedAt < 0) cappedAt = t
+    if (cappedAt >= 0 && t === cappedAt + 60) pass('the engineer that built it goes back to gathering', w.byId.get(supplier)?.order.k === 'gather', w.byId.get(supplier)?.order.k)
+    const idle = es.filter((u) => u.order.k === 'idle' && !u.queue.length)
+    if (sentFour && idle.length && t % 30 === 0 && dryAt < 0) {
+      const f = fields[field]
+      order(cmd('gather', idle.map((u) => u.id), f.x, f.y, false))
+    }
+    // With supply built, training carries on past the old cap.
+    if (p.popCap >= 15 && !got['a Supply Depot (built by an engineer taken off gathering) raises the cap and training goes on'] && !home.yq!.length) {
+      order(cmd('build', R.engineer, false, home.id))
+      order(cmd('build', R.engineer, false, home.id))
+      pass('a Supply Depot (built by an engineer taken off gathering) raises the cap and training goes on', home.yq!.length === 2 && p.popCap === 15, `cap ${p.popCap}, queue ${home.yq!.length}`)
+    }
+    // 60 s: the base's field nearly emptied (a cheat), so it runs dry with its engineers on it.
+    if (t === 1800) {
+      dryField = field
+      cheatGap = w.kyber![field] - 60
+      say({ t, k: 'kyber', f: field, left: 60 })
+    }
+    if (dryAt >= 0 && moved < 0 && t > dryAt + 600) {
+      const on = engs().filter((u) => u.order.k === 'gather')
+      moved = on.length && on.every((u) => u.order.k === 'gather' && u.order.f !== dryField && (w.kyber![u.order.f] ?? 0) > 0) ? on.length : 0
+    }
+    // Kyber is neither made nor lost: what left the fields was dropped off or is being carried.
+    const inFields = w.kyber!.reduce((a, b) => a + b, 0)
+    const carried = w.units.reduce((a, u) => a + (u.dead ? 0 : (u.carry ?? 0)), 0)
+    const dropped = w.players.reduce((a, q) => a + q.earnedBy.mines, 0)
+    lostKyber = Math.max(lostKyber, Math.abs(FIELD_KYBER * fields.length - cheatGap - inFields - carried - dropped))
+    for (const u of w.units) if ((u.carry ?? 0) > CARRY + 1e-9) overCarry++
+    const miners = new Map<number, number>()
+    for (const u of w.units) if (!u.dead && u.gm?.mine && u.order.k === 'gather') miners.set(u.order.f, (miners.get(u.order.f) ?? 0) + 1)
+    mostMiners = Math.max(mostMiners, ...miners.values(), 0)
+    drops = p.earnedBy.mines
+    // The AI on seat 1.
+    const q = w.players[1]
+    const aiQueued = w.units.filter((u) => !u.dead && u.owner === 1 && u.yq).reduce((n, u) => n + u.yq!.length, 0)
+    if (q.pop + aiQueued > q.popCap) aiOverCap++
+    if (q.pop >= q.popCap) {
+      aiCapped++
+      if (w.units.some((u) => !u.dead && u.owner === 1 && u.t.id === D.supply && u.site)) aiCapSupply++
+    }
+    aiGatherMax = Math.max(aiGatherMax, w.units.filter((u) => !u.dead && u.owner === 1 && u.order.k === 'gather').length)
+  })
+  const w = final.w
+  for (const [k, [ok, detail]] of Object.entries(got)) check(`economy battle: ${k}`, ok, detail)
+  check('economy battle: four engineers gathered and dropped kyber off at the Command Center', sentFour && drops > 0, `${Math.round(drops)} kyber dropped off by seat 0`)
+  check('economy battle: kyber is never made or lost (fields = dropped off + carried)', lostKyber < 1e-6, `largest gap ${lostKyber}`)
+  check('economy battle: no engineer carries more than a load', !overCarry, `${CARRY} a load`)
+  check('economy battle: several engineers mine one field at once without jamming', mostMiners >= 3, `${mostMiners} at once`)
+  check('economy battle: a field runs dry and its engineers move on to the nearest other field', dryAt > 0 && moved > 0, dryAt > 0 ? `dry at ${(dryAt * STEP).toFixed(0)} s, ${moved} moved on` : 'never ran dry')
+  check('economy battle: the dry field is empty', w.kyber![dryField] === 0)
+  check('economy battle: the AI kept its engineers gathering', w.players[1].earnedBy.mines > 0 && aiGatherMax >= 4, `${Math.round(w.players[1].earnedBy.mines)} kyber gathered, up to ${aiGatherMax} gathering at once`)
+  check('economy battle: the AI builds supply before its cap and never trains past it', !aiOverCap && w.units.some((u) => !u.dead && u.owner === 1 && u.t.id === D.supply) && aiCapped <= aiCapSupply + 30 * 10, `cap ${w.players[1].popCap}, at the cap ${(aiCapped * STEP).toFixed(1)} s (${(aiCapSupply * STEP).toFixed(1)} s of it with supply going up)`)
+  console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}; kyber left ${w.kyber!.map((k) => Math.round(k)).join(', ')}`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

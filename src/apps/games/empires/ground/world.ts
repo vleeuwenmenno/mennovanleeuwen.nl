@@ -9,7 +9,11 @@
 // - Movement for ground vehicles: a path on the tile grid by canStep, turn then drive, gentle
 //   separation, never onto ground they can't stand on (see groundTick). Ships keep flying.
 // - Buildings on the grid: placement by the tile rules, sites that engineers start (our units step
-//   off the footprint first) and build, repairs, training out of the door, income.
+//   off the footprint first) and build, repairs, training out of the door, and the unit cap from
+//   each building's supply.
+// - Kyber, the ground battle's one resource (it is the side's credits): crystal fields that hold a
+//   fixed amount and run dry (World `kyber`), engineers that mine a load, haul it to the nearest
+//   Command Center and go back (the `gather` order).
 // - Fog by tile with the height rule instead of space's sight circles, and each team's memory of
 //   enemy buildings as last seen (World `known`).
 //
@@ -17,14 +21,14 @@
 // that never imports it (the production one, while ground battles are dev-only) never carries it.
 //
 // The orders are the space game's own (commands.ts): move, stop, place, construct, cancel a site,
-// build (train) at a building, cancel, rally. Lockstep rules as in sim.ts: no Math.random, no Date,
+// build (train) at a building, cancel, rally, and gather (ground only). Lockstep rules as in sim.ts: no Math.random, no Date,
 // detmath for trig, units in `w.units` order, the nav grid changed only at the start of a tick.
 // No DOM: the server runs it too.
 
 import * as M from '../detmath.ts'
-import { BASE_POP, UNIT, isEngineer, isGround, isGroundBuilding, type UnitType } from '../data.ts'
+import { UNIT, isEngineer, isGround, isGroundBuilding, type UnitType } from '../data.ts'
 import type { MapDef } from '../maps.ts'
-import { STEP, giveBack, issue, nextOrder, setGroundHooks, spawn, spend, type Owner, type Player, type QueueItem, type Unit, type World } from '../sim.ts'
+import { STEP, earn, giveBack, issue, nextOrder, setGroundHooks, spawn, spend, type Order, type Owner, type Player, type QueueItem, type Unit, type World } from '../sim.ts'
 import { dropEye, newFog, placeEye, sees, seesAt, type Eye, type GroundFog } from './fog.ts'
 import { GROUND_MAP } from './maps.ts'
 import {
@@ -58,8 +62,8 @@ export function groundMapOf(id: string): GroundMap | null {
 
 const defs = new Map<string, MapDef>()
 /** The space game's map for ground map `id`: its size and spawns from the ground map, its kyber
- * crystal fields as its ore (for the lobby's preview and counts: a ground battle mines nothing from
- * them yet), no beacons, rocks, fields, nebulas or wrecks, and `ground` naming the terrain. Null when
+ * crystal fields as its ore (for the lobby's preview and counts only: engineers mine the fields
+ * themselves, see World `kyber`), no beacons, rocks, fields, nebulas or wrecks, and `ground` naming the terrain. Null when
  * none. */
 export function groundMapDef(id: string): MapDef | null {
   let d = defs.get(id)
@@ -83,8 +87,12 @@ export const groundMaps = (): MapDef[] => Object.keys(GROUND_MAP).map((id) => gr
 /** A team's memory of another team's building, as it last saw it (World `known`). */
 export type KnownBuilding = { id: number; unit: string; owner: Owner; tc: number; tr: number }
 
+/** A kyber crystal field: its middle (the ground map's deposit) and its tiles, the outermost first
+ * (the order its crystals vanish in as it runs dry). */
+export type KyberField = { x: number; y: number; tiles: number[] }
+
 /** The terrain layer of a ground battle (World `ground`): rebuilt from the map, never saved. */
-export type GroundState = { map: GroundMap; nav: GroundNav; fog: GroundFog }
+export type GroundState = { map: GroundMap; nav: GroundNav; fog: GroundFog; fields: KyberField[] }
 
 /** A building's footprint: its top-left tile, and whether it stands on the nav grid (a site does only
  * once work has started). */
@@ -92,21 +100,99 @@ export type Foot = { c: number; r: number; on: boolean }
 
 /** A ground vehicle's movement state (Unit `gm`): the nav grid version its path was found on (-1:
  * find it again), seconds without getting nearer its next waypoint and the nearest it got, paths
- * found again since the last waypoint, the building it works on this tick (0: none), and an
- * engineer's spot next to the building it was sent to. */
-export type GroundMove = { pv: number; stuck: number; best: number; tries: number; busy: number; spot?: Pt }
+ * found again since the last waypoint, the building it works on this tick (0: none), an engineer's
+ * spot next to the building it was sent to (or on the crystal field it mines), whether a gathering
+ * engineer is on its way to drop its load off, and whether it mined this tick. */
+export type GroundMove = { pv: number; stuck: number; best: number; tries: number; busy: number; spot?: Pt; drop?: boolean; mine?: boolean
+  /** Which order the spot and the drop-off are for (its kind and building or field): a new one
+   * finds its own. */
+  job?: string
+  /** A gatherer sent to build: the field it goes back to once the building is done. */
+  back?: number }
+
+// --- Kyber -------------------------------------------------------------------------------------------
+
+/** Kyber in each crystal field at the start: enough for a long game (a side's own fields, with half
+ * the shared one, hold 37,500 on Ashwater Crossing: half an hour of gathering with fourteen
+ * engineers, about 20 kyber a second). */
+export const FIELD_KYBER = 15000
+/** Kyber an engineer carries in one load, and mines a second. */
+export const CARRY = 20
+export const MINE_RATE = 2.5
+/** How near its spot on the field an engineer mines from. */
+const MINE_REACH = TILE * 0.8
+
+/** The crystal fields of a map: each deposit tile goes to the nearest deposit middle (the first on a
+ * tie), the outermost tiles first. */
+function fieldsOf(map: GroundMap): KyberField[] {
+  const g = map.grid
+  const fields: KyberField[] = map.deposits.map((d) => ({ x: d.x, y: d.y, tiles: [] }))
+  if (!fields.length) return fields
+  const far = (f: KyberField, i: number) => {
+    const c = i % g.cols
+    const dx = (c + 0.5) * TILE - f.x
+    const dy = ((i - c) / g.cols + 0.5) * TILE - f.y
+    return dx * dx + dy * dy
+  }
+  for (let i = 0; i < g.cols * g.rows; i++) {
+    if (!(g.flags[i] & TF.deposit)) continue
+    let best = 0
+    for (let k = 1; k < fields.length; k++) if (far(fields[k], i) < far(fields[best], i)) best = k
+    fields[best].tiles.push(i)
+  }
+  for (const f of fields) f.tiles.sort((a, b) => far(f, b) - far(f, a) || a - b)
+  return fields
+}
+
+/**
+ * How full each tile of field `f` looks, 0 to 1, from the kyber left in it: the outermost tiles empty
+ * first, the middle last. For the ground layer's crystals.
+ */
+export function fieldTiles(w: World, f: number): { tile: number; fill: number }[] {
+  const field = gs(w).fields[f]
+  const n = field.tiles.length
+  const share = Math.max(0, (w.kyber?.[f] ?? 0) / FIELD_KYBER)
+  return field.tiles.map((tile, k) => ({ tile, fill: clamp(share * n - (n - 1 - k), 0, 1) }))
+}
+
+/** The crystal field with kyber left under or nearest (x, y), within two tiles of one of its tiles,
+ * or -1. */
+export function fieldAt(w: World, x: number, y: number): number {
+  const g = gs(w)
+  const reach = TILE * 2
+  let best = -1
+  let bestD = reach * reach
+  g.fields.forEach((f, k) => {
+    if (!((w.kyber?.[k] ?? 0) > 0)) return
+    for (const i of f.tiles) {
+      const c = i % g.nav.cols
+      const dx = (c + 0.5) * TILE - x
+      const dy = ((i - c) / g.nav.cols + 0.5) * TILE - y
+      const d = dx * dx + dy * dy
+      if (d < bestD) {
+        bestD = d
+        best = k
+      }
+    }
+  })
+  return best
+}
 
 /** The terrain layer for world `w`, whose map names its ground map. */
 export function newGround(w: World): GroundState {
   const map = groundMapOf(w.map.ground!)
   if (!map) throw new Error(`No ground map ${w.map.ground}`)
-  return { map, nav: newNav(map), fog: newFog(map.grid, w.teams) }
+  return { map, nav: newNav(map), fog: newFog(map.grid, w.teams), fields: fieldsOf(map) }
 }
 
-/** The ground unit types of `faction`: its engineer and its Command Center. */
-export function groundIds(faction: string): { engineer: string; center: string } {
+/** The ground unit types of `faction`: its engineer, its Command Center and its supply building. */
+export function groundIds(faction: string): { engineer: string; center: string; supply: string } {
   const own = Object.values(UNIT).filter((t) => t.faction === faction && t.ground)
-  return { engineer: own.find((t) => isEngineer(t))!.id, center: own.find((t) => isGroundBuilding(t) && t.ground!.trains?.length)!.id }
+  return {
+    engineer: own.find((t) => isEngineer(t))!.id,
+    center: own.find((t) => isGroundBuilding(t) && t.ground!.trains?.length)!.id,
+    supply: own.find((t) => isGroundBuilding(t) && !t.ground!.trains?.length && t.ground!.supply)!.id,
+  }
 }
 
 const gs = (w: World) => w.ground!
@@ -147,6 +233,7 @@ function stampDown(w: World, u: Unit) {
 export function groundStart(w: World) {
   const g = gs(w)
   w.known = Array.from({ length: w.teams }, () => [])
+  w.kyber = g.fields.map(() => FIELD_KYBER)
   w.players.forEach((p, o) => {
     const ids = groundIds(p.faction)
     const ct = UNIT[ids.center]
@@ -227,7 +314,7 @@ function workSpot(w: World, u: Unit, s: Unit): Pt {
   const [fw, fh] = spec(s.t).foot!
   const { c: sc, r: sr } = s.foot!
   const taken = new Set<number>()
-  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && o.order.k === 'construct' && o.order.id === s.id) taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
+  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && ((o.order.k === 'construct' && o.order.id === s.id) || (o.order.k === 'gather' && o.gm.drop))) taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
   const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
   const piece = start >= 0 ? nav.piece[k - 1][start] : -1
   let best = -1
@@ -259,17 +346,37 @@ function done(u: Unit) {
   g.pv = -1
   g.tries = 0
   g.spot = undefined
+  g.drop = false
+  const built = u.order.k === 'construct'
   nextOrder(u, u.x, u.y, u.order.k === 'move' ? (u.order.face ?? null) : null)
+  // A gatherer taken off its field to build goes back to gathering once it has nothing else to do,
+  // as a villager does.
+  if (built && g.back !== undefined && u.order.k === 'idle' && !u.queue.length) u.order = { k: 'gather', f: g.back }
 }
 
-/** Where the current order sends `u` (null: it has nowhere to go), and the building it works on. */
-function goal(w: World, u: Unit): { x: number; y: number; job?: Unit } | null {
+/** Where the current order sends `u`: a point, a building to work on (`job`), a Command Center to
+ * drop kyber off at (`drop`), or a spot on a crystal field to mine (`mine`, the field). Null: it has
+ * nowhere to go. */
+type Goal = { x: number; y: number; job?: Unit; drop?: Unit; mine?: number }
+function goal(w: World, u: Unit): Goal | null {
   const o = u.order
+  // A new order (another building, another field) starts afresh: no spot or load run left over.
+  const job = o.k === 'gather' ? `g${o.f}` : o.k === 'construct' ? `c${o.id}` : o.k
+  const g = moveOf(u)
+  if (g.job !== job) {
+    // Off gathering to build: remember the field (kept through more building, dropped otherwise).
+    if (job.startsWith('c')) g.back = g.job?.startsWith('g') ? Number(g.job.slice(1)) : g.back
+    else if (!job.startsWith('g') && job !== 'idle') g.back = undefined
+    g.job = job
+    g.spot = undefined
+    g.drop = false
+    g.tries = 0
+  }
   if (o.k === 'move' || o.k === 'patrol') return { x: o.x, y: o.y }
+  if (o.k === 'gather' && isEngineer(u.t)) return gatherGoal(w, u, o)
   if (o.k === 'construct' && isEngineer(u.t)) {
     const s = w.byId.get(o.id)
     if (!s || !needsWork(s) || s.owner !== u.owner) return null
-    const g = moveOf(u)
     g.spot ??= workSpot(w, u, s)
     return { x: g.spot.x, y: g.spot.y, job: s }
   }
@@ -289,6 +396,8 @@ function steer(w: World, u: Unit) {
   const to = goal(w, u)
   if (!to) return done(u)
   if (to.job && footDist(to.job, u.x, u.y) <= REACH) return work(u, to.job)
+  if (to.drop && footDist(to.drop, u.x, u.y) <= REACH) return dropOff(w, u)
+  if (to.mine !== undefined && M.hypot(to.x - u.x, to.y - u.y) <= MINE_REACH) return mine(w, u, to.mine)
   if (g.pv !== nav.ver || !u.route || u.route.x !== to.x || u.route.y !== to.y) {
     const p = findPath(nav, size(u), u.x, u.y, to.x, to.y)
     u.route = { x: to.x, y: to.y, pts: p.pts, short: p.short }
@@ -321,7 +430,7 @@ function steer(w: World, u: Unit) {
       u.y = p.y
     }
     u.v = 0
-    return arrive(u, to.job)
+    return arrive(w, u, to)
   }
   // Turn towards the waypoint; drive when facing near enough, slower the further off.
   const off = wrap(M.atan2(dy, dx) - u.a)
@@ -335,7 +444,7 @@ function steer(w: World, u: Unit) {
   } else if (left < 0.3 && (g.stuck += STEP) > STUCK) {
     if (last && d < CROWD) {
       u.v = 0
-      return arrive(u, to.job)
+      return arrive(w, u, to)
     }
     if (++g.tries > TRIES) {
       u.v = 0
@@ -355,12 +464,24 @@ function steer(w: World, u: Unit) {
 }
 
 /** At the end of its path: a move is done (a patrol turns round); an engineer next to its building
- * gets to work, or gives up when it couldn't get there. */
-function arrive(u: Unit, job?: Unit) {
+ * gets to work, or gives up when it couldn't get there; a gathering engineer drops its load off or
+ * mines, or (crowded out of its spot) picks another spot, giving up after a few tries. */
+function arrive(w: World, u: Unit, to: Goal) {
   const o = u.order
+  const { job } = to
   if (job) {
     if (footDist(job, u.x, u.y) <= REACH) return work(u, job)
     return done(u)
+  }
+  if (to.drop || to.mine !== undefined) {
+    if (to.drop && footDist(to.drop, u.x, u.y) <= REACH) return dropOff(w, u)
+    if (to.mine !== undefined && M.hypot(to.x - u.x, to.y - u.y) <= MINE_REACH) return mine(w, u, to.mine)
+    const g = moveOf(u)
+    if (++g.tries > TRIES) return done(u)
+    g.spot = undefined
+    g.pv = -1
+    u.route = null
+    return
   }
   if (o.k === 'patrol') {
     const { x, y } = o
@@ -384,6 +505,152 @@ function work(u: Unit, s: Unit) {
   const off = wrap(M.atan2(s.y - u.y, s.x - u.x) - u.a)
   const turn = u.t.turn * STEP
   u.a = wrap(u.a + clamp(off, -turn, turn))
+}
+
+// --- Gathering ---------------------------------------------------------------------------------------
+
+/** The nearest crystal field to `u` with kyber left that it can drive to (the first on a tie), or
+ * -1. Every side knows where the fields are (the land is known from orbit). */
+function nearestField(w: World, u: Unit): number {
+  const nav = gs(w).nav
+  const k = size(u)
+  const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
+  const piece = start >= 0 ? nav.piece[k - 1][start] : -1
+  let best = -1
+  let bestD = Infinity
+  gs(w).fields.forEach((f, i) => {
+    if (!((w.kyber?.[i] ?? 0) > 0)) return
+    if (piece >= 0 && !f.tiles.some((t) => stands(nav, k, t) && nav.piece[k - 1][t] === piece)) return
+    const d = (f.x - u.x) * (f.x - u.x) + (f.y - u.y) * (f.y - u.y)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
+}
+
+/** The nearest finished building of `u`'s owner that takes in kyber (a Command Center), or null. */
+function dropFor(w: World, u: Unit): Unit | null {
+  let best: Unit | null = null
+  let bestD = Infinity
+  for (const s of w.units) {
+    if (s.dead || s.owner !== u.owner || !s.foot || s.site || !spec(s.t).dropOff) continue
+    const d = footDist(s, u.x, u.y)
+    if (d < bestD) {
+      bestD = d
+      best = s
+    }
+  }
+  return best
+}
+
+/** Where engineer `u` mines field `f`: the tile of it nearest `u` that it can reach and stand on, one
+ * no other engineer mining there has taken if there is one. Null when there is none. */
+function mineSpot(w: World, u: Unit, f: number): Pt | null {
+  const nav = gs(w).nav
+  const k = size(u)
+  const taken = new Set<number>()
+  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && !o.gm.drop && o.order.k === 'gather' && o.order.f === f) taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
+  const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
+  const piece = start >= 0 ? nav.piece[k - 1][start] : -1
+  let best = -1
+  let bestD = Infinity
+  for (const i of gs(w).fields[f].tiles) {
+    if (!stands(nav, k, i) || (piece >= 0 && nav.piece[k - 1][i] !== piece)) continue
+    const p = spotOf(nav, k, i)
+    const d = (p.x - u.x) * (p.x - u.x) + (p.y - u.y) * (p.y - u.y) + (taken.has(i) ? TAKEN : 0)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  }
+  return best < 0 ? null : spotOf(nav, k, best)
+}
+
+/** Where a gathering engineer goes: with a full load (or nothing left to mine and something in hand),
+ * to the nearest Command Center of ours; otherwise to its spot on its field, or, the field run dry,
+ * on to the nearest other one. Null when there is nothing left to do. */
+function gatherGoal(w: World, u: Unit, o: Extract<Order, { k: 'gather' }>): Goal | null {
+  const g = moveOf(u)
+  const carry = u.carry ?? 0
+  if (!g.drop) {
+    if (carry >= CARRY - 1e-9) {
+      g.drop = true
+      g.spot = undefined
+    } else if (!((w.kyber?.[o.f] ?? 0) > 0)) {
+      const next = nearestField(w, u)
+      g.spot = undefined
+      if (next >= 0) {
+        o.f = next
+        g.job = `g${next}`
+      } else if (carry > 0) g.drop = true
+      else return null
+    }
+  }
+  if (g.drop) {
+    const home = dropFor(w, u)
+    if (!home) return null
+    g.spot ??= workSpot(w, u, home)
+    return { x: g.spot.x, y: g.spot.y, drop: home }
+  }
+  g.spot ??= mineSpot(w, u, o.f) ?? undefined
+  if (!g.spot) return null
+  return { x: g.spot.x, y: g.spot.y, mine: o.f }
+}
+
+/** An engineer on its spot on field `f`: it stops, faces the crystals and mines, kyber going from the
+ * field into its load; once full it heads for a Command Center. The last crystal mined, the field
+ * runs dry (an event the screen tells the player about). */
+function mine(w: World, u: Unit, f: number) {
+  const g = moveOf(u)
+  g.mine = true
+  u.route = null
+  g.pv = -1
+  g.tries = 0
+  u.v = 0
+  const field = gs(w).fields[f]
+  const off = wrap(M.atan2(field.y - u.y, field.x - u.x) - u.a)
+  const turn = u.t.turn * STEP
+  u.a = wrap(u.a + clamp(off, -turn, turn))
+  const left = w.kyber![f]
+  const take = Math.min(MINE_RATE * STEP, CARRY - (u.carry ?? 0), left)
+  if (take > 0) {
+    u.carry = (u.carry ?? 0) + take
+    w.kyber![f] = left - take
+    if (w.kyber![f] <= 1e-9) {
+      w.kyber![f] = 0
+      w.events.push({ k: 'dry', field: f, x: field.x, y: field.y })
+    }
+  }
+  if ((u.carry ?? 0) >= CARRY - 1e-9 || !(w.kyber![f] > 0)) {
+    g.drop = (u.carry ?? 0) > 0
+    g.spot = undefined
+  }
+}
+
+/** A gathering engineer next to a Command Center of ours: its load goes into the side's kyber, then
+ * back to the field. */
+function dropOff(w: World, u: Unit) {
+  const g = moveOf(u)
+  const load = u.carry ?? 0
+  if (load > 0) earn(w, w.players[u.owner], load, 'mines', 'Kyber gathered')
+  u.carry = 0
+  g.drop = false
+  g.spot = undefined
+  g.pv = -1
+  g.tries = 0
+  u.route = null
+}
+
+/** Engineers `crew` gather kyber at the crystal field at (x, y): each mines a load, hauls it to the
+ * nearest Command Center of ours and goes back. Why not, or null. */
+export function groundGather(w: World, owner: Owner, crew: Unit[], x: number, y: number, queued: boolean): string | null {
+  const f = fieldAt(w, x, y)
+  if (f < 0) return 'No kyber there: pick a crystal field'
+  if (!w.units.some((s) => !s.dead && s.owner === owner && s.foot && !s.site && spec(s.t).dropOff)) return 'No Command Center to take the kyber in'
+  for (const u of crew) issue(u, { k: 'gather', f }, queued)
+  return null
 }
 
 /** Pushes `u` towards the nearest ground it can stand on, when it's somewhere it can't. True when it
@@ -681,7 +948,9 @@ export function groundTick(w: World, dt: number) {
   flushStamps(gs(w).nav)
   for (const u of w.units) {
     if (u.dead || !u.t.ground || u.t.tier !== 'vehicle') continue
-    moveOf(u).busy = 0
+    const g = moveOf(u)
+    g.busy = 0
+    g.mine = false
     if (!unstick(w, u)) steer(w, u)
   }
   separate(w)
@@ -757,15 +1026,27 @@ export function groundSight(w: World) {
  * see now as ghosts). */
 export const knownBuildings = (w: World, viewer: Owner): KnownBuilding[] => w.known?.[team(w, viewer)] ?? []
 
-// --- Income ------------------------------------------------------------------------------------------
+// --- Economy -----------------------------------------------------------------------------------------
 
-/** A player's income in a ground battle (sim.ts refreshPlayers): each finished building's. */
+/** The most units a side can have, however many supply buildings it puts up. */
+export const POP_MAX = 200
+
+/**
+ * A player's economy in a ground battle, four times a second (sim.ts refreshPlayers): no income
+ * trickles in (kyber comes only from drop-offs), the unit cap is the supply of its finished
+ * buildings, and the kyber it gathered a second lately is kept for the top bar and the economy.
+ */
 export function groundIncome(w: World, p: Player, o: Owner) {
-  let income = 0
-  for (const u of w.units) if (!u.dead && u.owner === o && u.foot && !u.site) income += spec(u.t).income ?? 0
-  p.incomeParts = { station: income * p.incomeMul, mines: 0, beacons: 0 }
-  p.income = p.incomeParts.station
-  p.popCap = BASE_POP
+  let supply = 0
+  for (const u of w.units) if (!u.dead && u.owner === o && u.foot && !u.site) supply += spec(u.t).supply ?? 0
+  p.incomeParts = { station: 0, mines: 0, beacons: 0 }
+  p.income = 0
+  p.popCap = Math.min(POP_MAX, supply)
+  // A running average over about half a minute (refreshPlayers runs every quarter second).
+  const total = p.earnedBy.mines
+  const got = total - (p.gatheredAt ?? total)
+  p.gatheredAt = total
+  p.gatherRate = (p.gatherRate ?? 0) * 0.99 + got * 4 * 0.01
 }
 
 // --- Placement ------------------------------------------------------------------------------------
@@ -900,7 +1181,7 @@ export function groundPlacement(w: World, owner: Owner, unitId: string, x: numbe
   }
   if (!door.every((d) => d.ok)) return out('No room in front of its door')
   if (worst === 4) return out(TILE_RULES[4])
-  if (p.credits < cost) return out('Not enough credits')
+  if (p.credits < cost) return out('Not enough kyber')
   return out(null)
 }
 
@@ -957,8 +1238,8 @@ export function groundCantBuild(w: World, owner: Owner, id: string, at: number):
   if (b.yq!.length >= QUEUE_MAX) return 'Queue full'
   let pop = p.pop
   for (const u of w.units) if (!u.dead && u.owner === owner) for (const q of u.yq ?? []) pop += UNIT[q.unit].pop
-  if (pop + t.pop > p.popCap) return 'At the unit limit'
-  if (p.credits < t.cost) return 'Not enough credits'
+  if (pop + t.pop > p.popCap) return `Needs more supply: build a ${UNIT[groundIds(p.faction).supply].name} (the unit cap is ${p.popCap})`
+  if (p.credits < t.cost) return 'Not enough kyber'
   return null
 }
 
@@ -986,8 +1267,13 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
       int(u.gm.tries)
       int(u.gm.busy)
       int(u.route?.pts.length ?? -1)
+      int(u.gm.drop ? 1 : 0)
+      int(u.gm.back ?? -1)
     }
+    if (u.carry !== undefined) num(u.carry)
+    if (u.order.k === 'gather') int(u.order.f)
   }
+  for (const k of w.kyber ?? []) num(k)
   for (const mem of w.known ?? []) {
     int(mem.length)
     for (const k of mem) int(k.id)
@@ -1013,6 +1299,8 @@ export const snapGround = (w: World): GroundSnap => ({ ver: gs(w).nav.ver, pendi
 export function restoreGround(w: World, s: GroundSnap | undefined) {
   const g = newGround(w)
   w.ground = g
+  // A battle saved before kyber: every field still full.
+  w.kyber ??= g.fields.map(() => FIELD_KYBER)
   for (const u of w.units) {
     if (!u.foot?.on) continue
     const [fw, fh] = spec(u.t).foot!
@@ -1050,4 +1338,5 @@ setGroundHooks({
   restore: restoreGround,
   mapDef: groundMapDef,
   think: (w, b) => groundThink(w, b),
+  gather: groundGather,
 })

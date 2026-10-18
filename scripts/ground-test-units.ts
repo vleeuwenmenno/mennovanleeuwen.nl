@@ -15,6 +15,6 @@ export const TEST_UNITS: UnitType[] = [
   vehicle('test-scout', 1, 11, 110, 6, 220),
   vehicle('test-rover', 2, 22, 80, 3, 140),
   vehicle('test-crawler', 3, 36, 50, 1.6, 80),
-  { ...groundCenter({ id: 'test-block', faction: 'republic', name: 'Test block', blurb: '', sprite: 'test-block', hull: 1500, cost: 300, build: 10, ground: { foot: [3, 3], standalone: false, range: 6, income: 0, trains: [] } }), size: 96 },
+  { ...groundCenter({ id: 'test-block', faction: 'republic', name: 'Test block', blurb: '', sprite: 'test-block', hull: 1500, cost: 300, build: 10, ground: { foot: [3, 3], standalone: false, range: 6, income: 0, supply: 0, dropOff: false, trains: [] } }), size: 96 },
 ]
 for (const t of TEST_UNITS) UNIT[t.id] = t

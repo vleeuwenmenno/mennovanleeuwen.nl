@@ -61,6 +61,10 @@ export type Order =
    * ally's until it is whole or lost (see cmdMend). `back`: the ship or structure it was guarding
    * (or escorting) when told, which it goes back to afterwards; 0 for none. */
   | { k: 'mend'; id: number; back: number }
+  /** Ground battles, engineers: gather kyber from crystal field `f` (an index into the ground map's
+   * deposits), carry each load to the nearest Command Center, and go back; on to the nearest other
+   * field when it runs dry (ground/world.ts). */
+  | { k: 'gather'; f: number }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
 export type Mods = {
@@ -215,6 +219,8 @@ export type Unit = {
   foot?: Foot
   gm?: GroundMove
   eye?: Eye
+  /** Ground battles, engineers: the kyber it carries to a Command Center. */
+  carry?: number
 }
 
 /**
@@ -280,6 +286,7 @@ export type Player = {
   start: Pt
   /** Still has a station. */
   alive: boolean
+  /** Credits; in a ground battle, kyber. */
   credits: number
   income: number
   incomeMul: number
@@ -307,6 +314,11 @@ export type Player = {
   refunds: { at: number; amount: number; unit: string }[]
   /** Credits and income every HISTORY_STEP seconds, for the economy chart. */
   history: { t: number; credits: number; income: number }[]
+  /** Ground battles: kyber gathered a second lately (a running average, for the top bar and the
+   * economy; the credits themselves come from drop-offs), and the total gathered when it was last
+   * worked out. */
+  gatherRate?: number
+  gatheredAt?: number
   /** Fleet battles: ships that jumped out alive, back to the fleet they came from. */
   escaped: string[]
   /** Fleet battles: ships of ours rush-launched unfinished that are waiting in the reserve (called in
@@ -325,7 +337,7 @@ export type Player = {
 export type EarnSource = 'station' | 'mines' | 'beacons' | 'salvage' | 'refunds'
 export type SpendKind = 'ships' | 'research' | 'structures' | 'repairs'
 /** One line in the economy log: + for money in, - for money out. */
-export type LedgerEntry = { t: number; amount: number; what: string; kind: SpendKind | 'salvage' | 'refund' | 'cancel' | 'gift'
+export type LedgerEntry = { t: number; amount: number; what: string; kind: SpendKind | 'salvage' | 'refund' | 'cancel' | 'gift' | 'kyber'
   /** A gift: the ally it went to or came from. */
   seat?: Owner
 }
@@ -343,6 +355,18 @@ export function spend(w: World, p: Player, amount: number, kind: SpendKind, what
   p.credits -= amount
   p.spentBy[kind] += amount
   note(w, p, -amount, kind, what)
+}
+/** Money earned by a side's own work (ground battles: kyber engineers drop off), counted under its
+ * source and logged; drop-offs close together share one line of the log. */
+export function earn(w: World, p: Player, amount: number, source: EarnSource, what: string) {
+  p.credits += amount
+  p.stats.earned += amount
+  p.earnedBy[source] += amount
+  const last = p.ledger[p.ledger.length - 1]
+  if (last && last.kind === 'kyber' && last.what === what && w.time - last.t < 15) {
+    last.amount += amount
+    last.t = w.time
+  } else note(w, p, amount, 'kyber', what)
 }
 /** Money back for something cancelled before it was done. */
 export function giveBack(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
@@ -426,6 +450,8 @@ export type SimEvent =
   | { k: 'fortified'; owner: Owner; unit: number; what: string; x: number; y: number }
   /** Ground battles: a unit rolled out of building `from`'s door. */
   | { k: 'trained'; owner: Owner; unit: string; x: number; y: number; from: number }
+  /** Ground battles: kyber crystal field `field` (at x, y) ran dry. */
+  | { k: 'dry'; field: number; x: number; y: number }
 
 export type World = {
   w: number
@@ -488,6 +514,8 @@ export type World = {
   ground?: GroundState
   /** Ground battles: each team's memory of other teams' buildings, as last seen. */
   known?: KnownBuilding[][]
+  /** Ground battles: the kyber left in each crystal field (by the ground map's deposits). */
+  kyber?: number[]
 }
 
 /** Whether defense platforms may go on ore in this battle (World `oreDefense`; on unless the lobby
@@ -522,6 +550,8 @@ export type GroundHooks = {
   mapDef(id: string): MapDef | null
   /** The AI's decisions in a ground battle (ai.ts think). */
   think(w: World, b: Brain): void
+  /** Engineers `crew` gather kyber at the crystal field at (x, y). */
+  gather(w: World, owner: Owner, crew: Unit[], x: number, y: number, queued: boolean): string | null
 }
 let groundCode: GroundHooks | null = null
 /** Loads ground battles into the sim (ground/world.ts calls it when it is imported). */
@@ -2574,6 +2604,14 @@ export function cantConstruct(w: World, owner: Owner, t: Unit | undefined): stri
 }
 
 /** Engineers build a construction site of ours, or weld one of our structures back together. */
+/** Ground battles: engineers `ids` gather kyber at the crystal field at (x, y) (ground/world.ts). */
+export function cmdGather(w: World, owner: Owner, ids: number[], x: number, y: number, queued = false): string | null {
+  if (!w.ground) return 'Nothing to gather here'
+  const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t))
+  if (!crew.length) return 'Only engineers gather kyber'
+  return G().gather(w, owner, crew, x, y, queued)
+}
+
 export function cmdConstruct(w: World, owner: Owner, ids: number[], id: number, queued = false): string | null {
   const t = w.byId.get(id)
   const why = cantConstruct(w, owner, t)

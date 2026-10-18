@@ -159,8 +159,12 @@ export type GroundSpec = {
   sight: number
   /** Buildings: footprint in tiles, columns × rows. */
   foot?: [number, number]
-  /** Buildings: credits a second it earns once built. */
+  /** Buildings: credits a second it earns once built (none do on the ground: kyber is gathered). */
   income?: number
+  /** Buildings: how many units it supports once built (the side's unit cap is the sum). */
+  supply?: number
+  /** Buildings: engineers drop off the kyber they gather here (a Command Center). */
+  dropOff?: boolean
   /** Buildings: how far its command range reaches, in tiles from its middle (other buildings go up
    * inside one of ours). */
   range?: number
@@ -198,29 +202,41 @@ export const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: numb
 
 // --- Ground units -----------------------------------------------------------------------------------
 
-/** Ground battle units by role, each faction's written with these (see GroundSpec). Numbers in the
- * space game's ballpark: an engineer squadron there costs 300 for three craft (one vehicle here,
- * 150 or so); a station earns 6 credits a second at level 1, as a Command Center does; a yard costs
- * 900 and a Command Center, a whole new base, 1,200. */
+/** Ground battle units by role, each faction's written with these (see GroundSpec). Prices are in
+ * kyber, which engineers gather from crystal fields (a ground battle's credits), in the space game's
+ * ballpark: an engineer squadron there costs 300 for three craft (one vehicle here, 150 or so); a
+ * yard costs 900 and a Command Center, a whole new base, 1,200. */
 type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number }
 
-/** An engineer: a small unarmed vehicle (size class 1) that puts up buildings and repairs them. */
+/** An engineer: a small unarmed vehicle (size class 1) that gathers kyber, puts up buildings and
+ * repairs them. */
 export const groundEngineer = (o: GroundWritten & { speed: number; turn: number }): UnitType => ({
   tier: 'vehicle', kind: 'engineer', aspect: 0.8, size: Math.round((o.ground.radius ?? 11) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
   sensor: (o.ground.sight ?? 8) * 32, weapons: [], hardpoints: [], engines: [],
-  role: { role: 'Construction', strong: ['building', 'repairing buildings'], weak: ['anything that shoots'] },
+  role: { role: 'Construction', strong: ['gathering kyber', 'building', 'repairing buildings'], weak: ['anything that shoots'] },
   ...o,
   ground: { size: 1, radius: 11, accel: 220, sight: 8, ...o.ground },
 })
 
-/** A Command Center: a 6 × 6 base building that trains engineers, earns credits and holds the command
- * range other buildings go up in; it may also start a new base on its own (standalone). */
+/** A Command Center: a 6 × 6 base building that trains engineers, takes in the kyber they gather,
+ * supports a few units and holds the command range other buildings go up in; it may also start a new
+ * base on its own (standalone). */
 export const groundCenter = (o: GroundWritten): UnitType => ({
   tier: 'building', aspect: 1, size: 6 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 10 * 32,
   weapons: [], hardpoints: [], engines: [],
-  role: { role: 'Base', strong: ['training engineers', 'income'], weak: ['being left unguarded'] },
+  role: { role: 'Base', strong: ['training engineers', 'taking in kyber'], weak: ['being left unguarded'] },
   ...o,
-  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], income: 6, range: 14, standalone: true, ...o.ground },
+  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], supply: 5, dropOff: true, range: 14, standalone: true, ...o.ground },
+})
+
+/** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does.
+ * It goes up inside the command range of one of ours. */
+export const groundSupply = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 3 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 5 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Supply', strong: ['raising the unit cap'], weak: ['being left unguarded'] },
+  ...o,
+  ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], supply: 10, ...o.ground },
 })
 
 // --- Stations ---------------------------------------------------------------------------------------
@@ -460,6 +476,6 @@ export type FactionData = {
   layout: Record<string, Layout>
   /** Its orbital defense station (Galactic conquest). */
   orbital: OrbitalPlan
-  /** Its ground battle units and buildings (UnitType `ground`): the Engineer, then the Command Center. */
+  /** Its ground battle units and buildings (UnitType `ground`): the Engineer, the Command Center and the supply building. */
   ground: UnitType[]
 }

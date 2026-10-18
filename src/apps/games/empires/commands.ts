@@ -2,7 +2,7 @@ import { LEVEL_UP, MODULE, ORBITAL_MODS, SITE_UPGRADES, TECH, UNIT, defenseFacti
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, cmdGather, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -39,6 +39,8 @@ const TABLE = {
   // Hybrid bases: engineers place a yard, build or repair a structure; a site can be called off.
   place: { run: cmdPlace, args: ['ids', 'structure', 'x', 'y', 'bool', 'angle'] },
   construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
+  // Ground battles: engineers gather kyber at the crystal field at a point.
+  gather: { run: cmdGather, args: ['ids', 'x', 'y', 'bool'] },
   // Repair ships: repair a damaged ship or station of ours or an ally's (the sim refuses an enemy's).
   mend: { run: cmdMend, args: ['ids', 'id', 'bool'] },
   cancelSite: { run: cmdCancelSite, args: ['id'] },

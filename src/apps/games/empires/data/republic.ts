@@ -3,7 +3,7 @@
 // data.ts. Points on a ship are on the 0-10 grid over its box, x from the left and y from the nose
 // (see data.ts).
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer } from './kit.ts'
+import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] }
 
@@ -268,17 +268,23 @@ const SHIPS: UnitType[] = [
 /** The warships' hardpoints at their size: where they are written (see SHIPS). */
 const LAYOUT: Record<string, Layout> = Object.fromEntries(SHIPS.filter((t) => t.hardpoints.length).map((t) => [t.id, t.hardpoints.map(({ x, y, s }) => ({ x, y, s }))]))
 
-/** Ground battles: the Republic's tracked crane rig, steady and sturdy, and its Command Center. */
+/** Ground battles: the Republic's tracked crane rig, steady and sturdy, its Command Center and its
+ * Supply Depot. */
 const GROUND: UnitType[] = [
   groundEngineer({
     id: 'r-g-engineer', faction: 'republic', name: 'Mason field engineer', sprite: 'republic-g-engineer',
-    blurb: 'A tracked utility rig with a crane arm and a welding torch. Unarmed: it raises Command Centers and welds damaged buildings back together.',
-    hull: 150, cost: 150, build: 12, speed: 88, turn: 4, ground: { radius: 11, builds: ['r-g-center'] },
+    blurb: 'A tracked utility rig with a crane arm and a welding torch. Unarmed: it mines kyber crystals and hauls them to a Command Center, raises buildings and welds damaged ones back together.',
+    hull: 150, cost: 150, build: 12, speed: 88, turn: 4, ground: { radius: 11, builds: ['r-g-supply', 'r-g-center'] },
   }),
   groundCenter({
     id: 'r-g-center', faction: 'republic', name: 'Command Center', sprite: 'republic-g-center',
-    blurb: 'A white armoured block with a landing pad and a comms dish. It trains engineers, earns a steady trickle of credits, and buildings go up within 14 tiles of it.',
+    blurb: 'A white armoured block with a landing pad and a comms dish. It trains engineers, takes in the kyber they mine, supports 5 units, and buildings go up within 14 tiles of it.',
     hull: 5200, cost: 1200, build: 60, ground: { trains: ['r-g-engineer'] },
+  }),
+  groundSupply({
+    id: 'r-g-supply', faction: 'republic', name: 'Supply Depot', sprite: 'republic-g-supply',
+    blurb: 'Armoured stores and a fuel tank behind blast walls. Each one supports 10 more units.',
+    hull: 1500, cost: 100, build: 25, ground: {},
   }),
 ]
 
