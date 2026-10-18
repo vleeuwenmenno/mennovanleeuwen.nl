@@ -286,12 +286,12 @@ const GROUND: UnitType[] = [
   groundFactory({
     id: 's-g-brood', faction: 'swarm', name: 'Brood Chamber', sprite: 'swarm-g-brood', makes: 'foot',
     blurb: 'A ribbed mound of hardened resin round a warm brood pit, with a wide maw in its side. Packs of swarmlings crawl out of it; it draws power while it breeds.',
-    hull: 2400, cost: 220, build: 30, ground: { trains: ['s-g-swarmlings'] },
+    hull: 2400, cost: 220, build: 30, ground: { trains: ['s-g-swarmlings', 's-g-spewer', 's-g-ravager'] },
   }),
   groundFactory({
     id: 's-g-nest', faction: 'swarm', name: 'Vehicle Nest', sprite: 'swarm-g-nest', makes: 'vehicle',
     blurb: 'A great shell of chitin plates over a birthing pool, its maw wide enough for the beasts the Swarm rides to war. They crawl out of the maw; it draws power while it grows them.',
-    hull: 3000, cost: 360, build: 40, ground: { trains: ['s-g-racer'] },
+    hull: 3000, cost: 360, build: 40, ground: { trains: ['s-g-racer', 's-g-spores', 's-g-behemoth'] },
   }),
   groundScout({
     id: 's-g-scout', faction: 'swarm', name: 'Skitterling', sprite: 'swarm-g-scout',

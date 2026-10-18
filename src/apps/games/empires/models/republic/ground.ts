@@ -258,7 +258,7 @@ export const GROUND: GroundModels = {
   'r-g-barracks': {
     w: 100,
     h: 100,
-    spec: () => ({
+    spec: ({ tier }) => ({
       breakStyle: 'pie',
       parts: [
         part('apron', chamfer(0, 2, 98, 96, 12), 'hull2', 1, {
@@ -301,6 +301,40 @@ export const GROUND: GroundModels = {
             { k: 'lights', pts: along([-18, 23], [18, 23], 6), r: 1.2, tone: 'glow' },
           ],
         }),
+        // Tier 2: annexes down both sides, a second armoury on the roof, a wider drop door and a
+        // second mast.
+        ...(tier >= 2
+          ? [
+              ...sym(part('annex', chamfer(-44, -6, 10, 46, 3), 'hull2', 1.5, { lift: 5, facets: bevel(-44, -6, 10, 46, 2), details: [{ k: 'shape', pts: box(-44, -6, 3, 30), tone: 'glass' }] })),
+              part('armoury2', chamfer(19, 8, 24, 18, 3), 'hull2', 3.2, {
+                lift: 10,
+                facets: bevel(19, 8, 24, 18, 3),
+                details: [...treads(10, 28, 2, 14, 3), { k: 'shape', pts: box(19, 15, 18, 2.5), tone: 'accent' }],
+              }),
+              part('mast2', capsule([-30, -26], [-36, -38], 1.6, 1), 'metal', 4, { lift: 16, details: [{ k: 'lights', pts: [[-36, -38]], r: 1.4, tone: 'glow' }] }),
+            ]
+          : []),
+        // The door grows with the tier: a wider frame round it, striped red at its edges.
+        ...(tier >= 2
+          ? [
+              part('doorWide', box(0, 33, tier >= 3 ? 70 : 58, 16), 'dark', 2.95, {
+                lift: 1,
+                details: [
+                  { k: 'shape', pts: box(tier >= 3 ? -33 : -27, 33, 3, 16), tone: 'accent' },
+                  { k: 'shape', pts: box(tier >= 3 ? 33 : 27, 33, 3, 16), tone: 'accent' },
+                  { k: 'lights', pts: along([tier >= 3 ? -30 : -24, 44], [tier >= 3 ? 30 : 24, 44], tier >= 3 ? 9 : 7), r: 1.1, tone: 'glow', minPx: 60 },
+                ],
+              }),
+            ]
+          : []),
+        // Tier 3: a pulse turret on the roof and a red command band.
+        ...(tier >= 3
+          ? [
+              part('turretBase', circle(-22, 10, 9, 20), 'hull2', 5, { lift: 14, sphere: true, details: [{ k: 'line', pts: circle(-22, 10, 6, 16) }] }),
+              ...[-3, 3].map((dx, i) => part(`barrel${i}`, capsule([-22 + dx, 6], [-22 + dx, -8], 1.6, 1.2), 'metal', 6, { lift: 15 })),
+              part('band', box(0, -40, 60, 3), 'accent', 3.5, { lift: 8 }),
+            ]
+          : []),
       ],
     }),
   },
@@ -310,7 +344,7 @@ export const GROUND: GroundModels = {
   'r-g-vfactory': {
     w: 100,
     h: 100,
-    spec: () => ({
+    spec: ({ tier }) => ({
       breakStyle: 'pie',
       parts: [
         part('apron', chamfer(0, 1, 98, 98, 12), 'hull2', 1, {
@@ -350,6 +384,29 @@ export const GROUND: GroundModels = {
             { k: 'lights', pts: along([-22, 34], [20, 34], 7), r: 1.2, tone: 'glow' },
           ],
         }),
+        // Tier 2: a service annex on the south-east corner, a second hoist and a wider gate.
+        ...(tier >= 2
+          ? [
+              part('annex', chamfer(40, 26, 16, 24, 3), 'hull', 2.2, { lift: 6, facets: bevel(40, 26, 16, 24, 2), details: [{ k: 'shape', pts: box(40, 26, 10, 3), tone: 'glass' }] }),
+              part('hoist2', box(-14, -14, 10, 10), 'metal', 6, { lift: 16, details: [{ k: 'lights', pts: [[-14, -14]], r: 1.4, tone: 'glow' }] }),
+              part('gateWide', box(-1, 41, tier >= 3 ? 80 : 66, 12), 'dark', 3.95, {
+                lift: 1,
+                details: [
+                  { k: 'shape', pts: box(tier >= 3 ? -40 : -33, 41, 3, 12), tone: 'accent' },
+                  { k: 'shape', pts: box(tier >= 3 ? 38 : 31, 41, 3, 12), tone: 'accent' },
+                ],
+              }),
+            ]
+          : []),
+        // Tier 3: a second crane bridge and a twin turret on the north-west corner.
+        ...(tier >= 3
+          ? [
+              part('bridge2', box(0, 14, 66, 7), 'hull2', 5, { lift: 15, details: [{ k: 'shape', pts: box(-24, 14, 8, 4), tone: 'accent' }, { k: 'shape', pts: box(24, 14, 8, 4), tone: 'accent' }] }),
+              part('hoist3', box(-8, 14, 12, 11), 'metal', 6, { lift: 16, details: [{ k: 'lights', pts: [[-8, 14]], r: 1.6, tone: 'glow' }] }),
+              part('turretBase', circle(-38, -38, 8, 18), 'hull', 5, { lift: 13, sphere: true, details: [{ k: 'shape', pts: circle(-38, -38, 2.5, 8), tone: 'accent' }] }),
+              ...[-2.6, 2.6].map((dx, i) => part(`barrel${i}`, capsule([-38 + dx, -40], [-38 + dx, -52], 1.4, 1), 'metal', 6, { lift: 14 })),
+            ]
+          : []),
       ],
     }),
   },

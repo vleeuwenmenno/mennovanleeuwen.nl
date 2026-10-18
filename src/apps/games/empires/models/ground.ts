@@ -21,8 +21,9 @@ import type { AnyDesign, Model, Part } from './types.ts'
 // Designs that walk (a squad's members, walkers) give their poses in walking order (ModelSpec
 // `walk`) and their legs as parts with a `pose`; the paint cache keeps a look per pose.
 
-/** One ground design: its box in model units (100 on the long side) and its parts. */
-export type GroundModel = { w: number; h: number; spec: (c: { w: number; h: number }) => ModelSpec }
+/** One ground design: its box in model units (100 on the long side) and its parts; `tier`: the tier
+ * a factory stands at (GroundSpec `tier`), whose design grows with it. */
+export type GroundModel = { w: number; h: number; spec: (c: { w: number; h: number; tier: number }) => ModelSpec }
 /** A faction's ground designs, by ground unit type id. */
 export type GroundModels = Record<string, GroundModel>
 
@@ -51,7 +52,8 @@ export function memberModel(id: string): Model | null {
 export function buildGroundModel(id: string, t?: UnitType): Model {
   const d = DEFS[t?.ground?.look ?? id]
   if (!d) throw new Error(`No ground model for ${id}`)
-  return assemble(`ground:${id}`, d.faction, d.def, t)
+  const tier = t?.ground?.factory ? (t.ground.tier ?? 1) : 1
+  return assemble(`ground:${id}${tier > 1 ? `:${tier}` : ''}`, d.faction, d.def, t)
 }
 
 const crystals = new Map<number, Model>()
@@ -68,7 +70,7 @@ export const crystalShapes = () => KYBER.length
 
 function assemble(key: string, faction: FactionId, def: GroundModel, t?: UnitType): Model {
   const { w, h } = def
-  const spec = def.spec({ w, h })
+  const spec = def.spec({ w, h, tier: t?.ground?.factory ? (t.ground.tier ?? 1) : 1 })
   const long = Math.max(w, h)
   // Its turrets, on its hardpoints (as a ship's: 0-10 grids over its box), in the faction's designs.
   const mounts = (t?.hardpoints ?? []).flatMap((hp, i) => {
@@ -103,8 +105,10 @@ const built = new Map<string, Model | null>()
 /** The model for ground unit type `id` (with its type `t`: its turrets on it), built on first use;
  * null when it has none. */
 export function groundModelFor(id: string, t?: UnitType): Model | null {
-  let m = built.get(id)
-  if (m === undefined) built.set(id, (m = (t?.ground?.look ?? id) in DEFS ? buildGroundModel(id, t) : null))
+  // A factory's model grows with its tier: one a tier.
+  const key = t?.ground?.factory && (t.ground.tier ?? 1) > 1 ? `${id}:${t.ground.tier}` : id
+  let m = built.get(key)
+  if (m === undefined) built.set(key, (m = (t?.ground?.look ?? id) in DEFS ? buildGroundModel(id, t) : null))
   return m
 }
 

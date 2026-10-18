@@ -6,7 +6,7 @@ import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
   BASE_POP, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
-  type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId,
+  type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId, GROUND_TECH, groundTechsFor,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { traits } from './codexInfo'
@@ -59,6 +59,8 @@ export type Hud = {
    * banked, and the tips that break them down (ground/power.ts). */
   power?: { made: number; used: number; ratio: number }
   rp?: number
+  /** Research points paid for the factory upgrades and research under way. */
+  rpSpent?: number
   powerTip?: string
   rpTip?: string
   /** Our yards: built ones with their queue, and sites with how far along they are (0 to 1). */
@@ -657,6 +659,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
         <button className="ew-top-cell ew-rpcell ew-hide-narrow" onClick={onEconomy} data-tip={hud.rpTip ?? 'Research points.'} aria-label={`Research points: ${Math.floor(hud.rp ?? 0)}`}>
           <span className="ew-rp"><Icon name="research" size={17} /></span>
           <b>{fmt(hud.rp ?? 0)}</b>
+          {!!hud.rpSpent && <small className="ew-rpspent">−{fmt(hud.rpSpent)}</small>}
         </button>
       )}
       {hud.ground && onIdleEngineer && (
@@ -955,6 +958,10 @@ type DetailProps = {
   onPlace: (unit: string) => void
   /** Call off a yard still going up. */
   onCancelSite: (id: number) => void
+  /** Ground battles: factory `uid` starts job `job` (its next tier, 'tier', or a GROUND_TECH id), or
+   * calls its job off (a full refund). */
+  onJob: (uid: number, job: string) => void
+  onCancelJob: (uid: number) => void
   /** Select one of ours (the base tabs: the station, a yard). */
   onSelect: (id: number) => void
   /** Order an expansion on building `uid`, or call off the one at `index` in its queue. */
@@ -2589,7 +2596,8 @@ function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit
         <strong>Build</strong>
         <span className="ew-muted ew-small" data-tip={`${hint}. ${coarse ? 'Long-press' : 'Right-click'} one of our buildings to repair it, or a kyber crystal field to gather it.`}>{hint}</span>
       </header>
-      <div className="ew-yard ew-engbuild-cards">
+      {/* More than four: two rows of three smaller cards, so their names fit. */}
+      <div className={`ew-yard ew-engbuild-cards ${builds.length > 4 ? 'is-many' : ''}`}>
         {builds.map((t) => {
           const poor = w.players[me].credits < t.cost
           const secs = Math.ceil(t.build / GROUND_CREW[Math.max(1, n)])
@@ -2647,6 +2655,14 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
   const trains = (b.t.ground?.trains ?? []).map((id) => UNIT[id]).filter(Boolean)
   const queue = b.yq ?? []
   const where = `the ${b.t.name}`
+  const factory = !!b.t.ground?.factory
+  // A factory's panel: its units, or its upgrades (the next tier and its research).
+  const [page, setPage] = useState<'units' | 'upgrades'>('units')
+  const jobs = factory ? 1 + groundTechsFor(b.t.id).length : 0
+  const units = trains.map((t) => (
+    <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, b.id)} whyReserve={null} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}
+      onBuild={(id, n) => p.onBuild(id, n, false, b.id)} onUnqueue={(id) => p.onUnqueue(id, b.id)} where={where} reinf={null} />
+  ))
   return (
     <div className="ew-stationwrap">
       {!site && trains.length > 0 && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, b.id)} at={where} launch />}
@@ -2669,18 +2685,92 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
             </p>
           ) : (
             <>
-            {queue.length > 0 && lowPower(w, me) && <p className="ew-lowpower ew-small" data-tip="Training draws power. Build a power generator.">{lowPower(w, me)}</p>}
-            <div className="ew-yard" style={cardCols(trains.length)}>
-              {trains.map((t) => (
-                <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, b.id)} whyReserve={null} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}
-                  onBuild={(id, n) => p.onBuild(id, n, false, b.id)} onUnqueue={(id) => p.onUnqueue(id, b.id)} where={where} reinf={null} />
-              ))}
-            </div>
+            {(queue.length > 0 || !!b.gj) && lowPower(w, me) && <p className="ew-lowpower ew-small" data-tip="Training, upgrades and research draw power. Build a power generator.">{lowPower(w, me)}</p>}
+            {factory ? (
+              <BuildPanel
+                tabs={[
+                  { id: 'units', group: 'units', label: 'Units', badge: trains.length, tip: `Units: what the ${b.t.name} trains, the higher tiers once it is upgraded.` },
+                  { id: 'upgrades', group: 'buildings', label: 'Upgrades', badge: b.gj ? '…' : `T${b.t.ground!.tier ?? 1}`, tip: `Upgrades: its next tier, and research for its units, paid with research points and kyber, one at a time.` },
+                ]}
+                page={page} onPick={(id) => setPage(id as 'units' | 'upgrades')}>
+                <div className="ew-yard" style={cardCols(page === 'upgrades' ? jobs : trains.length)}>
+                  {page === 'upgrades' ? <GroundUpgradeCards w={w} me={me} b={b} onJob={p.onJob} onCancelJob={p.onCancelJob} /> : units}
+                </div>
+              </BuildPanel>
+            ) : (
+              <div className="ew-yard" style={cardCols(trains.length)}>{units}</div>
+            )}
             </>
           )}
         </div>
       </Frame>
     </div>
+  )
+}
+
+/**
+ * A factory's upgrades as cards (ground/jobs.ts): its next tier, then its research, each done,
+ * under way (a bar filling; right-click or long-press to call it off, a full refund), ready, held
+ * back (research points, kyber, another job running) or locked (with what unlocks it). Prices in
+ * research points and kyber, the time and the power it draws.
+ */
+function GroundUpgradeCards({ w, me, b, onJob, onCancelJob }: { w: World; me: Owner; b: Unit; onJob: (uid: number, job: string) => void; onCancelJob: (uid: number) => void }) {
+  const press = useCancelPress()
+  const kit = groundKit()
+  const g = b.t.ground!
+  const tier = g.tier ?? 1
+  const max = kit?.tierMax ?? 3
+  const ratio = w.players[me].power?.ratio ?? 1
+  return (
+    <>
+      {['tier', ...groundTechsFor(b.t.id).map((t) => t.id)].map((job) => {
+        const tech = job === 'tier' ? null : GROUND_TECH[job]
+        // The prices from the game's own type: a battle saved before them carries a copy without.
+        const c = tech ?? (UNIT[b.t.id]?.ground?.tierUp ?? g.tierUp)?.[tier - 1]
+        const busy = b.gj?.id === job
+        const done = tech ? w.players[me].techs.includes(job) : tier >= max
+        const why = done || busy ? null : kit ? kit.cantJob(w, me, b, job) : 'Not available'
+        const locked = !!why && /^(Needs the|At the top|Already)/.test(why)
+        const status = done ? 'built' : busy ? 'busy' : locked ? 'locked' : why ? 'poor' : 'ready'
+        const name = tech ? tech.name : done ? `Tier ${max}` : `Tier ${tier + 1}`
+        const next = (g.trains ?? []).map((id) => UNIT[id]).filter((t) => t && (t.ground?.tier ?? 1) === tier + 1).map((t) => t.name)
+        const blurb = tech ? tech.blurb
+          : done ? `At the top tier: it trains all of its units.`
+            : `Upgrades the ${b.t.name} to tier ${tier + 1}: it trains its tier ${tier + 1} units${next.length ? ` (${next.join(', ')})` : ''}, gains hull and grows.`
+        const line = done ? '✓ Done' : busy ? `${Math.ceil(b.gj!.left / Math.max(ratio, 0.01))}s left${ratio < 1 ? ' · low power' : ''}` : null
+        const tip = [
+          name,
+          blurb,
+          c ? `${c.rp} research points, ${c.cost} kyber, ${c.time} s; draws ${c.draw} power while it runs.${tech && tech.tier > 1 ? ` Needs the factory at tier ${tech.tier}.` : ''}` : '',
+          'One upgrade or research at a time at each factory.',
+          '',
+          busy ? `Right-click to cancel (full refund: ${b.gj!.rp} research points, ${b.gj!.cost} kyber). Long-press on touch.` : status === 'ready' ? 'Click to start it.' : (why ?? ''),
+        ].join('\n')
+        return (
+          <button key={job} className={`ew-shipcard ew-modcard is-${status} ${status === 'locked' ? 'is-locked' : status === 'poor' ? 'is-off' : ''}`}
+            onClick={() => (status === 'ready' || status === 'poor' ? onJob(b.id, job) : undefined)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              if (busy && !press.touched()) onCancelJob(b.id)
+            }}
+            {...press.handlers(busy ? () => onCancelJob(b.id) : null)}
+            data-tip={tip} aria-label={`${name}: ${status}`}>
+            <span className="ew-modicon" style={{ ['--c' as string]: tech ? '#b08cff' : 'var(--ew-gold)' }}>{tech ? <Icon name="research" size={22} /> : <b className="ew-tiermark">T{done ? max : tier + 1}</b>}</span>
+            <strong>{name}</strong>
+            {line ? <span className="ew-modline">{line}</span> : c && (
+              <span className="ew-modline ew-jobcost">
+                <span className="ew-rp"><Icon name="research" size={10} /> {c.rp}</span>
+                <span className="ew-cost"><Icon name="credits" size={10} /> {c.cost}</span>
+                <span className="ew-time"><Icon name="time" size={10} /> {c.time}s</span>
+                <span className="ew-lowpower"><Icon name="power" size={10} /> −{c.draw}</span>
+              </span>
+            )}
+            {status === 'locked' && <span className="ew-lock">{tech && tech.tier > tier ? `T${tech.tier}` : 'Locked'}</span>}
+            {busy && <i className="ew-modbar" style={{ transform: `scaleX(${1 - b.gj!.left / b.gj!.total})` }} />}
+          </button>
+        )
+      })}
+    </>
   )
 }
 

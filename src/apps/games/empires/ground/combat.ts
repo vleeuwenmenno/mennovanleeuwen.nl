@@ -239,7 +239,8 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
 
 function fireFrom(w: World, u: Unit, g: Gun, e: Unit, from: { x: number; y: number }) {
   const k = g.w.ground!
-  const dmg = g.w.damage * (1 + RANK_BONUS * u.rank)
+  // Research at its factory (sim.ts techBonus) scales it.
+  const dmg = g.w.damage * u.mods.damage * (1 + RANK_BONUS * u.rank)
   const acc = GROUND_ACC[k][armourOf(e.t)]
   const dist = Math.sqrt(d2(e.x, e.y, from.x, from.y))
   const speed = SPEED[k]
@@ -290,7 +291,7 @@ function pour(w: World, u: Unit, g: Gun, e: Unit, dt: number) {
   const from = muzzle(u, g)
   g.hold = (g.hold ?? 0) + dt
   // A squad's members each pour theirs.
-  const dmg = g.w.damage * (1 + RANK_BONUS * u.rank) * dt * (u.t.ground?.squad ? membersLeft(u) : 1)
+  const dmg = g.w.damage * u.mods.damage * (1 + RANK_BONUS * u.rank) * dt * (u.t.ground?.squad ? membersLeft(u) : 1)
   if (k === 'beam') {
     // Burns harder the longer it holds the same target: up to twice as hard after two seconds.
     hurt(w, e, k, dmg * Math.min(2, 1 + g.hold / 2), u.owner, u.id, from.x, from.y, g.w.kind)

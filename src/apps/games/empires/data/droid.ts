@@ -173,12 +173,12 @@ const GROUND: UnitType[] = [
   groundFactory({
     id: 'd-g-botfactory', faction: 'droid', name: 'Bot Factory', sprite: 'droid-g-botfactory', makes: 'foot',
     blurb: 'An eight-sided assembly deck round a stamping press, with a wide shutter in its side. Battle droids march out of it in squads, fresh off the line; it draws power while it works.',
-    hull: 2300, cost: 230, build: 32, ground: { trains: ['d-g-droids'] },
+    hull: 2300, cost: 230, build: 32, ground: { trains: ['d-g-droids', 'd-g-salvo', 'd-g-bulwark'] },
   }),
   groundFactory({
     id: 'd-g-foundry', faction: 'droid', name: 'Vehicle Foundry', sprite: 'droid-g-foundry', makes: 'vehicle',
     blurb: 'A heavy smelting block with glowing furnace vents and a wide hangar shutter. It casts the Confederacy\'s tanks and speeders, which roll out of the shutter; it draws power while it works.',
-    hull: 3100, cost: 380, build: 42, ground: { trains: ['d-g-razor'] },
+    hull: 3100, cost: 380, build: 42, ground: { trains: ['d-g-razor', 'd-g-breaker', 'd-g-juggernaut'] },
   }),
   groundScout({
     id: 'd-g-scout', faction: 'droid', name: 'Probe droid', sprite: 'droid-g-scout',

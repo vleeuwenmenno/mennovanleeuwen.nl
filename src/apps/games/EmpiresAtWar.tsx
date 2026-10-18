@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { BEACON_POP, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, cleanDefense, defenseId, dims, isEngineer, isShip, placeType, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type OrbitalModId, type Tier } from './empires/data'
+import { BEACON_POP, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, GROUND_TECH, UNIT, WORKS_NAME, buildable, cleanDefense, defenseId, dims, isEngineer, isShip, placeType, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type OrbitalModId, type Tier } from './empires/data'
 import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, setKyberMoney, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type SettingsTab, type Setup, type Slot } from './empires/Menus'
@@ -392,17 +392,17 @@ const ToastStack = memo(function ToastStack({ store, low, look }: { store: Toast
 })
 
 /** A ground battle's power and research points for the top bar, with the tips that break them down. */
-function groundPowerHud(w: World, me: Owner): Pick<Hud, 'power' | 'rp' | 'powerTip' | 'rpTip'> {
+function groundPowerHud(w: World, me: Owner): Pick<Hud, 'power' | 'rp' | 'rpSpent' | 'powerTip' | 'rpTip'> {
   const r = groundKit()?.power(w, me)
   if (!r) return {}
   const n = (v: number) => Math.round(v * 10) / 10
   const powerTip = [
     `Power: ${n(r.made)} made, ${n(r.used)} used${r.ratio < 1 ? `. Short: everything that uses power runs at ${Math.round(r.ratio * 100)}% speed. Build a power generator.` : '.'}`,
     `Made: Command Centers ${n(r.centers)}, generators ${n(r.generators)}${r.stopped ? ` (${r.stopped} stopped: no kyber)` : ''}, burning ${n(r.burn * 60)} kyber a minute.`,
-    `Used: construction ${n(r.sites)}, training ${n(r.training)}, research ${n(r.research)}.`,
+    `Used: construction ${n(r.sites)}, training ${n(r.training)}, factory upgrades and research ${n(r.upgrades)}, research stations ${n(r.research)}.`,
   ].join('\n')
-  const rpTip = `Research points: ${Math.floor(r.rp)} banked, ${n(r.rpRate * 60)} a minute from research stations. The factories will spend them on upgrades.`
-  return { power: { made: r.made, used: r.used, ratio: r.ratio }, rp: r.rp, powerTip, rpTip }
+  const rpTip = `Research points: ${Math.floor(r.rp)} banked, ${n(r.rpRate * 60)} a minute from research stations.${r.rpSpent ? ` ${Math.round(r.rpSpent)} spent on the factory upgrades and research under way (back if called off).` : ''} The factories spend them: select one, then its Upgrades page.`
+  return { power: { made: r.made, used: r.used, ratio: r.ratio }, rp: r.rp, rpSpent: r.rpSpent, powerTip, rpTip }
 }
 
 function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
@@ -1785,7 +1785,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           } else toast(`You sent ${seats[e.to].name} ${fmt(e.amount)} credits`, 'good')
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
-          toast(`Research complete: ${TECH[e.id].name}`, 'good')
+          toast(`Research complete: ${(TECH[e.id] ?? GROUND_TECH[e.id]).name}`, 'good')
+        } else if (e.k === 'tierUp' && e.owner === me) {
+          sound.researchDone()
+          toast(`${UNIT[e.unit].name} reached tier ${e.tier}: it trains its tier ${e.tier} units now`, 'good', { x: e.x, y: e.y })
         } else if (e.k === 'level' && e.owner === me) {
           sound.levelUp()
           const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
@@ -2836,6 +2839,20 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               onSelect={selectOne}
               onCancelSite={(id) => {
                 const why = order('cancelSite', id)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.unqueued()
+              }}
+              onJob={(uid, job) => {
+                const why = order('groundJob', uid, job)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.queued()
+              }}
+              onCancelJob={(uid) => {
+                const why = order('cancelGroundJob', uid)
                 if (why) {
                   toast(why, 'bad')
                   sound.error()

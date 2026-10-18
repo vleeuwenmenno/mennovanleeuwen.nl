@@ -3586,8 +3586,9 @@ and of the next building that draws power it wants, then, one at a time, its foo
 engineers), its vehicle factory (from 6, once a generator runs) and a research station for each
 Command Center (two at most), trains a mix of its factories' tier 1 units (the kind it has fewest of
 first, one at a time a factory, 6 at most and 12 once it is rich; while it saves for its expansion,
-one of each), which wait at their rally points and help the Scouts defend, and fields a few Scouts
-(see Ground combat below). It reads only what its
+one of each), which wait at their rally points and help the Scouts defend, upgrades its factories a
+tier whenever it can pay (keeping 300 kyber back), takes two pieces of research at them, and fields
+a few Scouts (see Ground combat below). It reads only what its
 team knows and gives the same orders a player does, so every copy of a battle makes the same choices.
 
 **Power and research points** ([`ground/power.ts`](src/apps/games/empires/ground/power.ts)), per
@@ -3604,34 +3605,62 @@ side, worked out once a tick by the buildings' work:
   tick; when the side can't pay a tick's burn, it makes nothing that tick, and starts again once
   there is kyber.
 - **Used:** whatever is busy (`busyDraw`): a site while engineers build it, a building with a `draw`
-  while its queue isn't empty (the Command Center and the factories while they train; upgrades
-  will draw the same way), and a research station all the time.
+  while its queue isn't empty (the Command Center and the factories while they train), a factory's
+  upgrade or research its own draw while it runs, and a research station all the time.
 - **Short of power,** every consumer of that side runs at made / used of its speed: sites, training
   and research points alike, the same share for all, so nothing depends on their order. A new base
   runs on its Command Center alone (training and one site draw 5 of its 6); a second job at once, or
   a research station while training or building, needs a generator.
 - **Research points** are banked per side (Player `rp`, in the hash and in snapshots, with the kyber
-  burnt), for the factories' upgrades of later phases to spend.
+  burnt), and spent at the factories (below). The top bar shows them, with what the upgrades under
+  way have taken (−N) beside them.
 
 **Factories** train each faction's fighting units: a foot factory its squads, a vehicle factory its
 vehicles. Engineers build them like any building; a trained unit leaves by the wide door in the
 middle of the south side and drives to the factory's rally point. Each draws power only while its
 queue isn't empty, and short of power it trains at made / used of its speed like everything else.
 
-| Faction | Foot factory | Cost, time, hull | Vehicle factory | Cost, time, hull | Tier 1 units |
+| Faction | Foot factory | Cost, time, hull | Vehicle factory | Cost, time, hull | Units, tier 1, 2, 3 |
 | --- | --- | --- | --- | --- | --- |
-| Republic | Barracks: a white blast-walled hall, an armoury on its roof, a red-striped drop door | 250, 35 s, 2,600 | Vehicle Factory: an assembly hangar under a gantry crane, a wide armoured gate | 400, 45 s, 3,400 | `r-g-troopers`, `r-g-raider` |
-| Confederacy | Bot Factory: an eight-sided deck round a stamping press, droids on the line to the shutter | 230, 32 s, 2,300 | Vehicle Foundry: a smelting block with smokestacks, glowing furnace vents and a casting pit | 380, 42 s, 3,100 | `d-g-droids`, `d-g-razor` |
-| Swarm | Brood Chamber: a ribbed resin mound round a pit of eggs, a wide maw | 220, 30 s, 2,400 | Vehicle Nest: a shell of chitin plates round a violet birthing pool | 360, 40 s, 3,000 | `s-g-swarmlings`, `s-g-racer` |
+| Republic | Barracks: a white blast-walled hall, an armoury on its roof, a red-striped drop door | 250, 35 s, 2,600 | Vehicle Factory: an assembly hangar under a gantry crane, a wide armoured gate | 400, 45 s, 3,400 | foot `r-g-troopers`, `r-g-repeaters`, `r-g-lancers`; vehicles `r-g-raider`, `r-g-hailstorm`, `r-g-bastion` |
+| Confederacy | Bot Factory: an eight-sided deck round a stamping press, droids on the line to the shutter | 230, 32 s, 2,300 | Vehicle Foundry: a smelting block with smokestacks, glowing furnace vents and a casting pit | 380, 42 s, 3,100 | foot `d-g-droids`, `d-g-salvo`, `d-g-bulwark`; vehicles `d-g-razor`, `d-g-breaker`, `d-g-juggernaut` |
+| Swarm | Brood Chamber: a ribbed resin mound round a pit of eggs, a wide maw | 220, 30 s, 2,400 | Vehicle Nest: a shell of chitin plates round a violet birthing pool | 360, 40 s, 3,000 | foot `s-g-swarmlings`, `s-g-spewer`, `s-g-ravager`; vehicles `s-g-racer`, `s-g-spores`, `s-g-behemoth` |
 
 Foot factories stand on 4 × 4 tiles and draw 3 power; vehicle factories on 5 × 5 and draw 5. A
 `trains` id the game doesn't know yet is left off the cards and can't be ordered (`trainsOf`).
 
 **Tiers** (Menno's rule: tier 1 small and simple, tier 2 medium, tier 3 the big ones). A building
-that trains stands at a tier (GroundSpec `tier`, 1 for now; `tierOf`), and a unit's GroundSpec
-`tier` is the tier its trainer must have reached (1 when left out; `tierNeeded`). A card for a unit
-above the factory's tier says "Needs the Vehicle Factory at tier 2". Upgrades that raise a factory's
-tier, paid with research points, come next.
+that trains stands at a tier (GroundSpec `tier`; `tierOf`), and a unit's GroundSpec `tier` is the
+tier its trainer must have reached (1 when left out; `tierNeeded`). A card for a unit above the
+factory's tier says "Needs the Vehicle Factory at tier 2: upgrade it on its Upgrades page".
+
+**Upgrades and research at the factories** ([`ground/jobs.ts`](src/apps/games/empires/ground/jobs.ts)).
+The research stations only make research points; everything they buy is done at a factory, on its
+panel's Upgrades page (the Units page has what it trains). A factory does one job at a time (Unit
+`gj`, the `groundJob` and `cancelGroundJob` orders): paid with research points and kyber when it
+starts, drawing its power while it runs, slowed at made / used of its speed when power is short,
+and refunded in full when called off (right-click the card, long-press on touch).
+
+| Job | Foot factory | Vehicle factory | Power |
+| --- | --- | --- | --- |
+| Tier 2 | 100 RP, 250 kyber, 35 s | 150 RP, 350 kyber, 45 s | draws 4 |
+| Tier 3 | 250 RP, 500 kyber, 50 s | 350 RP, 700 kyber, 60 s | draws 6 |
+| Weapons: its units deal 15% more damage | 80 RP, 150 kyber, 30 s | same | draws 3 |
+| Armour: its units have 15% more hull | 80 RP, 150 kyber, 30 s | same | draws 3 |
+| Speed: its units move 10% faster (needs tier 2) | 100 RP, 200 kyber, 35 s | same | draws 3 |
+
+- **A tier upgrade** swaps the factory for the same factory at the next tier (`factoryType`): 25%
+  more hull at tier 2, 50% at tier 3 (its damage kept), and its model grows as the space game's
+  stations do: the Republic's Barracks gets annexes, a second armoury and a roof turret, its Vehicle
+  Factory a service annex, a second crane bridge and a twin turret; the Bot Factory assembly arms,
+  more spires and a turret, the Foundry a third smokestack, a casting line and a crane; the Brood
+  Chamber side chambers, horns and a second pit, the Vehicle Nest spines and a crown of horns; and
+  every door grows wider. A battle saved before upgrades keeps its factories at tier 1.
+- **Research** (data/groundTech.ts, three a factory with names of its own, such as the Republic
+  Barracks' Marksman drills, Phase II armour and Forced march) goes into the side's `techs` like
+  space research and works through the same path: `techBonus` adds it to every unit type the
+  factory trains, so units already out take it (`remod`) as well as those trained later. Ground
+  units' weapons and speed read those bonuses (`mods.damage`, `mods.speed`).
 
 ### Ground combat
 
@@ -3753,10 +3782,10 @@ enemy's squads at the camera; its *Tier 1 test* spawns all six tier 1 units (eve
 squad and fast vehicle) for us and the same six for the first enemy, sent at each other.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) an upgrade battle (the tier gate on units and research, a tier upgrade paid in research points and kyber, its power drawn only while it runs, called off with both refunded, slowed by made / used to the tick, done: tier 2, more hull, the tier 2 unit trained; weapons research reaching the units already out and those trained after; the AI upgrading a factory and researching) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) and a tier 1 battle (all six tier 1 units firing, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
-pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
+pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own; every factory's model at tiers 2 and 3, each with more parts than the tier below
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
 ```
 
@@ -3785,11 +3814,14 @@ differs:
   buildings we remember but don't see now are drawn as faded ghosts where we saw them. The minimap
   shows the terrain under the same veil.
 - **Building:** an engineer's panel has a card for each building it puts up (B, or the touch wheel's
-  Build entry). The ghost under the pointer colours every tile of the footprint green or red, outlines
+  Build entry); with more than four they sit in two rows of three smaller cards, so their names fit. The ghost under the pointer colours every tile of the footprint green or red, outlines
   the row in front of its door and names the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
   opened, then **Build here** or **Cancel**.
 - **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
   rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
+- **A factory's panel** has two pages, as a yard's: Units (its train cards, locked ones saying the
+  tier they need) and Upgrades (its next tier and its research, each card with its price in research
+  points, kyber, time and power, a bar while it runs, and right-click or long-press to call it off).
 - **Kyber:** a right-click on a crystal cluster with engineers selected (or the touch wheel's Gather
   kyber, the first entry when the wheel opens on a cluster) sets them gathering. Hovering a cluster
   with engineers selected says so: a crystal-and-pick cursor and a "Right-click: mine kyber" tag,

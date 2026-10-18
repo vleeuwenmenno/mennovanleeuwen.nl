@@ -5,6 +5,7 @@ import { sees } from './fog.ts'
 import { TF, TILE, type GroundLayer } from './types.ts'
 import { crystalModel } from '../models/ground.ts'
 import { SITE_DRAW, powerReport } from './power.ts'
+import { TIER_MAX, cantJob } from './jobs.ts'
 import { drawHull } from '../models/paint.ts'
 import { drawEffects } from './effects.ts'
 import { drawBodies, drawSquad, squadFell, walkerPose } from './squadDraw.ts'
@@ -283,6 +284,8 @@ export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   carry: CARRY,
   power: powerReport,
   siteDraw: SITE_DRAW,
+  cantJob,
+  tierMax: TIER_MAX,
   effects: drawEffects,
   squad: drawSquad,
   pose: walkerPose,

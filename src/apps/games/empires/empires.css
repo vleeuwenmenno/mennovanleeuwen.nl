@@ -4804,6 +4804,28 @@ span.ew-teamtag {
   background: var(--ew-gold);
   transform-origin: left;
 }
+/* Ground battles: a factory's upgrade cards (GroundUpgradeCards in Hud.tsx): the tier it goes to in
+   the ring, and the price in research points, kyber, time and power on two short lines. */
+.ew-tiermark {
+  font: 800 14px/1 system-ui;
+  letter-spacing: 0.02em;
+}
+.ew-modline.ew-jobcost {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 6px;
+  white-space: normal;
+}
+.ew-modline.ew-jobcost > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ew-rpspent {
+  color: #b08cff;
+  opacity: 0.8;
+}
 .ew-yardnote {
   grid-row: 1 / span 2;
   align-self: center;
@@ -7609,6 +7631,39 @@ span.ew-teamtag {
 .ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-poor {
   width: 100%;
   min-width: 0;
+}
+/* More than four buildings to put up (a ground battle's engineers): two rows of three, each card its
+   picture on the left and its name and price beside it, as tall together as one row of big cards. */
+.ew-engbuild .ew-engbuild-cards.is-many {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, 30px);
+  grid-auto-columns: auto;
+  gap: 4px;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard.is-poor {
+  height: 30px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  column-gap: 5px;
+  row-gap: 0;
+  padding: 2px 5px;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard .ew-art {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  height: 24px;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard strong,
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard .ew-yc-line {
+  grid-column: 2;
+  justify-content: flex-start;
+  text-align: left;
+  line-height: 1.15;
 }
 
 /* --- Galactic conquest: what stands round a planet, and the orbit view (Orbit.tsx) ------------- */

@@ -38,6 +38,7 @@ import {
 } from './nav.ts'
 import { buildGroundMap } from './terrain.ts'
 import { groundPower } from './power.ts'
+import { cancelJob, jobsTick, startJob } from './jobs.ts'
 import { groundThink } from './think.ts'
 import { combatHash, engage, giveUp, groundCombat } from './combat.ts'
 import { testField, testMesa } from './testmaps.ts'
@@ -575,7 +576,8 @@ function steer(w: World, u: Unit) {
     g.stuck = 0
     g.best = Infinity
   }
-  let aim = t.speed * Math.max(0, 1 - left * 1.25)
+  // Research at its factory (sim.ts techBonus) speeds it up.
+  let aim = t.speed * u.mods.speed * Math.max(0, 1 - left * 1.25)
   if (last) aim = Math.min(aim, Math.sqrt(2 * accel * Math.max(0, d - ARRIVE * 0.5)) + 4)
   if (u.order.k === 'move' && u.order.speed < aim) aim = u.order.speed
   u.v = u.v < aim ? Math.min(aim, u.v + accel * STEP) : Math.max(aim, u.v - accel * STEP)
@@ -1060,6 +1062,8 @@ function works(w: World, dt: number) {
   for (const u of w.units) if (!u.dead && u.gm?.busy) crews.set(u.gm.busy, (crews.get(u.gm.busy) ?? 0) + 1)
   // Power (ground/power.ts): short of it, sites, training and research run slower, by owner.
   const power = groundPower(w, dt, crews)
+  // The factories' upgrades and research (ground/jobs.ts), at the same share of their speed.
+  jobsTick(w, dt, power)
   // Units trained this tick are added to the end of the list: they have nothing to do yet.
   const n = w.units.length
   for (let i = 0; i < n; i++) {
@@ -1400,7 +1404,7 @@ function trainerFor(w: World, owner: Owner, id: string, at: number): Unit | stri
   if (at) {
     const u = w.byId.get(at)
     if (!can(u)) return "That building can't train it"
-    return tierOf(u) >= tierNeeded(t) ? u : `Needs the ${u.t.name} at tier ${tierNeeded(t)}`
+    return tierOf(u) >= tierNeeded(t) ? u : `Needs the ${u.t.name} at tier ${tierNeeded(t)}: upgrade it on its Upgrades page`
   }
   let best: Unit | undefined
   for (const u of w.units) if (ok(u) && (!best || u.yq!.length < best.yq!.length)) best = u
@@ -1449,6 +1453,8 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
       num(u.building)
       int(u.yq?.length ?? -1)
       for (const q of u.yq ?? []) num(q.left)
+      int(u.t.ground?.tier ?? 0)
+      if (u.gj) num(u.gj.left)
     }
     if (u.gm) {
       int(u.gm.pv)
@@ -1471,6 +1477,7 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
   for (const p of w.players) {
     num(p.rp ?? 0)
     num(p.burnt ?? 0)
+    int(p.techs.length)
   }
   for (const mem of w.known ?? []) {
     int(mem.length)
@@ -1546,4 +1553,6 @@ setGroundHooks({
   mapDef: groundMapDef,
   think: (w, b) => groundThink(w, b),
   gather: groundGather,
+  job: startJob,
+  cancelJob,
 })
