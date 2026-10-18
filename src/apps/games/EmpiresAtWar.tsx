@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } 
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { BEACON_POP, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, cleanDefense, defenseId, dims, isEngineer, isShip, placeType, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type OrbitalModId, type Tier } from './empires/data'
-import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, setKyberMoney, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type SettingsTab, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
@@ -396,7 +396,9 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
   return {
     groups: groupInfo(w, me, groups),
     idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && u.stance !== 'hold').length,
-    credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
+    idleEngineers: w.ground ? w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'idle' && !u.queue.length).length : 0,
+    // A ground battle earns only what its engineers gather: the rate lately, for the top bar.
+    credits: p.credits, income: w.ground ? (p.gatherRate ?? 0) : p.income, pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
     hybrid: !!w.hybrid,
@@ -483,6 +485,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   /** Before the battle: time stands still while the player picks where to start. Our station
    * isn't placed (or shown) until they've clicked a spot. */
+  // A ground battle's money is kyber: every price and card shows it so.
+  setKyberMoney(!!world.current?.ground)
   const deploying = useRef(!conquest && !online && !resumed.current && !map.ground)
   const placed = useRef(!!conquest || !!online || !!resumed.current || !!map.ground)
   const myTeam = world.current.players[me].team
@@ -655,8 +659,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // The camera may run well past the map's edge, so ships in a corner can be brought clear of
     // the HUD (more room at the bottom, where the panels are), zoomed out as well as in.
     const fit = (v: number, lo: number, hi: number, mid: number) => (lo > hi ? mid : Math.max(lo, Math.min(hi, v)))
-    c.x = fit(c.x, hw - (vw * 0.35) / c.zoom, w.w - hw + (vw * 0.35) / c.zoom, w.w / 2)
-    c.y = fit(c.y, hh - (vh * 0.3) / c.zoom, w.h - hh + (vh * 0.5) / c.zoom, w.h / 2)
+    // A ground battle keeps the grey mirrored land past the edge to about a fifth of the view (a
+    // little more at the bottom, under the panels).
+    const [mx, mt, mb] = w.ground ? [0.2, 0.2, 0.28] : [0.35, 0.3, 0.5]
+    c.x = fit(c.x, hw - (vw * mx) / c.zoom, w.w - hw + (vw * mx) / c.zoom, w.w / 2)
+    c.y = fit(c.y, hh - (vh * mt) / c.zoom, w.h - hh + (vh * mb) / c.zoom, w.h / 2)
   }
   const where = (x: number, y: number) => {
     const { vw, vh } = view()
@@ -908,6 +915,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
         return
       }
+      // A ground battle: a right-click on a kyber crystal field sets them gathering there.
+      const kit = w.ground ? groundKit() : null
+      if (kit && !unit && kit.fieldAt(w, at.x, at.y) >= 0) {
+        gatherAt(crew, at, queued)
+        const rest = ships.filter((u) => !isEngineer(u.t))
+        if (rest.length) order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
+        return
+      }
     }
     // Structures fire where they're told: every gun, or the one gun that was clicked.
     if (armed.length && target) {
@@ -951,6 +966,18 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       renderer.current.ping(at.x, at.y, attackMove ? '#ffaa5a' : '#7dffa0')
       say(attackMove ? 'attackMove' : 'move')
     }
+  }
+
+  /** Engineers `crew` gather kyber at the crystal field at `at` (a ground battle). */
+  const gatherAt = (crew: Unit[], at: Pt, queued: boolean) => {
+    const why = order('gather', crew.map((u) => u.id), at.x, at.y, queued)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return
+    }
+    renderer.current.ping(at.x, at.y, '#7fd8ff')
+    sound.order('move', myFaction, 'fighter')
   }
 
   const buildSite = (node: number, id: string) => {
@@ -1141,6 +1168,22 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     if (idle.length) sound.select(myFaction, voice())
     else sound.error()
   }
+  /** A ground battle: the next idle engineer (round them all in turn), selected and looked at. */
+  const idleEngineerAt = useRef(0)
+  const selectIdleEngineer = () => {
+    const idle = world.current.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'idle' && !u.queue.length)
+    if (!idle.length) {
+      toast('No idle engineers', 'info')
+      sound.error()
+      return
+    }
+    // The first one after the last picked (by id), so repeated clicks go round them all.
+    const u = idle.find((x) => x.id > idleEngineerAt.current) ?? idle[0]
+    idleEngineerAt.current = u.id
+    select([u.id])
+    centerOn(u.x, u.y)
+    sound.select(myFaction, 'fighter')
+  }
   /** Select a control group (its key, a click or a tap on its chip); twice in quick succession also
    * looks at it. A group of one yard (or the station) opens its build panel, as selecting it does. */
   const groupPress = useRef(new DoublePress())
@@ -1304,6 +1347,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const withAb = ships.filter((u) => u.t.ability)
       // Engineers: put a yard down here (pinned, for the confirm button).
       if (w.hybrid && ships.some((u) => isEngineer(u.t))) items.push(it('yard', 'Build yard', 'slip', () => pinYard(at)))
+      // A ground battle's engineers on a kyber crystal field: gather it.
+      const crewHere = ships.filter((u) => isEngineer(u.t))
+      if (w.ground && crewHere.length && (groundKit()?.fieldAt(w, at.x, at.y) ?? -1) >= 0) items.push(it('gather', 'Gather kyber', 'kyber', () => gatherAt(ships.filter((u) => isEngineer(u.t)), at, shiftOf())))
       // A ground battle's engineers: each building they put up, pinned here.
       if (w.ground) for (const id of [...new Set(ships.flatMap((u) => u.t.ground?.builds ?? []))]) items.push(it(`build:${id}`, `Build ${UNIT[id].name}`, 'slip', () => pinYard(at, id)))
       // ...or a defense station, in a battle that has them.
@@ -1624,6 +1670,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         else if (e.k === 'hpdown') {
           sound.hardpointDown(where(e.x, e.y), w.players[e.owner]?.faction)
           if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
+        } else if (e.k === 'dry') {
+          // A kyber field ran dry: news for whoever was mining it.
+          if (w.units.some((u) => !u.dead && u.owner === me && u.order.k === 'gather' && Math.hypot(u.x - e.x, u.y - e.y) < 900)) toast('A kyber field ran dry: the engineers there move on to the nearest other field', 'info', { x: e.x, y: e.y })
         } else if (e.k === 'trained' && e.owner === me) {
           const t = UNIT[e.unit]
           sound.shipReady(myFaction, 'gunship')
@@ -1760,6 +1809,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
         })() : null,
+      }
+      if (layer && kit) {
+        // The crystal fields as they run down (an upload only when they changed).
+        const fill = kit.kyber(w)
+        if (fill) layer.setKyber?.(fill)
       }
       layer?.draw(cm, vw, vh, Math.min(2, window.devicePixelRatio || 1), now / 1000)
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
@@ -2635,7 +2689,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           />
         )}
         <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onYard={selectOne} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
-          onGift={allies.length ? () => setUi((u) => ({ ...u, gift: !u.gift })) : undefined} giftOpen={ui.gift}
+          onGift={allies.length ? () => setUi((u) => ({ ...u, gift: !u.gift })) : undefined} giftOpen={ui.gift} onIdleEngineer={hud.ground ? selectIdleEngineer : undefined}
           onMenu={() => (ui.menu ? closeMenu() : openMenu())}
           onTechTree={() => setTree(!ui.tree)}
           onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
@@ -2738,7 +2792,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {/* The tactical map floats: it can be dragged anywhere. While it sits in its corner the dock
             leaves room for it, so the unit card stays beside it. */}
         <TacticalMap canvas={mini} sides={sides} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini} onPointerEnd={() => miniPress.current.cancel()}
-          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle}
+          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle} ground={hud.ground}
           fogGrid={settings.fogGrid} onFogGrid={() => setSettings({ fogGrid: !settings.fogGrid })}
           onAlert={() => (lastAlarm.current ? centerOn(lastAlarm.current.x, lastAlarm.current.y) : toast('No alerts yet', 'info'))}
           onMove={mapMoved}

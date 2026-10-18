@@ -3415,26 +3415,30 @@ size class and a small test building are registered by the check scripts only.
 
 ### Ground units, building and the AI
 
-**The first units** are one Engineer and one Command Center a faction. Engineers are small vehicles
-and drones (no walking animation): size class 1, unarmed, sight 8 tiles. Command Centers stand on
-6 × 6 tiles, see 10 tiles, earn 6 credits a second and train their faction's engineer. Prices sit
-near the space game's: a battle starts with 1,600 credits.
+**The first units** are one Engineer, one Command Center and one supply building a faction.
+Engineers are small vehicles and drones (no walking animation): size class 1, unarmed, sight 8
+tiles; they gather kyber, build and repair. Command Centers stand on 6 × 6 tiles, see 10 tiles, train
+their faction's engineer, take in the kyber engineers gather and support 5 units. Supply buildings
+stand on 3 × 3 tiles inside the command range and support 10 more each. Prices are in kyber (see
+below), near the space game's: a battle starts with 1,600.
 
-| Faction | Engineer | Cost, time | Command Center | Hull |
-| --- | --- | --- | --- | --- |
-| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 88) | 150, 12 s | Command Center | 5,200 |
-| Confederacy | Forger builder droid: a hovering fabricator with cutting arms (hull 110, speed 104) | 140, 11 s | Command Hub | 5,000 |
-| Swarm | Shaper drone: a low crawler that spits resin (hull 120, speed 96) | 130, 10 s | Hive Nexus | 5,400 |
+| Faction | Engineer | Cost, time | Command Center | Hull | Supply building | Hull |
+| --- | --- | --- | --- | --- | --- | --- |
+| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 88) | 150, 12 s | Command Center | 5,200 | Supply Depot: armoured stores and a fuel tank behind blast walls | 1,500 |
+| Confederacy | Forger builder droid: a hovering fabricator with cutting arms (hull 110, speed 104) | 140, 11 s | Command Hub | 5,000 | Supply Relay: a hexagonal power and parts deck round a humming mast | 1,400 |
+| Swarm | Shaper drone: a low crawler that spits resin (hull 120, speed 96) | 130, 10 s | Hive Nexus | 5,400 | Brood Cache: resin pods full of glowing nutrient | 1,600 |
 
-A Command Center costs 1,200 and takes one engineer 60 seconds. Their models are drawn like the
+A Command Center costs 1,200 and takes one engineer 60 seconds; a supply building costs 100 and
+takes 25 seconds. Their models are drawn like the
 ships ([`models/<faction>/ground.ts`](src/apps/games/empires/models), built by
 [`models/ground.ts`](src/apps/games/empires/models/ground.ts), which loads them into the game's
 model lookup when imported): parts and facets in the faction's palette, cel shaded from straight
 above with the light top left. Buildings face south (their door) and never turn.
 
 **Starting:** each side gets its Command Center in the middle of its spawn's plateau (it is the
-player's station: the queue, income and AI go by it), one engineer in front of its door, the rally
-point a little way out, and the starting credits. Every team knows where the others start: the enemy
+player's station: the queue and the AI go by it), one engineer in front of its door, the rally
+point a little way out, and the starting kyber (the lobby's starting-credits slider, called
+Starting kyber on the ground). Every team knows where the others start: the enemy
 Command Centers are in its memory of buildings from the first second.
 
 **Placing a building** (`groundPlacement`, through the space game's `place` order). The ghost checks
@@ -3447,7 +3451,7 @@ every tile of the footprint and reports the first rule that fails, in this order
    exploring first; enemies only count where we see or remember them.
 3. No enemy unit we can see stands on it.
 4. The row of tiles in front of its door is open, so units can always roll out.
-5. There are enough credits.
+5. There is enough kyber.
 
 A site placed on top of a building hidden in the fog is given up, refunded in full, when its
 engineer gets there.
@@ -3465,19 +3469,38 @@ site or building frees its stamp; a player with no building left, finished or go
 **Training** uses the space game's `build` order at a building (as at a yard): a Command Center
 trains from its own queue of up to 10, each paid when queued and refunded in full when cancelled
 (`cancel`). A trained unit rolls out of the door, the middle of the south side, and drives to the
-building's rally point (`rally`). Income is 6 credits a second per standing Command Center, in the
-economy as the station's.
+building's rally point (`rally`). Training stops at the unit cap: each finished Command Center
+supports 5 units and each finished supply building 10 more (200 at most), engineers count 1, and a
+unit queued counts too. At the cap the card says why: "Needs more supply: build a Supply Depot".
+
+**Kyber** is the ground battle's one resource, and it is the side's credits: the top bar, cards and
+prices show it with a crystal icon, and nothing trickles in (space keeps its station income). It
+lies in crystal fields (the TF.deposit tiles round each of the map's deposits), 15,000 a field, a
+finite amount held in the world (`World.kyber`, saved and hashed): a side's own fields with half the
+shared one hold 37,500 on Ashwater Crossing, about half an hour of gathering with fourteen
+engineers. Engineers gather it (`gather`, a right-click on a field or the touch wheel's Gather
+kyber): each drives to a tile of the field (several share a field, each on its own tile when there
+are enough), mines 2.5 a second into a load of 20, hauls the load to the nearest finished Command
+Center of ours, drops it off (the side's kyber, the economy's "Kyber gathered" and the log) and goes
+back, about 1.5 kyber a second for each engineer on a field 13 tiles out. A field's crystals shrink
+and vanish as it runs down, its outermost tiles first (the ground layer's crystals, from a byte a
+tile it uploads only when they change); when it runs dry its engineers move on to the nearest other
+field with kyber left that they can reach, and the screen says so. An engineer taken off gathering
+to build goes back to its field once the building is done.
 
 **The AI** is the space game's (`ai.ts`: same brain, think clock and random stream) with decisions
 of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)), passive for
-now: it trains engineers one at a time (two with one Command Center, four with two), saves up and
-expands with a second Command Center beside the crystal field nearest home on its own side of the
-map, sends idle engineers to its sites and damaged buildings, calls off a site nobody manages to
+now: it keeps every idle engineer gathering at the crystal field nearest its Command Centers, puts
+up a supply building beside a Command Center (away from the fields) once fewer than three more units
+fit under its cap, trains engineers where the queue is shortest (seven a Command Center, fourteen at
+most), saves up and expands with a second Command Center beside a crystal field on its own side that
+none of its Command Centers serves yet, sends idle engineers to its sites and damaged buildings
+(taking a gatherer off its field for a site nobody is building), calls off a site nobody manages to
 start within 90 seconds, and builds nothing hostile. It reads only what its team knows and gives the
 same orders a player does, so every copy of a battle makes the same choices.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands), an economy battle (gathering, drop-off, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
 pnpm check:ground-models # every ground unit has a model through the model lookup, sound and the same every time
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
@@ -3514,7 +3537,21 @@ differs:
   opened, then **Build here** or **Cancel**.
 - **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
   rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
-- The top bar leaves out ore, beacons and research.
+- **Kyber:** a right-click on a crystal field with engineers selected (or the touch wheel's Gather
+  kyber there) sets them gathering. An engineer carrying kyber shows a blue crystal on its back,
+  bigger as its load fills, and sparks while it mines; its panel says what it is doing (mining,
+  hauling a load in, building). A field running dry is a toast, and its emptied tiles show as bare
+  gravel on the ground and the minimap.
+- The top bar shows kyber with its crystal icon and what was gathered a minute lately, the units
+  against the cap, and an **idle engineer** button (with a count) that selects the next idle
+  engineer and looks at it, round them all in turn. It leaves out ore, beacons and research. The
+  economy panel shows kyber, what was gathered a minute, what is being carried in and what is left
+  in the fields, and what was gathered and spent.
+- Engineers are drawn at least 24 pixels across however far out the view is, over a dark pool and a
+  rim in their side's colour, so they stand out from the ground.
+- The camera keeps the grey mirrored land past the map's edge to about a fifth of the view.
+- The tactical map's filters say Units and Buildings, and the lobby's AI line says what the ground AI
+  does instead of the space admiral's words.
 
 The ground screen's pieces reach the battle screen, the renderer and the lobby through
 [`groundKit.ts`](src/apps/games/empires/groundKit.ts), which `ground/load.ts` fills in; a

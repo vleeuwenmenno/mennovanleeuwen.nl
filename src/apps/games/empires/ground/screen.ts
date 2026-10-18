@@ -3,7 +3,7 @@ import { UNIT } from '../data.ts'
 import type { Owner, World } from '../sim.ts'
 import { sees } from './fog.ts'
 import { TF, TILE, type GroundLayer } from './types.ts'
-import { commandAreas, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
+import { CARRY, FIELD_KYBER, commandAreas, fieldAt, fieldTiles, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
 
 // The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
 // the placement ghost and the minimap's ground. In the browser only; ground/load.ts hands them to the
@@ -164,8 +164,36 @@ function minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: numb
   const smooth = ctx.imageSmoothingEnabled
   ctx.imageSmoothingEnabled = true
   ctx.drawImage(t, ox, oy, w.w * s, w.h * s)
+  // Crystal fields as they run down: an emptied tile shows as bare gravel.
+  const cols = w.ground!.nav.cols
+  ctx.fillStyle = '#6e6a62'
+  w.ground!.fields.forEach((_, f) => {
+    if ((w.kyber?.[f] ?? 1) >= FIELD_KYBER) return
+    for (const { tile, fill } of fieldTiles(w, f)) {
+      if (fill > 0) continue
+      const c = tile % cols
+      ctx.fillRect(ox + c * TILE * s, oy + ((tile - c) / cols) * TILE * s, Math.ceil(TILE * s), Math.ceil(TILE * s))
+    }
+  })
   ctx.drawImage(shadeOf(w, team, reveal).canvas, ox, oy, w.w * s, w.h * s)
   ctx.imageSmoothingEnabled = smooth
+}
+
+/** What the crystal fields looked like when the ground layer was last told, per world. */
+const kyberKeys = new WeakMap<World, string>()
+/** How full each tile's crystals are, for the ground layer (setKyber): only when it changed since the
+ * last call for this world (in sixteenths of a tile), else null. Tiles that aren't crystal read full. */
+function kyber(w: World): Uint8Array | null {
+  const g = w.ground!
+  if (!w.kyber) return null
+  const key = w.kyber.map((k, f) => Math.ceil((k / FIELD_KYBER) * g.fields[f].tiles.length * 16)).join(',')
+  if (kyberKeys.get(w) === key) return null
+  kyberKeys.set(w, key)
+  const fill = new Uint8Array(g.nav.cols * g.nav.rows).fill(255)
+  g.fields.forEach((_, f) => {
+    for (const { tile, fill: k } of fieldTiles(w, f)) fill[tile] = Math.round(k * 255)
+  })
+  return fill
 }
 
 /** The kit, with the picture of the ground from `layer` (the WebGL2 one, or the 2D stand-in). */
@@ -179,4 +207,7 @@ export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   fog,
   ghost,
   minimap,
+  fieldAt,
+  kyber,
+  carry: CARRY,
 })

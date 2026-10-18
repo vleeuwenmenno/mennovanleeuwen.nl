@@ -28,6 +28,13 @@ export type GroundKit = {
   ghost(ctx: CanvasRenderingContext2D, w: World, me: Owner, unitId: string, p: GroundPlacement, zoom: number): void
   /** The minimap's ground: the terrain and the fog, into the box (ox, oy) at `s` pixels a world unit. */
   minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: number, oy: number, s: number, reveal: boolean): void
+  /** The crystal field with kyber left under or near (x, y), or -1 (a right-click there gathers). */
+  fieldAt(w: World, x: number, y: number): number
+  /** How full each tile's crystals are, for the ground layer, when it changed since the last call;
+   * null when it didn't. */
+  kyber(w: World): Uint8Array | null
+  /** Kyber an engineer carries in one load. */
+  carry: number
 }
 
 let kit: GroundKit | null = null

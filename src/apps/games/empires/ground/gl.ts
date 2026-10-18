@@ -279,7 +279,7 @@ uniform float uBrW[4];
 uniform int uBrN;
 uniform vec4 uRuin[8];
 uniform int uRuinN;
-uniform sampler2D uH, uSh, uA, uB, uC, uN, uGrass, uDirt, uRock;
+uniform sampler2D uH, uSh, uA, uB, uC, uN, uGrass, uDirt, uRock, uKy;
 out vec4 outColor;
 
 const float TEX = ${TEX.toFixed(1)};
@@ -444,16 +444,18 @@ void main() {
     }
   }
 
-  // Kyber crystals: pale gravel with blue shards.
+  // Kyber crystals: pale gravel with blue shards, fewer and smaller as the field runs dry (uKy: how
+  // full each tile is), bare gravel once it's empty.
   float crys = smoothstep(0.4, 0.55, B.a);
   if (crys > 0.0) {
     vec3 gravel = vec3(0.55, 0.57, 0.60) * tone;
     vec4 cc = cells(m / 9.0);
-    float shard = (1.0 - smoothstep(0.24, 0.3, cc.x / (0.55 + cc.w * 0.6))) * step(0.3, cc.w);
+    float ky = texture(uKy, m / uWorld).r;
+    float shard = (1.0 - smoothstep(0.24, 0.3, cc.x / ((0.55 + cc.w * 0.6) * (0.35 + 0.65 * ky)))) * step(0.3 + 0.7 * (1.0 - ky), cc.w) * step(0.02, ky);
     float facet = step(0.0, cc.y + cc.z);
     vec3 blue = mix(vec3(0.42, 0.78, 1.0), vec3(0.18, 0.40, 0.85), facet);
     vec3 c2 = mix(gravel, blue, shard);
-    c2 += vec3(0.1, 0.25, 0.45) * (1.0 - smoothstep(0.0, 0.6, cc.x)) * 0.35;
+    c2 += vec3(0.1, 0.25, 0.45) * (1.0 - smoothstep(0.0, 0.6, cc.x)) * 0.35 * ky;
     col = mix(col, c2, crys);
   }
 
@@ -585,7 +587,7 @@ void main() {
 }`
 
 /** Which texture goes in which sampler, by texture unit. */
-const UNITS: [string, string][] = [['uH', 'h'], ['uSh', 'sh'], ['uA', 'a'], ['uB', 'b'], ['uC', 'c'], ['uN', 'noise'], ['uGrass', 'grass'], ['uDirt', 'dirt'], ['uRock', 'rock']]
+const UNITS: [string, string][] = [['uH', 'h'], ['uSh', 'sh'], ['uA', 'a'], ['uB', 'b'], ['uC', 'c'], ['uN', 'noise'], ['uGrass', 'grass'], ['uDirt', 'dirt'], ['uRock', 'rock'], ['uKy', 'ky']]
 
 class GlLayer implements GroundLayer {
   readonly canvas: HTMLCanvasElement
@@ -603,6 +605,10 @@ class GlLayer implements GroundLayer {
   private brWidths = new Float32Array(4)
   private ruinData = new Float32Array(32)
   private world = [1, 1]
+  private kyCols = 1
+  private kyRows = 1
+  /** Uploads of the crystal fields' fill (setKyber) so far (for measuring). */
+  kyberUploads = 0
   private base: string
   /** Settles once the detail textures are in. */
   ready: Promise<void>
@@ -625,7 +631,7 @@ class GlLayer implements GroundLayer {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`ground program: ${gl.getProgramInfoLog(p)}`)
     this.prog = p
     this.vao = gl.createVertexArray()!
-    for (const u of ['uView', 'uCam', 'uScale', 'uWorld', 'uTime', 'uField', 'uHsize', 'uBr', 'uBrW', 'uBrN', 'uRuin', 'uRuinN', 'uH', 'uSh', 'uA', 'uB', 'uC', 'uN', 'uGrass', 'uDirt', 'uRock']) this.loc[u] = gl.getUniformLocation(p, u)
+    for (const u of ['uView', 'uCam', 'uScale', 'uWorld', 'uTime', 'uField', 'uHsize', 'uBr', 'uBrW', 'uBrN', 'uRuin', 'uRuinN', 'uH', 'uSh', 'uA', 'uB', 'uC', 'uN', 'uGrass', 'uDirt', 'uRock', 'uKy']) this.loc[u] = gl.getUniformLocation(p, u)
     // Grey stand-ins until the detail textures load.
     for (const k of ['grass', 'dirt', 'rock']) this.tex[k] = this.texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([115, 115, 115, 255]), true)
     const N = 128
@@ -673,10 +679,14 @@ class GlLayer implements GroundLayer {
 
   setMap(map: GroundMap) {
     const gl = this.ctx
-    for (const k of ['h', 'sh', 'a', 'b', 'c']) if (this.tex[k]) gl.deleteTexture(this.tex[k])
+    for (const k of ['h', 'sh', 'a', 'b', 'c', 'ky']) if (this.tex[k]) gl.deleteTexture(this.tex[k])
     const f = bakeFields(map)
     this.fields = f
     this.world = [map.grid.cols * TILE, map.grid.rows * TILE]
+    // Every crystal field full until the battle says otherwise (setKyber).
+    this.kyCols = map.grid.cols
+    this.kyRows = map.grid.rows
+    this.tex.ky = this.texture(map.grid.cols, map.grid.rows, gl.R8, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(map.grid.cols * map.grid.rows).fill(255), false)
     this.tex.h = this.texture(f.hw, f.hh, gl.R16F, gl.RED, gl.FLOAT, f.height, true)
     this.tex.sh = this.texture(f.hw, f.hh, gl.RG8, gl.RG, gl.UNSIGNED_BYTE, f.shade, true)
     this.tex.a = this.texture(f.fw, f.fh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, f.a, true)
@@ -723,6 +733,17 @@ class GlLayer implements GroundLayer {
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     this.drawCalls++
+  }
+
+  /** How full each tile's crystals are, one byte a tile (row by row, 255 full): an upload, so call it
+   * only when it changes (a field running down changes it every few seconds). */
+  setKyber(fill: Uint8Array) {
+    const gl = this.ctx
+    if (!this.tex.ky || gl.isContextLost() || fill.length !== this.kyCols * this.kyRows) return
+    gl.bindTexture(gl.TEXTURE_2D, this.tex.ky)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.kyCols, this.kyRows, gl.RED, gl.UNSIGNED_BYTE, fill)
+    this.kyberUploads++
   }
 
   dispose() {

@@ -11,6 +11,7 @@
   --ew-good: #7dffa0;
   --ew-bad: #ff6a5e;
   --ew-gold: #f2c14a;
+  --ew-kyber: #7fd8ff;
   --ew-display: 'Orbitron', 'Eurostile', 'Segoe UI', system-ui, sans-serif;
   position: relative;
   flex: 1;
@@ -1678,6 +1679,11 @@ span.ew-teamtag {
 }
 .ew-gold {
   color: var(--ew-gold);
+}
+/* A ground battle's money: kyber, blue, wherever a price or the top bar shows it. */
+.ew-kyber,
+.ew-icon.is-kyber {
+  color: var(--ew-kyber);
 }
 .ew-good {
   color: var(--ew-good);
@@ -8131,4 +8137,28 @@ span.ew-teamtag {
 }
 .ew-dockguides.is-touch .ew-dockghost span {
   font-size: 13px;
+}
+
+/* --- Ground battles: the top bar's idle engineer button (TopBar in Hud.tsx). --- */
+.ew-top-cell.ew-idlebtn {
+  position: relative;
+  padding: 0 12px;
+  color: var(--ew-muted);
+}
+.ew-top-cell.ew-idlebtn.is-idle {
+  color: var(--ew-gold);
+}
+.ew-idlebtn em {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--ew-gold);
+  color: #061020;
+  font: 700 9.5px/14px system-ui;
+  font-style: normal;
+  text-align: center;
 }

@@ -172,6 +172,9 @@ export interface GroundLayer {
   setMap(map: GroundMap): void
   /** `w`, `h`: the view in CSS pixels; `dpr`: device pixels per CSS pixel (the screen caps it at 2). */
   draw(cam: { x: number; y: number; zoom: number }, w: number, h: number, dpr: number, time: number): void
+  /** How full each tile's kyber crystals are (one byte a tile, row by row, 255 full), when the
+   * crystal fields run down; a layer that leaves it out draws them full. */
+  setKyber?(fill: Uint8Array): void
   /** Frees its GPU resources. */
   dispose(): void
 }

@@ -1731,6 +1731,12 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
               </div>
               {(() => {
                 const foe = setup.slots.find((s) => s.kind === 'ai' && s.team === 1)
+                // On the ground the AI doesn't fight yet: its own words, not the space admiral's.
+                if (ground) return (
+                  <p className="ew-muted ew-small">
+                    On the ground the AI builds up but doesn't attack yet: it keeps its engineers gathering kyber, puts up supply before it reaches its unit cap, trains more engineers, and expands with a second Command Center towards the crystal fields. Difficulty and style don't change it yet.
+                  </p>
+                )
                 return (
                   <p className="ew-muted ew-small">
                     {DIFFICULTY[foe?.difficulty ?? 'easy'].blurb} {PROFILES[foe?.profile ?? 'balanced'].name}: {PROFILES[foe?.profile ?? 'balanced'].blurb}
@@ -1740,9 +1746,9 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
             </Frame>
             <Frame title="Battle settings" className="ew-lobby-settings">
               <div className="ew-setting">
-                <h5>Starting credits</h5>
+                <h5>{ground ? 'Starting kyber' : 'Starting credits'}</h5>
                 <label className="ew-range">
-                  <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
+                  <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label={ground ? 'Starting kyber' : 'Starting credits'} />
                   <b>{setup.credits.toLocaleString('en-US')}</b>
                 </label>
               </div>
@@ -1825,7 +1831,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <LaunchBar
           ok={!!enemies}
           note={enemies ? `You${allies ? ` and ${allies} ${allies === 1 ? 'ally' : 'allies'}` : ''} against ${enemies} ${enemies === 1 ? 'enemy' : 'enemies'}.` : 'Add at least one enemy.'}
-          summary={`${map.name} · ${setup.credits.toLocaleString('en-US')} credits`}
+          summary={`${map.name} · ${setup.credits.toLocaleString('en-US')} ${ground ? 'kyber' : 'credits'}`}
         >
           <button className="ew-go" disabled={!enemies} onClick={() => (sound.unlock(), sound.click(), onLaunch(setup))}>
             Launch battle

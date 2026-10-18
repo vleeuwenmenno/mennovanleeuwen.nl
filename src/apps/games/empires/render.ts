@@ -217,6 +217,8 @@ const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba
  * All drawn only on screen, a few calls per ship that has one, so a big battle (where few ships
  * have them) pays next to nothing.
  */
+/** The smallest a ground vehicle is drawn, in CSS pixels across, however far out the view is. */
+const GROUND_MIN_PX = 24
 const MECH = { tendrils: 6, lines: 8, links: 8, sparkEvery: 0.18, beamLife: 0.22, chargeFrom: 0.55, minPx: 18 }
 /** Factions whose ships are alive: their launches hatch, with a wet burst instead of a ring. */
 const ORGANIC: Partial<Record<FactionId, true>> = { swarm: true }
@@ -1333,6 +1335,8 @@ export class Renderer {
     const hulls = this.hulls
     hulls.length = 0
     let fighterRings = false
+    // A ground battle's vehicles stand out from the ground: their pools and rims, all at once.
+    if (w.ground) this.vehiclePools(ctx, w, view, z, shown)
     for (const u of shown) {
       // Strike craft come last (drawRank): their team rings go down in one stroke per colour first.
       if (!fighterRings && u.t.tier === 'fighter') {
@@ -2982,6 +2986,46 @@ export class Renderer {
    * rather than one each, since a battle has a great many of them. The same ellipses, under the
    * craft and over the bigger hulls, as when each was drawn with its craft.
    */
+  /**
+   * Ground vehicles, drawn at least GROUND_MIN_PX across (see drawUnit), stand out from the busy
+   * ground: a dark pool under each and a rim in its side's colour (none while selected or hovered,
+   * which have rings of their own). One fill for every pool and one stroke a colour, under the units.
+   */
+  private vehiclePools(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, shown: Unit[]) {
+    const rimOf = (u: Unit) => {
+      const [sw, sh] = dims(u.t)
+      return Math.max(sw, sh) * 0.5 * (Math.max(u.t.size, GROUND_MIN_PX / z) / u.t.size)
+    }
+    const cars = shown.filter((u) => u.t.tier === 'vehicle' && !u.site)
+    if (!cars.length) return
+    ctx.fillStyle = 'rgba(8, 10, 14, 0.42)'
+    ctx.beginPath()
+    for (const u of cars) {
+      const rr = rimOf(u)
+      ctx.moveTo(u.x + 2 / z + rr * 1.05, u.y + 3 / z)
+      ctx.ellipse(u.x + 2 / z, u.y + 3 / z, rr * 1.05, rr * 0.95, 0, 0, Math.PI * 2)
+    }
+    ctx.fill()
+    ctx.globalAlpha = 0.6
+    ctx.lineWidth = Math.max(1.3 / z, 1.2)
+    const done = new Set<string>()
+    for (const first of cars) {
+      const rel = relColor(w, view.me, first.owner)
+      if (done.has(rel)) continue
+      done.add(rel)
+      ctx.strokeStyle = rel
+      ctx.beginPath()
+      for (const u of cars) {
+        if (view.selected.has(u.id) || view.hover === u.id || relColor(w, view.me, u.owner) !== rel) continue
+        const rr = rimOf(u) + 1.5 / z
+        ctx.moveTo(u.x + rr, u.y)
+        ctx.ellipse(u.x, u.y, rr, rr * 0.92, 0, 0, Math.PI * 2)
+      }
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+  }
+
   private fighterRings(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, shown: Unit[]) {
     ctx.globalAlpha = 0.35
     ctx.lineWidth = Math.max(1 / z, 1.2)
@@ -3009,14 +3053,50 @@ export class Renderer {
     ctx.globalAlpha = 1
   }
 
+  /** An engineer's load of kyber (Unit `carry`) and the sparks of its mining (see drawUnit). */
+  private drawKyber(ctx: CanvasRenderingContext2D, u: Unit, size: number, z: number) {
+    const full = Math.min(1, (u.carry ?? 0) / (groundKit()?.carry ?? 20))
+    const bx = u.x - Math.cos(u.a) * size * 0.22
+    const by = u.y - Math.sin(u.a) * size * 0.22
+    if (full > 0) {
+      const r = size * (0.1 + 0.12 * full) + 1.5 / z
+      ctx.fillStyle = '#7fd8ff'
+      ctx.strokeStyle = '#0b2a40'
+      ctx.lineWidth = 1 / z
+      ctx.beginPath()
+      ctx.moveTo(bx, by - r)
+      ctx.lineTo(bx + r * 0.62, by)
+      ctx.lineTo(bx, by + r)
+      ctx.lineTo(bx - r * 0.62, by)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    }
+    if (u.gm?.mine) {
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.fillStyle = '#9fe6ff'
+      const fx = u.x + Math.cos(u.a) * size * 0.45
+      const fy = u.y + Math.sin(u.a) * size * 0.45
+      for (let i = 0; i < 3; i++) {
+        const a = Math.random() * Math.PI * 2
+        const d = Math.random() * size * 0.25
+        const r = (0.8 + Math.random() * 1.4) / z
+        ctx.fillRect(fx + Math.cos(a) * d - r, fy + Math.sin(a) * d - r, r * 2, r * 2)
+      }
+      ctx.globalCompositeOperation = 'source-over'
+    }
+  }
+
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View, shadow: Shadow | null = null) {
     const t = u.t
     const fac = FACTIONS[t.faction]
-    // Small craft keep a minimum size on screen when zoomed far out, so fleets stay readable.
-    const minPx = t.tier === 'fighter' ? 9 : t.tier === 'gunship' ? 14 : 0
+    // Small craft keep a minimum size on screen when zoomed far out, so fleets stay readable; ground
+    // vehicles (engineers are small) more so, against the busy ground.
+    const minPx = t.tier === 'fighter' ? 9 : t.tier === 'gunship' ? 14 : t.tier === 'vehicle' ? GROUND_MIN_PX : 0
     const size = Math.max(t.size, minPx / z)
     const k = size / t.size
     const [sw, sh] = dims(t)
+
     const sel = view.selected.has(u.id)
     const hov = view.hover === u.id
     const rel = relColor(w, view.me, u.owner)
@@ -3053,7 +3133,7 @@ export class Renderer {
 
     // Team ring: a faint ellipse in the relative colour, so allies and enemies of the same faction
     // can be told apart. (Strike craft have theirs drawn together, see fighterRings.)
-    if (view.rings && !sel && !hov && t.tier !== 'fighter') {
+    if (view.rings && !sel && !hov && t.tier !== 'fighter' && t.tier !== 'vehicle') {
       ctx.strokeStyle = rel
       ctx.globalAlpha = 0.28
       ctx.lineWidth = Math.max(1 / z, 1.2)
@@ -3086,6 +3166,9 @@ export class Renderer {
       if (u.rush) this.drawScaffolds(ctx, u, m, size, z)
     }
     if (t.regrow && !u.site) this.drawRegrow(ctx, u, w, size)
+    // A ground engineer's kyber: a blue crystal on its back, bigger the fuller its load, and
+    // sparks while it mines.
+    if (u.carry || u.gm?.mine) this.drawKyber(ctx, u, size, z)
     if (u.guns.length && spinalsOf(t).length && size * z >= MECH.minPx) this.drawSpinalCharge(ctx, u, z)
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
     // An expansion going up on its socket: a scaffold ring turning round it, filling as it's built.
