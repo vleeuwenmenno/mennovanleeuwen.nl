@@ -297,8 +297,8 @@
     },
     "ground-layer": {
       "GL draw calls / frame": {
-        "baseline": 1,
-        "budget": 3,
+        "baseline": 3,
+        "budget": 5,
         "kind": "count"
       },
       "GL texture uploads / frame": {

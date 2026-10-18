@@ -1,4 +1,5 @@
 import { LEVEL_H, RUIN_HALF, expandFeatures, valueNoise } from './terrain.ts'
+import { TreeLayer, bakeCrowns, loadAtlas, placeCrowns } from './trees.ts'
 import { TERRAINS, TF, TILE, type GroundLayer, type GroundMap } from './types.ts'
 
 // The ground under a battle, drawn with WebGL2 (types.ts GroundLayer): one full-screen triangle a
@@ -12,8 +13,9 @@ import { TERRAINS, TF, TILE, type GroundLayer, type GroundMap } from './types.ts
 // - a small tiling noise texture, and the round 1 ground textures as detail inside the splat.
 // The shader warps the mask lookups with noise so edges come out organic, lights the land from the
 // heightmap with a few hard-ish tones (the game's cel-shaded look), puts rock on steep slopes with
-// strata, paints forests as solid canopy with crowns and a cast shadow, moves the water, and past
-// the map's edge draws the map mirrored, greyed and darkened, with a faint line on the edge.
+// strata, paints forests as a dark canopy floor with a cast shadow (trees.ts draws the crowns over
+// it), moves the water, and past the map's edge draws the map mirrored, greyed and darkened, with a
+// faint line on the edge.
 //
 // Where WebGL2 is missing, createGroundLayer returns a flat 2D layer (`gl: false`) that draws one
 // baked picture of the same masks, lit by the same heightmap.
@@ -70,6 +72,16 @@ function blur(buf: Uint8Array, w: number, h: number, ch: number, r: number) {
       buf[(y * w + x) * 4 + ch] = Math.round(sum / (2 * r + 1))
       sum += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]
     }
+  }
+}
+
+/** How much forest the baked mask has at a world point (0..1), for placing the crowns. */
+function forestAt(f: Fields) {
+  return (x: number, y: number) => {
+    const u = Math.min(f.fw - 1, Math.max(0, x / TEX - 0.5)), v = Math.min(f.fh - 1, Math.max(0, y / TEX - 0.5))
+    const i = Math.min(f.fw - 2, Math.floor(u)), j = Math.min(f.fh - 2, Math.floor(v)), fx = u - i, fy = v - j
+    const at = (a: number, b: number) => f.b[(b * f.fw + a) * 4 + 2] / 255
+    return (at(i, j) * (1 - fx) + at(i + 1, j) * fx) * (1 - fy) + (at(i, j + 1) * (1 - fx) + at(i + 1, j + 1) * fx) * fy
   }
 }
 
@@ -517,44 +529,11 @@ void main() {
     }
   }
 
-  // Forest: one canopy of crowns lit from the top left, gaps dark, a dark rim at its edge.
+  // Forest: a dark canopy floor, so no ground shows between the crowns drawn over it (trees.ts).
   if (forest > 0.0) {
-    vec4 cr = cells(m / 25.0);
-    float r = 0.62 + cr.w * 0.18;
-    float crown = 1.0 - smoothstep(r * 0.85, r, cr.x);
-    vec3 cn = normalize(vec3(-cr.y, -cr.z, max(0.0, r - cr.x) * 1.6 + 0.05));
-    float lit = dot(cn, sun);
-    vec3 dark = vec3(0.10, 0.20, 0.10), mid = mix(vec3(0.17, 0.32, 0.14), vec3(0.22, 0.34, 0.13), cr.w), light = mix(vec3(0.30, 0.46, 0.19), vec3(0.38, 0.50, 0.20), cr.w);
-    vec3 canopy = mix(dark, mix(mid, light, smoothstep(0.55, 0.7, lit)), smoothstep(0.1, 0.25, lit) * crown);
-    canopy *= 0.9 + cr.w * 0.2;
-    float edge = smoothstep(0.44, 0.48, B.b) - smoothstep(0.5, 0.56, B.b);
-    canopy = mix(canopy, vec3(0.06, 0.11, 0.06), edge * 0.85);
-    col = mix(col, canopy, forest);
-  }
-
-  // Trees: loose ones round the woods' edges, and now and then a lone one out on the grass.
-  {
-    float nearWood = smoothstep(0.1, 0.4, B.b) * (1.0 - forest);
-    float open = smoothstep(0.55, 0.8, Ak.r) * (1.0 - road) * (1.0 - water) * (1.0 - crys) * (1.0 - cliff);
-    vec3 dk = vec3(0.10, 0.20, 0.10), md = vec3(0.19, 0.34, 0.14), lt = vec3(0.34, 0.50, 0.20);
-    vec4 ts = cells((m - vec2(7.0, 9.0)) / 26.0);
-    // Lone trees stand in a few small groups out on the grass, not scattered everywhere.
-    float clump = smoothstep(0.76, 0.86, n1.g) * smoothstep(0.4, 0.6, n1.b) * open * 1.4;
-    vec4 ls = cells((m - vec2(7.0, 9.0)) / 44.0);
-    float shadow = 0.0;
-    if (fract(ts.w * 7.3) < nearWood * 1.3) shadow = 1.0 - smoothstep(0.34, 0.42, ts.x);
-    if (fract(ls.w * 11.1) < clump) shadow = max(shadow, 1.0 - smoothstep(0.32, 0.4, ls.x));
-    col *= 1.0 - 0.3 * shadow;
-    vec4 tc = cells(m / 26.0);
-    if (fract(tc.w * 7.3) < nearWood * 1.3) {
-      vec4 t = crown(tc, 0.32 + fract(tc.w * 3.1) * 0.1, 1.2 / uScale / 26.0, dk, md, lt, sun);
-      col = mix(col, t.rgb, t.a);
-    }
-    vec4 lc = cells(m / 44.0);
-    if (fract(lc.w * 11.1) < clump) {
-      vec4 t = crown(lc, 0.3 + fract(lc.w * 5.3) * 0.08, 1.2 / uScale / 44.0, dk, md, lt, sun);
-      col = mix(col, t.rgb, t.a);
-    }
+    vec4 fc = cells(m / 30.0);
+    vec3 floorCol = vec3(0.09, 0.16, 0.10) * (0.9 + fc.w * 0.2) * mix(0.85, 1.0, sh.r);
+    col = mix(col, floorCol, forest);
   }
 
   // Past the edge: greyed and darkened, with a faint line along the edge itself.
@@ -586,7 +565,8 @@ class GlLayer implements GroundLayer {
   private ruinData = new Float32Array(MAX_RUINS * 4)
   private world = [1, 1]
   private base: string
-  /** Settles once the detail textures are in. */
+  private trees: TreeLayer
+  /** Settles once the detail textures and the trees' atlas are in. */
   ready: Promise<void>
 
   constructor(canvas: HTMLCanvasElement, gl: WebGL2RenderingContext, base: string) {
@@ -607,13 +587,15 @@ class GlLayer implements GroundLayer {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`ground program: ${gl.getProgramInfoLog(p)}`)
     this.prog = p
     this.vao = gl.createVertexArray()!
+    this.trees = new TreeLayer(gl, base)
     for (const u of ['uView', 'uCam', 'uScale', 'uWorld', 'uTime', 'uField', 'uHsize', 'uBr', 'uBrW', 'uBrN', 'uRuin', 'uRuinN', 'uH', 'uSh', 'uA', 'uB', 'uC', 'uN', 'uGrass', 'uDirt', 'uRock']) this.loc[u] = gl.getUniformLocation(p, u)
     // Grey stand-ins until the detail textures load.
     for (const k of ['grass', 'dirt', 'rock']) this.tex[k] = this.texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([115, 115, 115, 255]), true)
     const N = 128
     this.tex.noise = this.texture(N, N, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, noiseTexture(N), true, true)
-    this.ready = Promise.all(
-      [['grass', 'grass-a'], ['dirt', 'dirt-a'], ['rock', 'rocky-a']].map(
+    this.ready = Promise.all([
+      this.trees.ready,
+      ...[['grass', 'grass-a'], ['dirt', 'dirt-a'], ['rock', 'rocky-a']].map(
         ([k, file]) =>
           new Promise<void>((ok) => {
             const img = new Image()
@@ -635,7 +617,7 @@ class GlLayer implements GroundLayer {
             img.src = `${this.base}terrain/${file}.webp`
           }),
       ),
-    ).then(() => undefined)
+    ]).then(() => undefined)
   }
 
   private texture(w: number, h: number, internal: number, format: number, type: number, data: ArrayBufferView, linear: boolean, repeat = false) {
@@ -669,6 +651,7 @@ class GlLayer implements GroundLayer {
     for (let i = 0; i < f.bridges.length / 5; i++) this.brEnds.set(f.bridges.slice(i * 5, i * 5 + 4), i * 4), (this.brWidths[i] = f.bridges[i * 5 + 4])
     this.ruinData.fill(0)
     this.ruinData.set(f.ruins)
+    this.trees.setCrowns(placeCrowns(map, forestAt(f)), this.world[0], this.world[1])
   }
 
   draw(cam: { x: number; y: number; zoom: number }, w: number, h: number, dpr: number, time: number) {
@@ -705,12 +688,14 @@ class GlLayer implements GroundLayer {
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     this.drawCalls++
+    this.drawCalls += this.trees.draw(cam, cam.zoom * (pw / w), pw, ph)
   }
 
   dispose() {
     const gl = this.ctx
     for (const t of Object.values(this.tex)) gl.deleteTexture(t)
     this.tex = {}
+    this.trees.dispose()
     gl.deleteProgram(this.prog)
     gl.deleteVertexArray(this.vao)
     gl.getExtension('WEBGL_lose_context')?.loseContext()
@@ -719,8 +704,9 @@ class GlLayer implements GroundLayer {
 
 // --- The flat fallback ---------------------------------------------------------------------------
 
-/** Without WebGL2: one baked picture of the land (2 samples a tile), lit by its heightmap, drawn with
- * the camera, and its mirror images past the edges in grey. */
+/** Without WebGL2: one baked picture of the land (2 samples a tile), lit by its heightmap, with the
+ * trees' crowns baked over it at 8 pixels a tile once the atlas is in, drawn with the camera, and its
+ * mirror images past the edges in grey. */
 class FlatLayer implements GroundLayer {
   readonly canvas: HTMLCanvasElement
   readonly gl = false
@@ -728,10 +714,15 @@ class FlatLayer implements GroundLayer {
   private pic: HTMLCanvasElement | null = null
   private grey: HTMLCanvasElement | null = null
   private world = [1, 1]
-  ready = Promise.resolve()
+  private base: string
+  /** Which setMap the crowns being baked belong to (a later map wins). */
+  private mapNo = 0
+  ready: Promise<void>
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, base: string) {
     this.canvas = canvas
+    this.base = base
+    this.ready = loadAtlas(base).then(() => undefined)
   }
 
   setMap(map: GroundMap) {
@@ -767,7 +758,7 @@ class FlatLayer implements GroundLayer {
         if (f.b[o + 3] > 115) c = mix(c, [143, 133, 117], 0.7)
         if (f.c[o] > 120) c = f.c[o + 1] > 100 ? [105, 135, 125] : mix([76, 143, 148], [28, 77, 112], Math.min(1, f.c[o + 3] / 180))
         if (f.c[o + 2] > 120) c = [148, 118, 86]
-        if (f.b[o + 2] > 120) c = [38, 72, 32]
+        if (f.b[o + 2] > 120) c = [23, 41, 26]
         const q = (y * pw + x) * 4
         img.data[q] = c[0]
         img.data[q + 1] = c[1]
@@ -784,6 +775,30 @@ class FlatLayer implements GroundLayer {
     gc.getContext('2d')!.putImageData(grey, 0, 0)
     this.pic = pic
     this.grey = gc
+    // The crowns: the picture drawn again at 8 pixels a tile with them over it, and greyed for the
+    // mirror copies.
+    const no = ++this.mapNo
+    const crowns = placeCrowns(map, forestAt(f))
+    loadAtlas(this.base).then((atlas) => {
+      if (!atlas || no !== this.mapNo) return
+      const k = 8 / TILE
+      const tw = Math.round(this.world[0] * k), th = Math.round(this.world[1] * k)
+      const tc = document.createElement('canvas')
+      tc.width = tw
+      tc.height = th
+      const ctx = tc.getContext('2d')!
+      ctx.imageSmoothingEnabled = true
+      ctx.drawImage(pic, 0, 0, tw, th)
+      bakeCrowns(ctx, crowns, atlas, k)
+      const d = ctx.getImageData(0, 0, tw, th)
+      for (let i = 0; i < d.data.length; i += 4) d.data[i] = d.data[i + 1] = d.data[i + 2] = (d.data[i] * 0.3 + d.data[i + 1] * 0.59 + d.data[i + 2] * 0.11) * 0.5
+      const tg = document.createElement('canvas')
+      tg.width = tw
+      tg.height = th
+      tg.getContext('2d')!.putImageData(d, 0, 0)
+      this.pic = tc
+      this.grey = tg
+    })
   }
 
   draw(cam: { x: number; y: number; zoom: number }, w: number, h: number, dpr: number) {
@@ -830,5 +845,5 @@ export function createGroundLayer(opts: GroundLayerOptions = {}): GroundLayer {
     }
   }
   // A canvas that had a WebGL context can't give a 2D one: start over with a fresh canvas.
-  return new FlatLayer(opts.flat ? canvas : document.createElement('canvas'))
+  return new FlatLayer(opts.flat ? canvas : document.createElement('canvas'), base)
 }
