@@ -73,9 +73,11 @@ fails for a reason unrelated to the change, say so rather than rerunning it repe
 - Several sessions may work in this repo at once. Never touch another session's worktree, branch, server or uncommitted changes.
   - Clean up only what you created, by name.
   - Keep the main checkout clean.
-- **Extra work goes to a new session, not a subagent.** Work that edits code (a feature, a fix, a follow-up) is started as its own session, so the user can find it in the UI, see what it is doing, and talk to it.
-  - Brief it fully: the task, the files or area, and what done looks like. Follow up with the session that has the context rather than starting another.
-  - Its report comes back as a short note. Check the diff and results yourself before calling it done.
+- **Builders are subagents, not new sessions.** Work that edits code (a feature, a fix, a follow-up) goes to a background subagent in its own git worktree, spawned by the session that orchestrates it. Its report comes straight back to that session, and playtest notes go to it without passing through extra sessions.
+  - Brief it fully: the task, the files or area, and what done looks like. Send follow-ups to the subagent that has the context rather than starting another.
+  - Check the diff and results yourself before calling it done.
+  - Subagents end if their session crashes. When that happens, look for their uncommitted work in their worktrees and pick it up rather than starting over.
+  - Start a separate session only when the user asks for one, or for work that must keep running on its own.
   - Quick reads and searches stay inline in the current session. Don't spawn a subagent or a session for them.
 
 ## Code rules worth knowing
