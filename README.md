@@ -3968,7 +3968,8 @@ differs:
 - **The ground** is drawn on a canvas of its own right under the battle canvas, at the same size
   and camera, first each frame, through the `GroundLayer` interface (`ground/types.ts`): the WebGL2
   layer ([`ground/gl.ts`](src/apps/games/empires/ground/gl.ts)). The battle canvas then starts
-  clear: no backdrop, stars or map-edge dimming.
+  clear: no backdrop, stars or map-edge dimming, and no shade behind the bottom panels (over the
+  bright ground it read as a dark band across the battlefield; the panels have backgrounds of their own).
 - **Fog** is a half-dark veil by tile outside our sight, never black (the land is known from
   orbit), over the units and everything on the ground, so route lines stay under it. Enemy
   buildings we remember but don't see now are drawn as faded ghosts where we saw them. The minimap
