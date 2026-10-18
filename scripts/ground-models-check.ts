@@ -9,10 +9,14 @@
 //    details with real points.
 // 3. Buildings fill their footprint (a model drawn on its footprint covers most of it) and vehicles
 //    are mostly hull, so neither is drawn as a speck on its box.
+// 4. The kyber crystal clusters' shapes (models/kyber.ts) build and are sound the same way, one for
+//    every shape the sim lays out (ground/world.ts CRYSTAL_SHAPES).
 
 import { UNITS } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
-import { buildGroundModel, groundModelIds } from '../src/apps/games/empires/models/ground.ts'
+import { buildGroundModel, crystalModel, crystalShapes, groundModelIds } from '../src/apps/games/empires/models/ground.ts'
+import { CRYSTAL_SHAPES } from '../src/apps/games/empires/ground/world.ts'
+import type { Model } from '../src/apps/games/empires/models/types.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
 import type { Pt } from '../src/apps/games/empires/models/types.ts'
 
@@ -35,17 +39,18 @@ for (const id of groundModelIds()) {
 }
 
 const finite = (pts: Pt[]) => pts.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
-for (const t of real) {
-  if (!groundModel(t.id)) continue
-  let m
+/** Checks one model built by `build`: sound, the same twice, filling at least `minFill` of its box. */
+function sound(label: string, build: () => Model, minFill: number, name: string) {
+  let m: Model
   try {
-    m = buildGroundModel(t.id)
+    m = build()
   } catch (e) {
-    ok(false, `${t.id}: building its model threw ${(e as Error).message}`)
-    continue
+    ok(false, `${label}: building its model threw ${(e as Error).message}`)
+    return
   }
+  const t = { id: label }
   // 2. Deterministic and sound.
-  ok(JSON.stringify(m) === JSON.stringify(buildGroundModel(t.id)), `${t.id}: builds differently twice`)
+  ok(JSON.stringify(m) === JSON.stringify(build()), `${t.id}: builds differently twice`)
   const ids = new Set<string>()
   const lim = Math.max(m.w, m.h) * 0.6
   m.parts.forEach((p, i) => {
@@ -69,9 +74,14 @@ for (const t of real) {
       if (m.parts.some((p) => p.pts.length >= 3 && inPart(p, x, y))) hit++
     }
   const fill = hit / (N * N)
-  ok(fill >= (t.ground?.foot ? 0.55 : 0.3), `${t.id}: fills only ${Math.round(fill * 100)}% of its box`)
-  console.log(`  ${t.id.padEnd(14)} ${String(m.parts.length).padStart(3)} parts, fills ${Math.round(fill * 100)}% of its box (${t.name})`)
+  ok(fill >= minFill, `${t.id}: fills only ${Math.round(fill * 100)}% of its box`)
+  console.log(`  ${t.id.padEnd(14)} ${String(m.parts.length).padStart(3)} parts, fills ${Math.round(fill * 100)}% of its box (${name})`)
 }
+for (const t of real) if (groundModel(t.id)) sound(t.id, () => buildGroundModel(t.id), t.ground?.foot ? 0.55 : 0.3, t.name)
+
+// 4. The crystal clusters.
+ok(crystalShapes() === CRYSTAL_SHAPES, `the sim lays out ${CRYSTAL_SHAPES} cluster shapes, there are ${crystalShapes()} models`)
+for (let k = 0; k < crystalShapes(); k++) sound(`kyber:${k}`, () => crystalModel(k), 0.18, `kyber crystal cluster, shape ${k + 1}`)
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll ground model checks passed')
 if (failed) process.exit(1)

@@ -5,6 +5,7 @@ import { seedOf } from './kit.ts'
 import { GROUND as republic } from './republic/ground.ts'
 import type { ModelSpec } from './spec.ts'
 import { GROUND as swarm } from './swarm/ground.ts'
+import { KYBER } from './kyber.ts'
 import type { Model } from './types.ts'
 
 // Models for the ground battle's units and buildings, in the same parts-and-vectors format as the
@@ -32,13 +33,29 @@ export const groundModelIds = () => Object.keys(DEFS)
 export function buildGroundModel(id: string): Model {
   const d = DEFS[id]
   if (!d) throw new Error(`No ground model for ${id}`)
-  const { w, h } = d.def
-  const spec = d.def.spec({ w, h })
+  return assemble(`ground:${id}`, d.faction, d.def)
+}
+
+const crystals = new Map<number, Model>()
+/** The model of kyber crystal cluster shape `shape` (models/kyber.ts), built on first use. Painted
+ * in the Confederacy's palette for its oranges; the clusters belong to nobody. */
+export function crystalModel(shape: number): Model {
+  const k = ((shape % KYBER.length) + KYBER.length) % KYBER.length
+  let m = crystals.get(k)
+  if (!m) crystals.set(k, (m = assemble(`kyber:${k}`, 'droid', KYBER[k])))
+  return m
+}
+/** How many crystal cluster shapes there are. */
+export const crystalShapes = () => KYBER.length
+
+function assemble(key: string, faction: FactionId, def: GroundModel): Model {
+  const { w, h } = def
+  const spec = def.spec({ w, h })
   const parts = [...spec.parts].sort((a, b) => a.z - b.z)
-  const seed = seedOf(`ground:${id}`)
+  const seed = seedOf(key)
   return {
-    key: `ground:${id}`,
-    faction: d.faction,
+    key,
+    faction,
     w,
     h,
     long: Math.max(w, h),

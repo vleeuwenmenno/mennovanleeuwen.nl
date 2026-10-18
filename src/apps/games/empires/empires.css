@@ -11,7 +11,7 @@
   --ew-good: #7dffa0;
   --ew-bad: #ff6a5e;
   --ew-gold: #f2c14a;
-  --ew-kyber: #7fd8ff;
+  --ew-kyber: #ff9a3c;
   --ew-display: 'Orbitron', 'Eurostile', 'Segoe UI', system-ui, sans-serif;
   position: relative;
   flex: 1;
@@ -815,6 +815,11 @@
 }
 .ew-legend .is-ore {
   background: #4fe3d8;
+  transform: rotate(45deg) scale(0.8, 1);
+}
+/* A ground map's kyber crystal fields. */
+.ew-legend .is-kyber {
+  background: var(--ew-kyber);
   transform: rotate(45deg) scale(0.8, 1);
 }
 .ew-legend .is-beacon {

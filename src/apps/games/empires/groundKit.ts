@@ -32,9 +32,9 @@ export type GroundKit = {
   minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: number, oy: number, s: number, reveal: boolean): void
   /** The crystal field with kyber left under or near (x, y), or -1 (a right-click there gathers). */
   fieldAt(w: World, x: number, y: number): number
-  /** How full each tile's crystals are, for the ground layer, when it changed since the last call;
-   * null when it didn't. */
-  kyber(w: World): Uint8Array | null
+  /** The kyber crystal clusters inside the box (world units), each as big as the kyber it has left
+   * lets it be, in world coordinates; `zdpr`: device pixels per world unit. */
+  crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }): void
   /** Kyber an engineer carries in one load. */
   carry: number
 }

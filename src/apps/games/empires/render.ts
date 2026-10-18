@@ -805,6 +805,8 @@ export class Renderer {
     // A ground battle: the building being placed (its tiles, the row before its door, our command
     // ranges), and the enemy buildings we remember but don't see now, as ghosts where we saw them.
     if (ground) {
+      // Kyber crystal clusters: objects on the ground, shrinking as they're mined (under the ghost).
+      ground.crystals(ctx, w, z, zdpr, { x0: left, y0: top, x1: right, y1: bottom })
       const gp = view.groundPlace
       if (gp) {
         ground.ghost(ctx, w, view.me, gp.unit, gp.p, z)
@@ -3105,8 +3107,8 @@ export class Renderer {
     const by = u.y - Math.sin(u.a) * size * 0.22
     if (full > 0) {
       const r = size * (0.1 + 0.12 * full) + 1.5 / z
-      ctx.fillStyle = '#7fd8ff'
-      ctx.strokeStyle = '#0b2a40'
+      ctx.fillStyle = '#ff9a3c'
+      ctx.strokeStyle = '#4a1c06'
       ctx.lineWidth = 1 / z
       ctx.beginPath()
       ctx.moveTo(bx, by - r)
@@ -3119,7 +3121,7 @@ export class Renderer {
     }
     if (u.gm?.mine) {
       ctx.globalCompositeOperation = 'lighter'
-      ctx.fillStyle = '#9fe6ff'
+      ctx.fillStyle = '#ffc070'
       const fx = u.x + Math.cos(u.a) * size * 0.45
       const fy = u.y + Math.sin(u.a) * size * 0.45
       for (let i = 0; i < 3; i++) {
@@ -3211,7 +3213,7 @@ export class Renderer {
       if (u.rush) this.drawScaffolds(ctx, u, m, size, z)
     }
     if (t.regrow && !u.site) this.drawRegrow(ctx, u, w, size)
-    // A ground engineer's kyber: a blue crystal on its back, bigger the fuller its load, and
+    // A ground engineer's kyber: an orange crystal on its back, bigger the fuller its load, and
     // sparks while it mines.
     if (u.carry || u.gm?.mine) this.drawKyber(ctx, u, size, z)
     if (u.guns.length && spinalsOf(t).length && size * z >= MECH.minPx) this.drawSpinalCharge(ctx, u, z)

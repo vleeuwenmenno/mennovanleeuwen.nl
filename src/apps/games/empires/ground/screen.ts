@@ -3,7 +3,9 @@ import { UNIT } from '../data.ts'
 import type { Owner, World } from '../sim.ts'
 import { sees } from './fog.ts'
 import { TF, TILE, type GroundLayer } from './types.ts'
-import { CARRY, FIELD_KYBER, commandAreas, fieldAt, fieldTiles, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
+import { crystalModel } from '../models/ground.ts'
+import { drawHull } from '../models/paint.ts'
+import { CARRY, commandAreas, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
 
 // The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
 // the placement ghost and the minimap's ground. In the browser only; ground/load.ts hands them to the
@@ -42,7 +44,7 @@ function thumb(id: string): HTMLCanvasElement | null {
     let [r, gg, b] = TERRAIN_RGB[g.terrain[i]] ?? TERRAIN_RGB[0]
     let k = 0.72 + 0.17 * g.height[i]
     if (g.flags[i] & TF.water) [r, gg, b, k] = [53, 90, 122, 1]
-    else if (g.flags[i] & TF.deposit) [r, gg, b, k] = [79, 227, 216, 0.9]
+    else if (g.flags[i] & TF.deposit) [r, gg, b, k] = [143, 133, 117, 1]
     else if (g.flags[i] & TF.blocked) k *= 0.55
     img.data[i * 4] = Math.min(255, r * k)
     img.data[i * 4 + 1] = Math.min(255, gg * k)
@@ -164,36 +166,63 @@ function minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: numb
   const smooth = ctx.imageSmoothingEnabled
   ctx.imageSmoothingEnabled = true
   ctx.drawImage(t, ox, oy, w.w * s, w.h * s)
-  // Crystal fields as they run down: an emptied tile shows as bare gravel.
-  const cols = w.ground!.nav.cols
-  ctx.fillStyle = '#6e6a62'
-  w.ground!.fields.forEach((_, f) => {
-    if ((w.kyber?.[f] ?? 1) >= FIELD_KYBER) return
-    for (const { tile, fill } of fieldTiles(w, f)) {
-      if (fill > 0) continue
-      const c = tile % cols
-      ctx.fillRect(ox + c * TILE * s, oy + ((tile - c) / cols) * TILE * s, Math.ceil(TILE * s), Math.ceil(TILE * s))
-    }
-  })
   ctx.drawImage(shadeOf(w, team, reveal).canvas, ox, oy, w.w * s, w.h * s)
+  // Kyber crystal clusters with kyber left: orange dots, over the veil (the land is known from orbit).
+  ctx.fillStyle = KYBER_DOT
+  const d = Math.max(2, TILE * s)
+  for (const c of w.crystals ?? []) {
+    if (!(c.left > 0)) continue
+    const p = crystalAt(c)
+    ctx.fillRect(ox + p.x * s - d / 2, oy + p.y * s - d / 2, d, d)
+  }
   ctx.imageSmoothingEnabled = smooth
 }
 
-/** What the crystal fields looked like when the ground layer was last told, per world. */
-const kyberKeys = new WeakMap<World, string>()
-/** How full each tile's crystals are, for the ground layer (setKyber): only when it changed since the
- * last call for this world (in sixteenths of a tile), else null. Tiles that aren't crystal read full. */
-function kyber(w: World): Uint8Array | null {
-  const g = w.ground!
-  if (!w.kyber) return null
-  const key = w.kyber.map((k, f) => Math.ceil((k / FIELD_KYBER) * g.fields[f].tiles.length * 16)).join(',')
-  if (kyberKeys.get(w) === key) return null
-  kyberKeys.set(w, key)
-  const fill = new Uint8Array(g.nav.cols * g.nav.rows).fill(255)
-  g.fields.forEach((_, f) => {
-    for (const { tile, fill: k } of fieldTiles(w, f)) fill[tile] = Math.round(k * 255)
-  })
-  return fill
+/** The minimap's colour for a crystal cluster. */
+const KYBER_DOT = '#ff9a3c'
+/** A cluster's size when full, world units across, and the smallest it is drawn on screen (CSS
+ * pixels), so a field reads at the default zoom. */
+const CRYSTAL_SIZE = TILE * 1.9
+const CRYSTAL_MIN_PX = 18
+const FRESH = { detached: 0, scorch: 0, variant: 0 }
+
+let glowImg: HTMLCanvasElement | null = null
+/** A soft orange glow, drawn once and reused under every cluster. */
+function glow() {
+  if (glowImg) return glowImg
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const g = c.getContext('2d')!
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32)
+  grad.addColorStop(0, 'rgba(255, 150, 60, 0.75)')
+  grad.addColorStop(0.45, 'rgba(255, 110, 30, 0.3)')
+  grad.addColorStop(1, 'rgba(255, 90, 20, 0)')
+  g.fillStyle = grad
+  g.fillRect(0, 0, 64, 64)
+  return (glowImg = c)
+}
+
+/** The kyber crystal clusters inside `box`: a soft glow, then the cluster's model (one of a few
+ * shapes), smaller the less kyber it has left; a mined-out one is gone. Drawn under the fog veil
+ * like the land itself: every side knows where they are. */
+function crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }) {
+  const all = w.crystals
+  if (!all?.length) return
+  const g = glow()
+  for (const c of all) {
+    if (!(c.left > 0)) continue
+    const p = crystalAt(c)
+    if (p.x < box.x0 || p.x > box.x1 || p.y < box.y0 || p.y > box.y1) continue
+    const full = c.left / c.max
+    const size = Math.max(CRYSTAL_SIZE * (0.45 + 0.55 * full), CRYSTAL_MIN_PX / zoom)
+    const r = size * 1.05
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = 0.55 + 0.35 * full
+    ctx.drawImage(g, p.x - r, p.y - r, r * 2, r * 2)
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 1
+    drawHull(ctx, crystalModel(c.shape), p.x, p.y, 0, size, zdpr, FRESH)
+  }
 }
 
 /** The kit, with the picture of the ground from `layer` (the WebGL2 one, or the 2D stand-in). */
@@ -209,6 +238,6 @@ export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   ghost,
   minimap,
   fieldAt,
-  kyber,
+  crystals,
   carry: CARRY,
 })

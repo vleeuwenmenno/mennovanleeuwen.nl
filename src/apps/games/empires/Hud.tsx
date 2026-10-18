@@ -1885,7 +1885,7 @@ const SPEND: [SpendKind, string, string][] = [
   ['structures', 'Platforms', '#7dffa0'],
   ['repairs', 'Repairs', '#ffd36e'],
 ]
-const LEDGER_COLOR: Record<LedgerEntry['kind'], string> = { ships: '#ff9a6e', research: '#b08cff', structures: '#7dffa0', repairs: '#ffd36e', salvage: '#f2c14a', refund: '#c890ff', cancel: '#9fb0c8', gift: '#59c8ff', kyber: '#7fd8ff' }
+const LEDGER_COLOR: Record<LedgerEntry['kind'], string> = { ships: '#ff9a6e', research: '#b08cff', structures: '#7dffa0', repairs: '#ffd36e', salvage: '#f2c14a', refund: '#c890ff', cancel: '#9fb0c8', gift: '#59c8ff', kyber: '#ff9a3c' }
 
 /** Credits and income over the battle: credits as a gold area, income per minute as a green line,
  * each on its own scale. */
@@ -1953,7 +1953,8 @@ export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; o
   const ground = !!w.ground
   const gathering = ground ? w.units.filter((u) => !u.dead && u.owner === me && u.order.k === 'gather').length : 0
   const carried = ground ? w.units.reduce((n, u) => n + (!u.dead && u.owner === me ? (u.carry ?? 0) : 0), 0) : 0
-  const fieldsLeft = (w.kyber ?? []).reduce((n, k) => n + k, 0)
+  const fieldsLeft = (w.crystals ?? []).reduce((n, c) => n + c.left, 0)
+  const clustersLeft = (w.crystals ?? []).filter((c) => c.left > 0).length
   return (
     <Floating id="economy" title="Economy" at={{ left: 120, top: 56 }} onClose={onClose} className="ew-econ">
       <div className="ew-econ-top">
@@ -1974,9 +1975,9 @@ export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; o
         <>
           <h5>Kyber now</h5>
           <Breakdown rows={[
-            { label: 'Gathered a minute', color: '#7fd8ff', value: (p.gatherRate ?? 0) * 60, note: `${gathering} engineer${gathering === 1 ? '' : 's'} gathering` },
-            { label: 'Carried, on its way in', color: '#4fe3d8', value: carried },
-            { label: 'Left in the fields', color: '#c8d4ee', value: fieldsLeft, note: `${(w.kyber ?? []).filter((k) => k > 0).length} of ${(w.kyber ?? []).length} fields` },
+            { label: 'Gathered a minute', color: '#ff9a3c', value: (p.gatherRate ?? 0) * 60, note: `${gathering} engineer${gathering === 1 ? '' : 's'} gathering` },
+            { label: 'Carried, on its way in', color: '#d9661c', value: carried },
+            { label: 'Left in the fields', color: '#c8d4ee', value: fieldsLeft, note: `${clustersLeft} crystal cluster${clustersLeft === 1 ? '' : 's'}` },
           ]} />
         </>
       ) : (
@@ -2006,7 +2007,7 @@ export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; o
       <div className="ew-econ-cols">
         <div>
           <h5>Earned · {fmt(Object.values(p.earnedBy).reduce((a, b) => a + b, 0))}</h5>
-          <Breakdown rows={(ground ? EARN.filter(([k]) => k === 'mines' || k === 'refunds' || p.earnedBy[k] > 0) : EARN).map(([k, label, color]) => ({ label: ground && k === 'mines' ? 'Kyber gathered' : label, color: ground && k === 'mines' ? '#7fd8ff' : color, value: p.earnedBy[k] }))} />
+          <Breakdown rows={(ground ? EARN.filter(([k]) => k === 'mines' || k === 'refunds' || p.earnedBy[k] > 0) : EARN).map(([k, label, color]) => ({ label: ground && k === 'mines' ? 'Kyber gathered' : label, color: ground && k === 'mines' ? '#ff9a3c' : color, value: p.earnedBy[k] }))} />
         </div>
         <div>
           <h5>Spent · {fmt(Object.values(p.spentBy).reduce((a, b) => a + b, 0))}</h5>

@@ -976,7 +976,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       sound.error()
       return
     }
-    renderer.current.ping(at.x, at.y, '#7fd8ff')
+    renderer.current.ping(at.x, at.y, '#ff9a3c')
     sound.order('move', myFaction, 'fighter')
   }
 
@@ -1809,11 +1809,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
         })() : null,
-      }
-      if (layer && kit) {
-        // The crystal fields as they run down (an upload only when they changed).
-        const fill = kit.kyber(w)
-        if (fill) layer.setKyber?.(fill)
       }
       layer?.draw(cm, vw, vh, Math.min(2, window.devicePixelRatio || 1), now / 1000)
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))

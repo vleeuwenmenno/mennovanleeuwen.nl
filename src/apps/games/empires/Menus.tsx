@@ -1110,7 +1110,8 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
       const k = big ? 1 : Math.max(0.5, Math.min(1, (7600 * MAP_SCALE) / Math.max(map.w, map.h)))
       g.fillStyle = '#f2c14a'
       for (const h of map.wrecks) g.fillRect(ox + h.x * s - 2.5 * k, oy + h.y * s - 2.5 * k, 5 * k, 5 * k)
-      g.fillStyle = '#4fe3d8'
+      // Ore in space; kyber crystal fields (orange) on the ground.
+      g.fillStyle = map.ground ? '#ff9a3c' : '#4fe3d8'
       for (const n of map.ore) {
         const x = ox + n.x * s
         const y = oy + n.y * s
@@ -1468,7 +1469,7 @@ export function MapPicker({ current, maps = MAPS, generated, generatedBlurb, onP
  * there are (the lobbies' map panel, where this is the map's facts too). */
 export function MapLegend({ map, counts = false }: { map: MapDef; counts?: boolean }) {
   // A ground map: its spawns and kyber crystal fields (its ore, on the preview).
-  const items: [string, string, number?][] = map.ground ? [['spawn', 'Spawn', map.spawns.length], ['ore', 'Crystal field', map.ore.length]] : [
+  const items: [string, string, number?][] = map.ground ? [['spawn', 'Spawn', map.spawns.length], ['kyber', 'Crystal field', map.ore.length]] : [
     ['spawn', 'Spawn', map.spawns.length],
     ['ore', 'Ore', map.ore.length],
     ['beacon', 'Beacon', map.beacons.length],

@@ -3368,13 +3368,14 @@ puts rock on steep slopes and bare ridges (angular blocks, strata, strong light)
 and paints:
 - water darker away from the banks, with slow swells, a few glints and foam on the edge, moving;
 - boulders along the banks, thicker round the ford, each lit and casting a shadow;
-- the ford as clear shallow water over a stony bed, the crystals in it on top;
+- the ford as clear shallow water over a stony bed, its crystal field's gravel in it;
 - bridges straight from their shapes: steel plates on girders with bolts, round pylons at the
   corners, a dark outline and a shadow on the water;
 - ruins: a foundation of flagstones with broken walls and corner columns, casting shadows;
 - forests as one canopy of crowns lit from the top left, a dark rim at the edge and a cast shadow,
   loose trees round the woods' edges, and a few small groups of trees out on the grass;
-- crystal fields as pale gravel with blue shards;
+- crystal fields as plain gravel with a few pebbles (the crystal clusters on them are objects the
+  battle draws, see Kyber below);
 - past the map's edge, the map mirrored, greyed and darkened, with a faint line on the edge.
 
 There are no chunks, so no seams in any browser (checked in Chromium and Firefox). Round 1 maps
@@ -3387,7 +3388,7 @@ buildings, effects, fog and the HUD stay on the 2D canvas over it. (Round 1's ch
 renderer and its rock-chunk cliffs are gone.)
 
 ```sh
-pnpm check:ground-map           # every hand-made map, then 96 generated ones: builds the same twice, symmetric, reach, open build areas, fairness
+pnpm check:ground-map           # every hand-made map, then 96 generated ones: builds the same twice, symmetric, reach, open build areas, fairness, crystal clusters (3 to 7 a field, its kyber, none side by side, open ground to mine from)
 pnpm check:ground-map --quick   # the hand-made maps only
 ```
 
@@ -3527,18 +3528,27 @@ unit queued counts too. At the cap the card says why: "Needs more supply: build 
 
 **Kyber** is the ground battle's one resource, and it is the side's credits: the top bar, cards and
 prices show it with a crystal icon, and nothing trickles in (space keeps its station income). It
-lies in crystal fields (the TF.deposit tiles round each of the map's deposits), 15,000 a field, a
-finite amount held in the world (`World.kyber`, saved and hashed): a side's own fields with half the
-shared one hold 37,500 on Ashwater Crossing, about half an hour of gathering with fourteen
-engineers. Engineers gather it (`gather`, a right-click on a field or the touch wheel's Gather
-kyber): each drives to a tile of the field (several share a field, each on its own tile when there
-are enough), mines 2.5 a second into a load of 20, hauls the load to the nearest finished Command
-Center of ours, drops it off (the side's kyber, the economy's "Kyber gathered" and the log) and goes
-back, about 1.5 kyber a second for each engineer on a field 13 tiles out. A field's crystals shrink
-and vanish as it runs down, its outermost tiles first (the ground layer's crystals, from a byte a
-tile it uploads only when they change); when it runs dry its engineers move on to the nearest other
-field with kyber left that they can reach, and the screen says so. An engineer taken off gathering
-to build goes back to its field once the building is done.
+lies in crystal clusters, objects standing on the crystal fields (the TF.deposit tiles round each of
+the map's deposits), like the gold and stone piles of Age of Empires (`World.crystals`, saved with a
+battle and in its hash). When a battle starts, each field gets one cluster for about every two of
+its tiles, 3 to 7 (5 a field on Ashwater Crossing), laid out from the map's seed (the same on every
+machine and apart from the world's random stream): the field's edge tiles first, never side by
+side, each with open ground round it, in one of three shapes. The field's 15,000 kyber is shared
+out between them, each a fifth more or less than an even share (about 3,000 each on Ashwater): a
+side's own fields with half the shared one hold 37,500 there, about half an hour of gathering with
+fourteen engineers. A cluster blocks its tile like a tree (its stamp on the nav grid, and nothing
+builds on a field anyway). Engineers gather it (`gather`, a right-click on a cluster or the touch
+wheel's Gather kyber): each picks a cluster of the field, the nearest it can reach with ones that
+fewer engineers are mining counting as nearer, drives to an open tile next to it (each engineer on
+its own when there are enough), mines 2.5 a second into a load of 20, hauls the load to the nearest
+finished Command Center of ours, drops it off (the side's kyber, the economy's "Kyber gathered" and
+the log) and goes back, about 1.5 kyber a second for each engineer on a field 13 tiles out. A
+cluster shrinks as it is mined and is gone when empty: its stamp comes off the nav grid at the next
+tick's flush, the same fixed point as building stamps, so every copy agrees; its engineers move on
+to the next cluster in the field, and once the field is dry to the nearest other field with a
+cluster they can reach (and the screen says so). An engineer taken off gathering to build goes back
+to its field once the building is done. A battle saved before clusters gets them laid out when it
+loads, each field's kyber shared out as it was.
 
 **The AI** is the space game's (`ai.ts`: same brain, think clock and random stream) with decisions
 of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)), passive for
@@ -3552,9 +3562,9 @@ start within 90 seconds, and builds nothing hostile. It reads only what its team
 same orders a player does, so every copy of a battle makes the same choices.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands), an economy battle (gathering, drop-off, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, each in step across two copies, a snapshot thaw and a replay
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
-pnpm check:ground-models # every ground unit has a model through the model lookup, sound and the same every time
+pnpm check:ground-models # every ground unit has a model through the model lookup, and every crystal cluster shape one, sound and the same every time
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
 ```
 
@@ -3590,10 +3600,14 @@ differs:
 - **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
   rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
 - **Kyber:** a right-click on a crystal field with engineers selected (or the touch wheel's Gather
-  kyber there) sets them gathering. An engineer carrying kyber shows a blue crystal on its back,
-  bigger as its load fills, and sparks while it mines; its panel says what it is doing (mining,
-  hauling a load in, building). A field running dry is a toast, and its emptied tiles show as bare
-  gravel on the ground and the minimap.
+  kyber there) sets them gathering. The clusters are orange and dark-orange crystals in the models'
+  style ([`models/kyber.ts`](src/apps/games/empires/models/kyber.ts): faceted, cel shaded, a bold
+  outline, light from the top left, three shapes) over a soft orange glow, drawn at least 18 pixels
+  across and smaller the less they hold; they show under the fog veil (the land is known from
+  orbit), and as orange dots on the minimap and the lobby's preview. An engineer carrying kyber
+  shows an orange crystal on its back, bigger as its load fills, and sparks while it mines; its
+  panel says what it is doing (mining, hauling a load in, building). A field running dry is a
+  toast. Kyber's icon and the economy panel's kyber are orange too.
 - The top bar shows kyber with its crystal icon and what was gathered a minute lately, the units
   against the cap, and an **idle engineer** button (with a count) that selects the next idle
   engineer and looks at it, round them all in turn. It leaves out ore, beacons and research. The
