@@ -48,7 +48,9 @@
 // 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
 //    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
-//    member standing, from where each stands, so fewer members fire fewer shots. The six tier 1 units
+//    member standing, each on its own reload and at a target of its own, from where it stands, so fewer
+//    members fire fewer shots; standing members shuffle, and crossing a river they file through the
+//    crossing and gather again on the far side. The six tier 1 units
 //    (each faction's foot squad and fast vehicle) fight each other in step the same way, every one
 //    of them firing; and the six tier 2 units (anti-swarm) against a crowd of tier 1 twice their
 //    number, all six firing, splash catching several at once, the anti-swarm side ahead.
@@ -71,7 +73,6 @@ import { TILE } from '../src/apps/games/empires/ground/types.ts'
 import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
 import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
 import { TEST_WALKER, TIER1, TIER2, TIER3, registerWalkerTest, registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
-import { memberAt } from '../src/apps/games/empires/ground/squad.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
 let failed = false
@@ -1279,35 +1280,99 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
 }
 
 {
-  // One volley a member: a full squad fires five shots, each from where its member stands; once its
-  // hull is down to half, three are left and it fires three.
+  // Members fire on their own: a full squad's first shots come over several ticks, each from where a
+  // member stands, spread over the targets in reach; with half its hull gone three members are left
+  // and it fires about three fifths as often.
   const field = groundMapDef('test-field')!
   const w = newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 7, credits: 0 })
   const cy = field.h / 2
   const squad = spawn(w, TIER1.republic.foot, 0, field.w * 0.4, cy, 0)
   squad.stance = 'hold'
-  raiseBuilding(w, UNIT['d-g-supply'], 1, Math.floor(squad.x / TILE) + 3, Math.floor(cy / TILE) - 1)
-  const volley = () => {
-    for (let t = 0; t < 120; t++) {
+  for (const dy of [-1.5, 0, 1.5]) {
+    const e = spawn(w, 'd-g-engineer', 1, squad.x + 4 * TILE, cy + dy * TILE, Math.PI)
+    e.hull = e.hullMax = 1e6
+  }
+  const run = (seconds: number) => {
+    const shots: { t: number; target: number; member: boolean }[] = []
+    for (let t = 0; t < seconds * 30; t++) {
       tick(w)
       w.events.length = 0
-      // Shots fired this tick (they flew one step already).
-      const mine = (w.gshots ?? []).filter((x) => x.from === squad.id && x.age < STEP * 1.01)
-      if (mine.length) return mine
+      for (const x of w.gshots ?? [])
+        if (x.from === squad.id && x.age < STEP * 1.01) shots.push({ t, target: x.target, member: (squad.crew ?? []).some((m) => Math.abs(m.x - x.sx) < 1e-6 && Math.abs(m.y - x.sy) < 1e-6) })
     }
-    return []
+    return shots
   }
-  const full = volley()
-  const where = full.every((x) => [0, 1, 2, 3, 4].some((i) => Math.abs(memberAt(squad, i).x - x.sx) < 1e-6 && Math.abs(memberAt(squad, i).y - x.sy) < 1e-6))
-  check('a full squad fires a shot from each of its members', full.length === 5 && where, `${full.length} shots${where ? '' : ', not from its members'}`)
+  const full = run(10)
+  const first = new Set(full.slice(0, 5).map((x) => x.t)).size
+  check("a squad's members fire on their own timing", first >= 3, `its first 5 shots over ${first} different ticks`)
+  check('each shot comes from where a member stands', full.length > 0 && full.every((x) => x.member))
+  const spread = new Set(full.map((x) => x.target)).size
+  check('a squad spreads its fire over the targets in reach', spread >= 2, `${spread} of 3 targets shot at`)
   squad.hull = squad.hullMax * 0.5
-  for (let t = 0; t < 40; t++) {
+  run(1)
+  const half = run(10)
+  const ratio = half.length / full.length
+  check('with half its hull gone, three members are left and fire about three fifths as often', squad.members === 3 && ratio > 0.4 && ratio < 0.8, `${squad.members} members, ${half.length} shots against ${full.length}`)
+}
+
+{
+  // Loose, not a grid: standing still, members shuffle; sent across the river on Ashwater Crossing,
+  // they file through the crossing and all arrive, gathered round the squad again.
+  const w = newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 8, credits: 0 })
+  const [a, b] = w.ground!.map.spawns
+  const squad = spawn(w, TIER1.republic.foot, 0, a.x + 6 * TILE, a.y, 0)
+  const s = squad.t.ground!.squad!.spacing
+  const step = (seconds: number, each?: () => void) => {
+    for (let t = 0; t < seconds * 30; t++) {
+      tick(w)
+      w.events.length = 0
+      each?.()
+    }
+  }
+  step(3)
+  const before = (squad.crew ?? []).map((m) => ({ x: m.x, y: m.y }))
+  step(8)
+  const shuffled = (squad.crew ?? []).filter((m, i) => Math.hypot(m.x - before[i].x, m.y - before[i].y) > 2).length
+  check('standing still, members shuffle now and then', shuffled >= 2, `${shuffled} of ${squad.crew?.length} moved`)
+  runCmd(w, 0, cmd('move', [squad.id], b.x, b.y, false, false))
+  step(150)
+  const far = Math.max(...(squad.crew ?? []).map((m) => Math.hypot(m.x - squad.x, m.y - squad.y)))
+  check('sent across the river, it arrives with every member gathered round it again', Math.hypot(squad.x - b.x, squad.y - b.y) < 6 * TILE && far < 3 * TILE, `${Math.round(Math.hypot(squad.x - b.x, squad.y - b.y))} from its goal, members within ${Math.round(far)}`)
+}
+
+{
+  // Through a gap one tile wide (a wall of buildings): the squad squeezes through in file, every
+  // member gets through, and it fans out again in the open beyond.
+  const field = groundMapDef('test-field')!
+  const w = newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 9, credits: 0 })
+  const c0 = Math.floor(field.w / TILE / 2)
+  const r0 = Math.floor(field.h / TILE / 2)
+  // Depots three tiles high, stacked down the middle of the field, leaving one row open at r0.
+  for (const r of [r0 - 12, r0 - 9, r0 - 6, r0 - 3, r0 + 1, r0 + 4, r0 + 7, r0 + 10]) raiseBuilding(w, UNIT['r-g-supply'], 0, c0, r)
+  const y = (r0 + 0.5) * TILE
+  const squad = spawn(w, TIER1.republic.foot, 0, (c0 - 8) * TILE, y, 0)
+  const s = squad.t.ground!.squad!.spacing
+  for (let t = 0; t < 60; t++) tick(w)
+  runCmd(w, 0, cmd('move', [squad.id], (c0 + 12) * TILE, y, false, false))
+  let inGap = 0
+  let gapWidest = 0
+  let beyond = 0
+  for (let t = 0; t < 30 * 30; t++) {
     tick(w)
     w.events.length = 0
+    const crew = squad.crew ?? []
+    const ys = crew.map((m) => m.y)
+    const width = Math.max(...ys) - Math.min(...ys)
+    // Members inside the wall's columns.
+    if (crew.some((m) => m.x > c0 * TILE && m.x < (c0 + 3) * TILE)) {
+      inGap++
+      gapWidest = Math.max(gapWidest, ...crew.filter((m) => m.x > c0 * TILE && m.x < (c0 + 3) * TILE).map((m) => Math.abs(m.y - y)))
+    }
+    if (crew.every((m) => m.x > (c0 + 4) * TILE)) beyond = Math.max(beyond, width)
   }
-  w.gshots = []
-  const half = volley()
-  check('with half its hull gone, three members are left and fire three shots', squad.members === 3 && half.length === 3, `${squad.members} members, ${half.length} shots`)
+  const through = (squad.crew ?? []).every((m) => m.x > (c0 + 3) * TILE)
+  check('through a gap one tile wide, the squad files through and every member gets past', inGap > 10 && gapWidest <= TILE / 2 + 1 && through, `${inGap} ticks in the gap, ${Math.round(gapWidest)} from its middle at most, ${through ? 'all' : 'not all'} through`)
+  check('beyond the gap the squad fans out again', beyond > s * 1.5, `${Math.round(beyond)} wide`)
 }
 
 if (failed) {

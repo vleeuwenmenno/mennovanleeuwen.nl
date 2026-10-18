@@ -15,8 +15,9 @@
 //   that grows with the distance, splash); swarm rockets go as a salvo onto a spot, with a little
 //   splash; a beam holds on its target and burns harder the longer it does; a spray hurts everything
 //   in a short cone and leaves a burn.
-// - Squads (ground/squad.ts): each member standing fires the squad's weapon from where it stands
-//   (a beam or spray pours each member's share), and members fall as the hull drops.
+// - Squads (ground/squad.ts): each member standing fires the squad's weapon from where it stands,
+//   on its own reload and at a target of its own (a beam or spray pours each member's share from
+//   the middle), and members fall as the hull drops.
 //
 // Lockstep as the rest of the sim: the world's random stream, detmath, units in `w.units` order.
 
@@ -24,7 +25,7 @@ import * as M from '../detmath.ts'
 import { GROUND_ACC, GROUND_VS, type Armour, type GroundWeaponKind, type UnitType } from '../data/kit.ts'
 import { RANK_BONUS, damage, foes, hpPos, near, rand, sees, type Gun, type Owner, type Unit, type World } from '../sim.ts'
 import { TILE } from './types.ts'
-import { memberAt, membersLeft, squadsTick } from './squad.ts'
+import { crewOf, crewTick, membersLeft, squadHash, squadsTick } from './squad.ts'
 import { footDist } from './world.ts'
 
 /** A shot in flight (World `gshots`): its weapon, where it is and how it moves, seconds left to fly
@@ -230,12 +231,8 @@ function splash(w: World, x: number, y: number, r: number, g: GroundWeaponKind, 
   w.events.push({ k: 'splash', x, y, r, owner })
 }
 
-/** One shot (or a salvo) from gun `g` of `u` at `e`; from a squad, one from each member standing,
- * from where it stands. */
-function fire(w: World, u: Unit, g: Gun, e: Unit) {
-  if (!u.t.ground?.squad) return fireFrom(w, u, g, e, muzzle(u, g))
-  for (let i = 0; i < membersLeft(u); i++) fireFrom(w, u, g, e, memberAt(u, i))
-}
+/** One shot (or a salvo) from gun `g` of `u` at `e`. */
+const fire = (w: World, u: Unit, g: Gun, e: Unit) => fireFrom(w, u, g, e, muzzle(u, g))
 
 function fireFrom(w: World, u: Unit, g: Gun, e: Unit, from: { x: number; y: number }) {
   const k = g.w.ground!
@@ -319,10 +316,16 @@ function pour(w: World, u: Unit, g: Gun, e: Unit, dt: number) {
 function shoot(w: World, u: Unit, dt: number) {
   if (u.focus && !foe(w, u.owner, w.byId.get(u.focus))) u.focus = 0
   const primary = u.focus ? w.byId.get(u.focus) : u.target ? w.byId.get(u.target) : undefined
-  for (const g of u.guns) {
+  for (let gi = 0; gi < u.guns.length; gi++) {
+    const g = u.guns[gi]
     if (!g.w.ground || (g.hp >= 0 && u.hps[g.hp].hp <= 0)) continue
     const k = g.w.ground
     const steady = k === 'beam' || k === 'spray'
+    // A squad's members each fire this gun on their own (a beam or a spray pours from the middle).
+    if (u.t.ground?.squad && !steady) {
+      crewFire(w, u, g, gi, primary, dt)
+      continue
+    }
     if (!steady) g.cd -= dt
     const from = muzzle(u, g)
     let e: Unit | undefined = foe(w, u.owner, primary) && bears(u, g, primary, from) ? primary : undefined
@@ -356,6 +359,49 @@ function shoot(w: World, u: Unit, dt: number) {
     if (g.cd > 0) continue
     fire(w, u, g, e)
     g.cd = g.w.cooldown * (0.9 + rand(w) * 0.2)
+  }
+}
+
+/** How many of the best targets in its reach a squad member picks among. */
+const SPREAD = 3
+
+/**
+ * Gun `g` (the unit's gun `gi`) of squad `u`, for each member standing: its own reload (each
+ * reloads in its own time, a little more or less than the gun's), and its own target: the squad's
+ * when it is told to attack one, else the one it shot at last while it can, else one of the few best
+ * in its reach, picked from the world's random stream, so a squad spreads its fire over what is near.
+ */
+function crewFire(w: World, u: Unit, g: Gun, gi: number, primary: Unit | undefined, dt: number) {
+  const told = u.order.k === 'attack' || !!u.focus
+  g.target = 0
+  for (const m of crewOf(w, u)) {
+    m.cd[gi] = (m.cd[gi] ?? 0) - dt
+    if (m.cd[gi] > 0) continue
+    const from = { x: m.x, y: m.y }
+    let e: Unit | undefined = told && foe(w, u.owner, primary) && bears(u, g, primary, from) ? primary : undefined
+    if (!e) {
+      const kept = m.t[gi] ? w.byId.get(m.t[gi]) : undefined
+      if (foe(w, u.owner, kept) && bears(u, g, kept, from)) e = kept
+    }
+    if (!e) {
+      const best: { e: Unit; s: number }[] = []
+      near(w, from.x, from.y, g.w.range + TILE * 3, (o) => {
+        if (!foe(w, u.owner, o) || !bears(u, g, o, from)) return
+        best.push({ e: o, s: (worth(g, o) + 0.05) / (Math.sqrt(d2(o.x, o.y, from.x, from.y)) + 100) })
+      })
+      best.sort((a, b) => b.s - a.s || a.e.id - b.e.id)
+      if (best.length) e = best[Math.floor(rand(w) * Math.min(SPREAD, best.length))].e
+    }
+    if (!e) {
+      m.t[gi] = 0
+      m.cd[gi] = 0
+      continue
+    }
+    m.t[gi] = e.id
+    g.target = e.id
+    g.aim = M.atan2(e.y - from.y, e.x - from.x)
+    fireFrom(w, u, g, e, from)
+    m.cd[gi] = g.w.cooldown * (0.8 + rand(w) * 0.4)
   }
 }
 
@@ -416,6 +462,7 @@ function burns(w: World, dt: number) {
 /** The ground battle's combat for one tick, after the units moved: every armed ground unit and
  * finished building fires, shots fly and land, burns burn. */
 export function groundCombat(w: World, dt: number) {
+  crewTick(w, dt)
   const n = w.units.length
   for (let i = 0; i < n; i++) {
     const u = w.units[i]
@@ -449,4 +496,5 @@ export function combatHash(w: World, int: (v: number) => void, num: (v: number) 
     if (u.burn) num(u.burn.left)
     if (u.members !== undefined) int(u.members)
   }
+  squadHash(w, int, num)
 }

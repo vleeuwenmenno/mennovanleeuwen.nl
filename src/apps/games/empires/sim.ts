@@ -14,6 +14,7 @@ import type { Brain } from './ai.ts'
 import type { Eye } from './ground/fog.ts'
 import type { Crystal, Foot, GroundMove, GroundSnap, GroundState, KnownBuilding } from './ground/world.ts'
 import type { GroundShot } from './ground/combat.ts'
+import type { Member } from './ground/squad.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
 // economy and capture beacons. The game screen and the headless balance sims both drive it by
@@ -227,6 +228,11 @@ export type Unit = {
   carry?: number
   /** Ground battles, squads (GroundSpec `squad`): how many of its members are still standing. */
   members?: number
+  /** Ground battles, squads: its members, each walking and shooting on its own (ground/squad.ts). */
+  crew?: Member[]
+  /** Ground battles, squads: where its middle has been lately, newest first, as x, y pairs; members
+   * follow it in file through narrow ground. */
+  trail?: number[]
   /** Ground battles: a spray's burn still eating at it (hull points a second, seconds left, whose). */
   burn?: { dps: number; left: number; by: Owner; from: number }
 }

@@ -3062,7 +3062,8 @@ export class Renderer {
       const [sw, sh] = dims(u.t)
       return Math.max(sw, sh) * 0.5 * (Math.max(u.t.size, GROUND_MIN_PX / z) / u.t.size)
     }
-    const cars = shown.filter((u) => u.t.tier === 'vehicle' && !u.site)
+    // (A squad's members each have their own at their feet, see ground/squadDraw.ts.)
+    const cars = shown.filter((u) => u.t.tier === 'vehicle' && !u.site && !u.t.ground?.squad)
     if (!cars.length) return
     ctx.fillStyle = 'rgba(8, 10, 14, 0.42)'
     ctx.beginPath()
@@ -3216,7 +3217,9 @@ export class Renderer {
       ctx.globalAlpha = sel ? 0.9 : 0.5
       ctx.lineWidth = 1.6 / z
       ctx.beginPath()
-      ctx.ellipse(u.x, u.y, Math.max(sw, sh) * 0.55 * k + 4 / z, Math.max(sw, sh) * 0.55 * k + 4 / z, 0, 0, Math.PI * 2)
+      // A squad's ring takes in its members wherever they stand.
+      const rr = t.ground?.squad && w.ground ? (groundKit()?.ring(u, z) ?? 0) + 3 / z : Math.max(sw, sh) * 0.55 * k + 4 / z
+      ctx.ellipse(u.x, u.y, rr, rr, 0, 0, Math.PI * 2)
       ctx.stroke()
       ctx.globalAlpha = 1
     }
@@ -3225,7 +3228,7 @@ export class Renderer {
     const alpha = building(u) ? 0.55 : t.kind === 'wing' && !atHome(w, u) ? 0.45 : 1
     if (u.site) this.drawSite(ctx, u, w, m, size, z)
     // A ground squad: its members, walking (ground/squadDraw.ts).
-    else if (t.ground?.squad && w.ground) groundKit()?.squad(ctx, u, z, z * canvasDpr(), alpha, this.clock)
+    else if (t.ground?.squad && w.ground) groundKit()?.squad(ctx, u, z, z * canvasDpr(), alpha, this.clock, rel)
     else if (m && st) {
       const zdpr = z * canvasDpr()
       // A walker steps through its poses as it goes.
