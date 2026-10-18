@@ -477,7 +477,10 @@ const groundLayer: Scene = {
       window.__groundLayer = { layer, view, frame: () => layer.draw(view, 1280, 720, 1, performance.now() / 1000) }
       ;(layer.ready ?? Promise.resolve()).then(() => (window.__groundLayerReady = true))
     })()`)
+    // Every texture and the trees' atlas in, then the stepped clock: the water moves with
+    // performance.now(), so on real time each run would draw it at a different moment.
     await settleUntil(page, `!!window.__groundLayerReady`)
+    await page.eval(`__perf.manual(7)`)
     const gl = await page.eval<boolean>(`window.__groundLayer.layer.gl`)
     await page.eval(`__perf.frames(10, () => window.__groundLayer.frame())`)
     await page.eval(`window.__glCount = { draws: 0, uploads: 0 }`)
