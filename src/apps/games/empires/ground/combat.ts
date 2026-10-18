@@ -170,7 +170,7 @@ export function engage(w: World, u: Unit): Engage {
     return fight(e)
   }
   // A plain move, building and gathering: no stopping for a fight (guns still fire on the way).
-  if ((o.k === 'move' && !o.attack) || o.k === 'construct' || o.k === 'gather' || o.k === 'mend') {
+  if ((o.k === 'move' && !o.attack) || o.k === 'construct' || o.k === 'gather' || o.k === 'mend' || o.k === 'assist') {
     u.target = 0
     return null
   }

@@ -67,6 +67,10 @@ export type Order =
    * deposits), carry each load to the nearest Command Center, and go back; on to the nearest other
    * field when it runs dry (ground/world.ts). */
   | { k: 'gather'; f: number }
+  /** Ground battles, engineers: assist engineer `id` of ours, as Age of Empires villagers do: work on
+   * the same site or building, gather the same field, and follow it on to its next job, until told
+   * otherwise. `job`: what it is helping with now (ground/world.ts), none while it only follows. */
+  | { k: 'assist'; id: number; job?: { k: 'construct'; id: number } | { k: 'gather'; f: number } }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
 export type Mods = {
@@ -1149,10 +1153,19 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
 }
 
 /** Give a ship an order now, or, queued, after the ones it already has (straight away if it has
- * none). An order given now drops anything queued. */
+ * none). An order given now drops anything queued. Gathering (a ground battle's engineers) never
+ * ends, so a queued order goes before it: an engineer gathering does the queued orders first, then
+ * goes back to its field. */
 export function issue(u: Unit, o: Order, queued = false) {
   if (queued && (u.order.k !== 'idle' || u.queue.length)) {
-    u.queue.push(o)
+    if (u.order.k === 'gather' && !u.queue.length) {
+      u.queue = [u.order]
+      u.order = o
+      u.target = o.k === 'attack' ? o.id : 0
+      return
+    }
+    if (u.queue[u.queue.length - 1]?.k === 'gather') u.queue.splice(u.queue.length - 1, 0, o)
+    else u.queue.push(o)
     return
   }
   u.order = o
@@ -1170,7 +1183,7 @@ export function issue(u: Unit, o: Order, queued = false) {
 export function lastStop(w: World, u: Unit): Pt {
   for (const o of [...u.queue].reverse().concat(u.order)) {
     if (o.k === 'move' || o.k === 'patrol' || o.k === 'area') return { x: o.x, y: o.y }
-    if (o.k === 'guard' || o.k === 'construct' || o.k === 'mend') {
+    if (o.k === 'guard' || o.k === 'construct' || o.k === 'mend' || o.k === 'assist') {
       const t = w.byId.get(o.id)
       if (t && !t.dead) return { x: t.x, y: t.y }
     }
@@ -2665,6 +2678,17 @@ export function cmdCancelGroundJob(w: World, owner: Owner, id: number): string |
   const at = w.byId.get(id)
   if (!w.ground || !at || at.dead || at.owner !== owner || !at.foot) return 'No factory of ours'
   return G().cancelJob(w, owner, at)
+}
+
+/** Ground battles: engineers `ids` of ours assist engineer `id` of ours (Order `assist`): they help
+ * with whatever it does and follow it on to its next job. */
+export function cmdAssist(w: World, owner: Owner, ids: number[], id: number, queued = false): string | null {
+  const lead = w.byId.get(id)
+  if (!w.ground || !lead || lead.dead || lead.owner !== owner || !isEngineer(lead.t)) return 'Only one of our engineers can be assisted'
+  const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t) && u.id !== id)
+  if (!crew.length) return 'Only engineers assist'
+  for (const u of crew) issue(u, { k: 'assist', id }, queued)
+  return null
 }
 
 export function cmdConstruct(w: World, owner: Owner, ids: number[], id: number, queued = false): string | null {

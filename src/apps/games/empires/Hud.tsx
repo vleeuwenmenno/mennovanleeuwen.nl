@@ -2254,6 +2254,11 @@ function orderText(w: World, u: Unit) {
     const t = w.byId.get(o.id)
     return t ? `${t.site ? 'Building' : 'Repairing'} the ${t.t.name}` : 'Building'
   }
+  // Ground engineers assisting another: what they help with, or following it.
+  if (o.k === 'assist') {
+    const t = o.job?.k === 'construct' ? w.byId.get(o.job.id) : undefined
+    return o.job?.k === 'gather' ? `Assisting: gathering kyber${u.gm?.drop ? ', hauling a load' : ''}` : t ? `Assisting: ${t.site ? 'building' : 'repairing'} the ${t.t.name}` : 'Assisting: following its engineer'
+  }
   if (o.k === 'mend') {
     const t = w.byId.get(o.id)
     return t ? `Repairing ${t.owner === u.owner ? '' : 'allied '}${t.t.name}` : 'Repairing'

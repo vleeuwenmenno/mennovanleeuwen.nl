@@ -52,6 +52,12 @@
 //    short it runs at made / used of its speed, to the tick; done, the factory stands at tier 2 with
 //    more hull and trains the tier 2 unit; research there (weapons) reaches the unit already out and
 //    the one trained after. Then a long AI run: it upgrades a factory and takes research.
+// 3g. An orders battle on Ashwater Crossing, seat 0 scripted (Republic), seat 1 the AI, checked the
+//    same way: one engineer is given a move, then Shift-queued a gather and two sites: it drives
+//    there, builds the two sites one after the other (a queued order goes before gathering, which
+//    never ends), then gathers. Another engineer is assisted by a third (Order `assist`) through a
+//    build, a repair and gathering: the helper works the same site, mends the same building and
+//    mines the same field, following it from job to job.
 // 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
 //    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
@@ -1017,6 +1023,121 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     w.events.length = 0
   }
   check('the AI upgrades a factory and takes research there', tiers >= 1 && techs >= 1, `${tiers} tier upgrades, ${techs} research done in 15 min`)
+}
+
+// --- 3g. The orders battle ------------------------------------------------------------------------------
+
+{
+  const make = (): Copy => ({ w: newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 64, credits: 6000 }), brains: [{ ...newBrain(1, 'medium'), peaceful: true }] })
+  const ticks = Math.round(Math.max(seconds, 240) / STEP)
+  const got: Record<string, [boolean, string]> = {}
+  const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
+  let home: Unit | undefined
+  let a = 0
+  let b = 0
+  let c = 0
+  let spot = { x: 0, y: 0 }
+  let site1 = 0
+  let site2 = 0
+  let site3 = 0
+  const built: number[] = []
+  const builtAt = new Map<number, number>()
+  let arrived = -1
+  let started1 = -1
+  let started2 = -1
+  let gatherAt = -1
+  let phase = 0
+  let phaseAt = 0
+  let helped = { build: 0, repair: 0, gather: 0, followed: 0 }
+  lockstep('orders battle', make, ticks, ({ w }, t, say) => {
+    home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
+    const order = (x: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(x) })
+    for (const e of w.events) if (e.k === 'built' && e.owner === 0) {
+      const s = w.units.find((u) => u.owner === 0 && u.t.id === e.unit && Math.abs(u.x - e.x) < 1 && Math.abs(u.y - e.y) < 1)
+      if (s) {
+        built.push(s.id)
+        builtAt.set(s.id, t)
+      }
+    }
+    w.events.length = 0
+    const A = w.byId.get(a)
+    const B = w.byId.get(b)
+    const C = w.byId.get(c)
+    // 1/6 s: two more engineers.
+    if (t === 5) {
+      a = w.units.find((u) => u.owner === 0 && u.t.id === R.engineer)!.id
+      b = w.nextId
+      say({ t, k: 'spawn', unit: R.engineer, owner: 0, x: home.x + 2 * TILE, y: home.y + 4.5 * TILE })
+      c = w.nextId
+      say({ t, k: 'spawn', unit: R.engineer, owner: 0, x: home.x - 2 * TILE, y: home.y + 4.5 * TILE })
+    }
+    // 1/3 s: A moves, then (Shift) gathers, then (Shift) puts up two sites.
+    if (t === 10 && A) {
+      spot = find(w, 0, R.supply, null, { x: home.x + 9 * TILE, y: home.y + 9 * TILE })!
+      order(cmd('move', [a], spot.x, spot.y, false, false))
+      const cl = w.crystals!.find((k) => k.left > 0 && w.ground!.fields[k.f] && Math.hypot(crystalAt(k).x - home!.x, crystalAt(k).y - home!.y) < 20 * TILE) ?? w.crystals!.find((k) => k.left > 0)!
+      order(cmd('gather', [a], crystalAt(cl).x, crystalAt(cl).y, true))
+      const s1 = find(w, 0, R.supply, null, { x: home.x - 9 * TILE, y: home.y + 8 * TILE })!
+      site1 = w.nextId
+      order(cmd('place', [a], R.supply, s1.x, s1.y, true, NaN))
+      const s2 = find(w, 0, R.generator, null, { x: home.x - 10 * TILE, y: home.y - 8 * TILE })!
+      site2 = w.nextId
+      order(cmd('place', [a], R.generator, s2.x, s2.y, true, NaN))
+      pass('Shift-queued orders go before gathering: move, the two sites, then gather', A.order.k === 'move' && A.queue.map((q) => q.k).join(',') === 'construct,construct,gather', `${A.order.k}; ${A.queue.map((q) => q.k).join(', ')}`)
+    }
+    if (A && arrived < 0 && t > 10 && A.order.k === 'construct') arrived = Math.hypot(A.x - spot.x, A.y - spot.y) < 3 * TILE ? t : -2
+    const S1 = w.byId.get(site1)
+    const S2 = w.byId.get(site2)
+    if (started1 < 0 && S1?.site?.started) started1 = t
+    if (started2 < 0 && S2?.site?.started) started2 = t
+    if (A && gatherAt < 0 && A.order.k === 'gather' && built.includes(site2)) gatherAt = t
+    // B and C: C assists B through a build, a repair and gathering.
+    if (!B || !C) return
+    const job = C.order.k === 'assist' ? C.order.job : undefined
+    if (phase === 0 && t === 15) {
+      const s3 = find(w, 0, R.research, null, { x: home.x + 10 * TILE, y: home.y - 9 * TILE })!
+      site3 = w.nextId
+      order(cmd('place', [b], R.research, s3.x, s3.y, false, NaN))
+      order(cmd('assist', [c], b, false))
+      phase = 1
+    }
+    if (phase === 1) {
+      if (job?.k === 'construct' && job.id === site3 && C.gm?.busy === site3 && B.gm?.busy === site3) helped.build++
+      if (built.includes(site3)) {
+        // The Command Center damaged (as the dev cheats would): B repairs it.
+        say({ t, k: 'hull', id: home.id, share: 0.5 })
+        order(cmd('construct', [b], home.id, false))
+        phase = 2
+        phaseAt = t
+      }
+    } else if (phase === 2) {
+      if (job?.k === 'construct' && job.id === home.id && C.gm?.busy === home.id) helped.repair++
+      if (home.hull >= home.hullMax - 0.5 || t > phaseAt + 1800) {
+        const cl = w.crystals!.find((k) => k.left > 0)!
+        order(cmd('gather', [b], crystalAt(cl).x, crystalAt(cl).y, false))
+        phase = 3
+        phaseAt = t
+      }
+    } else if (phase === 3) {
+      if (job?.k === 'gather' && B.order.k === 'gather' && job.f === B.order.f && (C.gm?.mine || C.gm?.drop)) helped.gather++
+      if (t > phaseAt + 900) {
+        // B drives off: C follows.
+        const far = find(w, 0, R.supply, null, { x: home.x - 14 * TILE, y: home.y })!
+        order(cmd('move', [b], far.x, far.y, false, false))
+        phase = 4
+        phaseAt = t
+      }
+    } else if (phase === 4 && B.order.k === 'idle' && Math.hypot(C.x - B.x, C.y - B.y) <= 4 * TILE && C.order.k === 'assist') helped.followed++
+  })
+  for (const [k, [ok, detail]] of Object.entries(got)) check(`orders battle: ${k}`, ok, detail)
+  check('orders battle: the queued engineer drives to its move first', arrived > 0, arrived > 0 ? `there at ${(arrived * STEP).toFixed(1)} s` : 'not there when it started building')
+  const done1 = builtAt.get(site1) ?? -1
+  check('orders battle: then builds the two sites one after the other', started1 >= arrived && done1 > 0 && started2 >= done1 && (builtAt.get(site2) ?? -1) > done1, `site 1 started ${(started1 * STEP).toFixed(1)} s, built ${(done1 * STEP).toFixed(1)} s; site 2 started ${(started2 * STEP).toFixed(1)} s, built ${((builtAt.get(site2) ?? 0) * STEP).toFixed(1)} s`)
+  check('orders battle: and gathers once the second is built', gatherAt > 0, gatherAt > 0 ? `${(gatherAt * STEP).toFixed(1)} s` : 'never')
+  check('orders battle: an assisting engineer builds the same site', helped.build > 30, `${helped.build} ticks working it together`)
+  check('orders battle: ...repairs the same building', helped.repair > 30, `${helped.repair} ticks`)
+  check('orders battle: ...gathers the same field', helped.gather > 30, `${helped.gather} ticks`)
+  check('orders battle: ...and follows it when it moves on', helped.followed > 0, `${helped.followed} ticks beside it`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

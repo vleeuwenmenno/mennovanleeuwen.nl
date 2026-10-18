@@ -802,6 +802,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     if (!c || !(c.left > 0) || !mySelection().some((u) => u.owner === me && isEngineer(u.t))) return null
     return { x: (c.c + 0.5) * 32, y: (c.r + 0.5) * 32 }
   }
+  /** A ground battle: our engineer `id` under the pointer, when our selection has other engineers that
+   * a right-click would send to assist it (Order `assist`). */
+  const assistHint = (id: number) => {
+    const u = id ? world.current.byId.get(id) : undefined
+    return u && world.current.ground && u.owner === me && isEngineer(u.t) && mySelection().some((s) => s.id !== u.id && isEngineer(s.t)) ? u.id : undefined
+  }
   /** Sends repair ships to repair `unit`; false (and says why) when it can't be done. */
   const repairOrder = (unit: Unit, medics: Unit[], queued = false) => {
     const why = order('mend', medics.map((u) => u.id), unit.id, queued)
@@ -919,6 +925,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // warship of ours finishes it), on our ruin of a yard rebuilds it; the rest of the selection
     // carries on as usual.
     const crew = ships.filter((u) => isEngineer(u.t))
+    // A ground battle: a right-click on another of our engineers makes the selected engineers assist
+    // it (help with what it does, and follow it on); the rest of the selection moves there.
+    if (crew.length && !attackMove && w.ground && unit && unit.owner === me && isEngineer(unit.t) && crew.some((u) => u.id !== unit.id)) {
+      assistOrder(crew.filter((u) => u.id !== unit.id), unit, queued)
+      const rest = ships.filter((u) => !isEngineer(u.t))
+      if (rest.length) order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
+      return
+    }
     if (crew.length && !attackMove) {
       const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < UNIT[r.unit].size * 0.45)
       // (An ally's damaged structure too: they weld it back for them.)
@@ -992,6 +1006,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
   }
 
+  /** Engineers `crew` assist engineer `lead` of ours (a ground battle). */
+  const assistOrder = (crew: Unit[], lead: Unit, queued: boolean) => {
+    const why = order('assist', crew.map((u) => u.id), lead.id, queued)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return
+    }
+    renderer.current.ping(lead.x, lead.y, '#7dffa0')
+    sound.order('move', myFaction, 'fighter')
+  }
   /** Engineers `crew` gather kyber at the crystal field at `at` (a ground battle). */
   const gatherAt = (crew: Unit[], at: Pt, queued: boolean) => {
     const why = order('gather', crew.map((u) => u.id), at.x, at.y, queued)
@@ -1073,7 +1098,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     renderer.current.ping(at.x, at.y, '#ffc86e')
     sound.constructing()
     toast(`${placeType(pl.unit)?.name ?? 'The site'}: the engineers are on their way`, 'info')
-    setMode('normal')
+    // A ground battle: Shift keeps placing, so several sites go down in a row (the engineers work them
+    // in order).
+    if (!queued || !world.current.ground) setMode('normal')
   }
   /** Touch (the action wheel): start placing a yard with its spot already pinned at `at`. */
   const pinYard = (at: Pt, unit = nextYard()) => {
@@ -1338,6 +1365,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // selected and this one hurt: they repair it (both, on a station).
       const crew = ships.filter((u) => isEngineer(u.t))
       const medics = medicsFor(unit)
+      // A ground battle: another of our engineers, assisted by the selected ones.
+      const helpers = w.ground && isEngineer(unit.t) ? crew.filter((u) => u.id !== unit.id) : []
+      if (helpers.length) items.push(it('assist', 'Assist', 'engineer', () => assistOrder(helpers, unit, shiftOf())))
       if (crew.length && !cantConstruct(w, me, unit))
         items.push(it('construct', unit.site ? 'Build it' : unit.rush ? 'Finish it' : 'Repair it', 'slip', () => {
           const why = order('construct', crew.map((u) => u.id), unit.id, shiftOf())
@@ -1833,6 +1863,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         escortHint: mode.current === 'guard' ? escortHint(h.unit) : undefined,
         repairHint: mode.current === 'normal' && !touchLast.current ? repairHint(h.unit) : undefined,
         mineHint: mode.current === 'normal' && !touchLast.current ? mineHint(h.crystal) : null,
+        assistHint: mode.current === 'normal' && !touchLast.current ? assistHint(h.unit) : undefined,
         buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
@@ -1847,6 +1878,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // The mining cursor, over a kyber crystal our selected engineers would mine on a right-click.
       const mining = !!v.mineHint
       if (canvas.current && canvas.current.classList.contains('is-mine') !== mining) canvas.current.classList.toggle('is-mine', mining)
+      // The assist cursor, over one of our engineers our selected engineers would assist.
+      const assisting = v.assistHint !== undefined
+      if (canvas.current && canvas.current.classList.contains('is-assist') !== assisting) canvas.current.classList.toggle('is-assist', assisting)
       sound.ambience(paused.current ? 0 : dt)
       miniT -= dt
       const hideMine = deploying.current && !placed.current ? me : -1
@@ -2784,7 +2818,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                   : ui.mode === 'place' ? `${(placeType(placing.current?.unit ?? '') ?? yardOf(myFaction)).name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
             {ui.mode === 'place' && w.ground
-              ? touchUi ? 'Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
+              ? touchUi ? 'Shift on: after the engineers\' other orders, and keep placing more. ✕ to cancel.' : <>Shift-click: after the engineers' other orders, and keep placing more. <kbd>Esc</kbd> or right-click to cancel.</>
               : ui.mode === 'place'
               ? touchUi ? 'Turn it with the buttons. Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Wheel or <kbd>[</kbd> <kbd>]</kbd> turn it (Shift: finer), or drag to aim its mouth. Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
               : touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
