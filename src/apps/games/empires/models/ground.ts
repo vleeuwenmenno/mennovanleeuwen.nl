@@ -18,6 +18,8 @@ import type { AnyDesign, Model, Part } from './types.ts'
 // (its door at +y) and is drawn unturned; a vehicle with sim heading h is drawn turned by h + π/2.
 // A ground unit's turrets (hardpoints with a weapon, its data's) are mounts placed on its model as on
 // a ship's, each in a socket, turning on their own; a weapon fixed along the nose has no mount.
+// Designs that walk (a squad's members, walkers) give their poses in walking order (ModelSpec
+// `walk`) and their legs as parts with a `pose`; the paint cache keeps a look per pose.
 
 /** One ground design: its box in model units (100 on the long side) and its parts. */
 export type GroundModel = { w: number; h: number; spec: (c: { w: number; h: number }) => ModelSpec }
@@ -28,8 +30,21 @@ const BY_FACTION: Record<FactionId, GroundModels> = { republic, droid, swarm }
 const DEFS: Record<string, { faction: FactionId; def: GroundModel }> = {}
 for (const f of Object.keys(BY_FACTION) as FactionId[]) for (const [id, def] of Object.entries(BY_FACTION[f])) DEFS[id] = { faction: f, def }
 
-/** Every ground type id with a model. */
+/** Every ground type id with a model (and the squads' members, by their model id). */
 export const groundModelIds = () => Object.keys(DEFS)
+
+const members = new Map<string, Model>()
+/** The model of a squad's member (GroundSpec `squad`: a design here by its id, in its faction's
+ * palette), built on first use; null when there is none. */
+export function memberModel(id: string): Model | null {
+  let m = members.get(id)
+  if (!m) {
+    const d = DEFS[id]
+    if (!d) return null
+    members.set(id, (m = assemble(`member:${id}`, d.faction, d.def)))
+  }
+  return m
+}
 
 /** Builds the model for ground unit type `id` (throws when it has none); with its type `t`, its
  * turrets on it, and drawn with the design it borrows when it has none of its own (GroundSpec `look`). */
@@ -80,6 +95,7 @@ function assemble(key: string, faction: FactionId, def: GroundModel, t?: UnitTyp
     core: spec.core,
     scorch: scorchSpots(parts, w, h, seed),
     seed,
+    ...(spec.walk ? { walk: spec.walk } : {}),
   }
 }
 

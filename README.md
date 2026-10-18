@@ -2740,6 +2740,14 @@ brood chambers) drawn in [`swarm/mounts.ts`](src/apps/games/empires/models/swarm
   Big flagship at that size is about half a megabyte and a full turn paints 32, so caching it
   filled about 53 MB of a 48 MB phone budget (`memTuning` in paint.ts; `legacy` puts the old 720-pixel rule back, to
   measure against).
+- **Walk cycles** (ground squads' members and walkers): a model that walks gives its poses in
+  walking order (`walk` in its spec, 2 to 4 poses, pose 0 its rest pose) and its legs as parts with
+  a `pose`, shown only in that pose. The pose is one more key of the hull bitmaps (with size, light
+  heading and damage), so a walking unit draws a cached bitmap like any other and never repaints
+  as it steps. A unit steps through its poses by how far it has walked, so faster units step faster,
+  and holds its rest pose standing. Ships, stations and vehicles declare no poses and paint as
+  before. In the ground-squads perf scene (about a hundred members walking and fighting) the walk
+  cycles take 79 bitmaps and 0.72 MB of the cache.
 - **Damage:** scorch marks spread as the hull drops (four levels, with burnt-through holes at the
   worst); parts come off at their hull share and fly away tumbling and smoking; wrecked mounts
   show broken. All of it follows from the battle's own state.
@@ -3649,17 +3657,34 @@ Scout scouts: the enemy's start first, then the map's spawns and crystal fields.
 more at a time, go after enemy engineers they see, else the enemy buildings they know of, unarmed
 ones first and armed ones too once there are four.
 
+**Squads** ([`ground/squad.ts`](src/apps/games/empires/ground/squad.ts),
+[`ground/squadDraw.ts`](src/apps/games/empires/ground/squadDraw.ts)): foot soldiers (trooper
+squads, battle droid squads, bug packs) are one unit each, a squad of a few members (GroundSpec
+`squad`: how many, the member's model and size, their spacing). The members stand in a loose
+formation round the unit's middle that turns and walks with it, each stepping through its walk
+cycle, and turn to face what the squad fights. The hull is the squad's: a member falls for every
+share of it lost (a squad of five loses one at 80%, 60% and so on), so usually one at a time,
+and the last one falls with the unit. Each member still standing fires the
+squad's weapon from where it stands (five troopers, five bolts and five muzzle flashes), so a squad
+with fewer members fires less; a beam or a spray pours each member's share. A fallen member lies
+where it fell, dark, with a puff of dust, and fades after a few seconds (on screen only). Squads are
+light armour, path on size class 1, and their member count is in the battle's hash and snapshots.
+When zoomed far out a squad's members grow and spread so it stays about 24 pixels across.
+
 **The weapon test** (dev builds only, the F9 cheat panel's *Weapon test* in a ground battle,
 [`ground/testWeapons.ts`](src/apps/games/empires/ground/testWeapons.ts)) spawns one test unit per
 weapon for us and for the first enemy at the camera, in two rows facing each other (artillery
 further back), and sends them at each other: every weapon's effects side by side. The test units
 are each faction's Scout with the weapon on a turret, medium armour and 600 hull, and appear in no
-lobby or Codex.
+lobby or Codex. The panel's *Squad test* spawns three test squads of ours and a test walker against
+three of the first enemy's at the camera: a trooper squad (five troopers with pulse rifles), a
+battle droid squad (five, pulse blasters) or a swarmling pack (six, spit bolts), each its faction's
+tier 1 foot unit as planned, and a two-legged walker with a pulse turret on its back.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), each in step across two copies, a snapshot thaw and a replay; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
-pnpm check:ground-models # every ground unit has a model through the model lookup, and every crystal cluster shape one, sound and the same every time
+pnpm check:ground-models # every ground unit (the dev test squads and walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
 ```
 
@@ -3752,7 +3777,9 @@ no React update loop, few commits); a ground battle on Dustfall Ridge on the bat
 builds, as the check's server is) with three dozen vehicles of both sides driving across the low
 ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
 canvas's: the ground layer is a canvas of its own under it); the same battle with the dev weapon
-test spawned three times over, 42 test units fighting with all seven ground weapons; the WebGL2 ground layer alone on
+test spawned three times over, 42 test units fighting with all seven ground weapons; the same battle
+with the dev squad test, 20 test squads and two walkers walking and fighting (it also counts the
+bitmaps cached, walk poses included); the WebGL2 ground layer alone on
 Ashwater Crossing, panning over the river with the water moving (it counts its own GL draw calls
 and texture uploads, which the canvas counters don't see); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and

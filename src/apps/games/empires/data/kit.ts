@@ -181,6 +181,13 @@ export type GroundSpec = {
   armour?: Armour
   /** The ground unit whose model it is drawn with, when not its own (the dev weapon test's units). */
   look?: string
+  /**
+   * A squad (troopers, battle droids, a pack of bugs): one unit of `n` members in a loose formation
+   * `spacing` world units apart, each drawn as model `member` (models/<faction>/ground.ts), `size`
+   * world units long, walking. The hull is the squad's: members fall one by one as it drops, and
+   * each member left fires the unit's weapons (ground/squad.ts).
+   */
+  squad?: { n: number; member: string; size: number; spacing: number }
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }

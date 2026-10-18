@@ -11,10 +11,15 @@
 //    are mostly hull, so neither is drawn as a speck on its box.
 // 4. The kyber crystal clusters' shapes (models/kyber.ts) build and are sound the same way, one for
 //    every shape the sim lays out (ground/world.ts CRYSTAL_SHAPES).
+// 5. Models that walk (squads' members, walkers; Model `walk`): 2 to 4 poses, each in the walk with
+//    legs of its own, the rest pose (0) with its own legs, and nothing posed outside the walk. The
+//    dev test squads and walker (ground/testWeapons.ts) are checked with the rest, each squad's
+//    member model in its own faction's folder.
 
-import { UNITS } from '../src/apps/games/empires/data.ts'
+import { UNIT } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
 import { buildGroundModel, crystalModel, crystalShapes, groundModelIds } from '../src/apps/games/empires/models/ground.ts'
+import { registerSquadTest } from '../src/apps/games/empires/ground/testWeapons.ts'
 import { CRYSTAL_SHAPES } from '../src/apps/games/empires/ground/world.ts'
 import type { Model } from '../src/apps/games/empires/models/types.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
@@ -28,13 +33,15 @@ const ok = (cond: boolean, msg: string) => {
   }
 }
 
-const real = UNITS.filter((t) => !!t.ground)
+registerSquadTest()
+const real = Object.values(UNIT).filter((t) => !!t.ground)
 const groundModel = (id: string) => modelFor(real.find((t) => t.id === id)!)
-// 1. Coverage both ways.
+// 1. Coverage both ways (a squad's model is its member's).
 for (const t of real) ok(!!groundModel(t.id), `${t.id} (${t.name}) has no model`)
+const memberOf = new Map(real.filter((t) => t.ground?.squad).map((t) => [t.ground!.squad!.member, t]))
 for (const id of groundModelIds()) {
-  const t = real.find((u) => u.id === id)
-  ok(!!t, `model ${id} is for no ground unit type`)
+  const t = real.find((u) => u.id === id) ?? memberOf.get(id)
+  ok(!!t, `model ${id} is for no ground unit type or squad member`)
   if (t) ok(buildGroundModel(id).faction === t.faction, `model ${id} is in ${buildGroundModel(id).faction}'s folder, the unit is ${t.faction}'s`)
 }
 
@@ -64,20 +71,32 @@ function sound(label: string, build: () => Model, minFill: number, name: string)
     for (const d of p.details ?? []) ok(d.pts.length > 0 && finite(d.pts), `${t.id}: a detail of ${p.id} is broken`)
   })
   ok(m.parts.length >= 5, `${t.id}: only ${m.parts.length} parts`)
-  // 3. How much of its box it fills.
+  // 5. Poses.
+  const posed = m.parts.filter((p) => p.pose !== undefined)
+  if (m.walk || posed.length) {
+    const used = new Set(m.walk ?? [])
+    ok(!!m.walk && used.size >= 2 && used.size <= 4, `${t.id}: walks in ${used.size} poses (2 to 4)`)
+    for (const q of used) ok(posed.some((p) => p.pose === q), `${t.id}: pose ${q} has no legs of its own`)
+    ok(posed.some((p) => p.pose === 0), `${t.id}: no rest pose (0) of its own`)
+    ok(posed.every((p) => p.pose === 0 || used.has(p.pose!)), `${t.id}: a part in a pose it never walks in`)
+  }
+  // 3. How much of its box it fills (standing).
+  const standing = m.parts.filter((p) => p.pose === undefined || p.pose === 0)
   const N = 40
   let hit = 0
   for (let j = 0; j < N; j++)
     for (let i = 0; i < N; i++) {
       const x = ((i + 0.5) / N - 0.5) * m.w
       const y = ((j + 0.5) / N - 0.5) * m.h
-      if (m.parts.some((p) => p.pts.length >= 3 && inPart(p, x, y))) hit++
+      if (standing.some((p) => p.pts.length >= 3 && inPart(p, x, y))) hit++
     }
   const fill = hit / (N * N)
   ok(fill >= minFill, `${t.id}: fills only ${Math.round(fill * 100)}% of its box`)
   console.log(`  ${t.id.padEnd(14)} ${String(m.parts.length).padStart(3)} parts, fills ${Math.round(fill * 100)}% of its box (${name})`)
 }
-for (const t of real) if (groundModel(t.id)) sound(t.id, () => buildGroundModel(t.id), t.ground?.foot ? 0.55 : 0.3, t.name)
+for (const t of real) if (groundModel(t.id) && !t.ground?.squad) sound(t.id, () => buildGroundModel(t.id), t.ground?.foot ? 0.55 : 0.3, t.name)
+// A squad's member, alone on its own box.
+for (const [id, t] of memberOf) sound(id, () => buildGroundModel(id), 0.3, `a member of ${t.name}`)
 
 // 4. The crystal clusters.
 ok(crystalShapes() === CRYSTAL_SHAPES, `the sim lays out ${CRYSTAL_SHAPES} cluster shapes, there are ${crystalShapes()} models`)

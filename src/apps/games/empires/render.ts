@@ -570,6 +570,8 @@ export class Renderer {
     for (const e of events) {
       if (e.k === 'fire') {
         if (e.kind === 'turbo') this.add({ kind: 'muzzle', x: e.x, y: e.y, life: 0.12, size: 10, color: FACTIONS[w.players[e.owner].faction].bolt })
+        // On the ground every gun flashes as it fires (a squad's from each member).
+        else if (w.ground && e.light) this.add({ kind: 'muzzle', x: e.x, y: e.y, life: 0.08, size: 5, color: FACTIONS[w.players[e.owner].faction].bolt })
       } else if (e.k === 'hit') {
         if (e.shield) {
           this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.25, size: 3, grow: 30, color: FACTIONS[w.players[e.owner].faction].glow })
@@ -817,6 +819,8 @@ export class Renderer {
     if (ground) {
       // Kyber crystal clusters: objects on the ground, shrinking as they're mined (under the ghost).
       ground.crystals(ctx, w, z, zdpr, { x0: left, y0: top, x1: right, y1: bottom }, view.me, relColor(w, view.me, view.me))
+      // Squad members that fell, lying where they fell (under the units).
+      ground.bodies(ctx, zdpr, this.clock, { x0: left, y0: top, x1: right, y1: bottom })
       const gp = view.groundPlace
       if (gp) {
         ground.ghost(ctx, w, view.me, gp.unit, gp.p, z)
@@ -1812,7 +1816,9 @@ export class Renderer {
       this.tracked.delete(id)
       const u = tr.u
       if (!u.dead || !tr.vis || !this.kills.some((q) => Math.abs(q.x - u.x) < 1 && Math.abs(q.y - u.y) < 1)) continue
-      if (BREAK_WEIGHTS[u.t.tier]) this.deaths.push({ x: u.x, y: u.y, det: tr.det, at: this.clock })
+      // A ground squad's last members fall where they stood (ground/squadDraw.ts).
+      if (u.t.ground?.squad) groundKit()?.fell(u, this.clock)
+      else if (BREAK_WEIGHTS[u.t.tier]) this.deaths.push({ x: u.x, y: u.y, det: tr.det, at: this.clock })
       else this.fx.shatter(tr.m, u.t.tier, u.x, u.y, u.a + Math.PI / 2, u.t.size, Math.cos(u.a) * u.v, Math.sin(u.a) * u.v, u.id, hullState(tr.m, u, u.t.tier))
     }
     const listed = new Set<number>()
@@ -3218,9 +3224,13 @@ export class Renderer {
     // A defense wing craft far from its station fights at a fraction of its strength: drawn faded.
     const alpha = building(u) ? 0.55 : t.kind === 'wing' && !atHome(w, u) ? 0.45 : 1
     if (u.site) this.drawSite(ctx, u, w, m, size, z)
+    // A ground squad: its members, walking (ground/squadDraw.ts).
+    else if (t.ground?.squad && w.ground) groundKit()?.squad(ctx, u, z, z * canvasDpr(), alpha, this.clock)
     else if (m && st) {
       const zdpr = z * canvasDpr()
-      drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha, shadow })
+      // A walker steps through its poses as it goes.
+      const posed = m.walk && w.ground ? { ...st, pose: groundKit()?.pose(u, m, this.clock) ?? 0 } : st
+      drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, posed, { alpha, shadow })
       if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha, u.rush?.parts)
       if (u.rush) this.drawScaffolds(ctx, u, m, size, z)

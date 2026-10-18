@@ -197,6 +197,16 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
     ctx.toast('Weapon test: the seven ground weapons, ours against theirs', 'info')
     redraw()
   }
+  /** Ground battles: squads and a walker walking and fighting (ground/testWeapons.ts), at the camera. */
+  const squadTest = async () => {
+    const { spawnSquadTest } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnSquadTest(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Squad test: our squads and a walker against theirs', 'info')
+    redraw()
+  }
   const spawnNow = (at: Pt) => {
     const f = form.current
     const world = ctx.world()
@@ -377,6 +387,9 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
             <div className="ew-dev-line">
               <button className="ew-chip" onClick={() => void weaponTest()} data-tip="Ground battles: test units carrying each of the seven ground weapons, ours against the first enemy's, at the camera">
                 Weapon test
+              </button>
+              <button className="ew-chip" onClick={() => void squadTest()} data-tip="Ground battles: three test squads of ours and a walker against three of the first enemy's, at the camera">
+                Squad test
               </button>
             </div>
           )}

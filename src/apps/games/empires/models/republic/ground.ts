@@ -1,4 +1,4 @@
-import { along, bevel, box, capsule, chamfer, circle, part, sym, treads } from '../kit.ts'
+import { along, bevel, box, capsule, chamfer, circle, part, stride, sym, treads } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -195,4 +195,59 @@ export const GROUND: GroundModels = {
       ],
     }),
   },
+
+  // A trooper, one member of a squad (GroundSpec `squad`): white armour, the T visor of the helmet,
+  // a backpack, a rifle held forward in both hands. It walks: standing, its boots show under it;
+  // mid-stride one leg is out in front and the other behind (poses 1 and 2).
+  'r-gm-trooper': {
+    w: 76,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...stride('leg', 10, 0, [-20, -20], [-42, 26], 7, 'hull2', 'dark'),
+        part('torso', chamfer(0, 0, 46, 32, 8), 'hull', 3, { lift: 6, details: [{ k: 'shape', pts: box(0, -8, 30, 4), tone: 'accent' }] }),
+        part('pack', box(0, 17, 28, 14), 'hull2', 4, { lift: 7, details: [{ k: 'line', pts: [[-10, 17], [10, 17]], minPx: 40 }] }),
+        ...sym(part('shoulder', circle(-23, -2, 10, 14), 'hull', 4, { lift: 7, sphere: true })),
+        part('armL', capsule([-20, -6], [0, -30], 5, 4), 'hull', 5, { lift: 8 }),
+        part('armR', capsule([20, -6], [10, -28], 5, 4), 'hull', 5, { lift: 8 }),
+        part('rifle', capsule([7, -12], [7, -48], 3.4, 2.6), 'dark', 6, { lift: 9 }),
+        part('helmet', circle(0, -2, 14, 18), 'hull', 7, {
+          lift: 11,
+          sphere: true,
+          details: [{ k: 'shape', pts: [[-8, -13], [8, -13], [8, -9], [2, -9], [2, -3], [-2, -3], [-2, -9], [-8, -9]], tone: 'dark' }],
+        }),
+      ],
+    }),
+  },
+  // The dev walker test (ground/testWeapons.ts): a two-legged scout walker, its cockpit on two long
+  // legs with broad feet, a turret on its back; its feet step out in turn as it walks.
+  'r-gt-walker': {
+    w: 80,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...[0, 1, 2].flatMap((pose) => {
+          const fy = (side: number) => (pose === 0 ? 4 : pose === 1 ? (side < 0 ? -30 : 32) : side < 0 ? 32 : -30)
+          return [-1, 1].flatMap((side) => [
+            part(`foot${side < 0 ? 'L' : 'R'}${pose}`, chamfer(side * 28, fy(side), 20, 24, 6), 'hull2', 1, { lift: 2, pose, details: [{ k: 'line', pts: [[side * 28 - 6, fy(side) - 6], [side * 28 + 6, fy(side) - 6]], minPx: 50 }] }),
+            part(`strut${side < 0 ? 'L' : 'R'}${pose}`, capsule([side * 24, 0], [side * 28, fy(side)], 4.5, 3.5), 'metal', 2, { lift: 8, pose }),
+          ])
+        }),
+        ...sym(part('hip', circle(-24, 0, 8, 14), 'hull2', 3, { lift: 12, sphere: true })),
+        part('body', chamfer(0, -2, 40, 50, 10), 'hull', 4, {
+          lift: 14,
+          facets: bevel(0, -2, 40, 50, 6),
+          details: [
+            { k: 'shape', pts: box(0, -20, 26, 5), tone: 'accent' },
+            { k: 'shape', pts: box(0, -27, 18, 4), tone: 'glass' },
+          ],
+        }),
+      ],
+    }),
+  },
 }
+

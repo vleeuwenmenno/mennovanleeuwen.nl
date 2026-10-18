@@ -1,4 +1,4 @@
-import { arcBand, along, box, capsule, circle, ngon, part, rimFacets, sym, treads } from '../kit.ts'
+import { arcBand, along, box, capsule, chamfer, circle, ngon, part, rimFacets, stride, sym, treads } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -163,6 +163,30 @@ export const GROUND: GroundModels = {
         }),
         part('eye', circle(0, -14, 5, 14), 'glass', 5, { lift: 15, details: [{ k: 'lights', pts: [[0, -14]], r: 2, tone: 'ember' }] }),
         part('antenna', capsule([8, 4], [16, 18], 1, 0.7), 'metal', 5, { lift: 16 }),
+      ],
+    }),
+  },
+  // A battle droid, one member of a squad (GroundSpec `squad`): a thin tan frame, its long head
+  // jutting forward, a backpack, a blaster held out in front. It walks on long thin legs (poses 1
+  // and 2 mid-stride).
+  'd-gm-droid': {
+    w: 50,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...stride('leg', 8, 6, [-14, -14], [-40, 36], 4.5, 'hull2', 'metal'),
+        part('torso', chamfer(0, 6, 34, 20, 6), 'trim', 3, { lift: 6, details: [{ k: 'line', pts: [[-12, 6], [12, 6]], minPx: 40 }] }),
+        part('pack', box(0, 20, 20, 12), 'trim', 4, { lift: 7, details: [{ k: 'shape', pts: box(0, 20, 12, 4), tone: 'hull2' }] }),
+        part('armL', capsule([-16, 2], [-2, -28], 3.6, 3), 'trim', 5, { lift: 8 }),
+        part('armR', capsule([16, 2], [8, -24], 3.6, 3), 'trim', 5, { lift: 8 }),
+        part('blaster', capsule([4, -12], [4, -46], 2.8, 2.2), 'metal', 6, { lift: 9 }),
+        part('neck', capsule([0, 4], [0, -6], 3, 3), 'hull2', 6, { lift: 9 }),
+        part('head', capsule([0, -4], [0, -30], 6.5, 4.5), 'trim', 7, {
+          lift: 11,
+          details: [{ k: 'shape', pts: circle(-3.5, -9, 1.6, 8), tone: 'dark' }, { k: 'shape', pts: circle(3.5, -9, 1.6, 8), tone: 'dark' }],
+        }),
       ],
     }),
   },

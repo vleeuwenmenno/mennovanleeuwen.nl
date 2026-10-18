@@ -1,5 +1,6 @@
 import type { MapDef } from './maps.ts'
-import type { Owner, World } from './sim.ts'
+import type { Owner, Unit, World } from './sim.ts'
+import type { Model } from './models/types.ts'
 import type { GroundLayer } from './ground/types.ts'
 import type { GroundPlacement, KnownBuilding } from './ground/world.ts'
 
@@ -43,6 +44,15 @@ export type GroundKit = {
   /** The ground weapons' shots, beams, sprays and burns (ground/effects.ts), in world coordinates;
    * `clock`: the screen's seconds, for flicker. */
   effects(ctx: CanvasRenderingContext2D, w: World, me: Owner, zoom: number, clock: number): void
+  /** A squad's members (GroundSpec `squad`, ground/squadDraw.ts) where they stand, walking; `zdpr`:
+   * device pixels per world unit; `clock`: the screen's seconds. */
+  squad(ctx: CanvasRenderingContext2D, u: Unit, zoom: number, zdpr: number, alpha: number, clock: number): void
+  /** The pose a walker (a vehicle whose model walks, Model `walk`) is in now. */
+  pose(u: Unit, m: Model, clock: number): number
+  /** A squad we saw was destroyed: its last members fall. */
+  fell(u: Unit, clock: number): void
+  /** Fallen squad members lying where they fell, fading (under the units). */
+  bodies(ctx: CanvasRenderingContext2D, zdpr: number, clock: number, box: { x0: number; y0: number; x1: number; y1: number }): void
 }
 
 let kit: GroundKit | null = null
