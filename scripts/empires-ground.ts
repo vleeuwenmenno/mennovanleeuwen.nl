@@ -80,7 +80,7 @@ const check = (what: string, ok: boolean, detail = '') => {
 }
 
 // The checks' own test units (a vehicle of each size class, a small building).
-import { TIER1, TIER2_TEST } from './ground-test-units.ts'
+import { TIER1 as TIER1_PAIRS, TIER2_TEST } from './ground-test-units.ts'
 
 // --- 1. Sources -------------------------------------------------------------------------------------
 
@@ -450,7 +450,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const aiCenters = ai.filter((u) => u.t.id === S.center && !u.site).length
   const aiEngs = ai.filter((u) => u.t.id === S.engineer).length
   check('building battle: the AI trained engineers and expanded to a second Command Center', aiCenters >= 2 && aiEngs >= 3, `${aiCenters} Hive Nexuses, ${aiEngs} Shaper drones`)
-  check('building battle: the AI built nothing but engineers, Command Centers, supply, power, research, factories and their units, and Scouts', ai.every((u) => [S.center, S.engineer, S.supply, 's-g-generator', 's-g-research', 's-g-scout', 's-g-brood', 's-g-nest', ...TIER1.swarm].includes(u.t.id)))
+  check('building battle: the AI built nothing but engineers, Command Centers, supply, power, research, factories and their units, and Scouts', ai.every((u) => [S.center, S.engineer, S.supply, 's-g-generator', 's-g-research', 's-g-scout', 's-g-brood', 's-g-nest', ...TIER1_PAIRS.swarm].includes(u.t.id)))
   check('building battle: each side knows where the other started', !!w.known?.[0].some((k) => k.owner === 1) && !!w.known?.[1].some((k) => k.owner === 0))
   console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}`)
 }
@@ -745,7 +745,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
   const bad: Record<string, number> = {}
   const miss = (k: string) => (bad[k] = (bad[k] ?? 0) + 1)
-  const [, raider] = TIER1.republic
+  const [, raider] = TIER1_PAIRS.republic
   const vt = UNIT[R.vfactory]
   // For the tier rule and unknown ids: a tier 2 unit and an id nobody defines, on the factory's list.
   const trainsWas = vt.ground!.trains!
@@ -860,7 +860,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     if (t > 240 / STEP) worst = Math.min(worst, w.players[1].power?.ratio ?? 1)
   }
   const ai = w.units.filter((u) => !u.dead && u.owner === 1)
-  const [foot, vehicle] = TIER1.droid
+  const [foot, vehicle] = TIER1_PAIRS.droid
   const n = (id: string) => ai.filter((u) => u.t.id === id && !u.site).length
   check('the AI builds a foot factory and a vehicle factory', n('d-g-botfactory') >= 1 && n('d-g-foundry') >= 1, `${n('d-g-botfactory')} Bot Factories, ${n('d-g-foundry')} Vehicle Foundries`)
   check('the AI trains a mix of both factories\' units', n(foot) >= 1 && n(vehicle) >= 1, `${n(foot)} ${foot}, ${n(vehicle)} ${vehicle}`)
