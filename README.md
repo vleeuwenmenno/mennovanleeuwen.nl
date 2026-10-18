@@ -3715,6 +3715,27 @@ turns on its hull. The damage table needs no change for squads: they are light a
 weapons and (later) swarm rockets and sprays, the anti-swarm weapons, cut them down, and rockets
 and shells, the anti-armour ones, do little. Splash hits a squad once, as one unit.
 
+**Tier 2 units** are the anti-swarm units, trained once a factory reaches tier 2 (`ground.tier: 2`;
+the factory upgrades are the economy side's): medium size and armour (the Repeater squad stays
+light, as squads do), more parts, a turret that turns on its own on most, and weapons that hurt
+groups: splash, rocket salvos and spray. They cost, take and use about twice what tier 1 does (pop
+2). In fights of equal kyber (about 1,200 a side) each keeps about 0.2 to 0.8 more of its kyber
+than the tier 1 unit it fights (the Hailstorm only breaks even with the Razor, which gets inside
+its minimum range), except against the Racer, whose spine darts bite into their armour and beat all
+but the Repeater squad by about half; together the six beat a crowd of tier 1 twice their number.
+
+| Faction | Unit | Factory | Hull | Cost, time | Speed | Weapons |
+| --- | --- | --- | --- | --- | --- | --- |
+| Republic | Repeater squad: four heavy troopers with ammunition drums | Barracks | 520 (light) | 220, 22 s | 60 | Rapid pulse cannons (2.2 each a trooper, 6 tiles, 0.3 s) and frag grenades (9, lobbed 1.5 to 6 tiles, splash 1.25 tiles, 4 s) |
+| Republic | Hailstorm carrier: a white tracked hull | Vehicle Factory | 700 | 300, 28 s | 80 | Airburst artillery in a turret (40, 3 to 15 tiles, splash 2 tiles, 3 s), firing at what allies see |
+| Confederacy | Salvo droid: a two-legged walker with a rocket pod on each shoulder | Bot Factory | 600 | 220, 22 s | 62 | Two swarm rocket pods, fixed (4 rockets of 5 each, 8 tiles, 3.6 s) |
+| Confederacy | Breaker tank: a broad grey tracked hull | Vehicle Foundry | 760 | 300, 28 s | 78 | Swarm rocket battery in a turret (8 rockets of 6, 9 tiles, splash 1.25 tiles, 4.4 s) |
+| Swarm | Spewer: a squat six-legged beast with a glowing maw | Brood Chamber | 600 | 220, 22 s | 74 | Acid spray cone (9 a second, 3 tiles, burns) |
+| Swarm | Spore carrier: a four-legged beast with a spore sac turret | Vehicle Nest | 720 | 290, 27 s | 78 | Spore swarm in a turret (8 spores of 5.5, 9 tiles, splash 1.25 tiles, 4 s) |
+
+The Repeater squad, the Salvo droid, the Spewer and the Spore carrier walk; the Hailstorm and the
+Breaker roll on tracks.
+
 **Tier 3 units** are the heavy units of the factories (Menno: "tier 3 is the big boys"; GroundSpec
 `tier: 3`, so a factory must reach tier 3 to train them): big hulls on size class 2 or 3, two to
 three times a tier 1 vehicle's size, slow, heavy armour (the Lancer team stays light, but tough),
@@ -3733,11 +3754,10 @@ their walk poses.
 | Swarm | Behemoth: a huge six-legged beast, a bile mortar grown into its back | Vehicle Nest | 1,700 | 420, 44 s | 40 | 3 | Bile artillery in a turret on its back (85, 20 tiles, 4.5 s, splash) and a bite (16, close in) |
 
 In the counter loop they beat the anti-swarm units (pulse, swarm rockets, sprays, airburst shells all
-do little to heavy armour) and lose to massed fast units with anti-armour weapons: at equal kyber,
-on open ground, every one of them beats stand-ins for the tier 2 anti-swarm units (medium armour,
-spray, swarm rockets, rapid pulse or airburst) except where its own weak spot shows (sprays get under
-the Behemoth's mortar, and sprays and rapid pulse shred the light Lancers), and every one loses to
-Racers (`check:ground` fights it). The Lancers are the anti-armour squad: they beat every other tier
+do little to heavy armour) and lose to massed fast units with anti-armour weapons: at equal kyber
+(about 1,200 a side), on open ground, they win 34 of their 36 fights against the six tier 2 units
+(the Repeater squad's rapid pulse beats the light Lancers and, narrowly, the Ravager), and every one
+loses to Racers (`check:ground` fights it). The Lancers are the anti-armour squad: they beat every other tier
 3 unit at equal kyber. Big hulls cross every ramp, bridge and ford of every map (`check:ground-nav`).
 
 **Command Centers** carry a light defence turret on their roof: pulse, 14 damage, 10 tiles, every
@@ -3775,12 +3795,15 @@ are each faction's Scout with the weapon on a turret, medium armour and 600 hull
 lobby or Codex. The panel's *Squad test* spawns three of our faction's foot squads and a test walker
 (two legs, a pulse turret on its back, walking through its poses) against three of the first
 enemy's squads at the camera; its *Tier 1 test* spawns all six tier 1 units (every faction's foot
-squad and fast vehicle) for us and the same six for the first enemy, sent at each other; its *Tier 3 test* spawns all six tier 3 units the same way, the big ones
-further apart (the Behemoth further back, as artillery can't fire close).
+squad and fast vehicle) for us and the same six for the first enemy, sent at each other; its
+*Tier 2 test* spawns all six tier 2 units for us against a crowd of tier 1 units (all six, twice
+over) for the first enemy; and its *Tier 3 test* spawns all six tier 3 units for us and the same six for
+the first enemy, the big ones further apart (the Behemoth further back, as artillery can't fire
+close).
 
 ```sh
 pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed), a tier 1 battle (all six tier 1 units firing, losses on both sides) and a tier 3 battle (all six tier 3 units firing, beams included, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons; tier 3 units' tier, armour, pop, price and size; two of any tier 3 unit losing to equal kyber of Racers
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) a tier 1 battle (all six tier 1 units firing, losses on both sides) a tier 2 battle (the six tier 2 units against a crowd of tier 1: all six firing, splash catching several units at once, the anti-swarm side ahead) and a tier 3 battle (all six tier 3 units firing, beams included, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons; tier 3 units' tier, armour, pop, price and size; two of any tier 3 unit losing to equal kyber of Racers
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule; size classes 2 and 3 crossing every bridge, ford and ramp and reaching every spawn on every hand-made map and 16 generated ones
 pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones

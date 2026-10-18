@@ -50,7 +50,8 @@
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
 //    member standing, from where each stands, so fewer members fire fewer shots. The six tier 1 units
 //    (each faction's foot squad and fast vehicle) fight each other in step the same way, every one
-//    of them firing.
+//    of them firing; and the six tier 2 units (anti-swarm) against a crowd of tier 1 twice their
+//    number, all six firing, splash catching several at once, the anti-swarm side ahead.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
@@ -69,7 +70,7 @@ import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, f
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
 import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
-import { TEST_WALKER, TIER1, TIER3, registerWalkerTest, registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
+import { TEST_WALKER, TIER1, TIER2, TIER3, registerWalkerTest, registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
 import { memberAt } from '../src/apps/games/empires/ground/squad.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
@@ -1140,6 +1141,60 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const gone = [...spawned].filter(([id]) => !final.w.byId.get(id) || final.w.byId.get(id)!.dead)
   check('tier 1 battle: units die on both sides', gone.some(([, o]) => o === 0) && gone.some(([, o]) => o === 1), `${gone.length} of ${spawned.size} destroyed`)
   check('tier 1 units are tier 1, light armour, in the Codex lists', six.every((id) => UNIT[id].ground?.tier === 1 && UNIT[id].ground?.armour === 'light' && UNITS.includes(UNIT[id])))
+}
+
+{
+  // The six tier 2 units (the anti-swarm ones) against a crowd of tier 1 units twice their number:
+  // in step across two copies, a snapshot thaw and a replay; all six fire, splash catches several
+  // units at once, and the anti-swarm side comes out ahead.
+  const tier2 = (['republic', 'droid', 'swarm'] as const).flatMap((f) => [TIER2[f].foot, TIER2[f].vehicle])
+  const crowd = (['republic', 'droid', 'swarm'] as const).flatMap((f) => [TIER1[f].foot, TIER1[f].vehicle])
+  const make = (): Copy => ({ w: newWorld(dustfall, [seat('droid', 0, 0), seat('swarm', 1, 1)], { seed: 55, credits: 0 }), brains: [] })
+  const fired = new Set<string>()
+  const spawned = new Map<number, number>()
+  const start = new Map<number, number>()
+  let multi = 0
+  const hullAt = new Map<number, number>()
+  const final = lockstep('tier 2 battle', make, Math.round(90 / STEP), ({ w }, t, say) => {
+    const x = w.w * 0.45
+    const y = w.h * 0.55
+    if (t === 1) {
+      tier2.forEach((id, i) => say({ t, k: 'spawn', unit: id, owner: 0, x: x - 7 * TILE, y: y + (i - 2.5) * 2.4 * TILE }))
+      for (const dx of [7, 9]) crowd.forEach((id, i) => say({ t, k: 'spawn', unit: id, owner: 1, x: x + dx * TILE, y: y + (i - 2.5) * 2.2 * TILE + (dx - 8) * TILE }))
+    }
+    if (t === 2)
+      for (const o of [0, 1]) {
+        const ids = w.units.filter((u) => u.owner === o && (tier2.includes(u.t.id) || crowd.includes(u.t.id))).map((u) => u.id)
+        for (const id of ids) spawned.set(id, o)
+        start.set(o, ids.reduce((n, id) => n + w.byId.get(id)!.t.cost, 0))
+        say({ t, k: 'cmd', owner: o, json: JSON.stringify(cmd('move', ids, x + (o ? -4 : 4) * TILE, y, true, false)) })
+      }
+    for (const s of w.gshots ?? []) {
+      const u = w.byId.get(s.from)
+      if (u) fired.add(u.t.id)
+    }
+    for (const u of w.units) for (const g of u.guns) if (g.hold && tier2.includes(u.t.id)) fired.add(u.t.id)
+    // A splash that hurt more than one of the crowd this tick.
+    for (const e of w.events) {
+      if (e.k !== 'splash' || e.owner !== 0) continue
+      const hit = w.units.filter((u) => u.owner === 1 && (hullAt.get(u.id) ?? u.hull) > u.hull + 1e-9 && Math.hypot(u.x - e.x, u.y - e.y) < e.r + 40).length
+      if (hit > 1) multi++
+    }
+    hullAt.clear()
+    for (const u of w.units) hullAt.set(u.id, u.hull)
+    w.events.length = 0
+  })
+  const quiet = tier2.filter((id) => !fired.has(id))
+  check('tier 2 battle: all six tier 2 units fire', !quiet.length, quiet.length ? `never: ${quiet.join(', ')}` : '')
+  check('tier 2 battle: splash catches several units at once', multi > 3, `${multi} splashes hurt more than one`)
+  // The share of each side's kyber still standing.
+  const cost = (id: number) => final.w.byId.get(id)?.t.cost ?? 0
+  const share = (o: number) => {
+    const ids = [...spawned].filter(([, q]) => q === o).map(([id]) => id)
+    return ids.filter((id) => final.w.byId.get(id) && !final.w.byId.get(id)!.dead).reduce((n, id) => n + cost(id), 0) / (start.get(o) ?? 1)
+  }
+  check('tier 2 battle: the anti-swarm side comes out ahead of the crowd', share(0) > share(1), `kyber still standing: tier 2 ${Math.round(share(0) * 100)}%, tier 1 ${Math.round(share(1) * 100)}%`)
+  check('tier 2 units are tier 2, the squads light and the rest medium armour', tier2.every((id) => UNIT[id].ground?.tier === 2 && UNIT[id].ground?.armour === (UNIT[id].ground?.squad ? 'light' : 'medium') && UNITS.includes(UNIT[id])))
 }
 
 {

@@ -217,6 +217,16 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
     ctx.toast('Tier 1 test: the six tier 1 units, ours against theirs', 'info')
     redraw()
   }
+  /** Ground battles: the six tier 2 units of ours against a crowd of tier 1 units of theirs. */
+  const tier2Test = async () => {
+    const { spawnTier2Test } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnTier2Test(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Tier 2 test: the six tier 2 units against a crowd of tier 1', 'info')
+    redraw()
+  }
   /** Ground battles: the six tier 3 units, ours against the same six of theirs, at the camera. */
   const tier3Test = async () => {
     const { spawnTier3Test } = await import('./ground/testWeapons.ts')
@@ -413,6 +423,9 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
               </button>
               <button className="ew-chip" onClick={() => void tierTest()} data-tip="Ground battles: every faction's tier 1 foot squad and fast vehicle, six of ours against the same six of the first enemy's, at the camera">
                 Tier 1 test
+              </button>
+              <button className="ew-chip" onClick={() => void tier2Test()} data-tip="Ground battles: every faction's tier 2 anti-swarm units of ours against a crowd of tier 1 units of the first enemy's, at the camera">
+                Tier 2 test
               </button>
               <button className="ew-chip" onClick={() => void tier3Test()} data-tip="Ground battles: every faction's tier 3 heavy units (foot factory and vehicle factory), six of ours against the same six of the first enemy's, at the camera">
                 Tier 3 test

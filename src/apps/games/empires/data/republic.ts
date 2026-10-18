@@ -3,7 +3,7 @@
 // data.ts. Points on a ship are on the 0-10 grid over its box, x from the left and y from the nose
 // (see data.ts).
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundHeavy } from './kit.ts'
+import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundMedium, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] }
 
@@ -329,6 +329,23 @@ const GROUND: UnitType[] = [
     hull: 340, cost: 150, build: 14, speed: 125, turn: 3.5, ground: { radius: 14 },
     role: { role: 'Raider', strong: ['light units', 'firing on the move'], weak: ['heavy armour', 'rockets'] },
     hardpoints: [{ ...gun('flak', 5, 4.6, 0.34, 300, groundWeapon('pulse', 22, { range: 224, cooldown: 1 })), key: 'tur' }],
+    weapons: [],
+  }),
+  // Tier 2: the anti-swarm units of the Barracks and the Vehicle Factory (once they reach tier 2).
+  groundSquad({
+    id: 'r-g-repeaters', faction: 'republic', name: 'Repeater squad', sprite: 'republic-g-repeaters', pop: 2,
+    blurb: 'Four heavy troopers with rapid-fire pulse cannons and frag grenades. They hose down light units and break up packs with frag; armour and artillery are their bane.',
+    hull: 520, cost: 220, build: 22, speed: 60, turn: 3.5, ground: { tier: 2, sight: 9 },
+    squad: { n: 4, member: 'r-gm-repeater', size: 18, spacing: 13 },
+    role: { role: 'Anti-swarm', strong: ['light units', 'squads', 'groups'], weak: ['armour', 'artillery'] },
+    weapons: [groundWeapon('pulse', 2.2, { range: 192, cooldown: 0.3 }), groundWeapon('artillery', 9, { range: 192, min: 48, splash: 40, cooldown: 4 })],
+  }),
+  groundMedium({
+    id: 'r-g-hailstorm', faction: 'republic', name: 'Hailstorm carrier', sprite: 'republic-g-hailstorm',
+    blurb: 'A tracked carrier with an airburst artillery turret. Its shells burst over groups of light units from long range; it needs others to spot for it, and anything that gets close is under its guns.',
+    hull: 700, cost: 300, build: 28, speed: 80, turn: 2.5, ground: { sight: 9 },
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'buildings'], weak: ['anything close', 'fast raiders'] },
+    hardpoints: [{ ...gun('turbo', 5, 5.2, 0.36, 500, groundWeapon('artillery', 40, { range: 480, min: 96, splash: 60, cooldown: 3 })), key: 'tur' }],
     weapons: [],
   }),
   // Tier 3: the heavy units of the Barracks and the Vehicle Factory (the big ones, phase 5c).

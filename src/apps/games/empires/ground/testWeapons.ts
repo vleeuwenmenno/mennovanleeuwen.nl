@@ -10,8 +10,8 @@ import { TILE } from './types.ts'
 // weapon on a turret on its back, medium armour, slow. Not in any lobby or Codex.
 //
 // Also a test walker (a two-legged walker with a turret on its back) to show walk cycles on a
-// vehicle, and spawns of the real tier 1 units for the cheat panel's "Squad test" and "Tier 1 test",
-// the ground-squads perf scene and check:ground.
+// vehicle, and spawns of the real tier 1 and 2 units for the cheat panel's "Squad test", "Tier 1
+// test" and "Tier 2 test", the ground-squads perf scene and check:ground.
 
 /** Each weapon's test gun: its damage (a beam's and a spray's a second). */
 const TEST_GUN: Record<GroundWeaponKind, Weapon> = {
@@ -84,6 +84,12 @@ export const TIER1: Record<FactionId, { foot: string; vehicle: string }> = {
   droid: { foot: 'd-g-droids', vehicle: 'd-g-razor' },
   swarm: { foot: 's-g-swarmlings', vehicle: 's-g-racer' },
 }
+/** Each faction's tier 2 units, the anti-swarm ones: its foot factory's and its vehicle factory's. */
+export const TIER2: Record<FactionId, { foot: string; vehicle: string }> = {
+  republic: { foot: 'r-g-repeaters', vehicle: 'r-g-hailstorm' },
+  droid: { foot: 'd-g-salvo', vehicle: 'd-g-breaker' },
+  swarm: { foot: 's-g-spewer', vehicle: 's-g-spores' },
+}
 export const TEST_WALKER = 'r-gt-walker'
 
 /** Registers the test walker (once). */
@@ -145,6 +151,17 @@ export function spawnTierTest(w: World, me: Owner, foe: Owner, x: number, y: num
   const out: Unit[] = []
   column(w, me, -1, six, x, y, out)
   column(w, foe, 1, six, x, y, out)
+  return out
+}
+
+/** The tier 2 test: all six tier 2 units (every faction's) for `me` against a crowd of tier 1 units
+ * for `foe` (all six, twice over), the anti-swarm units against the swarm, sent at each other. */
+export function spawnTier2Test(w: World, me: Owner, foe: Owner, x: number, y: number): Unit[] {
+  const out: Unit[] = []
+  column(w, me, -1, FACTION_IDS.flatMap((f) => [TIER2[f].foot, TIER2[f].vehicle]), x, y, out)
+  const crowd = FACTION_IDS.flatMap((f) => [TIER1[f].foot, TIER1[f].vehicle])
+  column(w, foe, 1, crowd, x, y - TILE * 1.1, out)
+  column(w, foe, 1, crowd, x + TILE * 2, y + TILE * 1.1, out)
   return out
 }
 

@@ -354,6 +354,55 @@ export const GROUND: GroundModels = {
     }),
   },
 
+  // A heavy trooper, one member of a Repeater squad (tier 2): bulkier armour with red shoulder
+  // bands, an ammunition drum on the back and a rapid-fire pulse cannon held at the hip.
+  'r-gm-repeater': {
+    w: 84,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...stride('leg', 11, 2, [-20, -20], [-40, 28], 8, 'hull2', 'dark'),
+        part('torso', chamfer(0, 2, 54, 36, 9), 'hull', 3, { lift: 6, details: [{ k: 'shape', pts: box(0, -8, 36, 4), tone: 'accent' }, { k: 'line', pts: [[-18, 10], [18, 10]], minPx: 50 }] }),
+        part('drum', circle(0, 22, 12, 16), 'metal', 4, { lift: 8, details: [{ k: 'line', pts: circle(0, 22, 7, 12) }] }),
+        ...sym(part('shoulder', circle(-27, -2, 11, 14), 'hull', 4, { lift: 8, sphere: true, details: [{ k: 'shape', pts: box(-27, -2, 14, 4), tone: 'accent' }] })),
+        part('armL', capsule([-24, -6], [2, -28], 5.5, 4.5), 'hull', 5, { lift: 9 }),
+        part('armR', capsule([24, -6], [14, -26], 5.5, 4.5), 'hull', 5, { lift: 9 }),
+        part('cannon', capsule([9, -6], [9, -48], 5.5, 4), 'dark', 6, { lift: 10, details: [{ k: 'line', pts: [[4, -36], [14, -36]] }, { k: 'line', pts: [[4, -42], [14, -42]], minPx: 50 }] }),
+        part('helmet', circle(0, -2, 15, 18), 'hull', 7, {
+          lift: 12,
+          sphere: true,
+          details: [{ k: 'shape', pts: [[-9, -14], [9, -14], [9, -10], [2, -10], [2, -3], [-2, -3], [-2, -10], [-9, -10]], tone: 'dark' }],
+        }),
+      ],
+    }),
+  },
+  // The Hailstorm carrier (tier 2, Vehicle Factory): a white tracked hull with a sloped glacis, red
+  // bands, ammunition lockers and a rear engine deck; its airburst artillery turret sits in a socket
+  // in the middle and turns on its own.
+  'r-g-hailstorm': {
+    w: 80,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        ...sym(part('track', box(-31, 0, 16, 94), 'dark', 1, { lift: 2, details: treads(-38, -24, -44, 44, 14) })),
+        part('hull', chamfer(0, 0, 50, 92, 10), 'hull', 2, {
+          lift: 9,
+          facets: bevel(0, 0, 50, 92, 7),
+          details: [
+            { k: 'shape', pts: box(0, -30, 40, 4), tone: 'accent' },
+            { k: 'shape', pts: box(0, 26, 40, 4), tone: 'accent' },
+            { k: 'line', pts: [[-18, -38], [18, -38]], minPx: 60 },
+          ],
+        }),
+        ...sym(part('locker', box(-17, 34, 12, 12), 'hull2', 3, { lift: 10, details: [{ k: 'line', pts: [[-21, 34], [-13, 34]], minPx: 60 }] })),
+        part('deck', box(0, 40, 14, 10), 'metal', 3, { lift: 10, details: treads(-6, 6, 36, 44, 3) }),
+        part('hatch', circle(-14, -32, 5, 10), 'hull2', 3, { lift: 10 }),
+      ],
+    }),
+  },
   // A trooper, one member of a squad (GroundSpec `squad`): white armour, the T visor of the helmet,
   // a backpack, a rifle held forward in both hands. It walks: standing, its boots show under it;
   // mid-stride one leg is out in front and the other behind (poses 1 and 2).

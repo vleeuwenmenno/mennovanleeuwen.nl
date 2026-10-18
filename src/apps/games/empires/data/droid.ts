@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundHeavy } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundMedium, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -201,6 +201,22 @@ const GROUND: UnitType[] = [
     hull: 220, cost: 120, build: 12, speed: 180, turn: 4.5, ground: { radius: 12 },
     role: { role: 'Raider', strong: ['hit and run', 'armour (rockets)'], weak: ['massed fire', 'splash'] },
     weapons: [groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('rocket', 16, { range: 224, arc: 0.6 })],
+  }),
+  // Tier 2: the anti-swarm units of the Bot Factory and the Vehicle Foundry (once they reach tier 2).
+  groundMedium({
+    id: 'd-g-salvo', faction: 'droid', name: 'Salvo droid', sprite: 'droid-g-salvo',
+    blurb: 'A two-legged droid walker with a swarm rocket pod on each shoulder. It turns to face its target and empties both pods over a group at once.',
+    hull: 600, cost: 220, build: 22, speed: 62, turn: 3, ground: { radius: 17 },
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['armour', 'fast flankers'] },
+    weapons: [groundWeapon('swarm', 5, { burst: 4, arc: 0.6, cooldown: 3.6 }), groundWeapon('swarm', 5, { burst: 4, arc: 0.6, cooldown: 3.6 })],
+  }),
+  groundMedium({
+    id: 'd-g-breaker', faction: 'droid', name: 'Breaker tank', sprite: 'droid-g-breaker',
+    blurb: 'A broad tracked tank with a swarm rocket battery in its turret. Its salvos rain over packs of light units; heavy armour shrugs them off.',
+    hull: 760, cost: 300, build: 28, speed: 78, turn: 2.5, ground: {},
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['heavy armour', 'beams'] },
+    hardpoints: [{ ...gun('flak', 5, 5.2, 0.36, 500, groundWeapon('swarm', 6, { burst: 8, range: 288, splash: 40, cooldown: 4.4 })), key: 'tur', look: 'missileBox' }],
+    weapons: [],
   }),
   // Tier 3: the heavy units of the Bot Factory and the Vehicle Foundry (the big ones, phase 5c).
   groundHeavy({
