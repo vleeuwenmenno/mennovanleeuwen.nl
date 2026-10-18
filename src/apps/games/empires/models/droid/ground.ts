@@ -1,4 +1,4 @@
-import { along, box, capsule, circle, ngon, part, rimFacets, sym, treads } from '../kit.ts'
+import { arcBand, along, box, capsule, circle, ngon, part, rimFacets, sym, treads } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -6,7 +6,8 @@ import type { Pt } from '../types.ts'
 // fleet's steel, gunmetal and burnt orange (plan D10: one look across modes). The Command Hub is an
 // eight-sided industrial deck round a sphere core, as its space station is, with antenna spires, a
 // cargo crane and its door to the south; the Forger builder droid hovers (its shadow falls further
-// off) on a round body with two cutting arms and a rack of plates.
+// off) on a round body with two cutting arms and a rack of plates; the Supply Relay is a hexagonal
+// power and parts deck round a humming mast, ringed by capacitor banks.
 
 const OCT = Math.PI / 8
 
@@ -95,5 +96,49 @@ export const GROUND: GroundModels = {
         part('aerial', capsule([10, -8], [16, -22], 1.1, 0.8), 'metal', 5, { lift: 16 }),
       ],
     }),
+  },
+  'd-g-supply': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const rim = ngon(0, 0, 49, 6, Math.PI / 6)
+      return {
+        breakStyle: 'pie',
+        parts: [
+          // The six-sided deck's sloped rim, and the plating inside with orange hazard marks.
+          part('deck', rim, 'hull2', 1, { lift: 3, facets: rimFacets(rim, 0, 0, 0.82) }),
+          part('plates', ngon(0, 0, 40, 6, Math.PI / 6), 'hull', 2, {
+            lift: 1,
+            details: [
+              ...[0, 2, 4].map((i) => {
+                const a = Math.PI / 6 + (i * Math.PI) / 3 + Math.PI / 6
+                return { k: 'shape' as const, pts: box(Math.cos(a) * 33, Math.sin(a) * 33, 8, 4), tone: 'accent' as const }
+              }),
+              { k: 'lights', pts: ngon(0, 0, 36, 6, 0), r: 1.3, tone: 'glass', minPx: 50 },
+            ],
+          }),
+          // Capacitor banks on three sides, steel drums with orange caps.
+          ...[-Math.PI * 0.83, -Math.PI * 0.17, Math.PI * 0.5 + 0.9].map((a, i) =>
+            part(`bank${i}`, circle(Math.cos(a) * 26, Math.sin(a) * 26, 8, 18), 'metal', 3, {
+              lift: 8,
+              sphere: true,
+              details: [{ k: 'shape', pts: circle(Math.cos(a) * 26, Math.sin(a) * 26, 3.2, 10), tone: 'accent' }],
+            }),
+          ),
+          // The power coils round the mast, glowing teal.
+          part('coil', arcBand(0, -2, 13, 17, -Math.PI * 0.9, Math.PI * 0.4, 14), 'glass', 3, { lift: 4, glow: true }),
+          // The mast: a steel sphere with an antenna and sensor lights, humming.
+          part('mast', circle(0, -2, 11, 22), 'hull', 4, {
+            lift: 14,
+            sphere: true,
+            details: [{ k: 'lights', pts: [[-5, 1], [5, 1], [0, -7]], r: 1.4, tone: 'glass' }],
+          }),
+          part('antenna', capsule([0, -6], [8, -20], 1.4, 0.8), 'metal', 5, { lift: 18, details: [{ k: 'lights', pts: [[8, -20]], r: 1.4, tone: 'trim' }] }),
+          // The door on the south side, under its orange guide lights.
+          part('door', box(0, 37, 18, 6), 'dark', 3, { lift: 1, details: [{ k: 'lights', pts: along([-7, 33], [7, 33], 3), r: 1.1, tone: 'trim' }] }),
+          ...sym(part('strut', box(-30, 24, 6, 12), 'metal', 2, { lift: 3, details: treads(-33, -27, 19, 29, 2) })),
+        ],
+      }
+    },
   },
 }

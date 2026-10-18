@@ -5,7 +5,8 @@ import type { Pt } from '../types.ts'
 // The Swarm's ground units, seen from straight above, light from the top left. The Hive Nexus is a
 // mound of dark chitin round a glowing violet core, ringed by pale plates, with tendrils spreading
 // into the ground round it and a maw to the south (its door). The Shaper drone is a low crawler:
-// three pairs of short legs, a pale thorax, mandibles, and a sac of resin glowing acid green.
+// three pairs of short legs, a pale thorax, mandibles, and a sac of resin glowing acid green. The
+// Brood Cache is a cluster of resin pods full of glowing nutrient on a low mound, webbed together.
 
 /** A lumpy ring of `n` points round (x, y): radius `r`, each point pushed in or out by up to `amp`
  * from a fixed pattern (no randomness: the same mound every time). */
@@ -93,5 +94,41 @@ export const GROUND: GroundModels = {
         }),
       ],
     }),
+  },
+  's-g-supply': {
+    w: 100,
+    h: 100,
+    spec: () => {
+      const mound = lumps(0, 2, 44, 3, 9)
+      // The pods: middle (x, y), radius, and which shell.
+      const pods: [number, number, number, 'hull' | 'hull2'][] = [[-15, -12, 17, 'hull'], [17, -15, 14, 'hull2'], [19, 15, 13, 'hull'], [-16, 18, 12, 'hull2'], [0, 2, 11, 'hull2']]
+      return {
+        breakStyle: 'pie',
+        parts: [
+          part('mound', mound, 'metal', 1, { lift: 2, facets: rimFacets(mound, 0, 2, 0.5, 0.7) }),
+          // Strands of resin between the pods.
+          ...pods.slice(0, 4).map(([x, y], i) => part(`web${i}`, thick([[x * 0.4, y * 0.4], [x, y]], 4, 2), 'dark', 2, { lift: 3 })),
+          ...pods.map(([x, y, r, tone], i) =>
+            part(`pod${i}`, circle(x, y, r, 20, r * 0.92), tone, 3 + i * 0.1, {
+              lift: 5 + r * 0.25,
+              sphere: true,
+              details: [
+                { k: 'shape', pts: circle(x - r * 0.15, y - r * 0.15, r * 0.45, 14), tone: 'aid' },
+                { k: 'line', pts: arcBand(x, y, r * 0.7, r * 0.72, -2.4, -0.6, 6).slice(0, 7) },
+              ],
+            }),
+          ),
+          // The nutrient glowing through the middle pod's top, and violet nodes on the others.
+          part('glow', circle(0, 2, 5, 12), 'aid', 4, { lift: 8, glow: true }),
+          ...sym(part('node', circle(-24, -2, 2.6, 10), 'glass', 4, { lift: 6, glow: true })),
+          // The maw on the south side, its door.
+          part('maw', spline([[-10, 38], [0, 35], [10, 38], [7, 45], [0, 47], [-7, 45]] as Pt[], 3, true), 'dark', 3, {
+            lift: 1,
+            details: [{ k: 'lights', pts: [[-5, 42], [5, 42]], r: 1.3, tone: 'glow' }],
+          }),
+          part('stalk', capsule([26, -30], [32, -40], 2.2, 1.2), 'accent', 2, { lift: 6 }),
+        ],
+      }
+    },
   },
 }

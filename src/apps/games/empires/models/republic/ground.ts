@@ -4,8 +4,9 @@ import type { Pt } from '../types.ts'
 
 // The Republic's ground units, seen from straight above, light from the top left: the Command
 // Center (a white armoured block with red bands, a landing pad, a comms tower with its dish and blue
-// lights, its door facing south) and the Mason field engineer (a tracked crane rig with a welding
-// torch on the end of its arm). Same parts and palette as the fleet (models/republic/palette.ts).
+// lights, its door facing south), the Mason field engineer (a tracked crane rig with a welding
+// torch on the end of its arm) and the Supply Depot (armoured stores and a fuel tank behind blast
+// walls). Same parts and palette as the fleet (models/republic/palette.ts).
 
 export const GROUND: GroundModels = {
   'r-g-center': {
@@ -115,6 +116,55 @@ export const GROUND: GroundModels = {
         }),
         // The welding torch on its end: its light shows while it builds.
         part('torch', circle(16, -46, 4, 12), 'glow', 6, { lift: 12, glow: true }),
+      ],
+    }),
+  },
+  'r-g-supply': {
+    w: 100,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'pie',
+      parts: [
+        // The pad, grey plating with a red stripe by the door.
+        part('pad', chamfer(0, 2, 96, 94, 10), 'hull2', 1, {
+          lift: 2,
+          details: [
+            { k: 'line', pts: chamfer(0, 2, 88, 86, 8) },
+            { k: 'shape', pts: box(-12, 44, 30, 3), tone: 'accent' },
+            { k: 'lights', pts: [[-43, -40], [43, -40], [-43, 44], [43, 44]], r: 1.4, tone: 'glow', minPx: 50 },
+          ],
+        }),
+        // Blast walls round the north, west and east sides, bevelled white armour.
+        part('wallN', box(0, -40, 80, 9), 'hull', 2, { lift: 7, facets: bevel(0, -40, 80, 9, 3) }),
+        ...sym(part('wall', box(-40, -2, 9, 66), 'hull', 2, { lift: 7, facets: bevel(-40, -2, 9, 66, 3), details: [{ k: 'shape', pts: box(-40, 6, 9, 4), tone: 'accent' }] })),
+        // The store: an armoured block with a red band and a roof hatch.
+        part('store', chamfer(-11, -8, 42, 40, 6), 'hull', 3, {
+          lift: 9,
+          facets: bevel(-11, -8, 42, 40, 5),
+          details: [
+            { k: 'shape', pts: box(-11, -20, 32, 4), tone: 'accent' },
+            { k: 'line', pts: [[-26, 2], [4, 2]], minPx: 40 },
+            { k: 'shape', pts: box(-11, -4, 12, 8), tone: 'dark' },
+          ],
+        }),
+        // The fuel tank on the east side, piped to the store.
+        part('pipe', capsule([8, -10], [17, -12], 2), 'metal', 3, { lift: 8 }),
+        part('tank', circle(22, -12, 13, 24), 'hull2', 4, {
+          lift: 11,
+          sphere: true,
+          details: [
+            { k: 'line', pts: circle(22, -12, 9, 20) },
+            { k: 'shape', pts: box(22, -12, 22, 3), tone: 'accent' },
+          ],
+        }),
+        // Crates stacked by the door, ready to go out.
+        part('crates', box(22, 20, 18, 14), 'metal', 3, { lift: 4, details: [{ k: 'line', pts: [[13, 20], [31, 20]] }, { k: 'line', pts: [[22, 13], [22, 27]] }] }),
+        part('crate', box(-30, 24, 10, 10), 'hull2', 3, { lift: 4, details: [{ k: 'shape', pts: box(-30, 24, 10, 2), tone: 'accent' }] }),
+        // The door on the south face of the store, under a strip of blue light.
+        part('door', box(-11, 15, 20, 6), 'dark', 4, {
+          lift: 1,
+          details: [{ k: 'lights', pts: along([-18, 11], [-4, 11], 4), r: 1.1, tone: 'glow' }],
+        }),
       ],
     }),
   },
