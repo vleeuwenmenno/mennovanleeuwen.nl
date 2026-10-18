@@ -3372,15 +3372,28 @@ and paints:
 - bridges straight from their shapes: steel plates on girders with bolts, round pylons at the
   corners, a dark outline and a shadow on the water;
 - ruins: a foundation of flagstones with broken walls and corner columns, casting shadows;
-- forests as one canopy of crowns lit from the top left, a dark rim at the edge and a cast shadow,
-  loose trees round the woods' edges, and a few small groups of trees out on the grass;
+- forests as a dark canopy floor in the forest's shape, with a soft shadow down and to the right,
+  under the trees (below);
 - crystal fields as pale gravel with blue shards;
 - past the map's edge, the map mirrored, greyed and darkened, with a faint line on the edge.
+
+The trees are flat cel-shaded canopies seen from straight above (big rounded leaf lobes, three hard
+tones lit from the top left, a bold dark outline), nine of them, one a conifer, in one atlas
+(`public/games/empires/ground/trees/canopies.webp`). Where they stand is worked out once per map
+([`trees.ts`](src/apps/games/empires/ground/trees.ts)): crowns packed tightly over every forest, sizes
+varied, about one in twelve a conifer; looser ones over its edges; and now and then a small group out
+on open grass, away from bases, roads, water and slopes. It's seeded by the map, so a map always looks
+the same. The layer draws them as instanced quads over the ground: a pass of soft shadows cast down
+and to the right, then the crowns top to bottom, so lower crowns overlap higher ones, each a little
+lighter or darker than its neighbours. That's 1 + 2 draw calls for each mirror region in view, and
+the CPU does nothing per crown each frame. The mirrored border shows them greyed. It's drawing only:
+forests stay `TF.forest` tiles, and units go round them.
 
 There are no chunks, so no seams in any browser (checked in Chromium and Firefox). Round 1 maps
 draw through it too, their blocking trees and boulders becoming forest and rock in the masks.
 Where WebGL2 is missing, `createGroundLayer` returns a flat 2D layer (`gl: false`) that draws one
-baked picture of the same masks, lit by the same heightmap, with the same grey mirror round it.
+baked picture of the same masks, lit by the same heightmap, with the same crowns baked in once (8
+pixels a tile) and the same grey mirror round it.
 The viewer's **Flat** button shows it. The battle screen draws ground battles with this layer: its
 canvas sits under the battle canvas and is drawn first each frame with the same camera, while units,
 buildings, effects, fog and the HUD stay on the 2D canvas over it. (Round 1's chunk-baked 2D
