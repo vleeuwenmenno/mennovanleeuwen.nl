@@ -1,16 +1,23 @@
 // Checks the Empires At War ground maps (src/apps/games/empires/ground/): headless, no browser.
 //
-//   node scripts/ground-map-check.ts            # every map
-//   node scripts/ground-map-check.ts --print    # also draw each map as text (heights, ramps, props)
+//   node scripts/ground-map-check.ts            # every hand-made map, then a sweep of generated ones
+//   node scripts/ground-map-check.ts --quick    # the hand-made maps only
+//   node scripts/ground-map-check.ts --print    # also draw each hand-made map as text
 //
 // For every map in GROUND_MAPS:
 // 1. It builds the same twice: the tile arrays and the props hash alike (the sim relies on it).
-// 2. It is symmetric: every tile matches its mirror copy (point symmetry: turned half way round).
-// 3. Every spawn reaches every other spawn and every deposit, stepping by canStep (types.ts).
+// 2. It is symmetric: every tile matches its mirror copy (point, diagonal and quad symmetry; a
+//    turned map, three or six ways, can't match tile for tile on a square grid).
+// 3. Every spawn reaches every other spawn and every crystal field, stepping by canStep (types.ts).
 // 4. No blocking prop stands on a ramp or in a spawn's build area, and every blocking prop's tiles
 //    are flagged blocked.
-// 5. Each spawn's build area is open, buildable plateau.
+// 5. Each spawn's build area is open, buildable level ground.
+// 6. Fair: a crystal field within 20 tiles' walk of every base, and every base about as far from
+//    its nearest field and from the other bases as every other base is (generate.ts problem()).
+// Then generated maps (generate.ts): every recipe for 2, 3, 4 and 6 players at every size, two
+// seeds each, must build the same twice and pass the same rules (problem()).
 
+import { GEN_PLAYERS, GEN_SIZES, RECIPES, genId, generateGroundDef, problem } from '../src/apps/games/empires/ground/generate.ts'
 import { GROUND_MAPS } from '../src/apps/games/empires/ground/maps.ts'
 import { blockedTiles, buildGroundMap, rampsOf, spawnArea } from '../src/apps/games/empires/ground/terrain.ts'
 import { TF, TILE, canStep, type GroundMap, type TileGrid } from '../src/apps/games/empires/ground/types.ts'
@@ -92,16 +99,19 @@ for (const def of GROUND_MAPS) {
   const ha = hashMap(a), hb = hashMap(b)
   check('builds the same twice', ha === hb, `hash ${ha}, ${ms.toFixed(0)} ms, ${a.props.length} props`)
 
-  // Symmetry, tile by tile, for point symmetry and the diagonal mirror.
-  if (def.sym === 'point' || def.mirror === 'diagonal') {
+  // Symmetry, tile by tile, for point and quad symmetry and the diagonal mirror.
+  if (def.sym === 'point' || def.sym === 'quad' || def.mirror === 'diagonal') {
     let bad = 0
     for (let t = 0; t < g.cols * g.rows; t++) {
       const c = t % g.cols, r = (t - c) / g.cols
-      const m = def.mirror === 'diagonal' ? (g.rows - 1 - c) * g.cols + (g.cols - 1 - r) : g.cols * g.rows - 1 - t
-      if (g.height[t] !== g.height[m] || g.flags[t] !== g.flags[m] || g.terrain[t] !== g.terrain[m]) bad++
+      const copies = def.mirror === 'diagonal' ? [(g.rows - 1 - c) * g.cols + (g.cols - 1 - r)] : def.sym === 'point' ? [g.cols * g.rows - 1 - t] : [r * g.cols + (g.cols - 1 - c), (g.rows - 1 - r) * g.cols + c]
+      for (const m of copies) if (g.height[t] !== g.height[m] || g.flags[t] !== g.flags[m] || g.terrain[t] !== g.terrain[m]) bad++
     }
     check('every tile matches its mirror copy', bad === 0, bad ? `${bad} differ` : '')
   }
+  // Round 1 sketch maps were laid out before crystals were gathered: no field near the bases yet.
+  const fair = problem(a, { nearField: !!def.features })
+  check(def.features ? 'fair and playable (crystals near each base, fair distances)' : 'fair and playable (fair distances; a round 1 map, no field near the bases)', !fair, fair ?? '')
 
   check('has spawns and deposits', a.spawns.length >= 2 && a.deposits.length > 0, `${a.spawns.length} spawns, ${a.deposits.length} deposits, ${rampsOf(a).length} ramps`)
   for (let i = 0; i < a.spawns.length; i++) {
@@ -133,6 +143,26 @@ for (const def of GROUND_MAPS) {
       }
     check(`spawn ${i + 1}'s build area is open level ground`, closed === 0, closed ? `${closed} tiles not` : '')
   }
+}
+
+// --- Generated maps -----------------------------------------------------------------------------
+
+if (!process.argv.includes('--quick')) {
+  console.log('\nGenerated maps')
+  const t0 = performance.now()
+  let n = 0, bad = 0
+  for (const recipe of RECIPES)
+    for (const players of GEN_PLAYERS)
+      for (const size of GEN_SIZES)
+        for (const seed of [1, 2]) {
+          const rules = { recipe, players, size, seed }
+          const a = buildGroundMap(generateGroundDef(rules))
+          const b = buildGroundMap(generateGroundDef(rules))
+          const why = problem(a)
+          n++
+          if (why || hashMap(a) !== hashMap(b) || a.spawns.length !== players) bad++, check(genId(rules), false, why ?? (a.spawns.length !== players ? `${a.spawns.length} spawns` : 'builds differently twice'))
+        }
+  check(`every generated map builds the same twice and passes`, !bad, `${n} maps, ${((performance.now() - t0) / 1000).toFixed(0)} s`)
 }
 
 if (failed) {
