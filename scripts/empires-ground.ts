@@ -19,8 +19,11 @@
 // 3b. An economy battle on Ashwater Crossing, seat 0 scripted (Republic) and seat 1 the AI
 //    (Confederacy), checked the same way: seat 0 trains up to its unit cap (the next one refused with
 //    the supply reason), sends four engineers to gather the crystal field by its base, builds a Supply
-//    Depot and trains on past the old cap, and a field run nearly dry (as a dev cheat would) runs out:
-//    its engineers move on to the nearest other field. All along, the kyber gone from the fields is
+//    Depot and trains on past the old cap, and a field's clusters run nearly dry (as a dev cheat would)
+//    run out one by one: each mined-out cluster's stamp comes off the nav grid, its engineers move on
+//    to the next cluster in the field, and once the field is dry to the nearest other field. The
+//    clusters are laid out the same in every copy, each field holding FIELD_KYBER, and block their
+//    tiles. All along, the kyber gone from the fields is
 //    exactly what was dropped off plus what is being carried, no load is over the carry size, and
 //    several engineers mine one field at once. The AI must keep its engineers gathering, build supply
 //    before it reaches its cap, and never train past it.
@@ -37,7 +40,7 @@ import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/app
 import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
 import { anchorAt, footprintOpen, stands } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
-import { CARRY, CREW_RATE, FIELD_KYBER, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
+import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, fieldLeft, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
@@ -174,7 +177,7 @@ type Input =
   | { t: number; k: 'hull'; id: number; share: number }
   | { t: number; k: 'add'; unit: string; owner: number; c: number; r: number }
   | { t: number; k: 'kill'; id: number }
-  | { t: number; k: 'kyber'; f: number; left: number }
+  | { t: number; k: 'kyber'; f: number; each: number }
 
 function apply(w: World, x: Input): unknown {
   if (x.k === 'cmd') {
@@ -182,7 +185,10 @@ function apply(w: World, x: Input): unknown {
     return c ? runCmd(w, x.owner, c) : 'junk'
   }
   if (x.k === 'add') return raiseBuilding(w, UNIT[x.unit], x.owner, x.c, x.r)
-  if (x.k === 'kyber') return void (w.kyber![x.f] = x.left)
+  if (x.k === 'kyber') {
+    for (const c of w.crystals!) if (c.f === x.f && c.left > 0) c.left = Math.min(c.left, x.each)
+    return
+  }
   const u = w.byId.get(x.id)
   if (!u || u.dead) return
   if (x.k === 'hull') u.hull = u.hullMax * x.share
@@ -425,6 +431,12 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   let dryAt = -1
   let dryField = -1
   let cheatGap = 0
+  let startOk = ''
+  const emptiedAt = new Map<number, number>()
+  let freed = 0
+  let stillStamped = 0
+  let nextCluster = 0
+  const lastCl = new Map<number, number>()
   let moved = -1
   let lostKyber = 0
   let overCarry = 0
@@ -438,6 +450,18 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const final = lockstep('economy battle', make, ticks, ({ w }, t, say) => {
     home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
     const fields = w.ground!.fields
+    const nav = w.ground!.nav
+    const tileOf = (c: { c: number; r: number }) => c.r * nav.cols + c.c
+    // At the start: every field's clusters hold FIELD_KYBER between them, CLUSTERS_MIN to CLUSTERS_MAX of
+    // them, and (once the first stamps are down) each blocks its tile.
+    if (t === 1) {
+      const bad = fields.map((_, f) => {
+        const cs = w.crystals!.filter((c) => c.f === f)
+        return cs.length < CLUSTERS_MIN || cs.length > CLUSTERS_MAX || cs.reduce((n, c) => n + c.left, 0) !== FIELD_KYBER ? `field ${f}: ${cs.length} clusters, ${cs.reduce((n, c) => n + c.left, 0)}` : cs.some((c) => !c.on || nav.bld[tileOf(c)] === 0 || stands(nav, 1, tileOf(c))) ? `field ${f}: a cluster not on the grid` : ''
+      }).filter(Boolean)
+      startOk = bad.join('; ')
+      pass(`every field's clusters hold ${FIELD_KYBER} kyber and block their tiles`, !bad.length, bad.length ? startOk : `${w.crystals!.length} clusters on ${fields.length} fields: ${fields.map((_, f) => w.crystals!.filter((c) => c.f === f).length).join(', ')}`)
+    }
     if (field < 0) field = fields.map((f, i) => ({ i, d: (f.x - home!.x) ** 2 + (f.y - home!.y) ** 2 })).sort((a, b) => a.d - b.d)[0].i
     for (const e of w.events) {
       events[e.k] = (events[e.k] ?? 0) + 1
@@ -454,8 +478,13 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     }
     // Once four are out: all four gather the field by the base (as a right-click there orders it).
     const es = engs()
+    // Where to right-click to gather a field: one of its clusters with kyber left.
+    const clusterIn = (f: number) => {
+      const c = w.crystals!.find((x) => x.f === f && x.left > 0)
+      return c ? crystalAt(c) : fields[f]
+    }
     if (!sentFour && es.length >= 4) {
-      const f = fields[field]
+      const f = clusterIn(field)
       order(cmd('gather', es.slice(0, 4).map((u) => u.id), f.x, f.y, false))
       sentFour = true
     }
@@ -475,7 +504,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     if (cappedAt >= 0 && t === cappedAt + 60) pass('the engineer that built it goes back to gathering', w.byId.get(supplier)?.order.k === 'gather', w.byId.get(supplier)?.order.k)
     const idle = es.filter((u) => u.order.k === 'idle' && !u.queue.length)
     if (sentFour && idle.length && t % 30 === 0 && dryAt < 0) {
-      const f = fields[field]
+      const f = clusterIn(field)
       order(cmd('gather', idle.map((u) => u.id), f.x, f.y, false))
     }
     // With supply built, training carries on past the old cap.
@@ -484,18 +513,37 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
       order(cmd('build', R.engineer, false, home.id))
       pass('a Supply Depot (built by an engineer taken off gathering) raises the cap and training goes on', home.yq!.length === 2 && p.popCap === 15, `cap ${p.popCap}, queue ${home.yq!.length}`)
     }
-    // 60 s: the base's field nearly emptied (a cheat), so it runs dry with its engineers on it.
+    // 60 s: the base's field's clusters nearly emptied (a cheat: 50 left in each), so they run out one
+    // by one with its engineers on them.
     if (t === 1800) {
       dryField = field
-      cheatGap = w.kyber![field] - 60
-      say({ t, k: 'kyber', f: field, left: 60 })
+      const before = fieldLeft(w, field)
+      say({ t, k: 'kyber', f: field, each: 50 })
+      cheatGap = before - fieldLeft(w, field)
+    }
+    // A mined-out cluster: off the grid at the next flush (two ticks on, the tile is open again).
+    w.crystals!.forEach((c, i) => {
+      if (c.left > 0) return
+      const at = emptiedAt.get(i)
+      if (at === undefined) emptiedAt.set(i, t)
+      else if (t === at + 2) {
+        if (!c.on && nav.bld[tileOf(c)] === 0 && stands(nav, 1, tileOf(c))) freed++
+        else stillStamped++
+      }
+    })
+    // Its engineers go to the next cluster in the same field.
+    for (const u of engs()) {
+      const was = lastCl.get(u.id)
+      const now = u.gm?.cl
+      if (was !== undefined && now !== undefined && now !== was && w.crystals![was].left === 0 && w.crystals![was].f === dryField && w.crystals![now].f === dryField) nextCluster++
+      if (now !== undefined) lastCl.set(u.id, now)
     }
     if (dryAt >= 0 && moved < 0 && t > dryAt + 600) {
       const on = engs().filter((u) => u.order.k === 'gather')
-      moved = on.length && on.every((u) => u.order.k === 'gather' && u.order.f !== dryField && (w.kyber![u.order.f] ?? 0) > 0) ? on.length : 0
+      moved = on.length && on.every((u) => u.order.k === 'gather' && u.order.f !== dryField && fieldLeft(w, u.order.f) > 0) ? on.length : 0
     }
     // Kyber is neither made nor lost: what left the fields was dropped off or is being carried.
-    const inFields = w.kyber!.reduce((a, b) => a + b, 0)
+    const inFields = w.crystals!.reduce((a, c) => a + c.left, 0)
     const carried = w.units.reduce((a, u) => a + (u.dead ? 0 : (u.carry ?? 0)), 0)
     const dropped = w.players.reduce((a, q) => a + q.earnedBy.mines, 0)
     lostKyber = Math.max(lostKyber, Math.abs(FIELD_KYBER * fields.length - cheatGap - inFields - carried - dropped))
@@ -521,10 +569,12 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('economy battle: no engineer carries more than a load', !overCarry, `${CARRY} a load`)
   check('economy battle: several engineers mine one field at once without jamming', mostMiners >= 3, `${mostMiners} at once`)
   check('economy battle: a field runs dry and its engineers move on to the nearest other field', dryAt > 0 && moved > 0, dryAt > 0 ? `dry at ${(dryAt * STEP).toFixed(0)} s, ${moved} moved on` : 'never ran dry')
-  check('economy battle: the dry field is empty', w.kyber![dryField] === 0)
+  check('economy battle: the dry field is empty', fieldLeft(w, dryField) === 0 && w.crystals!.filter((c) => c.f === dryField).every((c) => !c.on))
+  check('economy battle: a mined-out cluster\'s stamp comes off the grid at the next flush', freed >= 3 && !stillStamped, `${freed} freed, ${stillStamped} still stamped`)
+  check('economy battle: engineers move on to the next cluster in the same field', nextCluster > 0, `${nextCluster} moves`)
   check('economy battle: the AI kept its engineers gathering', w.players[1].earnedBy.mines > 0 && aiGatherMax >= 4, `${Math.round(w.players[1].earnedBy.mines)} kyber gathered, up to ${aiGatherMax} gathering at once`)
   check('economy battle: the AI builds supply before its cap and never trains past it', !aiOverCap && w.units.some((u) => !u.dead && u.owner === 1 && u.t.id === D.supply) && aiCapped <= aiCapSupply + 30 * 10, `cap ${w.players[1].popCap}, at the cap ${(aiCapped * STEP).toFixed(1)} s (${(aiCapSupply * STEP).toFixed(1)} s of it with supply going up)`)
-  console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}; kyber left ${w.kyber!.map((k) => Math.round(k)).join(', ')}`)
+  console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}; kyber left by field ${w.ground!.fields.map((_, f) => Math.round(fieldLeft(w, f))).join(', ')}`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

@@ -14,6 +14,9 @@
 // 5. Each spawn's build area is open, buildable level ground.
 // 6. Fair: a crystal field within 20 tiles' walk of every base, and every base about as far from
 //    its nearest field and from the other bases as every other base is (generate.ts problem()).
+// 7. Its kyber crystal clusters (ground/world.ts placeCrystals): every field gets CLUSTERS_MIN to
+//    CLUSTERS_MAX of them holding FIELD_KYBER between them, laid out the same twice, none side by
+//    side, each with open ground next to it that the first spawn reaches.
 // Then generated maps (generate.ts): every recipe for 2, 3, 4 and 6 players at every size, two
 // seeds each, must build the same twice and pass the same rules (problem()).
 
@@ -21,6 +24,7 @@ import { GEN_PLAYERS, GEN_SIZES, RECIPES, genId, generateGroundDef, problem } fr
 import { GROUND_MAPS } from '../src/apps/games/empires/ground/maps.ts'
 import { blockedTiles, buildGroundMap, rampsOf, spawnArea } from '../src/apps/games/empires/ground/terrain.ts'
 import { TF, TILE, canStep, type GroundMap, type TileGrid } from '../src/apps/games/empires/ground/types.ts'
+import { CLUSTERS_MAX, CLUSTERS_MIN, FIELD_KYBER, fieldsOf, placeCrystals } from '../src/apps/games/empires/ground/world.ts'
 
 let failed = false
 const check = (what: string, ok: boolean, detail = '') => {
@@ -88,6 +92,34 @@ function print(m: GroundMap) {
   console.log(rows.join('\n'))
 }
 
+/** What is wrong with a map's crystal clusters, or null. */
+function crystalProblem(m: GroundMap): string | null {
+  const g = m.grid
+  const fields = fieldsOf(m)
+  const cs = placeCrystals(m, fields)
+  if (JSON.stringify(cs) !== JSON.stringify(placeCrystals(m, fieldsOf(m)))) return 'clusters laid out differently twice'
+  const on = new Set(cs.map((c) => c.r * g.cols + c.c))
+  const seen = reach(g, tileOf(g, m.spawns[0]))
+  for (let f = 0; f < fields.length; f++) {
+    const mine = cs.filter((c) => c.f === f)
+    const sum = mine.reduce((n, c) => n + c.left, 0)
+    if (mine.length < CLUSTERS_MIN || mine.length > CLUSTERS_MAX || sum !== FIELD_KYBER) return `field ${f}: ${mine.length} clusters holding ${sum}`
+    for (const c of mine) {
+      if (mine.some((o) => o !== c && Math.abs(o.c - c.c) + Math.abs(o.r - c.r) <= 1)) return `field ${f}: two clusters side by side at ${c.c},${c.r}`
+      let open = false
+      for (let dr = -1; dr <= 1; dr++)
+        for (let dc = -1; dc <= 1; dc++) {
+          const cc = c.c + dc, rr = c.r + dr
+          if ((!dc && !dr) || cc < 0 || rr < 0 || cc >= g.cols || rr >= g.rows) continue
+          const t = rr * g.cols + cc
+          if (!on.has(t) && !(g.flags[t] & TF.blocked) && seen[t]) open = true
+        }
+      if (!open) return `field ${f}: the cluster at ${c.c},${c.r} has no open ground next to it`
+    }
+  }
+  return null
+}
+
 for (const def of GROUND_MAPS) {
   console.log(`\n${def.name} (${def.id}, ${def.cols} × ${def.rows} tiles)`)
   const t0 = performance.now()
@@ -114,6 +146,8 @@ for (const def of GROUND_MAPS) {
   check(def.features ? 'fair and playable (crystals near each base, fair distances)' : 'fair and playable (fair distances; a round 1 map, no field near the bases)', !fair, fair ?? '')
 
   check('has spawns and deposits', a.spawns.length >= 2 && a.deposits.length > 0, `${a.spawns.length} spawns, ${a.deposits.length} deposits, ${rampsOf(a).length} ramps`)
+  const crystals = crystalProblem(a)
+  check('its crystal clusters: a few a field, holding the field\'s kyber, none side by side, each with open ground to mine from', !crystals, crystals ?? `${placeCrystals(a, fieldsOf(a)).length} clusters on ${a.deposits.length} fields`)
   for (let i = 0; i < a.spawns.length; i++) {
     const seen = reach(g, tileOf(g, a.spawns[i]))
     const others = a.spawns.filter((_, j) => j !== i).every((s) => seen[tileOf(g, s)])
@@ -158,7 +192,7 @@ if (!process.argv.includes('--quick')) {
           const rules = { recipe, players, size, seed }
           const a = buildGroundMap(generateGroundDef(rules))
           const b = buildGroundMap(generateGroundDef(rules))
-          const why = problem(a)
+          const why = problem(a) ?? crystalProblem(a)
           n++
           if (why || hashMap(a) !== hashMap(b) || a.spawns.length !== players) bad++, check(genId(rules), false, why ?? (a.spawns.length !== players ? `${a.spawns.length} spawns` : 'builds differently twice'))
         }

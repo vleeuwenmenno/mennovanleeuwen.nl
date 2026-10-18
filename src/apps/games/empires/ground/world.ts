@@ -12,7 +12,9 @@
 //   off the footprint first) and build, repairs, training out of the door, and the unit cap from
 //   each building's supply.
 // - Kyber, the ground battle's one resource (it is the side's credits): crystal fields that hold a
-//   fixed amount and run dry (World `kyber`), engineers that mine a load, haul it to the nearest
+//   fixed amount in separate crystal clusters that run out and are gone (World `crystals`: each
+//   blocks its tile like a tree, its stamp freed when it empties), engineers that mine a load from
+//   one cluster, haul it to the nearest
 //   Command Center and go back (the `gather` order).
 // - Fog by tile with the height rule instead of space's sight circles, and each team's memory of
 //   enemy buildings as last seen (World `known`).
@@ -108,23 +110,121 @@ export type GroundMove = { pv: number; stuck: number; best: number; tries: numbe
    * finds its own. */
   job?: string
   /** A gatherer sent to build: the field it goes back to once the building is done. */
-  back?: number }
+  back?: number
+  /** A gatherer: the crystal cluster it mines (an index into World `crystals`). */
+  cl?: number }
+
+/** A kyber crystal cluster (World `crystals`): an object standing on one tile of crystal field `f`
+ * (c, r), blocking it like a tree, with the kyber it started with and has left, one of a few shapes,
+ * and whether it stands on the nav grid (it comes off once mined out, at the next flush). */
+export type Crystal = { f: number; c: number; r: number; left: number; max: number; shape: number; on: boolean }
 
 // --- Kyber -------------------------------------------------------------------------------------------
 
-/** Kyber in each crystal field at the start: enough for a long game (a side's own fields, with half
- * the shared one, hold 37,500 on Ashwater Crossing: half an hour of gathering with fourteen
- * engineers, about 20 kyber a second). */
+/** Kyber in each crystal field at the start, shared out over its clusters: enough for a long game (a
+ * side's own fields, with half the shared one, hold 37,500 on Ashwater Crossing: half an hour of
+ * gathering with fourteen engineers, about 20 kyber a second). */
 export const FIELD_KYBER = 15000
+/** Clusters a field has: about one for every two of its tiles, between these. */
+export const CLUSTERS_MIN = 3
+export const CLUSTERS_MAX = 7
+/** How many shapes a cluster comes in (models/ground.ts kyber models). */
+export const CRYSTAL_SHAPES = 3
 /** Kyber an engineer carries in one load, and mines a second. */
 export const CARRY = 20
 export const MINE_RATE = 2.5
-/** How near its spot on the field an engineer mines from. */
-const MINE_REACH = TILE * 0.8
+/** How near a cluster's middle an engineer mines from (from any of the eight tiles round it). */
+const MINE_REACH = TILE * 1.6
+
+/** A small seeded random stream (mulberry32) for laying out a map's clusters: the same on every
+ * machine, and apart from the world's own stream. */
+function seeded(seed: number) {
+  let s = seed >>> 0
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0
+    let t = s
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/**
+ * A map's crystal clusters at the start of a battle, from its fields and its seed: each field gets
+ * one cluster for about every two of its tiles (CLUSTERS_MIN to CLUSTERS_MAX), on tiles picked at
+ * random (the field's edge first, so they spread) but never side by side (apart, or at most corner
+ * to corner in a small field) and always with open ground round each to mine it from, and FIELD_KYBER
+ * shared out between them, each a fifth more or less than an even share. The same on every machine.
+ */
+export function placeCrystals(map: GroundMap, fields: KyberField[]): Crystal[] {
+  const g = map.grid
+  const out: Crystal[] = []
+  fields.forEach((field, f) => {
+    const rnd = seeded(Math.imul(map.def.seed ^ 0x6b79, 2654435761) + f * 0x9e3779b9)
+    const want = clamp(Math.round(field.tiles.length * 0.55), CLUSTERS_MIN, CLUSTERS_MAX)
+    const pool = field.tiles.filter((i) => !(g.flags[i] & TF.blocked))
+    // The field's edge tiles first (fewest field tiles round them: clusters spread out and more of
+    // them fit), in random order among equals from the field's own stream.
+    const inField = new Set(field.tiles)
+    const edge = (i: number) => {
+      let n = 0
+      for (const d of [-1, 1, -g.cols, g.cols]) if (inField.has(i + d)) n++
+      return n
+    }
+    const key = new Map(pool.map((i) => [i, edge(i) + rnd()]))
+    pool.sort((a, b) => key.get(a)! - key.get(b)! || a - b)
+    const picked: number[] = []
+    const near = (i: number, j: number, d: number) => Math.max(Math.abs((j % g.cols) - (i % g.cols)), Math.abs(Math.floor(j / g.cols) - Math.floor(i / g.cols))) <= d
+    // Open ground round tile i (walkable, not a cluster): what an engineer mines it from.
+    const open = (i: number) => {
+      let n = 0
+      for (let dr = -1; dr <= 1; dr++)
+        for (let dc = -1; dc <= 1; dc++) {
+          const c = (i % g.cols) + dc
+          const r = Math.floor(i / g.cols) + dr
+          if ((!dc && !dr) || c < 0 || r < 0 || c >= g.cols || r >= g.rows) continue
+          const j = r * g.cols + c
+          if (!(g.flags[j] & TF.blocked) && !picked.includes(j)) n++
+        }
+      return n
+    }
+    // First never side by side (not even corner to corner), then, for a small field, corner to
+    // corner too; always with open ground round each one.
+    for (const gap of [1, 0])
+      for (const i of pool) {
+        if (picked.length >= want) break
+        if (picked.includes(i) || picked.some((j) => (gap ? near(i, j, 1) : near(i, j, 1) && (j % g.cols === i % g.cols || Math.floor(j / g.cols) === Math.floor(i / g.cols))))) continue
+        if (open(i) < 2 + gap) continue
+        picked.push(i)
+        // A cluster placed must not take the last open tile round one placed before.
+        if (picked.some((j) => open(j) < 2)) picked.pop()
+      }
+    const weights = picked.map(() => 0.8 + rnd() * 0.4)
+    const sum = weights.reduce((a, b) => a + b, 0)
+    let given = 0
+    picked.forEach((i, k) => {
+      const amount = k === picked.length - 1 ? FIELD_KYBER - given : Math.round((FIELD_KYBER * weights[k]) / sum)
+      given += amount
+      const c = i % g.cols
+      out.push({ f, c, r: (i - c) / g.cols, left: amount, max: amount, shape: Math.floor(rnd() * CRYSTAL_SHAPES), on: false })
+    })
+  })
+  return out
+}
+
+/** Kyber left in field `f`, all its clusters together. */
+export function fieldLeft(w: World, f: number) {
+  let n = 0
+  for (const c of w.crystals ?? []) if (c.f === f) n += c.left
+  return n
+}
+
+/** A cluster's middle, in world units. */
+export const crystalAt = (c: Crystal): Pt => ({ x: (c.c + 0.5) * TILE, y: (c.r + 0.5) * TILE })
 
 /** The crystal fields of a map: each deposit tile goes to the nearest deposit middle (the first on a
  * tie), the outermost tiles first. */
-function fieldsOf(map: GroundMap): KyberField[] {
+export function fieldsOf(map: GroundMap): KyberField[] {
   const g = map.grid
   const fields: KyberField[] = map.deposits.map((d) => ({ x: d.x, y: d.y, tiles: [] }))
   if (!fields.length) return fields
@@ -144,38 +244,31 @@ function fieldsOf(map: GroundMap): KyberField[] {
   return fields
 }
 
-/**
- * How full each tile of field `f` looks, 0 to 1, from the kyber left in it: the outermost tiles empty
- * first, the middle last. For the ground layer's crystals.
- */
-export function fieldTiles(w: World, f: number): { tile: number; fill: number }[] {
-  const field = gs(w).fields[f]
-  const n = field.tiles.length
-  const share = Math.max(0, (w.kyber?.[f] ?? 0) / FIELD_KYBER)
-  return field.tiles.map((tile, k) => ({ tile, fill: clamp(share * n - (n - 1 - k), 0, 1) }))
-}
-
-/** The crystal field with kyber left under or nearest (x, y), within two tiles of one of its tiles,
+/** The crystal field of the cluster with kyber left under or nearest (x, y), within two tiles of it,
  * or -1. */
 export function fieldAt(w: World, x: number, y: number): number {
-  const g = gs(w)
   const reach = TILE * 2
   let best = -1
   let bestD = reach * reach
-  g.fields.forEach((f, k) => {
-    if (!((w.kyber?.[k] ?? 0) > 0)) return
-    for (const i of f.tiles) {
-      const c = i % g.nav.cols
-      const dx = (c + 0.5) * TILE - x
-      const dy = ((i - c) / g.nav.cols + 0.5) * TILE - y
-      const d = dx * dx + dy * dy
-      if (d < bestD) {
-        bestD = d
-        best = k
-      }
+  for (const c of w.crystals ?? []) {
+    if (!(c.left > 0)) continue
+    const p = crystalAt(c)
+    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y)
+    if (d < bestD) {
+      bestD = d
+      best = c.f
     }
-  })
+  }
   return best
+}
+
+/** Puts each standing cluster's stamp on the nav grid (from the next flush). */
+function stampCrystals(w: World) {
+  for (const c of w.crystals ?? []) {
+    if (!(c.left > 0)) continue
+    stampFootprint(gs(w).nav, c.c, c.r, 1, 1, 1)
+    c.on = true
+  }
 }
 
 /** The terrain layer for world `w`, whose map names its ground map. */
@@ -233,7 +326,8 @@ function stampDown(w: World, u: Unit) {
 export function groundStart(w: World) {
   const g = gs(w)
   w.known = Array.from({ length: w.teams }, () => [])
-  w.kyber = g.fields.map(() => FIELD_KYBER)
+  w.crystals = placeCrystals(g.map, g.fields)
+  stampCrystals(w)
   w.players.forEach((p, o) => {
     const ids = groundIds(p.faction)
     const ct = UNIT[ids.center]
@@ -509,20 +603,52 @@ function work(u: Unit, s: Unit) {
 
 // --- Gathering ---------------------------------------------------------------------------------------
 
-/** The nearest crystal field to `u` with kyber left that it can drive to (the first on a tie), or
- * -1. Every side knows where the fields are (the land is known from orbit). */
-function nearestField(w: World, u: Unit): number {
+/** The anchor tiles round cluster `c` (the eight next to it) that `u` can stand on and reach. */
+function crystalSpots(w: World, u: Unit, c: Crystal): number[] {
   const nav = gs(w).nav
   const k = size(u)
   const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
   const piece = start >= 0 ? nav.piece[k - 1][start] : -1
+  const out: number[] = []
+  for (let r = c.r - k; r <= c.r + 1; r++)
+    for (let cc = c.c - k; cc <= c.c + 1; cc++) {
+      // Anchor squares over the cluster's own tile are on it.
+      if (r > c.r - k && r <= c.r && cc > c.c - k && cc <= c.c) continue
+      if (cc < 0 || r < 0 || cc >= nav.cols || r >= nav.rows) continue
+      const i = r * nav.cols + cc
+      if (stands(nav, k, i) && (piece < 0 || nav.piece[k - 1][i] === piece)) out.push(i)
+    }
+  return out
+}
+
+/** The cluster with kyber left in field `f` that `u` should mine: the nearest it can reach, one with
+ * fewer engineers on it counting as nearer (so a crew spreads over the field). -1 when none. */
+function pickCrystal(w: World, u: Unit, f: number): number {
+  const all = w.crystals ?? []
+  const miners = new Map<number, number>()
+  for (const o of w.units) if (o !== u && !o.dead && o.order.k === 'gather' && o.gm?.cl !== undefined && !o.gm.drop) miners.set(o.gm.cl, (miners.get(o.gm.cl) ?? 0) + 1)
+  let best = -1
+  let bestD = Infinity
+  all.forEach((c, i) => {
+    if (c.f !== f || !(c.left > 0)) return
+    const p = crystalAt(c)
+    const d = (p.x - u.x) * (p.x - u.x) + (p.y - u.y) * (p.y - u.y) + (miners.get(i) ?? 0) * TAKEN
+    if (d < bestD && crystalSpots(w, u, c).length) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
+}
+
+/** The nearest crystal field to `u` with a cluster it can mine (the first on a tie), or -1. Every
+ * side knows where the fields are (the land is known from orbit). */
+function nearestField(w: World, u: Unit): number {
   let best = -1
   let bestD = Infinity
   gs(w).fields.forEach((f, i) => {
-    if (!((w.kyber?.[i] ?? 0) > 0)) return
-    if (piece >= 0 && !f.tiles.some((t) => stands(nav, k, t) && nav.piece[k - 1][t] === piece)) return
     const d = (f.x - u.x) * (f.x - u.x) + (f.y - u.y) * (f.y - u.y)
-    if (d < bestD) {
+    if (d < bestD && pickCrystal(w, u, i) >= 0) {
       bestD = d
       best = i
     }
@@ -545,19 +671,16 @@ function dropFor(w: World, u: Unit): Unit | null {
   return best
 }
 
-/** Where engineer `u` mines field `f`: the tile of it nearest `u` that it can reach and stand on, one
- * no other engineer mining there has taken if there is one. Null when there is none. */
-function mineSpot(w: World, u: Unit, f: number): Pt | null {
+/** Where engineer `u` mines cluster `cl`: the open tile next to it nearest `u`, one no other engineer
+ * mining has taken if there is one. Null when there is none. */
+function mineSpot(w: World, u: Unit, cl: number): Pt | null {
   const nav = gs(w).nav
   const k = size(u)
   const taken = new Set<number>()
-  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && !o.gm.drop && o.order.k === 'gather' && o.order.f === f) taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
-  const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
-  const piece = start >= 0 ? nav.piece[k - 1][start] : -1
+  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && !o.gm.drop && o.order.k === 'gather') taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
   let best = -1
   let bestD = Infinity
-  for (const i of gs(w).fields[f].tiles) {
-    if (!stands(nav, k, i) || (piece >= 0 && nav.piece[k - 1][i] !== piece)) continue
+  for (const i of crystalSpots(w, u, w.crystals![cl])) {
     const p = spotOf(nav, k, i)
     const d = (p.x - u.x) * (p.x - u.x) + (p.y - u.y) * (p.y - u.y) + (taken.has(i) ? TAKEN : 0)
     if (d < bestD) {
@@ -569,23 +692,34 @@ function mineSpot(w: World, u: Unit, f: number): Pt | null {
 }
 
 /** Where a gathering engineer goes: with a full load (or nothing left to mine and something in hand),
- * to the nearest Command Center of ours; otherwise to its spot on its field, or, the field run dry,
- * on to the nearest other one. Null when there is nothing left to do. */
+ * to the nearest Command Center of ours; otherwise to its spot by its cluster, or, the cluster mined
+ * out, the next one in the same field, or, the field run dry, the nearest other field. Null when
+ * there is nothing left to do. */
 function gatherGoal(w: World, u: Unit, o: Extract<Order, { k: 'gather' }>): Goal | null {
   const g = moveOf(u)
   const carry = u.carry ?? 0
   if (!g.drop) {
+    const mine = g.cl !== undefined ? w.crystals?.[g.cl] : undefined
     if (carry >= CARRY - 1e-9) {
       g.drop = true
       g.spot = undefined
-    } else if (!((w.kyber?.[o.f] ?? 0) > 0)) {
-      const next = nearestField(w, u)
+    } else if (!mine || mine.f !== o.f || !(mine.left > 0)) {
       g.spot = undefined
-      if (next >= 0) {
-        o.f = next
-        g.job = `g${next}`
-      } else if (carry > 0) g.drop = true
-      else return null
+      let next = pickCrystal(w, u, o.f)
+      if (next < 0) {
+        const f = nearestField(w, u)
+        if (f >= 0) {
+          o.f = f
+          g.job = `g${f}`
+          next = pickCrystal(w, u, f)
+        }
+      }
+      if (next >= 0) g.cl = next
+      else {
+        g.cl = undefined
+        if (carry > 0) g.drop = true
+        else return null
+      }
     }
   }
   if (g.drop) {
@@ -594,39 +728,45 @@ function gatherGoal(w: World, u: Unit, o: Extract<Order, { k: 'gather' }>): Goal
     g.spot ??= workSpot(w, u, home)
     return { x: g.spot.x, y: g.spot.y, drop: home }
   }
-  g.spot ??= mineSpot(w, u, o.f) ?? undefined
+  g.spot ??= mineSpot(w, u, g.cl!) ?? undefined
   if (!g.spot) return null
-  return { x: g.spot.x, y: g.spot.y, mine: o.f }
+  return { x: g.spot.x, y: g.spot.y, mine: g.cl! }
 }
 
-/** An engineer on its spot on field `f`: it stops, faces the crystals and mines, kyber going from the
- * field into its load; once full it heads for a Command Center. The last crystal mined, the field
- * runs dry (an event the screen tells the player about). */
-function mine(w: World, u: Unit, f: number) {
+/** An engineer by its cluster: it stops, faces it and mines, kyber going from the cluster into its
+ * load; once full it heads for a Command Center. A cluster mined out is gone: its stamp comes off the
+ * nav grid at the next flush (as a building's), and the last one in a field runs it dry (an event
+ * the screen tells the player about). */
+function mine(w: World, u: Unit, cl: number) {
   const g = moveOf(u)
   g.mine = true
   u.route = null
   g.pv = -1
   g.tries = 0
   u.v = 0
-  const field = gs(w).fields[f]
-  const off = wrap(M.atan2(field.y - u.y, field.x - u.x) - u.a)
+  const c = w.crystals![cl]
+  const at = crystalAt(c)
+  const off = wrap(M.atan2(at.y - u.y, at.x - u.x) - u.a)
   const turn = u.t.turn * STEP
   u.a = wrap(u.a + clamp(off, -turn, turn))
-  const left = w.kyber![f]
-  const take = Math.min(MINE_RATE * STEP, CARRY - (u.carry ?? 0), left)
+  const take = Math.min(MINE_RATE * STEP, CARRY - (u.carry ?? 0), c.left)
   if (take > 0) {
     u.carry = (u.carry ?? 0) + take
-    w.kyber![f] = left - take
-    if (w.kyber![f] <= 1e-9) {
-      w.kyber![f] = 0
-      w.events.push({ k: 'dry', field: f, x: field.x, y: field.y })
+    c.left -= take
+    if (c.left <= 1e-9) {
+      c.left = 0
+      if (c.on) stampFootprint(gs(w).nav, c.c, c.r, 1, 1, -1)
+      c.on = false
+      if (!(fieldLeft(w, c.f) > 0)) {
+        const field = gs(w).fields[c.f]
+        w.events.push({ k: 'dry', field: c.f, x: field.x, y: field.y })
+      }
     }
   }
-  if ((u.carry ?? 0) >= CARRY - 1e-9 || !(w.kyber![f] > 0)) {
-    g.drop = (u.carry ?? 0) > 0
+  if ((u.carry ?? 0) >= CARRY - 1e-9) {
+    g.drop = true
     g.spot = undefined
-  }
+  } else if (!(c.left > 0)) g.spot = undefined
 }
 
 /** A gathering engineer next to a Command Center of ours: its load goes into the side's kyber, then
@@ -1269,11 +1409,15 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
       int(u.route?.pts.length ?? -1)
       int(u.gm.drop ? 1 : 0)
       int(u.gm.back ?? -1)
+      int(u.gm.cl ?? -1)
     }
     if (u.carry !== undefined) num(u.carry)
     if (u.order.k === 'gather') int(u.order.f)
   }
-  for (const k of w.kyber ?? []) num(k)
+  for (const c of w.crystals ?? []) {
+    num(c.left)
+    int(c.on ? 1 : 0)
+  }
   for (const mem of w.known ?? []) {
     int(mem.length)
     for (const k of mem) int(k.id)
@@ -1299,13 +1443,21 @@ export const snapGround = (w: World): GroundSnap => ({ ver: gs(w).nav.ver, pendi
 export function restoreGround(w: World, s: GroundSnap | undefined) {
   const g = newGround(w)
   w.ground = g
-  // A battle saved before kyber: every field still full.
-  w.kyber ??= g.fields.map(() => FIELD_KYBER)
+  // A battle saved before crystal clusters: its fields' clusters laid out afresh, each field's left
+  // shared out as it was (a battle saved before kyber at all: every field full).
+  if (!w.crystals) {
+    w.crystals = placeCrystals(g.map, g.fields)
+    const was = w.kyber
+    if (was) for (const c of w.crystals) c.left = c.max * Math.max(0, Math.min(1, (was[c.f] ?? FIELD_KYBER) / FIELD_KYBER))
+    delete w.kyber
+    for (const c of w.crystals) c.on = c.left > 0
+  }
   for (const u of w.units) {
     if (!u.foot?.on) continue
     const [fw, fh] = spec(u.t).foot!
     stampFootprint(g.nav, u.foot.c, u.foot.r, fw, fh, 1)
   }
+  for (const c of w.crystals) if (c.on) stampFootprint(g.nav, c.c, c.r, 1, 1, 1)
   for (const p of s?.pending ?? []) stampFootprint(g.nav, p.c, p.r, p.w, p.h, p.d === 1 ? -1 : 1)
   flushStamps(g.nav)
   g.nav.ver = s?.ver ?? 0

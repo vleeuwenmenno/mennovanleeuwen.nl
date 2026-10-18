@@ -12,7 +12,7 @@ import {
 } from './data.ts'
 import type { Brain } from './ai.ts'
 import type { Eye } from './ground/fog.ts'
-import type { Foot, GroundMove, GroundSnap, GroundState, KnownBuilding } from './ground/world.ts'
+import type { Crystal, Foot, GroundMove, GroundSnap, GroundState, KnownBuilding } from './ground/world.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
 // economy and capture beacons. The game screen and the headless balance sims both drive it by
@@ -514,7 +514,11 @@ export type World = {
   ground?: GroundState
   /** Ground battles: each team's memory of other teams' buildings, as last seen. */
   known?: KnownBuilding[][]
-  /** Ground battles: the kyber left in each crystal field (by the ground map's deposits). */
+  /** Ground battles: the kyber crystal clusters standing on the crystal fields, with the kyber each
+   * has left (ground/world.ts Crystal). */
+  crystals?: Crystal[]
+  /** Ground battles saved before crystal clusters: the kyber left in each field (read on loading, then
+   * gone). */
   kyber?: number[]
 }
 

@@ -3,7 +3,7 @@ import * as M from '../detmath.ts'
 import { UNIT } from '../data.ts'
 import { cmdBuild, cmdCancelSite, cmdConstruct, cmdGather, cmdPlace, cantBuild, type Unit, type World } from '../sim.ts'
 import { TILE, type Pt } from './types.ts'
-import { POP_MAX, groundIds, groundPlacement, knownBuildings } from './world.ts'
+import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, knownBuildings } from './world.ts'
 
 // The AI's decisions in a ground battle: a branch of ai.ts's think (same brain, clock and random
 // stream), passive for now: on its seat it keeps its engineers gathering kyber, puts up supply before
@@ -108,8 +108,9 @@ export function groundThink(w: World, b: Brain) {
       else byField.set(f, [u])
     }
     for (const [f, us] of byField) {
-      const field = w.ground!.fields[f]
-      cmdGather(w, o, us.map((u) => u.id), field.x, field.y)
+      // At one of the field's clusters with kyber left (the order finds the field from it).
+      const at = (w.crystals ?? []).find((c) => c.f === f && c.left > 0)
+      if (at) cmdGather(w, o, us.map((u) => u.id), crystalAt(at).x, crystalAt(at).y)
     }
   }
 
@@ -129,7 +130,7 @@ function fieldFor(w: World, centers: Unit[], u: Unit): number {
   let bestD = Infinity
   let bestU = Infinity
   w.ground!.fields.forEach((f, i) => {
-    if (!((w.kyber?.[i] ?? 0) > 0)) return
+    if (!(fieldLeft(w, i) > 0)) return
     const d = Math.min(...centers.map((c) => d2(f, c)))
     const du = d2(f, u)
     // Fields about as near home count the same: then the one nearer the engineer.
@@ -175,7 +176,7 @@ function expansionSpot(w: World, o: number, type: string, centers: Unit[]): Pt |
   const served = SERVED * TILE
   const fields = w.ground!.map.deposits
     .map((d, i) => ({ d, i, far: d2(d, home) }))
-    .filter(({ d, i, far }) => (w.kyber?.[i] ?? 0) > 0 && enemies.every((e) => d2(d, e) > far) && centers.every((c) => d2(d, c) > served * served))
+    .filter(({ d, i, far }) => fieldLeft(w, i) > 0 && enemies.every((e) => d2(d, e) > far) && centers.every((c) => d2(d, c) > served * served))
     .sort((a, c) => a.far - c.far || a.i - c.i)
   for (const { d } of fields)
     for (const [dx, dy] of AROUND) {
