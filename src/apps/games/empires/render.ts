@@ -28,6 +28,8 @@ const TAG_PATHS = {
   repair: 'M16 3.5a12.5 12.5 0 1 0 0.01 0zM16 9.5v13M9.5 16h13',
   // A crystal and a pick: mine (a ground battle's kyber).
   mine: 'M12 6l4-3.5 4 3.5-4 14zM12 6h8M5 27l11-11M13 12.5l5.5 5.5',
+  // Two engineers side by side: assist (a ground battle's engineers).
+  assist: 'M11 6.5a3.5 3.5 0 1 0 0.01 0zM21 6.5a3.5 3.5 0 1 0 0.01 0zM4.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5M14.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5M11 27h10M18 24l3 3-3 3',
 }
 const tagIcons = new Map<string, Path2D>()
 const tagIcon = (k: keyof typeof TAG_PATHS) => {
@@ -109,6 +111,9 @@ export type View = {
   /** A ground battle, no order armed, engineers selected and the pointer over a kyber crystal
    * cluster (its middle): tagged "Right-click: mine kyber". */
   mineHint?: Pt | null
+  /** A ground battle: our engineer under the pointer that our selected engineers would assist on a
+   * right-click. */
+  assistHint?: number
 }
 
 type Particle = {
@@ -1261,12 +1266,30 @@ export class Renderer {
           ctx.lineTo(at.x, at.y)
           ctx.stroke()
         }
+      } else if ((o.k === 'construct' || o.k === 'assist') && w.ground) {
+        // A ground battle's engineer: a dotted line to the site or building it works on (gold), or to
+        // the engineer it assists (green). (A gatherer's line to its crystal is the ground's own.)
+        const t = w.byId.get(o.id)
+        if (t && !t.dead) {
+          ctx.strokeStyle = o.k === 'construct' ? 'rgba(255,200,110,0.45)' : 'rgba(125,255,160,0.45)'
+          ctx.setLineDash([2 / z, 5 / z])
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.lineTo(t.x, t.y)
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
       }
       // Shift-queued orders: dashed legs on from the current one, a dot at each stop.
       if (u.queue.length) {
-        const spot = (q: typeof o) => {
+        const spot = (q: typeof o): Pt | null => {
           if (q.k === 'move' || q.k === 'patrol' || q.k === 'area') return { x: q.x, y: q.y }
-          if (q.k === 'attack') return w.byId.get(q.id) ?? null
+          if (q.k === 'attack' || q.k === 'construct' || q.k === 'mend' || q.k === 'assist' || q.k === 'guard') {
+            const t = w.byId.get(q.id)
+            return t && !t.dead ? t : null
+          }
+          // A ground battle's crystal field: its middle.
+          if (q.k === 'gather') return w.ground?.fields[q.f] ?? null
           return null
         }
         let from = spot(o) ?? u
@@ -1274,7 +1297,7 @@ export class Renderer {
         for (const q of u.queue) {
           const to = spot(q)
           if (!to) continue
-          const col = q.k === 'attack' || q.k === 'area' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : '125,255,160'
+          const col = q.k === 'attack' || q.k === 'area' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : q.k === 'construct' ? '255,200,110' : q.k === 'gather' ? '255,154,60' : '125,255,160'
           ctx.strokeStyle = `rgba(${col},0.3)`
           ctx.beginPath()
           ctx.moveTo(from.x, from.y)
@@ -1331,6 +1354,9 @@ export class Renderer {
     if (fix && !fix.dead && !guarded.has(fix.id)) tags.push([ctx, fix, Math.hypot(...dims(fix.t)) * 0.5 * z + 10, 'Repair', 'repair', '125,255,160', z])
     // Engineers selected over a kyber crystal: what a right-click will do.
     if (view.mineHint) tags.push([ctx, view.mineHint, 28 * z + 12, 'Right-click: mine kyber', 'mine', '255,154,60', z])
+    // Engineers selected over another of our engineers: they would assist it.
+    const help = view.assistHint ? w.byId.get(view.assistHint) : undefined
+    if (help && !help.dead) tags.push([ctx, help, Math.hypot(...dims(help.t)) * 0.5 * z + 10, 'Right-click: assist', 'assist', '125,255,160', z])
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
     // (Engineers weld with beams of their own, see drawWelds.)

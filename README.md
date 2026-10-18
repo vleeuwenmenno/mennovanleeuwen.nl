@@ -3881,8 +3881,31 @@ pathed and counted as one unit; its members walk on their own round it:
   middle. Members turn to their own targets, else to where they walk.
 - **Falling.** The hull is the squad's: a member falls for every share of it lost (a squad of five
   loses one at 80%, 60% and so on), which one from the random stream, and the last one falls with
-  the unit. A fallen member lies where it fell, dark, with a puff of dust, and fades after a few
-  seconds (on screen only).
+  the unit. How it falls is drawn on screen only (see Deaths below).
+- **Deaths** ([`ground/deaths.ts`](src/apps/games/empires/ground/deaths.ts)). The sim decides only
+  when a member falls; it also notes, for the screen and outside the hash, the ground weapon that
+  hit the squad last, where that hit came from and whose it was (Unit `gHit`, `gHitX`, `gHitY`,
+  `gHitF`). A member then falls by its faction, cartoon rather than gore:
+  - a trooper is knocked back in a burst of blaster sparks and lies where it lands, burnt;
+  - a droid comes apart with an electrical pop (a cyan ring and a spark jag): three of its head, arms
+    and blaster fly off spinning and lie round its body as scrap, on a splash of oil;
+  - a bug bursts in a spray of chitin and ichor and lies curled up, legs drawn in, on a green stain.
+
+  Explosives (rockets, shells, artillery, swarm rockets) throw a body two or three times further,
+  spinning through the air, and leave a scorch mark where it stood. A spray melts it instead: a
+  Republic flame chars it to ash, droid gas and Swarm acid dissolve it into a bubbling puddle. Each
+  member falls its own way, from a seed of its own (its squad and number: direction, distance, spin,
+  which parts fly, its pose on the ground), so a squad never dies in step. Bodies lie 24 seconds and
+  fade over 6 (a melted one is gone in under 2), stains last 30 seconds and fade over 6, and at most
+  160 bodies and 120 stains stay, the oldest going first. Each death makes a small sound of its
+  faction (`EmpiresSound.death`: a trooper's grunt and armour clatter, a droid's servo whine and pop,
+  a bug's squeal), panned where it is, at most four in 0.4 seconds and two of a faction in 0.3, so
+  a big fight doesn't turn into noise. It stays cheap with big armies: bodies are the members' own
+  cached bitmaps, all lit from one heading so every body of a look shares one bitmap (a droid breaks
+  one of four ways), flying parts the cached part bitmaps wrecks use, stains three sprites a kind in
+  one canvas painted once, and nothing is allocated per frame. In the ground-squads perf scene,
+  which now has splash and spray test units among the squads so members die every way while it is
+  measured, the deaths add about 40 bitmaps and no measurable main thread time.
 - **On screen.** Each member steps through its own walk cycle, out of step with the others, and has
   a small shadow and a rim in its side's colour at its feet instead of a disc under the squad; the
   selection ring takes in the members wherever they stand, and clicking any member picks the squad.
@@ -3907,8 +3930,7 @@ the first enemy, the big ones further apart (the Behemoth further back, as artil
 close).
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) an upgrade battle (the tier gate on units and research, a tier upgrade paid in research points and kyber, its power drawn only while it runs, called off with both refunded, slowed by made / used to the tick, done: tier 2, more hull, the tier 2 unit trained; weapons research reaching the units already out and those trained after; the AI upgrading a factory and researching) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad's members firing on their own timing, from where each stands, spread over the targets in reach and about three fifths as often with three of five left; members shuffling standing still, crossing a river and gathering again, and filing through a gap one tile wide and fanning out beyond; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) a tier 1 battle (all six tier 1 units firing, losses on both sides) a tier 2 battle (the six tier 2 units against a crowd of tier 1: all six firing, splash catching several units at once, the anti-swarm side ahead) and a tier 3 battle (all six tier 3 units firing, beams included, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad's members firing on their own timing, from where each stands, spread over the targets in reach and about three fifths as often with three of five left; members shuffling standing still, crossing a river and gathering again, and filing through a gap one tile wide and fanning out beyond; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons; tier 3 units' tier, armour, pop, price and size; two of any tier 3 unit losing to equal kyber of Racers
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units), an upgrade battle (the tier gate on units and research, a tier upgrade paid in research points and kyber, its power drawn only while it runs, called off with both refunded, slowed by made / used to the tick, done: tier 2, more hull, the tier 2 unit trained; weapons research reaching the units already out and those trained after; the AI upgrading a factory and researching), an orders battle (a move with a Shift-queued gather and two sites: the move, the two sites built one after the other, then gathering; an engineer assisting another through a build, a repair and gathering, and following it on), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed), a tier 1 battle (all six tier 1 units firing, losses on both sides), a tier 2 battle (the six tier 2 units against a crowd of tier 1: all six firing, splash catching several units at once, the anti-swarm side ahead) and a tier 3 battle (all six tier 3 units firing, beams included, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad's members firing on their own timing, from where each stands, spread over the targets in reach and about three fifths as often with three of five left; members shuffling standing still, crossing a river and gathering again, and filing through a gap one tile wide and fanning out beyond; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons; tier 3 units' tier, armour, pop, price and size; two of any tier 3 unit losing to equal kyber of Racers
 pnpm check:ground-panels http://localhost:5263 [dir]  # needs a dev server: an engineer's Build cards and a factory's Units and Upgrades pages at 1280x720, 1000x820, 1920x1080 and a phone upright and on its side: no name or price line cut, no card out of the panel (a row may scroll sideways), nothing scrolling; with a dir, screenshots and the placement ghosts of a generator and a factory
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule; size classes 2 and 3 crossing every bridge, ford and ramp and reaching every spawn on every hand-made map and 16 generated ones
 pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
@@ -3952,6 +3974,20 @@ differs:
 - **A factory's panel** has two pages, as a yard's: Units (its train cards, locked ones saying the
   tier they need) and Upgrades (its next tier and its research, each card with its price in research
   points, kyber, time and power, a bar while it runs, and right-click or long-press to call it off).
+- **Shift-queue** works on the ground as in space (Shift held, or the touch bar's Shift toggle): move,
+  attack, attack-move and patrol, gather, repair and build. With Shift a building's placement stays
+  open, so several sites go down in a row and the engineers build them in order. Gathering never
+  ends, so an order queued behind it goes before it: a gathering engineer does its queued orders,
+  then goes back to its field. The selected units' queues show as dashed legs from stop to stop
+  (gold to a site, orange to a crystal field, green to a move or an engineer assisted), under the
+  fog.
+- **Assist** (Order `assist`, the `assist` order through commands.ts), as Age of Empires villagers
+  do: with engineers selected, a right-click on another engineer of ours (the cursor and a
+  "Right-click: assist" tag show over it; on touch the wheel's Assist) makes them help with what it
+  does: build the same site, repair the same building, gather the same field (more engineers on a
+  site build faster, as always). They follow it on to its next job until told otherwise, and stay
+  near it while it has none; a chain of assists leads to the first engineer with a job. A
+  right-click on a site or a damaged building of ours sends them straight to it, as before.
 - **Kyber:** a right-click on a crystal cluster with engineers selected (or the touch wheel's Gather
   kyber, the first entry when the wheel opens on a cluster) sets them gathering. Hovering a cluster
   with engineers selected says so: a crystal-and-pick cursor and a "Right-click: mine kyber" tag,

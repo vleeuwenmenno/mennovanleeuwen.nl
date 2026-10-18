@@ -1,22 +1,20 @@
 import { memberModel } from '../models/ground.ts'
 import { drawHull } from '../models/paint.ts'
-import type { HullState, Model } from '../models/types.ts'
+import type { Model } from '../models/types.ts'
 import type { Unit } from '../sim.ts'
+import { drawDeaths, memberFell } from './deaths.ts'
 import { memberPos, squadReach } from './squad.ts'
 
 // How squads and walkers look on the battle screen (groundKit's squad, ring, pose, fell and bodies):
 // a squad's members, each its member model where it stands in the sim (ground/squad.ts), turned the
 // way it faces, stepping through its own walk cycle as it goes, with a shadow and a rim in its side's
-// colour at its feet; a walker's legs the same way; and the members that fell, lying where they
-// fell and fading. All on screen only: how far each has walked is kept here, from where it was drawn
+// colour at its feet; a walker's legs the same way; and the members that fell (ground/deaths.ts:
+// each falls its own way, by its faction and the weapon that got it). All on screen only: how far each has walked is kept here, from where it was drawn
 // last.
 
 /** A squad is drawn at least this many CSS pixels across, however far out the view is: its members
  * grow and spread with it, as a far-off vehicle keeps a size (render.ts GROUND_MIN_PX). */
 const SQUAD_MIN_PX = 24
-/** Seconds a fallen member lies before it starts fading, and how long the fading takes. */
-const LIE = 4
-const FADE = 2
 /** Below this speed (world units a second) a unit stands, in its rest pose. */
 const STILL = 4
 
@@ -46,15 +44,13 @@ export function walkerPose(u: Unit, m: Model, clock: number) {
   return poseAt(m, u.v > STILL, odometer(u, clock), u.t.size * 0.32, 0)
 }
 
-type Body = { x: number; y: number; rot: number; m: Model; size: number; at: number }
-const bodies: Body[] = []
-/** Where each squad's members stood when last drawn, by their number, to see one fall. */
+/** Where each squad's members stood when last drawn, by their number, to see one fall, and when that
+ * was (a squad out of view for a while doesn't drop bodies where it was last seen). */
 const seen = new Map<number, Map<number, { x: number; y: number; a: number }>>()
+const seenAt = new Map<number, number>()
 /** How far each member has walked (by squad and member), and when it last moved: each steps at its
  * own pace, out of step with the others. */
 const steps = new Map<string, { x: number; y: number; d: number; moved: number }>()
-
-const FALLEN: HullState = { detached: 0, scorch: 3, variant: 0, pose: 0 }
 
 /** Squad `u`'s members where they stand, each with a small shadow and a rim in `rim` (the side's
  * colour) at its feet; `alpha` see-through; `zdpr` device pixels per world unit. */
@@ -72,8 +68,9 @@ export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, z: number, zdp
     now.set(q.k, { x: p.x, y: p.y, a: q.a })
   }
   // Members gone since the last frame fell where they stood.
-  if (was) for (const [key, p] of was) if (!now.has(key)) bodies.push({ x: p.x, y: p.y, rot: p.a + Math.PI / 2 + (key % 2 ? 0.6 : -0.5), m, size, at: clock })
+  if (was && clock - (seenAt.get(u.id) ?? -1) < 0.5) for (const [key, p] of was) if (!now.has(key)) memberFell(u, m, p.x, p.y, p.a, size, key, clock)
   seen.set(u.id, now)
+  seenAt.set(u.id, clock)
   // Shadows and rims at their feet.
   ctx.save()
   ctx.globalAlpha *= alpha
@@ -126,34 +123,10 @@ export function squadFell(u: Unit, clock: number) {
   const sq = u.t.ground?.squad
   const m = sq && memberModel(sq.member)
   if (!sq || !m) return
-  for (const q of u.crew ?? []) bodies.push({ x: q.x, y: q.y, rot: q.a + Math.PI / 2 + (q.k % 2 ? 0.6 : -0.5), m, size: sq.size, at: clock })
+  for (const q of u.crew ?? []) memberFell(u, m, q.x, q.y, q.a, sq.size, q.k, clock)
   seen.delete(u.id)
+  seenAt.delete(u.id)
 }
 
-/** The fallen members, under the units: a puff of dust as each drops, then the body, dark, fading. */
-export function drawBodies(ctx: CanvasRenderingContext2D, zdpr: number, clock: number, box: { x0: number; y0: number; x1: number; y1: number }) {
-  let gone = 0
-  for (const b of bodies) {
-    const age = clock - b.at
-    if (age > LIE + FADE || age < 0) {
-      gone++
-      continue
-    }
-    if (b.x < box.x0 - 20 || b.x > box.x1 + 20 || b.y < box.y0 - 20 || b.y > box.y1 + 20) continue
-    const alpha = age < LIE ? 1 : 1 - (age - LIE) / FADE
-    drawHull(ctx, b.m, b.x, b.y, b.rot, b.size * 0.95, zdpr, FALLEN, { wreck: true, alpha: alpha * 0.85 })
-    if (age < 0.4) {
-      const t = age / 0.4
-      ctx.strokeStyle = `rgba(214,196,168,${0.6 * (1 - t)})`
-      ctx.lineWidth = b.size * 0.18
-      ctx.beginPath()
-      ctx.arc(b.x, b.y, b.size * (0.3 + t * 0.8), 0, Math.PI * 2)
-      ctx.stroke()
-    }
-  }
-  if (gone > 32) {
-    const keep = bodies.filter((b) => clock - b.at <= LIE + FADE && clock >= b.at)
-    bodies.length = 0
-    bodies.push(...keep)
-  }
-}
+/** The fallen members, under the units (ground/deaths.ts). */
+export const drawBodies = drawDeaths

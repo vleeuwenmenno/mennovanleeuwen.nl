@@ -2,7 +2,7 @@ import { GROUND_TECH, LEVEL_UP, MODULE, ORBITAL_MODS, SITE_UPGRADES, TECH, UNIT,
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, cmdGather, cmdGroundJob, cmdCancelGroundJob, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, cmdGather, cmdAssist, cmdGroundJob, cmdCancelGroundJob, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -41,6 +41,8 @@ const TABLE = {
   construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
   // Ground battles: engineers gather kyber at the crystal field at a point.
   gather: { run: cmdGather, args: ['ids', 'x', 'y', 'bool'] },
+  // Ground battles: engineers assist another engineer of ours (help with what it does, follow it).
+  assist: { run: cmdAssist, args: ['ids', 'id', 'bool'] },
   // Ground battles: a factory upgrades to its next tier or researches, or calls that off.
   groundJob: { run: cmdGroundJob, args: ['id', 'gjob'] },
   cancelGroundJob: { run: cmdCancelGroundJob, args: ['id'] },

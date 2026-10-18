@@ -9,7 +9,7 @@ import { TIER_MAX, cantJob } from './jobs.ts'
 import { drawHull } from '../models/paint.ts'
 import { drawEffects } from './effects.ts'
 import { drawBodies, drawSquad, squadFell, squadRing, walkerPose } from './squadDraw.ts'
-import { CARRY, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
+import { CARRY, jobOrder, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
 
 // The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
 // the placement ghost and the minimap's ground. In the browser only; ground/load.ts hands them to the
@@ -251,7 +251,7 @@ function crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: n
   ctx.setLineDash([6 / zoom, 5 / zoom])
   ctx.beginPath()
   for (const u of w.units) {
-    if (u.dead || u.owner !== me || u.order.k !== 'gather' || u.gm?.cl === undefined || u.gm.drop) continue
+    if (u.dead || u.owner !== me || jobOrder(u).k !== 'gather' || u.gm?.cl === undefined || u.gm.drop) continue
     const c = all[u.gm.cl]
     if (!c || !(c.left > 0)) continue
     worked.add(u.gm.cl)

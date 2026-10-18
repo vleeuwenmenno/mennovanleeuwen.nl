@@ -415,6 +415,38 @@ export function footDist(s: Unit, x: number, y: number) {
   return Math.sqrt(dx * dx + dy * dy)
 }
 
+/** What engineer `u` works on for its order: an assisting engineer's job is the one it helps with
+ * (Order `assist`), its own order otherwise. */
+export const jobOrder = (u: Unit): Order => (u.order.k === 'assist' ? (u.order.job ?? u.order) : u.order)
+
+/** How near (tiles) an assisting engineer with nothing to help with keeps to the one it assists. */
+const FOLLOW = 3
+
+type AssistJob = NonNullable<Extract<Order, { k: 'assist' }>['job']>
+/**
+ * What an assisting engineer (Order `assist`) should help with now: the site or building the
+ * engineer it assists works on, or the field it gathers; through a chain of assists to the first
+ * engineer with a job. Null: nothing to help with (it follows); 'gone': the engineer it assisted is
+ * lost or no longer ours (the order is done).
+ */
+function assistJob(w: World, u: Unit, o: Extract<Order, { k: 'assist' }>): AssistJob | null | 'gone' {
+  let lead = w.byId.get(o.id)
+  if (!lead || lead.dead || lead.owner !== u.owner) return 'gone'
+  for (let hops = 0; hops < 4 && lead.order.k === 'assist'; hops++) {
+    if (lead.order.job) return lead.order.job
+    const next = w.byId.get(lead.order.id)
+    if (!next || next.dead || next === u) return null
+    lead = next
+  }
+  const lo = lead.order
+  if (lo.k === 'construct') {
+    const s = w.byId.get(lo.id)
+    return s && needsWork(s) && s.owner === u.owner ? { k: 'construct', id: lo.id } : null
+  }
+  if (lo.k === 'gather') return { k: 'gather', f: lo.f }
+  return null
+}
+
 /** How much further a spot already taken by another engineer counts as (squared world units). */
 const TAKEN = TILE * 6 * TILE * 6
 
@@ -429,7 +461,10 @@ function workSpot(w: World, u: Unit, s: Unit): Pt {
   const [fw, fh] = spec(s.t).foot!
   const { c: sc, r: sr } = s.foot!
   const taken = new Set<number>()
-  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && ((o.order.k === 'construct' && o.order.id === s.id) || (o.order.k === 'gather' && o.gm.drop))) taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
+  for (const o of w.units) {
+    const j = o === u || o.dead || !o.gm?.spot ? null : jobOrder(o)
+    if (j && ((j.k === 'construct' && j.id === s.id) || (j.k === 'gather' && o.gm!.drop))) taken.add(anchorAt(nav, size(o), o.gm!.spot!.x, o.gm!.spot!.y))
+  }
   const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
   const piece = start >= 0 ? nav.piece[k - 1][start] : -1
   let best = -1
@@ -470,13 +505,28 @@ function done(u: Unit) {
 }
 
 /** Where the current order sends `u`: a point, a building to work on (`job`), a Command Center to
- * drop kyber off at (`drop`), or a spot on a crystal field to mine (`mine`, the field). Null: it has
- * nowhere to go. */
-type Goal = { x: number; y: number; job?: Unit; drop?: Unit; mine?: number; /** After a target, or back to its spot (combat.ts engage). */ fight?: boolean }
+ * drop kyber off at (`drop`), a spot on a crystal field to mine (`mine`, the field), or the engineer
+ * it assists (`follow`). Null: it has nowhere to go. */
+type Goal = { x: number; y: number; job?: Unit; drop?: Unit; mine?: number; /** After a target, or back to its spot (combat.ts engage). */ fight?: boolean; follow?: boolean }
 function goal(w: World, u: Unit): Goal | null {
-  const o = u.order
+  let o = u.order
+  // Assisting: the job of the engineer it assists becomes its own (kept on the order, so a field it
+  // moves on to sticks), or with none it follows that engineer.
+  let follow: Unit | undefined
+  if (o.k === 'assist' && isEngineer(u.t)) {
+    const a = o
+    const j = assistJob(w, u, a)
+    if (j === 'gone') return null
+    const same = !!a.job && !!j && a.job.k === j.k && (j.k === 'construct' ? a.job.k === 'construct' && a.job.id === j.id : a.job.k === 'gather' && a.job.f === j.f)
+    // (Gathering, it keeps to its own field once the other's has run dry and each moves on.)
+    const keep = a.job?.k === 'gather' && j?.k === 'gather' && !(fieldLeft(w, j.f) > 0)
+    if (!j) delete a.job
+    else if (!same && !keep) a.job = { ...j }
+    if (a.job) o = a.job
+    else follow = w.byId.get(a.id)
+  }
   // A new order (another building, another field) starts afresh: no spot or load run left over.
-  const job = o.k === 'gather' ? `g${o.f}` : o.k === 'construct' ? `c${o.id}` : o.k
+  const job = o.k === 'gather' ? `g${o.f}` : o.k === 'construct' ? `c${o.id}` : follow ? `a${follow.id}` : o.k
   const g = moveOf(u)
   if (g.job !== job) {
     // Off gathering to build: remember the field (kept through more building, dropped otherwise).
@@ -487,6 +537,7 @@ function goal(w: World, u: Unit): Goal | null {
     g.drop = false
     g.tries = 0
   }
+  if (follow) return { x: follow.x, y: follow.y, follow: true }
   if (o.k === 'move' || o.k === 'patrol') return { x: o.x, y: o.y }
   if (o.k === 'gather' && isEngineer(u.t)) return gatherGoal(w, u, o)
   if (o.k === 'construct' && isEngineer(u.t)) {
@@ -515,11 +566,18 @@ function steer(w: World, u: Unit) {
   }
   const to: Goal | null = fight ? { x: fight.x, y: fight.y, fight: true } : goal(w, u)
   if (!to) return done(u)
+  // Assisting with nothing to help with: near the engineer it assists, it waits.
+  if (to.follow && M.hypot(to.x - u.x, to.y - u.y) <= FOLLOW * TILE) {
+    u.route = null
+    u.v = Math.max(0, u.v - spec(t).accel * STEP)
+    if (u.v > 0) drive(w, u, u.x + M.cos(u.a) * u.v * STEP, u.y + M.sin(u.a) * u.v * STEP)
+    return
+  }
   if (to.job && footDist(to.job, u.x, u.y) <= REACH) return work(u, to.job)
   if (to.drop && footDist(to.drop, u.x, u.y) <= REACH) return dropOff(w, u)
   if (to.mine !== undefined && M.hypot(to.x - u.x, to.y - u.y) <= MINE_REACH) return mine(w, u, to.mine)
   // (After a moving target, the way is found again only once it has moved a tile off it.)
-  const stale = !u.route || (to.fight ? (u.route.x - to.x) * (u.route.x - to.x) + (u.route.y - to.y) * (u.route.y - to.y) > TILE * TILE : u.route.x !== to.x || u.route.y !== to.y)
+  const stale = !u.route || (to.fight || to.follow ? (u.route.x - to.x) * (u.route.x - to.x) + (u.route.y - to.y) * (u.route.y - to.y) > TILE * TILE : u.route.x !== to.x || u.route.y !== to.y)
   if (g.pv !== nav.ver || stale) {
     const p = findPath(nav, size(u), u.x, u.y, to.x, to.y)
     u.route = { x: to.x, y: to.y, pts: p.pts, short: p.short }
@@ -592,8 +650,9 @@ function steer(w: World, u: Unit) {
 function arrive(w: World, u: Unit, to: Goal) {
   const o = u.order
   const { job } = to
-  // A chase or a way back ends where it is: the fight decides again next tick.
-  if (to.fight) {
+  // A chase or a way back ends where it is: the fight decides again next tick (and so does following
+  // the engineer it assists).
+  if (to.fight || to.follow) {
     u.route = null
     return
   }
@@ -660,7 +719,7 @@ function crystalSpots(w: World, u: Unit, c: Crystal): number[] {
 function pickCrystal(w: World, u: Unit, f: number): number {
   const all = w.crystals ?? []
   const miners = new Map<number, number>()
-  for (const o of w.units) if (o !== u && !o.dead && o.order.k === 'gather' && o.gm?.cl !== undefined && !o.gm.drop) miners.set(o.gm.cl, (miners.get(o.gm.cl) ?? 0) + 1)
+  for (const o of w.units) if (o !== u && !o.dead && jobOrder(o).k === 'gather' && o.gm?.cl !== undefined && !o.gm.drop) miners.set(o.gm.cl, (miners.get(o.gm.cl) ?? 0) + 1)
   let best = -1
   let bestD = Infinity
   all.forEach((c, i) => {
@@ -711,7 +770,7 @@ function mineSpot(w: World, u: Unit, cl: number): Pt | null {
   const nav = gs(w).nav
   const k = size(u)
   const taken = new Set<number>()
-  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && !o.gm.drop && o.order.k === 'gather') taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
+  for (const o of w.units) if (o !== u && !o.dead && o.gm?.spot && !o.gm.drop && jobOrder(o).k === 'gather') taken.add(anchorAt(nav, size(o), o.gm.spot.x, o.gm.spot.y))
   let best = -1
   let bestD = Infinity
   for (const i of crystalSpots(w, u, w.crystals![cl])) {
@@ -1476,6 +1535,10 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
     }
     if (u.carry !== undefined) num(u.carry)
     if (u.order.k === 'gather') int(u.order.f)
+    if (u.order.k === 'assist') {
+      int(u.order.id)
+      int(!u.order.job ? 0 : u.order.job.k === 'construct' ? u.order.job.id : -1 - u.order.job.f)
+    }
   }
   for (const c of w.crystals ?? []) {
     num(c.left)
