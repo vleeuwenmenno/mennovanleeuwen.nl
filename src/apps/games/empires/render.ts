@@ -203,6 +203,33 @@ const WELD = {
   minFlashPx: 2.5,
   minSparkPx: 4,
 }
+/** The parts of a ground engineer's model its welding beam comes from: the Republic rig's torch,
+ * the droid's two cutters (a beam each), the Swarm drone's mandibles (one beam from between them). */
+const TOOL_PARTS = /^(torch|cutter|mandible)/
+const toolTips = new Map<string, [number, number][] | null>()
+/**
+ * Where a ground engineer's welding beams start: the front tip of each tool part in its model, as
+ * (forward, right) offsets from the unit's middle in world units; null for a unit that isn't a
+ * ground unit or whose model has no tool (it fires from its nose). Worked out once per unit type.
+ */
+function weldTips(t: UnitType): [number, number][] | null {
+  const known = toolTips.get(t.id)
+  if (known !== undefined) return known
+  let tips: [number, number][] | null = null
+  const m = t.ground ? modelFor(t) : null
+  if (m) {
+    // Model space: nose up (-y), x to the right; `size` world units across its long side.
+    const k = t.size / Math.max(m.w, m.h)
+    const tipOf = (pts: [number, number][]) => pts.reduce((a, p) => (p[1] < a[1] ? p : a))
+    const found = m.parts.filter((p) => TOOL_PARTS.test(p.id) && p.pts.length).map((p) => tipOf(p.pts))
+    // The mandibles meet: one beam from between their tips.
+    const mouth = m.parts.some((p) => p.id.startsWith('mandible'))
+    const at = mouth && found.length ? [found.reduce((a, p) => [a[0] + p[0] / found.length, a[1] + p[1] / found.length] as [number, number], [0, 0] as [number, number])] : found
+    if (at.length) tips = at.map(([x, y]) => [-y * k, x * k])
+  }
+  toolTips.set(t.id, tips)
+  return tips
+}
 /** A launch's docking light: a small amber glow sprite. */
 const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba(255,214,120,0.95)'], [1, 'rgba(255,170,60,0)']] as const }
 
@@ -2570,8 +2597,10 @@ export class Renderer {
     let on = false
     const px = 1 / z
     for (const u of w.units) {
-      if (u.dead || !u.mending.length || !isEngineer(u.t) || !u.seen[team] || u.owner === hide || !onScreen(u.x, u.y, 400)) continue
-      const o = w.byId.get(u.mending[0])
+      // A ground engineer at work marks the building it works on in its ground move (`gm.busy`).
+      const job = u.mending.length ? u.mending[0] : (u.gm?.busy ?? 0)
+      if (u.dead || !job || !isEngineer(u.t) || !u.seen[team] || u.owner === hide || !onScreen(u.x, u.y, 400)) continue
+      const o = w.byId.get(job)
       if (!o || o.dead) continue
       if (!on) {
         on = true
@@ -2603,11 +2632,27 @@ export class Renderer {
       }
       const hx = o.x + lx * c - ly * s
       const hy = o.y + lx * s + ly * c
-      const nose = u.t.size * 0.45
-      const nx = u.x + Math.cos(u.a) * nose
-      const ny = u.y + Math.sin(u.a) * nose
       const flick = 0.7 + 0.3 * Math.sin(t * 37 + u.id * 3.1)
-      this.beam(ctx, nx, ny, hx, hy, look, WELD.engineer, flick, px, z, u.id)
+      const fx = Math.cos(u.a)
+      const fy = Math.sin(u.a)
+      const tips = weldTips(u.t)
+      if (tips) {
+        // A ground engineer fires from its tool (the rig's torch, each of the droid's cutters, the
+        // drone's mandibles), the beams spread a little along the welding front. The model is drawn
+        // at least GROUND_MIN_PX across (see drawUnit), and its tool moves out with it.
+        const g = Math.max(1, GROUND_MIN_PX / z / u.t.size)
+        tips.forEach(([tf, tr], i) => {
+          const f = tf * g
+          const r = tr * g
+          const sx = u.x + fx * f - fy * r
+          const sy = u.y + fy * f + fx * r
+          const spread = (i - (tips.length - 1) / 2) * 0.18 * sw
+          this.beam(ctx, sx, sy, hx + spread * c, hy + spread * s, look, WELD.engineer, flick, px, z, u.id + i * 7)
+        })
+        continue
+      }
+      const nose = u.t.size * 0.45
+      this.beam(ctx, u.x + fx * nose, u.y + fy * nose, hx, hy, look, WELD.engineer, flick, px, z, u.id)
     }
     if (on) ctx.restore()
   }

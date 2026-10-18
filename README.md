@@ -3576,8 +3576,7 @@ touch wheel and touch bar, the HUD panels and tooltips, and resuming after a rel
 differs:
 - **The ground** is drawn on a canvas of its own right under the battle canvas, at the same size
   and camera, first each frame, through the `GroundLayer` interface (`ground/types.ts`): the WebGL2
-  layer once `ground/gl.ts` is in, and until then a stand-in around the 2D chunk renderer
-  ([`ground/layer2d.ts`](src/apps/games/empires/ground/layer2d.ts)). The battle canvas then starts
+  layer ([`ground/gl.ts`](src/apps/games/empires/ground/gl.ts)). The battle canvas then starts
   clear: no backdrop, stars or map-edge dimming.
 - **Fog** is a half-dark veil by tile outside our sight, never black (the land is known from
   orbit), over the units and everything on the ground, so route lines stay under it. Enemy
@@ -3600,6 +3599,11 @@ differs:
   engineer and looks at it, round them all in turn. It leaves out ore, beacons and research. The
   economy panel shows kyber, what was gathered a minute, what is being carried in and what is left
   in the fields, and what was gathered and spent.
+- **Engineers at work** fire the space engineers' welding beam (render.ts `drawWelds`), in their
+  side's weld colour, at the welding front of a site going up or a spot on a building they repair,
+  with its flash and sparks where it hits. On the ground it comes from the engineer's tool, found in
+  its model: the Republic rig's torch, a beam from each of the droid's two cutters, one from between
+  the Swarm drone's mandibles (`weldTips`), moving out with the model when it is drawn bigger.
 - Engineers are drawn at least 24 pixels across however far out the view is, over a dark pool and a
   rim in their side's colour, so they stand out from the ground.
 - The camera keeps the grey mirrored land past the map's edge to about a fifth of the view.
