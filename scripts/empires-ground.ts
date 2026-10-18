@@ -1781,6 +1781,42 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('beyond the gap the squad fans out again', beyond > s * 1.5, `${Math.round(beyond)} wide`)
 }
 
+{
+  // The same gap with the squad spread out: it still files through, every member gets past, and
+  // fans out again (wider) beyond.
+  const field = groundMapDef('test-field')!
+  const w = newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 9, credits: 0 })
+  const c0 = Math.floor(field.w / TILE / 2)
+  const r0 = Math.floor(field.h / TILE / 2)
+  // Depots three tiles high, stacked down the middle of the field, leaving one row open at r0.
+  for (const r of [r0 - 12, r0 - 9, r0 - 6, r0 - 3, r0 + 1, r0 + 4, r0 + 7, r0 + 10]) raiseBuilding(w, UNIT['r-g-supply'], 0, c0, r)
+  const y = (r0 + 0.5) * TILE
+  const squad = spawn(w, TIER1.republic.foot, 0, (c0 - 8) * TILE, y, 0)
+  squad.spread = true
+  const s = squad.t.ground!.squad!.spacing
+  for (let t = 0; t < 60; t++) tick(w)
+  runCmd(w, 0, cmd('move', [squad.id], (c0 + 12) * TILE, y, false, false))
+  let inGap = 0
+  let gapWidest = 0
+  let beyond = 0
+  for (let t = 0; t < 45 * 30; t++) {
+    tick(w)
+    w.events.length = 0
+    const crew = squad.crew ?? []
+    const ys = crew.map((m) => m.y)
+    const width = Math.max(...ys) - Math.min(...ys)
+    // Members inside the wall's columns.
+    if (crew.some((m) => m.x > c0 * TILE && m.x < (c0 + 3) * TILE)) {
+      inGap++
+      gapWidest = Math.max(gapWidest, ...crew.filter((m) => m.x > c0 * TILE && m.x < (c0 + 3) * TILE).map((m) => Math.abs(m.y - y)))
+    }
+    if (crew.every((m) => m.x > (c0 + 4) * TILE)) beyond = Math.max(beyond, width)
+  }
+  const through = (squad.crew ?? []).every((m) => m.x > (c0 + 3) * TILE)
+  check('spread out, through a gap one tile wide, the squad still files through and every member gets past', inGap > 10 && gapWidest <= TILE / 2 + 1 && through, `${inGap} ticks in the gap, ${Math.round(gapWidest)} from its middle at most, ${through ? 'all' : 'not all'} through`)
+  check('spread out, beyond the gap it fans out again, wider', beyond > s * 2.5, `${Math.round(beyond)} wide`)
+}
+
 // --- 7. Spread out --------------------------------------------------------------------------------------
 
 {
@@ -1815,7 +1851,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   })
   const a = final.w.byId.get(ids[0])!
   const b = final.w.byId.get(ids[1])!
-  check('spread out: the squad spreads at once, its members walking out wider', reachOpen > reachShut * 1.4, `members within ${Math.round(reachShut)} closed, ${Math.round(reachOpen)} spread`)
+  check('spread out: the squad spreads at once, its members walking out much wider, still together as one squad', reachOpen > reachShut * 2 && reachOpen < 2.5 * TILE, `members within ${Math.round(reachShut)} closed, ${Math.round(reachOpen)} spread`)
   check('spread out: Shift-queued behind a move, it waits for the move, then spreads', waited && !!b.spread && at.queued > 90, `spread at tick ${at.queued}`)
   check('spread out: used again it closes up, members back to their usual spacing', !a.spread && squadReach(a) < reachOpen * 0.8, `members within ${Math.round(squadReach(a))}`)
   // The spread flag is in the hash.
