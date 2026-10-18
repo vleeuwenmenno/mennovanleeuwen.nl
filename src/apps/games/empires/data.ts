@@ -18,7 +18,7 @@
 // (see `reach` and `scaled`), so the numbers below stay the ones to balance against each other.
 
 import { DROID } from './data/droid.ts'
-import { ORBITAL_FRAME, reach, type AbilityId, type Ability, type BaseModule, type Berth, type FactionData, type FactionId, type FactionInfo, type Hardpoint, type Layout, type ModuleId, type OrbitalModId, type OrbitalModule, type OrbitalPlan, type StationPlan, type Tech, type Tier, type UnitType, type Weapon, type WeaponKind, type Works } from './data/kit.ts'
+import { ORBITAL_FRAME, SPREAD, reach, type AbilityId, type Ability, type BaseModule, type Berth, type FactionData, type FactionId, type FactionInfo, type Hardpoint, type Layout, type ModuleId, type OrbitalModId, type OrbitalModule, type OrbitalPlan, type StationPlan, type Tech, type Tier, type UnitType, type Weapon, type WeaponKind, type Works } from './data/kit.ts'
 import { REPUBLIC } from './data/republic.ts'
 import { SWARM } from './data/swarm.ts'
 import { sized } from './models/sizes.ts'
@@ -45,7 +45,7 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   launchSwarm: { name: 'Scramble', blurb: 'Empties the hangars: two extra squadrons of its strike craft at once.', cooldown: 60, duration: 0 },
   spreadOut: {
     name: 'Spread out',
-    blurb: 'Infantry squads only: its members spread out to a wider, looser spacing (and close up again when it is used once more). Spread out, hits miss it more often, above all splash, artillery, swarm rockets and sprays, but it moves a fifth slower and reloads more slowly.',
+    blurb: `Infantry squads only: its members spread out to a much wider, looser spacing (used again, they close up). Spread out, hits miss it more often: ${Math.round(SPREAD.evade.artillery * 100)}% of artillery shells and swarm rockets, ${Math.round(SPREAD.evade.pulse * 100)}% of direct fire, and it takes ${Math.round(SPREAD.evade.spray * 100)}% less from sprays. But it moves at only ${Math.round(SPREAD.speed * 100)}% of its speed and reloads ${Math.round((SPREAD.reload - 1) * 100)}% slower.`,
     cooldown: 1.5,
     duration: 0,
   },

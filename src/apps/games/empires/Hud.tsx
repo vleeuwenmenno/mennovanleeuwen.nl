@@ -5,7 +5,7 @@ import { SNAP_MOUSE, SNAP_TOUCH, candidates, dockCentred, dockName, dockStyle, i
 import { clampToViewport, placeTip, screenArea, topBarInset, useKeepInside, type Box } from './fit'
 import {
   ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
-  BASE_POP, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  BASE_POP, SPREAD, BEACON_INCOME, BEACON_POP, BEACON_SENSOR, POP_PER_LEVEL, abilityOf, siteUpgradeOf, stageName, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType, ORBITALS, ORBITAL_TOP, defenseId, defenseType, orbitalMod, orbitalName, orbitalSlotLevel, orbitalSlots, type OrbitalModId, GROUND_TECH, groundTechsFor,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
@@ -2380,6 +2380,14 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           </span>
         )}
         {/* Given up first when room runs out: the description, then the role line. */}
+        {/* A squad spread out: what it costs and what it gains, plainly. */}
+        {squad.some((x) => x.spread) && (
+          <span className="ew-traits">
+            <span className="ew-tag" data-tip={abilityOf('spreadOut', t.faction).blurb}>
+              Spread out · speed {Math.round(SPREAD.speed * 100)}% · splash misses {Math.round(SPREAD.evade.artillery * 100)}%
+            </span>
+          </span>
+        )}
         <span className="ew-muted ew-small ew-fit-desc" data-fit="1">{t.blurb}</span>
         {r && (
           <span className="ew-counters ew-fit-role" data-fit="2">

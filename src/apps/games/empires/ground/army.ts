@@ -22,7 +22,7 @@ import { POP_MAX, knownBuildings, tierNeeded, trainsOf } from './world.ts'
 // - Damaged heavies (tier 2 and 3, below its style's share of their hull) are pulled out of a
 //   wave and sent home to guard the base.
 // - Its squads spread out when an enemy that hurts groups (artillery, swarm rockets, sprays) comes
-//   near, and close up again once it is gone.
+//   near while they hold or advance, and close up again once it is gone or to chase or fall back.
 // Only what its team knows, the world's random stream, the same orders a player gives.
 
 /** Scouts it keeps, and the engineers it has before it trains any. */
@@ -265,7 +265,8 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
 const SPLASHY = new Set(['artillery', 'swarm', 'spray'])
 
 /** Its squads spread out while an enemy that hurts groups (artillery, swarm rockets, sprays) it sees
- * is within SPREAD_NEAR tiles of them, and close up once none is within SPREAD_CLEAR. */
+ * is within SPREAD_NEAR tiles of them and they hold their ground or advance, and close up once none
+ * is within SPREAD_CLEAR, or to chase or fall back (spread out they are slow). */
 function spreadThink(w: World, b: Brain, mine: Unit[]) {
   const team = w.players[b.o].team
   const splashers = w.units.filter((e) => !e.dead && w.players[e.owner].team !== team && e.seen[team] && e.guns.some((g) => SPLASHY.has(g.w.ground ?? '')))
@@ -274,8 +275,15 @@ function spreadThink(w: World, b: Brain, mine: Unit[]) {
   for (const u of mine) {
     if (u.t.ability !== 'spreadOut') continue
     const near = (r: number) => splashers.some((e) => d2(e, u) < r * TILE * r * TILE)
-    if (!u.spread && near(SPREAD_NEAR)) on.push(u.id)
-    else if (u.spread && !near(SPREAD_CLEAR)) off.push(u.id)
+    // Spread out only holding ground or advancing (idle, an attack-move, or fighting what is in its
+    // reach): it is too slow for a chase or a retreat, so a squad chasing a target or falling back
+    // closes up.
+    const o = u.order
+    const prey = o.k === 'attack' ? w.byId.get(o.id) : undefined
+    const reach = Math.max(0, ...u.guns.map((g) => g.w.range)) + 2 * TILE
+    const steady = o.k === 'idle' || (o.k === 'move' && o.attack) || (!!prey && d2(prey, u) < reach * reach)
+    if (!u.spread && steady && near(SPREAD_NEAR)) on.push(u.id)
+    else if (u.spread && (!steady || !near(SPREAD_CLEAR))) off.push(u.id)
   }
   if (on.length) cmdSpread(w, b.o, on, true)
   if (off.length) cmdSpread(w, b.o, off, false)

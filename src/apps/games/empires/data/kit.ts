@@ -410,8 +410,8 @@ export const groundHeavy = (o: GroundWritten & { speed: number; turn: number; we
  * `reload` times slower.
  */
 export const SPREAD = {
-  spacing: 1.8,
-  speed: 0.8,
+  spacing: 2.6,
+  speed: 0.7,
   reload: 1.2,
   evade: { pulse: 0.1, beam: 0.1, rocket: 0.1, shell: 0.1, artillery: 0.4, swarm: 0.4, spray: 0.3 } as Record<GroundWeaponKind, number>,
 }
