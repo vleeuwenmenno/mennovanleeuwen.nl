@@ -3,7 +3,7 @@
 // data.ts. Points on a ship are on the 0-10 grid over its box, x from the left and y from the nose
 // (see data.ts).
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad } from './kit.ts'
+import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] }
 
@@ -329,6 +329,30 @@ const GROUND: UnitType[] = [
     hull: 340, cost: 150, build: 14, speed: 125, turn: 3.5, ground: { radius: 14 },
     role: { role: 'Raider', strong: ['light units', 'firing on the move'], weak: ['heavy armour', 'rockets'] },
     hardpoints: [{ ...gun('flak', 5, 4.6, 0.34, 300, groundWeapon('pulse', 22, { range: 224, cooldown: 1 })), key: 'tur' }],
+    weapons: [],
+  }),
+  // Tier 3: the heavy units of the Barracks and the Vehicle Factory (the big ones, phase 5c).
+  {
+    ...groundSquad({
+      id: 'r-g-lancers', faction: 'republic', name: 'Lancer team', sprite: 'republic-g-lancers',
+      blurb: 'Four heavy clone troopers in thick armour, each with a rocket launcher on the shoulder. Their rockets crack walkers, tanks and buildings; their armour keeps them going long after a trooper squad would have fallen, but light, fast units dodge most of what they fire.',
+      hull: 1500, cost: 440, build: 48, speed: 56, turn: 3.5, ground: { radius: 18, tier: 3 },
+      squad: { n: 4, member: 'r-gm-lancer', size: 22, spacing: 17 },
+      role: { role: 'Anti-armour', strong: ['heavy armour', 'buildings'], weak: ['fast light units', 'sprays'] },
+      weapons: [groundWeapon('rocket', 34, { range: 256, cooldown: 2.8 })],
+    }),
+    pop: 4,
+  },
+  groundHeavy({
+    id: 'r-g-bastion', faction: 'republic', name: 'Bastion walker tank', sprite: 'republic-g-bastion',
+    blurb: 'A six-legged armoured walker the size of a house. A heavy shell cannon in its main turret breaks other heavy units, and a pulse gun turret on its back keeps light ones honest. Slow to turn: quick raiders with rockets get round it.',
+    hull: 2000, cost: 600, build: 56, speed: 48, turn: 1.5, ground: { size: 3, radius: 36 },
+    aspect: 1.06,
+    role: { role: 'Walker tank', strong: ['heavy armour', 'anti-swarm units'], weak: ['fast rocket raiders', 'flanking'] },
+    hardpoints: [
+      { ...gun('turbo', 5, 3.9, 0.36, 900, groundWeapon('shell', 150, { range: 288, cooldown: 2.8 })), look: 'triple', key: 'main' },
+      { ...gun('flak', 5, 7.3, 0.2, 500, groundWeapon('pulse', 16, { range: 224, cooldown: 0.7 })), look: 'pd', key: 'pd' },
+    ],
     weapons: [],
   }),
 ]

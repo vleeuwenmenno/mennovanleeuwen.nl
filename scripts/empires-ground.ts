@@ -63,13 +63,13 @@ import { cleanCmd, cmd, runCmd, type Cmd } from '../src/apps/games/empires/comma
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import { SITE_DRAW } from '../src/apps/games/empires/ground/power.ts'
 import { STEP, cantBuild, damage, newWorld, siteRefund, spawn, stateHash, tick, type Seat, type Unit, type World } from '../src/apps/games/empires/sim.ts'
-import { anchorAt, footprintOpen, stands } from '../src/apps/games/empires/ground/nav.ts'
+import { anchorAt, footprintOpen, stands, standsAt } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
 import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, fieldLeft, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
 import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
-import { TEST_WALKER, TIER1, registerWalkerTest, registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
+import { TEST_WALKER, TIER1, TIER3, registerWalkerTest, registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
 import { memberAt } from '../src/apps/games/empires/ground/squad.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
@@ -127,6 +127,7 @@ function find(w: World, owner: number, type: string, why: string | null, near: {
 
 const kill = (w: World, u: Unit) => damage(w, u, 1e9, 'turbo', -1, u.x, u.y, (u.owner + 1) % w.players.length)
 const seat = (faction: Seat['faction'], team: number, spawn: number): Seat => ({ faction, team, spawn })
+const FACTION_LIST = ['republic', 'droid', 'swarm'] as const
 
 // --- 2. Placement rules -------------------------------------------------------------------------------
 
@@ -1139,6 +1140,87 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const gone = [...spawned].filter(([id]) => !final.w.byId.get(id) || final.w.byId.get(id)!.dead)
   check('tier 1 battle: units die on both sides', gone.some(([, o]) => o === 0) && gone.some(([, o]) => o === 1), `${gone.length} of ${spawned.size} destroyed`)
   check('tier 1 units are tier 1, light armour, in the Codex lists', six.every((id) => UNIT[id].ground?.tier === 1 && UNIT[id].ground?.armour === 'light' && UNITS.includes(UNIT[id])))
+}
+
+{
+  // The six tier 3 units (every faction's heavy foot and vehicle unit), the same six a side,
+  // fighting across the low ground: in step across two copies, a snapshot thaw and a replay. Big
+  // hulls are spawned where their size class stands.
+  const six = (['republic', 'droid', 'swarm'] as const).flatMap((f) => [TIER3[f].foot, TIER3[f].vehicle])
+  const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('swarm', 1, 1)], { seed: 45, credits: 0 }), brains: [] })
+  const fired = new Set<string>()
+  const spawned = new Map<number, number>()
+  const final = lockstep('tier 3 battle', make, Math.round(90 / STEP), ({ w }, t, say) => {
+    const x = w.w * 0.45
+    const y = w.h * 0.55
+    if (t === 1)
+      for (const o of [0, 1])
+        six.forEach((id, i) => {
+          const k = UNIT[id].ground!.size
+          let px = x + (o ? 9 : -9) * TILE
+          let py = y + (i - 2.5) * 3.4 * TILE
+          for (let s = 0; s < 12 && !standsAt(w.ground!.nav, k, px, py); s++) px += (o ? 1 : -1) * TILE
+          say({ t, k: 'spawn', unit: id, owner: o, x: px, y: py })
+        })
+    if (t === 2)
+      for (const o of [0, 1]) {
+        const ids = w.units.filter((u) => u.owner === o && six.includes(u.t.id)).map((u) => u.id)
+        for (const id of ids) spawned.set(id, o)
+        say({ t, k: 'cmd', owner: o, json: JSON.stringify(cmd('move', ids, x + (o ? -4 : 4) * TILE, y, true, false)) })
+      }
+    for (const s of w.gshots ?? []) {
+      const u = w.byId.get(s.from)
+      if (u) fired.add(u.t.id)
+    }
+    // A beam makes no shots: it fires while it holds a target.
+    for (const u of w.units) if (!u.dead && six.includes(u.t.id) && u.guns.some((g) => (g.hold ?? 0) > 0)) fired.add(u.t.id)
+    w.events.length = 0
+  })
+  const quiet = six.filter((id) => !fired.has(id))
+  check('tier 3 battle: all six tier 3 units fire', !quiet.length, quiet.length ? `never: ${quiet.join(', ')}` : '')
+  const gone = [...spawned].filter(([id]) => !final.w.byId.get(id) || final.w.byId.get(id)!.dead)
+  check('tier 3 battle: units die on both sides', gone.some(([, o]) => o === 0) && gone.some(([, o]) => o === 1), `${gone.length} of ${spawned.size} destroyed`)
+  // The tier rule and the price: tier 3, heavy armour (the Lancer team stays light), pop 4, about
+  // four times the tier 1 unit of the same factory in kyber and build time.
+  const bad = (['republic', 'droid', 'swarm'] as const).flatMap((f) =>
+    (['foot', 'vehicle'] as const).flatMap((k) => {
+      const t3 = UNIT[TIER3[f][k]]
+      const t1 = UNIT[TIER1[f][k]]
+      const armour = t3.ground?.squad ? 'light' : 'heavy'
+      const ok = t3.ground?.tier === 3 && t3.ground.armour === armour && t3.pop === 4 && t3.cost >= t1.cost * 3.5 && t3.cost <= t1.cost * 4.5 && t3.build >= t1.build * 3.5 && t3.build <= t1.build * 4.5 && UNITS.includes(t3)
+      return ok ? [] : [t3.id]
+    }),
+  )
+  check('tier 3 units are tier 3, heavy armour (the squad light), pop 4, about four times tier 1 in kyber and build time, in the Codex lists', !bad.length, bad.join(', '))
+  // Size: a tier 3 vehicle is about two to three times a tier 1 vehicle, on size class 2 or 3.
+  const small = FACTION_LIST.map((f) => [UNIT[TIER3[f].vehicle], UNIT[TIER1[f].vehicle]] as const).filter(([a, b]) => a.size < b.size * 2 || a.size > b.size * 3.2 || a.ground!.size < 2)
+  check('tier 3 vehicles are two to three times a tier 1 vehicle\'s size, on size class 2 or 3', !small.length, small.map(([a]) => a.id).join(', '))
+}
+
+{
+  // The counter loop's heavy end: massed tier 1 Racers (fast, spine darts against armour) beat any
+  // tier 3 unit at equal kyber, on the flat test field.
+  const field = groundMapDef('test-field')!
+  const lost: string[] = []
+  for (const f of FACTION_LIST)
+    for (const k of ['foot', 'vehicle'] as const) {
+      const id = TIER3[f][k]
+      const w = newWorld(field, [seat('republic', 0, 0), seat('swarm', 1, 1)], { seed: 9, credits: 0 })
+      const cx = field.w / 2
+      const cy = field.h / 2
+      const budget = UNIT[id].cost * 2
+      const heavy = [0, 1].map((i) => spawn(w, id, 0, cx - 11 * TILE, cy + (i - 0.5) * 4 * TILE, 0).id)
+      const n = Math.round(budget / UNIT['s-g-racer'].cost)
+      const racers = Array.from({ length: n }, (_, i) => spawn(w, 's-g-racer', 1, cx + (11 + Math.floor(i / 4) * 1.5) * TILE, cy + ((i % 4) - 1.5) * 1.5 * TILE, Math.PI).id)
+      runCmd(w, 0, cmd('move', heavy, cx + 12 * TILE, cy, true, false))
+      runCmd(w, 1, cmd('move', racers, cx - 12 * TILE, cy, true, false))
+      for (let t = 0; t < 120 / STEP && heavy.some((h) => !w.byId.get(h)?.dead); t++) {
+        tick(w)
+        w.events.length = 0
+      }
+      if (heavy.some((h) => w.byId.get(h) && !w.byId.get(h)!.dead)) lost.push(id)
+    }
+  check('two of any tier 3 unit lose to equal kyber of massed Racers (fast, anti-armour)', !lost.length, lost.length ? `still standing: ${lost.join(', ')}` : '')
 }
 
 {

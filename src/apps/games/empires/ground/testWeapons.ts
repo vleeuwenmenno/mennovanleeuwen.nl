@@ -147,3 +147,34 @@ export function spawnTierTest(w: World, me: Owner, foe: Owner, x: number, y: num
   column(w, foe, 1, six, x, y, out)
   return out
 }
+
+/** Each faction's tier 3 units, the heavy ones: its foot factory's and its vehicle factory's. */
+export const TIER3: Record<FactionId, { foot: string; vehicle: string }> = {
+  republic: { foot: 'r-g-lancers', vehicle: 'r-g-bastion' },
+  droid: { foot: 'd-g-bulwark', vehicle: 'd-g-juggernaut' },
+  swarm: { foot: 's-g-ravager', vehicle: 's-g-behemoth' },
+}
+
+/** The tier 3 test: all six tier 3 units for `me` and the same six for `foe`, facing each other
+ * across (x, y) and sent at each other. They are big, so they stand further apart. */
+export function spawnTier3Test(w: World, me: Owner, foe: Owner, x: number, y: number): Unit[] {
+  const six = FACTION_IDS.flatMap((f) => [TIER3[f].foot, TIER3[f].vehicle])
+  const out: Unit[] = []
+  for (const [o, side] of [[me, -1], [foe, 1]] as const) {
+    const nav = w.ground!.nav
+    const ids: number[] = []
+    six.forEach((id, i) => {
+      const k = UNIT[id].ground!.size
+      // Artillery stands further back: it can't fire close.
+      let px = x + side * TILE * (UNIT[id].hardpoints.some((h) => h.weapon?.ground === 'artillery') ? 13 : 8)
+      let py = y + (i - 2.5) * TILE * 3.4
+      for (let s = 0; s < 8 && !standsAt(nav, k, px, py); s++) px -= side * TILE
+      if (!standsAt(nav, k, px, py)) py += TILE
+      const u = spawn(w, id, o, px, py, side < 0 ? 0 : Math.PI)
+      ids.push(u.id)
+      out.push(u)
+    })
+    cmdMove(w, o, ids, x - side * TILE * 4, y, true)
+  }
+  return out
+}

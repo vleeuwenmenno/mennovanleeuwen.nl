@@ -1,4 +1,4 @@
-import { arcBand, capsule, circle, part, rimFacets, spline, sym, thick } from '../kit.ts'
+import { along, arcBand, box, capsule, circle, part, rimFacets, spline, sym, thick } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -352,4 +352,112 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // The Ravager (tier 3, Brood Chamber): a great beast of pale armour plates over dark chitin on four
+  // thick legs, glowing bile sacs either side of its throat, a heavy head with tusks, spines down its
+  // back. It lumbers on diagonal pairs (poses 1 and 2).
+  's-g-ravager': {
+    w: 80,
+    h: 100,
+    spec: () => {
+      const legs = [{ hy: -14, fx: 35, fy: -30, kx: 30 }, { hy: 18, fx: 33, fy: 36, kx: 30 }]
+      const legParts = [0, 1, 2].flatMap((pose) =>
+        [-1, 1].flatMap((side) =>
+          legs.flatMap((l, j) => {
+            // Diagonal pairs: left front with right back, right front with left back.
+            const a = (j === 0) === (side < 0)
+            const fy = l.fy + (pose === 0 ? 0 : (pose === 1) === a ? -11 : 11)
+            const ky = (l.hy + fy) / 2
+            const n = `${side < 0 ? 'L' : 'R'}${j}${pose}`
+            return [
+              part(`claw${n}`, circle(side * l.fx, fy, 5, 9), 'dark', 1, { lift: 3, pose }),
+              part(`lower${n}`, capsule([side * l.kx, ky], [side * l.fx, fy], 5.4, 4), 'metal', 1.2, { lift: 6, pose }),
+              part(`upper${n}`, capsule([side * 14, l.hy], [side * l.kx, ky], 8, 6.4), 'hull2', 1.4, { lift: 11, pose }),
+            ]
+          }),
+        ),
+      )
+      return {
+        breakStyle: 'bands',
+        walk: [1, 0, 2, 0],
+        parts: [
+          ...legParts,
+          part('tail', thick([[0, 28], [2, 40], [0, 49]], 16, 3), 'metal', 2, { lift: 8 }),
+          part('body', capsule([0, -18], [0, 30], 22, 18), 'metal', 3, { lift: 12 }),
+          ...plates([[-12, 22, 12], [2, 24, 12], [16, 21, 11], [29, 15, 9]], 4),
+          ...sym(part('spineL', capsule([-6, -2], [-11, 10], 2.6, 1), 'accent', 5, { lift: 17 })),
+          ...sym(part('spine2L', capsule([-6, 12], [-11, 24], 2.6, 1), 'accent', 5, { lift: 17 })),
+          ...sym(part('sacL', circle(-13, -24, 7, 14), 'aid', 5, { lift: 13, sphere: true })),
+          ...sym(part('tuskL', capsule([-9, -40], [-15, -50], 3.6, 1.2), 'hull', 5, { lift: 13 })),
+          part('head', capsule([0, -26], [0, -44], 13, 9), 'hull', 6, {
+            lift: 15,
+            facets: [{ pts: [[-13, -26], [0, -26], [0, -44], [-9, -44]], slope: [-0.5, -0.2] }, { pts: [[13, -26], [0, -26], [0, -44], [9, -44]], slope: [0.5, -0.2] }],
+            details: [{ k: 'lights', pts: [[-6, -38], [6, -38], [-8, -33], [8, -33]], r: 1.6, tone: 'glass' }, { k: 'shape', pts: box(0, -30, 4, 8), tone: 'accent' }],
+          }),
+        ],
+      }
+    },
+  },
+  // The Behemoth (tier 3, Vehicle Nest): a huge, slow beast, overlapping armour plates over a broad
+  // dark body, six stubby legs, a small horned head, rows of glowing acid-green glands down its
+  // flanks; the living bile mortar on its back is its turret and turns on its own. It plods on
+  // alternate tripods (poses 1 and 2).
+  's-g-behemoth': {
+    w: 94,
+    h: 100,
+    spec: () => {
+      const legs = [{ hy: -18, fy: -28 }, { hy: 6, fy: 6 }, { hy: 28, fy: 38 }]
+      const legParts = [0, 1, 2].flatMap((pose) =>
+        [-1, 1].flatMap((side) =>
+          legs.flatMap((l, j) => {
+            const a = (j === 1) === (side > 0)
+            const fy = l.fy + (pose === 0 ? 0 : (pose === 1) === a ? -8 : 8)
+            const n = `${side < 0 ? 'L' : 'R'}${j}${pose}`
+            return [
+              part(`foot${n}`, circle(side * 39, fy, 7.5, 12), 'hull2', 1, { lift: 3, pose, details: [{ k: 'lights', pts: [[side * 39 - 3.5, fy - 6], [side * 39 + 3.5, fy - 6], [side * 43, fy - 3]], r: 1.4, tone: 'dark', minPx: 50 }] }),
+              part(`leg${n}`, capsule([side * 18, l.hy], [side * 39, fy], 9.5, 7), 'metal', 1.3, { lift: 9, pose }),
+              part(`plateLeg${n}`, capsule([side * 22, l.hy], [side * 32, l.hy + (fy - l.hy) * 0.7], 6, 4.5), 'hull2', 1.5, { lift: 11, pose }),
+            ]
+          }),
+        ),
+      )
+      return {
+        breakStyle: 'bands',
+        walk: [1, 0, 2, 0],
+        parts: [
+          ...legParts,
+          part('tail', thick([[0, 36], [-2, 44], [0, 50]], 18, 4), 'metal', 2, { lift: 8 }),
+          part('body', capsule([0, -22], [0, 32], 26, 22), 'metal', 3, {
+            lift: 12,
+            details: [
+              { k: 'lights', pts: along([-23, -12], [-21, 26], 5), r: 2, tone: 'aid' },
+              { k: 'lights', pts: along([23, -12], [21, 26], 5), r: 2, tone: 'aid' },
+            ],
+          }),
+          ...plates([[-21, 22, 12], [-9, 24, 10], [21, 23, 12], [33, 18, 10]], 4),
+          // The collar the mortar is grown into.
+          part('collar', circle(0, 6, 21, 22), 'hull2', 4.5, { lift: 14, details: [{ k: 'lights', pts: [[-17, 6], [17, 6], [0, -11], [0, 23]], r: 1.8, tone: 'accent' }] }),
+          ...sym(part('hornL', capsule([-7, -40], [-14, -48], 3.2, 1), 'hull', 5, { lift: 13 })),
+          part('head', capsule([0, -30], [0, -44], 12, 8), 'hull', 6, {
+            lift: 14,
+            facets: [{ pts: [[-12, -30], [0, -30], [0, -44], [-8, -44]], slope: [-0.5, -0.2] }, { pts: [[12, -30], [0, -30], [0, -44], [8, -44]], slope: [0.5, -0.2] }],
+            details: [{ k: 'lights', pts: [[-5, -39], [5, -39]], r: 1.6, tone: 'glass' }],
+          }),
+        ],
+      }
+    },
+  },
+}
+
+/** Armour plates across a beast's back, front to back: each [y, half width, depth], a pale arched
+ * plate in two halves (each lit on its own) with a violet band, lifted over the one in front. */
+function plates(rows: [number, number, number][], z: number) {
+  return rows.flatMap(([y, hw, d], i) =>
+    sym(
+      part(`plate${i}L`, [[0, y - d / 2 - 2], [-hw * 0.6, y - d / 2], [-hw, y + d / 4], [-hw * 0.82, y + d / 2], [0, y + d / 2 + 2]], 'hull', z + i * 0.1, {
+        lift: 14 + i,
+        slope: [-0.5, -0.25],
+        details: [{ k: 'shape', pts: [[0, y + d / 2 - 1], [-hw * 0.75, y + d / 2 - 2], [-hw * 0.82, y + d / 2], [0, y + d / 2 + 2]], tone: 'accent' }],
+      }),
+    ),
+  )
 }

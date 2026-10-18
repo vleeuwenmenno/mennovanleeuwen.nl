@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -201,6 +201,28 @@ const GROUND: UnitType[] = [
     hull: 220, cost: 120, build: 12, speed: 180, turn: 4.5, ground: { radius: 12 },
     role: { role: 'Raider', strong: ['hit and run', 'armour (rockets)'], weak: ['massed fire', 'splash'] },
     weapons: [groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('rocket', 16, { range: 224, arc: 0.6 })],
+  }),
+  // Tier 3: the heavy units of the Bot Factory and the Vehicle Foundry (the big ones, phase 5c).
+  groundHeavy({
+    id: 'd-g-bulwark', faction: 'droid', name: 'Bulwark droid', sprite: 'droid-g-bulwark',
+    blurb: 'A hulking two-legged war droid that carries a great slab of a shield on one arm and a beam projector on the other. The beam burns hotter the longer it holds a target, so it melts armour; it has to turn its whole body to aim, and it is slow.',
+    hull: 1300, cost: 380, build: 40, speed: 46, turn: 2, ground: { radius: 30 },
+    aspect: 0.86,
+    role: { role: 'Assault droid', strong: ['heavy armour', 'anti-swarm units'], weak: ['fast rocket raiders', 'long range'] },
+    weapons: [groundWeapon('beam', 28, { range: 160, arc: 0.6 })],
+  }),
+  groundHeavy({
+    id: 'd-g-juggernaut', faction: 'droid', name: 'Juggernaut crawler', sprite: 'droid-g-juggernaut',
+    blurb: 'A wide tracked crawler of riveted plate, a heavy beam projector in its turret and two small pulse guns at its back corners. It grinds forward and burns through anything armoured that stands in front of it; fast raiders with rockets swarm it.',
+    hull: 1450, cost: 480, build: 48, speed: 42, turn: 1.3, ground: { size: 3, radius: 38 },
+    aspect: 0.84,
+    role: { role: 'Crawler', strong: ['heavy armour', 'buildings', 'anti-swarm units'], weak: ['fast rocket raiders', 'flanking'] },
+    hardpoints: [
+      { ...gun('turbo', 5, 4.4, 0.36, 900, groundWeapon('beam', 26, { range: 176 })), look: 'triple', key: 'main' },
+      { ...gun('flak', 2.2, 8.1, 0.16, 400, groundWeapon('pulse', 7, { range: 192, cooldown: 0.6 })), look: 'pd', key: 'pdL' },
+      { ...gun('flak', 7.8, 8.1, 0.16, 400, groundWeapon('pulse', 7, { range: 192, cooldown: 0.6 })), look: 'pd', key: 'pdR' },
+    ],
+    weapons: [],
   }),
 ]
 

@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -314,6 +314,24 @@ const GROUND: UnitType[] = [
     hull: 320, cost: 105, build: 11, speed: 160, turn: 4, ground: { radius: 13 },
     role: { role: 'Raider', strong: ['armour (spine darts)', 'speed'], weak: ['light units', 'massed fire'] },
     weapons: [groundWeapon('rocket', 46, { range: 224, cooldown: 1.6, arc: 0.6 }), groundWeapon('pulse', 9, { range: 40, cooldown: 0.7, arc: 0.8 })],
+  }),
+  // Tier 3: the heavy units of the Brood Chamber and the Vehicle Nest (the big ones, phase 5c).
+  groundHeavy({
+    id: 's-g-ravager', faction: 'swarm', name: 'Ravager', sprite: 'swarm-g-ravager',
+    blurb: 'A great armoured beast on four thick legs that spits heavy globs of bile from a sac in its throat, and bites what comes close. The bile eats through armour; quick, light hunters dodge it.',
+    hull: 1300, cost: 360, build: 36, speed: 60, turn: 2.2, ground: { radius: 30 },
+    aspect: 0.8,
+    role: { role: 'Siege beast', strong: ['heavy armour', 'anti-swarm units'], weak: ['fast rocket raiders', 'packs'] },
+    weapons: [groundWeapon('shell', 95, { range: 256, cooldown: 2.6, arc: 0.5 }), groundWeapon('pulse', 20, { range: 56, cooldown: 0.8, arc: 0.8 })],
+  }),
+  groundHeavy({
+    id: 's-g-behemoth', faction: 'swarm', name: 'Behemoth', sprite: 'swarm-g-behemoth',
+    blurb: 'A huge, slow beast with a living bile mortar grown into its back, which turns on its own and lobs bile across the field at what its allies see. Nothing close can be hit by the mortar, only bitten: fast hunters that get in under it bring it down.',
+    hull: 1700, cost: 420, build: 44, speed: 40, turn: 1.2, ground: { size: 3, radius: 40, sight: 11 },
+    aspect: 0.94,
+    role: { role: 'Artillery beast', strong: ['buildings', 'clumps', 'anti-swarm units'], weak: ['fast units up close'] },
+    hardpoints: [{ ...gun('turbo', 5, 5.6, 0.34, 900, groundWeapon('artillery', 85, { splash: 72 })), look: 'spore', key: 'mortar' }],
+    weapons: [groundWeapon('pulse', 16, { range: 64, cooldown: 0.9, arc: 0.9 })],
   }),
 ]
 

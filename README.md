@@ -3715,6 +3715,31 @@ turns on its hull. The damage table needs no change for squads: they are light a
 weapons and (later) swarm rockets and sprays, the anti-swarm weapons, cut them down, and rockets
 and shells, the anti-armour ones, do little. Splash hits a squad once, as one unit.
 
+**Tier 3 units** are the heavy units of the factories (Menno: "tier 3 is the big boys"; GroundSpec
+`tier: 3`, so a factory must reach tier 3 to train them): big hulls on size class 2 or 3, two to
+three times a tier 1 vehicle's size, slow, heavy armour (the Lancer team stays light, but tough),
+pop 4, and about four times their factory's tier 1 unit in kyber and build time (a factory draws
+power while it trains, so a four times longer build takes four times the power). The vehicles carry
+several turrets or one heavy main gun, each turning on its own; the walkers and beasts step through
+their walk poses.
+
+| Faction | Unit | Factory | Hull | Cost, time | Speed | Size class | Weapons |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Republic | Lancer team: four heavy troopers, rocket launchers on their shoulders | Barracks | 1,500 | 440, 48 s | 56 | 1 (a squad) | Rockets (34 each a trooper, 8 tiles, 2.8 s) |
+| Republic | Bastion walker tank: an armoured hull on six legs | Vehicle Factory | 2,000 | 600, 56 s | 48 | 3 | Heavy shell cannon in its main turret (150, 9 tiles, 2.8 s) and a pulse gun turret (16, 7 tiles, 0.7 s) |
+| Confederacy | Bulwark droid: a two-legged war droid with a shield slab and a beam arm | Bot Factory | 1,300 | 380, 40 s | 46 | 2 | Beam on its arm, fixed (28 a second, 5 tiles; it turns to aim) |
+| Confederacy | Juggernaut crawler: a wide tracked hull with a dozer prow | Vehicle Foundry | 1,450 | 480, 48 s | 42 | 3 | Heavy beam in its turret (26 a second, 5.5 tiles) and two pulse gun turrets at its back corners (7, 6 tiles, 0.6 s) |
+| Swarm | Ravager: a great four-legged beast with bile sacs at its throat | Brood Chamber | 1,300 | 360, 36 s | 60 | 2 | Heavy bile shell from its mouth (95, 8 tiles, 2.6 s) and a bite (20, close in) |
+| Swarm | Behemoth: a huge six-legged beast, a bile mortar grown into its back | Vehicle Nest | 1,700 | 420, 44 s | 40 | 3 | Bile artillery in a turret on its back (85, 20 tiles, 4.5 s, splash) and a bite (16, close in) |
+
+In the counter loop they beat the anti-swarm units (pulse, swarm rockets, sprays, airburst shells all
+do little to heavy armour) and lose to massed fast units with anti-armour weapons: at equal kyber,
+on open ground, every one of them beats stand-ins for the tier 2 anti-swarm units (medium armour,
+spray, swarm rockets, rapid pulse or airburst) except where its own weak spot shows (sprays get under
+the Behemoth's mortar, and sprays and rapid pulse shred the light Lancers), and every one loses to
+Racers (`check:ground` fights it). The Lancers are the anti-armour squad: they beat every other tier
+3 unit at equal kyber. Big hulls cross every ramp, bridge and ford of every map (`check:ground-nav`).
+
 **Command Centers** carry a light defence turret on their roof: pulse, 14 damage, 10 tiles, every
 0.8 seconds.
 
@@ -3750,12 +3775,13 @@ are each faction's Scout with the weapon on a turret, medium armour and 600 hull
 lobby or Codex. The panel's *Squad test* spawns three of our faction's foot squads and a test walker
 (two legs, a pulse turret on its back, walking through its poses) against three of the first
 enemy's squads at the camera; its *Tier 1 test* spawns all six tier 1 units (every faction's foot
-squad and fast vehicle) for us and the same six for the first enemy, sent at each other.
+squad and fast vehicle) for us and the same six for the first enemy, sent at each other; its *Tier 3 test* spawns all six tier 3 units the same way, the big ones
+further apart (the Behemoth further back, as artillery can't fire close).
 
 ```sh
 pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) and a tier 1 battle (all six tier 1 units firing, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
-pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed), a tier 1 battle (all six tier 1 units firing, losses on both sides) and a tier 3 battle (all six tier 3 units firing, beams included, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons; tier 3 units' tier, armour, pop, price and size; two of any tier 3 unit losing to equal kyber of Racers
+pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule; size classes 2 and 3 crossing every bridge, ford and ramp and reaching every spawn on every hand-made map and 16 generated ones
 pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
 ```

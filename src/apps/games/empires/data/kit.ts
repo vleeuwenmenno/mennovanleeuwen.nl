@@ -382,6 +382,16 @@ export const groundFast = (o: GroundWritten & { speed: number; turn: number; wea
   ground: { size: 1, radius: 13, accel: 260, sight: 9, armour: 'light', tier: 1, ...o.ground },
 })
 
+/** A tier 3 unit, the heavy unit of a factory (Menno: "tier 3 is the big boys"): a big hull on size
+ * class 2 or 3, heavy armour, slow, a heavy main gun or several turrets that turn on their own; about
+ * four times a tier 1 unit's price, build time and pop. */
+export const groundHeavy = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role'] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.8, size: Math.round((o.ground.radius ?? 32) * 2.6), shield: 0, regen: 0, pop: 4, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 10) * 32, hardpoints: [], engines: [],
+  ...o,
+  ground: { size: 2, radius: 32, accel: 110, sight: 10, armour: 'heavy', tier: 3, ...o.ground },
+})
+
 /** A tier 1 squad, the fast unit of a foot factory: a few members on foot (GroundSpec `squad`),
  * one unit with one hull, light armour, each member firing the squad's weapons; cheap. Drawn as its
  * members (the member's model). */

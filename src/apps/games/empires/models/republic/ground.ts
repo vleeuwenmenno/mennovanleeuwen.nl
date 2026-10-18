@@ -434,5 +434,89 @@ export const GROUND: GroundModels = {
       ],
     }),
   },
+  // A Lancer, one heavy trooper of a Lancer team (tier 3, Barracks): bulky white armour, a red
+  // pauldron, a long rocket launcher on its right shoulder and a rack of rockets on its back.
+  'r-gm-lancer': {
+    w: 80,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...stride('leg', 12, 4, [-18, -18], [-40, 32], 8, 'hull2', 'dark'),
+        part('pack', chamfer(0, 22, 38, 18, 5), 'hull2', 3, { lift: 6, details: [{ k: 'lights', pts: along([-12, 26], [12, 26], 4), r: 2.4, tone: 'accent' }] }),
+        part('torso', chamfer(0, 2, 54, 34, 9), 'hull', 4, { lift: 7, facets: bevel(0, 2, 54, 34, 6), details: [{ k: 'shape', pts: box(0, -8, 34, 4), tone: 'accent' }] }),
+        part('pauldronL', circle(-27, 0, 12, 16), 'accent', 5, { lift: 9, sphere: true }),
+        part('pauldronR', circle(27, 0, 11, 16), 'hull', 5, { lift: 9, sphere: true }),
+        part('armL', capsule([-24, -4], [6, -26], 6, 5), 'hull', 6, { lift: 10 }),
+        // The launcher on the right shoulder: a long tube with a red band, a sight and a dark muzzle.
+        part('launcher', capsule([21, 24], [21, -46], 7, 7), 'hull2', 7, {
+          lift: 14,
+          details: [{ k: 'shape', pts: box(21, -32, 14, 4), tone: 'accent' }, { k: 'line', pts: [[15, 8], [27, 8]], minPx: 40 }],
+        }),
+        part('muzzle', circle(21, -46, 5.5, 12), 'dark', 8, { lift: 14 }),
+        part('sight', box(12, -14, 5, 10), 'metal', 8, { lift: 15, minPx: 30 }),
+        part('helmet', circle(-3, -2, 14, 18), 'hull', 9, {
+          lift: 12,
+          sphere: true,
+          details: [{ k: 'shape', pts: [[-12, -13], [6, -13], [6, -9], [-12, -9]], tone: 'glass' }, { k: 'shape', pts: box(-3, 0, 3, 12), tone: 'accent' }],
+        }),
+      ],
+    }),
+  },
+  // The Bastion walker tank (tier 3, Vehicle Factory): a great armoured hull on six splayed legs,
+  // red bands and a cockpit slit across its nose, a heavy shell cannon in its main turret forward
+  // and a pulse gun turret on its back deck. Its legs step on alternate tripods (poses 1 and 2).
+  'r-g-bastion': {
+    w: 100,
+    h: 94,
+    spec: () => {
+      // Each leg's hip (y), knee (x, out from the hull) and where its foot rests (y).
+      const legs = [{ hy: -22, kx: 38, fy: -30 }, { hy: 2, kx: 41, fy: 3 }, { hy: 24, kx: 38, fy: 31 }]
+      const legParts = [0, 1, 2].flatMap((pose) =>
+        [-1, 1].flatMap((side) =>
+          legs.flatMap((l, j) => {
+            // Tripod A: left front, right middle, left back; tripod B the others.
+            const a = (j === 1) === (side > 0)
+            const fy = l.fy + (pose === 0 ? 0 : (pose === 1) === a ? -8 : 8)
+            const ky = l.hy + (fy - l.hy) * 0.45
+            const kx = side * l.kx
+            const fx = side * 44
+            const n = `${side < 0 ? 'L' : 'R'}${j}${pose}`
+            return [
+              part(`foot${n}`, chamfer(fx, fy, 11, 14, 4), 'hull2', 1, { lift: 3, pose, details: [{ k: 'line', pts: [[fx - 4, fy - 3], [fx + 4, fy - 3]], minPx: 60 }] }),
+              part(`shin${n}`, capsule([kx, ky], [fx, fy], 4.2, 3.6), 'metal', 1.2, { lift: 7, pose }),
+              part(`thigh${n}`, capsule([side * 22, l.hy], [kx, ky], 7, 5.4), 'hull', 1.4, { lift: 12, pose, details: [{ k: 'line', pts: [[side * 26, l.hy + (ky - l.hy) * 0.2], [side * 34, l.hy + (ky - l.hy) * 0.8]], minPx: 60 }] }),
+              part(`knee${n}`, circle(kx, ky, 4.2, 10), 'metal', 1.6, { lift: 13, pose, sphere: true }),
+            ]
+          }),
+        ),
+      )
+      return {
+        breakStyle: 'bands',
+        walk: [1, 0, 2, 0],
+        parts: [
+          ...legParts,
+          // The hip housings the legs hang from, down both sides.
+          ...sym(part('hipsL', chamfer(-22, 2, 12, 60, 4), 'metal', 2, { lift: 12 })),
+          part('hull', [[-14, -44], [14, -44], [26, -31], [28, 20], [22, 40], [-22, 40], [-28, 20], [-26, -31]], 'hull', 3, {
+            lift: 16,
+            facets: [
+              { pts: [[-14, -44], [14, -44], [24, -33], [-24, -33]], slope: [0, -0.8] },
+              { pts: [[-28, 20], [28, 20], [22, 40], [-22, 40]], slope: [0, 0.75] },
+            ],
+            details: [
+              { k: 'shape', pts: [[-9, -43], [9, -43], [7, -39], [-7, -39]], tone: 'glass' },
+              { k: 'shape', pts: box(0, -30, 44, 4), tone: 'accent' },
+              { k: 'line', pts: [[-26, 8], [26, 8]], minPx: 50 },
+              { k: 'line', pts: [[-27, 18], [27, 18]], minPx: 60 },
+            ],
+          }),
+          // Armour skirts over the hips, red-tipped at the back.
+          ...sym(part('skirtL', [[-29, -26], [-20, -28], [-20, 30], [-27, 32]], 'hull2', 4, { lift: 17, slope: [-0.7, 0], details: [{ k: 'shape', pts: box(-24, 27, 6, 4), tone: 'accent' }, { k: 'line', pts: [[-28, 0], [-21, 0]], minPx: 50 }] })),
+          part('deck', chamfer(0, 32, 30, 14, 4), 'hull2', 4, { lift: 17, details: [{ k: 'lights', pts: along([-9, 37], [9, 37], 4), r: 1.5, tone: 'glow', minPx: 40 }] }),
+        ],
+      }
+    },
+  },
 }
-

@@ -1,4 +1,4 @@
-import { arcBand, along, box, capsule, chamfer, circle, ngon, part, rimFacets, stride, sym, treads } from '../kit.ts'
+import { arcBand, along, bevel, box, capsule, chamfer, circle, ngon, part, rimFacets, stride, sym, treads } from '../kit.ts'
 import type { GroundModels } from '../ground.ts'
 import type { Pt } from '../types.ts'
 
@@ -349,6 +349,90 @@ export const GROUND: GroundModels = {
           lift: 11,
           details: [{ k: 'shape', pts: circle(-3.5, -9, 1.6, 8), tone: 'dark' }, { k: 'shape', pts: circle(3.5, -9, 1.6, 8), tone: 'dark' }],
         }),
+      ],
+    }),
+  },
+  // The Bulwark droid (tier 3, Bot Factory): a hulking two-legged war droid in steel plate, a great
+  // riveted shield slab held out on its left arm, a beam projector on its right with an orange
+  // emitter at the tip, a power pack with glowing capacitors on its back. Its broad feet step out in
+  // turn (poses 1 and 2).
+  'd-g-bulwark': {
+    w: 88,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      walk: [1, 0, 2, 0],
+      parts: [
+        ...[0, 1, 2].flatMap((pose) =>
+          [-1, 1].flatMap((side) => {
+            const fy = pose === 0 ? 10 : (pose === 1) === side < 0 ? -22 : 36
+            const n = `${side < 0 ? 'L' : 'R'}${pose}`
+            return [
+              part(`foot${n}`, chamfer(side * 17, fy, 18, 26, 6), 'hull2', 1, { lift: 3, pose, details: [{ k: 'line', pts: [[side * 17 - 6, fy - 7], [side * 17 + 6, fy - 7]], minPx: 50 }] }),
+              part(`leg${n}`, capsule([side * 15, 8], [side * 17, fy], 6, 5), 'metal', 2, { lift: 9, pose }),
+            ]
+          }),
+        ),
+        part('pack', chamfer(0, 27, 34, 20, 5), 'hull2', 3, {
+          lift: 12,
+          details: [{ k: 'lights', pts: along([-10, 31], [10, 31], 3), r: 2.4, tone: 'trim' }, { k: 'line', pts: [[-14, 22], [14, 22]], minPx: 40 }],
+        }),
+        part('torso', chamfer(0, 4, 52, 40, 10), 'hull', 4, {
+          lift: 14,
+          facets: bevel(0, 4, 52, 40, 7),
+          details: [{ k: 'shape', pts: box(0, -9, 28, 4), tone: 'accent' }, { k: 'line', pts: [[0, -6], [0, 20]], minPx: 50 }],
+        }),
+        ...sym(part('shoulderL', circle(-28, 0, 12, 16), 'hull2', 5, { lift: 16, sphere: true })),
+        // The gun arm: a thick forearm and the beam projector, its emitter glowing.
+        part('armR', capsule([28, 2], [26, -24], 7, 6), 'hull2', 6, { lift: 17 }),
+        part('projector', capsule([26, -20], [26, -47], 6, 4.5), 'metal', 7, { lift: 18, details: [{ k: 'shape', pts: box(26, -33, 13, 3), tone: 'accent' }] }),
+        part('emitter', circle(26, -47, 4.4, 12), 'trim', 8, { lift: 18, glow: true }),
+        part('head', capsule([0, -8], [0, -24], 7.5, 6), 'hull', 8, { lift: 19, details: [{ k: 'shape', pts: box(0, -19, 10, 3), tone: 'glass' }] }),
+        // The shield arm and its slab, held out across the left of its front.
+        part('armL', capsule([-28, 2], [-24, -24], 7, 6), 'hull2', 6, { lift: 17 }),
+        part('shield', [[-44, -42], [-4, -46], [-3, -30], [-43, -25]], 'hull', 9, {
+          lift: 22,
+          facets: [{ pts: [[-44, -42], [-4, -46], [-4, -42], [-43, -38]], slope: [0.1, -0.8] }],
+          details: [
+            { k: 'shape', pts: [[-40, -34], [-7, -37], [-7, -34], [-40, -31]], tone: 'accent' },
+            { k: 'lights', pts: [[-40, -28], [-24, -29.5], [-8, -31], [-40, -40], [-8, -43]], r: 1.3, tone: 'metal', minPx: 50 },
+          ],
+        }),
+      ],
+    }),
+  },
+  // The Juggernaut crawler (tier 3, Vehicle Foundry): a wide hull of riveted steel on two broad
+  // tracks, a dozer prow striped in orange, a heavy beam projector in its turret, two small pulse
+  // guns at its back corners and an engine block with cyan exhausts at its tail.
+  'd-g-juggernaut': {
+    w: 84,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        ...sym(part('trackL', chamfer(-33, 1, 17, 94, 6), 'metal', 1, { lift: 5, details: treads(-41, -25, -45, 47, 16) })),
+        part('hull', chamfer(0, 2, 52, 84, 10), 'hull', 2, {
+          lift: 12,
+          facets: bevel(0, 2, 52, 84, 7),
+          details: [
+            { k: 'shape', pts: box(-17, 4, 4, 52), tone: 'accent' },
+            { k: 'shape', pts: box(17, 4, 4, 52), tone: 'accent' },
+            { k: 'lights', pts: along([-21, -30], [-21, 32], 7), r: 1.1, tone: 'metal', minPx: 60 },
+            { k: 'lights', pts: along([21, -30], [21, 32], 7), r: 1.1, tone: 'metal', minPx: 60 },
+            { k: 'line', pts: [[-24, 18], [24, 18]], minPx: 50 },
+          ],
+        }),
+        ...sym(part('fenderL', chamfer(-33, -39, 19, 18, 5), 'hull2', 3, { lift: 9 })),
+        part('prow', chamfer(0, -45, 62, 10, 4), 'hull2', 4, {
+          lift: 10,
+          facets: [{ pts: [[-31, -50], [31, -50], [31, -47], [-31, -47]], slope: [0, -0.8] }],
+          details: [-24, -12, 0, 12, 24].map((x) => ({ k: 'shape' as const, pts: [[x - 3, -42], [x + 1, -48], [x + 4, -48], [x, -42]] as Pt[], tone: 'accent' as const })),
+        }),
+        part('engine', chamfer(0, 35, 34, 16, 4), 'hull2', 3, {
+          lift: 14,
+          details: [{ k: 'line', pts: [[-12, 31], [12, 31]] }, { k: 'line', pts: [[-12, 35], [12, 35]], minPx: 50 }, { k: 'line', pts: [[-12, 39], [12, 39]], minPx: 50 }],
+        }),
+        ...sym(part('exhaustL', circle(-10, 45, 3.6, 10), 'glow', 4, { lift: 15, glow: true })),
       ],
     }),
   },

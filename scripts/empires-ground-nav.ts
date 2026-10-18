@@ -317,6 +317,41 @@ else
     check(`${m.def.name}: every class gets from every spawn to every spawn and deposit`, !misses.length, misses.length ? misses.slice(0, 3).join('; ') : `${paths} paths, ${((performance.now() - t0) / paths).toFixed(2)} ms each`)
   }
 
+// --- Crossings for the big hulls --------------------------------------------------------------------
+
+// Tier 3 units are big (size classes 2 and 3): on every hand-made map and a sweep of generated ones,
+// both classes get from the first spawn onto every bridge, ford and ramp and to every other spawn,
+// every step legal.
+if (built) {
+  const terrain = await import('../src/apps/games/empires/ground/terrain.ts')
+  const maps = await import('../src/apps/games/empires/ground/maps.ts')
+  const gen = await import('../src/apps/games/empires/ground/generate.ts')
+  const ids = [...Object.keys(maps.GROUND_MAP), ...gen.RECIPES.flatMap((r) => gen.GEN_PLAYERS.map((p, i) => gen.genId({ recipe: r, players: p, size: gen.GEN_SIZES[i % gen.GEN_SIZES.length], seed: 11 + i })))]
+  for (const id of ids) {
+    const def = maps.GROUND_MAP[id]
+    const m = terrain.buildGroundMap(def)
+    const f = terrain.expandFeatures(def)
+    const n = newNav(m)
+    const T = (p: [number, number]) => ({ x: (p[0] + 0.5) * TILE, y: (p[1] + 0.5) * TILE })
+    const goals = [
+      ...f.bridges.map((b, i) => [`bridge ${i}`, T([(b.from[0] + b.to[0]) / 2, (b.from[1] + b.to[1]) / 2])] as const),
+      ...f.fords.map((o, i) => [`ford ${i}`, T(o.at)] as const),
+      ...f.ramps.map((r, i) => [`ramp ${i}`, T([(r.from[0] + r.to[0]) / 2, (r.from[1] + r.to[1]) / 2])] as const),
+      ...m.spawns.slice(1).map((p, i) => [`spawn ${i + 1}`, p] as const),
+    ]
+    const misses: string[] = []
+    for (const k of [2, 3] as const)
+      for (const [what, g] of goals) {
+        const a = m.spawns[0]
+        const p = findPath(n, k, a.x, a.y, g.x, g.y)
+        const w = walk(n, m.grid, k, a, p.pts)
+        const end = p.pts[p.pts.length - 1] ?? a
+        if (w.bad || Math.hypot(end.x - g.x, end.y - g.y) > TILE * 2) misses.push(`class ${k} to ${what}: ${w.bad || 'not reached'}`)
+      }
+    check(`${def.name}: size classes 2 and 3 cross its ${f.bridges.length} bridges, ${f.fords.length} fords and ${f.ramps.length} ramps and reach its ${m.spawns.length - 1} other spawns`, !misses.length, misses.slice(0, 3).join('; '))
+  }
+}
+
 if (failed) {
   console.log('ground nav check FAILED')
   process.exit(1)
