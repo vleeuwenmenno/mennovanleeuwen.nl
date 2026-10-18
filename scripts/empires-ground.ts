@@ -5,7 +5,7 @@
 //
 // 1. The ground code uses no Math.random, Date, clock, DOM or engine-dependent maths.
 // 2. Placement on Dustfall Ridge: every rule refuses somewhere with its own reason (unbuildable, a
-//    crystal field, uneven ground, built on, blocking a door, too near the enemy (any building), enemy units on it, no room at its own door, credits), the ghost checks every tile, an
+//    crystal field, uneven ground, built on, blocking a building's exit, too near the enemy (any building), enemy units on it, no room for its own exit, credits), the ghost checks every tile, an
 //    order to place there is refused with the same reason, and a building hidden in the fog doesn't
 //    stop a placement.
 // 3. A building battle on Dustfall Ridge, seat 0 scripted (Republic) and seat 1 a peaceful AI (Swarm: no fighters), two
@@ -150,7 +150,7 @@ const seat = (faction: Seat['faction'], team: number, spawn: number): Seat => ({
   expect('terrain', R.center, 'Not on buildable ground')
   expect('crystal field', 'test-block', 'A deposit is in the way')
   expect('built on', R.center, 'Something is built there')
-  expect('door blocked', R.center, "It would block a building's door")
+  expect('exit blocked', R.center, "It would block a building's exit")
   expect('enemy near, any building', 'test-block', 'Too close to an enemy building (keep 20 tiles away)')
   {
     // No command range: a small building as far from our Command Center as the map allows (and still
@@ -160,7 +160,24 @@ const seat = (faction: Seat['faction'], team: number, spawn: number): Seat => ({
     check('a building may go up far from our Command Centers (no command range)', !!far && tiles > 40, `${tiles.toFixed(0)} tiles out`)
   }
   expect('enemy near', R.center, 'Too close to an enemy building (keep 20 tiles away)')
-  expect('own door', R.center, 'No room in front of its door')
+  expect('own exit', R.center, 'No room for its exit: the row in front of its door must stay clear')
+  {
+    // Exits only where units come out: a Command Center and a factory have one, a power generator,
+    // a research station and a supply building none, and nothing keeps the row in front of theirs clear.
+    const exit = (type: string) => groundPlacement(w, 0, type, home.x, home.y + 14 * TILE).door.length
+    check('a building that trains has an exit (the row in front of its door), one that trains nothing has none',
+      exit(R.center) === 6 && exit(R.vfactory) === 5 && exit(R.barracks) === 4 && exit(R.generator) === 0 && exit(R.research) === 0 && exit(R.supply) === 0,
+      [R.center, R.vfactory, R.barracks, R.generator, R.research, R.supply].map((t) => `${t} ${exit(t)}`).join(', '))
+    const at = find(w, 0, R.supply, null, { x: home.x - 14 * TILE, y: home.y + 10 * TILE })!
+    const pl = groundPlacement(w, 0, R.supply, at.x, at.y)
+    const depot = raiseBuilding(w, UNIT[R.supply], 0, pl.tc, pl.tr)
+    tick(w)
+    // A generator right against the depot's south side, where a door row would be.
+    const why = groundPlacement(w, 0, R.generator, (pl.tc + 1) * TILE, (pl.tr + 4) * TILE).why
+    check('a building may stand right in front of one that trains nothing', why !== "It would block a building's exit", String(why))
+    kill(w, depot)
+    tick(w)
+  }
   {
     const p = groundPlacement(w, 0, R.center, home.x + 3 * TILE, home.y)
     const red = p.tiles.filter((t) => !t.ok).length

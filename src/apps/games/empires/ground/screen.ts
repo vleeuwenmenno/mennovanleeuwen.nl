@@ -137,11 +137,40 @@ function ghost(ctx: CanvasRenderingContext2D, _w: World, _me: Owner, unitId: str
     ctx.fillStyle = t.ok ? 'rgba(90, 255, 130, 0.32)' : 'rgba(255, 70, 60, 0.5)'
     ctx.fillRect(t.tc * TILE + 1, t.tr * TILE + 1, TILE - 2, TILE - 2)
   }
-  // The row in front of its door, which must stay free: outlined only.
-  ctx.lineWidth = 1.5 * px
-  for (const t of p.door) {
-    ctx.strokeStyle = t.ok ? 'rgba(90, 255, 130, 0.7)' : 'rgba(255, 70, 60, 0.85)'
-    ctx.strokeRect(t.tc * TILE + 3, t.tr * TILE + 3, TILE - 6, TILE - 6)
+  // Its exit (a building that trains: the row in front of its door, kept clear so units can leave):
+  // one dashed strip, not tiles to build on, with an arrow pointing out of the door.
+  if (p.door.length) {
+    const ok = p.door.every((t) => t.ok)
+    const x0 = p.door[0].tc * TILE + 3
+    const y0 = p.door[0].tr * TILE + 3
+    const wd = p.door.length * TILE - 6
+    const ht = TILE - 6
+    ctx.strokeStyle = ok ? 'rgba(150, 215, 255, 0.85)' : 'rgba(255, 70, 60, 0.9)'
+    ctx.fillStyle = ok ? 'rgba(150, 215, 255, 0.1)' : 'rgba(255, 70, 60, 0.18)'
+    ctx.lineWidth = 1.5 * px
+    ctx.setLineDash([6 * px, 4 * px])
+    ctx.fillRect(x0, y0, wd, ht)
+    ctx.strokeRect(x0, y0, wd, ht)
+    ctx.setLineDash([])
+    for (const t of p.door)
+      if (!t.ok) {
+        ctx.fillStyle = 'rgba(255, 70, 60, 0.45)'
+        ctx.fillRect(t.tc * TILE + 3, t.tr * TILE + 3, TILE - 6, TILE - 6)
+      }
+    // The arrow: out of the door, down the middle of the strip.
+    const ax = x0 + wd / 2
+    const a = Math.min(ht * 0.42, TILE * 0.4)
+    ctx.fillStyle = ok ? 'rgba(150, 215, 255, 0.9)' : 'rgba(255, 70, 60, 0.95)'
+    ctx.beginPath()
+    ctx.moveTo(ax - a * 0.35, y0 + ht * 0.12)
+    ctx.lineTo(ax + a * 0.35, y0 + ht * 0.12)
+    ctx.lineTo(ax + a * 0.35, y0 + ht * 0.48)
+    ctx.lineTo(ax + a * 0.8, y0 + ht * 0.48)
+    ctx.lineTo(ax, y0 + ht * 0.9)
+    ctx.lineTo(ax - a * 0.8, y0 + ht * 0.48)
+    ctx.lineTo(ax - a * 0.35, y0 + ht * 0.48)
+    ctx.closePath()
+    ctx.fill()
   }
   ctx.strokeStyle = p.why ? ENEMY : OWN
   ctx.lineWidth = 2 * px

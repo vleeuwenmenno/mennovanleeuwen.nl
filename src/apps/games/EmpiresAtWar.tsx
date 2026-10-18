@@ -2778,7 +2778,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
                 : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
                 : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near. On a ship two classes bigger it escorts it: flies over its hull and moves with it.`
-                  : ui.mode === 'place' && w.ground ? `${UNIT[placing.current?.unit ?? '']?.name ?? 'Building'}: ${click} a spot where every tile is green.${touchUi ? ' Then build it here.' : ''}`
+                  : ui.mode === 'place' && w.ground ? <>{`${UNIT[placing.current?.unit ?? '']?.name ?? 'Building'}: ${click} a spot where every tile is green.${touchUi ? ' Then build it here.' : ''}`}{UNIT[placing.current?.unit ?? '']?.ground?.trains?.length ? <> <span data-tip="Exit: kept clear so units can leave. Nothing may be built on it.">The dashed strip with the arrow is its exit, kept clear so units can leave.</span></> : null}</>
                   : ui.mode === 'place' ? `${(placeType(placing.current?.unit ?? '') ?? yardOf(myFaction)).name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
             {ui.mode === 'place' && w.ground

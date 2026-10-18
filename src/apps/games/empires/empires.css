@@ -7632,38 +7632,74 @@ span.ew-teamtag {
   width: 100%;
   min-width: 0;
 }
-/* More than four buildings to put up (a ground battle's engineers): two rows of three, each card its
-   picture on the left and its name and price beside it, as tall together as one row of big cards. */
+/* More than four buildings to put up (a ground battle's engineers): two rows of cards sharing the
+   panel's width (three columns on a wide one), each its picture on the left and its full name and
+   price beside it (kyber, time, power). Where three columns don't fit, the rows scroll sideways
+   rather than squeeze the names (the panel can't grow taller). */
 .ew-engbuild .ew-engbuild-cards.is-many {
-  grid-auto-flow: row;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(2, 30px);
-  grid-auto-columns: auto;
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  grid-template-rows: repeat(2, 40px);
+  grid-auto-columns: minmax(134px, 1fr);
   gap: 4px;
+  max-width: none;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard,
 .ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard.is-locked,
 .ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard.is-poor {
-  height: 30px;
-  grid-template-columns: 24px minmax(0, 1fr);
+  width: auto;
+  height: 40px;
+  grid-template-columns: 22px minmax(0, 1fr);
   grid-template-rows: auto auto;
   align-content: center;
   align-items: center;
   column-gap: 5px;
-  row-gap: 0;
-  padding: 2px 5px;
+  row-gap: 3px;
+  padding: 3px 5px;
 }
 .ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard .ew-art {
   grid-row: 1 / span 2;
   grid-column: 1;
-  height: 24px;
+  height: 22px;
 }
-.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard strong,
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard strong {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.1;
+  text-align: left;
+}
 .ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard .ew-yc-line {
   grid-column: 2;
   justify-content: flex-start;
-  text-align: left;
-  line-height: 1.15;
+  gap: 6px;
+  overflow: visible;
+}
+.ew-engbuild .ew-yc-line > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* On a phone the panel can't grow: the engineer's cards stay in two rows that scroll sideways, and a
+   factory's unit cards are as tall as its row, as its upgrade cards are. */
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-engbuild .ew-engbuild-cards.is-many {
+    grid-auto-columns: 150px;
+  }
+  .ew-deck .ew-yard.is-groundyard .ew-shipcard:not(.ew-modcard) {
+    height: auto;
+    aspect-ratio: auto;
+    align-self: stretch;
+  }
+}
+
+/* A short screen (a phone on its side): one row of them. */
+@media (max-height: 500px) {
+  .ew-engbuild .ew-engbuild-cards.is-many {
+    grid-template-rows: 40px;
+  }
 }
 
 /* --- Galactic conquest: what stands round a planet, and the orbit view (Orbit.tsx) ------------- */
@@ -8242,6 +8278,10 @@ span.ew-teamtag {
 }
 .ew-rp {
   color: #b08cff;
+}
+/* What a building draws once it is busy (a card's price line): a cost, not a warning. */
+.ew-powerdraw {
+  color: #c9b98a;
 }
 /* A consumer slowed for want of power (a site, training, research). */
 .ew-lowpower {

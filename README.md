@@ -3518,14 +3518,17 @@ Command Centers are in its memory of buildings from the first second.
 **Placing a building** (`groundPlacement`, through the space game's `place` order). The ghost checks
 every tile of the footprint and reports the first rule that fails, in this order:
 1. Every tile is buildable (no ramp, cliff, water or blocking prop), off crystal fields, on one
-   level, and free of buildings and of the row in front of another building's door.
+   level, and free of buildings and of another building's exit.
 2. It is at least 20 tiles from every enemy building we know of (middle to middle), so nobody builds
    up against the enemy's base or walls in its door. Otherwise there is no limit: no command range,
    no distance from our Command Centers. The land is known everywhere from the start (a side always
    has eyes in orbit), so no tile needs exploring first; enemies only count where we see or
    remember them.
 3. No enemy unit we can see stands on it.
-4. The row of tiles in front of its door is open, so units can always roll out.
+4. Its exit is open: for a building that trains units (a Command Center, a factory; `hasExit`),
+   the row of tiles in front of its door, kept clear so they can always roll out. A building that
+   trains nothing (a generator, a research station, supply) has no exit, and others may stand right
+   against its south side.
 5. There is enough kyber.
 
 The order also needs one of its engineers to be able to drive up to the footprint ("Your engineers
@@ -3784,6 +3787,7 @@ squad and fast vehicle) for us and the same six for the first enemy, sent at eac
 ```sh
 pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) an upgrade battle (the tier gate on units and research, a tier upgrade paid in research points and kyber, its power drawn only while it runs, called off with both refunded, slowed by made / used to the tick, done: tier 2, more hull, the tier 2 unit trained; weapons research reaching the units already out and those trained after; the AI upgrading a factory and researching) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) and a tier 1 battle (all six tier 1 units firing, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground-panels http://localhost:5263 [dir]  # needs a dev server: an engineer's Build cards and a factory's Units and Upgrades pages at 1280x720, 1000x820, 1920x1080 and a phone upright and on its side: no name or price line cut, no card out of the panel (a row may scroll sideways), nothing scrolling; with a dir, screenshots and the placement ghosts of a generator and a factory
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
 pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own; every factory's model at tiers 2 and 3, each with more parts than the tier below
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
@@ -3814,8 +3818,12 @@ differs:
   buildings we remember but don't see now are drawn as faded ghosts where we saw them. The minimap
   shows the terrain under the same veil.
 - **Building:** an engineer's panel has a card for each building it puts up (B, or the touch wheel's
-  Build entry); with more than four they sit in two rows of three smaller cards, so their names fit. The ghost under the pointer colours every tile of the footprint green or red, outlines
-  the row in front of its door and names the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
+  Build entry), each with its full name and its price (kyber, time, and the power it makes or
+  draws), the details in its tooltip. With more than four they sit in two rows of three; where three
+  don't fit (a narrow window, a phone) the rows scroll sideways, and on a short screen they are one
+  row. The ghost under the pointer colours every tile of the footprint green or red, outlines
+  a building's exit (a dashed strip with an arrow out of the door, for one that trains units; the
+  hint says what it is) and names the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
   opened, then **Build here** or **Cancel**.
 - **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
   rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.

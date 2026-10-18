@@ -2610,7 +2610,7 @@ function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit
               <span className="ew-yc-line">
                 <span className="ew-cost"><Icon name="credits" size={10} /> {t.cost}</span>
                 <span className="ew-time"><Icon name="time" size={10} /> {secs}s</span>
-                {pw && <span className={pw.made ? 'ew-power' : 'ew-lowpower'}><Icon name="power" size={10} /> {pw.short}</span>}
+                {pw && <span className={pw.made ? 'ew-power' : 'ew-powerdraw'}><Icon name="power" size={10} /> {pw.short}</span>}
               </span>
             </button>
           )
@@ -2693,7 +2693,7 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
                   { id: 'upgrades', group: 'buildings', label: 'Upgrades', badge: b.gj ? '…' : `T${b.t.ground!.tier ?? 1}`, tip: `Upgrades: its next tier, and research for its units, paid with research points and kyber, one at a time.` },
                 ]}
                 page={page} onPick={(id) => setPage(id as 'units' | 'upgrades')}>
-                <div className="ew-yard" style={cardCols(page === 'upgrades' ? jobs : trains.length)}>
+                <div className="ew-yard is-groundyard" style={cardCols(page === 'upgrades' ? jobs : trains.length)}>
                   {page === 'upgrades' ? <GroundUpgradeCards w={w} me={me} b={b} onJob={p.onJob} onCancelJob={p.onCancelJob} /> : units}
                 </div>
               </BuildPanel>
@@ -2762,7 +2762,7 @@ function GroundUpgradeCards({ w, me, b, onJob, onCancelJob }: { w: World; me: Ow
                 <span className="ew-rp"><Icon name="research" size={10} /> {c.rp}</span>
                 <span className="ew-cost"><Icon name="credits" size={10} /> {c.cost}</span>
                 <span className="ew-time"><Icon name="time" size={10} /> {c.time}s</span>
-                <span className="ew-lowpower"><Icon name="power" size={10} /> −{c.draw}</span>
+                <span className="ew-powerdraw"><Icon name="power" size={10} /> −{c.draw}</span>
               </span>
             )}
             {status === 'locked' && <span className="ew-lock">{tech && tech.tier > tier ? `T${tech.tier}` : 'Locked'}</span>}
