@@ -364,11 +364,11 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     // 1.5 s: the fourth cancelled.
     if (t === 30) {
       for (let i = 0; i < 5; i++) order(cmd('build', R.engineer, false, home.id))
-      pass('engineers queue up to the unit cap, the next refused for supply', home.yq!.length === 4 && before - credits() === 600 && /^Needs more supply: build a Supply Depot/.test(cantBuild(w, 0, R.engineer, false, home.id) ?? ''), `queue ${home.yq!.length}, paid ${before - credits()}, ${cantBuild(w, 0, R.engineer, false, home.id)}`)
+      pass('engineers queue up to the unit cap, the next refused for supply', home.yq!.length === 4 && before - credits() === 4 * UNIT[R.engineer].cost && /^Needs more supply: build a Supply Depot/.test(cantBuild(w, 0, R.engineer, false, home.id) ?? ''), `queue ${home.yq!.length}, paid ${before - credits()}, ${cantBuild(w, 0, R.engineer, false, home.id)}`)
     }
     if (t === 45) {
       order(cmd('cancel', 3, home.id))
-      pass('a cancelled queue item is refunded in full', home.yq!.length === 3 && credits() - before === 150)
+      pass('a cancelled queue item is refunded in full', home.yq!.length === 3 && credits() - before === UNIT[R.engineer].cost)
     }
     // Just after: a Supply Depot beside the Command Center, after the first site (so the rally test
     // later has room to train).
@@ -1125,7 +1125,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     }
     // The Hub weakened (as a dev cheat would), then everything of ours sent at it, attack-moving:
     // they take on the Probes on the way, then the Hub.
-    if (t === 30) say({ t, k: 'hull', id: hub.id, share: 0.2 })
+    if (t === 30) say({ t, k: 'hull', id: hub.id, share: 0.08 })
     if (t === 40) {
       const ids = w.units.filter((u) => u.owner === 0 && u.t.id === 'r-g-scout').map((u) => u.id)
       say({ t, k: 'cmd', owner: 0, json: JSON.stringify(cmd('move', ids, hub.x, hub.y, true, false)) })
@@ -1174,7 +1174,8 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   }
   {
     const w = fresh()
-    const art = spawn(w, testWeaponId('republic', 'artillery'), 0, field.w * 0.3, cy, 0)
+    // (Out of reach of our Command Center's turret.)
+    const art = spawn(w, testWeaponId('republic', 'artillery'), 0, field.w * 0.45, cy, 0)
     art.stance = 'hold'
     spawn(w, 'd-g-engineer', 1, art.x + 4 * TILE, cy, 0)
     check('artillery never fires closer than its minimum range', run(w, 4) === 0)

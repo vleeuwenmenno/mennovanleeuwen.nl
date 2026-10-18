@@ -233,12 +233,12 @@ export const ARMOURS: Armour[] = ['light', 'medium', 'heavy', 'structure']
 /** Damage of each ground weapon against each armour class, as a share of its damage (the ground's
  * own table, beside space's VS: space units never meet these). */
 export const GROUND_VS: Record<GroundWeaponKind, Record<Armour, number>> = {
-  pulse: { light: 1, medium: 0.7, heavy: 0.35, structure: 0.4 },
-  beam: { light: 0.6, medium: 1.1, heavy: 1.3, structure: 0.8 },
+  pulse: { light: 1, medium: 0.7, heavy: 0.35, structure: 0.25 },
+  beam: { light: 0.6, medium: 1.1, heavy: 1.3, structure: 0.6 },
   rocket: { light: 0.5, medium: 1, heavy: 1.4, structure: 1.3 },
-  shell: { light: 0.6, medium: 1, heavy: 1.4, structure: 1 },
+  shell: { light: 0.6, medium: 1, heavy: 1.4, structure: 0.9 },
   artillery: { light: 0.8, medium: 0.9, heavy: 0.7, structure: 1.5 },
-  swarm: { light: 1.3, medium: 0.8, heavy: 0.4, structure: 0.5 },
+  swarm: { light: 1.3, medium: 0.8, heavy: 0.4, structure: 0.35 },
   spray: { light: 1.4, medium: 0.9, heavy: 0.5, structure: 0.3 },
 }
 /** Chance a ground weapon's shot connects with each armour class (lighter is faster and harder to

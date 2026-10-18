@@ -153,7 +153,7 @@ const GROUND: UnitType[] = [
     blurb: 'An eight-sided industrial deck round a sphere core. It trains builder droids, takes in the kyber they cut and supports 5 units.',
     hull: 5000, cost: 1200, build: 60, ground: { trains: ['d-g-engineer', 'd-g-scout'] },
     // A light defence turret on its roof (ground/combat.ts).
-    hardpoints: [{ ...gun('flak', 2.9, 7.1, 0.13, 900, groundWeapon('pulse', 14, { range: 320, cooldown: 0.8 })), key: 'tur' }],
+    hardpoints: [{ ...gun('flak', 2.9, 7.1, 0.13, 900, groundWeapon('pulse', 22, { range: 352, cooldown: 0.8 })), key: 'tur' }],
   }),
   groundSupply({
     id: 'd-g-supply', faction: 'droid', name: 'Supply Relay', sprite: 'droid-g-supply',

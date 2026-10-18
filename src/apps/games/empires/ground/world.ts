@@ -808,7 +808,8 @@ function mine(w: World, u: Unit, cl: number) {
 function dropOff(w: World, u: Unit) {
   const g = moveOf(u)
   const load = u.carry ?? 0
-  if (load > 0) earn(w, w.players[u.owner], load, 'mines', 'Kyber gathered')
+  // (The AI's difficulty sets how much it gets for a load: Seat incomeMul.)
+  if (load > 0) earn(w, w.players[u.owner], load * w.players[u.owner].incomeMul, 'mines', 'Kyber gathered')
   u.carry = 0
   g.drop = false
   g.spot = undefined

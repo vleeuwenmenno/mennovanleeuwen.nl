@@ -203,6 +203,25 @@ export type Brain = {
   gScouted?: number
   /** Ground battles: it fields no fighters at all (the checks' economy battles). */
   peaceful?: boolean
+  /** Ground battles (ground/army.ts): the units of the wave out now, what it was worth when it set
+   * out (and as reinforcements joined), when it set out and when the last reinforcements followed,
+   * the army value its next wave waits for, its heavies sent home hurt, the enemy fighters it has
+   * seen (id to type), when it first saw an attack on its base (-1: none), and where it has got to
+   * on its hunt for the last enemy buildings. */
+  gWave?: number[]
+  gWaveFrom?: number
+  gWaveAt?: number
+  gFollowAt?: number
+  gWaveV?: number
+  gHurt?: number[]
+  gFoes?: Record<number, string>
+  gAlarm?: number
+  gHunt?: number
+  gHunted?: number[]
+  gHuntAt?: number
+  /** Ground battles: when it last trained a Scout, and how many it has trained. */
+  gScoutAt?: number
+  gScoutsMade?: number
   diff: Difficulty
   /** How it plays (see PROFILES). Brains saved before profiles play Balanced. */
   profile: Profile
@@ -366,8 +385,9 @@ function reinforcements(w: World, b: Brain, st: Unit, army: Unit[]) {
 }
 
 /** The quiet start before it attacks anything of ours: its difficulty's, stretched or shortened
- * by its profile and its faction's doctrine; never shorter than the easy levels promise. */
-const calmOf = (w: World, b: Brain) => {
+ * by its profile and its faction's doctrine; never shorter than the easy levels promise. (Ground
+ * battles use it too, see ground/army.ts.) */
+export const calmOf = (w: World, b: Brain) => {
   const D = DIFFICULTY[b.diff]
   const c = D.calm * PROFILES[b.profile].calm * doctrineOf(w, b).calm
   return b.diff === 'easy' || b.diff === 'veryEasy' ? Math.max(D.calm, c) : c

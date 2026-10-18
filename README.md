@@ -3498,7 +3498,7 @@ below), near the space game's: a battle starts with 1,600.
 
 | Faction | Engineer | Cost, time | Command Center | Hull | Supply building | Hull |
 | --- | --- | --- | --- | --- | --- | --- |
-| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 88) | 150, 12 s | Command Center | 5,200 | Supply Depot: armoured stores and a fuel tank behind blast walls | 1,500 |
+| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 100) | 140, 11 s | Command Center | 5,200 | Supply Depot: armoured stores and a fuel tank behind blast walls | 1,500 |
 | Confederacy | Forger builder droid: a hovering fabricator with cutting arms (hull 110, speed 104) | 140, 11 s | Command Hub | 5,000 | Supply Relay: a hexagonal power and parts deck round a humming mast | 1,400 |
 | Swarm | Shaper drone: a low crawler that spits resin (hull 120, speed 96) | 130, 10 s | Hive Nexus | 5,400 | Brood Cache: resin pods full of glowing nutrient | 1,600 |
 
@@ -3577,22 +3577,55 @@ cluster they can reach (and the screen says so). An engineer taken off gathering
 to its field once the building is done. A battle saved before clusters gets them laid out when it
 loads, each field's kyber shared out as it was.
 
-**The AI** is the space game's (`ai.ts`: same brain, think clock and random stream) with decisions
-of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)): it keeps every idle engineer gathering at the crystal field nearest its Command Centers, puts
-up a supply building beside a Command Center (away from the fields) once fewer than three more units
-fit under its cap, trains engineers where the queue is shortest (seven a Command Center, fourteen at
-most), saves up and expands with a second Command Center beside a crystal field on its own side that
-none of its Command Centers serves yet, sends idle engineers to its sites and damaged buildings
-(taking a gatherer off its field for a site nobody is building), calls off a site nobody manages to
-start within 90 seconds, builds a power generator whenever its power isn't ahead of a site going up
-and of the next building that draws power it wants, then, one at a time, its foot factory (from 4
-engineers), its vehicle factory (from 6, once a generator runs) and a research station for each
-Command Center (two at most), trains a mix of its factories' tier 1 units (the kind it has fewest of
-first, one at a time a factory, 6 at most and 12 once it is rich; while it saves for its expansion,
-one of each), which wait at their rally points and help the Scouts defend, upgrades its factories a
-tier whenever it can pay (keeping 300 kyber back), takes two pieces of research at them, and fields
-a few Scouts (see Ground combat below). It reads only what its
-team knows and gives the same orders a player does, so every copy of a battle makes the same choices.
+**The AI** is the space game's (`ai.ts`: same brain, think clock, random stream, difficulty and
+style) with decisions of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)
+for its base and economy, [`ground/army.ts`](src/apps/games/empires/ground/army.ts) for its army). It
+reads only what its team knows and gives the same orders a player does, so every copy of a battle
+makes the same choices.
+- **Economy.** Every idle engineer gathers at the crystal field nearest its Command Centers. It trains
+  engineers where the queue is shortest (seven a Command Center, fourteen at most) and keeps two
+  engineers' worth of kyber back from everything else, so it can rebuild them after a raid; with
+  fewer than four left it buys nothing but engineers. Engineers that see an armed enemy within 7
+  tiles run for the nearest Command Center with no enemy near it, and go back to work after.
+- **Expanding.** Once it has six engineers it saves up for a second Command Center beside a crystal
+  field on its own side that none of its Command Centers serves yet (most of the army and a second
+  research station wait meanwhile) and places it the moment it can pay, before anything else. When
+  its nearest crystal field is more than 20 tiles from every Command Center it has (a long haul for
+  every load, as on Dustfall Ridge), a Command Center by the field comes first of all.
+- **Base.** Supply before the cap (once fewer than three more units fit), a power generator whenever
+  its power isn't ahead of a site going up and of the next building that draws power it wants, then
+  its foot factory (from 4 engineers), its vehicle factory (from 6, once a generator runs) and a
+  research station for each Command Center (two at most). It sends idle engineers to its sites and
+  damaged buildings and calls off a site nobody manages to start within 90 seconds.
+- **Upgrades.** It upgrades its factories a tier whenever it has the research points, saving its
+  kyber for it once it has an army of 600 kyber to hold its base with, and takes two pieces of
+  research at them.
+- **Army.** Its factories train what counters the enemy army it has seen (the counter loop: fast
+  tier 1 units beat heavy tier 3 ones, heavy beat anti-swarm tier 2, anti-swarm beat fast), with a
+  taste for the newest tier it has and some variety; the easy levels stop at a smaller army. The
+  army gathers at a rally point in front of the base and attacks in waves: once its quiet start is
+  over and the army is worth enough (each wave a little more than the last, and more as the battle
+  goes on, or whatever it has once it fills its unit cap), it attack-moves on the nearest enemy
+  building it knows of, leaving a fifth of the army home as guards; on Medium and Hard its guns go
+  on one target at a time (the weakest near the wave). Units trained while a wave is out follow it
+  in groups. A wave that loses more than its style allows comes home and the next waits for more;
+  after 25 minutes its waves fight to the end. Damaged tier 2 and 3 units leave the wave and guard
+  the base.
+- **Defence.** Anything that comes within 14 tiles of its buildings or engineers is met, after its
+  difficulty's reaction time, by everything at home, and a big enough attack calls the wave back.
+- **Finishing.** Once every enemy building it knows of is down it hunts for the rest: the spawns,
+  the crystal fields and a grid over the whole map, nearest first, moving on from each once it has
+  seen it (or after 90 seconds of trying to get there). Once it sees no enemy army left, a smaller
+  army is enough to go and finish the job.
+- **Scouts.** Two from the Command Center, one a minute at most and six in a battle: one scouts
+  (during the quiet start only the crystal fields on its own side, then the enemy's start first and
+  the map after), the other raids enemy engineers once the quiet start is over.
+- **Difficulty and style** work as in space: Very easy and Easy earn less (55% and 68% of every
+  load of kyber), think and react slower, never focus their fire and stop at a smaller army; Hard
+  earns a quarter more and reacts in a second. The quiet start (no waves or raids) is the space
+  game's, but at least 4 minutes on Medium (6 on Easy, 10 on Very easy, none on Hard), long enough
+  to put up a generator and a factory. The style sets how big its waves are, how long it rests
+  between them, when a wave turns back and how much stays home.
 
 **Power and research points** ([`ground/power.ts`](src/apps/games/empires/ground/power.ts)), per
 side, worked out once a tick by the buildings' work:
@@ -3703,12 +3736,12 @@ space game's tables, tiers and hashes are untouched. Damage is multiplied by:
 
 | Weapon | Light | Medium | Heavy | Structure |
 | --- | --- | --- | --- | --- |
-| Pulse | 1 | 0.7 | 0.35 | 0.4 |
-| Beam | 0.6 | 1.1 | 1.3 | 0.8 |
+| Pulse | 1 | 0.7 | 0.35 | 0.25 |
+| Beam | 0.6 | 1.1 | 1.3 | 0.6 |
 | Rockets | 0.5 | 1 | 1.4 | 1.3 |
-| Heavy shell | 0.6 | 1 | 1.4 | 1 |
+| Heavy shell | 0.6 | 1 | 1.4 | 0.9 |
 | Artillery | 0.8 | 0.9 | 0.7 | 1.5 |
-| Swarm rockets | 1.3 | 0.8 | 0.4 | 0.5 |
+| Swarm rockets | 1.3 | 0.8 | 0.4 | 0.35 |
 | Spray | 1.4 | 0.9 | 0.5 | 0.3 |
 
 Shots miss light vehicles more often: rockets hit them 55% of the time and heavy shells 40%, while
@@ -3735,7 +3768,7 @@ anti-armour unit, loses to light units and beats medium armour by as much.
 
 | Faction | Unit | Factory | Hull | Cost, time | Speed | Weapons |
 | --- | --- | --- | --- | --- | --- | --- |
-| Republic | Trooper squad: five troopers in white armour | Barracks | 300 | 110, 12 s | 70 | Pulse rifles (3.5 each a trooper, 5.5 tiles, 0.9 s) |
+| Republic | Trooper squad: five troopers in white armour | Barracks | 300 | 105, 12 s | 70 | Pulse rifles (3.5 each a trooper, 5.5 tiles, 0.9 s) |
 | Republic | Raider hover tank: a white wedge on a repulsor skirt | Vehicle Factory | 340 | 150, 14 s | 125 | Pulse cannon in a turret that turns on its own (22, 7 tiles, 1 s) |
 | Confederacy | Battle droid squad: five tan droids | Bot Factory | 250 | 95, 10 s | 66 | Pulse blasters (2.7 each a droid, 5.5 tiles, 0.8 s) |
 | Confederacy | Razor hover bike: a droid on a pronged bike | Vehicle Foundry | 220 | 120, 12 s | 180 | Twin pulse guns (6 each, 0.6 s) and light rockets (16, 7 tiles, 2.6 s) |
@@ -3759,7 +3792,7 @@ but the Repeater squad by about half; together the six beat a crowd of tier 1 tw
 | Faction | Unit | Factory | Hull | Cost, time | Speed | Weapons |
 | --- | --- | --- | --- | --- | --- | --- |
 | Republic | Repeater squad: four heavy troopers with ammunition drums | Barracks | 520 (light) | 220, 22 s | 60 | Rapid pulse cannons (2.2 each a trooper, 6 tiles, 0.3 s) and frag grenades (9, lobbed 1.5 to 6 tiles, splash 1.25 tiles, 4 s) |
-| Republic | Hailstorm carrier: a white tracked hull | Vehicle Factory | 700 | 300, 28 s | 80 | Airburst artillery in a turret (40, 3 to 15 tiles, splash 2 tiles, 3 s), firing at what allies see |
+| Republic | Hailstorm carrier: a white tracked hull | Vehicle Factory | 700 | 300, 28 s | 80 | Airburst artillery in a turret (34, 3 to 15 tiles, splash 2 tiles, 3 s), firing at what allies see |
 | Confederacy | Salvo droid: a two-legged walker with a rocket pod on each shoulder | Bot Factory | 600 | 220, 22 s | 62 | Two swarm rocket pods, fixed (4 rockets of 5 each, 8 tiles, 3.6 s) |
 | Confederacy | Breaker tank: a broad grey tracked hull | Vehicle Foundry | 760 | 300, 28 s | 78 | Swarm rocket battery in a turret (8 rockets of 6, 9 tiles, splash 1.25 tiles, 4.4 s) |
 | Swarm | Spewer: a squat six-legged beast with a glowing maw | Brood Chamber | 600 | 220, 22 s | 74 | Acid spray cone (9 a second, 3 tiles, burns) |
@@ -3792,18 +3825,41 @@ do little to heavy armour) and lose to massed fast units with anti-armour weapon
 loses to Racers (`check:ground` fights it). The Lancers are the anti-armour squad: they beat every other tier
 3 unit at equal kyber. Big hulls cross every ramp, bridge and ford of every map (`check:ground-nav`).
 
-**Command Centers** carry a light defence turret on their roof: pulse, 14 damage, 10 tiles, every
-0.8 seconds.
+**Command Centers** carry a defence turret on their roof: pulse, 22 damage, 11 tiles, every 0.8
+seconds.
 
 **Winning.** A side is out once every one of its buildings is destroyed, finished or going up; the
 last side standing wins ("Every enemy building is destroyed.").
 
-**The AI's Scouts** ([`ground/army.ts`](src/apps/games/empires/ground/army.ts)): once it has four
-engineers it trains three Scouts (six once it has 700 kyber), one at a time, keeping 200 kyber back.
-It turns all of them on any enemy that comes within 12 tiles of its buildings or engineers. One
-Scout scouts: the enemy's start first, then the map's spawns and crystal fields. The rest, two or
-more at a time, go after enemy engineers they see, else the enemy buildings they know of, unarmed
-ones first and armed ones too once there are four.
+**The AI's army**: see The AI above.
+
+**Balance and the ground tournament.** `pnpm empires:ground` plays AI against AI ground battles,
+headless, every pairing of different factions from both spawns on every ground map, and reports
+each faction's wins, each pairing, how long battles took, the fighting units each side built by
+tier, research and factory tiers, and the kills by the killer's weapon; battles still going at the
+time limit are stalls (listed, and given to the side with clearly more army and buildings left).
+A dash between two difficulties plays them against each other. Battles run in parallel worker
+threads (`TOURNAMENT_WORKERS`; each takes a few hundred megabytes).
+
+```sh
+pnpm empires:ground                      # 45 minutes, 2 seeds, medium, every ground map
+pnpm empires:ground 45 2 hard-medium     # minutes, seeds, difficulty (or two: first faction's - second's)
+pnpm empires:ground 45 1 medium forkwater,highcairn
+```
+
+At Medium on the four hand-made maps (48 battles, 2 seeds), after tuning:
+
+| | Republic | Confederacy | Swarm |
+| --- | --- | --- | --- |
+| Wins of decided battles | 54% | 50% | 47% |
+| Fighting units built a battle (tier 1, 2, 3) | 48, 18, 2 | 62, 18, 4 | 62, 23, 2 |
+
+39 of 48 battles end within 45 minutes (median 21 minutes; Dustfall Ridge about 16, Forkwater about
+36); the rest are even armies trading at the unit cap. Every weapon kills (most with pulse, then
+rockets, swarm rockets and sprays; beams, artillery and shells far less). Medium beats Easy 24 to 0
+and Hard beats Medium 24 to 0. Before tuning (the AI kept a fixed small army that only defended and
+raided with Scouts), the Swarm won 16%, half the battles stalled, and the AI built about 80 Scouts a
+battle and almost no tier 2 or 3.
 
 **Squads** ([`ground/squad.ts`](src/apps/games/empires/ground/squad.ts),
 [`ground/squadDraw.ts`](src/apps/games/empires/ground/squadDraw.ts)): foot soldiers (trooper

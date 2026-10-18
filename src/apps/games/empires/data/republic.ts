@@ -274,14 +274,14 @@ const GROUND: UnitType[] = [
   groundEngineer({
     id: 'r-g-engineer', faction: 'republic', name: 'Mason field engineer', sprite: 'republic-g-engineer',
     blurb: 'A tracked utility rig with a crane arm and a welding torch. Unarmed: it mines kyber crystals and hauls them to a Command Center, raises buildings and welds damaged ones back together.',
-    hull: 150, cost: 150, build: 12, speed: 88, turn: 4, ground: { radius: 11, builds: ['r-g-supply', 'r-g-generator', 'r-g-barracks', 'r-g-vfactory', 'r-g-research', 'r-g-center'] },
+    hull: 150, cost: 140, build: 11, speed: 100, turn: 4.4, ground: { radius: 11, accel: 250, builds: ['r-g-supply', 'r-g-generator', 'r-g-barracks', 'r-g-vfactory', 'r-g-research', 'r-g-center'] },
   }),
   groundCenter({
     id: 'r-g-center', faction: 'republic', name: 'Command Center', sprite: 'republic-g-center',
     blurb: 'A white armoured block with a landing pad and a comms dish. It trains engineers, takes in the kyber they mine and supports 5 units.',
     hull: 5200, cost: 1200, build: 60, ground: { trains: ['r-g-engineer', 'r-g-scout'] },
     // A light defence turret on its roof (ground/combat.ts).
-    hardpoints: [{ ...gun('flak', 5, 6.6, 0.13, 900, groundWeapon('pulse', 14, { range: 320, cooldown: 0.8 })), key: 'tur' }],
+    hardpoints: [{ ...gun('flak', 5, 6.6, 0.13, 900, groundWeapon('pulse', 22, { range: 352, cooldown: 0.8 })), key: 'tur' }],
   }),
   groundSupply({
     id: 'r-g-supply', faction: 'republic', name: 'Supply Depot', sprite: 'republic-g-supply',
@@ -318,7 +318,7 @@ const GROUND: UnitType[] = [
   groundSquad({
     id: 'r-g-troopers', faction: 'republic', name: 'Trooper squad', sprite: 'republic-g-troopers',
     blurb: 'Five clone troopers with pulse rifles. Cheap and quick to train, they cut down light units and engineers; they fall one by one under fire, and fight less with every trooper lost.',
-    hull: 300, cost: 110, build: 12, speed: 70, turn: 4, ground: {},
+    hull: 300, cost: 105, build: 12, speed: 70, turn: 4, ground: {},
     squad: { n: 5, member: 'r-gm-trooper', size: 16, spacing: 12 },
     role: { role: 'Infantry', strong: ['light units', 'engineers'], weak: ['splash', 'heavy armour'] },
     weapons: [groundWeapon('pulse', 3.5, { range: 176, cooldown: 0.9 })],
@@ -345,7 +345,7 @@ const GROUND: UnitType[] = [
     blurb: 'A tracked carrier with an airburst artillery turret. Its shells burst over groups of light units from long range; it needs others to spot for it, and anything that gets close is under its guns.',
     hull: 700, cost: 300, build: 28, speed: 80, turn: 2.5, ground: { sight: 9 },
     role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'buildings'], weak: ['anything close', 'fast raiders'] },
-    hardpoints: [{ ...gun('turbo', 5, 5.2, 0.36, 500, groundWeapon('artillery', 40, { range: 480, min: 96, splash: 60, cooldown: 3 })), key: 'tur' }],
+    hardpoints: [{ ...gun('turbo', 5, 5.2, 0.36, 500, groundWeapon('artillery', 34, { range: 480, min: 96, splash: 60, cooldown: 3 })), key: 'tur' }],
     weapons: [],
   }),
   // Tier 3: the heavy units of the Barracks and the Vehicle Factory (the big ones, phase 5c).

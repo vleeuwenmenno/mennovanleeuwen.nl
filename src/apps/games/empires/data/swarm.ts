@@ -266,7 +266,7 @@ const GROUND: UnitType[] = [
     blurb: 'A chitin mound round a glowing violet core. It grows Shaper drones, takes in the kyber they bring and supports 5 units.',
     hull: 5400, cost: 1200, build: 60, ground: { trains: ['s-g-engineer', 's-g-scout'] },
     // A light defence turret on its roof (ground/combat.ts).
-    hardpoints: [{ ...gun('flak', 2.7, 6.7, 0.13, 900, groundWeapon('pulse', 14, { range: 320, cooldown: 0.8 })), key: 'tur' }],
+    hardpoints: [{ ...gun('flak', 2.7, 6.7, 0.13, 900, groundWeapon('pulse', 22, { range: 352, cooldown: 0.8 })), key: 'tur' }],
   }),
   groundSupply({
     id: 's-g-supply', faction: 'swarm', name: 'Brood Cache', sprite: 'swarm-g-supply',

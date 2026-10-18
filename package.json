@@ -71,6 +71,7 @@
     "empires:bot": "node scripts/empires-bot.ts",
     "empires:tournament": "node scripts/empires-tournament.ts",
     "empires:maps": "node scripts/empires-maps.ts",
+    "empires:ground": "node scripts/empires-ground-tournament.ts",
     "start": "node server/index.ts"
   },
   "dependencies": {

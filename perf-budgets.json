@@ -363,22 +363,22 @@
     },
     "ground-squads": {
       "canvas draw calls / frame": {
-        "baseline": 352.92,
-        "budget": 406,
+        "baseline": 362.57,
+        "budget": 417,
         "kind": "count"
       },
       "canvas drawImage / frame": {
-        "baseline": 157.18,
-        "budget": 181,
+        "baseline": 157.83,
+        "budget": 182,
         "kind": "count"
       },
       "canvas fill+stroke / frame": {
-        "baseline": 170.18,
-        "budget": 196,
+        "baseline": 179.13,
+        "budget": 206,
         "kind": "count"
       },
       "canvas save+restore / frame": {
-        "baseline": 263.43,
+        "baseline": 263.4,
         "budget": 303,
         "kind": "count"
       },
@@ -398,8 +398,8 @@
         "kind": "count"
       },
       "offscreen draw calls / frame": {
-        "baseline": 10.83,
-        "budget": 13,
+        "baseline": 9.75,
+        "budget": 12,
         "kind": "count"
       },
       "new canvases / sim s": {
@@ -428,7 +428,7 @@
         "kind": "count"
       },
       "main thread ms / frame": {
-        "budget": 5,
+        "budget": 4,
         "kind": "time"
       }
     },
