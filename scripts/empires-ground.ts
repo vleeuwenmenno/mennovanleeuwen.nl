@@ -40,14 +40,16 @@
 // 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
 //    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
-//    member standing, from where each stands, so fewer members fire fewer shots.
+//    member standing, from where each stands, so fewer members fire fewer shots. The six tier 1 units
+//    (each faction's foot squad and fast vehicle) fight each other in step the same way, every one
+//    of them firing.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
 //    unit stays where it can't stand, none leaves the map or turns NaN.
 
 import { readFileSync, readdirSync } from 'node:fs'
-import { UNIT } from '../src/apps/games/empires/data.ts'
+import { UNIT, UNITS } from '../src/apps/games/empires/data.ts'
 import { newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd, cmd, runCmd, type Cmd } from '../src/apps/games/empires/commands.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
@@ -59,7 +61,7 @@ import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, f
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
 import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
-import { TEST_WALKER, registerSquadTest, registerWeaponTest, spawnWeaponTest, testSquadId, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
+import { TEST_WALKER, TIER1, registerWalkerTest, registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
 import { memberAt } from '../src/apps/games/empires/ground/squad.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
@@ -922,7 +924,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
 {
   // Three trooper squads and the walker against three battle droid squads, attack-moving at each
   // other on the low ground of Dustfall Ridge.
-  registerSquadTest()
+  registerWalkerTest()
   const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 33, credits: 0 }), brains: [] })
   const ticks = Math.round(80 / STEP)
   const seen = new Map<number, number[]>()
@@ -931,9 +933,9 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     const x = w.w * 0.45
     const y = w.h * 0.55
     if (t === 1) {
-      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: testSquadId('republic'), owner: 0, x: x - 7 * TILE, y: y + (i - 1) * 2.2 * TILE })
+      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: TIER1.republic.foot, owner: 0, x: x - 7 * TILE, y: y + (i - 1) * 2.2 * TILE })
       say({ t, k: 'spawn', unit: TEST_WALKER, owner: 0, x: x - 8 * TILE, y: y + 3.3 * TILE })
-      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: testSquadId('droid'), owner: 1, x: x + 7 * TILE, y: y + (i - 1) * 2.2 * TILE })
+      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: TIER1.droid.foot, owner: 1, x: x + 7 * TILE, y: y + (i - 1) * 2.2 * TILE })
     }
     if (t === 2)
       for (const o of [0, 1]) {
@@ -969,12 +971,44 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
 }
 
 {
+  // The six tier 1 units (every faction's foot squad and fast vehicle), the same six a side, fighting
+  // across the low ground: in step across two copies, a snapshot thaw and a replay.
+  const six = (['republic', 'droid', 'swarm'] as const).flatMap((f) => [TIER1[f].foot, TIER1[f].vehicle])
+  const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('swarm', 1, 1)], { seed: 44, credits: 0 }), brains: [] })
+  const fired = new Set<string>()
+  const spawned = new Map<number, number>()
+  const final = lockstep('tier 1 battle', make, Math.round(90 / STEP), ({ w }, t, say) => {
+    const x = w.w * 0.45
+    const y = w.h * 0.55
+    if (t === 1)
+      for (const o of [0, 1])
+        six.forEach((id, i) => say({ t, k: 'spawn', unit: id, owner: o, x: x + (o ? 7 : -7) * TILE, y: y + (i - 2.5) * 2.2 * TILE }))
+    if (t === 2)
+      for (const o of [0, 1]) {
+        const ids = w.units.filter((u) => u.owner === o && six.includes(u.t.id)).map((u) => u.id)
+        for (const id of ids) spawned.set(id, o)
+        say({ t, k: 'cmd', owner: o, json: JSON.stringify(cmd('move', ids, x + (o ? -4 : 4) * TILE, y, true, false)) })
+      }
+    for (const s of w.gshots ?? []) {
+      const u = w.byId.get(s.from)
+      if (u) fired.add(u.t.id)
+    }
+    w.events.length = 0
+  })
+  const quiet = six.filter((id) => !fired.has(id))
+  check('tier 1 battle: all six tier 1 units fire', !quiet.length, quiet.length ? `never: ${quiet.join(', ')}` : '')
+  const gone = [...spawned].filter(([id]) => !final.w.byId.get(id) || final.w.byId.get(id)!.dead)
+  check('tier 1 battle: units die on both sides', gone.some(([, o]) => o === 0) && gone.some(([, o]) => o === 1), `${gone.length} of ${spawned.size} destroyed`)
+  check('tier 1 units are tier 1, light armour, in the Codex lists', six.every((id) => UNIT[id].ground?.tier === 1 && UNIT[id].ground?.armour === 'light' && UNITS.includes(UNIT[id])))
+}
+
+{
   // One volley a member: a full squad fires five shots, each from where its member stands; once its
   // hull is down to half, three are left and it fires three.
   const field = groundMapDef('test-field')!
   const w = newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 7, credits: 0 })
   const cy = field.h / 2
-  const squad = spawn(w, testSquadId('republic'), 0, field.w * 0.4, cy, 0)
+  const squad = spawn(w, TIER1.republic.foot, 0, field.w * 0.4, cy, 0)
   squad.stance = 'hold'
   raiseBuilding(w, UNIT['d-g-supply'], 1, Math.floor(squad.x / TILE) + 3, Math.floor(cy / TILE) - 1)
   const volley = () => {

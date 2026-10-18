@@ -252,6 +252,33 @@ export const GROUND: GroundModels = {
     }),
   },
 
+  // The Raider hover tank (tier 1, Vehicle Factory): a low white wedge on a dark repulsor skirt
+  // with glowing pads at its corners, red bands, side panels and a rear deck; its pulse cannon
+  // turret sits in a socket in the middle and turns on its own.
+  'r-g-raider': {
+    w: 70,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        part('skirt', chamfer(0, 2, 66, 92, 14), 'metal', 1, {
+          lift: 3,
+          details: [{ k: 'lights', pts: [[-27, -32], [27, -32], [-27, 36], [27, 36]], r: 2.6, tone: 'glow' }],
+        }),
+        part('hull', [[0, -48], [22, -36], [28, -8], [28, 36], [18, 46], [-18, 46], [-28, 36], [-28, -8], [-22, -36]], 'hull', 2, {
+          lift: 8,
+          facets: [{ pts: [[0, -48], [22, -36], [0, -28]], slope: [0.6, -0.8] }, { pts: [[0, -48], [-22, -36], [0, -28]], slope: [-0.6, -0.8] }],
+          details: [
+            { k: 'shape', pts: box(0, 30, 44, 4), tone: 'accent' },
+            { k: 'shape', pts: [[-3, -44], [3, -44], [3, -30], [-3, -30]], tone: 'accent' },
+            { k: 'line', pts: [[-24, 20], [24, 20]], minPx: 50 },
+          ],
+        }),
+        ...sym(part('panel', box(-23, 12, 7, 34), 'hull2', 3, { lift: 9, details: [{ k: 'line', pts: [[-23, 0], [-23, 24]], minPx: 60 }] })),
+        part('deck', box(0, 40, 32, 9), 'hull2', 3, { lift: 9, details: [{ k: 'lights', pts: along([-10, 42], [10, 42], 3), r: 1.4, tone: 'glow', minPx: 40 }] }),
+      ],
+    }),
+  },
   // A trooper, one member of a squad (GroundSpec `squad`): white armour, the T visor of the helmet,
   // a backpack, a rifle held forward in both hands. It walks: standing, its boots show under it;
   // mid-stride one leg is out in front and the other behind (poses 1 and 2).

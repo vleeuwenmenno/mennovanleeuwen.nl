@@ -197,6 +197,9 @@ export type GroundSpec = {
    * each member left fires the unit's weapons (ground/squad.ts).
    */
   squad?: { n: number; member: string; size: number; spacing: number }
+  /** Units a factory trains: the tier the factory must reach to train it (1 small and simple, 2
+   * medium, 3 the big ones). */
+  tier?: 1 | 2 | 3
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
@@ -346,6 +349,28 @@ export const groundScout = (o: GroundWritten & { speed: number; turn: number; we
   ...o,
   ground: { size: 1, radius: 11, accel: 320, sight: 12, armour: 'light', ...o.ground },
 })
+
+/** A tier 1 vehicle, the fast unit of a vehicle factory: small and simple, light armour, quick,
+ * a light weapon or two (on a turret, or fixed along its nose); cheap. */
+export const groundFast = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role'] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.75, size: Math.round((o.ground.radius ?? 13) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 9) * 32, hardpoints: [], engines: [],
+  ...o,
+  ground: { size: 1, radius: 13, accel: 260, sight: 9, armour: 'light', tier: 1, ...o.ground },
+})
+
+/** A tier 1 squad, the fast unit of a foot factory: a few members on foot (GroundSpec `squad`),
+ * one unit with one hull, light armour, each member firing the squad's weapons; cheap. Drawn as its
+ * members (the member's model). */
+export const groundSquad = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role']; squad: NonNullable<GroundSpec['squad']> }): UnitType => {
+  const { squad, ...rest } = o
+  return {
+    tier: 'vehicle', aspect: 1, size: 36, shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+    sensor: (o.ground.sight ?? 8) * 32, hardpoints: [], engines: [],
+    ...rest,
+    ground: { size: 1, radius: 14, accel: 200, sight: 8, armour: 'light', tier: 1, look: squad.member, squad, ...o.ground },
+  }
+}
 
 // --- Stations ---------------------------------------------------------------------------------------
 

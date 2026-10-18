@@ -3,7 +3,7 @@
 // data.ts. Points on a ship are on the 0-10 grid over its box, x from the left and y from the nose
 // (see data.ts).
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundScout, groundFast, groundSquad, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] }
 
@@ -303,6 +303,23 @@ const GROUND: UnitType[] = [
     blurb: 'A light repulsor speeder with twin pulse lasers along its nose. Fast, with long sight: it finds the enemy and picks off engineers, but heavy armour shrugs it off.',
     hull: 140, cost: 90, build: 9, speed: 165, turn: 5, ground: { radius: 11, sight: 12 },
     weapons: [groundWeapon('pulse', 6, { arc: 0.3 }), groundWeapon('pulse', 6, { arc: 0.3 })],
+  }),
+  // Tier 1: the fast units of the Barracks and the Vehicle Factory (trained there, phase 4a).
+  groundSquad({
+    id: 'r-g-troopers', faction: 'republic', name: 'Trooper squad', sprite: 'republic-g-troopers',
+    blurb: 'Five clone troopers with pulse rifles. Cheap and quick to train, they cut down light units and engineers; they fall one by one under fire, and fight less with every trooper lost.',
+    hull: 300, cost: 110, build: 12, speed: 70, turn: 4, ground: {},
+    squad: { n: 5, member: 'r-gm-trooper', size: 16, spacing: 12 },
+    role: { role: 'Infantry', strong: ['light units', 'engineers'], weak: ['splash', 'heavy armour'] },
+    weapons: [groundWeapon('pulse', 3.5, { range: 176, cooldown: 0.9 })],
+  }),
+  groundFast({
+    id: 'r-g-raider', faction: 'republic', name: 'Raider hover tank', sprite: 'republic-g-raider',
+    blurb: 'A light repulsor tank with a pulse cannon in a turret that turns on its own, so it fires on the move. Quick and handy, thinly armoured.',
+    hull: 340, cost: 150, build: 14, speed: 125, turn: 3.5, ground: { radius: 14 },
+    role: { role: 'Raider', strong: ['light units', 'firing on the move'], weak: ['heavy armour', 'rockets'] },
+    hardpoints: [{ ...gun('flak', 5, 4.6, 0.34, 300, groundWeapon('pulse', 22, { range: 224, cooldown: 1 })), key: 'tur' }],
+    weapons: [],
   }),
 ]
 
