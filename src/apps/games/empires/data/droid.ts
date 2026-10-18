@@ -157,7 +157,7 @@ const GROUND: UnitType[] = [
   }),
   groundSupply({
     id: 'd-g-supply', faction: 'droid', name: 'Supply Relay', sprite: 'droid-g-supply',
-    blurb: 'A hexagonal power and parts relay with a humming mast. Each one supports 10 more units.',
+    blurb: 'A hexagonal power and parts relay with a humming mast. Each one supports 10 more units. Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.',
     hull: 1400, cost: 100, build: 25, ground: {},
   }),
   groundGenerator({

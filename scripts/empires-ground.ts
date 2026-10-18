@@ -58,6 +58,12 @@
 //    never ends), then gathers. Another engineer is assisted by a third (Order `assist`) through a
 //    build, a repair and gathering: the helper works the same site, mends the same building and
 //    mines the same field, following it from job to job.
+// 3h. A drop-off battle on Ashwater Crossing, seat 0 scripted (Republic), seat 1 a peaceful AI,
+//    checked the same way: four engineers mine the far field on our side and haul to the Command
+//    Center; a Supply Depot site beside the field, not built, is ignored; a finished depot there
+//    takes their loads (kyber a minute measured before and after); destroyed while engineers carry
+//    to it, they re-route to the Command Center. Then an AI run with the fields by its start mined out:
+//    the AI puts a supply building beside the further field it mines.
 // 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
 //    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
 //    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
@@ -87,7 +93,7 @@ import { squadReach } from '../src/apps/games/empires/ground/squad.ts'
 import { SPREAD } from '../src/apps/games/empires/data.ts'
 import { anchorAt, footprintOpen, stands, standsAt } from '../src/apps/games/empires/ground/nav.ts'
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
-import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, fieldLeft, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
+import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, REACH, crystalAt, fieldLeft, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
 import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
@@ -1143,6 +1149,130 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('orders battle: ...repairs the same building', helped.repair > 30, `${helped.repair} ticks`)
   check('orders battle: ...gathers the same field', helped.gather > 30, `${helped.gather} ticks`)
   check('orders battle: ...and follows it when it moves on', helped.followed > 0, `${helped.followed} ticks beside it`)
+}
+
+// --- 3h. The drop-off battle ----------------------------------------------------------------------------
+
+{
+  const make = (): Copy => ({ w: newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 65, credits: 3000 }), brains: [{ ...newBrain(1, 'medium'), peaceful: true }] })
+  const ticks = Math.round(Math.max(seconds, 240) / STEP)
+  const got: Record<string, [boolean, string]> = {}
+  const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
+  let home: Unit | undefined
+  let crew: number[] = []
+  let field = -1
+  let site = 0
+  let depot = 0
+  let placer = 0
+  const drops = { cc: 0, depot: 0, site: 0, afterKill: 0 }
+  let carried = new Map<number, number>()
+  let k0 = 0
+  let k1 = 0
+  let rateBefore = 0
+  let rateWith = 0
+  let killedAt = -1
+  let rerouted = 0
+  let wasHeading = 0
+  const depotSpot = (w: World, at: { x: number; y: number }, avoid = 0, from = 4) => {
+    for (let r = from; r < 14; r++)
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2 + avoid
+        const pl = groundPlacement(w, 0, R.supply, at.x + Math.cos(a) * r * TILE, at.y + Math.sin(a) * r * TILE)
+        if (!pl.why) return pl
+      }
+    return null
+  }
+  lockstep('drop-off battle', make, ticks, ({ w }, t, say) => {
+    home ??= w.units.find((u) => u.owner === 0 && u.t.id === R.center)!
+    w.events.length = 0
+    const order = (c: Cmd) => say({ t, k: 'cmd', owner: 0, json: JSON.stringify(c) })
+    // 1/6 s: four engineers (three more raised) on the far field of our side.
+    if (t === 5) {
+      const foe = w.units.find((u) => u.owner === 1 && u.foot)!
+      const fields = w.ground!.fields.map((f, i) => ({ f, i, d: Math.hypot(f.x - home!.x, f.y - home!.y) })).filter((x) => x.d < Math.hypot(x.f.x - foe.x, x.f.y - foe.y)).sort((a, b) => a.d - b.d || a.i - b.i)
+      field = fields[fields.length - 1].i
+      const first = w.units.find((u) => u.owner === 0 && u.t.id === R.engineer)!
+      crew = [first.id]
+      for (let i = 0; i < 4; i++) {
+        crew.push(w.nextId)
+        say({ t, k: 'spawn', unit: R.engineer, owner: 0, x: home.x + (i - 1.5) * 2 * TILE, y: home.y + 4.5 * TILE })
+      }
+      placer = crew.pop()!
+    }
+    if (t === 10) {
+      const cl = w.crystals!.find((c) => c.f === field && c.left > 0)!
+      order(cmd('gather', crew, crystalAt(cl).x, crystalAt(cl).y, false))
+      // A depot site beside the field that nobody builds: the placer is sent off elsewhere at once.
+      const pl = depotSpot(w, w.ground!.fields[field])!
+      site = w.nextId
+      order(cmd('place', [placer], R.supply, pl.x, pl.y, false, NaN))
+      order(cmd('move', [placer], home.x - 8 * TILE, home.y, false, false))
+    }
+    // Who dropped where: a load that went from carried to nothing next to a drop-off.
+    for (const id of crew) {
+      const u = w.byId.get(id)
+      if (!u || u.dead) continue
+      const before = carried.get(id) ?? 0
+      if (before > 0 && (u.carry ?? 0) === 0) {
+        const at = [home, depot ? w.byId.get(depot) : undefined, site ? w.byId.get(site) : undefined].find((s) => s && !s.dead && !!s.foot && footDist(s, u.x, u.y) <= REACH + TILE)
+        if (at === home) (killedAt >= 0 ? drops.afterKill++ : drops.cc++)
+        else if (at && at.id === depot) drops.depot++
+        else if (at && at.id === site) drops.site++
+      }
+      carried.set(id, u.carry ?? 0)
+      if (site && u.gm?.home === site) drops.site++
+    }
+    const s = w.byId.get(site)
+    if (t === 60 / STEP) pass('an unfinished supply building beside the field takes no kyber', !!s?.site && drops.site === 0 && drops.cc > 0, `${drops.cc} loads to the Command Center, ${drops.site} to the site`)
+    // 60 s: kyber a minute so far (after the walk out); a finished depot raised beside the field.
+    if (t === 30 / STEP) k0 = w.players[0].credits
+    if (t === 90 / STEP) {
+      rateBefore = (w.players[0].credits - k0) / 1
+      // (A few tiles out, so a haul to it takes a while: the kill below catches one on its way.)
+      const pl = depotSpot(w, w.ground!.fields[field], Math.PI, 7)!
+      depot = w.nextId
+      say({ t, k: 'add', unit: R.supply, owner: 0, c: pl.tc, r: pl.tr })
+    }
+    if (t === 120 / STEP) k1 = w.players[0].credits
+    if (t === 180 / STEP) rateWith = (w.players[0].credits - k1) / 1
+    // 3 min on: the depot destroyed while an engineer carries to it.
+    if (killedAt < 0 && t > 180 / STEP) {
+      const heading = crew.map((id) => w.byId.get(id)).find((u) => u && u.gm?.drop && u.gm.home === depot)
+      if (heading) {
+        wasHeading = heading.id
+        say({ t, k: 'kill', id: depot })
+        killedAt = t
+      }
+    }
+    if (killedAt >= 0 && t === killedAt + 2) {
+      const u = w.byId.get(wasHeading)
+      if (u && u.gm?.home === home.id) rerouted++
+    }
+  })
+  for (const [k, [ok, detail]] of Object.entries(got)) check(`drop-off battle: ${k}`, ok, detail)
+  check('drop-off battle: a finished supply building beside the field takes the loads', drops.depot > 0, `${drops.depot} loads to the depot, ${drops.cc} to the Command Center before it`)
+  check('drop-off battle: with the depot the far field gives much more kyber', rateWith > rateBefore * 2, `${Math.round(rateBefore)} kyber a minute to the Command Center, ${Math.round(rateWith)} with the depot`)
+  check('drop-off battle: the depot destroyed, an engineer carrying to it re-routes to the Command Center', killedAt > 0 && rerouted > 0 && drops.afterKill > 0, `${drops.afterKill} loads to the Command Center after`)
+}
+{
+  // The AI on Ashwater Crossing with the fields by its start nearly mined out (a cheat), so it mines
+  // one further off: it puts a supply building beside it.
+  const w = newWorld(ashwater, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 66, credits: 1600 })
+  const brains = [{ ...newBrain(1, 'medium'), peaceful: true }]
+  tick(w)
+  const hub = w.units.find((u) => u.owner === 1 && u.foot)!
+  for (const c of w.crystals!) {
+    const f = w.ground!.fields[c.f]
+    if (Math.hypot(f.x - hub.x, f.y - hub.y) < 20 * TILE) c.left = Math.min(c.left, 40)
+  }
+  for (let t = 0; t < Math.round(300 / STEP); t++) {
+    for (const b of brains) think(w, b, STEP)
+    tick(w)
+    w.events.length = 0
+  }
+  const depots = w.units.filter((u) => !u.dead && u.owner === 1 && u.t.id === D.supply && !u.site)
+  const near = depots.filter((d) => w.ground!.fields.some((f) => Math.hypot(f.x - d.x, f.y - d.y) < 10 * TILE))
+  check('the AI puts a supply building beside a far field it mines', near.length > 0, `${depots.length} supply buildings, ${near.length} beside a field`)
 }
 
 // --- 4. The crowd battle -------------------------------------------------------------------------------

@@ -2683,6 +2683,7 @@ function GroundBuildingDetail(p: DetailProps & { b: Unit }) {
           ) : !trains.length ? (
             <p className="ew-muted ew-sitebox">
               {b.t.ground?.supply ? <>Supports {b.t.ground.supply} units. Your units: {hud.pop} of {hud.popCap}{hud.pop >= hud.popCap ? ': at the cap, build more supply to train again.' : '.'}</> : null}
+              {b.t.ground?.supply && b.t.ground.dropOff ? <> Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.</> : null}
               {b.t.ground?.burn ? <>Makes {b.t.ground.power} power, burning {Math.round(b.t.ground.burn * 60)} kyber a minute{w.players[me].credits < b.t.ground.burn / 30 ? ': stopped, no kyber left.' : '.'} Your power: {fmt(hud.power?.made ?? 0)} made, {fmt(hud.power?.used ?? 0)} used.</> : null}
               {b.t.ground?.research ? <>Makes {Math.round(b.t.ground.research * 60 * (w.players[me].power?.ratio ?? 1))} research points a minute, drawing {b.t.ground.draw} power. {fmt(hud.rp ?? 0)} points banked: the factories will spend them on upgrades.</> : null}
               {b.t.ground?.research && lowPower(w, me) ? <> <span className="ew-lowpower">{lowPower(w, me)}</span></> : null}

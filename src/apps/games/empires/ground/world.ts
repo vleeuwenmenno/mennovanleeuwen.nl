@@ -115,7 +115,10 @@ export type GroundMove = { pv: number; stuck: number; best: number; tries: numbe
   /** A gatherer sent to build: the field it goes back to once the building is done. */
   back?: number
   /** A gatherer: the crystal cluster it mines (an index into World `crystals`). */
-  cl?: number }
+  cl?: number
+  /** A gatherer hauling a load: the drop-off it picked for this trip (a Command Center or a supply
+   * building), picked afresh when that one is lost or no longer takes kyber. */
+  home?: number }
 
 /** A kyber crystal cluster (World `crystals`): an object standing on one tile of crystal field `f`
  * (c, r), blocking it like a tree, with the kyber it started with and has left, one of a few shapes,
@@ -287,7 +290,7 @@ export function groundIds(faction: string): { engineer: string; center: string; 
   const own = Object.values(UNIT).filter((t) => t.faction === faction && t.ground)
   return {
     engineer: own.find((t) => isEngineer(t))!.id,
-    center: own.find((t) => isGroundBuilding(t) && t.ground!.dropOff)!.id,
+    center: own.find((t) => isGroundBuilding(t) && t.ground!.dropOff && !!t.ground!.trains?.length)!.id,
     supply: own.find((t) => isGroundBuilding(t) && !t.ground!.trains?.length && t.ground!.supply)!.id,
     generator: own.find((t) => isGroundBuilding(t) && !!t.ground!.burn)?.id ?? '',
     research: own.find((t) => isGroundBuilding(t) && !!t.ground!.research)?.id ?? '',
@@ -497,6 +500,7 @@ function done(u: Unit) {
   g.tries = 0
   g.spot = undefined
   g.drop = false
+  g.home = undefined
   const built = u.order.k === 'construct'
   nextOrder(u, u.x, u.y, u.order.k === 'move' ? (u.order.face ?? null) : null)
   // A gatherer taken off its field to build goes back to gathering once it has nothing else to do,
@@ -535,6 +539,7 @@ function goal(w: World, u: Unit): Goal | null {
     g.job = job
     g.spot = undefined
     g.drop = false
+    g.home = undefined
     g.tries = 0
   }
   if (follow) return { x: follow.x, y: follow.y, follow: true }
@@ -749,19 +754,38 @@ function nearestField(w: World, u: Unit): number {
   return best
 }
 
-/** The nearest finished building of `u`'s owner that takes in kyber (a Command Center), or null. */
-function dropFor(w: World, u: Unit): Unit | null {
-  let best: Unit | null = null
-  let bestD = Infinity
-  for (const s of w.units) {
-    if (s.dead || s.owner !== u.owner || !s.foot || s.site || !spec(s.t).dropOff) continue
-    const d = footDist(s, u.x, u.y)
-    if (d < bestD) {
-      bestD = d
-      best = s
+/** Whether building `s` takes in kyber for `owner` now: one of theirs that is finished and a drop-off
+ * (GroundSpec `dropOff`: a Command Center, a supply building). */
+const takesKyber = (s: Unit, owner: Owner) => !s.dead && s.owner === owner && !!s.foot && !s.site && !!spec(s.t).dropOff
+
+/**
+ * Where engineer `u` takes its load: the finished drop-off of its owner nearest it by the way it
+ * has to drive (a Command Center or a supply building, as Age of Empires' storehouses), and the spot
+ * next to it it drives to. Ties go to the lower id, so every copy picks the same. The drop-offs
+ * are tried nearest in a straight line first, stopping once the next is further off in a straight
+ * line than the best way found (no way is shorter than that). One it can't drive up to counts only
+ * when none can be reached (then the nearest in a straight line). Null when there is none.
+ */
+function dropFor(w: World, u: Unit): { s: Unit; spot: Pt } | null {
+  const nav = gs(w).nav
+  const homes = w.units.filter((s) => takesKyber(s, u.owner)).map((s) => ({ s, d: footDist(s, u.x, u.y) }))
+  homes.sort((a, b) => a.d - b.d || a.s.id - b.s.id)
+  let best: { s: Unit; spot: Pt; len: number } | null = null
+  for (const { s, d } of homes) {
+    if (best && d > best.len) break
+    const spot = workSpot(w, u, s)
+    const p = findPath(nav, size(u), u.x, u.y, spot.x, spot.y)
+    if (p.short || !p.pts.length) continue
+    let len = 0
+    let at: Pt = u
+    for (const q of p.pts) {
+      len += M.hypot(q.x - at.x, q.y - at.y)
+      at = q
     }
+    if (!best || len < best.len || (len === best.len && s.id < best.s.id)) best = { s, spot, len }
   }
-  return best
+  if (best) return { s: best.s, spot: best.spot }
+  return homes.length ? { s: homes[0].s, spot: workSpot(w, u, homes[0].s) } : null
 }
 
 /** Where engineer `u` mines cluster `cl`: the open tile next to it nearest `u`, one no other engineer
@@ -785,7 +809,7 @@ function mineSpot(w: World, u: Unit, cl: number): Pt | null {
 }
 
 /** Where a gathering engineer goes: with a full load (or nothing left to mine and something in hand),
- * to the nearest Command Center of ours; otherwise to its spot by its cluster, or, the cluster mined
+ * to the nearest drop-off of ours (dropFor); otherwise to its spot by its cluster, or, the cluster mined
  * out, the next one in the same field, or, the field run dry, the nearest other field. Null when
  * there is nothing left to do. */
 function gatherGoal(w: World, u: Unit, o: Extract<Order, { k: 'gather' }>): Goal | null {
@@ -816,8 +840,17 @@ function gatherGoal(w: World, u: Unit, o: Extract<Order, { k: 'gather' }>): Goal
     }
   }
   if (g.drop) {
-    const home = dropFor(w, u)
-    if (!home) return null
+    // The drop-off picked for this trip, or (none yet, or it was lost or no longer takes kyber) the
+    // nearest by the way there; the route is found again for a new one.
+    let home = g.home !== undefined ? w.byId.get(g.home) : undefined
+    if (!home || !takesKyber(home, u.owner)) {
+      const pick = dropFor(w, u)
+      if (!pick) return null
+      home = pick.s
+      g.home = home.id
+      g.spot = pick.spot
+      u.route = null
+    }
     g.spot ??= workSpot(w, u, home)
     return { x: g.spot.x, y: g.spot.y, drop: home }
   }
@@ -862,8 +895,8 @@ function mine(w: World, u: Unit, cl: number) {
   } else if (!(c.left > 0)) g.spot = undefined
 }
 
-/** A gathering engineer next to a Command Center of ours: its load goes into the side's kyber, then
- * back to the field. */
+/** A gathering engineer next to a drop-off of ours (a Command Center or a supply building): its load
+ * goes into the side's kyber, then back to the field. */
 function dropOff(w: World, u: Unit) {
   const g = moveOf(u)
   const load = u.carry ?? 0
@@ -871,6 +904,7 @@ function dropOff(w: World, u: Unit) {
   if (load > 0) earn(w, w.players[u.owner], load * w.players[u.owner].incomeMul, 'mines', 'Kyber gathered')
   u.carry = 0
   g.drop = false
+  g.home = undefined
   g.spot = undefined
   g.pv = -1
   g.tries = 0
@@ -878,11 +912,11 @@ function dropOff(w: World, u: Unit) {
 }
 
 /** Engineers `crew` gather kyber at the crystal field at (x, y): each mines a load, hauls it to the
- * nearest Command Center of ours and goes back. Why not, or null. */
+ * nearest drop-off of ours (a Command Center or a supply building) and goes back. Why not, or null. */
 export function groundGather(w: World, owner: Owner, crew: Unit[], x: number, y: number, queued: boolean): string | null {
   const f = fieldAt(w, x, y)
   if (f < 0) return 'No kyber there: pick a crystal field'
-  if (!w.units.some((s) => !s.dead && s.owner === owner && s.foot && !s.site && spec(s.t).dropOff)) return 'No Command Center to take the kyber in'
+  if (!w.units.some((s) => takesKyber(s, owner))) return 'Nowhere to take the kyber: build a Command Center or a supply building'
   for (const u of crew) issue(u, { k: 'gather', f }, queued)
   return null
 }
@@ -1532,6 +1566,7 @@ export function groundHash(w: World, int: (v: number) => void, num: (v: number) 
       int(u.gm.drop ? 1 : 0)
       int(u.gm.back ?? -1)
       int(u.gm.cl ?? -1)
+      int(u.gm.home ?? -1)
     }
     if (u.carry !== undefined) num(u.carry)
     if (u.order.k === 'gather') int(u.order.f)

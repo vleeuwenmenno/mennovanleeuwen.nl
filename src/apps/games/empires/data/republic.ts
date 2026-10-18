@@ -285,7 +285,7 @@ const GROUND: UnitType[] = [
   }),
   groundSupply({
     id: 'r-g-supply', faction: 'republic', name: 'Supply Depot', sprite: 'republic-g-supply',
-    blurb: 'Armoured stores and a fuel tank behind blast walls. Each one supports 10 more units.',
+    blurb: 'Armoured stores and a fuel tank behind blast walls. Each one supports 10 more units. Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.',
     hull: 1500, cost: 100, build: 25, ground: {},
   }),
   groundGenerator({

@@ -364,13 +364,15 @@ export const groundFactory = (o: GroundWritten & { makes: 'foot' | 'vehicle' }):
   }
 }
 
-/** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does. */
+/** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does,
+ * and takes in the kyber engineers gather, as a storehouse does: one beside a far crystal field
+ * shortens their walk. */
 export const groundSupply = (o: GroundWritten): UnitType => ({
   tier: 'building', aspect: 1, size: 3 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 5 * 32,
   weapons: [], hardpoints: [], engines: [],
-  role: { role: 'Supply', strong: ['raising the unit cap'], weak: ['being left unguarded'] },
+  role: { role: 'Supply', strong: ['raising the unit cap', 'taking in kyber near a far field'], weak: ['being left unguarded'] },
   ...o,
-  ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], supply: 10, ...o.ground },
+  ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], supply: 10, dropOff: true, ...o.ground },
 })
 
 /** A Scout: tier 1, small and simple, fast and lightly armoured with long sight, a light weapon fixed

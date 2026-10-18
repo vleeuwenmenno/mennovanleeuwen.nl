@@ -270,7 +270,7 @@ const GROUND: UnitType[] = [
   }),
   groundSupply({
     id: 's-g-supply', faction: 'swarm', name: 'Brood Cache', sprite: 'swarm-g-supply',
-    blurb: 'A cluster of resin pods full of nutrient. Each one supports 10 more units.',
+    blurb: 'A cluster of resin pods full of nutrient. Each one supports 10 more units. Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.',
     hull: 1600, cost: 100, build: 25, ground: {},
   }),
   groundGenerator({

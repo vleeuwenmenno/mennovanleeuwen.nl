@@ -133,7 +133,7 @@ export function armyThink(w: World, b: Brain, mine: Unit[]) {
   const late = w.time > LATE
   const buildings = mine.filter((u) => !!u.foot)
   const engineers = mine.filter((u) => !!u.t.ground?.builds?.length)
-  const home = buildings.find((u) => u.t.ground?.dropOff && !u.site) ?? buildings[0]
+  const home = buildings.find((u) => u.t.ground?.dropOff && !!u.t.ground.trains?.length && !u.site) ?? buildings[0]
   if (!home) return
   const enemy = w.players.find((q) => q.team !== team && q.alive)
   if (!enemy) return

@@ -6,7 +6,7 @@ import { TILE, type Pt } from './types.ts'
 import { armyCap, armyThink, isFighter, pickFighter } from './army.ts'
 import { SITE_DRAW } from './power.ts'
 import { TIER_MAX, cantJob, jobCost } from './jobs.ts'
-import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, knownBuildings, trainsOf } from './world.ts'
+import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, jobOrder, knownBuildings, trainsOf } from './world.ts'
 
 // The AI's decisions in a ground battle: a branch of ai.ts's think (same brain, clock and random
 // stream): on its seat it keeps its engineers gathering kyber, puts up supply before it reaches its
@@ -31,6 +31,12 @@ const KEEP_ENGINEERS = 2
 const FLEE = 7
 /** Room it keeps under the unit cap: it builds supply once fewer than this many more fit. */
 const SUPPLY_ROOM = 3
+/** A field this far (tiles, middle to middle) from every drop-off of ours, mined by at least
+ * DEPOT_CREW of our engineers, gets a supply building beside it (drop-offs too): when it needs supply
+ * anyway, or as soon as it can pay with DEPOT_RESERVE kyber left over. */
+const DEPOT_FAR = 16
+const DEPOT_CREW = 3
+const DEPOT_RESERVE = 150
 /** Command Centers it wants: its own and one expansion. */
 const CENTERS = 2
 /** Engineers it has before it saves up for the expansion. */
@@ -138,10 +144,16 @@ export function groundThink(w: World, b: Brain) {
   const queued = mine.reduce((n, c) => n + (c.yq ?? []).reduce((k, q) => k + UNIT[q.unit].pop, 0), 0)
   const room = p.popCap - p.pop - queued
 
-  // 1. Supply before the cap: one building at a time, beside a Command Center.
+  // 1. Supply before the cap: one building at a time, beside a Command Center, or beside a far field
+  // its engineers mine (supply buildings take in kyber too), and there even before the cap once it
+  // can pay: the walk to drop the kyber off is short again.
   const supplyCost = UNIT[ids.supply].cost
-  if (!broke && room < SUPPLY_ROOM && p.popCap < POP_MAX && !supplies.some((u) => u.site) && standing.length && can(supplyCost)) {
-    const spot = supplySpot(w, o, ids.supply, standing[0])
+  const far = standing.length ? farMinedField(w, mine) : -1
+  const depot = far >= 0 ? depotSpot(w, o, ids.supply, far) : null
+  const needed = room < SUPPLY_ROOM && p.popCap < POP_MAX
+  // (A depot is cheap: it doesn't wait for the kyber kept back for a Command Center.)
+  if (!broke && ((needed && can(supplyCost)) || (depot && p.credits >= supplyCost + DEPOT_RESERVE)) && !supplies.some((u) => u.site) && standing.length) {
+    const spot = depot ?? supplySpot(w, o, ids.supply, standing[0])
     const who = spot && spare(spot)
     if (spot && who) cmdPlace(w, o, [who.id], ids.supply, spot.x, spot.y)
   }
@@ -283,6 +295,42 @@ function fieldFor(w: World, centers: Unit[], u: Unit): number {
     }
   })
   return best
+}
+
+/** The crystal field its engineers mine (at least DEPOT_CREW of them) that lies furthest from every
+ * drop-off of ours (finished or going up), when that is more than DEPOT_FAR tiles; -1 otherwise. */
+function farMinedField(w: World, mine: Unit[]): number {
+  const crews = new Map<number, number>()
+  for (const u of mine) {
+    const j = jobOrder(u)
+    if (j.k === 'gather') crews.set(j.f, (crews.get(j.f) ?? 0) + 1)
+  }
+  const homes = mine.filter((u) => !!u.foot && !!u.t.ground?.dropOff)
+  let best = -1
+  let bestD = DEPOT_FAR * TILE
+  for (const [f, n] of [...crews].sort((a, b) => a[0] - b[0])) {
+    if (n < DEPOT_CREW || !(fieldLeft(w, f) > 0)) continue
+    const at = w.ground!.fields[f]
+    const d = homes.length ? Math.min(...homes.map((h) => Math.sqrt(d2(h, at)))) : Infinity
+    if (d > bestD) {
+      bestD = d
+      best = f
+    }
+  }
+  return best
+}
+
+/** Where a supply building goes beside crystal field `f` to take its kyber in: rings round the
+ * field's middle from 4 tiles out, the first spot the placement accepts. */
+function depotSpot(w: World, o: number, type: string, f: number): Pt | null {
+  const at = w.ground!.fields[f]
+  for (let r = 4; r <= 9; r++)
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2
+      const pl = groundPlacement(w, o, type, at.x + M.cos(a) * r * TILE, at.y + M.sin(a) * r * TILE)
+      if (!pl.why || pl.why === 'Not enough kyber') return { x: pl.x, y: pl.y }
+    }
+  return null
 }
 
 /** Where a supply building goes beside Command Center `home`: rings round it from 6 to 12 tiles out,
