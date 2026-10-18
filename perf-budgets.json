@@ -361,6 +361,77 @@
         "kind": "time"
       }
     },
+    "ground-squads": {
+      "canvas draw calls / frame": {
+        "baseline": 337.47,
+        "budget": 389,
+        "kind": "count"
+      },
+      "canvas drawImage / frame": {
+        "baseline": 161.28,
+        "budget": 186,
+        "kind": "count"
+      },
+      "canvas fill+stroke / frame": {
+        "baseline": 149.87,
+        "budget": 173,
+        "kind": "count"
+      },
+      "canvas save+restore / frame": {
+        "baseline": 217.93,
+        "budget": 251,
+        "kind": "count"
+      },
+      "canvas gradients / frame": {
+        "baseline": 0.05,
+        "budget": 3,
+        "kind": "count"
+      },
+      "canvas filters+shadows / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "canvas pixel reads / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "offscreen draw calls / frame": {
+        "baseline": 4.95,
+        "budget": 7,
+        "kind": "count"
+      },
+      "new canvases / sim s": {
+        "baseline": 6,
+        "budget": 8,
+        "kind": "count"
+      },
+      "bitmap cache MB": {
+        "baseline": 0.72,
+        "budget": 3,
+        "kind": "count"
+      },
+      "bitmaps cached": {
+        "baseline": 79,
+        "budget": 91,
+        "kind": "count"
+      },
+      "React commits / sim s": {
+        "baseline": 8,
+        "budget": 10,
+        "kind": "count"
+      },
+      "DOM nodes": {
+        "baseline": 203,
+        "budget": 234,
+        "kind": "count"
+      },
+      "main thread ms / frame": {
+        "budget": 4,
+        "kind": "time"
+      }
+    },
     "ground-layer": {
       "GL draw calls / frame": {
         "baseline": 3,

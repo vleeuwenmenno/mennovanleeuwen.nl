@@ -7,6 +7,7 @@ import { crystalModel } from '../models/ground.ts'
 import { SITE_DRAW, powerReport } from './power.ts'
 import { drawHull } from '../models/paint.ts'
 import { drawEffects } from './effects.ts'
+import { drawBodies, drawSquad, squadFell, walkerPose } from './squadDraw.ts'
 import { CARRY, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
 
 // The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
@@ -283,4 +284,8 @@ export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   power: powerReport,
   siteDraw: SITE_DRAW,
   effects: drawEffects,
+  squad: drawSquad,
+  pose: walkerPose,
+  fell: squadFell,
+  bodies: drawBodies,
 })

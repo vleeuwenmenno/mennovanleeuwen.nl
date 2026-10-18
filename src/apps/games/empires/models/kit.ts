@@ -427,3 +427,21 @@ export function toneIndex(slope: Pt | undefined, light: Pt) {
   const d = slope[0] * light[0] + slope[1] * light[1]
   return d > 0.16 ? 0 : d < -0.16 ? 2 : 1
 }
+
+/** A pair of legs that walk (Part `pose`): from hips `hx` either side of the middle at `hy`, to feet
+ * at `rest` (y of each foot standing, front of the box negative) or mid-stride `step` (y of the leg
+ * in front, y of the one behind), as a leg capsule `r` thick with a boot at its end; pose 1 the
+ * left leg in front, pose 2 the right. */
+export function stride(id: string, hx: number, hy: number, rest: [number, number], step: [number, number], r: number, tone: Tone, boot: Tone): Part[] {
+  const out: Part[] = []
+  for (const pose of [0, 1, 2])
+    for (const side of [-1, 1]) {
+      const front = (pose === 1 && side < 0) || (pose === 2 && side > 0)
+      const fy = pose === 0 ? rest[side < 0 ? 0 : 1] : front ? step[0] : step[1]
+      const x = side * hx
+      const name = `${id}${side < 0 ? 'L' : 'R'}${pose}`
+      out.push(part(name, capsule([x, hy], [x + side, fy], r, r * 0.85), tone, 1, { lift: 3, pose }))
+      out.push(part(`${name}boot`, circle(x + side, fy + (fy < hy ? -2 : 2), r * 0.95, 10), boot, 2, { lift: 3, pose }))
+    }
+  return out
+}

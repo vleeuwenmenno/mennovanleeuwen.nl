@@ -37,6 +37,10 @@
 //    up all run at made / used of their speed, to the tick; a power generator puts it right, burning
 //    its kyber every tick; with no kyber left it stops, and the shortage is back. The AI builds a
 //    generator and a research station and banks research points.
+// 6. Squads: a battle of the dev test squads (troopers and a walker against battle droids) in step
+//    across two copies, a snapshot thaw and a replay, squads losing members one by one as their hull
+//    drops, never fewer than one while alive, and the count in the hash; a squad fires one shot per
+//    member standing, from where each stands, so fewer members fire fewer shots.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
@@ -55,7 +59,8 @@ import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, f
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
 import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
 import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
-import { registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
+import { TEST_WALKER, registerSquadTest, registerWeaponTest, spawnWeaponTest, testSquadId, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
+import { memberAt } from '../src/apps/games/empires/ground/squad.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
 let failed = false
@@ -910,6 +915,89 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     check('weapon test: all seven ground weapons fire', !missing.length, missing.length ? `never: ${missing.join(', ')}` : '')
     check('weapon test: both sides lose units', us.some((u) => u.owner === 0 && u.dead) && us.some((u) => u.owner === 1 && u.dead), `${us.filter((u) => u.dead).length} of ${us.length} destroyed`)
   }
+}
+
+// --- 6. Squads -----------------------------------------------------------------------------------------
+
+{
+  // Three trooper squads and the walker against three battle droid squads, attack-moving at each
+  // other on the low ground of Dustfall Ridge.
+  registerSquadTest()
+  const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 33, credits: 0 }), brains: [] })
+  const ticks = Math.round(80 / STEP)
+  const seen = new Map<number, number[]>()
+  let walked = false
+  const final = lockstep('squad battle', make, ticks, ({ w }, t, say) => {
+    const x = w.w * 0.45
+    const y = w.h * 0.55
+    if (t === 1) {
+      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: testSquadId('republic'), owner: 0, x: x - 7 * TILE, y: y + (i - 1) * 2.2 * TILE })
+      say({ t, k: 'spawn', unit: TEST_WALKER, owner: 0, x: x - 8 * TILE, y: y + 3.3 * TILE })
+      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: testSquadId('droid'), owner: 1, x: x + 7 * TILE, y: y + (i - 1) * 2.2 * TILE })
+    }
+    if (t === 2)
+      for (const o of [0, 1]) {
+        const ids = w.units.filter((u) => u.owner === o && (u.t.ground?.squad || u.t.id === TEST_WALKER)).map((u) => u.id)
+        say({ t, k: 'cmd', owner: o, json: JSON.stringify(cmd('move', ids, o ? x - 4 * TILE : x + 4 * TILE, y, true, false)) })
+      }
+    for (const u of w.units) {
+      if (!u.t.ground?.squad || u.members === undefined) continue
+      const list = seen.get(u.id) ?? []
+      if (list[list.length - 1] !== u.members) list.push(u.members)
+      seen.set(u.id, list)
+    }
+    for (const u of w.units) if (u.t.id === TEST_WALKER && u.v > 10) walked = true
+    w.events.length = 0
+  })
+  const counts = [...seen.values()]
+  const lost = counts.filter((c) => c.length > 1).length
+  console.log(`  members standing over the battle: ${counts.map((c) => c.join('>')).join(', ')}`)
+  check('squad battle: squads lose members as their hull drops', lost >= 3, `${lost} of ${counts.length} squads lost some`)
+  check('squad battle: members only fall, never below one while the squad lives', counts.every((c) => c.every((n, i) => n >= 1 && (i === 0 || n < c[i - 1]))))
+  check('squad battle: members fall one at a time', counts.every((c) => c.every((n, i) => i === 0 || c[i - 1] - n === 1)), counts.map((c) => c.join('>')).join(', '))
+  check('squad battle: a squad is destroyed in the end', final.w.units.some((u) => u.t.ground?.squad && u.dead) || [...seen.keys()].some((id) => !final.w.byId.get(id)))
+  check('squad battle: the walker walks', walked)
+  // The count is in the hash.
+  const sq = final.w.units.find((u) => !u.dead && u.t.ground?.squad)
+  if (sq) {
+    const h = stateHash(final.w)
+    const was = sq.members
+    sq.members = (was ?? 1) + 1
+    check("a squad's member count is in the hash", stateHash(final.w) !== h)
+    sq.members = was
+  }
+}
+
+{
+  // One volley a member: a full squad fires five shots, each from where its member stands; once its
+  // hull is down to half, three are left and it fires three.
+  const field = groundMapDef('test-field')!
+  const w = newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 7, credits: 0 })
+  const cy = field.h / 2
+  const squad = spawn(w, testSquadId('republic'), 0, field.w * 0.4, cy, 0)
+  squad.stance = 'hold'
+  raiseBuilding(w, UNIT['d-g-supply'], 1, Math.floor(squad.x / TILE) + 3, Math.floor(cy / TILE) - 1)
+  const volley = () => {
+    for (let t = 0; t < 120; t++) {
+      tick(w)
+      w.events.length = 0
+      // Shots fired this tick (they flew one step already).
+      const mine = (w.gshots ?? []).filter((x) => x.from === squad.id && x.age < STEP * 1.01)
+      if (mine.length) return mine
+    }
+    return []
+  }
+  const full = volley()
+  const where = full.every((x) => [0, 1, 2, 3, 4].some((i) => Math.abs(memberAt(squad, i).x - x.sx) < 1e-6 && Math.abs(memberAt(squad, i).y - x.sy) < 1e-6))
+  check('a full squad fires a shot from each of its members', full.length === 5 && where, `${full.length} shots${where ? '' : ', not from its members'}`)
+  squad.hull = squad.hullMax * 0.5
+  for (let t = 0; t < 40; t++) {
+    tick(w)
+    w.events.length = 0
+  }
+  w.gshots = []
+  const half = volley()
+  check('with half its hull gone, three members are left and fire three shots', squad.members === 3 && half.length === 3, `${squad.members} members, ${half.length} shots`)
 }
 
 if (failed) {

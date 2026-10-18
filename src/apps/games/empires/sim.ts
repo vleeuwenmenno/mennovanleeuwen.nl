@@ -225,6 +225,8 @@ export type Unit = {
   eye?: Eye
   /** Ground battles, engineers: the kyber it carries to a Command Center. */
   carry?: number
+  /** Ground battles, squads (GroundSpec `squad`): how many of its members are still standing. */
+  members?: number
   /** Ground battles: a spray's burn still eating at it (hull points a second, seconds left, whose). */
   burn?: { dps: number; left: number; by: Owner; from: number }
 }

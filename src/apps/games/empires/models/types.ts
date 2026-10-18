@@ -85,6 +85,9 @@ export type Part = {
    * mode; it is only not painted. Give it to raised greebles and small fittings, not to anything
    * that makes the silhouette (or to a part that carries an engine glow). */
   minPx?: number
+  /** Only in this pose of a model that walks (Model `walk`): a leg as it stands at one step. Parts
+   * without one are in every pose. */
+  pose?: number
 }
 
 /**
@@ -148,6 +151,10 @@ export type Model = {
   scorch: Scorch[]
   /** A number unique to the design, seeding its scorch marks and break lines. */
   seed: number
+  /** A model that walks (ground squads' members, walkers): its poses in walking order, stepped
+   * through as it goes; pose 0, its rest pose, is how it stands still. Its parts with a `pose` show
+   * only in that pose. None for everything else (ships, stations, vehicles): one look. */
+  walk?: number[]
 }
 
 /** What a hull looks like right now, everything the cached bitmaps depend on. */
@@ -158,4 +165,6 @@ export type HullState = {
   scorch: number
   /** Which of four scorch layouts, so a fleet doesn't share one set of burns. */
   variant: number
+  /** Which pose a model that walks is in (Model `walk`; 0 when left out). */
+  pose?: number
 }

@@ -15,6 +15,8 @@
 //   that grows with the distance, splash); swarm rockets go as a salvo onto a spot, with a little
 //   splash; a beam holds on its target and burns harder the longer it does; a spray hurts everything
 //   in a short cone and leaves a burn.
+// - Squads (ground/squad.ts): each member standing fires the squad's weapon from where it stands
+//   (a beam or spray pours each member's share), and members fall as the hull drops.
 //
 // Lockstep as the rest of the sim: the world's random stream, detmath, units in `w.units` order.
 
@@ -22,6 +24,7 @@ import * as M from '../detmath.ts'
 import { GROUND_ACC, GROUND_VS, type Armour, type GroundWeaponKind, type UnitType } from '../data/kit.ts'
 import { RANK_BONUS, damage, foes, hpPos, near, rand, sees, type Gun, type Owner, type Unit, type World } from '../sim.ts'
 import { TILE } from './types.ts'
+import { memberAt, membersLeft, squadsTick } from './squad.ts'
 import { footDist } from './world.ts'
 
 /** A shot in flight (World `gshots`): its weapon, where it is and how it moves, seconds left to fly
@@ -227,10 +230,15 @@ function splash(w: World, x: number, y: number, r: number, g: GroundWeaponKind, 
   w.events.push({ k: 'splash', x, y, r, owner })
 }
 
-/** One shot (or a salvo) from gun `g` of `u` at `e`. */
+/** One shot (or a salvo) from gun `g` of `u` at `e`; from a squad, one from each member standing,
+ * from where it stands. */
 function fire(w: World, u: Unit, g: Gun, e: Unit) {
+  if (!u.t.ground?.squad) return fireFrom(w, u, g, e, muzzle(u, g))
+  for (let i = 0; i < membersLeft(u); i++) fireFrom(w, u, g, e, memberAt(u, i))
+}
+
+function fireFrom(w: World, u: Unit, g: Gun, e: Unit, from: { x: number; y: number }) {
   const k = g.w.ground!
-  const from = muzzle(u, g)
   const dmg = g.w.damage * (1 + RANK_BONUS * u.rank)
   const acc = GROUND_ACC[k][armourOf(e.t)]
   const dist = Math.sqrt(d2(e.x, e.y, from.x, from.y))
@@ -281,7 +289,8 @@ function pour(w: World, u: Unit, g: Gun, e: Unit, dt: number) {
   const k = g.w.ground!
   const from = muzzle(u, g)
   g.hold = (g.hold ?? 0) + dt
-  const dmg = g.w.damage * (1 + RANK_BONUS * u.rank) * dt
+  // A squad's members each pour theirs.
+  const dmg = g.w.damage * (1 + RANK_BONUS * u.rank) * dt * (u.t.ground?.squad ? membersLeft(u) : 1)
   if (k === 'beam') {
     // Burns harder the longer it holds the same target: up to twice as hard after two seconds.
     hurt(w, e, k, dmg * Math.min(2, 1 + g.hold / 2), u.owner, u.id, from.x, from.y, g.w.kind)
@@ -415,6 +424,7 @@ export function groundCombat(w: World, dt: number) {
   }
   fly(w, dt)
   burns(w, dt)
+  squadsTick(w)
 }
 
 /** The fight's own state in a world's hash (ground/world.ts groundHash). */
@@ -437,5 +447,6 @@ export function combatHash(w: World, int: (v: number) => void, num: (v: number) 
       }
     }
     if (u.burn) num(u.burn.left)
+    if (u.members !== undefined) int(u.members)
   }
 }

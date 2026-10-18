@@ -197,4 +197,39 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // A swarmling, one bug of a pack (GroundSpec `squad`): a purple carapace over its abdomen, a pale
+  // thorax and head, mandibles, six legs. It scuttles on alternate tripods (poses 1 and 2: one
+  // front leg, the other side's middle one and the back one forward together).
+  's-gm-swarmling': {
+    w: 84,
+    h: 96,
+    spec: () => {
+      // Each leg's hip (its y; x is 9 either side) and where its foot rests (left side), front to back.
+      const legs: { hy: number; fx: number; fy: number }[] = [{ hy: -8, fx: -38, fy: -30 }, { hy: 0, fx: -42, fy: -2 }, { hy: 8, fx: -38, fy: 26 }]
+      const parts = [0, 1, 2].flatMap((pose) =>
+        [-1, 1].flatMap((side) =>
+          legs.map((l, j) => {
+            // Tripod A: left front, right middle, left back; tripod B the others.
+            const a = (j === 1) === (side > 0)
+            const shift = pose === 0 ? 0 : (pose === 1) === a ? -12 : 12
+            return part(`leg${side < 0 ? 'L' : 'R'}${j}${pose}`, capsule([side * 9, l.hy], [-side * l.fx, l.fy + shift], 3.2, 2), 'metal', 1, { lift: 4, pose })
+          }),
+        ),
+      )
+      return {
+        breakStyle: 'bands',
+        walk: [1, 2],
+        parts: [
+          ...parts,
+          part('abdomen', capsule([0, 12], [0, 34], 14, 11), 'accent', 3, { lift: 7, details: [{ k: 'line', pts: [[-11, 20], [11, 20]] }, { k: 'line', pts: [[-10, 28], [10, 28]], minPx: 40 }] }),
+          part('thorax', circle(0, -2, 11, 14), 'hull2', 4, { lift: 8, sphere: true }),
+          ...sym(part('mandible', capsule([-5, -28], [-8, -42], 2.6, 1.2), 'metal', 4, { lift: 6 })),
+          part('head', capsule([0, -12], [0, -26], 8.5, 7), 'hull', 5, {
+            lift: 9,
+            details: [{ k: 'lights', pts: [[-4, -24], [4, -24]], r: 1.6, tone: 'aid' }],
+          }),
+        ],
+      }
+    },
+  },
 }

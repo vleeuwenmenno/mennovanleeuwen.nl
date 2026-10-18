@@ -439,6 +439,53 @@ const groundCombat: Scene = {
   },
 }
 
+// --- A squad fight ---
+
+/**
+ * The same ground battle with foot squads fighting: the dev squad test (ground/testWeapons.ts) on
+ * the low ground, five trooper squads and a walker against five battle droid squads, five times
+ * over side by side, about a hundred members walking in step through their leg poses, firing a
+ * shot each and falling. The camera holds on the fight. The bitmap cache is measured with the
+ * poses in it.
+ */
+const groundSquads: Scene = {
+  name: 'ground-squads',
+  about: 'Ground battle on Dustfall Ridge, 20 test squads and 2 walkers walking and fighting',
+  async run(page, url) {
+    await launchGround(page, url)
+    const spawned = await page.eval<number>(`(async () => {
+      const test = await import('/src/apps/games/empires/ground/testWeapons.ts')
+      const w = __ew.world
+      const cx = w.w * 0.45, cy = w.h * 0.55
+      let made = 0
+      for (const dy of [-150, 150]) made += test.spawnSquadTest(w, 0, 1, cx, cy + dy, 5).length
+      Object.assign(__ew.cam, { x: cx, y: cy, zoom: Math.max(0.3, Math.min(1.4, document.querySelector('canvas.ew-canvas').clientWidth / 1100)) })
+      return made
+    })()`)
+    // They walk at each other and open fire, then a second of the fight is measured.
+    await page.eval(`__perf.frames(150)`)
+    const fight = await measure(page, 60)
+    const after = await page.eval<{ mb: number; bitmaps: number; nodes: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, bitmaps: p.cacheStats().bitmaps, nodes: document.getElementsByTagName('*').length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 22) throw new Error(`Only ${spawned} of 22 test squads and walkers spawned`)
+    return {
+      metrics: {
+        ...canvasMetrics(fight, 60),
+        'bitmap cache MB': count(after.mb),
+        'bitmaps cached': count(after.bitmaps),
+        'React commits / sim s': commitsPerSec(fight, 60),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(fight),
+      },
+      shots: { 'ground-squads': shot },
+    }
+  },
+}
+
 // --- The ground layer ---
 
 /**
@@ -807,7 +854,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, groundCombat, groundLayer, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, groundCombat, groundSquads, groundLayer, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))
