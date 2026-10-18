@@ -198,6 +198,11 @@ export type Brain = {
    * (world seconds); one that never gets started is called off. Absent in space battles. */
   gSite?: number
   gSiteAt?: number
+  /** Ground battles (ground/army.ts): its Scout out scouting, and how many trips it has sent it on. */
+  gScout?: number
+  gScouted?: number
+  /** Ground battles: it fields no fighters at all (the checks' economy battles). */
+  peaceful?: boolean
   diff: Difficulty
   /** How it plays (see PROFILES). Brains saved before profiles play Balanced. */
   profile: Profile

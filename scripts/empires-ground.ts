@@ -9,7 +9,7 @@
 //    enemy, enemy units on it, no room at its own door, credits), the ghost checks every tile, an
 //    order to place there is refused with the same reason, and a building hidden in the fog doesn't
 //    stop a placement.
-// 3. A building battle on Dustfall Ridge, seat 0 scripted (Republic) and seat 1 the AI (Swarm), two
+// 3. A building battle on Dustfall Ridge, seat 0 scripted (Republic) and seat 1 a peaceful AI (Swarm: no fighters), two
 //    copies side by side, a third thawed from a snapshot midway, and a replay from the logged
 //    inputs, all hashing the same every second. Seat 0 trains engineers at its Command Center
 //    (one cancelled and refunded), places Command Centers and builds them with a growing crew, calls
@@ -27,6 +27,11 @@
 //    exactly what was dropped off plus what is being carried, no load is over the carry size, and
 //    several engineers mine one field at once. The AI must keep its engineers gathering, build supply
 //    before it reaches its cap, and never train past it.
+// 5. Combat: a Scout battle (eight Pathfinders against three Probe droids and the Command Hub's
+//    turret) in step across two copies, a snapshot thaw and a replay, ending with every enemy
+//    building destroyed and a win, its stamp freed; artillery holds fire at what its team can't see,
+//    fires past its own sight at what an ally sees, and never closer than its minimum range; a shot
+//    lands as its damage times GROUND_VS for the armour; the dev weapon test fires all seven weapons.
 // 4. A crowd battle on Test Mesa (ground/testmaps.ts) with vehicles of every size class, many move
 //    orders (queued and not, and stops) and buildings put up and destroyed mid-battle, some right on
 //    top of units: two copies, a snapshot thaw and a replay in step for several thousand ticks; no
@@ -42,6 +47,9 @@ import { anchorAt, footprintOpen, stands } from '../src/apps/games/empires/groun
 import { MESA } from '../src/apps/games/empires/ground/testmaps.ts'
 import { CARRY, CLUSTERS_MAX, CLUSTERS_MIN, CREW_RATE, FIELD_KYBER, crystalAt, fieldLeft, footDist, groundMapDef, groundPlacement, raiseBuilding } from '../src/apps/games/empires/ground/world.ts'
 import { TILE } from '../src/apps/games/empires/ground/types.ts'
+import { GROUND_VS, GROUND_WEAPONS } from '../src/apps/games/empires/data/kit.ts'
+import { armourOf } from '../src/apps/games/empires/ground/combat.ts'
+import { registerWeaponTest, spawnWeaponTest, testWeaponId } from '../src/apps/games/empires/ground/testWeapons.ts'
 
 const seconds = Number(process.argv[2] ?? 150)
 let failed = false
@@ -178,6 +186,7 @@ type Input =
   | { t: number; k: 'add'; unit: string; owner: number; c: number; r: number }
   | { t: number; k: 'kill'; id: number }
   | { t: number; k: 'kyber'; f: number; each: number }
+  | { t: number; k: 'spawn'; unit: string; owner: number; x: number; y: number }
 
 function apply(w: World, x: Input): unknown {
   if (x.k === 'cmd') {
@@ -185,6 +194,7 @@ function apply(w: World, x: Input): unknown {
     return c ? runCmd(w, x.owner, c) : 'junk'
   }
   if (x.k === 'add') return raiseBuilding(w, UNIT[x.unit], x.owner, x.c, x.r)
+  if (x.k === 'spawn') return spawn(w, x.unit, x.owner, x.x, x.y, 0)
   if (x.k === 'kyber') {
     for (const c of w.crystals!) if (c.f === x.f && c.left > 0) c.left = Math.min(c.left, x.each)
     return
@@ -252,7 +262,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
 // --- 3. The building battle -----------------------------------------------------------------------
 
 {
-  const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('swarm', 1, 1)], { seed: 99, credits: 6000 }), brains: [newBrain(1, 'medium')] })
+  const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('swarm', 1, 1)], { seed: 99, credits: 6000 }), brains: [{ ...newBrain(1, 'medium'), peaceful: true }] })
   const ticks = Math.round(seconds / STEP)
   const got: Record<string, [boolean, string]> = {}
   const pass = (k: string, ok: boolean, detail = '') => (got[k] ??= [ok, detail])
@@ -410,7 +420,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const aiCenters = ai.filter((u) => u.t.id === S.center && !u.site).length
   const aiEngs = ai.filter((u) => u.t.id === S.engineer).length
   check('building battle: the AI trained engineers and expanded to a second Command Center', aiCenters >= 2 && aiEngs >= 3, `${aiCenters} Hive Nexuses, ${aiEngs} Shaper drones`)
-  check('building battle: the AI built nothing but engineers, Command Centers and supply', ai.every((u) => u.t.id === S.center || u.t.id === S.engineer || u.t.id === S.supply))
+  check('building battle: the AI built nothing but engineers, Command Centers, supply and Scouts', ai.every((u) => u.t.id === S.center || u.t.id === S.engineer || u.t.id === S.supply || u.t.id === 's-g-scout'))
   check('building battle: each side knows where the other started', !!w.known?.[0].some((k) => k.owner === 1) && !!w.known?.[1].some((k) => k.owner === 0))
   console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}`)
 }
@@ -439,6 +449,9 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const lastCl = new Map<number, number>()
   let moved = -1
   let lostKyber = 0
+  // Kyber in the hold of an engineer that was destroyed goes with it (the AI's Scouts raid).
+  const holds = new Map<number, Unit>()
+  let sunk = 0
   let overCarry = 0
   let mostMiners = 0
   let drops = 0
@@ -545,8 +558,10 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
     // Kyber is neither made nor lost: what left the fields was dropped off or is being carried.
     const inFields = w.crystals!.reduce((a, c) => a + c.left, 0)
     const carried = w.units.reduce((a, u) => a + (u.dead ? 0 : (u.carry ?? 0)), 0)
+    for (const [id, u] of holds) if (u.dead) (sunk += u.carry ?? 0), holds.delete(id)
+    for (const u of w.units) if (!u.dead && u.carry) holds.set(u.id, u)
     const dropped = w.players.reduce((a, q) => a + q.earnedBy.mines, 0)
-    lostKyber = Math.max(lostKyber, Math.abs(FIELD_KYBER * fields.length - cheatGap - inFields - carried - dropped))
+    lostKyber = Math.max(lostKyber, Math.abs(FIELD_KYBER * fields.length - cheatGap - inFields - carried - dropped - sunk))
     for (const u of w.units) if ((u.carry ?? 0) > CARRY + 1e-9) overCarry++
     const miners = new Map<number, number>()
     for (const u of w.units) if (!u.dead && u.gm?.mine && u.order.k === 'gather') miners.set(u.order.f, (miners.get(u.order.f) ?? 0) + 1)
@@ -565,7 +580,7 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   const w = final.w
   for (const [k, [ok, detail]] of Object.entries(got)) check(`economy battle: ${k}`, ok, detail)
   check('economy battle: four engineers gathered and dropped kyber off at the Command Center', sentFour && drops > 0, `${Math.round(drops)} kyber dropped off by seat 0`)
-  check('economy battle: kyber is never made or lost (fields = dropped off + carried)', lostKyber < 1e-6, `largest gap ${lostKyber}`)
+  check('economy battle: kyber is never made or lost (fields = dropped off + carried + lost with destroyed engineers)', lostKyber < 1e-6, `largest gap ${lostKyber}`)
   check('economy battle: no engineer carries more than a load', !overCarry, `${CARRY} a load`)
   check('economy battle: several engineers mine one field at once without jamming', mostMiners >= 3, `${mostMiners} at once`)
   check('economy battle: a field runs dry and its engineers move on to the nearest other field', dryAt > 0 && moved > 0, dryAt > 0 ? `dry at ${(dryAt * STEP).toFixed(0)} s, ${moved} moved on` : 'never ran dry')
@@ -657,6 +672,115 @@ function lockstep(label: string, make: () => Copy, ticks: number, script: (a: Co
   check('crowd battle: nothing leaves the map or turns NaN', !offMap && !nan, `${offMap} off the map, ${nan} NaN`)
   check('crowd battle: move orders end', ended > 100, `${ended}`)
   check('crowd battle: buildings went up and were destroyed', added >= 10 && destroyed >= 5)
+}
+
+// --- 5. Combat ------------------------------------------------------------------------------------------
+
+{
+  // A Scout battle won by destroying every building: eight Pathfinders against three Probe droids and
+  // the Command Hub's turret, in step across two copies, a snapshot thaw and a replay.
+  const make = (): Copy => ({ w: newWorld(dustfall, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 21, credits: 3000 }), brains: [] })
+  const ticks = Math.round(150 / STEP)
+  let hub: Unit | undefined
+  let hubFoot: { c: number; r: number } | null = null
+  let turret = false
+  const events: Record<string, number> = {}
+  const final = lockstep('combat battle', make, ticks, ({ w }, t, say) => {
+    hub ??= w.units.find((u) => u.owner === 1 && u.t.id === 'd-g-center')!
+    hubFoot ??= { ...hub.foot! }
+    const home = w.units.find((u) => u.owner === 0 && u.t.id === 'r-g-center')!
+    for (const e of w.events) events[e.k] = (events[e.k] ?? 0) + 1
+    w.events.length = 0
+    if (hub.guns.some((g) => g.target)) turret = true
+    if (t === 1) {
+      for (let i = 0; i < 8; i++) say({ t, k: 'spawn', unit: 'r-g-scout', owner: 0, x: home.x + 160 + (i % 4) * 30, y: home.y + 140 + Math.floor(i / 4) * 30 })
+      for (let i = 0; i < 3; i++) say({ t, k: 'spawn', unit: 'd-g-scout', owner: 1, x: hub.x - 200 - i * 30, y: hub.y - 160 })
+    }
+    // The Hub weakened (as a dev cheat would), then everything of ours sent at it, attack-moving:
+    // they take on the Probes on the way, then the Hub.
+    if (t === 30) say({ t, k: 'hull', id: hub.id, share: 0.2 })
+    if (t === 40) {
+      const ids = w.units.filter((u) => u.owner === 0 && u.t.id === 'r-g-scout').map((u) => u.id)
+      say({ t, k: 'cmd', owner: 0, json: JSON.stringify(cmd('move', ids, hub.x, hub.y, true, false)) })
+    }
+  }, 1350)
+  const w = final.w
+  console.log(`  events: ${Object.entries(events).map(([k, n]) => `${n} ${k}`).join(', ')}; won at ${w.winner === 0 ? `${Math.round(w.time)} s` : 'never'}`)
+  check('combat battle: Scouts fire, hit and die', (events.fire ?? 0) > 20 && (events.hit ?? 0) > 10 && (events.boom ?? 0) >= 2, `${events.fire ?? 0} shots, ${events.boom ?? 0} destroyed`)
+  check("combat battle: the Command Hub's turret fires", turret)
+  check('combat battle: a side whose every building is destroyed is out, and the other wins', w.winner === 0 && !w.players[1].alive && w.players[0].alive)
+  // (The battle stops ticking once it is won, so the stamp may still wait for its flush.)
+  const nav = w.ground!.nav
+  const freed = !!hubFoot && (nav.pending.some((p) => p.d === -1 && p.c === hubFoot!.c && p.r === hubFoot!.r) || [0, 1, 2, 3, 4, 5].every((dr) => [0, 1, 2, 3, 4, 5].every((dc) => nav.bld[(hubFoot!.r + dr) * nav.cols + hubFoot!.c + dc] === 0)))
+  check('combat battle: a destroyed building frees its stamp', freed)
+  check('combat battle: experience from kills', w.units.some((u) => u.owner === 0 && u.kills > 0))
+}
+
+{
+  // Fog: a unit fires only at what its team sees; artillery at what an ally sees, past its own sight;
+  // never closer than its minimum range. Armour: a shot lands as its damage times GROUND_VS.
+  registerWeaponTest()
+  const field = groundMapDef('test-field')!
+  const fresh = () => newWorld(field, [seat('republic', 0, 0), seat('droid', 1, 1)], { seed: 5, credits: 0 })
+  const run = (w: World, s: number) => {
+    let shots = 0
+    for (let t = 0; t < s * 30; t++) {
+      tick(w)
+      shots += w.events.filter((e) => e.k === 'fire').length
+      w.events.length = 0
+    }
+    return shots
+  }
+  const cy = field.h / 2
+  {
+    const w = fresh()
+    const art = spawn(w, testWeaponId('republic', 'artillery'), 0, field.w * 0.3, cy, 0)
+    art.stance = 'hold'
+    const foe = spawn(w, 'd-g-engineer', 1, art.x + 16 * TILE, cy, 0)
+    const blind = run(w, 3)
+    const eye = spawn(w, 'r-g-scout', 0, foe.x - 3 * TILE, cy - 2 * TILE, 0)
+    eye.stance = 'hold'
+    eye.guns.length = 0
+    const seen = run(w, 4)
+    check("artillery doesn't fire at what its team can't see", blind === 0 && !(w.gshots ?? []).some((x) => x.from === art.id && x.age > 3.5), `${blind} shots`)
+    check('artillery fires past its own sight at what an ally sees', seen > 0 && (foe.dead || foe.hull < foe.hullMax), `${seen} shots`)
+  }
+  {
+    const w = fresh()
+    const art = spawn(w, testWeaponId('republic', 'artillery'), 0, field.w * 0.3, cy, 0)
+    art.stance = 'hold'
+    spawn(w, 'd-g-engineer', 1, art.x + 4 * TILE, cy, 0)
+    check('artillery never fires closer than its minimum range', run(w, 4) === 0)
+  }
+  {
+    // One pulse bolt on a building: its damage times the pulse's share against structures.
+    const w = fresh()
+    const gun = spawn(w, testWeaponId('republic', 'pulse'), 0, field.w * 0.5, cy, 0)
+    gun.stance = 'hold'
+    const block = raiseBuilding(w, UNIT['d-g-supply'], 1, Math.floor(gun.x / TILE) + 3, Math.floor(cy / TILE) - 1)
+    let first = 0
+    for (let t = 0; t < 120 && !first; t++) {
+      tick(w)
+      first = block.hullMax - block.hull
+    }
+    const want = 10 * GROUND_VS.pulse[armourOf(block.t)]
+    check('a shot lands as its damage times its share against the armour', Math.abs(first - want) < 1e-9, `${first} against ${want} (pulse on structure)`)
+  }
+  {
+    // The weapon test: every one of the seven ground weapons fires, and both sides lose units.
+    const w = newWorld(dustfall, [seat('republic', 0, 0), seat('swarm', 1, 1)], { seed: 9 })
+    const us = spawnWeaponTest(w, 0, 1, w.w * 0.45, w.h * 0.55)
+    const fired = new Set<string>()
+    for (let t = 0; t < 40 * 30; t++) {
+      tick(w)
+      w.events.length = 0
+      for (const x of w.gshots ?? []) fired.add(x.g)
+      for (const u of w.units) for (const g of u.guns) if (g.hold) fired.add(g.w.ground!)
+    }
+    const missing = GROUND_WEAPONS.filter((k) => !fired.has(k))
+    check('weapon test: all seven ground weapons fire', !missing.length, missing.length ? `never: ${missing.join(', ')}` : '')
+    check('weapon test: both sides lose units', us.some((u) => u.owner === 0 && u.dead) && us.some((u) => u.owner === 1 && u.dead), `${us.filter((u) => u.dead).length} of ${us.length} destroyed`)
+  }
 }
 
 if (failed) {

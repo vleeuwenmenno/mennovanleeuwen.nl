@@ -3,15 +3,17 @@ import * as M from '../detmath.ts'
 import { UNIT } from '../data.ts'
 import { cmdBuild, cmdCancelSite, cmdConstruct, cmdGather, cmdPlace, cantBuild, type Unit, type World } from '../sim.ts'
 import { TILE, type Pt } from './types.ts'
+import { armyThink } from './army.ts'
 import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, knownBuildings } from './world.ts'
 
 // The AI's decisions in a ground battle: a branch of ai.ts's think (same brain, clock and random
-// stream), passive for now: on its seat it keeps its engineers gathering kyber, puts up supply before
-// it reaches its unit cap, trains more engineers, expands with a second Command Center towards the
-// crystal fields on its own side of the map, finishes its sites and repairs its buildings, and builds
-// nothing hostile. It reads only what its team knows (its own units, the land and its crystal fields,
-// which every side sees from orbit, and the enemy buildings it remembers) and gives the same orders a
-// player does, so every copy of a battle makes the same choices.
+// stream): on its seat it keeps its engineers gathering kyber, puts up supply before it reaches its
+// unit cap, trains more engineers, expands with a second Command Center towards the crystal fields on
+// its own side of the map, finishes its sites and repairs its buildings, and fields a few Scouts that
+// scout, defend its buildings and raid the enemy's engineers and buildings (army.ts). It reads only
+// what its team knows (its own units, the land and its crystal fields, which every side sees from
+// orbit, the enemy it sees and the enemy buildings it remembers) and gives the same orders a player
+// does, so every copy of a battle makes the same choices.
 
 /** Engineers it keeps for each standing Command Center, and at most. */
 const ENGINEERS_PER_CENTER = 7
@@ -114,7 +116,10 @@ export function groundThink(w: World, b: Brain) {
     }
   }
 
-  // 5. Expanding: a second Command Center beside a crystal field on its own side that none of ours
+  // 5. Its Scouts: training, scouting, defending, raiding (army.ts).
+  armyThink(w, b, mine)
+
+  // 6. Expanding: a second Command Center beside a crystal field on its own side that none of ours
   // serves yet, once it can pay for it.
   if (centers.length >= CENTERS || !standing.length || centers.some((c) => c.site) || engineers.length < EXPAND_AT) return
   if (p.credits < centerCost) return

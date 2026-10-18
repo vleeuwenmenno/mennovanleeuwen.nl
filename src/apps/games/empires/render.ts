@@ -576,6 +576,11 @@ export class Renderer {
           }
           if (e.kind === 'turbo' || e.kind === 'missile') this.add({ kind: 'fire', x: e.x, y: e.y, life: 0.35, size: 6, grow: 22, color: '#ff8a3a' })
         }
+      } else if (e.k === 'splash') {
+        // A ground battle's artillery shell or swarm rocket bursting: a flash and a ring of dust.
+        if (!seen(e.x, e.y)) continue
+        this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.4, size: e.r * 0.3, grow: e.r * 1.4, color: 'rgba(210,190,150,0.8)' })
+        this.add({ kind: 'fire', x: e.x, y: e.y, life: 0.3, size: e.r * 0.2, grow: e.r * 0.5, color: '#ffae5a' })
       } else if (e.k === 'boom') {
         this.kills.push({ x: e.x, y: e.y, at: this.clock })
         if (!seen(e.x, e.y)) continue
@@ -1532,6 +1537,7 @@ export class Renderer {
 
     // A ground battle's fog: a half-dark veil by tile outside our sight (never black: the land is known
     // from orbit), over the units and everything on the ground, under the move markers.
+    if (ground) ground.effects(ctx, w, view.me, z, this.clock)
     if (ground) ground.fog(ctx, w, w.players[view.me].team, !!view.reveal)
 
     // Move markers.

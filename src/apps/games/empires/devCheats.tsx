@@ -187,6 +187,16 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
     return () => clearInterval(t)
   }, [open])
 
+  /** Ground battles: the seven ground weapons at work (ground/testWeapons.ts), at the camera. */
+  const weaponTest = async () => {
+    const { spawnWeaponTest } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnWeaponTest(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Weapon test: the seven ground weapons, ours against theirs', 'info')
+    redraw()
+  }
   const spawnNow = (at: Pt) => {
     const f = form.current
     const world = ctx.world()
@@ -363,6 +373,13 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
             </button>
           </div>
           {armed && <div className="ew-dev-hint ew-small">Left click places (again and again), right click or Esc stops.</div>}
+          {w.ground && (
+            <div className="ew-dev-line">
+              <button className="ew-chip" onClick={() => void weaponTest()} data-tip="Ground battles: test units carrying each of the seven ground weapons, ours against the first enemy's, at the camera">
+                Weapon test
+              </button>
+            </div>
+          )}
           {w.fleet && <div className="ew-muted ew-small">Campaign battle: what you spawn counts in the result.</div>}
         </div>
       </Floating>

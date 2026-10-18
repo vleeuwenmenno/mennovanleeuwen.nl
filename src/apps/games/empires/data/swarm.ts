@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundScout, groundWeapon } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -264,12 +264,20 @@ const GROUND: UnitType[] = [
   groundCenter({
     id: 's-g-center', faction: 'swarm', name: 'Hive Nexus', sprite: 'swarm-g-center',
     blurb: 'A chitin mound round a glowing violet core. It grows Shaper drones, takes in the kyber they bring, supports 5 units, and buildings go up within 14 tiles of it.',
-    hull: 5400, cost: 1200, build: 60, ground: { trains: ['s-g-engineer'] },
+    hull: 5400, cost: 1200, build: 60, ground: { trains: ['s-g-engineer', 's-g-scout'] },
+    // A light defence turret on its roof (ground/combat.ts).
+    hardpoints: [{ ...gun('flak', 2.7, 6.7, 0.13, 900, groundWeapon('pulse', 14, { range: 320, cooldown: 0.8 })), key: 'tur' }],
   }),
   groundSupply({
     id: 's-g-supply', faction: 'swarm', name: 'Brood Cache', sprite: 'swarm-g-supply',
     blurb: 'A cluster of resin pods full of nutrient. Each one supports 10 more units.',
     hull: 1600, cost: 100, build: 25, ground: {},
+  }),
+  groundScout({
+    id: 's-g-scout', faction: 'swarm', name: 'Skitterling', sprite: 'swarm-g-scout',
+    blurb: 'A quick six-legged skitterer that spits bolts of acid. The fastest thing on the ground and the first to find the enemy, but it bursts under any real fire.',
+    hull: 110, cost: 80, build: 8, speed: 175, turn: 6, ground: { radius: 10, sight: 12 },
+    weapons: [groundWeapon('pulse', 8, { arc: 0.35, cooldown: 0.5 })],
   }),
 ]
 

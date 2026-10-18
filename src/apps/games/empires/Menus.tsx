@@ -1953,6 +1953,7 @@ export function Result({ w, me, names, won, onAgain, onExit, campaign = false, o
           <h2>{won ? 'Victory' : 'Defeat'}</h2>
           <p className="ew-muted">
             {campaign ? (won ? 'The enemy is destroyed or driven off. Our survivors hold the orbit.' : 'Our fleet is gone from this battle. Ships that jumped out are back in the galaxy.')
+              : w.ground ? (won ? 'Every enemy building is destroyed.' : 'Our side has no buildings left.')
               : won ? 'Every enemy station is destroyed.' : 'Our side has no stations left.'}
           </p>
           <table>

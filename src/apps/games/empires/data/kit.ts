@@ -46,6 +46,14 @@ export type Weapon = {
    * nose, so the whole ship turns to aim it (the AI and the sim's closing in already do: see sim.ts
    * bearing). Its mount doesn't turn on the model. Made with `spinal()`. */
   spinal?: true
+  /** Ground battles' weapons (groundWeapon): which of the seven it is. Its `kind` is then the space
+   * weapon it sounds and sparks like; the ground's own table (GROUND_VS) sets what it does. */
+  ground?: GroundWeaponKind
+  /** Ground: the radius its shells or rockets hurt everything in where they land (artillery, swarm
+   * rockets), in world units. */
+  splash?: number
+  /** Ground: the nearest it can fire (artillery), in world units. */
+  min?: number
 }
 
 /**
@@ -175,9 +183,71 @@ export type GroundSpec = {
   trains?: string[]
   /** Engineers: the buildings it puts up, in card order. */
   builds?: string[]
+  /** Armour class (ground/combat.ts, GROUND_VS): vehicles light unless they say, buildings structure. */
+  armour?: Armour
+  /** The ground unit whose model it is drawn with, when not its own (the dev weapon test's units). */
+  look?: string
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
+
+// --- Ground weapons ---------------------------------------------------------------------------------
+
+/** The seven ground weapons (ground battles only; ground/combat.ts fires them):
+ * - pulse: fast bolts, accurate, the all-rounder, good against light armour;
+ * - beam: a continuous beam that burns harder the longer it holds one target, short range;
+ * - rocket: slow to reload, homing, good against heavy armour and buildings;
+ * - shell: a heavy shell, slow, misses fast light units, good against heavy armour;
+ * - artillery: a lobbed shell from long range, a minimum range, splash; fires at what allies see;
+ * - swarm: a salvo of small rockets with splash, good against light units in groups;
+ * - spray: a short cone (flame, gas, acid) that keeps burning, good against light units. */
+export type GroundWeaponKind = 'pulse' | 'beam' | 'rocket' | 'shell' | 'artillery' | 'swarm' | 'spray'
+export const GROUND_WEAPONS: GroundWeaponKind[] = ['pulse', 'beam', 'rocket', 'shell', 'artillery', 'swarm', 'spray']
+/** Ground armour classes: what a ground unit or building is (GroundSpec `armour`). */
+export type Armour = 'light' | 'medium' | 'heavy' | 'structure'
+export const ARMOURS: Armour[] = ['light', 'medium', 'heavy', 'structure']
+
+/** Damage of each ground weapon against each armour class, as a share of its damage (the ground's
+ * own table, beside space's VS: space units never meet these). */
+export const GROUND_VS: Record<GroundWeaponKind, Record<Armour, number>> = {
+  pulse: { light: 1, medium: 0.7, heavy: 0.35, structure: 0.4 },
+  beam: { light: 0.6, medium: 1.1, heavy: 1.3, structure: 0.8 },
+  rocket: { light: 0.5, medium: 1, heavy: 1.4, structure: 1.3 },
+  shell: { light: 0.6, medium: 1, heavy: 1.4, structure: 1 },
+  artillery: { light: 0.8, medium: 0.9, heavy: 0.7, structure: 1.5 },
+  swarm: { light: 1.3, medium: 0.8, heavy: 0.4, structure: 0.5 },
+  spray: { light: 1.4, medium: 0.9, heavy: 0.5, structure: 0.3 },
+}
+/** Chance a ground weapon's shot connects with each armour class (lighter is faster and harder to
+ * hit). A beam and a spray don't miss; artillery and swarm rockets land where they were aimed, give
+ * or take a scatter, and hurt what is there. */
+export const GROUND_ACC: Record<GroundWeaponKind, Record<Armour, number>> = {
+  pulse: { light: 0.9, medium: 0.95, heavy: 1, structure: 1 },
+  beam: { light: 1, medium: 1, heavy: 1, structure: 1 },
+  rocket: { light: 0.55, medium: 0.85, heavy: 0.95, structure: 1 },
+  shell: { light: 0.4, medium: 0.75, heavy: 0.9, structure: 1 },
+  artillery: { light: 1, medium: 1, heavy: 1, structure: 1 },
+  swarm: { light: 0.85, medium: 0.9, heavy: 0.95, structure: 1 },
+  spray: { light: 1, medium: 1, heavy: 1, structure: 1 },
+}
+/** The space weapon each ground weapon sounds and sparks like. */
+const GROUND_LOOK: Record<GroundWeaponKind, WeaponKind> = { pulse: 'laser', beam: 'laser', rocket: 'missile', shell: 'turbo', artillery: 'turbo', swarm: 'missile', spray: 'flak' }
+/** Each ground weapon's usual reach and reload, in world units (32 a tile) and seconds. A beam's and
+ * a spray's damage is a second's worth, dealt while they hold. */
+const GROUND_BASE: Record<GroundWeaponKind, { range: number; cooldown: number; splash?: number; min?: number; burst?: number }> = {
+  pulse: { range: 192, cooldown: 0.6 },
+  beam: { range: 128, cooldown: 0 },
+  rocket: { range: 256, cooldown: 2.6 },
+  shell: { range: 256, cooldown: 2.8 },
+  artillery: { range: 640, cooldown: 4.5, splash: 64, min: 192 },
+  swarm: { range: 256, cooldown: 4, splash: 36, burst: 6 },
+  spray: { range: 96, cooldown: 0 },
+}
+/** A ground weapon of kind `g` doing `damage` (a shot's, or a beam's and a spray's a second), with
+ * its kind's usual reach and reload unless `o` says otherwise; `arc` (radians either side of the nose)
+ * makes it fixed, so the unit turns to aim it. */
+export const groundWeapon = (g: GroundWeaponKind, damage: number, o: Partial<Pick<Weapon, 'range' | 'cooldown' | 'arc' | 'splash' | 'min' | 'burst'>> = {}): Weapon =>
+  ({ kind: GROUND_LOOK[g], damage, ground: g, ...GROUND_BASE[g], ...o })
 
 // --- Guns -------------------------------------------------------------------------------------------
 
@@ -206,7 +276,7 @@ export const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: numb
  * kyber, which engineers gather from crystal fields (a ground battle's credits), in the space game's
  * ballpark: an engineer squadron there costs 300 for three craft (one vehicle here, 150 or so); a
  * yard costs 900 and a Command Center, a whole new base, 1,200. */
-type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number }
+type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number; hardpoints?: Hardpoint[] }
 
 /** An engineer: a small unarmed vehicle (size class 1) that gathers kyber, puts up buildings and
  * repairs them. */
@@ -237,6 +307,16 @@ export const groundSupply = (o: GroundWritten): UnitType => ({
   role: { role: 'Supply', strong: ['raising the unit cap'], weak: ['being left unguarded'] },
   ...o,
   ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], supply: 10, ...o.ground },
+})
+
+/** A Scout: tier 1, small and simple, fast and lightly armoured with long sight, a light weapon fixed
+ * along its nose, cheap. Trained at the Command Center. */
+export const groundScout = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.75, size: Math.round((o.ground.radius ?? 11) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 12) * 32, hardpoints: [], engines: [],
+  role: { role: 'Scout', strong: ['scouting', 'engineers', 'light units'], weak: ['heavy armour', 'buildings'] },
+  ...o,
+  ground: { size: 1, radius: 11, accel: 320, sight: 12, armour: 'light', ...o.ground },
 })
 
 // --- Stations ---------------------------------------------------------------------------------------

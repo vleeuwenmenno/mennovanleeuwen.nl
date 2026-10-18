@@ -168,4 +168,31 @@ export const GROUND: GroundModels = {
       ],
     }),
   },
+  // The Pathfinder speeder: a slim white repulsor sled, a red stripe down its nose, the pilot's
+  // canopy behind it, twin pulse laser barrels along the nose and two engine pods aft.
+  'r-g-scout': {
+    w: 62,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        // The engine pods on short pylons.
+        ...sym(part('pylon', box(-12, 26, 12, 6), 'metal', 1, { lift: 8 })),
+        ...sym(part('pod', capsule([-20, 14], [-20, 42], 7, 6), 'hull2', 2, { lift: 9, details: [{ k: 'lights', pts: [[-20, 44]], r: 2.4, tone: 'glow' }] })),
+        // The laser barrels, under the nose's sides.
+        ...sym(part('barrel', capsule([-7, -30], [-7, -50], 2.2, 1.6), 'dark', 2, { lift: 7 })),
+        // The hull: a narrow wedge, bevelled.
+        part('hull', [[0, -46], [10, -30], [13, 10], [10, 34], [-10, 34], [-13, 10], [-10, -30]], 'hull', 3, {
+          lift: 9,
+          facets: [{ pts: [[0, -46], [10, -30], [0, -24]], slope: [0.6, -0.8] }, { pts: [[0, -46], [-10, -30], [0, -24]], slope: [-0.6, -0.8] }],
+          details: [
+            { k: 'shape', pts: [[-3, -40], [3, -40], [3, 2], [-3, 2]], tone: 'accent' },
+            { k: 'line', pts: [[-11, 22], [11, 22]], minPx: 40 },
+          ],
+        }),
+        // The canopy.
+        part('canopy', capsule([0, -6], [0, 12], 6, 6), 'glass', 4, { lift: 11 }),
+      ],
+    }),
+  },
 }
