@@ -49,9 +49,12 @@ export type GroundKit = {
   /** The ground weapons' shots, beams, sprays and burns (ground/effects.ts), in world coordinates;
    * `clock`: the screen's seconds, for flicker. */
   effects(ctx: CanvasRenderingContext2D, w: World, me: Owner, zoom: number, clock: number): void
-  /** A squad's members (GroundSpec `squad`, ground/squadDraw.ts) where they stand, walking; `zdpr`:
-   * device pixels per world unit; `clock`: the screen's seconds. */
-  squad(ctx: CanvasRenderingContext2D, u: Unit, zoom: number, zdpr: number, alpha: number, clock: number): void
+  /** A squad's members (GroundSpec `squad`, ground/squadDraw.ts) where they stand, walking, each
+   * with a rim in `rim` (its side's colour); `zdpr`: device pixels per world unit; `clock`: the
+   * screen's seconds. */
+  squad(ctx: CanvasRenderingContext2D, u: Unit, zoom: number, zdpr: number, alpha: number, clock: number, rim: string): void
+  /** How far a squad's members reach from its middle as drawn (world units), for its ring. */
+  ring(u: Unit, zoom: number): number
   /** The pose a walker (a vehicle whose model walks, Model `walk`) is in now. */
   pose(u: Unit, m: Model, clock: number): number
   /** A squad we saw was destroyed: its last members fall. */

@@ -3752,16 +3752,33 @@ ones first and armed ones too once there are four.
 **Squads** ([`ground/squad.ts`](src/apps/games/empires/ground/squad.ts),
 [`ground/squadDraw.ts`](src/apps/games/empires/ground/squadDraw.ts)): foot soldiers (trooper
 squads, battle droid squads, bug packs) are one unit each, a squad of a few members (GroundSpec
-`squad`: how many, the member's model and size, their spacing). The members stand in a loose
-formation round the unit's middle that turns and walks with it, each stepping through its walk
-cycle, and turn to face what the squad fights. The hull is the squad's: a member falls for every
-share of it lost (a squad of five loses one at 80%, 60% and so on), so usually one at a time,
-and the last one falls with the unit. Each member still standing fires the
-squad's weapon from where it stands (five troopers, five bolts and five muzzle flashes), so a squad
-with fewer members fires less; a beam or a spray pours each member's share. A fallen member lies
-where it fell, dark, with a puff of dust, and fades after a few seconds (on screen only). Squads are
-light armour, path on size class 1, and their member count is in the battle's hash and snapshots.
-When zoomed far out a squad's members grow and spread so it stays about 24 pixels across.
+`squad`: how many, the member's model and size, their spacing). The squad is selected, ordered,
+pathed and counted as one unit; its members walk on their own round it:
+- **Loose formation.** Each member heads for its place in a loose cluster round the squad's middle,
+  nudged by a drift of its own that changes every few seconds, and walks there at its own pace,
+  keeping a little apart from the others. So on the move they spread, bunch and drift, each stops at
+  a slightly different spot, and standing still they shuffle now and then.
+- **Through narrow ground.** Where a member's place is blocked, or it can't walk straight there (a
+  gap, a bridge, a ramp, a ford), it follows the squad's trail instead, in order, so the squad files
+  through in a column and fans out again beyond.
+- **Shooting.** Each member standing fires the squad's weapons from where it stands, on a reload of
+  its own (a little more or less than the gun's, from the battle's random stream) and at a target of
+  its own: the squad's when it is told to attack one, else the one it shot last while it can, else
+  one of the few best in its reach. So a squad's shots come one by one and spread over what is near,
+  and a squad with fewer members fires less; a beam or a spray pours each member's share from the
+  middle. Members turn to their own targets, else to where they walk.
+- **Falling.** The hull is the squad's: a member falls for every share of it lost (a squad of five
+  loses one at 80%, 60% and so on), which one from the random stream, and the last one falls with
+  the unit. A fallen member lies where it fell, dark, with a puff of dust, and fades after a few
+  seconds (on screen only).
+- **On screen.** Each member steps through its own walk cycle, out of step with the others, and has
+  a small shadow and a rim in its side's colour at its feet instead of a disc under the squad; the
+  selection ring takes in the members wherever they stand, and clicking any member picks the squad.
+  When zoomed far out the members grow and spread so the squad stays about 24 pixels across.
+
+Squads are light armour and path on size class 1. Their members (where each stands and faces, its
+drift, its reloads and targets) and the squad's trail are in the battle's hash and snapshots; a
+squad from a save made before members walked on their own gets them in their places.
 
 **The weapon test** (dev builds only, the F9 cheat panel's *Weapon test* in a ground battle,
 [`ground/testWeapons.ts`](src/apps/games/empires/ground/testWeapons.ts)) spawns one test unit per
@@ -3776,8 +3793,8 @@ squad and fast vehicle) for us and the same six for the first enemy, sent at eac
 over) for the first enemy.
 
 ```sh
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
-pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) a tier 1 battle (all six tier 1 units firing, losses on both sides) and a tier 2 battle (the six tier 2 units against a crowd of tier 1: all six firing, splash catching several units at once, the anti-swarm side ahead), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad's members firing on their own timing, from where each stands, spread over the targets in reach and about three fifths as often with three of five left; members shuffling standing still, crossing a river and gathering again, and filing through a gap one tile wide and fanning out beyond; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) a tier 1 battle (all six tier 1 units firing, losses on both sides) and a tier 2 battle (the six tier 2 units against a crowd of tier 1: all six firing, splash catching several units at once, the anti-swarm side ahead), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad's members firing on their own timing, from where each stands, spread over the targets in reach and about three fifths as often with three of five left; members shuffling standing still, crossing a river and gathering again, and filing through a gap one tile wide and fanning out beyond; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
 pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones

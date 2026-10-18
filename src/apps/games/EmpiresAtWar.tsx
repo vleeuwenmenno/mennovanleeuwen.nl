@@ -748,7 +748,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const ly = dx * s + dy * c
       // A little wider than the hull's box, so its edges still count.
       const inside = Math.abs(lx) <= Math.max(uw * 0.55, minR) && Math.abs(ly) <= Math.max(uh * 0.55, minR)
-      if (!inside) continue
+      // A ground squad: any of its members, wherever they stand.
+      const member = !!u.crew?.some((m) => Math.hypot(m.x - p.x, m.y - p.y) <= Math.max((u.t.ground?.squad?.size ?? 0) * 0.6, minR))
+      if (!inside && !member) continue
       const score = -drawRank(u) * 1e6 + u.t.size + Math.hypot(dx, dy) * 0.1
       if (score < bestScore) {
         bestScore = score

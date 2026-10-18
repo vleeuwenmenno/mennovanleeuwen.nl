@@ -2,13 +2,14 @@ import { memberModel } from '../models/ground.ts'
 import { drawHull } from '../models/paint.ts'
 import type { HullState, Model } from '../models/types.ts'
 import type { Unit } from '../sim.ts'
-import { memberAt, membersLeft } from './squad.ts'
+import { memberPos, squadReach } from './squad.ts'
 
-// How squads and walkers look on the battle screen (groundKit's squad, pose, fell and bodies): a
-// squad's members, each its member model at its place in the formation, turned to where the squad
-// faces (to its target while it fights), stepping through their walk poses as the squad goes; a
-// walker's legs the same way; and the members that fell, lying where they fell and fading. All on
-// screen only: how far a unit has walked is kept here, from where it was drawn last.
+// How squads and walkers look on the battle screen (groundKit's squad, ring, pose, fell and bodies):
+// a squad's members, each its member model where it stands in the sim (ground/squad.ts), turned the
+// way it faces, stepping through its own walk cycle as it goes, with a shadow and a rim in its side's
+// colour at its feet; a walker's legs the same way; and the members that fell, lying where they
+// fell and fading. All on screen only: how far each has walked is kept here, from where it was drawn
+// last.
 
 /** A squad is drawn at least this many CSS pixels across, however far out the view is: its members
  * grow and spread with it, as a far-off vehicle keeps a size (render.ts GROUND_MIN_PX). */
@@ -47,37 +48,77 @@ export function walkerPose(u: Unit, m: Model, clock: number) {
 
 type Body = { x: number; y: number; rot: number; m: Model; size: number; at: number }
 const bodies: Body[] = []
-/** How many members each squad had when last drawn, to see one fall. */
-const standing = new Map<number, number>()
+/** Where each squad's members stood when last drawn, by their number, to see one fall. */
+const seen = new Map<number, Map<number, { x: number; y: number; a: number }>>()
+/** How far each member has walked (by squad and member), and when it last moved: each steps at its
+ * own pace, out of step with the others. */
+const steps = new Map<string, { x: number; y: number; d: number; moved: number }>()
 
 const FALLEN: HullState = { detached: 0, scorch: 3, variant: 0, pose: 0 }
 
-/** Squad `u`'s members, `alpha` see-through; `zdpr` device pixels per world unit. */
-export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, z: number, zdpr: number, alpha: number, clock: number) {
+/** Squad `u`'s members where they stand, each with a small shadow and a rim in `rim` (the side's
+ * colour) at its feet; `alpha` see-through; `zdpr` device pixels per world unit. */
+export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, z: number, zdpr: number, alpha: number, clock: number, rim: string) {
   const sq = u.t.ground!.squad!
   const m = memberModel(sq.member)
-  if (!m) return
+  if (!m || !u.crew) return
+  // Far out, the squad spreads and its members grow, so it stays readable.
   const k = Math.max(1, SQUAD_MIN_PX / (u.t.size * z))
   const size = sq.size * k
-  const left = membersLeft(u)
-  const d = odometer(u, clock)
-  const moving = u.v > STILL
-  // Turned to its target while it fights, else the way it goes.
-  const g = u.guns.find((q) => q.target)
-  const face = (g ? g.aim : u.a) + Math.PI / 2
-  const was = standing.get(u.id) ?? left
-  for (let i = left; i < was; i++) {
-    const p = memberAt(u, i, k)
-    bodies.push({ x: p.x, y: p.y, rot: face + (i % 2 ? 0.6 : -0.5), m, size, at: clock })
+  const was = seen.get(u.id)
+  const now = new Map<number, { x: number; y: number; a: number }>()
+  for (const q of u.crew) {
+    const p = memberPos(u, q, k)
+    now.set(q.k, { x: p.x, y: p.y, a: q.a })
   }
-  standing.set(u.id, left)
-  for (let i = 0; i < left; i++) {
-    const p = memberAt(u, i, k)
-    // A little sway each, so they don't stand like posts.
-    const rot = face + (moving ? 0 : Math.sin(clock * 0.9 + i * 1.7) * 0.12)
-    const st: HullState = { detached: 0, scorch: 0, variant: 0, pose: poseAt(m, moving, d, sq.size * 0.55, i) }
-    drawHull(ctx, m, p.x, p.y, rot, size, zdpr, st, { alpha })
+  // Members gone since the last frame fell where they stood.
+  if (was) for (const [key, p] of was) if (!now.has(key)) bodies.push({ x: p.x, y: p.y, rot: p.a + Math.PI / 2 + (key % 2 ? 0.6 : -0.5), m, size, at: clock })
+  seen.set(u.id, now)
+  // Shadows and rims at their feet.
+  ctx.save()
+  ctx.globalAlpha *= alpha
+  ctx.fillStyle = 'rgba(8, 10, 14, 0.35)'
+  ctx.beginPath()
+  for (const p of now.values()) {
+    ctx.moveTo(p.x + size * 0.42, p.y + 1.5 / z)
+    ctx.ellipse(p.x, p.y + 1.5 / z, size * 0.42, size * 0.36, 0, 0, Math.PI * 2)
   }
+  ctx.fill()
+  ctx.strokeStyle = rim
+  ctx.globalAlpha *= 0.55
+  ctx.lineWidth = Math.max(1 / z, 1)
+  ctx.beginPath()
+  for (const p of now.values()) {
+    ctx.moveTo(p.x + size * 0.46, p.y)
+    ctx.ellipse(p.x, p.y, size * 0.46, size * 0.4, 0, 0, Math.PI * 2)
+  }
+  ctx.stroke()
+  ctx.restore()
+  for (const q of u.crew) {
+    const p = now.get(q.k)!
+    // Each its own walk: by how far it has gone, standing once it stops.
+    const key = `${u.id}:${q.k}`
+    let st = steps.get(key)
+    if (!st) steps.set(key, (st = { x: q.x, y: q.y, d: q.k * sq.size * 0.3, moved: -1 }))
+    const dd = Math.hypot(q.x - st.x, q.y - st.y)
+    if (dd > 0.05) st.moved = clock
+    st.d += dd
+    st.x = q.x
+    st.y = q.y
+    const moving = clock - st.moved < 0.2
+    const pose = poseAt(m, moving, st.d, sq.size * 0.55, 0)
+    // Standing, a little sway each, so they don't stand like posts.
+    const rot = q.a + Math.PI / 2 + (moving ? 0 : Math.sin(clock * 0.9 + q.k * 1.7) * 0.1)
+    drawHull(ctx, m, p.x, p.y, rot, size, zdpr, { detached: 0, scorch: 0, variant: 0, pose }, { alpha })
+  }
+  if (steps.size > 4000) steps.clear()
+}
+
+/** How far squad `u` reaches from its middle as drawn (world units), for its selection ring. */
+export function squadRing(u: Unit, z: number) {
+  const sq = u.t.ground!.squad!
+  const k = Math.max(1, SQUAD_MIN_PX / (u.t.size * z))
+  return squadReach(u) * k + sq.size * k * 0.5
 }
 
 /** Squad `u` is destroyed: its last members fall where they stood. */
@@ -85,11 +126,8 @@ export function squadFell(u: Unit, clock: number) {
   const sq = u.t.ground?.squad
   const m = sq && memberModel(sq.member)
   if (!sq || !m) return
-  for (let i = 0; i < membersLeft(u); i++) {
-    const p = memberAt(u, i)
-    bodies.push({ x: p.x, y: p.y, rot: u.a + Math.PI / 2 + (i % 2 ? 0.6 : -0.5), m, size: sq.size, at: clock })
-  }
-  standing.delete(u.id)
+  for (const q of u.crew ?? []) bodies.push({ x: q.x, y: q.y, rot: q.a + Math.PI / 2 + (q.k % 2 ? 0.6 : -0.5), m, size: sq.size, at: clock })
+  seen.delete(u.id)
 }
 
 /** The fallen members, under the units: a puff of dust as each drops, then the body, dark, fading. */
