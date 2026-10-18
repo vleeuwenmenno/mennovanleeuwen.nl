@@ -305,6 +305,29 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // The Razor hover bike (tier 1, Vehicle Foundry): a slim grey bike with two long prongs out in
+  // front and pulse guns under them, a rocket pod either side, a glowing drive at the back, and a
+  // battle droid riding it.
+  'd-g-razor': {
+    w: 50,
+    h: 100,
+    spec: () => ({
+      breakStyle: 'bands',
+      parts: [
+        ...sym(part('prong', capsule([-8, -18], [-12, -48], 3.4, 2.2), 'metal', 1, { lift: 6 })),
+        ...sym(part('gun', capsule([-13, -28], [-13, -46], 1.9, 1.4), 'dark', 2, { lift: 7 })),
+        part('body', capsule([0, -28], [0, 30], 9, 7), 'hull', 2, {
+          lift: 8,
+          details: [{ k: 'shape', pts: box(0, -18, 6, 14), tone: 'accent' }, { k: 'line', pts: [[-7, 14], [7, 14]], minPx: 50 }],
+        }),
+        ...sym(part('pod', capsule([-16, 4], [-16, 22], 5.2, 5), 'hull2', 3, { lift: 9, details: [{ k: 'shape', pts: circle(-16, 2, 2.6, 8), tone: 'dark' }] })),
+        part('drive', circle(0, 36, 8.5, 14), 'hull2', 3, { lift: 9, details: [{ k: 'lights', pts: [[0, 38]], r: 3.2, tone: 'glow' }] }),
+        ...sym(part('arm', capsule([-6, 6], [-10, -12], 2.2, 2), 'trim', 4, { lift: 12 })),
+        part('rider', box(0, 8, 14, 12), 'trim', 4, { lift: 12 }),
+        part('head', capsule([0, 2], [0, -16], 4.6, 3.4), 'trim', 5, { lift: 14 }),
+      ],
+    }),
+  },
   // A battle droid, one member of a squad (GroundSpec `squad`): a thin tan frame, its long head
   // jutting forward, a backpack, a blaster held out in front. It walks on long thin legs (poses 1
   // and 2 mid-stride).

@@ -271,6 +271,52 @@ export const GROUND: GroundModels = {
       }
     },
   },
+  // The Racer beast (tier 1, Vehicle Nest): a long-legged runner, its back plated in purple with a
+  // double row of barbed spine darts, a narrow head with jaws, a whip of a tail. It trots on four
+  // legs (poses 1 and 2: a front leg and the other side's back leg forward together).
+  's-g-racer': {
+    w: 72,
+    h: 100,
+    spec: () => {
+      // Each leg's hip (its y; x is 10 either side) and where its foot rests (left side).
+      const legs = [{ hy: -14, fx: -30, fy: -34 }, { hy: 16, fx: -30, fy: 36 }]
+      const parts = [0, 1, 2].flatMap((pose) =>
+        [-1, 1].flatMap((side) =>
+          legs.flatMap((l, j) => {
+            // Diagonal pairs: left front with right back, right front with left back.
+            const a = (j === 0) === (side < 0)
+            const fy = l.fy + (pose === 0 ? 0 : (pose === 1) === a ? -14 : 14)
+            const fx = -side * l.fx
+            const name = `${side < 0 ? 'L' : 'R'}${j}${pose}`
+            return [
+              part(`leg${name}`, capsule([side * 10, l.hy], [fx, fy], 4.2, 2.4), 'metal', 1, { lift: 5, pose }),
+              part(`claw${name}`, circle(fx, fy, 3.2, 8), 'dark', 2, { lift: 5, pose }),
+            ]
+          }),
+        ),
+      )
+      return {
+        breakStyle: 'bands',
+        walk: [1, 2],
+        parts: [
+          ...parts,
+          part('tail', capsule([0, 24], [0, 48], 4.5, 1.5), 'hull2', 2, { lift: 6 }),
+          part('body', capsule([0, -18], [0, 24], 13, 10), 'hull2', 3, { lift: 8 }),
+          part('back', capsule([0, -10], [0, 22], 10, 8), 'accent', 4, {
+            lift: 10,
+            details: [{ k: 'line', pts: [[-9, 0], [9, 0]] }, { k: 'line', pts: [[-8, 12], [8, 12]], minPx: 40 }],
+          }),
+          ...sym(part('spineA', capsule([-5, -6], [-10, 6], 2.4, 1), 'trim', 5, { lift: 12 })),
+          ...sym(part('spineB', capsule([-5, 6], [-10, 18], 2.4, 1), 'trim', 5, { lift: 12 })),
+          ...sym(part('jaw', capsule([-4, -40], [-7, -49], 2.2, 1), 'metal', 4, { lift: 8 })),
+          part('head', capsule([0, -22], [0, -42], 8, 5), 'hull', 5, {
+            lift: 10,
+            details: [{ k: 'lights', pts: [[-4, -36], [4, -36]], r: 1.5, tone: 'aid' }],
+          }),
+        ],
+      }
+    },
+  },
   // A swarmling, one bug of a pack (GroundSpec `squad`): a purple carapace over its abdomen, a pale
   // thorax and head, mandibles, six legs. It scuttles on alternate tripods (poses 1 and 2: one
   // front leg, the other side's middle one and the back one forward together).

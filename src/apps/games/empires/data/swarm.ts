@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -297,7 +297,23 @@ const GROUND: UnitType[] = [
     id: 's-g-scout', faction: 'swarm', name: 'Skitterling', sprite: 'swarm-g-scout',
     blurb: 'A quick six-legged skitterer that spits bolts of acid. The fastest thing on the ground and the first to find the enemy, but it bursts under any real fire.',
     hull: 110, cost: 80, build: 8, speed: 175, turn: 6, ground: { radius: 10, sight: 12 },
-    weapons: [groundWeapon('pulse', 8, { arc: 0.35, cooldown: 0.5 })],
+    weapons: [groundWeapon('pulse', 9.5, { arc: 0.35, cooldown: 0.5 })],
+  }),
+  // Tier 1: the fast units of the Brood Chamber and the Vehicle Nest (trained there, phase 4a).
+  groundSquad({
+    id: 's-g-swarmlings', faction: 'swarm', name: 'Swarmling pack', sprite: 'swarm-g-swarmlings',
+    blurb: 'Six swarmlings that spit acid bolts as they come and tear with their claws up close. The quickest feet on the ground; each one lost is a mouth less.',
+    hull: 230, cost: 90, build: 9, speed: 95, turn: 5, ground: {},
+    squad: { n: 6, member: 's-gm-swarmling', size: 14, spacing: 11 },
+    role: { role: 'Infantry', strong: ['light units', 'engineers', 'close in'], weak: ['splash', 'heavy armour'] },
+    weapons: [groundWeapon('pulse', 2.2, { range: 128, cooldown: 0.9 }), groundWeapon('pulse', 3, { range: 40, cooldown: 0.5 })],
+  }),
+  groundFast({
+    id: 's-g-racer', faction: 'swarm', name: 'Racer beast', sprite: 'swarm-g-racer',
+    blurb: 'A long-legged runner that flings barbed spine darts from its back and bites what it catches. The darts home in and bite deep into armour; light, quick targets shake them off.',
+    hull: 320, cost: 105, build: 11, speed: 160, turn: 4, ground: { radius: 13 },
+    role: { role: 'Raider', strong: ['armour (spine darts)', 'speed'], weak: ['light units', 'massed fire'] },
+    weapons: [groundWeapon('rocket', 46, { range: 224, cooldown: 1.6, arc: 0.6 }), groundWeapon('pulse', 9, { range: 40, cooldown: 0.7, arc: 0.8 })],
   }),
 ]
 

@@ -13,13 +13,13 @@
 //    every shape the sim lays out (ground/world.ts CRYSTAL_SHAPES).
 // 5. Models that walk (squads' members, walkers; Model `walk`): 2 to 4 poses, each in the walk with
 //    legs of its own, the rest pose (0) with its own legs, and nothing posed outside the walk. The
-//    dev test squads and walker (ground/testWeapons.ts) are checked with the rest, each squad's
-//    member model in its own faction's folder.
+//    dev test walker (ground/testWeapons.ts) is checked with the rest, and each squad's member model
+//    is in its own faction's folder.
 
 import { UNIT } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
 import { buildGroundModel, crystalModel, crystalShapes, groundModelIds } from '../src/apps/games/empires/models/ground.ts'
-import { registerSquadTest } from '../src/apps/games/empires/ground/testWeapons.ts'
+import { registerWalkerTest } from '../src/apps/games/empires/ground/testWeapons.ts'
 import { CRYSTAL_SHAPES } from '../src/apps/games/empires/ground/world.ts'
 import type { Model } from '../src/apps/games/empires/models/types.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
@@ -33,7 +33,7 @@ const ok = (cond: boolean, msg: string) => {
   }
 }
 
-registerSquadTest()
+registerWalkerTest()
 const real = Object.values(UNIT).filter((t) => !!t.ground)
 const groundModel = (id: string) => modelFor(real.find((t) => t.id === id)!)
 // 1. Coverage both ways (a squad's model is its member's).

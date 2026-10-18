@@ -207,6 +207,16 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
     ctx.toast('Squad test: our squads and a walker against theirs', 'info')
     redraw()
   }
+  /** Ground battles: the six tier 1 units, ours against the same six of theirs, at the camera. */
+  const tierTest = async () => {
+    const { spawnTierTest } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnTierTest(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Tier 1 test: the six tier 1 units, ours against theirs', 'info')
+    redraw()
+  }
   const spawnNow = (at: Pt) => {
     const f = form.current
     const world = ctx.world()
@@ -388,8 +398,11 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
               <button className="ew-chip" onClick={() => void weaponTest()} data-tip="Ground battles: test units carrying each of the seven ground weapons, ours against the first enemy's, at the camera">
                 Weapon test
               </button>
-              <button className="ew-chip" onClick={() => void squadTest()} data-tip="Ground battles: three test squads of ours and a walker against three of the first enemy's, at the camera">
+              <button className="ew-chip" onClick={() => void squadTest()} data-tip="Ground battles: three of our foot squads and a test walker against three of the first enemy's squads, at the camera">
                 Squad test
+              </button>
+              <button className="ew-chip" onClick={() => void tierTest()} data-tip="Ground battles: every faction's tier 1 foot squad and fast vehicle, six of ours against the same six of the first enemy's, at the camera">
+                Tier 1 test
               </button>
             </div>
           )}

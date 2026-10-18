@@ -9,10 +9,9 @@ import { TILE } from './types.ts'
 // check:ground register them). One per weapon and faction, drawn as that faction's Scout with the
 // weapon on a turret on its back, medium armour, slow. Not in any lobby or Codex.
 //
-// Also test squads and a walker, for the walk cycles (the cheat panel's "Squad test", the
-// ground-squads perf scene, check:ground): a squad of five troopers, one of five battle droids and a
-// pack of six swarmlings, each its faction's tier 1 foot unit as planned (phase 4 makes the real
-// ones), and a two-legged walker with a turret on its back.
+// Also a test walker (a two-legged walker with a turret on its back) to show walk cycles on a
+// vehicle, and spawns of the real tier 1 units for the cheat panel's "Squad test" and "Tier 1 test",
+// the ground-squads perf scene and check:ground.
 
 /** Each weapon's test gun: its damage (a beam's and a spray's a second). */
 const TEST_GUN: Record<GroundWeaponKind, Weapon> = {
@@ -79,91 +78,72 @@ export function spawnWeaponTest(w: World, me: Owner, foe: Owner, x: number, y: n
   return out
 }
 
-/** Each faction's test squad: its tier 1 foot unit as the plan has it. */
-const SQUADS: Record<FactionId, { id: string; name: string; blurb: string; hull: number; speed: number; member: string; n: number; size: number; spacing: number; gun: Weapon }> = {
-  republic: {
-    id: 'r-gt-troopers', name: 'Test trooper squad', blurb: 'A dev test squad: five clone troopers with pulse rifles.',
-    hull: 300, speed: 62, member: 'r-gm-trooper', n: 5, size: 16, spacing: 12, gun: groundWeapon('pulse', 5, { range: 176, cooldown: 0.9 }),
-  },
-  droid: {
-    id: 'd-gt-droids', name: 'Test battle droid squad', blurb: 'A dev test squad: five battle droids with pulse blasters.',
-    hull: 260, speed: 58, member: 'd-gm-droid', n: 5, size: 16, spacing: 12, gun: groundWeapon('pulse', 4.5, { range: 176, cooldown: 0.8 }),
-  },
-  swarm: {
-    id: 's-gt-pack', name: 'Test swarmling pack', blurb: 'A dev test pack: six swarmlings spitting acid bolts.',
-    hull: 240, speed: 82, member: 's-gm-swarmling', n: 6, size: 14, spacing: 11, gun: groundWeapon('pulse', 4, { range: 128, cooldown: 0.7 }),
-  },
+/** Each faction's tier 1 units: its foot squad (foot factory) and its fast vehicle (vehicle factory). */
+export const TIER1: Record<FactionId, { foot: string; vehicle: string }> = {
+  republic: { foot: 'r-g-troopers', vehicle: 'r-g-raider' },
+  droid: { foot: 'd-g-droids', vehicle: 'd-g-razor' },
+  swarm: { foot: 's-g-swarmlings', vehicle: 's-g-racer' },
 }
-/** Faction `f`'s test squad, and the walker. */
-export const testSquadId = (f: FactionId) => SQUADS[f].id
 export const TEST_WALKER = 'r-gt-walker'
 
-/** Registers the test squads and the walker (once). */
-export function registerSquadTest() {
-  for (const f of FACTION_IDS) {
-    const q = SQUADS[f]
-    if (UNIT[q.id]) continue
-    const scout = UNIT[`${PREFIX[f]}-g-scout`]
-    UNIT[q.id] = {
-      ...scout,
-      id: q.id,
-      name: q.name,
-      blurb: q.blurb,
-      aspect: 1,
-      size: 36,
-      hull: q.hull,
-      speed: q.speed,
-      turn: 3.5,
-      cost: 100,
-      weapons: [q.gun],
-      hardpoints: [],
-      role: { role: 'Infantry', strong: ['light units', 'engineers'], weak: ['heavy armour', 'splash'] },
-      ground: { ...scout.ground!, radius: 14, accel: 200, sight: 8, armour: 'light', look: q.member, squad: { n: q.n, member: q.member, size: q.size, spacing: q.spacing } },
-    }
+/** Registers the test walker (once). */
+export function registerWalkerTest() {
+  if (UNIT[TEST_WALKER]) return
+  const scout = UNIT['r-g-scout']
+  UNIT[TEST_WALKER] = {
+    ...scout,
+    id: TEST_WALKER,
+    name: 'Test walker',
+    blurb: 'A dev test walker: two legs, a pulse cannon turret on its back.',
+    aspect: 0.8,
+    size: 40,
+    hull: 520,
+    speed: 52,
+    turn: 2.2,
+    cost: 200,
+    weapons: [],
+    hardpoints: [{ ...gun('flak', 5, 4.6, 0.32, 400, groundWeapon('pulse', 14, { range: 224, cooldown: 1 })), key: 'tur' }],
+    role: { role: 'Walker', strong: ['light units'], weak: ['rockets'] },
+    ground: { ...scout.ground!, radius: 15, accel: 160, sight: 9, armour: 'medium', look: undefined },
   }
-  if (!UNIT[TEST_WALKER]) {
-    const scout = UNIT['r-g-scout']
-    UNIT[TEST_WALKER] = {
-      ...scout,
-      id: TEST_WALKER,
-      name: 'Test walker',
-      blurb: 'A dev test walker: two legs, a pulse cannon turret on its back.',
-      aspect: 0.8,
-      size: 40,
-      hull: 520,
-      speed: 52,
-      turn: 2.2,
-      cost: 200,
-      weapons: [],
-      hardpoints: [{ ...gun('flak', 5, 4.6, 0.32, 400, groundWeapon('pulse', 14, { range: 224, cooldown: 1 })), key: 'tur' }],
-      role: { role: 'Walker', strong: ['light units'], weak: ['rockets'] },
-      ground: { ...scout.ground!, radius: 15, accel: 160, sight: 9, armour: 'medium', look: undefined },
-    }
-  }
+}
+
+/** Spawns `types` for `o` in a column on its side (`side` -1 left, 1 right) of (x, y), sent across
+ * with attack-move. */
+function column(w: World, o: Owner, side: -1 | 1, types: string[], x: number, y: number, out: Unit[]) {
+  const nav = w.ground!.nav
+  const ids: number[] = []
+  types.forEach((id, i) => {
+    let px = x + side * TILE * 7
+    let py = y + (i - (types.length - 1) / 2) * TILE * 2.2
+    for (let s = 0; s < 6 && !standsAt(nav, 1, px, py); s++) px -= side * TILE
+    if (!standsAt(nav, 1, px, py)) py += TILE
+    const u = spawn(w, id, o, px, py, side < 0 ? 0 : Math.PI)
+    ids.push(u.id)
+    out.push(u)
+  })
+  cmdMove(w, o, ids, x - side * TILE * 4, y, true)
 }
 
 /**
- * The squad test: three of `me`'s faction's test squads and the walker for `me`, three of `foe`'s
- * faction's squads for `foe`, facing each other across (x, y) and sent at each other with
+ * The squad test: `per` of `me`'s faction's foot squads and the test walker for `me`, `per` of
+ * `foe`'s faction's squads for `foe`, facing each other across (x, y) and sent at each other with
  * attack-move. Returns the units spawned.
  */
 export function spawnSquadTest(w: World, me: Owner, foe: Owner, x: number, y: number, per = 3): Unit[] {
-  registerSquadTest()
+  registerWalkerTest()
   const out: Unit[] = []
-  const nav = w.ground!.nav
-  for (const [o, side] of [[me, -1], [foe, 1]] as const) {
-    const ids: number[] = []
-    const types = [...Array(per).fill(testSquadId(w.players[o].faction)), ...(side < 0 ? [TEST_WALKER] : [])]
-    types.forEach((id: string, i) => {
-      let px = x + side * TILE * 7
-      let py = y + (i - (types.length - 1) / 2) * TILE * 2.2
-      for (let s = 0; s < 6 && !standsAt(nav, 1, px, py); s++) px -= side * TILE
-      if (!standsAt(nav, 1, px, py)) py += TILE
-      const u = spawn(w, id, o, px, py, side < 0 ? 0 : Math.PI)
-      ids.push(u.id)
-      out.push(u)
-    })
-    cmdMove(w, o, ids, x - side * TILE * 4, y, true)
-  }
+  column(w, me, -1, [...Array(per).fill(TIER1[w.players[me].faction].foot), TEST_WALKER], x, y, out)
+  column(w, foe, 1, Array(per).fill(TIER1[w.players[foe].faction].foot), x, y, out)
+  return out
+}
+
+/** The tier 1 test: all six tier 1 units (every faction's foot squad and fast vehicle) for `me` and
+ * the same six for `foe`, facing each other across (x, y) and sent at each other. */
+export function spawnTierTest(w: World, me: Owner, foe: Owner, x: number, y: number): Unit[] {
+  const six = FACTION_IDS.flatMap((f) => [TIER1[f].foot, TIER1[f].vehicle])
+  const out: Unit[] = []
+  column(w, me, -1, six, x, y, out)
+  column(w, foe, 1, six, x, y, out)
   return out
 }

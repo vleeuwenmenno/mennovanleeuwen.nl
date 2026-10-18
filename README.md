@@ -2747,7 +2747,7 @@ brood chambers) drawn in [`swarm/mounts.ts`](src/apps/games/empires/models/swarm
   as it steps. A unit steps through its poses by how far it has walked, so faster units step faster,
   and holds its rest pose standing. Ships, stations and vehicles declare no poses and paint as
   before. In the ground-squads perf scene (about a hundred members walking and fighting) the walk
-  cycles take 79 bitmaps and 0.72 MB of the cache.
+  cycles take 77 bitmaps and 0.72 MB of the cache.
 - **Damage:** scorch marks spread as the hull drops (four levels, with burnt-through holes at the
   worst); parts come off at their hull share and fly away tumbling and smoking; wrecked mounts
   show broken. All of it follows from the battle's own state.
@@ -3690,8 +3690,30 @@ big ones).
 | Faction | Scout | Hull | Cost, time | Speed | Guns |
 | --- | --- | --- | --- | --- | --- |
 | Republic | Pathfinder speeder: a slim repulsor wedge | 140 | 90, 9 s | 165 | Twin pulse lasers along its nose (6 each) |
-| Confederacy | Probe droid: a hovering sensor head (sight 13) | 120 | 85, 8 s | 150 | Pulse blaster (11, 0.7 s) |
-| Swarm | Skitterling: a six-legged runner | 110 | 80, 8 s | 175 | Spit bolts (8, 0.5 s) |
+| Confederacy | Probe droid: a hovering sensor head (sight 13) | 120 | 85, 8 s | 150 | Pulse blaster (14.5, 0.7 s) |
+| Swarm | Skitterling: a six-legged runner | 110 | 80, 8 s | 175 | Spit bolts (9.5, 0.5 s) |
+
+**Tier 1 units** are the fast units of the factories (the foot factory trains the squad, the vehicle
+factory the vehicle; the factories themselves are phase 4a's): small and simple, light armour,
+pop 1, sight 8 or 9 tiles, a little dearer than a Scout (GroundSpec `tier: 1`, which the factories'
+tier upgrades will check). Their numbers were set by fights of equal kyber (about 720 a side)
+between every pair of them and the Scouts: the squads, the Raider, the Razor and the Scouts trade
+about evenly (each pair within about a third of the kyber either way), while the Racer, an
+anti-armour unit, loses to light units and beats medium armour by as much.
+
+| Faction | Unit | Factory | Hull | Cost, time | Speed | Weapons |
+| --- | --- | --- | --- | --- | --- | --- |
+| Republic | Trooper squad: five troopers in white armour | Barracks | 300 | 110, 12 s | 70 | Pulse rifles (3.5 each a trooper, 5.5 tiles, 0.9 s) |
+| Republic | Raider hover tank: a white wedge on a repulsor skirt | Vehicle Factory | 340 | 150, 14 s | 125 | Pulse cannon in a turret that turns on its own (22, 7 tiles, 1 s) |
+| Confederacy | Battle droid squad: five tan droids | Bot Factory | 250 | 95, 10 s | 66 | Pulse blasters (2.7 each a droid, 5.5 tiles, 0.8 s) |
+| Confederacy | Razor hover bike: a droid on a pronged bike | Vehicle Foundry | 220 | 120, 12 s | 180 | Twin pulse guns (6 each, 0.6 s) and light rockets (16, 7 tiles, 2.6 s) |
+| Swarm | Swarmling pack: six purple bugs | Brood Chamber | 230 | 90, 9 s | 95 | Spit bolts (2.2 each a bug, 4 tiles, 0.9 s) and claws (3, close in, 0.5 s) |
+| Swarm | Racer beast: a four-legged runner that trots | Vehicle Nest | 320 | 105, 11 s | 160 | Spine darts, homing (46, 7 tiles, 1.6 s), and a bite (9, close in) |
+
+The squads and the Racer walk (their legs step through poses, see Walk cycles); the Raider's turret
+turns on its hull. The damage table needs no change for squads: they are light armour, so pulse
+weapons and (later) swarm rockets and sprays, the anti-swarm weapons, cut them down, and rockets
+and shells, the anti-armour ones, do little. Splash hits a squad once, as one unit.
 
 **Command Centers** carry a light defence turret on their roof: pulse, 14 damage, 10 tiles, every
 0.8 seconds.
@@ -3725,15 +3747,16 @@ When zoomed far out a squad's members grow and spread so it stays about 24 pixel
 weapon for us and for the first enemy at the camera, in two rows facing each other (artillery
 further back), and sends them at each other: every weapon's effects side by side. The test units
 are each faction's Scout with the weapon on a turret, medium armour and 600 hull, and appear in no
-lobby or Codex. The panel's *Squad test* spawns three test squads of ours and a test walker against
-three of the first enemy's at the camera: a trooper squad (five troopers with pulse rifles), a
-battle droid squad (five, pulse blasters) or a swarmling pack (six, spit bolts), each its faction's
-tier 1 foot unit as planned, and a two-legged walker with a pulse turret on its back.
+lobby or Codex. The panel's *Squad test* spawns three of our faction's foot squads and a test walker
+(two legs, a pulse turret on its back, walking through its poses) against three of the first
+enemy's squads at the camera; its *Tier 1 test* spawns all six tier 1 units (every faction's foot
+squad and fast vehicle) for us and the same six for the first enemy, sent at each other.
 
 ```sh
 pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units) and a squad battle (test squads and a walker: members falling one by one, never below one while alive, a squad destroyed), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed) and a tier 1 battle (all six tier 1 units firing, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad firing one shot per member standing, from where each stands; artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons
 pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule
-pnpm check:ground-models # every ground unit (the dev test squads and walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
+pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
 pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
 ```
 
@@ -3834,7 +3857,7 @@ builds, as the check's server is) with three dozen vehicles of both sides drivin
 ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
 canvas's: the ground layer is a canvas of its own under it); the same battle with the dev weapon
 test spawned three times over, 42 test units fighting with all seven ground weapons; the same battle
-with the dev squad test, 20 test squads and two walkers walking and fighting (it also counts the
+with the dev squad test, 20 foot squads and two test walkers walking and fighting (it also counts the
 bitmaps cached, walk poses included); the WebGL2 ground layer alone on
 Ashwater Crossing, panning over the river with the water moving (it counts its own GL draw calls
 and texture uploads, which the canvas counters don't see); the galactic conquest map of a new and a late

@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -184,7 +184,23 @@ const GROUND: UnitType[] = [
     id: 'd-g-scout', faction: 'droid', name: 'Probe droid', sprite: 'droid-g-scout',
     blurb: 'A hovering probe droid with a pulse blaster under its sensor head. Fast and far-sighted, cheap and thin-skinned: a scout and an engineer hunter.',
     hull: 120, cost: 85, build: 8, speed: 150, turn: 5.5, ground: { radius: 10, sight: 13 },
-    weapons: [groundWeapon('pulse', 11, { arc: 0.4, cooldown: 0.7 })],
+    weapons: [groundWeapon('pulse', 14.5, { arc: 0.4, cooldown: 0.7 })],
+  }),
+  // Tier 1: the fast units of the Bot Factory and the Vehicle Foundry (trained there, phase 4a).
+  groundSquad({
+    id: 'd-g-droids', faction: 'droid', name: 'Battle droid squad', sprite: 'droid-g-droids',
+    blurb: 'Five battle droids with pulse blasters: cheap, fast to build, and made to be spent. Each droid lost is a blaster less.',
+    hull: 250, cost: 95, build: 10, speed: 66, turn: 4, ground: {},
+    squad: { n: 5, member: 'd-gm-droid', size: 16, spacing: 12 },
+    role: { role: 'Infantry', strong: ['light units', 'engineers', 'numbers'], weak: ['splash', 'heavy armour'] },
+    weapons: [groundWeapon('pulse', 2.7, { range: 176, cooldown: 0.8 })],
+  }),
+  groundFast({
+    id: 'd-g-razor', faction: 'droid', name: 'Razor hover bike', sprite: 'droid-g-razor',
+    blurb: 'A droid on a fast hover bike, twin pulse guns under its prongs and a pod of light rockets. Strikes and runs; the rockets bite into armour, but it bursts under fire.',
+    hull: 220, cost: 120, build: 12, speed: 180, turn: 4.5, ground: { radius: 12 },
+    role: { role: 'Raider', strong: ['hit and run', 'armour (rockets)'], weak: ['massed fire', 'splash'] },
+    weapons: [groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('rocket', 16, { range: 224, arc: 0.6 })],
   }),
 ]
 
