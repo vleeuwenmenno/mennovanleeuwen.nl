@@ -278,7 +278,7 @@ const GROUND: UnitType[] = [
   }),
   groundCenter({
     id: 'r-g-center', faction: 'republic', name: 'Command Center', sprite: 'republic-g-center',
-    blurb: 'A white armoured block with a landing pad and a comms dish. It trains engineers, takes in the kyber they mine, supports 5 units, and buildings go up within 14 tiles of it.',
+    blurb: 'A white armoured block with a landing pad and a comms dish. It trains engineers, takes in the kyber they mine and supports 5 units.',
     hull: 5200, cost: 1200, build: 60, ground: { trains: ['r-g-engineer'] },
   }),
   groundSupply({

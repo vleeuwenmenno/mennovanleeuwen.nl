@@ -1198,11 +1198,10 @@ export type TileCheck = { tc: number; tr: number; ok: boolean }
  * when it may go there). The ghost under the cursor shows this. */
 export type GroundPlacement = { why: string | null; tc: number; tr: number; x: number; y: number; cost: number; tiles: TileCheck[]; door: TileCheck[] }
 
-/** How far (in tiles, middle to middle) a standalone building (a Command Center) keeps from every
- * enemy building we know of. */
-export const STANDALONE_GAP = 20
-/** Command range of a building whose type names none, in tiles. */
-const DEFAULT_RANGE = 6
+/** How far (in tiles, middle to middle) every building keeps from the enemy buildings we know of: no
+ * building up against the enemy's base or walling in its door. Otherwise a building may go anywhere
+ * our engineers can reach, however far from our Command Centers. */
+export const ENEMY_GAP = 20
 
 /** A footprint a team knows of: its tiles, and whether it is an enemy's. */
 type Known = { c: number; r: number; fw: number; fh: number; enemy: boolean }
@@ -1237,20 +1236,11 @@ const doorOf = (f: Known, c: number, r: number) => r === f.r + f.fh && c >= f.c 
 /** Why one tile can't be under a building, in the order the reasons are reported. */
 const TILE_RULES = ['Not on buildable ground', 'A deposit is in the way', 'The ground must be level', 'Something is built there', "It would block a building's door"] as const
 
-/** The command range circles of `owner`'s buildings (sites nobody has started don't count), in world
- * units: where its other buildings may go. */
-export function commandAreas(w: World, owner: Owner): { x: number; y: number; r: number }[] {
-  const out: { x: number; y: number; r: number }[] = []
-  for (const u of w.units) if (!u.dead && u.owner === owner && u.foot?.on) out.push({ x: u.x, y: u.y, r: (spec(u.t).range ?? DEFAULT_RANGE) * TILE })
-  return out
-}
-
 /**
  * Where building `unitId` would go with its footprint centred as near (x, y) as the grid allows. The
  * rules, in order: every tile buildable, on one level and free of deposits, buildings and other
- * buildings' doors; inside the command range of one of our buildings, or for a standalone one
- * anywhere at least STANDALONE_GAP tiles from a known enemy building; no enemy unit we see on it;
- * its door row free; enough credits. What a team doesn't see doesn't stop it (the land itself is
+ * buildings' doors; at least ENEMY_GAP tiles from a known enemy building (but anywhere else, however
+ * far from our Command Centers); no enemy unit we see on it; its door row free; enough kyber. What a team doesn't see doesn't stop it (the land itself is
  * known everywhere): a site on ground where a hidden enemy building stands is given up, refunded,
  * when its engineer gets there.
  */
@@ -1299,17 +1289,14 @@ export function groundPlacement(w: World, owner: Owner, unitId: string, x: numbe
   }
   const out = (why: string | null): GroundPlacement => ({ why, tc, tr, x: cx, y: cy, cost, tiles, door })
   if (worst < TILE_RULES.length && worst !== 4) return out(TILE_RULES[worst])
-  // Command range: near one of our buildings, or (standalone) away from the enemy's.
-  const inRange = commandAreas(w, owner).some((a) => (a.x - cx) * (a.x - cx) + (a.y - cy) * (a.y - cy) <= a.r * a.r)
-  if (t.ground.standalone) {
-    const gap = STANDALONE_GAP * TILE
-    const near = knownFeet(w, owner).some((f) => {
-      const dx = cx - (f.c + f.fw / 2) * TILE
-      const dy = cy - (f.r + f.fh / 2) * TILE
-      return f.enemy && dx * dx + dy * dy < gap * gap
-    })
-    if (near) return out(`Too close to an enemy building (keep ${STANDALONE_GAP} tiles away)`)
-  } else if (!inRange) return out('Outside the command range of your buildings')
+  // Away from the enemy's buildings that we know of.
+  const gap = ENEMY_GAP * TILE
+  const near = knownFeet(w, owner).some((f) => {
+    const dx = cx - (f.c + f.fw / 2) * TILE
+    const dy = cy - (f.r + f.fh / 2) * TILE
+    return f.enemy && dx * dx + dy * dy < gap * gap
+  })
+  if (near) return out(`Too close to an enemy building (keep ${ENEMY_GAP} tiles away)`)
   // Enemy units we can see on it.
   const x0 = tc * TILE
   const y0 = tr * TILE
@@ -1325,6 +1312,23 @@ export function groundPlacement(w: World, owner: Owner, unitId: string, x: numbe
   return out(null)
 }
 
+/** Whether engineer `u` can drive to a tile next to a `fw` × `fh` footprint from tile (c, r). */
+function canReach(w: World, u: Unit, c: number, r: number, [fw, fh]: [number, number]) {
+  const nav = gs(w).nav
+  const k = size(u)
+  const start = nearestStand(nav, k, anchorAt(nav, k, u.x, u.y))
+  if (start < 0) return false
+  const piece = nav.piece[k - 1][start]
+  for (let rr = r - k; rr <= r + fh; rr++)
+    for (let cc = c - k; cc <= c + fw; cc++) {
+      if (rr > r - k && rr < r + fh && cc > c - k && cc < c + fw) continue
+      if (cc < 0 || rr < 0 || cc >= nav.cols || rr >= nav.rows) continue
+      const i = rr * nav.cols + cc
+      if (stands(nav, k, i) && nav.piece[k - 1][i] === piece) return true
+    }
+  return false
+}
+
 /** Engineers `crew` put up building `unitId` centred near (x, y): paid now, its site marked out (seen
  * by its owner only until work starts), the engineers sent to build it (`queued`: after their other
  * orders). Why not, or null. */
@@ -1333,6 +1337,8 @@ export function groundPlace(w: World, owner: Owner, crew: Unit[], unitId: string
   if (!builders.length) return crew.length ? "These engineers can't build that" : 'Select engineers to build it'
   const pl = groundPlacement(w, owner, unitId, x, y)
   if (pl.why) return pl.why
+  // Anywhere, as long as one of the engineers can drive up to it.
+  if (!builders.some((u) => canReach(w, u, pl.tc, pl.tr, spec(UNIT[unitId]).foot!))) return "Your engineers can't get there"
   const t = UNIT[unitId]
   spend(w, w.players[owner], pl.cost, 'structures', t.name)
   const site = spawn(w, unitId, owner, pl.x, pl.y, FACING)

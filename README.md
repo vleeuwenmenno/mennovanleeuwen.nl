@@ -3485,7 +3485,7 @@ size class and a small test building are registered by the check scripts only.
 Engineers are small vehicles and drones (no walking animation): size class 1, unarmed, sight 8
 tiles; they gather kyber, build and repair. Command Centers stand on 6 × 6 tiles, see 10 tiles, train
 their faction's engineer, take in the kyber engineers gather and support 5 units. Supply buildings
-stand on 3 × 3 tiles inside the command range and support 10 more each. Prices are in kyber (see
+stand on 3 × 3 tiles and support 10 more each. Prices are in kyber (see
 below), near the space game's: a battle starts with 1,600.
 
 | Faction | Engineer | Cost, time | Command Center | Hull | Supply building | Hull |
@@ -3511,15 +3511,17 @@ Command Centers are in its memory of buildings from the first second.
 every tile of the footprint and reports the first rule that fails, in this order:
 1. Every tile is buildable (no ramp, cliff, water or blocking prop), off crystal fields, on one
    level, and free of buildings and of the row in front of another building's door.
-2. It is inside the command range of one of our buildings (a Command Center reaches 14 tiles, others
-   6). A Command Center may instead go anywhere at least 20 tiles from an enemy building we know of.
-   The land is known everywhere from the start (a side always has eyes in orbit), so no tile needs
-   exploring first; enemies only count where we see or remember them.
+2. It is at least 20 tiles from every enemy building we know of (middle to middle), so nobody builds
+   up against the enemy's base or walls in its door. Otherwise there is no limit: no command range,
+   no distance from our Command Centers. The land is known everywhere from the start (a side always
+   has eyes in orbit), so no tile needs exploring first; enemies only count where we see or
+   remember them.
 3. No enemy unit we can see stands on it.
 4. The row of tiles in front of its door is open, so units can always roll out.
 5. There is enough kyber.
 
-A site placed on top of a building hidden in the fog is given up, refunded in full, when its
+The order also needs one of its engineers to be able to drive up to the footprint ("Your engineers
+can't get there" otherwise). A site placed on top of a building hidden in the fog is given up, refunded in full, when its
 engineer gets there.
 
 **Building** uses the space game's sites: placing pays at once, and until work starts the site is
@@ -3607,20 +3609,24 @@ differs:
   shows the terrain under the same veil.
 - **Building:** an engineer's panel has a card for each building it puts up (B, or the touch wheel's
   Build entry). The ghost under the pointer colours every tile of the footprint green or red, outlines
-  the row in front of its door, shows our command ranges for a building that needs one, and names
-  the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
+  the row in front of its door and names the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
   opened, then **Build here** or **Cancel**.
 - **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
   rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
-- **Kyber:** a right-click on a crystal field with engineers selected (or the touch wheel's Gather
-  kyber there) sets them gathering. The clusters are orange and dark-orange crystals in the models'
+- **Kyber:** a right-click on a crystal cluster with engineers selected (or the touch wheel's Gather
+  kyber, the first entry when the wheel opens on a cluster) sets them gathering. Hovering a cluster
+  with engineers selected says so: a crystal-and-pick cursor and a "Right-click: mine kyber" tag,
+  and an idle engineer's build line starts with "Right-click a kyber crystal to mine it". Each of
+  our gathering engineers shows the cluster it works: a thin dashed line in our colour from the
+  engineer to it (under the fog, like order lines), and corner ticks round every cluster ours are
+  working; its card says "Going to a crystal", "Mining a crystal: 14 of 20" or "Hauling to Command
+  Center". The clusters are orange and dark-orange crystals in the models'
   style ([`models/kyber.ts`](src/apps/games/empires/models/kyber.ts): faceted, cel shaded, a bold
   outline, light from the top left, three shapes) over a soft orange glow, drawn at least 18 pixels
   across and smaller the less they hold; they show under the fog veil (the land is known from
   orbit), and as orange dots on the minimap and the lobby's preview. An engineer carrying kyber
-  shows an orange crystal on its back, bigger as its load fills, and sparks while it mines; its
-  panel says what it is doing (mining, hauling a load in, building). A field running dry is a
-  toast. Kyber's icon and the economy panel's kyber are orange too.
+  shows an orange crystal on its back, bigger as its load fills, and sparks while it mines. A field
+  running dry is a toast. Kyber's icon and the economy panel's kyber are orange too.
 - The top bar shows kyber with its crystal icon and what was gathered a minute lately, the units
   against the cap, and an **idle engineer** button (with a count) that selects the next idle
   engineer and looks at it, round them all in turn. It leaves out ore, beacons and research. The

@@ -535,7 +535,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const wheelAcc = useRef(0)
   /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
   const pickedNode = useRef(-1)
-  const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0 })
+  const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0, crystal: -1 })
   // A long hover on a ship or structure brings up its unit card beside the cursor (on a capture
   // beacon, what it gives: `beacon`, its index).
   const [intel, setIntel] = useState<{ id: number; x: number; y: number; beacon?: number } | null>(null)
@@ -777,6 +777,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const repairHint = (id: number) => {
     const u = id ? world.current.byId.get(id) : undefined
     return u && (medicsFor(u).length || weldersFor(u).length) ? u.id : undefined
+  }
+  /** The kyber crystal cluster `i` (World `crystals`) as a spot to tag "Right-click: mine kyber",
+   * when our selection has engineers to mine it; null otherwise. */
+  const mineHint = (i: number) => {
+    const c = i >= 0 ? world.current.crystals?.[i] : undefined
+    if (!c || !(c.left > 0) || !mySelection().some((u) => u.owner === me && isEngineer(u.t))) return null
+    return { x: (c.c + 0.5) * 32, y: (c.r + 0.5) * 32 }
   }
   /** Sends repair ships to repair `unit`; false (and says why) when it can't be done. */
   const repairOrder = (unit: Unit, medics: Unit[], queued = false) => {
@@ -1805,6 +1812,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         place: placeGhost(),
         escortHint: mode.current === 'guard' ? escortHint(h.unit) : undefined,
         repairHint: mode.current === 'normal' && !touchLast.current ? repairHint(h.unit) : undefined,
+        mineHint: mode.current === 'normal' && !touchLast.current ? mineHint(h.crystal) : null,
         buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
@@ -1816,6 +1824,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // until the mode changes, so it is checked on the element itself).
       const fixing = v.repairHint !== undefined
       if (canvas.current && canvas.current.classList.contains('is-repair') !== fixing) canvas.current.classList.toggle('is-repair', fixing)
+      // The mining cursor, over a kyber crystal our selected engineers would mine on a right-click.
+      const mining = !!v.mineHint
+      if (canvas.current && canvas.current.classList.contains('is-mine') !== mining) canvas.current.classList.toggle('is-mine', mining)
       sound.ambience(paused.current ? 0 : dt)
       miniT -= dt
       const hideMine = deploying.current && !placed.current ? me : -1
@@ -2131,7 +2142,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
     }
     const h = pick(p.x, p.y)
-    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node, wreck: h.wreck }
+    // A ground battle: the kyber crystal cluster under the pointer, if any (a right-click mines it).
+    const crystal = !h.unit && world.current.ground ? (groundKit()?.crystalUnder(world.current, h.at.x, h.at.y) ?? -1) : -1
+    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node, wreck: h.wreck, crystal }
     const w0 = world.current
     const hover0 = !drag.current && e.pointerType !== 'touch'
     // (A beacon under the pointer, with no ship or structure over it, counts as minus its index plus one.)
@@ -2659,7 +2672,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           onPointerCancel={() => ((drag.current = null), (line.current = null), touches.current.clear(), (pinch.current = null), press.current.cancel())}
           onPointerLeave={(e) => {
             mouse.current.inside = false
-            hover.current = { unit: 0, hp: -1, node: -1, wreck: 0 }
+            hover.current = { unit: 0, hp: -1, node: -1, wreck: 0, crystal: -1 }
             // A finger "leaves" as it lifts: a unit card opened from the wheel stays up.
             if (!isTouch(e)) dropIntel()
           }}

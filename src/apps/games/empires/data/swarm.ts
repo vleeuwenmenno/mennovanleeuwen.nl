@@ -263,7 +263,7 @@ const GROUND: UnitType[] = [
   }),
   groundCenter({
     id: 's-g-center', faction: 'swarm', name: 'Hive Nexus', sprite: 'swarm-g-center',
-    blurb: 'A chitin mound round a glowing violet core. It grows Shaper drones, takes in the kyber they bring, supports 5 units, and buildings go up within 14 tiles of it.',
+    blurb: 'A chitin mound round a glowing violet core. It grows Shaper drones, takes in the kyber they bring and supports 5 units.',
     hull: 5400, cost: 1200, build: 60, ground: { trains: ['s-g-engineer'] },
   }),
   groundSupply({

@@ -19,22 +19,25 @@ export type GroundKit = {
   /** A new picture of the ground for the battle screen: the WebGL2 layer once it is in, else the 2D one. */
   layer(): GroundLayer
   placement(w: World, owner: Owner, unitId: string, x: number, y: number): GroundPlacement
-  commandAreas(w: World, owner: Owner): { x: number; y: number; r: number }[]
   /** Enemy buildings `me`'s team remembers, as last seen. */
   known(w: World, me: Owner): KnownBuilding[]
   /** The fog of war as a half-dark veil over the world outside `team`'s sight (never black: the land
    * is known from orbit), drawn in world coordinates. */
   fog(ctx: CanvasRenderingContext2D, w: World, team: number, reveal: boolean): void
-  /** The placement ghost's ground: our command ranges (for a building that needs one), each tile of
-   * the footprint green or red, and the row in front of its door; in world coordinates. */
+  /** The placement ghost's ground: each tile of the footprint green or red, and the row in front of
+   * its door; in world coordinates. */
   ghost(ctx: CanvasRenderingContext2D, w: World, me: Owner, unitId: string, p: GroundPlacement, zoom: number): void
   /** The minimap's ground: the terrain and the fog, into the box (ox, oy) at `s` pixels a world unit. */
   minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: number, oy: number, s: number, reveal: boolean): void
   /** The crystal field with kyber left under or near (x, y), or -1 (a right-click there gathers). */
   fieldAt(w: World, x: number, y: number): number
+  /** The kyber crystal cluster with kyber left under (x, y) (an index into World `crystals`), or -1. */
+  crystalUnder(w: World, x: number, y: number): number
   /** The kyber crystal clusters inside the box (world units), each as big as the kyber it has left
-   * lets it be, in world coordinates; `zdpr`: device pixels per world unit. */
-  crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }): void
+   * lets it be, in world coordinates; `zdpr`: device pixels per world unit. Under them, a line from
+   * each of `me`'s gathering engineers to the cluster it works, and a marker on that cluster, in
+   * `color` (our colour). */
+  crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }, me: Owner, color: string): void
   /** Kyber an engineer carries in one load. */
   carry: number
 }

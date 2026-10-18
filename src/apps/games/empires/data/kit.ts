@@ -165,12 +165,6 @@ export type GroundSpec = {
   supply?: number
   /** Buildings: engineers drop off the kyber they gather here (a Command Center). */
   dropOff?: boolean
-  /** Buildings: how far its command range reaches, in tiles from its middle (other buildings go up
-   * inside one of ours). */
-  range?: number
-  /** Buildings: may also go up anywhere far enough from known enemy buildings (a Command Center
-   * starting a new base). */
-  standalone?: boolean
   /** Buildings: what it trains, in card order. */
   trains?: string[]
   /** Engineers: the buildings it puts up, in card order. */
@@ -218,19 +212,17 @@ export const groundEngineer = (o: GroundWritten & { speed: number; turn: number 
   ground: { size: 1, radius: 11, accel: 220, sight: 8, ...o.ground },
 })
 
-/** A Command Center: a 6 × 6 base building that trains engineers, takes in the kyber they gather,
- * supports a few units and holds the command range other buildings go up in; it may also start a new
- * base on its own (standalone). */
+/** A Command Center: a 6 × 6 base building that trains engineers, takes in the kyber they gather and
+ * supports a few units; it may go up anywhere, to start a new base. */
 export const groundCenter = (o: GroundWritten): UnitType => ({
   tier: 'building', aspect: 1, size: 6 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 10 * 32,
   weapons: [], hardpoints: [], engines: [],
   role: { role: 'Base', strong: ['training engineers', 'taking in kyber'], weak: ['being left unguarded'] },
   ...o,
-  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], supply: 5, dropOff: true, range: 14, standalone: true, ...o.ground },
+  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], supply: 5, dropOff: true, ...o.ground },
 })
 
-/** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does.
- * It goes up inside the command range of one of ours. */
+/** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does. */
 export const groundSupply = (o: GroundWritten): UnitType => ({
   tier: 'building', aspect: 1, size: 3 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 5 * 32,
   weapons: [], hardpoints: [], engines: [],

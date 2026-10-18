@@ -5,8 +5,7 @@
 //
 // 1. The ground code uses no Math.random, Date, clock, DOM or engine-dependent maths.
 // 2. Placement on Dustfall Ridge: every rule refuses somewhere with its own reason (unbuildable, a
-//    crystal field, uneven ground, built on, blocking a door, outside the command range, too near the
-//    enemy, enemy units on it, no room at its own door, credits), the ghost checks every tile, an
+//    crystal field, uneven ground, built on, blocking a door, too near the enemy (any building), enemy units on it, no room at its own door, credits), the ghost checks every tile, an
 //    order to place there is refused with the same reason, and a building hidden in the fog doesn't
 //    stop a placement.
 // 3. A building battle on Dustfall Ridge, seat 0 scripted (Republic) and seat 1 the AI (Swarm), two
@@ -50,7 +49,7 @@ const check = (what: string, ok: boolean, detail = '') => {
   if (!ok) failed = true
 }
 
-// The checks' own test units (a vehicle of each size class, a building that needs a command range).
+// The checks' own test units (a vehicle of each size class, a small building).
 import './ground-test-units.ts'
 
 // --- 1. Sources -------------------------------------------------------------------------------------
@@ -114,7 +113,14 @@ const seat = (faction: Seat['faction'], team: number, spawn: number): Seat => ({
   expect('crystal field', 'test-block', 'A deposit is in the way')
   expect('built on', R.center, 'Something is built there')
   expect('door blocked', R.center, "It would block a building's door")
-  expect('command range', 'test-block', 'Outside the command range of your buildings')
+  expect('enemy near, any building', 'test-block', 'Too close to an enemy building (keep 20 tiles away)')
+  {
+    // No command range: a small building as far from our Command Center as the map allows (and still
+    // away from the enemy) may go up.
+    const far = find(w, 0, 'test-block', null, { x: home.x < w.w / 2 ? w.w : 0, y: home.y < w.h / 2 ? w.h * 0.5 : w.h * 0.5 })
+    const tiles = far ? Math.hypot(far.x - home.x, far.y - home.y) / TILE : 0
+    check('a building may go up far from our Command Centers (no command range)', !!far && tiles > 40, `${tiles.toFixed(0)} tiles out`)
+  }
   expect('enemy near', R.center, 'Too close to an enemy building (keep 20 tiles away)')
   expect('own door', R.center, 'No room in front of its door')
   {

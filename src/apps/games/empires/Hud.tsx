@@ -2201,7 +2201,7 @@ function orderText(w: World, u: Unit) {
   if (u.retreat > 0) return `Charging hyperspace drive: jumping out in ${Math.ceil(u.retreat)} s`
   if (o.k === 'patrol') return 'Patrolling'
   // Ground engineers: gathering kyber (mining, or hauling a load in), or building.
-  if (o.k === 'gather') return u.gm?.drop ? `Hauling ${Math.round(u.carry ?? 0)} kyber in` : u.gm?.mine ? `Mining kyber: ${Math.floor(u.carry ?? 0)} of ${groundKit()?.carry ?? 20}` : 'Gathering kyber'
+  if (o.k === 'gather') return u.gm?.drop ? `Hauling to Command Center: ${Math.round(u.carry ?? 0)} kyber` : u.gm?.mine ? `Mining a crystal: ${Math.floor(u.carry ?? 0)} of ${groundKit()?.carry ?? 20}` : 'Going to a crystal'
   if (o.k === 'construct') {
     const t = w.byId.get(o.id)
     return t ? `${t.site ? 'Building' : 'Repairing'} the ${t.t.name}` : 'Building'
@@ -2521,7 +2521,11 @@ function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit
   const builds = [...new Set(crew.flatMap((u) => u.t.ground?.builds ?? []))].map((id) => UNIT[id]).filter(Boolean)
   if (!builds.length) return null
   const n = Math.min(crew.length, GROUND_CREW.length - 1)
-  const hint = coarse ? 'Tap a card, then a spot: green tiles can be built on' : `Click a card (${keyName(keys.build)}), then a spot: green tiles can be built on`
+  // Idle engineers: first, that a right-click (a long-press on touch) on a crystal mines it.
+  const idle = crew.some((u) => u.order.k === 'idle' && !u.queue.length)
+  const hint = idle
+    ? coarse ? 'Long-press a kyber crystal to mine it, or tap a card to build' : `Right-click a kyber crystal to mine it, or click a card (${keyName(keys.build)}) to build`
+    : coarse ? 'Tap a card, then a spot: green tiles can be built on' : `Click a card (${keyName(keys.build)}), then a spot: green tiles can be built on`
   return (
     <section className="ew-engbuild" aria-label="Build">
       <header>
@@ -2532,7 +2536,7 @@ function GroundBuild({ w, me, crew, onPlace }: { w: World; me: Owner; crew: Unit
         {builds.map((t) => {
           const poor = w.players[me].credits < t.cost
           const secs = Math.ceil(t.build / GROUND_CREW[Math.max(1, n)])
-          const tip = `${t.name}\n${t.blurb}\n${t.build} s for one engineer; two build it 1.7 times as fast, three 2.2, four 2.5. A Command Center may go anywhere at least 20 tiles from enemy buildings we know of; other buildings go up within the command range of ours.${poor ? `\n\nNot enough kyber: ${Math.ceil(t.cost - w.players[me].credits)} more` : `\n\n${hint}.`}`
+          const tip = `${t.name}\n${t.blurb}\n${t.build} s for one engineer; two build it 1.7 times as fast, three 2.2, four 2.5. Buildings go up anywhere our engineers can reach, at least 20 tiles from enemy buildings we know of.${poor ? `\n\nNot enough kyber: ${Math.ceil(t.cost - w.players[me].credits)} more` : `\n\n${hint}.`}`
           return (
             <button key={t.id} className={`ew-shipcard ew-yardcard ${poor ? 'is-poor' : ''}`} onClick={() => onPlace(t.id)} {...unitTip(t, ownerTag(w, me, me), tip)}>
               <ShipArt t={t} />

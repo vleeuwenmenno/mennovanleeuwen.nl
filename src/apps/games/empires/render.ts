@@ -26,6 +26,8 @@ const TAG_PATHS = {
   patrol: 'M6 13a10 10 0 0 1 17-5M26 19a10 10 0 0 1-17 5M23 3.5v4.8h-4.8M9 28.5v-4.8h4.8',
   guard: 'M16 4l9 3.5v7c0 6-4 10-9 12.5-5-2.5-9-6.5-9-12.5v-7z',
   repair: 'M16 3.5a12.5 12.5 0 1 0 0.01 0zM16 9.5v13M9.5 16h13',
+  // A crystal and a pick: mine (a ground battle's kyber).
+  mine: 'M12 6l4-3.5 4 3.5-4 14zM12 6h8M5 27l11-11M13 12.5l5.5 5.5',
 }
 const tagIcons = new Map<string, Path2D>()
 const tagIcon = (k: keyof typeof TAG_PATHS) => {
@@ -104,6 +106,9 @@ export type View = {
   /** No order armed, and the pointer is over a damaged ship or structure of ours or an ally's that
    * the selection's repair ships would repair on a right-click: tagged "Repair". */
   repairHint?: number
+  /** A ground battle, no order armed, engineers selected and the pointer over a kyber crystal
+   * cluster (its middle): tagged "Right-click: mine kyber". */
+  mineHint?: Pt | null
 }
 
 type Particle = {
@@ -806,7 +811,7 @@ export class Renderer {
     // ranges), and the enemy buildings we remember but don't see now, as ghosts where we saw them.
     if (ground) {
       // Kyber crystal clusters: objects on the ground, shrinking as they're mined (under the ghost).
-      ground.crystals(ctx, w, z, zdpr, { x0: left, y0: top, x1: right, y1: bottom })
+      ground.crystals(ctx, w, z, zdpr, { x0: left, y0: top, x1: right, y1: bottom }, view.me, relColor(w, view.me, view.me))
       const gp = view.groundPlace
       if (gp) {
         ground.ghost(ctx, w, view.me, gp.unit, gp.p, z)
@@ -1315,6 +1320,8 @@ export class Renderer {
     // Repair ships selected over a damaged ship of ours or an ally's: what a right-click will do.
     const fix = view.repairHint ? w.byId.get(view.repairHint) : undefined
     if (fix && !fix.dead && !guarded.has(fix.id)) tags.push([ctx, fix, Math.hypot(...dims(fix.t)) * 0.5 * z + 10, 'Repair', 'repair', '125,255,160', z])
+    // Engineers selected over a kyber crystal: what a right-click will do.
+    if (view.mineHint) tags.push([ctx, view.mineHint, 28 * z + 12, 'Right-click: mine kyber', 'mine', '255,154,60', z])
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
     // (Engineers weld with beams of their own, see drawWelds.)

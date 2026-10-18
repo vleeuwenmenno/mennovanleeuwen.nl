@@ -150,7 +150,7 @@ const GROUND: UnitType[] = [
   }),
   groundCenter({
     id: 'd-g-center', faction: 'droid', name: 'Command Hub', sprite: 'droid-g-center',
-    blurb: 'An eight-sided industrial deck round a sphere core. It trains builder droids, takes in the kyber they cut, supports 5 units, and buildings go up within 14 tiles of it.',
+    blurb: 'An eight-sided industrial deck round a sphere core. It trains builder droids, takes in the kyber they cut and supports 5 units.',
     hull: 5000, cost: 1200, build: 60, ground: { trains: ['d-g-engineer'] },
   }),
   groundSupply({

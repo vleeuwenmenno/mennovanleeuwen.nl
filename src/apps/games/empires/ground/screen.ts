@@ -5,13 +5,12 @@ import { sees } from './fog.ts'
 import { TF, TILE, type GroundLayer } from './types.ts'
 import { crystalModel } from '../models/ground.ts'
 import { drawHull } from '../models/paint.ts'
-import { CARRY, commandAreas, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
+import { CARRY, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
 
 // The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
 // the placement ghost and the minimap's ground. In the browser only; ground/load.ts hands them to the
 // screen.
 
-const TAU = Math.PI * 2
 const OWN = '#7dffa0'
 const ENEMY = '#ff5a50'
 
@@ -126,25 +125,10 @@ function fog(ctx: CanvasRenderingContext2D, w: World, team: number, reveal: bool
   ctx.imageSmoothingEnabled = smooth
 }
 
-function ghost(ctx: CanvasRenderingContext2D, w: World, me: Owner, unitId: string, p: GroundPlacement, zoom: number) {
+function ghost(ctx: CanvasRenderingContext2D, _w: World, _me: Owner, unitId: string, p: GroundPlacement, zoom: number) {
   const px = 1 / zoom
   const spec = UNIT[unitId]?.ground
   const [fw, fh] = spec?.foot ?? [6, 6]
-  // Our command range, where a building may go (a standalone one, such as a Command Center, may go
-  // anywhere away from the enemy instead).
-  if (spec && !spec.standalone) {
-    ctx.strokeStyle = OWN
-    ctx.globalAlpha = 0.45
-    ctx.lineWidth = 1.5 * px
-    ctx.setLineDash([8 * px, 6 * px])
-    for (const a of commandAreas(w, me)) {
-      ctx.beginPath()
-      ctx.arc(a.x, a.y, a.r, 0, TAU)
-      ctx.stroke()
-    }
-    ctx.setLineDash([])
-    ctx.globalAlpha = 1
-  }
   for (const t of p.tiles) {
     ctx.fillStyle = t.ok ? 'rgba(90, 255, 130, 0.32)' : 'rgba(255, 70, 60, 0.5)'
     ctx.fillRect(t.tc * TILE + 1, t.tr * TILE + 1, TILE - 2, TILE - 2)
@@ -178,6 +162,23 @@ function minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: numb
   ctx.imageSmoothingEnabled = smooth
 }
 
+/** The kyber crystal cluster with kyber left under (x, y), within about a tile of its middle (the
+ * nearest when two are), or -1. */
+function crystalUnder(w: World, x: number, y: number): number {
+  let best = -1
+  let bestD = (TILE * 1.05) ** 2
+  w.crystals?.forEach((c, i) => {
+    if (!(c.left > 0)) return
+    const p = crystalAt(c)
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
+}
+
 /** The minimap's colour for a crystal cluster. */
 const KYBER_DOT = '#ff9a3c'
 /** A cluster's size when full, world units across, and the smallest it is drawn on screen (CSS
@@ -205,9 +206,29 @@ function glow() {
 /** The kyber crystal clusters inside `box`: a soft glow, then the cluster's model (one of a few
  * shapes), smaller the less kyber it has left; a mined-out one is gone. Drawn under the fog veil
  * like the land itself: every side knows where they are. */
-function crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }) {
+function crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }, me: Owner, color: string) {
   const all = w.crystals
   if (!all?.length) return
+  // Which cluster each of our gathering engineers works: a thin dashed line in our colour from the
+  // engineer to it (like an order line, under the fog), and the clusters being worked.
+  const worked = new Set<number>()
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(1.2 / zoom, 1)
+  ctx.globalAlpha = 0.6
+  ctx.setLineDash([6 / zoom, 5 / zoom])
+  ctx.beginPath()
+  for (const u of w.units) {
+    if (u.dead || u.owner !== me || u.order.k !== 'gather' || u.gm?.cl === undefined || u.gm.drop) continue
+    const c = all[u.gm.cl]
+    if (!c || !(c.left > 0)) continue
+    worked.add(u.gm.cl)
+    const p = crystalAt(c)
+    ctx.moveTo(u.x, u.y)
+    ctx.lineTo(p.x, p.y)
+  }
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.globalAlpha = 1
   const g = glow()
   for (const c of all) {
     if (!(c.left > 0)) continue
@@ -223,6 +244,23 @@ function crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: n
     ctx.globalAlpha = 1
     drawHull(ctx, crystalModel(c.shape), p.x, p.y, 0, size, zdpr, FRESH)
   }
+  // A marker on each cluster our engineers are working: four ticks round it in our colour.
+  if (!worked.size) return
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(2 / zoom, 1.5)
+  ctx.beginPath()
+  for (const i of worked) {
+    const p = crystalAt(all[i])
+    if (p.x < box.x0 || p.x > box.x1 || p.y < box.y0 || p.y > box.y1) continue
+    const r = Math.max(CRYSTAL_SIZE * 0.62, (CRYSTAL_MIN_PX * 0.7) / zoom)
+    const k = Math.max(5 / zoom, r * 0.3)
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      ctx.moveTo(p.x + sx * r, p.y + sy * (r - k))
+      ctx.lineTo(p.x + sx * r, p.y + sy * r)
+      ctx.lineTo(p.x + sx * (r - k), p.y + sy * r)
+    }
+  }
+  ctx.stroke()
 }
 
 /** The kit, with the picture of the ground from `layer` (the WebGL2 one, or the 2D stand-in). */
@@ -232,12 +270,12 @@ export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   thumb,
   layer,
   placement: groundPlacement,
-  commandAreas,
   known: knownBuildings,
   fog,
   ghost,
   minimap,
   fieldAt,
+  crystalUnder,
   crystals,
   carry: CARRY,
 })
