@@ -12,6 +12,7 @@ import { empiresMapSort, empiresMix, empiresMusic, empiresMuted, empiresVolume, 
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Reinforce, type World } from './sim'
 import { groundKit } from './groundKit'
+import type { GenRules } from './ground/generate.ts'
 import { MAP_SCALE } from './scale'
 import { Codex } from './Codex'
 import { score } from './Scoreboard'
@@ -42,6 +43,8 @@ export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules
    * (ground/maps.ts) picked for one. */
   mode?: 'space' | 'ground'
   groundMap?: string
+  /** A generated ground map's rules (ground/generate.ts), kept while another map is picked. */
+  groundGen?: GenRules
 }
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
@@ -56,8 +59,10 @@ export const setupAreas = (s: Setup, map: MapDef): Rect[] => map.spawns.map((_, 
 
 /** The ground map a ground setup plays on (null when ground battles aren't loaded). */
 const groundOf = (s: Setup): MapDef | null => {
-  const maps = groundKit()?.maps()
-  return maps ? (maps.find((m) => m.id === s.groundMap) ?? maps[0] ?? null) : null
+  const kit = groundKit()
+  if (!kit) return null
+  // Any ground map by its id, a generated one (`gen:…`) too.
+  return (s.groundMap ? kit.map(s.groundMap) : null) ?? kit.maps()[0] ?? null
 }
 /** The map a setup plays on: a ground map for a ground setup, once ground battles are loaded. */
 export const setupMap = (s: Setup): MapDef => (s.mode === 'ground' && groundOf(s)) || (s.map === GENERATED ? generateMap(s.gen) : (MAP[s.map] ?? MAPS[0]))
@@ -104,6 +109,7 @@ function lastSetup(): Setup {
       // Dev builds: a ground setup stays one (its slots are fitted to the ground map once it loads).
       ...(v?.mode === 'ground' ? { mode: 'ground' as const } : {}),
       ...(typeof v?.groundMap === 'string' ? { groundMap: v.groundMap } : {}),
+      ...(v?.groundGen && typeof v.groundGen === 'object' ? { groundGen: v.groundGen } : {}),
     }
   } catch {
     return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE }, stations: DEFENSE_DEFAULT, oreDefense: false }
@@ -1574,7 +1580,44 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
 // Dev builds only, until ground units can fight: the Space / Ground switch in the skirmish setup,
 // which loads ground battles (ground/load.ts) the first time. The condition is false in a production
 // build, so the ground chunk is never emitted.
-const loadGround = import.meta.env.DEV ? () => import('./ground/load.ts').then((m) => m.loadGround()) : null
+const loadGround = import.meta.env.DEV ? () => Promise.all([import('./ground/load.ts').then((m) => m.loadGround()), loadGroundGen!()]).then(() => {}) : null
+/** Dev builds: the ground map generator's rules and names (ground/generate.ts), loaded with ground battles. */
+let groundGen: typeof import('./ground/generate.ts') | null = null
+const loadGroundGen = import.meta.env.DEV ? () => import('./ground/generate.ts').then((m) => void (groundGen = m)) : null
+
+/** The ground generator's rules: recipe, players, size and seed, under the preview's map. */
+function GroundGenControls({ gen, rules, onChange, onReroll }: { gen: typeof import('./ground/generate.ts'); rules: GenRules; onChange: (patch: Partial<GenRules>) => void; onReroll: () => void }) {
+  const field = (label: string, control: ReactNode) => (
+    <label className="ew-genfield">
+      <span>{label}</span>
+      {control}
+    </label>
+  )
+  return (
+    <div className="ew-gen">
+      <div className="ew-genseed">
+        {field(
+          'Seed',
+          <input type="number" min={0} max={gen.GEN_MAX_SEED} value={rules.seed} onChange={(e) => onChange({ seed: Math.min(gen.GEN_MAX_SEED, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })} />,
+        )}
+        <button className="ew-genroll" onClick={onReroll} data-tip="Roll a new random seed: a different map from the same recipe">
+          <Icon name="dice" size={18} /> New seed
+        </button>
+        <small className="ew-muted">The same recipe, players, size and seed always build the same map.</small>
+      </div>
+      <section style={{ gridColumn: '1 / -1' }}>
+        <h6>Recipe</h6>
+        {field('Land', <Seg label="Recipe" value={rules.recipe} options={gen.RECIPES.map((r) => [r, gen.RECIPE_NAMES[r]] as [typeof r, string])} onChange={(v) => onChange({ recipe: v })} />)}
+        <small className="ew-muted">{gen.RECIPE_BLURBS[rules.recipe]}</small>
+      </section>
+      <section>
+        <h6>Layout</h6>
+        {field('Players', <Seg label="Players" value={rules.players} options={gen.GEN_PLAYERS.map((n) => [n, String(n)] as [typeof n, string])} onChange={(v) => onChange({ players: v })} />)}
+        {field('Size', <Seg label="Size" value={rules.size} options={gen.GEN_SIZES.map((z) => [z, gen.GEN_SIZE_NAMES[z]] as [typeof z, string])} onChange={(v) => onChange({ size: v })} />)}
+      </section>
+    </div>
+  )
+}
 /** Dev builds: the ground map viewer (the tile grid, heights and flags), from the ground lobby. */
 const GroundViewer = import.meta.env.DEV ? lazy(() => import('./ground/Viewer.tsx')) : null
 
@@ -1582,9 +1625,11 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const [setup, setSetup] = useState(lastSetup)
   // A ground setup left from last time loads ground battles first (dev builds only).
   const [groundOn, setGroundOn] = useState(() => !!groundKit())
+  const [, setGenOn] = useState(() => !!groundGen)
   useEffect(() => {
     if (setup.mode !== 'ground' || !loadGround) return
-    void (groundOn ? Promise.resolve() : loadGround()).then(() => {
+    void (groundOn ? (loadGroundGen?.() ?? Promise.resolve()) : loadGround()).then(() => {
+      setGenOn(true)
       setGroundOn(true)
       // Its slots fitted to the ground map (a setup is saved with the space map's).
       const to = groundOf(setup)
@@ -1602,6 +1647,10 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const [drawing, setDrawing] = useState(false)
   const generated = useMemo(() => generateMap(setup.gen), [setup.gen])
   const isGen = !ground && setup.map === GENERATED
+  // Ground: a generated map is picked when the setup's ground map is one (its id starts `gen:`).
+  const genRules = ground && groundGen ? groundGen.cleanGen(setup.groundGen) : null
+  const isGroundGen = ground && !!setup.groundMap?.startsWith('gen:') && !!genRules
+  const groundGenerated = genRules && groundGen ? (groundKit()?.map(groundGen.genId(genRules)) ?? null) : null
   const map = ground ? setupMap(setup) : isGen ? generated : (MAP[setup.map] ?? MAPS[0])
   const areas = useMemo(() => setupAreas(setup, map), [setup, map])
   const update = (next: Setup) => {
@@ -1628,6 +1677,14 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
     const to = m === 'ground' ? (groundOf(next) ?? map) : setup.map === GENERATED ? generated : (MAP[setup.map] ?? MAPS[0])
     setActive(0)
     update({ ...next, groundMap: m === 'ground' ? to.id : setup.groundMap, slots: slotsFor(to, setup.slots.slice(0, to.spawns.length)) })
+  }
+  /** New rules for the generated ground map: it is built and picked, and the slots follow it. */
+  const setGroundRules = (patch: Partial<GenRules>) => {
+    if (!groundGen || !genRules) return
+    const rules = groundGen.cleanGen({ ...genRules, ...patch })
+    const m = groundKit()?.map(groundGen.genId(rules))
+    if (!m) return
+    update({ ...setup, groundGen: rules, groundMap: m.id, slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
   }
   const setRules = (patch: Partial<MapRules>) => {
     const gen = cleanRules({ ...setup.gen, ...patch })
@@ -1763,6 +1820,20 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
               </div>
                 </>
               )}
+              {isGroundGen && groundGen && genRules && (
+                <div className="ew-setting">
+                  <h5>Generated map</h5>
+                  <GroundGenControls
+                    gen={groundGen}
+                    rules={genRules}
+                    onChange={(patch) => (sound.click(), setGroundRules(patch))}
+                    onReroll={() => {
+                      sound.click()
+                      setGroundRules({ seed: Math.floor(Math.random() * (groundGen!.GEN_MAX_SEED + 1)) })
+                    }}
+                  />
+                </div>
+              )}
               {isGen && (
                 <div className="ew-setting">
                   <h5>Generated map</h5>
@@ -1781,6 +1852,11 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
           <div className="ew-room-col is-map">
             <Frame title={map.name} className="ew-lobby-preview" aside={
                 <span className="ew-chips">
+                  {isGroundGen && groundGen && (
+                    <button className="ew-chip" onClick={() => (sound.click(), setGroundRules({ seed: Math.floor(Math.random() * (groundGen!.GEN_MAX_SEED + 1)) }))} data-tip="A different map from the same recipe">
+                      <Icon name="dice" size={13} /> New seed
+                    </button>
+                  )}
                   {isGen && (
                     <button className="ew-chip" onClick={() => (sound.click(), setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) }))} data-tip="A different map with the same rules">
                       <Icon name="dice" size={13} /> New seed
@@ -1834,11 +1910,21 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
       </div>
       {picker && (
         <MapPicker
-          current={isGen ? GENERATED : map.id}
+          current={isGen || isGroundGen ? GENERATED : map.id}
           maps={ground ? groundKit()?.maps() : undefined}
-          generated={ground ? null : generated}
-          generatedBlurb={`From your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them in Battle settings after picking it.`}
-          onPick={(id) => (id === GENERATED ? pickMap(generated, GENERATED) : pickMap(ground ? (groundKit()?.maps().find((m) => m.id === id) ?? map) : (MAP[id] ?? MAPS[0])))}
+          generated={ground ? groundGenerated : generated}
+          generatedBlurb={
+            ground && genRules && groundGen
+              ? `A random map from a recipe and a seed (now: ${groundGen.RECIPE_NAMES[genRules.recipe]}, ${genRules.players} players, ${groundGen.GEN_SIZE_NAMES[genRules.size].toLowerCase()}, seed ${genRules.seed}). Change them in Battle settings after picking it.`
+              : `From your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them in Battle settings after picking it.`
+          }
+          onPick={(id) =>
+            id === GENERATED
+              ? ground
+                ? groundGenerated && pickMap(groundGenerated)
+                : pickMap(generated, GENERATED)
+              : pickMap(ground ? (groundKit()?.maps().find((m) => m.id === id) ?? map) : (MAP[id] ?? MAPS[0]))
+          }
           onClose={() => setPicker(false)}
         />
       )}

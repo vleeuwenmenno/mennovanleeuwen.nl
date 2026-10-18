@@ -3,7 +3,7 @@ import { UNIT } from '../data.ts'
 import type { Owner, World } from '../sim.ts'
 import { sees } from './fog.ts'
 import { TF, TILE, type GroundLayer } from './types.ts'
-import { commandAreas, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
+import { commandAreas, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
 
 // The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
 // the placement ghost and the minimap's ground. In the browser only; ground/load.ts hands them to the
@@ -171,6 +171,7 @@ function minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: numb
 /** The kit, with the picture of the ground from `layer` (the WebGL2 one, or the 2D stand-in). */
 export const screenKit = (layer: () => GroundLayer): GroundKit => ({
   maps: groundMaps,
+  map: groundMapDef,
   thumb,
   layer,
   placement: groundPlacement,

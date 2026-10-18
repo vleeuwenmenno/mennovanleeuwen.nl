@@ -3268,9 +3268,8 @@ Until ground units can fight, the mode is in
 dev builds only: the Skirmish setup shows a **Space / Ground** switch when `import.meta.env.DEV` is
 set, and Ground plays the battle on the space game's own screen (see
 [The ground battle screen](#the-ground-battle-screen)), with a **Map viewer** for the ground maps
-(drag or one finger to pan, wheel or pinch to zoom, and a debug overlay of the tile grid, heights
-and tile flags; hovering or tapping a tile shows what it is). Production builds contain none of it but the ground units'
-entries in the factions' data and the sim's empty hooks.
+that is also their editor (see [The ground map editor](#the-ground-map-editor)). Production builds
+contain none of it but the ground units' entries in the factions' data and the sim's empty hooks.
 
 **Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
 Each tile has a terrain (dirt, grass, rocky, sand, mud, road, and later snow, ash, cracked earth and
@@ -3288,8 +3287,9 @@ drawn with shapes in tile units (`features`, GroundFeatures in types.ts): platea
 their level, ramps from foot to top, rivers along polylines (swelling and narrowing, deep in the
 middle), bridges and fords across them, dirt roads along polylines, forest polygons, crystal fields,
 ruins (old foundations, unbuildable but walkable) and spawns. A plateau that a ramp climbs keeps the
-low ground's grass; one with no way up is bare rock. Edges wobble with the seed. Shapes can be drawn over the whole map; the map's symmetry
-then copies one side's tiles onto the other, so both sides match exactly. Besides the space maps'
+low ground's grass; one with no way up is bare rock. Edges wobble with the seed. Shapes may be drawn
+on any side: the map's symmetry copies each one to every side (`expandFeatures` in terrain.ts), and
+then copies one side's tiles onto the others, so the sides match exactly. Besides the space maps'
 symmetries, a square map can be mirrored across its diagonal (`mirror: 'diagonal'`, from the top
 right corner to the bottom left), which puts two bases in the other corners and lets a river on
 the mirror line carry one shared bridge and one shared ford. No props: woods are drawn by the
@@ -3317,10 +3317,41 @@ after a Star Wars: Empire at War ground map (the look Menno picked): a river run
 between two bases on open ground, crossed only by a metal bridge and a rocky ford. A dirt road
 joins the bases over the bridge, past old ruins. Each side has a rocky mesa with one ramp and a
 crystal field on top, solid woods round the edges, and calm grass and dirt everywhere else; the
-third crystal field lies in the ford's shallows, shared. **Dustfall Ridge** (128 × 96, point symmetry, a round 1 sketch) is
-still there: each base on a plateau in a corner with one ramp down to a shelf of mid ground, the
-shelf with two ramps to the low ground, three deposits a side, and a mid-level hill and a pond in
-the middle.
+third crystal field lies in the ford's shallows, shared. The other maps:
+
+| Map | Players | Size | The idea |
+| --- | --- | --- | --- |
+| Ashwater Crossing | 2 | 96 × 96 | A river between the bases, one bridge and one ford, a mesa each |
+| Forkwater | 3 | 140 × 140 | A river forks in a lake between three bases; each arm has a bridge and a ford |
+| Highcairn | 4 | 112 × 112 | Plateau bases in the corners round a central mesa; rocky ridges with a pass each |
+| Dustfall Ridge | 2 | 128 × 96 | Round 1 sketch: plateau bases, mid shelves, a hill and a pond (no crystals near the bases yet) |
+
+Forkwater and Highcairn were laid out by the generator (below) and kept as maps of their own.
+
+**Generated maps** ([`generate.ts`](src/apps/games/empires/ground/generate.ts)) come from a recipe, a
+player count (2, 3, 4 or 6), a size (small, medium or large: 76, 96 or 120 tiles a side for two
+players, more for more) and a seed. A generated map travels as its id,
+`gen:<recipe>:<players>:<size>:<seed>`: `GROUND_MAP` builds it the first time it's asked for, the
+same on every machine. Each recipe lays out one player's sector and the symmetry copies it (two
+players: mirrored across the diagonal for Rivers, turned half way for the rest; three: turned a
+third; four: mirrored both ways; six: turned a sixth). A sector's edges are the lines it shares with
+its neighbours, so what lies on them (a river with its crossings, a pass, a crystal field) is shared.
+Woods and ridges go only where they keep clear of roads, ramps, crossings, crystals and build areas.
+- **Rivers:** rivers along the sector edges, meeting in a lake, each with a bridge and a ford (the
+  ford holds a shared crystal field); a mesa a side with a ramp and crystals on top; woods.
+- **Highlands:** each base on a plateau with a ramp; a central mesa with crystals and a ramp from
+  every side; bare rocky ridges along the edges with a pass and a crystal field in each.
+- **Forest:** big solid woods with lanes kept open between the bases and out to the edges, and
+  crystals in the clearings; a pond.
+- **Open plains:** open grass and dirt, roads to a pond in the middle, a few small woods, a low
+  ridge, ruins, crystals between the bases.
+
+A finished map is checked (every base reaches every other and every crystal field, build areas are
+open level ground, a crystal field within 20 tiles' walk of each base, and every base about as far
+from its nearest field and from the others as the rest: `problem()`), and laid out again from a
+varied stream if it fails, so every seed gives a playable map. In the lobby, the ground map picker's
+**Generated** entry picks one, and Battle settings then shows its recipe, players, size and seed
+(with a **New seed** button); the preview and the slots follow each change.
 
 **The ground layer** ([`gl.ts`](src/apps/games/empires/ground/gl.ts), the GroundLayer in types.ts)
 draws the ground under a battle with WebGL2: one full-screen triangle a frame (one draw call, no
@@ -3356,8 +3387,29 @@ buildings, effects, fog and the HUD stay on the 2D canvas over it. (Round 1's ch
 renderer and its rock-chunk cliffs are gone.)
 
 ```sh
-pnpm check:ground-map   # every ground map: builds the same twice, symmetric (point or diagonal), spawns reach each other and every crystal field (over the bridge and the ford), no blocking prop on ramps or build areas
+pnpm check:ground-map           # every hand-made map, then 96 generated ones: builds the same twice, symmetric, reach, open build areas, fairness
+pnpm check:ground-map --quick   # the hand-made maps only
 ```
+
+### The ground map editor
+
+The ground lobby's **Map viewer** ([`Viewer.tsx`](src/apps/games/empires/ground/Viewer.tsx), dev
+builds only) shows a ground map on the battle's own ground layer: drag or one finger to pan, wheel
+or pinch to zoom, a debug overlay of the tile grid, heights and tile flags (hovering or tapping a
+tile shows what it is), and **Flat** for the fallback. **Edit** turns it into an editor for a round 2
+map's shapes (round 1 sketch maps are view only), opened from any map in the list or **New map…**:
+- **Level** paints raised ground with a round brush (each dab a plateau at level 1 or 2);
+- **Plateau** and **Forest** draw polygons, **River** and **Road** polylines with a width: a tap a
+  point, then **Finish** (or Enter, or a double-click); Escape drops the one being drawn;
+- **Ramp** and **Bridge** are a drag, from the ramp's foot to its top or from bank to bank;
+- **Ford** (with a radius), **Crystals**, **Ruin** and **Spawn** are a tap; **Erase** removes the
+  shape tapped; **Undo** (or Ctrl+Z) takes back the last change;
+- the map's name, symmetry (none, point, diagonal, quad, three- or six-way) and size.
+
+The shapes drawn are outlined, their symmetric copies faintly, and the ground layer redraws after
+each change. **Export** copies the map as TypeScript, ready to paste into `GROUND_MAPS` in
+`ground/maps.ts` (if the browser won't allow copying, the text shows in a box to copy by hand).
+With touch, one finger draws with the tool and two pan and pinch; it is laid out for a tablet.
 
 ### The ground sim
 
@@ -3491,8 +3543,9 @@ dev build the lobby's **Space / Ground** switch loads ground battles
 ([`ground/load.ts`](src/apps/games/empires/ground/load.ts)) and swaps the map list for the ground
 maps, each previewed from its tile map (terrain, height, water, crystal fields). The slots, factions,
 teams, spawns, starting credits and AI rows are the same; what doesn't apply on the ground hides:
-reinforcements, defense stations, defense platforms on ore, start areas and the map generator. A
-**Map viewer** chip opens the ground map viewer. The choice is remembered with the rest of the lobby.
+reinforcements, defense stations, defense platforms on ore and start areas. The map picker's
+**Generated** entry makes a random ground map (see Generated maps above), with its own controls. A
+**Map viewer** chip opens the ground map viewer and editor. The choice is remembered with the rest of the lobby.
 
 Everything else comes from the space game: the camera, controls and shortcuts, the pause menu,
 selection (click, Shift-click, box, double-click), control groups, shift queues, order lines, the
