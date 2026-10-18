@@ -147,6 +147,14 @@ export type Unit = {
   gy: number
   /** Who shot at it last, so it can answer fire from beyond its usual look. */
   hitBy: number
+  /** Ground battles, for the screen only (never in the hash): the ground weapon that hit it last and
+   * where that hit came from (a shot's muzzle, a splash's middle), so a squad member that falls can
+   * fall the way that weapon would throw it (ground/deaths.ts). */
+  gHit?: import('./data/kit.ts').GroundWeaponKind
+  gHitX?: number
+  gHitY?: number
+  /** ...and whose it was (a flame, gas or acid spray melts a body its own way). */
+  gHitF?: FactionId
   /** Inside a nebula: no shields, short sensors. Refreshed every tick. */
   nebula: boolean
   /** Orders given with Shift, taken one at a time once the current one is done. */

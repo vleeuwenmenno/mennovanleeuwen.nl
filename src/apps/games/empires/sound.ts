@@ -819,6 +819,61 @@ const wetHit = (heavy: boolean): Recipe => (sr, r) => {
   })
 }
 
+// Ground squads' members falling (EmpiresSound.death), one sound a faction.
+
+/** A trooper going down: a short grunt through the helmet, then armour plates clattering. */
+const trooperDown: Recipe = (sr, r) => {
+  const o = new Osc(r())
+  const f1 = new Svf()
+  const f2 = new Svf()
+  const bp = new Svf()
+  const hp = new Svf()
+  const f0 = 150 + r() * 40
+  const clicks = [0.08, 0.12, 0.17, 0.2].map((t) => t + r() * 0.02)
+  return render(sr, 0.28, (t) => {
+    const src = o.saw(glide(f0, f0 * 0.62, t, 0.13), sr) * ad(t, 0.006, 0.05)
+    const voice = f1.run(src, 620, 2.4, sr).band * 1.3 + f2.run(src, 1150, 3, sr).band * 0.6
+    let c = 0
+    for (const at of clicks) {
+      const d = t - at
+      if (d >= 0 && d < 0.014) c += noise() * Math.exp(-d / 0.003)
+    }
+    const clank = bp.run(c, 3000 + r() * 400, 5, sr).band
+    const v = voice * 1.3 + clank * 1.7
+    return soft(v - hp.run(v, 90, 0.8, sr).low)
+  })
+}
+
+/** A droid coming apart: its servos whining down, an electrical pop, a clank of parts landing. */
+const droidDown: Recipe = (sr, r) => {
+  const o = new Osc(r())
+  const hp = new Svf()
+  const bp = new Svf()
+  const f0 = 650 + r() * 350
+  return render(sr, 0.26, (t) => {
+    const whine = o.sqr(glide(f0, 80, t, 0.17), sr) * ad(t, 0.004, 0.08) * 0.28
+    const pop = hp.run(noise(), 2600, 0.7, sr).high * ad(t, 0.0004, 0.009)
+    const clank = bp.run(noise(), 1700 + r() * 300, 7, sr).band * (ad(t - 0.1, 0.001, 0.025) + ad(t - 0.16, 0.001, 0.02) * 0.6)
+    return soft(whine + pop * 1.5 + clank * 2.2)
+  })
+}
+
+/** A bug dying: a thin squeal that cracks and drops, over a wet splat. */
+const bugDown: Recipe = (sr, r) => {
+  const o = new Osc(r())
+  const lfo = new Osc(r())
+  const lp = new Svf()
+  const f0 = 1700 + r() * 500
+  return render(sr, 0.24, (t) => {
+    const f = t < 0.05 ? glide(f0, f0 * 1.35, t, 0.05) : glide(f0 * 1.35, f0 * 0.45, t - 0.05, 0.15)
+    const squeal = o.sin(f * (1 + 0.04 * lfo.sin(38, sr)), sr) * ad(t, 0.006, 0.07) * 0.5
+    const splat = lp.run(noise(), 900, 0.7, sr).low * ad(t, 0.0008, 0.03)
+    return soft(squeal + splat * 1.4 + bubble(t, 0.05 + r() * 0.04, 250 + r() * 150, 0.015) * 0.25)
+  })
+}
+
+const DEATH: Record<SoundSet, Recipe> = { republic: trooperDown, forge: droidDown, hive: bugDown }
+
 /** A Swarm brood hatching: a fleshy squelch, bubbles, and a burst of chitters. */
 const hatch: Recipe = (sr, r) => {
   const lp = new Svf()
@@ -1249,6 +1304,12 @@ function impulse(ctx: BaseAudioContext, secs: number) {
 }
 
 export class EmpiresSound {
+  /** The game's sound, for what the screen makes up on its own (a squad member falling,
+   * ground/deaths.ts) rather than reads from the battle's events. */
+  static active: EmpiresSound | null = null
+  constructor() {
+    EmpiresSound.active = this
+  }
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
   private buses: Partial<Record<Bus, GainNode>> = {}
@@ -1465,6 +1526,16 @@ export class EmpiresSound {
     else if (kind === 'flak' && this.allow('flak', 3)) play('flak', { gain: 0.55, takes: 4 })
     else if (kind === 'missile' && this.allow('missile', 2, 0.15)) play('missile', { gain: set === 'hive' ? 0.45 : 0.6, takes: 3 })
     else if (kind === 'ion' && this.allow('ion', 2, 0.15)) play('ion', { gain: 0.55, takes: 3 })
+  }
+
+  /** A squad member falling in a ground battle (ground/deaths.ts), by its faction: a trooper's grunt
+   * and armour clatter, a droid's servo pop, a bug's squeal. A few at a time at most, so a big fight
+   * doesn't turn into noise. */
+  death(faction: FactionId, where: Where) {
+    if (!this.ready() || where.gain < 0.05) return
+    const set = SET[faction]
+    if (!this.allow('death', 4, 0.4) || !this.allow(`death-${set}`, 2, 0.3)) return
+    this.play(`death-${set}`, DEATH[set], { where, gain: set === 'forge' ? 0.4 : 0.35, verb: 0.12, takes: 4 })
   }
 
   /** A shot landing; `faction`: whose ship it hit (a living hull thuds wetly instead of crunching). */

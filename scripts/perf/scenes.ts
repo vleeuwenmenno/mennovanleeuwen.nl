@@ -445,8 +445,10 @@ const groundCombat: Scene = {
  * The same ground battle with foot squads fighting: the dev squad test (ground/testWeapons.ts) on
  * the low ground, five trooper squads and a walker against five battle droid squads, five times
  * over side by side, about a hundred members walking in step through their leg poses, firing a
- * shot each and falling. The camera holds on the fight. The bitmap cache is measured with the
- * poses in it.
+ * shot each and falling; with them a few test units with swarm rockets and sprays, so members fall
+ * thrown by splash, melted and shot down while the second is measured (ground/deaths.ts: bodies,
+ * flying parts, stains and bursts). The camera holds on the fight. The bitmap cache is measured
+ * with the poses and the bodies in it.
  */
 const groundSquads: Scene = {
   name: 'ground-squads',
@@ -459,12 +461,23 @@ const groundSquads: Scene = {
       const cx = w.w * 0.45, cy = w.h * 0.55
       let made = 0
       for (const dy of [-150, 150]) made += test.spawnSquadTest(w, 0, 1, cx, cy + dy, 5).length
+      // Splash and spray among ours, so members die every way.
+      const sim = await import('/src/apps/games/empires/sim.ts')
+      test.registerWeaponTest()
+      const extra = []
+      for (const [k, dx] of [['swarm', -6], ['spray', -3]])
+        for (const dy of [-150, -60, 60, 150]) extra.push(sim.spawn(w, test.testWeaponId('republic', k), 0, cx + dx * 32, cy + dy, 0).id)
+      sim.cmdMove(w, 0, extra, cx + 7 * 32, cy, true)
       Object.assign(__ew.cam, { x: cx, y: cy, zoom: Math.max(0.3, Math.min(1.4, document.querySelector('canvas.ew-canvas').clientWidth / 1100)) })
       return made
     })()`)
     // They walk at each other and open fire, then a second of the fight is measured.
     await page.eval(`__perf.frames(150)`)
+    const deaths = `(async () => (await import('/src/apps/games/empires/ground/deaths.ts')).deathCounts().bodies)()`
+    const before = await page.eval<number>(deaths)
     const fight = await measure(page, 60)
+    const fell = (await page.eval<number>(deaths)) - before
+    if (fell < 3) throw new Error(`Only ${fell} squad members fell while the fight was measured`)
     const after = await page.eval<{ mb: number; bitmaps: number; nodes: number }>(`(async () => {
       const p = await import('/src/apps/games/empires/models/paint.ts')
       return { mb: p.cacheStats().mb, bitmaps: p.cacheStats().bitmaps, nodes: document.getElementsByTagName('*').length }

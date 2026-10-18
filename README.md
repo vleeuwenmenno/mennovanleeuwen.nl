@@ -3825,8 +3825,31 @@ pathed and counted as one unit; its members walk on their own round it:
   middle. Members turn to their own targets, else to where they walk.
 - **Falling.** The hull is the squad's: a member falls for every share of it lost (a squad of five
   loses one at 80%, 60% and so on), which one from the random stream, and the last one falls with
-  the unit. A fallen member lies where it fell, dark, with a puff of dust, and fades after a few
-  seconds (on screen only).
+  the unit. How it falls is drawn on screen only (see Deaths below).
+- **Deaths** ([`ground/deaths.ts`](src/apps/games/empires/ground/deaths.ts)). The sim decides only
+  when a member falls; it also notes, for the screen and outside the hash, the ground weapon that
+  hit the squad last, where that hit came from and whose it was (Unit `gHit`, `gHitX`, `gHitY`,
+  `gHitF`). A member then falls by its faction, cartoon rather than gore:
+  - a trooper is knocked back in a burst of blaster sparks and lies where it lands, burnt;
+  - a droid comes apart with an electrical pop (a cyan ring and a spark jag): three of its head, arms
+    and blaster fly off spinning and lie round its body as scrap, on a splash of oil;
+  - a bug bursts in a spray of chitin and ichor and lies curled up, legs drawn in, on a green stain.
+
+  Explosives (rockets, shells, artillery, swarm rockets) throw a body two or three times further,
+  spinning through the air, and leave a scorch mark where it stood. A spray melts it instead: a
+  Republic flame chars it to ash, droid gas and Swarm acid dissolve it into a bubbling puddle. Each
+  member falls its own way, from a seed of its own (its squad and number: direction, distance, spin,
+  which parts fly, its pose on the ground), so a squad never dies in step. Bodies lie 24 seconds and
+  fade over 6 (a melted one is gone in under 2), stains last 30 seconds and fade over 6, and at most
+  160 bodies and 120 stains stay, the oldest going first. Each death makes a small sound of its
+  faction (`EmpiresSound.death`: a trooper's grunt and armour clatter, a droid's servo whine and pop,
+  a bug's squeal), panned where it is, at most four in 0.4 seconds and two of a faction in 0.3, so
+  a big fight doesn't turn into noise. It stays cheap with big armies: bodies are the members' own
+  cached bitmaps, all lit from one heading so every body of a look shares one bitmap (a droid breaks
+  one of four ways), flying parts the cached part bitmaps wrecks use, stains three sprites a kind in
+  one canvas painted once, and nothing is allocated per frame. In the ground-squads perf scene,
+  which now has splash and spray test units among the squads so members die every way while it is
+  measured, the deaths add about 40 bitmaps and no measurable main thread time.
 - **On screen.** Each member steps through its own walk cycle, out of step with the others, and has
   a small shadow and a rim in its side's colour at its feet instead of a disc under the squad; the
   selection ring takes in the members wherever they stand, and clicking any member picks the squad.

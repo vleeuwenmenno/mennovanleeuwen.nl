@@ -218,6 +218,11 @@ export function giveUp(u: Unit) {
 /** Damage `amount` of weapon kind `g` dealt to `e` by unit `from` of `owner`, through its armour. */
 function hurt(w: World, e: Unit, g: GroundWeaponKind, amount: number, owner: Owner, from: number, sx: number, sy: number, look: Gun['w']['kind']) {
   if (e.dead) return
+  // For the screen only: how a squad member that falls to it falls (ground/deaths.ts).
+  e.gHit = g
+  e.gHitX = sx
+  e.gHitY = sy
+  e.gHitF = w.players[owner]?.faction
   damage(w, e, amount * GROUND_VS[g][armourOf(e.t)], look, -1, sx, sy, owner, from)
 }
 
