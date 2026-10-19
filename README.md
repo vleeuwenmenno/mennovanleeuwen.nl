@@ -1849,10 +1849,25 @@ window's saved geometry is retained, including when returning to a larger screen
 
 ## Games
 
-The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is the arcade: picking a game
-opens it in a window of its own, titled with the game's name and grouped under Games in the dock.
-Each game has one window; picking it again (in the arcade, Spotlight, Launchpad, or `games tetris`
-and `./tetris.game` in the terminal) brings that window forward.
+The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is a games library: a shelf
+of covers, with the game you played last (or, before you have played anything, Empires At War) laid
+out large above it, and a search and two filters (*Played*, *Starred*) over both
+([`Library.tsx`](src/apps/games/Library.tsx)). Picking a game opens it in a window of its own,
+titled with the game's name and grouped under Games in the dock. Each game has one window; picking
+it again (in the library, Spotlight, Launchpad, or `games tetris` and `./tetris.game` in the
+terminal) brings that window forward.
+
+A cover is drawn, not downloaded ([`covers.tsx`](src/apps/games/covers.tsx)): plain shapes over the
+game's own colour, so it costs nothing, takes the theme's colours and still reads at 130px wide. A
+game without a drawing falls back to its emoji. What you played and what you starred are two small
+lists in this browser ([`prefs.ts`](src/apps/games/prefs.ts), `mvlos.games.recent` and
+`mvlos.games.favourites`): opening a game, in the OS or on its page of its own, puts it first, and
+the star sits on every cover and on the large one.
+
+On a phone the shelf comes three covers to a row, stars and filters grow to finger size, and the
+large cover gives up its poster on the smallest screens so its words fit; a phone on its side gets
+a shorter one. Tapping a cover opens the game, and holding it gives the same menu a right-click
+does.
 
 A game in progress belongs to its window. Closing the window ends the game, and opening it again
 starts at its main menu. A page reload keeps the window, so the game carries on where it was:
@@ -1875,11 +1890,12 @@ Every game also has a page of its own at **`/play/<game>`** (`/play/tetris`, `/p
 window, with no boot log, desktop, top bar or dock ([`src/os/playMode.ts`](src/os/playMode.ts),
 [`Play.tsx`](src/apps/games/Play.tsx)). The game bar slides in at the top edge (or with the
 handle on a touch screen) with the browser's real fullscreen, a link to the list and one back to
-MvL OS. **`/play`** lists the games; a link to a game that doesn't exist lands there with a note.
+MvL OS. **`/play`** is the same library, with each cover a link to that game's page; a link to a
+game that doesn't exist lands there with a note.
 The server gives each page the game's title and description for link previews
 ([`server/index.ts`](server/index.ts)).
 
-The game window's menu (⋯ or right-click) and a right-click on a card in the arcade have **Copy
+The game window's menu (⋯ or right-click) and a right-click on a cover in the library have **Copy
 direct link** and **Open without MvL OS**.
 
 Saves, settings and high scores are the same ones the OS uses (same site, same browser storage), so

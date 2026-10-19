@@ -376,8 +376,8 @@
     },
     "desktop-idle": {
       "DOM nodes": {
-        "baseline": 1158,
-        "budget": 1332,
+        "baseline": 1440,
+        "budget": 1656,
         "kind": "count"
       },
       "frame callbacks / frame": {
