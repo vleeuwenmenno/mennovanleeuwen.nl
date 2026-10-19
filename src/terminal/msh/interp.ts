@@ -34,8 +34,14 @@ type Sink = { write: (text: string) => void; tty: boolean; flush?: () => void }
 type Stdin = { data: string; pos: number }
 type Io = { out: Sink; err: Sink; stdin: Stdin | null }
 
+/** How `alias` shows one: alias name='value' */
+export const aliasLine = (name: string, value: string) => `alias ${name}='${value.replace(/'/g, `'\\''`)}'`
 const red = (s: string) => `{c:red}${s}{/}`
+/** Deepest chain of files that source or run each other */
+const MAX_SOURCE_DEPTH = 16
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+/** A word that can be an alias: no quotes, escapes or expansions in it */
+const ALIAS_WORD = /^[^\s'"\\$`=/|&;()<>{}!*?[\]~#]+$/
 const nullSink: Sink = { tty: false, write: () => {} }
 const bufferSink = () => {
   const sink = { tty: false, text: '', write: (t: string) => void (sink.text += t) }
@@ -76,10 +82,14 @@ type State = {
   locals: Map<string, string | undefined>[]
   loops: number
   getopts: number
+  /** `alias` definitions; scripts (msh file, source from a script) do not expand them, like bash */
+  aliases: Map<string, string>
+  /** Files being sourced or run right now (outermost first): one that runs itself is refused */
+  running: string[]
 }
 
 /** Functions and options outlive one command line: they belong to the terminal's environment. */
-const kept = new WeakMap<Record<string, string>, Pick<State, 'funcs' | 'opts' | 'positional'>>()
+const kept = new WeakMap<Record<string, string>, Pick<State, 'funcs' | 'opts' | 'positional' | 'aliases' | 'running'>>()
 
 let ticks = 0
 /** Lets the page breathe in long loops, so Ctrl+C gets through. */
@@ -311,6 +321,8 @@ class Shell {
   /** The status of the last $(…) in the current command, for a line of assignments only */
   private substStatus: number | null = null
   private depth = 0
+  /** Alias names that do not expand while an expanded alias runs (the loop guard) */
+  private aliasBlock: Set<string> | null = null
 
   constructor(
     readonly base: Base,
@@ -667,7 +679,7 @@ class Shell {
   /** A copy for ( … ) and $(…): changes stay inside. */
   subshell(): Shell {
     const base: Base = { ...this.base }
-    const st: State = { ...this.st, vars: { ...this.st.vars }, funcs: new Map(this.st.funcs), opts: { ...this.st.opts }, positional: [...this.st.positional], locals: [] }
+    const st: State = { ...this.st, vars: { ...this.st.vars }, funcs: new Map(this.st.funcs), opts: { ...this.st.opts }, positional: [...this.st.positional], locals: [], aliases: new Map(this.st.aliases) }
     base.setCwd = (p) => {
       base.cwd = p
       st.vars.PWD = p
@@ -679,6 +691,7 @@ class Shell {
   child(arg0: string, positional: string[]): Shell {
     const sh = this.subshell()
     sh.st.funcs.clear()
+    sh.st.aliases = new Map()
     sh.st.arg0 = arg0
     sh.st.positional = positional
     sh.st.opts = { e: false, x: false, u: false, pipefail: false }
@@ -747,7 +760,25 @@ class Shell {
         return status
       }
       case 'simple': {
-        const s = await this.simple(n, io)
+        let node: Node = n
+        let block: Set<string> | null = null
+        if (this.st.aliases.size && n.words.length) {
+          try {
+            ;({ node, block } = this.expandAlias(n))
+          } catch (e) {
+            return this.caught(e, io)
+          }
+        }
+        if (node.t !== 'simple') {
+          const saved = this.aliasBlock
+          this.aliasBlock = block
+          try {
+            return await this.exec(node, io, cond)
+          } finally {
+            this.aliasBlock = saved
+          }
+        }
+        const s = await this.simple(node, io)
         if (!cond) this.errexit(s)
         return s
       }
@@ -913,6 +944,41 @@ class Shell {
       }
     }
     return status
+  }
+
+  /**
+   * Alias expansion for the first word of a simple command (a plain, unquoted word). Each alias
+   * name expands at most once per command, so `alias ls='ls -l'` and `alias a=b b=a` end. A value
+   * that is one simple command is spliced in; a pipeline or list gets the rest of the words
+   * appended to its text and runs as that.
+   */
+  private expandAlias(n: Node & { t: 'simple' }): { node: Node; block: Set<string> } {
+    const seen = new Set(this.aliasBlock ?? [])
+    let node = n
+    for (;;) {
+      const word = node.words[0]
+      const value = word !== undefined && ALIAS_WORD.test(word) && !seen.has(word) ? this.st.aliases.get(word) : undefined
+      if (value === undefined) return { node, block: seen }
+      seen.add(word)
+      let tree: Node
+      const rest = node.words.slice(1)
+      try {
+        tree = parse(value)
+      } catch (e) {
+        throw new ShellError(`alias ${word}: ${(e as Error).message}`)
+      }
+      if (tree.t === 'simple' && !tree.redirs.length) {
+        node = { ...node, assigns: [...tree.assigns, ...node.assigns], words: [...tree.words, ...rest] }
+        continue
+      }
+      let full: Node
+      try {
+        full = parse(rest.length ? `${value} ${rest.join(' ')}` : value)
+      } catch (e) {
+        throw new ShellError(`alias ${word}: ${(e as Error).message}`)
+      }
+      return { node: node.redirs.length ? { t: 'group', body: full, redirs: node.redirs } : full, block: seen }
+    }
   }
 
   private async simple(n: Node & { t: 'simple' }, io: Io): Promise<number> {
@@ -1090,7 +1156,9 @@ class Shell {
   }
 
   /** How `type` and `command -v` describe a name. */
-  describe(name: string): { kind: 'function' | 'builtin' | 'file' | 'keyword'; text: string } | null {
+  describe(name: string): { kind: 'alias' | 'function' | 'builtin' | 'file' | 'keyword'; text: string } | null {
+    const aliased = this.st.aliases.get(name)
+    if (aliased !== undefined) return { kind: 'alias', text: `${name} is aliased to \`${aliased}'` }
     if (['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'in', '{', '}', '!', 'function'].includes(name)) return { kind: 'keyword', text: `${name} is a shell keyword` }
     if (this.st.funcs.has(name)) return { kind: 'function', text: `${name} is a function` }
     if (BUILTINS[name]) return { kind: 'builtin', text: `${name} is a shell builtin` }
@@ -1414,13 +1482,47 @@ const BUILTINS: Record<string, Builtin> = {
     if (!args[0]) return fail(io, 'source: filename argument required', 2)
     const text = await sh.readScript(args[0])
     if (text === null) return fail(io, `source: ${args[0]}: No such file or directory`)
+    const abs = resolvePath(sh.base.cwd, args[0])
+    if (sh.st.running.includes(abs) || sh.st.running.length >= MAX_SOURCE_DEPTH) return fail(io, `source: ${args[0]}: already running, skipped`)
     const savedArgs = sh.st.positional
     if (args.length > 1) sh.st.positional = args.slice(1)
+    sh.st.running.push(abs)
     try {
       return await sh.runSource(text, io, args[0])
     } finally {
+      sh.st.running.pop()
       if (args.length > 1) sh.st.positional = savedArgs
     }
+  },
+  alias: (sh, args, io) => {
+    const list = args.filter((a) => a !== '-p' && a !== '--')
+    if (!list.length) {
+      for (const [name, value] of [...sh.st.aliases].sort(([a], [b]) => a.localeCompare(b, 'en'))) io.out.write(`${aliasLine(name, value)}\n`)
+      return 0
+    }
+    let status = 0
+    for (const a of list) {
+      const eq = a.indexOf('=')
+      if (eq < 0) {
+        const value = sh.st.aliases.get(a)
+        if (value === undefined) status = fail(io, `alias: ${a}: not found`)
+        else io.out.write(`${aliasLine(a, value)}\n`)
+        continue
+      }
+      const name = a.slice(0, eq)
+      if (!name || !ALIAS_WORD.test(name)) status = fail(io, `alias: \`${name}': invalid alias name`)
+      else sh.st.aliases.set(name, a.slice(eq + 1))
+    }
+    return status
+  },
+  unalias: (sh, args, io) => {
+    if (!args.length) return fail(io, 'unalias: usage: unalias [-a] name [name ...]', 2)
+    let status = 0
+    for (const a of args) {
+      if (a === '-a') sh.st.aliases.clear()
+      else if (!sh.st.aliases.delete(a)) status = fail(io, `unalias: ${a}: not found`)
+    }
+    return status
   },
   '.': (sh, args, io) => BUILTINS.source(sh, args, io),
   eval: async (sh, args, io) => {
@@ -1439,7 +1541,7 @@ const BUILTINS: Record<string, Builtin> = {
       for (const name of args.slice(1)) {
         const d = sh.describe(name)
         if (!d) status = 1
-        else io.out.write(`${args[0] === '-V' ? d.text : d.kind === 'file' ? `/bin/${name}` : name}\n`)
+        else io.out.write(`${args[0] === '-V' ? d.text : d.kind === 'file' ? `/bin/${name}` : d.kind === 'alias' ? aliasLine(name, sh.st.aliases.get(name)!) : name}\n`)
       }
       return status
     }
@@ -1603,7 +1705,16 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   const child = sh.child(arg0, positional)
   child.st.opts.x = trace
   child.st.opts.e = errexit
-  return child.runSource(src, io, label)
+  if (label === '-c') return child.runSource(src, io, label)
+  // A script that starts itself again (msh ~/.mvshrc inside ~/.mvshrc) is refused, not looped.
+  const abs = resolvePath(sh.base.cwd, label)
+  if (sh.st.running.includes(abs) || sh.st.running.length >= MAX_SOURCE_DEPTH) return fail(io, `${label}: already running, skipped`)
+  sh.st.running.push(abs)
+  try {
+    return await child.runSource(src, io, label)
+  } finally {
+    sh.st.running.pop()
+  }
 }
 
 // --- entry points ---------------------------------------------------------------------------------
@@ -1616,10 +1727,10 @@ function topShell(shell: Base, interactive: boolean): Shell {
     shell.setCwd(p)
   }
   let keep = kept.get(shell.env)
-  if (!keep) kept.set(shell.env, (keep = { funcs: new Map(), opts: { e: false, x: false, u: false, pipefail: false }, positional: [] }))
+  if (!keep) kept.set(shell.env, (keep = { funcs: new Map(), opts: { e: false, x: false, u: false, pipefail: false }, positional: [], aliases: new Map(), running: [] }))
   // set -e at the prompt lasts for that line: the terminal does not close on a failure.
   if (interactive) keep.opts.e = false
-  const st: State = { vars: shell.env, funcs: keep.funcs, opts: keep.opts, positional: keep.positional, arg0: 'msh', locals: [], loops: 0, getopts: 0 }
+  const st: State = { vars: shell.env, funcs: keep.funcs, opts: keep.opts, positional: keep.positional, arg0: 'msh', locals: [], loops: 0, getopts: 0, aliases: keep.aliases, running: keep.running }
   return new Shell(base, st, interactive)
 }
 
@@ -1682,6 +1793,55 @@ export async function runCaptured(src: string, shell: Base): Promise<{ output: s
   const out = bufferSink()
   const status = await sh.runSource(src, { out, err: out, stdin: null }, '-c')
   return { output: hooks.strip(out.text).replace(/\n$/, ''), status }
+}
+
+/** The aliases of a terminal session (its environment object), for completion, which and the rc. */
+export const aliasesOf = (env: Record<string, string>): ReadonlyMap<string, string> => kept.get(env)?.aliases ?? new Map()
+
+/**
+ * Runs a startup file (~/.mvshrc) in the terminal's own shell, so what it sets (aliases,
+ * variables, cwd, functions) stays: statement by statement, so one broken line does not stop the
+ * rest. Silent unless a line prints something or fails; a failure names the line.
+ */
+export async function runRc(src: string, shell: Base, label: string, abs: string): Promise<void> {
+  const sh = topShell(shell, true)
+  if (sh.st.running.includes(abs)) return
+  sh.st.running.push(abs)
+  const lines = src.split('\n')
+  const tty = screen(shell.print)
+  try {
+    let i = 0
+    while (i < lines.length) {
+      const first = i + 1
+      let chunk = lines[i++]
+      // A statement that goes on (an open quote, `if` without `fi`, a heredoc) takes the next lines too.
+      while (i < lines.length && unfinished(chunk)) chunk += `\n${lines[i++]}`
+      if (!chunk.trim() || chunk.trim().startsWith('#')) continue
+      const buf = { tty: false, text: '', failed: false, write: (t: string) => void (buf.text += t) }
+      const io: Io = { out: buf, err: { tty: false, write: (t) => ((buf.failed = true), buf.write(t)) }, stdin: null }
+      try {
+        const tree = parse(chunk)
+        sh.setStatus(await sh.exec(tree, io))
+      } catch (e) {
+        if (e instanceof AbortSignal_) break
+        try {
+          sh.caught(e instanceof Error && !(e instanceof Signal) ? e : new ShellError(String(e)), io)
+        } catch {
+          buf.failed = true
+          buf.write(`${red(`msh: ${(e as Error).message}`)}\n`)
+        }
+        buf.failed = true
+      }
+      if (buf.text) {
+        if (buf.failed) tty.write(`{c:muted}${label}, line ${first}:{/}\n`)
+        tty.write(buf.text)
+      }
+      if (shell.signal.aborted) break
+    }
+  } finally {
+    tty.flush?.()
+    sh.st.running.pop()
+  }
 }
 
 /** Whether a line is unfinished (an open quote, `if` without `fi`), so more could be typed. */

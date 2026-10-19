@@ -5,7 +5,9 @@ import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
 import { CmdError } from './types'
 import { writeError } from './devices'
-import { kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
+import { cvMode } from '../os/cvMode'
+import { keptRc, RC_NAME, RC_PATH, setKeptRc } from './rcfile'
+import { HOME, kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
 
 // The filesystem as the terminal sees it: the site's own files (vfs.ts), with whatever /etc/fstab
 // mounts on top (data/mounts.ts): Seafile libraries under /mnt/seafile, a library on ~, bind
@@ -120,9 +122,16 @@ function browserNode(abs: string, path: string): Node | null {
   }
 }
 
+/** ~/.mvshrc where home is read-only: kept in this browser (rcfile.ts). */
+function keptRcNode(): FileNode {
+  const text = keptRc() ?? ''
+  return { type: 'file', name: RC_NAME, size: new TextEncoder().encode(text).length, content: () => keptRc() ?? '' }
+}
+
 /** Names a folder gains on top of its own: mount points right inside it. */
 function extraChildren(abs: string): Map<string, Node> {
   const out = new Map<string, Node>()
+  if (abs === HOME && keptRc() !== null && whereIs(RC_PATH).kind === 'local') out.set(RC_NAME, keptRcNode())
   for (const m of mounts()) {
     if (m.target === abs || parentOf(m.target) !== abs) continue
     const node = lookup(m.target)
@@ -138,6 +147,7 @@ export function lookup(abs: string): Node | null {
     const node = siteLookup(abs) as FileNode
     return { ...node, size: new TextEncoder().encode(node.content()).length, ro: true }
   }
+  if (abs === RC_PATH && w.kind === 'local' && keptRc() !== null) return keptRcNode()
   let node: Node | null = w.kind === 'local' ? siteLookup(w.path) : w.kind === 'sf' ? sfNode(w.sf, abs === '/' ? '' : baseOf(abs), w.ro) : w.kind === 'browser' ? browserNode(abs, w.path) : null
   // A mount point that only exists because something is mounted on it.
   if (!node && mounts().some((m) => m.target === abs)) node = { type: 'dir', name: baseOf(abs), children: new Map() }
@@ -297,7 +307,7 @@ export async function readFileText(abs: string): Promise<{ text: string; ro: boo
   if (!node || node.type !== 'file') return null
   if (node.browser) return { text: await readBrowserText(node.browser), ro: false }
   // The site's own files under the browser mount: readable, and saving makes the browser's copy.
-  if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
+  if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && abs !== RC_PATH && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
   const text = await readText(node.sf)
   texts.set(node.sf, { text, mtime: node.mtime ?? 0 })
   return { text, ro: !!node.ro }
@@ -324,6 +334,12 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   }
   const w = whereIs(abs)
   if (w.kind === 'missing') throw err(`${who}: ${target}: Transport endpoint is not connected`)
+  if (abs === RC_PATH && w.kind === 'local' && !cvMode()) {
+    const prev = keptRc()
+    const body = content && !content.endsWith('\n') ? `${content}\n` : content
+    setKeptRc(append && prev ? (prev.endsWith('\n') ? prev + body : `${prev}\n${body}`) : body)
+    return
+  }
   if (w.kind === 'local') return writeTmp('/', w.path, content, append)
   if (w.kind === 'browser') {
     await browserFilesReady()
@@ -414,6 +430,7 @@ export async function makeDir(cwd: string, arg: string, parents: boolean) {
 export async function touchFile(cwd: string, arg: string) {
   const abs = resolvePath(cwd, arg)
   if (lookup(abs)) return
+  if (abs === RC_PATH && whereIs(abs).kind === 'local' && !cvMode()) return setKeptRc('')
   if (abs.startsWith('/tmp/')) return writeTmp('/', abs, '', true)
   const where = whereIs(abs)
   if (where.kind === 'browser') {
@@ -444,6 +461,7 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
     ;(siteLookup('/tmp') as DirNode).children.delete(baseOf(abs))
     return
   }
+  if (abs === RC_PATH && node.type === 'file' && !node.sf && !node.browser) return setKeptRc(null)
   const w = whereIs(abs)
   if (w.kind === 'sf' && parseSf(w.sf)?.p === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
   if (w.kind === 'browser') {

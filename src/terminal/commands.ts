@@ -41,7 +41,7 @@ import { vtCommands } from './vt/demo'
 import { tarCommands } from './tar'
 import { unzipCommands } from './unzip'
 import { MEDIA_APP } from '../data/media'
-import { runLine, setShellHooks } from './msh/interp'
+import { aliasesOf, runLine, setShellHooks } from './msh/interp'
 import { meansPath, shellQuote } from './words'
 import { MSH_MAN } from '../data/mshReference'
 
@@ -413,7 +413,7 @@ export const commands: Record<string, Command> = {
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
-        ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'type', 'sleep', 'seq', 'basename', 'dirname']],
+        ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'alias', 'unalias', 'type', 'sleep', 'seq', 'basename', 'dirname']],
         ['Agents', ['agents', 'skills']],
         ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
@@ -423,6 +423,7 @@ export const commands: Record<string, Command> = {
         '',
         `Pipes work: ${c('cyan', 'cat cv.md | grep -i go')}   Writes go to /tmp: ${c('cyan', 'echo hi > /tmp/x')}`,
         `Scripts too: ${c('cyan', 'for f in *; do echo $f; done')}   The shell's syntax: ${c('cyan', 'man msh')}`,
+        `Shortcuts: ${c('cyan', "alias ll='ls -l'")}. Put alias lines in ${c('cyan', '~/.mvshrc')} (${c('cyan', 'nano ~/.mvshrc')}) and every terminal runs them at start.`,
         `${c('muted', 'Tab completes, ↑/↓ walks history, Ctrl+L clears, `man <cmd>` explains one.')}`,
       ].join('\n')
     },
@@ -778,7 +779,10 @@ export const commands: Record<string, Command> = {
   which: {
     desc: 'locate a command',
     usage: 'which <command>',
-    run: ({ args }) => args.map((a) => (commands[a] ? `/bin/${a}` : `${a} not found`)).join('\n'),
+    run: ({ args, env }) => {
+      const aliases = aliasesOf(env)
+      return args.map((a) => (aliases.has(a) ? `${a}: aliased to ${aliases.get(a)}` : commands[a] ? `/bin/${a}` : `${a} not found`)).join('\n')
+    },
   },
   clear: { desc: 'clear the screen', run: (ctx) => ctx.clear() },
   exit: { desc: 'close this terminal', run: (ctx) => void ctx.exit() },
@@ -1306,7 +1310,9 @@ export const commands: Record<string, Command> = {
   printf: { desc: 'formatted output', usage: 'printf <format> [arguments…]', run: viaShell('printf') },
   read: { desc: 'read a line into variables', usage: 'read [-r] [-p prompt] [name…]', run: viaShell('read') },
   source: { desc: 'run a file in this shell', usage: 'source <file> [arguments…]', run: viaShell('source') },
-  type: { desc: 'what a name is: function, builtin or command', usage: 'type <name>…', run: viaShell('type') },
+  alias: { desc: 'give a command another name', usage: "alias [name[=value]]   e.g. alias ll='ls -l'", run: viaShell('alias') },
+  unalias: { desc: 'remove an alias', usage: 'unalias [-a] <name>…', run: viaShell('unalias') },
+  type: { desc: 'what a name is: alias, function, builtin or command', usage: 'type <name>…', run: viaShell('type') },
   sleep: { desc: 'wait a while', usage: 'sleep <seconds>[s|m|h]', run: viaShell('sleep') },
   true: { desc: 'succeed', hidden: true, run: () => '' },
   false: { desc: 'fail', hidden: true, run: () => { throw new CmdError('', true) } },
@@ -1553,7 +1559,7 @@ export type Completion = { value: string; label: string; hint?: string }
 
 /** What Tab could complete the last word of `line` to: commands for the first word, paths (and app
  * names after `open`) for the rest. `before` is the line up to that word. */
-export function completions(line: string, cwd: string): { before: string; word: string; items: Completion[] } {
+export function completions(line: string, cwd: string, aliases: Iterable<string> = []): { before: string; word: string; items: Completion[] } {
   const raw = WORD_RE.exec(line)![1]
   const before = line.slice(0, line.length - raw.length)
   const word = unescapeArg(raw)
@@ -1563,7 +1569,14 @@ export function completions(line: string, cwd: string): { before: string; word: 
   const own = !isFirst && commands[name]?.complete?.(args, word)
   if (own && own.length) return { before, word, items: own }
   if (isFirst && !word.includes('/'))
-    return { before, word, items: Object.keys(commands).filter((k) => !commands[k].hidden && k.startsWith(word)).map((k) => ({ value: k, label: k, hint: commands[k].desc })) }
+    return {
+      before,
+      word,
+      items: [
+        ...[...aliases].filter((a) => a.startsWith(word)).sort().map((a) => ({ value: a, label: a, hint: 'alias' })),
+        ...Object.keys(commands).filter((k) => !commands[k].hidden && k.startsWith(word) && ![...aliases].includes(k)).map((k) => ({ value: k, label: k, hint: commands[k].desc })),
+      ],
+    }
   const slash = word.lastIndexOf('/')
   const dirPart = slash >= 0 ? word.slice(0, slash + 1) : ''
   const namePart = word.slice(slash + 1)
@@ -1581,8 +1594,8 @@ export function completions(line: string, cwd: string): { before: string; word: 
 }
 
 /** Tab: one match completes the word; several complete what they share, and come back to pick from. */
-export function complete(line: string, cwd: string): { line: string; items: Completion[] } {
-  const { before, word, items } = completions(line, cwd)
+export function complete(line: string, cwd: string, aliases: Iterable<string> = []): { line: string; items: Completion[] } {
+  const { before, word, items } = completions(line, cwd, aliases)
   if (items.length === 1) {
     const done = items[0].value
     return { line: before + escapeArg(done) + (done.endsWith('/') ? '' : ' '), items: [] }
