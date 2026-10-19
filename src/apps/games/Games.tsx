@@ -5,8 +5,8 @@ import { playUrl } from '../../os/playMode'
 import { useWM, type WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
-import { bestGladiatorLevel } from './gladiator/saves'
-import { highScores } from './shared'
+import { Library } from './Library'
+import { notePlayed } from './prefs'
 import { holdSession, newSession } from './session'
 import { Minecraft } from './Minecraft'
 import { Minesweeper } from './Minesweeper'
@@ -32,23 +32,6 @@ const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
 }
 
 export const GAMES = GAME_CATALOG.map((g) => ({ ...g, component: COMPONENTS[g.id] }))
-
-export function readBest(id: string) {
-  try {
-    const all = highScores.get()
-    if (id === 'minesweeper') return all['minesweeper-easy'] !== undefined ? `${all['minesweeper-easy']}s` : null
-    if (id === 'minecraft') return 'touch grass'
-    if (id === 'empires') return all.empires !== undefined ? `${all.empires} ${all.empires === 1 ? 'victory' : 'victories'}` : null
-    if (id === 'pool') return all.pool !== undefined ? `${all.pool} ${all.pool === 1 ? 'win' : 'wins'}` : null
-    if (id === 'gladiator') {
-      const top = bestGladiatorLevel()
-      return top ? `level ${top}` : null
-    }
-    return all[id] ?? null
-  } catch {
-    return null
-  }
-}
 
 /**
  * "Fullscreen" for a game inside the OS: the game panel covers the whole page, hiding the top
@@ -152,6 +135,8 @@ function GameWindow({ win, game }: { win: WinState; game: (typeof GAMES)[number]
   }, [session, wm, win.pid])
   // Closing the window ends the game: what it kept to carry on after a reload goes with it.
   useEffect(() => (session ? holdSession(session) : undefined), [session])
+  // The library puts the game just opened first, and says how long ago you stopped playing it.
+  useEffect(() => notePlayed(game.id), [game.id])
   const full = useGameFullscreen()
   const { exit, enter } = full
   // Closing the window also leaves fullscreen.
@@ -189,28 +174,12 @@ function GameWindow({ win, game }: { win: WinState; game: (typeof GAMES)[number]
 
 function Arcade() {
   const wm = useWM()
+  const open = (id: string) => wm.open('games', { game: id })
   return (
-    <div className="games">
-      <header className="games-head">
-        <h2>Arcade</h2>
-        <p className="muted">Small games, written for this site. Each opens in its own window; closing it ends the game. High scores stay in your browser.</p>
-      </header>
-      <div className="games-grid">
-        {GAMES.map((g) => (
-          <button
-            key={g.id}
-            className="game-card"
-            style={{ ['--p' as string]: g.color }}
-            onClick={() => wm.open('games', { game: g.id })}
-            onContextMenu={(e) => openContextMenu(e, [{ label: 'Play', onSelect: () => wm.open('games', { game: g.id }) }, { separator: true }, ...gameLinkItems(g.id)])}
-          >
-            <span className="game-card-art">{g.glyph}</span>
-            <strong>{g.name}</strong>
-            <span className="muted">{g.blurb}</span>
-            <span className="game-card-best">Best: {readBest(g.id) ?? '—'}</span>
-          </button>
-        ))}
-      </div>
-    </div>
+    <Library
+      subtitle="Small games, written for this site. Each opens in its own window; closing it ends the game. High scores stay in your browser."
+      onOpen={open}
+      onMenu={(e, id) => openContextMenu(e, [{ label: 'Play', onSelect: () => open(id) }, { separator: true }, ...gameLinkItems(id)])}
+    />
   )
 }

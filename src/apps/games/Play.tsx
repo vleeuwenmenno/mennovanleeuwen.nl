@@ -6,7 +6,9 @@ import { notify } from '../../os/notify'
 import { playGameId } from '../../os/playMode'
 import { REFUSED } from '../../os/Shell'
 import { SoloWindowProvider, type WinState } from '../../os/wm'
-import { FullscreenIcon, GAMES, readBest, useGameBar } from './Games'
+import { FullscreenIcon, GAMES, useGameBar } from './Games'
+import { Library } from './Library'
+import { notePlayed } from './prefs'
 import { playSession } from './session'
 
 // A game by its direct link (/play/<game>, src/os/playMode.ts): just the game, filling the page,
@@ -91,6 +93,7 @@ function PlayGame({ game }: { game: Game }) {
   // The game's "window": the whole page, always focused, with the tab's session for what the game
   // keeps across a reload.
   const [session] = useState(() => playSession(game.id))
+  useEffect(() => notePlayed(game.id), [game.id])
   const win = useMemo<WinState>(
     () => ({ pid: 1, app: 'games', x: 0, y: 0, w: window.innerWidth, h: window.innerHeight, z: 1, minimized: false, maximized: true, props: { game: game.id, session }, openedAt: Date.now() }),
     [game.id, session],
@@ -136,29 +139,22 @@ function PlayArcade({ missing }: { missing: string | null }) {
   usePageIdentity('Arcade · MvL OS', glyphIcon('🕹️'))
   return (
     <div className="play-arcade">
-      <div className="games">
-        <header className="games-head">
-          <h2>Arcade</h2>
-          <p className="muted">
+      <Library
+        title="Arcade"
+        subtitle={
+          <>
             Small games, written for <a href="/">MvL OS</a>. Each one plays on a page of its own; saves and high scores stay in your browser, shared with the desktop.
-          </p>
-          {missing !== null && (
+          </>
+        }
+        note={
+          missing !== null && (
             <p className="play-missing" role="status">
               There is no game called “{missing}”. These are the ones there are.
             </p>
-          )}
-        </header>
-        <div className="games-grid">
-          {GAMES.map((g) => (
-            <a key={g.id} className="game-card" href={`/play/${g.id}`} style={{ ['--p' as string]: g.color }}>
-              <span className="game-card-art">{g.glyph}</span>
-              <strong>{g.name}</strong>
-              <span className="muted">{g.blurb}</span>
-              <span className="game-card-best">Best: {readBest(g.id) ?? '—'}</span>
-            </a>
-          ))}
-        </div>
-      </div>
+          )
+        }
+        hrefFor={(id) => `/play/${id}`}
+      />
     </div>
   )
 }
