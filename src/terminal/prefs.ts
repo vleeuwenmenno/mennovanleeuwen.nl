@@ -18,9 +18,11 @@ export type TerminalPrefs = {
   extraKeys: boolean
   /** The tab strip: only with two or more tabs (like Ghostty), or always */
   tabBar: 'auto' | 'always'
+  /** Run ~/.mvshrc when a terminal opens */
+  runRc: boolean
 }
 
-const DEFAULTS: TerminalPrefs = { fontDesktop: FONT_DEFAULT, fontMobile: FONT_DEFAULT, extraKeys: true, tabBar: 'auto' }
+const DEFAULTS: TerminalPrefs = { fontDesktop: FONT_DEFAULT, fontMobile: FONT_DEFAULT, extraKeys: true, tabBar: 'auto', runRc: true }
 
 export const clampFont = (px: number) => Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(px)))
 const font = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? clampFont(v) : FONT_DEFAULT)
@@ -31,7 +33,7 @@ const store = synced<TerminalPrefs>('terminal', DEFAULTS, {
   normalize: (v) => {
     if (typeof v === 'number') return { ...DEFAULTS, fontDesktop: font(v), fontMobile: font(v) }
     const p = v && typeof v === 'object' ? (v as Partial<TerminalPrefs>) : {}
-    return { fontDesktop: font(p.fontDesktop), fontMobile: font(p.fontMobile), extraKeys: p.extraKeys !== false, tabBar: p.tabBar === 'always' ? 'always' : 'auto' }
+    return { fontDesktop: font(p.fontDesktop), fontMobile: font(p.fontMobile), extraKeys: p.extraKeys !== false, tabBar: p.tabBar === 'always' ? 'always' : 'auto', runRc: p.runRc !== false }
   },
 })
 

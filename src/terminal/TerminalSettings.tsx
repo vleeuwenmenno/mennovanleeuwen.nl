@@ -66,6 +66,17 @@ export function TerminalPrefsBody({ zoom, onAppearance }: { zoom: ReactNode; onA
       </section>
 
       <section className="set-section">
+        <h4>Startup file</h4>
+        <label className="set-check">
+          <input type="checkbox" checked={prefs.runRc} onChange={(e) => setTerminalPrefs({ runRc: e.target.checked })} />
+          Run ~/.mvshrc when a terminal opens
+        </label>
+        <p className="muted set-help">
+          Put aliases, exports and other shell lines in it, like a .bashrc: <code>alias ll='ls -l'</code>. Make it with <code>nano ~/.mvshrc</code>. A line that fails shows its number and the rest still runs. Signed out, it is kept in this browser.
+        </p>
+      </section>
+
+      <section className="set-section">
         <h4>Touch screens</h4>
         <label className="set-check">
           <input type="checkbox" checked={prefs.extraKeys} onChange={(e) => setTerminalPrefs({ extraKeys: e.target.checked })} />

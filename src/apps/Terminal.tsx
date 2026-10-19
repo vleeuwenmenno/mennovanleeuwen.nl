@@ -14,11 +14,13 @@ import { setAccent } from '../os/theme'
 import { useIsMobile } from '../os/useIsMobile'
 import { useMediaQuery } from '../os/useMediaQuery'
 import { setCloseGuard, useWM, type WinState } from '../os/wm'
+import { aliasesOf } from '../terminal/msh/interp'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
 import { ExtraKeys, useStickyMods, type ModKeys } from '../terminal/ExtraKeys'
 import { prepareFolder } from '../terminal/fs'
 import { quotePaths } from '../terminal/words'
-import { useTerminalPrefs } from '../terminal/prefs'
+import { terminalPrefs, useTerminalPrefs } from '../terminal/prefs'
+import { runStartupFile } from '../terminal/startup'
 import { SlTrain } from '../terminal/SlTrain'
 import { TerminalSettings } from '../terminal/TerminalSettings'
 import { HOME, prettyPath, resolvePath } from '../terminal/vfs'
@@ -348,6 +350,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     return () => void settingsOpeners.delete(win.pid)
   }, [win.pid, embedded, onLogout, active])
 
+  const env = useRef<Record<string, string>>({ USER: HANDLE, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   // Tab opens a picker, like fzf: after `go <alias>` your go links, otherwise the commands, files
   // and folders the word could become (once there is more than one). It narrows as you type; Tab
   // and ↓ (Shift+Tab and ↑, Ctrl+N/P) cycle, → puts the pick on the line, Enter does too (and
@@ -359,7 +362,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   const [picking, setPicking] = useState<{ before: string } | null>(null)
   const [pick, setPick] = useState(0)
   const go = useGoSuggestionState(goTemplate, goWord ?? '', !!picking && goMode)
-  const comp = useMemo(() => (picking && !goMode ? completions(value, cwd) : null), [picking, goMode, value, cwd])
+  const comp = useMemo(() => (picking && !goMode ? completions(value, cwd, aliasesOf(env.current).keys()) : null), [picking, goMode, value, cwd])
   const choices: Completion[] = goMode ? go.list.map((g) => ({ value: g.name, label: g.name, hint: g.target.replace(/^https?:\/\//, '').replace(/\/$/, '') })) : (comp?.items ?? [])
   const typed = goMode ? goWord! : (comp?.word.split('/').pop() ?? '')
   const lastWord = WORD_RE.exec(value)![1]
@@ -373,7 +376,6 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   }, [pick])
   const history = useRef<string[]>(loadHistory())
   const histIdx = useRef<number | null>(null)
-  const env = useRef<Record<string, string>>({ USER: HANDLE, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   const inputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const keyHandler = useRef<((key: string, text?: string) => boolean) | null>(null)
@@ -659,12 +661,44 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
 
   env.current.PWD = cwd
 
+  // ~/.mvshrc runs once as the session opens (aliases, exports, cd…); the first command waits for it.
+  const rcDone = useRef<Promise<void> | null>(null)
+  const rcCwd = useRef(cwd)
+  rcCwd.current = cwd
+  useEffect(() => {
+    if (rcDone.current || !terminalPrefs().runRc) return
+    const base: Parameters<typeof runStartupFile>[0] = {
+      cwd: rcCwd.current,
+      setCwd: (p) => {
+        base.cwd = p
+        setCwd(p)
+      },
+      env: env.current,
+      history: history.current,
+      windows: windowsRef.current,
+      openApp: wm.open,
+      openNewApp: wm.openNew,
+      closeWindow: wm.close,
+      clear: () => {},
+      exit: () => {},
+      console: !!onLogout,
+      setAccent,
+      print: (text) => setEntries((e) => [...e, { id: nextId++, kind: 'out', text }]),
+      live: () => {},
+      size: { cols: 80, rows: 24 },
+      onKey: () => {},
+    }
+    rcDone.current = runStartupFile(base)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function submit(line: string) {
     const trimmed = line.trim()
     setEntries((e) => [...e, { id: nextId++, kind: 'cmd', cwd, text: line }])
     setValue('')
     histIdx.current = null
     if (!trimmed) return
+    await rcDone.current
     if (history.current[history.current.length - 1] !== trimmed) {
       history.current.push(trimmed)
       history.current = history.current.slice(-200)
@@ -887,10 +921,10 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       const at = value
       void prepareFolder(resolvePath(cwd, word.includes('/') ? word.slice(0, word.lastIndexOf('/') + 1) : '.')).then(() => {
         if (inputRef.current?.value !== at) return
-        const { line, items } = complete(at, cwd)
+        const { line, items } = complete(at, cwd, aliasesOf(env.current).keys())
         setValue(line)
         if (items.length) {
-          setPicking({ before: completions(line, cwd).before })
+          setPicking({ before: completions(line, cwd, aliasesOf(env.current).keys()).before })
           setPick(0)
         }
       })

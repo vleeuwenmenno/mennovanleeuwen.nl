@@ -336,6 +336,7 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
   c, is Ctrl+C). The keys go through the same handler as a real keyboard, so completion, history
   and full-screen programs get them as usual. The row can be turned off.
 - **Tab bar**: from the second tab on (the default, like Ghostty), or always.
+- **Startup file**: run `~/.mvshrc` when a terminal opens (on by default; see below).
 
 ### The shell, agents and skills
 
@@ -346,6 +347,33 @@ builtins like `test`/`[`, `printf`, `read`, `source`, `eval` and `getopts`. `msh
 and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts. `man msh` shows the
 reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
 built-in `msh` skill.
+
+**Aliases and `~/.mvshrc`.** `alias ll='ls -l'` gives a command another name; `alias` lists them,
+`alias ll` shows one, `unalias ll` (or `unalias -a`) removes them. An alias replaces the first word
+of a simple command, also after `;`, `&&`, `||` and `|`, in `if` conditions, functions and
+subshells; not when the word is quoted or escaped, and not in scripts (`msh file`, `msh -c`), as in
+bash. A value that is a pipeline or a list works too (the rest of the words are appended to it).
+Each name expands at most once per command, so `alias ls='ls -l'` and two aliases naming each
+other end instead of looping (the second one then reports "command not found"). Aliases belong to
+one terminal tab (kept per environment in [`msh/interp.ts`](src/terminal/msh/interp.ts), next to
+the functions); `type`, `command -v` and `which` say "aliased to", `help` lists `alias`/`unalias`,
+and Tab offers alias names for the first word.
+
+`~/.mvshrc` is run once when a terminal opens, in the tab's own shell, so aliases, `export`ed
+variables, `cd` and functions it sets stay ([`src/terminal/startup.ts`](src/terminal/startup.ts),
+`runRc` in the interpreter). It runs statement by statement: comments and blank lines are skipped,
+a multi-line `if`/heredoc counts as one statement, a failing line prints `~/.mvshrc, line N:` and
+its error and the rest still runs. It is silent otherwise, stops after 5 s, is skipped when the
+account or files do not answer within 4 s, and the first command typed waits for it. A file that
+sources itself (`source`, `.` or `msh ~/.mvshrc`) is refused with "already running, skipped".
+There is no file until you make one (`nano ~/.mvshrc`, `echo "alias ll='ls -l'" >> ~/.mvshrc`);
+`help` and the Terminal settings mention it. Where it lives follows home: in the browser's files
+or Seafile once signed in (a normal file there, so Zed, Files and the terminal all edit it); signed
+out, where home is read-only, `~/.mvshrc` is still a file the terminal can create, read and remove
+(`nano`, `>`, `>>`, `rm`), but its text is kept in this browser
+([`src/terminal/rcfile.ts`](src/terminal/rcfile.ts), a `synced()` value, so local without an
+account). On the CV page home stays read-only and has none. The agents' `terminal` tool does not
+run it. `pnpm check:msh-rc` tests all of this.
 
 `agents` ([`src/terminal/agents/`](src/terminal/agents)) is the Agents app as a coding-agent CLI.
 In a folder on Seafile, that folder becomes the thread's work folder:

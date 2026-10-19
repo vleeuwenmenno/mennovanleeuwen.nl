@@ -104,9 +104,26 @@ break [n] and continue [n] work in loops; local x=1 keeps a variable to a functi
     shift [n]  local  return [n]  exit [n]  break [n]  continue [n]
     eval words              run the words as a command line
     command [-v] name       run a command, skipping functions (-v: say what it is)
-    type name               what a name is
+    type name               what a name is (an alias, function, builtin or command)
+    alias [name[=value]]    list, show or define an alias; unalias [-a] name removes one
     getopts spec var        parse options in a loop
     sleep 1.5               wait (s, m, h suffixes)
+
+## Aliases and ~/.mvshrc
+
+    alias ll='ls -l'        a new first word for a command: ll /tmp runs ls -l /tmp
+    alias                   list them; alias ll shows one
+    unalias ll              remove it (unalias -a removes all)
+
+An alias replaces the first word of a command, also after ; && || and | (not inside quotes, and
+not in scripts). A name expands once per command, so alias ls='ls -l' and two aliases that name
+each other do not loop. Aliases belong to one terminal tab.
+
+~/.mvshrc is a file in your home folder that every terminal tab runs when it opens, like .bashrc:
+alias lines, export, cd, anything msh runs. It is silent unless a line prints something; a line
+that fails shows its number and the rest still runs. Create it with nano ~/.mvshrc or
+echo "alias ll='ls -l'" >> ~/.mvshrc. Where ~ cannot be written (signed out), it is kept in this
+browser. Settings, Terminal can turn the startup file off. The agents' shell does not run it.
 
 ## Exit status
 
@@ -115,7 +132,7 @@ nothing matched. With set -e a script stops at the first failure outside if, whi
 
 ## Differences from bash
 
-No arrays, no [[ … ]], no process substitution, no job control; aliases do not exist. Commands
+No arrays, no [[ … ]], no process substitution, no job control; aliases are simple (no arguments). Commands
 are the ones MvL OS has: run \`help\` for the list and \`man <command>\` for one. Everything runs in
 the browser tab, and Ctrl+C stops a running line.
 `
