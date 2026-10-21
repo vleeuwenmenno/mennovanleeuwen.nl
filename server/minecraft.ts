@@ -528,9 +528,17 @@ export async function minecraftAdmin(user: { id: number; login: string }, body: 
 
 let cached: { at: number; value: Promise<McStatus> } | null = null
 
+/** A ping now and then goes unanswered while the server is fine: offline only after this many misses in a row. */
+const PING_TRIES = 3
+const PING_RETRY_MS = 2000
+
 async function pingNow(extras = false): Promise<McStatus> {
-  const st = await ping(MC_HOST, MC_PORT).catch((): McStatus => ({ online: false, players: { online: 0, max: 0, list: [] }, checkedAt: Date.now() }))
-  if (!st.online) return st
+  let st: McStatus | null = null
+  for (let i = 0; i < PING_TRIES && !st; i++) {
+    if (i) await new Promise((r) => setTimeout(r, PING_RETRY_MS))
+    st = await ping(MC_HOST, MC_PORT).catch(() => null)
+  }
+  if (!st) return { online: false, players: { online: 0, max: 0, list: [] }, checkedAt: Date.now() }
   const names = await rconPlayers(extras)
   return names ? { ...st, players: { ...st.players, online: names.length, list: names, hidden: 0 } } : st
 }
