@@ -405,12 +405,81 @@ const K_MAX = 140
  * fits beside its battle map's panel, the planet a little smaller and to one side (above it on a tall
  * screen), and goes no closer (K_ORBIT_MAX at most). Zooming in further than ORBIT_SNAP of that (or of
  * K_MAX, on a big screen) with the planet under the cursor eases into it, the panel fading and sliding
- * in as it comes, and zooming out below ORBIT_LEAVE of it lets go.
+ * in as it comes, and zooming out below ORBIT_LEAVE of it lets go. Its pictures fade in as it's
+ * entered and out over ORBIT_FADE_MS as it's left, rather than coming and going at once.
  */
 const K_ORBIT_MAX = 420
 const ORBIT_REACH = 3.05
 const ORBIT_SNAP = 0.85
 const ORBIT_LEAVE = 0.7
+const ORBIT_FADE_MS = 300
+/**
+ * The camera's glides (see GalaxyMap's clock). The zoom (as its log, so each doubling takes as long)
+ * and where one world point sits on screen each follow a critically damped spring: a glide starts
+ * from however the camera was already moving (a wheel spin carries into the snap into the orbit
+ * view), never overshoots where it's going, and a new aim on the way (another notch, a snap) bends it
+ * instead of jerking it. The stiffness is per kind of glide: the wheel's quick, a flight and the
+ * orbit view's slower (a spring settles to within 1% in about 6.6 / w seconds).
+ */
+const W_WHEEL = 26
+const W_FLY = 10
+const W_ORBIT = 11
+const W_MAX = 60
+type Glide = {
+  /** 'wheel': a wheel zoom round the cursor; 'fly': a flight somewhere; 'orbit': into (and in) the
+   * orbit view, the planet heading for its place beside the battle map. */
+  kind: 'wheel' | 'fly' | 'orbit'
+  /** The world point the glide holds on to, where it is on screen (from the view's centre), how fast
+   * that moves (px/s) and where it's going. */
+  ax: number
+  ay: number
+  sx: number
+  sy: number
+  vx: number
+  vy: number
+  tx: number
+  ty: number
+  /** The zoom's log, how fast it changes (per second) and where it's going. */
+  lk: number
+  vk: number
+  gk: number
+  /** The springs' stiffness: the place's and the zoom's. */
+  wp: number
+  wk: number
+  /** Where the cursor was for a wheel zoom (more notches there carry on with the same spot). */
+  cx: number
+  cy: number
+}
+/** `dt` seconds of a critically damped spring of stiffness `w` taking x (moving at v) to g, solved
+ * exactly, so it moves the same however the frames fall. */
+const spring = (x: number, v: number, g: number, w: number, dt: number): [number, number] => {
+  const y = x - g
+  const c = v + w * y
+  const e = Math.exp(-w * dt)
+  return [g + (y + c * dt) * e, (v - w * c * dt) * e]
+}
+/** Sets a glide's springs for its new aim: stiffness `wp` and `wk`, or stiffer where it's already
+ * closing in faster than that (a spring that stiff only slows down: no overshoot, no lurch). */
+const aimGlide = (G: Glide, wp: number, wk: number) => {
+  const yk = G.lk - G.gk
+  const ck = -G.vk * Math.sign(yk)
+  G.wk = ck > wk * Math.abs(yk) ? Math.min(W_MAX, ck / Math.abs(yk)) : wk
+  if (ck > W_MAX * Math.abs(yk)) G.vk = -Math.sign(yk) * W_MAX * Math.abs(yk)
+  const yx = G.sx - G.tx
+  const yy = G.sy - G.ty
+  const d = Math.hypot(yx, yy)
+  const cp = d > 1e-6 ? -(G.vx * yx + G.vy * yy) / d : 0
+  G.wp = cp > wp * d ? Math.min(W_MAX, cp / d) : wp
+  if (cp > W_MAX * d) {
+    const cut = (cp - W_MAX * d) / d
+    G.vx += cut * yx
+    G.vy += cut * yy
+  }
+}
+/** The player asked for less motion: flights and the orbit view's ease go at once (the wheel still
+ * glides its short way, as it follows the hand). */
+const reducedMQ = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
+const reducedMotion = () => !!reducedMQ?.matches
 /** Where planet `p` and its battle map sit in the orbit view, in a view of `size`. */
 const orbitFrameOf = (g: Galaxy, p: Planet, size: { w: number; h: number }): OrbitFrame => {
   const m = planetMap(g, p.id).map
@@ -1344,11 +1413,11 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     camRef.current = c
     view.set(c)
   }
-  const camGoal = useRef<Cam | null>(null)
-  /** A wheel zoom under way: the zoom it's heading for, and the world point (wx, wy) that was under
-   * the cursor, now at (sx, sy) from the view's centre and gliding to (tx, ty) (zooming in pulls it
-   * towards the centre). (cx, cy) is where the cursor was, so more notches there build on it. */
-  const zoomTo = useRef<{ k: number; wx: number; wy: number; sx: number; sy: number; tx: number; ty: number; cx: number; cy: number } | null>(null)
+  /** The glide under way, if any (see Glide). */
+  const glide = useRef<Glide | null>(null)
+  /** How the camera moved over the last frames (world units and the zoom's log, per second): a glide
+   * that starts after a pinch or a drag carries on from it. */
+  const camVel = useRef({ x: 0, y: 0, k: 0 })
   /** How fast the keys and screen edges are panning, in screen pixels a second (it eases in and out). */
   const panVel = useRef({ x: 0, y: 0 })
   const dragged = useRef(false)
@@ -1416,6 +1485,79 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     }
     return { x: clamp(c.x, 0, W), y: clamp(c.y, 0, H), k: clamp(c.k, kMinRef.current, K_MAX) }
   }
+  /** Where a glide moves the camera now. */
+  const glideCam = (G: Glide): Cam => {
+    const k = Math.exp(G.lk)
+    return { x: G.ax - G.sx / k, y: G.ay - G.sy / k, k }
+  }
+  /** Where a glide leaves the camera. */
+  const glideGoal = (G: Glide): Cam => {
+    const k = Math.exp(G.gk)
+    return { x: G.ax - G.tx / k, y: G.ay - G.ty / k, k }
+  }
+  /** A new glide holding world point (ax, ay), taking it to (tx, ty) on screen and the zoom to e^gk,
+   * carrying on from however the camera moves now (the glide under way, or a pinch or drag). */
+  const startGlide = (kind: Glide['kind'], ax: number, ay: number, tx: number, ty: number, gk: number, wp: number, wk: number): Glide => {
+    const c = camRef.current
+    const was = glide.current
+    // The camera's velocity: world units and the zoom's log per second.
+    let v = camVel.current
+    if (was) {
+      const k = Math.exp(was.lk)
+      v = { x: (was.sx * was.vk - was.vx) / k, y: (was.sy * was.vk - was.vy) / k, k: was.vk }
+    }
+    const sx = (ax - c.x) * c.k
+    const sy = (ay - c.y) * c.k
+    const G: Glide = { kind, ax, ay, sx, sy, vx: -v.x * c.k + sx * v.k, vy: -v.y * c.k + sy * v.k, tx, ty, lk: Math.log(c.k), vk: v.k, gk, wp, wk, cx: NaN, cy: NaN }
+    aimGlide(G, wp, wk)
+    glide.current = G
+    return G
+  }
+  /** A flight to camera `to` (already within bounds). Zooming in, the spot it's going to glides to the
+   * middle of the screen as the zoom grows; zooming far out, the camera zooms round the one point that
+   * is in the same place on screen before and after, so nothing swings out and back. */
+  const flyCam = (to: Cam) => {
+    if (reducedMotion()) {
+      glide.current = null
+      moveCam(to)
+      return
+    }
+    const c = camRef.current
+    let ax = to.x
+    let ay = to.y
+    let tx = 0
+    let ty = 0
+    if (Math.log(to.k / c.k) < -0.9) {
+      ax = (to.x * to.k - c.x * c.k) / (to.k - c.k)
+      ay = (to.y * to.k - c.y * c.k) / (to.k - c.k)
+      tx = (ax - to.x) * to.k
+      ty = (ay - to.y) * to.k
+    }
+    startGlide('fly', ax, ay, tx, ty, Math.log(to.k), W_FLY, W_FLY)
+  }
+  /** In the orbit view, the zoom to `k` (no closer than the view's own), `wk` its spring's stiffness;
+   * the planet keeps gliding to its place beside the battle map. */
+  const orbitTo = (k: number, wk: number) => {
+    const o = orbitRef.current
+    const fr = orbitAt(o)
+    const gk = Math.log(clamp(k, kMinRef.current, fr.k))
+    if (reducedMotion() && wk !== W_WHEEL) {
+      glide.current = null
+      moveCam(fix({ ...camRef.current, k: Math.exp(gk) }))
+      return
+    }
+    const was = glide.current
+    if (was?.kind === 'orbit') {
+      was.gk = gk
+      aimGlide(was, W_ORBIT, wk)
+      return
+    }
+    const q = planetAt(g, g.planets[o])
+    startGlide('orbit', q.x, q.y, fr.dx, fr.dy, gk, W_ORBIT, wk)
+  }
+  /** The orbit view just left (-1: none): its pictures fade out over ORBIT_FADE_MS rather than go. */
+  const [gone, setGone] = useState(-1)
+  const goneTimer = useRef(0)
   /** Into the orbit view of planet `pid`: the camera eases onto it and in, and it's selected. */
   const enterOrbit = (pid: number) => {
     const p = g.planets[pid]
@@ -1423,13 +1565,14 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     orbitRef.current = pid
     setOrbitState(pid)
     setOrbitSel(null)
+    clearTimeout(goneTimer.current)
+    setGone(-1)
     // The view clears for it: the planet's panels give way to the orbit card of what's picked.
     setTake({})
     setSel(null)
-    const q = planetAt(g, p)
-    zoomTo.current = null
-    const fr = orbitAt(pid)
-    camGoal.current = { x: q.x - fr.dx / fr.k, y: q.y - fr.dy / fr.k, k: fr.k }
+    // (A glide into another planet's orbit view starts afresh from where the camera is.)
+    if (glide.current?.kind === 'orbit') glide.current.kind = 'fly'
+    orbitTo(orbitK(pid), W_ORBIT)
   }
   /** Out of the orbit view (the camera lets go where it is; `out`: and pulls back to the system). */
   const leaveOrbit = (out = false) => {
@@ -1438,10 +1581,17 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     orbitRef.current = -1
     setOrbitState(-1)
     setOrbitSel(null)
+    if (!reducedMotion()) {
+      setGone(o)
+      clearTimeout(goneTimer.current)
+      // (Gone when its fade ends; this in case that never comes, as in a hidden tab.)
+      goneTimer.current = window.setTimeout(() => setGone(-1), ORBIT_FADE_MS + 200)
+    }
+    // A glide into the view carries on to where it was going, no longer held to the planet.
+    if (glide.current?.kind === 'orbit') glide.current.kind = 'fly'
     if (!out) return
     const q = planetAt(g, g.planets[o])
-    zoomTo.current = null
-    camGoal.current = fix({ x: q.x, y: q.y, k: Math.min(K_MAX * 0.4, orbitK(o) * 0.45) })
+    flyCam(fix({ x: q.x, y: q.y, k: Math.min(K_MAX * 0.4, orbitK(o) * 0.45) }))
   }
   /** The planet a zoom at world point (x, y) is going into, if any: the nearest within reach of it
    * (its structures' reach), else the one nearest the middle of the view within that. */
@@ -1465,13 +1615,13 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const q = planetAt(g, g.planets[o])
       if (Math.hypot(q.x - x, q.y - y) > planetR(g.planets[o]) * ORBIT_REACH || k < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
     }
-    zoomTo.current = null
-    camGoal.current = fix({ x, y, k })
+    if (orbitRef.current >= 0) orbitTo(k, W_ORBIT)
+    else flyCam(fix({ x, y, k }))
   }
   /** The zoom keys and buttons: in or out round the middle of the view, snapping into a planet's
    * orbit view the way the wheel does. */
   const zoomBy = (f: number) => {
-    const c = camGoal.current ?? camRef.current
+    const c = glide.current ? glideGoal(glide.current) : camRef.current
     if (orbitRef.current < 0 && f > 1) {
       const p = snapPlanet(c.x, c.y)
       if (p && c.k * f >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) return enterOrbit(p.id)
@@ -1480,7 +1630,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   }
   const flyOut = () => flyTo(W / 2, H / 2, kMin)
   // Dev builds can drive the camera from the console (and the browser checks).
-  if (import.meta.env.DEV) (window as unknown as { __gmap: unknown }).__gmap = { enterOrbit, leaveOrbit, flyTo, cam: () => camRef.current }
+  if (import.meta.env.DEV) (window as unknown as { __gmap: unknown }).__gmap = { enterOrbit, leaveOrbit, flyTo, cam: () => camRef.current, at: (pid: number) => planetAt(g, g.planets[pid]), orbitK, orbit: () => orbitRef.current }
 
   // The view's size; the first time, the whole galaxy fits.
   const fitted = useRef(false)
@@ -1550,6 +1700,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     let last = performance.now()
     let saveT = 0
     let drawT = 0
+    let prevCam = camRef.current
     const loop = (now: number) => {
       // Up to a second at a time: a background tab gets few frames, and the galaxy keeps time anyway.
       const dt = Math.min(1, (now - last) / 1000)
@@ -1592,44 +1743,66 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       v.x += ((dx / len) * top - v.x) * ease
       v.y += ((dy / len) * top - v.y) * ease
       if (!dx && !dy && Math.hypot(v.x, v.y) < 5) v.x = v.y = 0
+      // (Locked onto a planet in the orbit view, the keys and edges don't pan.)
+      if (orbitRef.current >= 0) v.x = v.y = 0
       if (v.x || v.y) {
-        camGoal.current = null
+        // A flight stops; a wheel zoom under way carries on from the panned spot.
+        const G = glide.current
+        if (G && G.kind !== 'wheel') glide.current = null
         const c = camRef.current
         const mx = (v.x * dt) / c.k
         const my = (v.y * dt) / c.k
         moveCam(fix({ ...c, x: c.x + mx, y: c.y + my }))
-        // A wheel zoom under way carries on from the panned spot.
-        if (zoomTo.current) {
-          zoomTo.current.wx += mx
-          zoomTo.current.wy += my
+        if (G?.kind === 'wheel') {
+          G.ax += mx
+          G.ay += my
         }
       }
-      // A wheel zoom glides to its zoom, the point that was under the cursor gliding with it to
-      // its spot on screen.
-      const z = zoomTo.current
-      if (z) {
-        const c = camRef.current
-        const t = 1 - Math.exp(-dt * 14)
-        let k = Math.exp(Math.log(c.k) + (Math.log(z.k) - Math.log(c.k)) * t)
-        z.sx += (z.tx - z.sx) * t
-        z.sy += (z.ty - z.sy) * t
-        if (Math.abs(k / z.k - 1) < 0.002 && Math.hypot(z.tx - z.sx, z.ty - z.sy) < 0.5) {
-          k = z.k
-          z.sx = z.tx
-          z.sy = z.ty
-          zoomTo.current = null
+      // A glide (see Glide): its springs move on by this frame's time.
+      const G = glide.current
+      if (G && dt > 0) {
+        ;[G.sx, G.vx] = spring(G.sx, G.vx, G.tx, G.wp, dt)
+        ;[G.sy, G.vy] = spring(G.sy, G.vy, G.ty, G.wp, dt)
+        ;[G.lk, G.vk] = spring(G.lk, G.vk, G.gk, G.wk, dt)
+        // No closer than the map (or the orbit view) goes, nor further out than the whole galaxy.
+        const hi = Math.log(orbitRef.current >= 0 ? orbitK(orbitRef.current) : K_MAX)
+        const lo = Math.log(kMinRef.current)
+        if (G.lk > hi) (G.lk = hi), (G.vk = Math.min(0, G.vk))
+        if (G.lk < lo) (G.lk = lo), (G.vk = Math.max(0, G.vk))
+        if (Math.abs(G.lk - G.gk) < 1e-3 && Math.abs(G.vk) < 0.02 && Math.hypot(G.sx - G.tx, G.sy - G.ty) < 0.3 && Math.hypot(G.vx, G.vy) < 4) {
+          G.lk = G.gk
+          G.sx = G.tx
+          G.sy = G.ty
+          glide.current = null
         }
-        moveCam(fix({ x: z.wx - z.sx / k, y: z.wy - z.sy / k, k }))
+        const c = glideCam(G)
+        if (G.kind === 'orbit') moveCam(c)
+        else {
+          // Held inside the galaxy: the glide carries on from where that left it.
+          const f = fix(c)
+          if (f.x !== c.x || f.y !== c.y) {
+            G.sx = (G.ax - f.x) * f.k
+            G.sy = (G.ay - f.y) * f.k
+          }
+          moveCam(f)
+        }
       }
-      const goal = camGoal.current
-      if (goal) {
+      // How the camera moved this frame (smoothed: a pinch's moves come between frames), for a
+      // glide that starts next; a jump (the minimap, a resize) is no motion to carry on.
+      {
         const c = camRef.current
-        const t = 1 - Math.exp(-dt * 6)
-        const next = { x: c.x + (goal.x - c.x) * t, y: c.y + (goal.y - c.y) * t, k: Math.exp(Math.log(c.k) + (Math.log(goal.k) - Math.log(c.k)) * t) }
-        if (Math.abs(next.k / goal.k - 1) < 0.01 && Math.hypot(goal.x - next.x, goal.y - next.y) * next.k < 1) {
-          camGoal.current = null
-          moveCam(goal)
-        } else moveCam(next)
+        const cv = camVel.current
+        if (dt > 0) {
+          const lk = Math.log(c.k / prevCam.k)
+          if (Math.abs(lk) > 0.4 || Math.hypot(c.x - prevCam.x, c.y - prevCam.y) * c.k > 400) cv.x = cv.y = cv.k = 0
+          else {
+            const a = 1 - Math.exp(-dt * 25)
+            cv.x += ((c.x - prevCam.x) / dt - cv.x) * a
+            cv.y += ((c.y - prevCam.y) / dt - cv.y) * a
+            cv.k += (lk / dt - cv.k) * a
+          }
+        }
+        prevCam = c
       }
       for (const e of g.events) {
         if (e.k === 'captured') {
@@ -1718,18 +1891,30 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const selPlanets = sel?.kind === 'planets' ? sel.ids.map((id) => g.planets[id]) : selPlanet ? [selPlanet] : []
   // The orbit view's planet, as we know it.
   const orbitP = orbit >= 0 ? g.planets[orbit] : null
-  const orbitKn = orbitP ? known(g, ME, orbitP) : null
+  // The planet whose orbit view and battle map are drawn: the one we're in, or the one just left
+  // while they fade out.
+  const shownP = orbitP ?? (gone >= 0 ? g.planets[gone] : null)
+  const orbitKn = shownP ? known(g, ME, shownP) : null
   // What stands on its battle map (PlanetMap.tsx), and so where it is pictured round the planet.
-  const orbitLay = useShownLayout(g, orbitP, orbitKn)
+  const orbitLay = useShownLayout(g, shownP, orbitKn)
   const orbitSpots = useMemo(() => (orbitLay ? mapToPolar(orbitLay.pm.map, placesOf(orbitLay.shown)) : {}), [orbitLay])
   // Where the planet and its battle map sit (worked out again only when the view changes size).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const orbitFr = useMemo(() => (orbitP ? orbitAt(orbitP.id) : null), [orbitP, size.w, size.h])
+  const orbitFr = useMemo(() => (shownP ? orbitAt(shownP.id) : null), [shownP, size.w, size.h])
   // The view resized while in the orbit view: the planet back where the orbit view has it.
   useEffect(() => {
     if (orbitRef.current < 0) return
-    camGoal.current = null
-    zoomTo.current = null
+    // (Still gliding in: it glides to the new place instead.)
+    const G = glide.current
+    if (G?.kind === 'orbit') {
+      const fr = orbitAt(orbitRef.current)
+      G.tx = fr.dx
+      G.ty = fr.dy
+      G.gk = Math.min(G.gk, Math.log(fr.k))
+      aimGlide(G, W_ORBIT, W_ORBIT)
+      return
+    }
+    glide.current = null
     moveCam(fix(camRef.current))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size.w, size.h])
@@ -2089,39 +2274,51 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const c = camRef.current
       const sx = e.clientX - r.left - el.clientWidth / 2
       const sy = e.clientY - r.top - el.clientHeight / 2
-      // (From where a glide under way is heading: easing into the orbit view, the zoom it settles at.)
-      const raw = (zoomTo.current?.k ?? (orbitRef.current >= 0 ? camGoal.current?.k : undefined) ?? c.k) * Math.exp(step)
+      // (From where a wheel zoom under way is heading, or the zoom into the orbit view.)
+      const G = glide.current
+      const raw = (G && G.kind !== 'fly' ? Math.exp(G.gk) : c.k) * Math.exp(step)
       const o = orbitRef.current
       if (o >= 0) {
-        // In the orbit view the zoom goes in closer than anywhere else, out to where it lets go.
-        if (raw < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
+        // In the orbit view the zoom goes in closer than anywhere else, out to where it lets go;
+        // the planet stays where the view has it.
+        if (raw >= orbitK(o) * ORBIT_LEAVE) return orbitTo(raw, W_WHEEL)
+        leaveOrbit()
       } else if (step > 0) {
-        // Zooming in past a planet snaps into its orbit view.
+        // Zooming in past a planet snaps into its orbit view (the zoom's speed carrying into it).
         const p = snapPlanet(c.x + sx / c.k, c.y + sy / c.k)
         if (p && raw >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) return enterOrbit(p.id)
       }
-      const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? orbitK(orbitRef.current) : K_MAX)
+      const k = clamp(raw, kMinRef.current, K_MAX)
       // Zooming in draws the spot under the cursor towards the centre, under a tenth of the way a
       // notch; zooming out keeps it under the cursor.
       const pull = k > c.k && step > 0 ? Math.exp(-step * ZOOM_PULL) : 1
-      camGoal.current = null
-      const z = zoomTo.current
+      const z = glide.current
       // More notches with the cursor where it was carry on with the same spot.
-      if (z && Math.hypot(z.cx - sx, z.cy - sy) < 6) Object.assign(z, { k, tx: z.tx * pull, ty: z.ty * pull })
-      else zoomTo.current = { k, wx: c.x + sx / c.k, wy: c.y + sy / c.k, sx, sy, tx: sx * pull, ty: sy * pull, cx: sx, cy: sy }
+      if (z?.kind === 'wheel' && Math.hypot(z.cx - sx, z.cy - sy) < 6) {
+        z.gk = Math.log(k)
+        z.tx *= pull
+        z.ty *= pull
+        aimGlide(z, W_WHEEL, W_WHEEL)
+      } else {
+        const n = startGlide('wheel', c.x + sx / c.k, c.y + sy / c.k, sx * pull, sy * pull, Math.log(k), W_WHEEL, W_WHEEL)
+        n.cx = sx
+        n.cy = sy
+      }
     }
     el.addEventListener('wheel', wheel, { passive: false })
     return () => el.removeEventListener('wheel', wheel)
   }, [])
-  /** Drags the map so the world point `grab` sits under (cx, cy), even while a zoom glides on. */
+  /** Drags the map so the world point `grab` sits under (cx, cy), even while a zoom glides on. (The
+   * orbit view holds the camera on its planet.) */
   const dragTo = (grab: { x: number; y: number }, cx: number, cy: number) => {
+    if (orbitRef.current >= 0) return
     const r = viewEl.current!.getBoundingClientRect()
-    camGoal.current = null
     const sx = cx - r.left - size.w / 2
     const sy = cy - r.top - size.h / 2
-    const z = zoomTo.current
-    if (z) Object.assign(z, { wx: grab.x, wy: grab.y, sx, sy, tx: sx, ty: sy, cx: NaN, cy: NaN })
+    const z = glide.current
+    if (z?.kind === 'wheel') Object.assign(z, { ax: grab.x, ay: grab.y, sx, sy, tx: sx, ty: sy, vx: 0, vy: 0, cx: NaN, cy: NaN })
     else {
+      glide.current = null
       const c = camRef.current
       moveCam(fix({ x: grab.x - sx / c.k, y: grab.y - sy / c.k, k: c.k }))
     }
@@ -2152,7 +2349,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const y0 = e.clientY
     // Dragging the map holds the point grabbed under the cursor, even while a zoom glides on.
     const grab = toWorld(x0, y0)
-    if (pan) camGoal.current = null
+    if (pan && glide.current?.kind === 'fly') glide.current = null
     const add = shiftOf(e)
     const finger = isTouch(e)
     const onSpace = !(e.target as Element).closest('.ew-gsys, .ew-gfleet, .ew-splanet, button')
@@ -2202,32 +2399,58 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const startPinch = (st: NonNullable<typeof fingers.current>) => {
     const [a, b] = [...st.at.values()]
     const w = toWorld((a.x + b.x) / 2, (a.y + b.y) / 2)
-    zoomTo.current = null
-    camGoal.current = null
+    // The fingers take the camera (in the orbit view the planet glides on to its place).
+    if (glide.current?.kind !== 'orbit') glide.current = null
     st.pinch = { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), k: camRef.current.k, wx: w.x, wy: w.y }
   }
   const pinchTo = (st: NonNullable<typeof fingers.current>) => {
     const [a, b] = [...st.at.values()]
     const z = st.pinch!
     const r = viewEl.current!.getBoundingClientRect()
-    const raw = (z.k * Math.hypot(a.x - b.x, a.y - b.y)) / z.d
+    const dist = Math.hypot(a.x - b.x, a.y - b.y)
+    const raw = (z.k * dist) / z.d
+    const sx = (a.x + b.x) / 2 - r.left - size.w / 2
+    const sy = (a.y + b.y) / 2 - r.top - size.h / 2
     const o = orbitRef.current
-    // Pinching in past a planet snaps into its orbit view (the rest of the pinch is let be), and
-    // pinching out of the orbit view far enough lets go.
+    // Pinching in past a planet snaps into its orbit view (the rest of the pinch is let be: the
+    // camera glides on into it from the pinch's own speed), and pinching out of the orbit view far
+    // enough lets go.
     if (o < 0 && raw > z.k) {
       const p = snapPlanet(z.wx, z.wy)
       if (p && raw >= Math.min(K_MAX * 0.97, orbitK(p.id) * ORBIT_SNAP)) {
+        const k = clamp(raw, kMinRef.current, K_MAX)
+        glide.current = null
+        moveCam(fix({ x: z.wx - sx / k, y: z.wy - sy / k, k }))
         st.pinch = null
         st.snapped = true
         enterOrbit(p.id)
         return
       }
     }
-    if (o >= 0 && raw < orbitK(o) * ORBIT_LEAVE) leaveOrbit()
-    const k = clamp(raw, kMinRef.current, orbitRef.current >= 0 ? orbitK(orbitRef.current) : K_MAX)
-    const sx = (a.x + b.x) / 2 - r.left - size.w / 2
-    const sy = (a.y + b.y) / 2 - r.top - size.h / 2
-    camGoal.current = null
+    if (o >= 0) {
+      const fr = orbitAt(o)
+      if (raw >= fr.k * ORBIT_LEAVE) {
+        // In the orbit view the pinch only zooms: the planet keeps (or glides on to) its place.
+        const k = clamp(raw, kMinRef.current, fr.k)
+        let G = glide.current
+        if (G?.kind !== 'orbit') {
+          const q = planetAt(g, g.planets[o])
+          G = startGlide('orbit', q.x, q.y, fr.dx, fr.dy, Math.log(k), W_ORBIT, W_ORBIT)
+        }
+        G.lk = G.gk = Math.log(k)
+        G.vk = 0
+        moveCam(glideCam(G))
+        return
+      }
+      leaveOrbit()
+      // Let go: the pinch carries on from the spot between the fingers now, where the camera is.
+      glide.current = null
+      const w = toWorld((a.x + b.x) / 2, (a.y + b.y) / 2)
+      st.pinch = { d: Math.max(1, dist), k: camRef.current.k, wx: w.x, wy: w.y }
+      return
+    }
+    const k = clamp(raw, kMinRef.current, K_MAX)
+    glide.current = null
     moveCam(fix({ x: z.wx - sx / k, y: z.wy - sy / k, k }))
   }
   const touchDown = (e: React.PointerEvent) => {
@@ -2615,48 +2838,52 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
               },
             }}
           />
-          {orbitP && orbitKn && (
-            <OrbitView
-              p={orbitP}
-              at={planetAt(g, orbitP)}
-              R={planetR(orbitP)}
-              view={view}
-              kIn={orbitK(orbitP.id)}
-              sel={orbitSel}
-              faction={orbitKn.owner >= 0 ? g.sides[orbitKn.owner].faction : myFaction}
-              live={orbitKn.live}
-              base={orbitKn.base}
-              station={orbitKn.station}
-              spots={orbitSpots}
-              onPick={(id) => {
-                sound.click()
-                setOrbitSel(id)
-                if (id && sel) setSel(null)
-              }}
-            />
-          )}
-          {orbitP && orbitKn && orbitLay && orbitFr && (
-            <PlanetMapPanel
-              g={g}
-              p={orbitP}
-              kn={orbitKn}
-              lay={orbitLay}
-              view={view}
-              at={planetAt(g, orbitP)}
-              span={ORBIT_REACH * 2 * planetR(orbitP)}
-              kIn={orbitK(orbitP.id)}
-              frame={orbitFr}
-              sel={orbitSel}
-              coarse={compact}
-              sound={sound}
-              toast={toast}
-              onPick={(id) => {
-                sound.click()
-                setOrbitSel(id)
-                if (id && sel) setSel(null)
-              }}
-              onChange={() => setFrame((n) => n + 1)}
-            />
+          {/* The orbit view and its battle map: they fade in as the view is entered, and out (no
+              longer taking the pointer) for a moment after it's left (empires.css). */}
+          {shownP && orbitKn && (
+            <div className={`ew-orbitfade ${orbitP ? '' : 'is-gone'}`} onAnimationEnd={(e) => e.animationName === 'ew-orbit-fadeout' && orbitRef.current < 0 && setGone(-1)}>
+              <OrbitView
+                p={shownP}
+                at={planetAt(g, shownP)}
+                R={planetR(shownP)}
+                view={view}
+                kIn={orbitK(shownP.id)}
+                sel={orbitSel}
+                faction={orbitKn.owner >= 0 ? g.sides[orbitKn.owner].faction : myFaction}
+                live={orbitKn.live}
+                base={orbitKn.base}
+                station={orbitKn.station}
+                spots={orbitSpots}
+                onPick={(id) => {
+                  sound.click()
+                  setOrbitSel(id)
+                  if (id && sel) setSel(null)
+                }}
+              />
+              {orbitLay && orbitFr && (
+                <PlanetMapPanel
+                  g={g}
+                  p={shownP}
+                  kn={orbitKn}
+                  lay={orbitLay}
+                  view={view}
+                  at={planetAt(g, shownP)}
+                  span={ORBIT_REACH * 2 * planetR(shownP)}
+                  kIn={orbitK(shownP.id)}
+                  frame={orbitFr}
+                  sel={orbitSel}
+                  coarse={compact}
+                  sound={sound}
+                  toast={toast}
+                  onPick={(id) => {
+                    sound.click()
+                    setOrbitSel(id)
+                    if (id && sel) setSel(null)
+                  }}
+                  onChange={() => setFrame((n) => n + 1)}
+                />
+              )}
+            </div>
           )}
           {orbitP && (
             <div className="ew-orbithint" onPointerDown={(e) => e.stopPropagation()}>
@@ -2713,8 +2940,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           view={view}
           onLook={(x, y) => {
             leaveOrbit()
-            camGoal.current = null
-            zoomTo.current = null
+            glide.current = null
             moveCam(fix({ ...camRef.current, x, y }))
           }}
           onWhole={flyOut}

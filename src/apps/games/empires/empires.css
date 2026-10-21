@@ -7960,6 +7960,43 @@ span.ew-teamtag {
     max-height: 46vh;
   }
 }
+/* The orbit view and its battle map (Conquest.tsx): the camera fades them as it zooms (their inline
+   opacity), and on top of that they fade in as the view is entered and, just left, fade out for
+   ORBIT_FADE_MS while taking no clicks, so nothing comes or goes at once whatever the zoom. (An
+   animation from or to one end only runs between that and the camera's opacity as it changes.) */
+.ew-orbitfade {
+  display: contents;
+}
+.ew-orbitfade > .ew-orbit,
+.ew-orbitfade > .ew-pmap,
+.ew-orbithint {
+  animation: ew-orbit-fadein 0.4s ease-out;
+}
+.ew-orbitfade.is-gone > .ew-orbit,
+.ew-orbitfade.is-gone > .ew-pmap {
+  animation: ew-orbit-fadeout 0.3s ease-in forwards;
+}
+.ew-orbitfade.is-gone,
+.ew-orbitfade.is-gone * {
+  pointer-events: none !important;
+}
+@keyframes ew-orbit-fadein {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes ew-orbit-fadeout {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ew-orbitfade > .ew-orbit,
+  .ew-orbitfade > .ew-pmap,
+  .ew-orbithint {
+    animation: none;
+  }
+}
 /* The orbit view's banner: where we are, and the way out. */
 .ew-orbithint {
   position: absolute;
