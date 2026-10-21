@@ -7714,6 +7714,73 @@ span.ew-teamtag {
   justify-content: space-between;
   margin-top: 6px;
 }
+/* The Defense page's site tiles: a picture and a few lines each, a tap opens the site's card. */
+.ew-yard.ew-gbuild.ew-gsites {
+  display: grid;
+  grid-template-rows: none;
+  grid-auto-flow: row;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  grid-auto-columns: auto;
+  gap: 10px;
+  max-width: none;
+  overflow: visible;
+  min-width: min(560px, 60vw);
+}
+.ew-gsite {
+  position: relative;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 84px;
+  padding: 8px 10px;
+  overflow: hidden;
+  text-align: left;
+  color: var(--ew-text);
+  font: inherit;
+  background: var(--ew-bg-2);
+  border: 1px solid var(--ew-line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.ew-gsite:hover,
+.ew-gsite:focus-visible {
+  border-color: var(--ew-gold);
+}
+.ew-gsite .ew-art {
+  width: 96px;
+  height: 72px;
+}
+.ew-gsite.is-empty {
+  border-style: dashed;
+}
+.ew-gsite.is-empty .ew-art {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+.ew-gsite.is-busy {
+  border-color: var(--ew-gold);
+}
+.ew-gsite-txt {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ew-gsite-txt small {
+  color: var(--ew-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.ew-gsite-txt .ew-modline {
+  white-space: normal;
+  font-size: 12px;
+}
+@media (pointer: coarse) {
+  .ew-gsite {
+    min-height: 96px;
+  }
+}
 /* The Defense page: a group per defense site, its slots and the modules to pick from. */
 /* Each site gets a column at least 320px wide (two side by side on a wide panel, one when narrow or
    on a phone), so its four slots stay readable and the modules to pick from have room to wrap. */
