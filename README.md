@@ -2394,8 +2394,15 @@ Esc, the banner's *Leave* or a look anywhere else lets go.
   (`MapDef.keep`), and the map's rocks are its own all over (`sym: 'none'`), so the map is the same
   whichever lane the attack comes down.
 - **Placing structures** (our planets): drag a structure on the battle map, with a mouse or a finger.
-  The Command Station moves within its home zone round the home spawn (`HOME_R`) and takes the rest
-  along; the yards and defense stations move within its build radius, clear of rocks, asteroid
+  The Command Station moves anywhere in the defender's third of the map (`homeZone` in
+  [`sim.ts`](src/apps/games/empires/sim.ts): the third on the side of the middle the home spawn is
+  on, along the axis it is furthest out on as a share of the map's size; every conquest map has its
+  home on the left, so that is the left third), keeping `STATION_ENTRY_GAP` from the middle of every
+  entry zone so attackers never drop out of hyperspace on top of the base, and takes the rest along.
+  While it is dragged the third shows as a tinted box and the entry zones' keep-out rings in red; a
+  spot outside says why and a drop there is refused. Anywhere within `HOME_R` of the home spawn (the
+  old home circle) always stays allowed, so older layouts stand where they did. In battle its reserve
+  jumps in by the station wherever it stands; the yards and defense stations move within its build radius, clear of rocks, asteroid
   fields, the map's edge and each other, kept apart by the size each grows to (`layoutTop`). A drop
   where one can't stand goes to the nearest clear spot (`nearestClear`), or is refused with the
   reason. A click or tap on a structure (on the map or round the planet) picks it and opens its card;

@@ -120,9 +120,10 @@
 .ew-pmap-entry:hover i {
   border-style: solid;
 }
-/* The station's build radius, and (while it's moved) its home zone. */
+/* The station's build radius, and (while it's moved) where it may go: our third of the map, and the
+   rings round the entry zones it keeps out of. */
 .ew-pmap-reach,
-.ew-pmap-home {
+.ew-pmap-keep {
   position: absolute;
   transform: translate(-50%, -50%);
   border-radius: 50%;
@@ -132,9 +133,16 @@
   border: 1px dashed color-mix(in srgb, var(--ew-accent) 45%, transparent);
   background: color-mix(in srgb, var(--ew-accent) 5%, transparent);
 }
-.ew-pmap-home {
-  border: 1.5px solid color-mix(in srgb, var(--ew-good) 60%, transparent);
-  background: color-mix(in srgb, var(--ew-good) 8%, transparent);
+.ew-pmap-zone {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed color-mix(in srgb, var(--ew-good) 65%, transparent);
+  background: color-mix(in srgb, var(--ew-good) 9%, transparent);
+  pointer-events: none;
+}
+.ew-pmap-keep {
+  border: 1px dashed color-mix(in srgb, var(--ew-bad) 55%, transparent);
+  background: color-mix(in srgb, var(--ew-bad) 6%, transparent);
 }
 /* A structure: its picture at its true size and heading, in a hit area big enough for a finger. */
 .ew-pstruct {

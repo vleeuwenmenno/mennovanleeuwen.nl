@@ -4,7 +4,7 @@ import { calendar, setLayout, type Galaxy, type Known, type Planet, type StructI
 import { WorkBar, orbitThings, structArt, structWork, withWork, workProgress, type OrbitCam, type StructWork } from './Orbit'
 import { ENTRY_R, STRUCT_ORDER, cleanTurn, planetMap, type LayoutPlace, type PlanetLayout, type PlanetMap } from './conquestMap'
 import { drawTerrainOverview } from './render'
-import { HOME_R, LAYOUT_IDS, layoutProblem, layoutTop, layoutWorld, nearestClear, standBase, stationProblem, type LayoutItem, type Stood, type World } from './sim'
+import { LAYOUT_IDS, STATION_ENTRY_GAP, homeZone, layoutProblem, layoutTop, layoutWorld, nearestClear, standBase, stationProblem, type LayoutItem, type Stood, type World } from './sim'
 import type { EmpiresSound } from './sound'
 import { TAP_SLOP } from './Touch'
 import './planetmap.css'
@@ -22,7 +22,7 @@ import './planetmap.css'
 // its spot in the layout (its default unless placed before).
 //
 // On our own planets the structures can be dragged (mouse or finger): the Command Station within its
-// home zone, the yards and defense stations within its build radius, clear of the rocks, fields, the
+// third of the map (sim.ts homeZone) clear of the entry zones, the yards and defense stations within its build radius, clear of the rocks, fields, the
 // map's edge and each other. A picked one of ours can be turned too: by the handle at its nose (mouse
 // or finger), the wheel over it, or R and Shift+R (also while dragging it); a double click on the
 // handle turns it back to its default heading. Battles here stand it turned so (the layout keeps the
@@ -444,19 +444,9 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     } catch {
       // (A pointer that went away.)
     }
-    const toMap = (cx: number, cy: number) => {
-      let x = me.x + (cx - x0) / s
-      let y = me.y + (cy - y0) / s
-      if (id === 'station') {
-        // Kept within its home zone.
-        const d = Math.hypot(x - pm.home.x, y - pm.home.y)
-        if (d > HOME_R) {
-          x = pm.home.x + ((x - pm.home.x) / d) * HOME_R
-          y = pm.home.y + ((y - pm.home.y) / d) * HOME_R
-        }
-      }
-      return { x, y }
-    }
+    // (The station may go anywhere in our third of the map: outside it, it shows why not, and a drop
+    // there is refused.)
+    const toMap = (cx: number, cy: number) => ({ x: me.x + (cx - x0) / s, y: me.y + (cy - y0) / s })
     // Turned with R while dragged: the heading it is let go with (undefined: as the layout has it).
     let a = turnOf(id)
     const move = (m: PointerEvent) => {
@@ -502,6 +492,8 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     ? fog ? (kn.t <= 0 ? 'Pre-war charts' : 'As last seen') : 'No station'
     : fog ? (kn.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(kn.t)}`) : ours ? (coarse ? 'Drag to place, pick to turn' : 'Drag to place, pick to turn: battles here stand them so') : 'Live'
   const st = drag?.id === 'station' ? drag : station
+  // Where the station may go (while it's dragged): our third of the map, clear of the entry zones.
+  const zone = homeZone(map, pm.home)
   const px = (v: number) => `${(v * s).toFixed(1)}px`
   return (
     <div
@@ -533,7 +525,12 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
             <span>{e.name}</span>
           </div>
         ))}
-        {ours && drag?.id === 'station' && <i className="ew-pmap-home" style={{ left: px(pm.home.x), top: px(pm.home.y), width: HOME_R * 2 * s, height: HOME_R * 2 * s }} />}
+        {ours && drag?.id === 'station' && (
+          <>
+            <i className="ew-pmap-zone" style={{ left: px(zone.x0), top: px(zone.y0), width: (zone.x1 - zone.x0) * s, height: (zone.y1 - zone.y0) * s }} />
+            {map.spawns.slice(1).map((q, i) => <i key={i} className="ew-pmap-keep" style={{ left: px(q.x), top: px(q.y), width: STATION_ENTRY_GAP * 2 * s, height: STATION_ENTRY_GAP * 2 * s }} />)}
+          </>
+        )}
         {st && <i className="ew-pmap-reach" style={{ left: px(st.x), top: px(st.y), width: BUILD_RADIUS * 2 * s, height: BUILD_RADIUS * 2 * s }} data-tip="The Command Station's build radius: its yards and defense stations stand within it" />}
         {shown.map((x) => {
           const d = drag?.id === x.id ? drag : null
@@ -551,7 +548,7 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
           const turnable = canTurn(x.id)
           const why = d?.why ?? tr?.why ?? null
           const busy = work?.id === x.id
-          const tip = `${x.name}${x.state === 'building' ? `: under construction, ${workProgress(p).left}s left` : busy ? `: upgrading, ${workProgress(p).left}s left` : x.state === 'ruin' ? ': a ruin, rebuilt for half' : ''}${fog ? ' (as last seen)' : ''}.${ours ? ` Drag it to where it stands in battles here; click for its orders${turnable ? `, then turn it by its handle${coarse ? '' : ', the wheel or R'}` : ''}.${x.id === 'station' ? ' The station moves within its home zone, and takes the rest along.' : ''}` : ' Click for what it is.'}`
+          const tip = `${x.name}${x.state === 'building' ? `: under construction, ${workProgress(p).left}s left` : busy ? `: upgrading, ${workProgress(p).left}s left` : x.state === 'ruin' ? ': a ruin, rebuilt for half' : ''}${fog ? ' (as last seen)' : ''}.${ours ? ` Drag it to where it stands in battles here; click for its orders${turnable ? `, then turn it by its handle${coarse ? '' : ', the wheel or R'}` : ''}.${x.id === 'station' ? ' The station moves anywhere in our third of the map, clear of the entry zones, and takes the rest along.' : ''}` : ' Click for what it is.'}`
           // The handle it is turned by, at its nose, a little way out past its hit area.
           const reach = hit / 2 + (coarse ? 22 : 14)
           const handle = turnable && sel === x.id && !d
