@@ -9,6 +9,8 @@ import {
   galaxyProfile, rivalOf, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw,
   type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
+import { fleetToSend, sendPreview, type SendWhat } from './galaxy'
+import type { MapDrop, MapDropHint } from './Inventory'
 import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
 import { HP_COLOR } from './icons'
 import { resultOf } from './result'
@@ -582,6 +584,22 @@ function fleetScreen(g: Galaxy, f: Fleet, cam: Cam, size: { w: number; h: number
   return { x: s.x + planetR(g.planets[f.planet]) * k + 26, y: s.y - 8 + seenAt(g, f.planet).indexOf(f) * 22 }
 }
 
+/** What a drag from the fleet inventory shows on the map: the target ringed (`r`: a planet's
+ * radius, 0 for a system's star) and the way there, green, or red when the order would be refused. */
+type DropShow = { at: { x: number; y: number }; r: number; ok: boolean; pts: { x: number; y: number }[] }
+/** The drag's target and path over the map, in screen pixels, following the camera. */
+function DropPreview({ view, size, show }: { view: CamView; size: { w: number; h: number }; show: DropShow }) {
+  const cam = useSyncExternalStore(view.sub, () => view.cam)
+  const at = (p: { x: number; y: number }) => ({ x: (p.x - cam.x) * cam.k + size.w / 2, y: (p.y - cam.y) * cam.k + size.h / 2 })
+  const c = at(show.at)
+  return (
+    <svg className={`ew-gdrop ${show.ok ? 'is-ok' : 'is-bad'}`} width={size.w} height={size.h} aria-hidden>
+      {show.pts.length > 1 && <polyline points={show.pts.map(at).map((p) => `${n4(p.x)},${n4(p.y)}`).join(' ')} />}
+      <circle cx={n4(c.x)} cy={n4(c.y)} r={n4(Math.max(18, show.r * cam.k + 8))} />
+    </svg>
+  )
+}
+
 /**
  * The map's camera, kept out of React. Moving it re-aims the map (`placeRegion`, and at a zoom
  * `drawRegion`: see Region) and sets the CSS
@@ -1112,7 +1130,7 @@ function GalaxyView({ g, view, sel, mini = false, orbit = -1, on }: {
               data-sid={s.id}
               data-longpress=""
               onClick={() => on?.system(s.id)}
-              data-tip={mini || has(B_NEAR) ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${fog ? ` Hidden: we have no planet or fleet there; what shows is what we last saw (${lastLook <= 0 ? 'the pre-war charts' : `day ${dayOf(lastLook)}`}).` : ''}${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
+              data-tip={mini || has(B_NEAR) ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${fog ? ` Hidden: we have no planet or fleet there; what shows is what we last saw (${lastLook <= 0 ? 'the pre-war charts' : `day ${dayOf(lastLook)}`}).` : ''}${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop), or drag a fleet or ships here from the fleets panel.`}
             >
               <circle cx={s.x} cy={s.y} fill="transparent" style={css({ r: spx(has(B_NEAR) ? 30 : 22) })} data-ik-lo={has(B_NEAR) ? undefined : n4(4 / 22)} />
               {(!view || has(B_DOTS)) && <circle cx={s.x} cy={s.y} fill={`url(#star-${s.star})`} style={css({ r: spx(13) })} data-ik-lo={n4(7 / 13)} />}
@@ -1151,8 +1169,8 @@ function GalaxyView({ g, view, sel, mini = false, orbit = -1, on }: {
                     'data-longpress': '',
                     onClick: (e: React.MouseEvent) => (e.stopPropagation(), on?.planet(p, e.detail > 1)),
                     'data-tip': k.live
-                      ? `${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`
-                      : `${p.name}: ${PLANET_KINDS[p.kind].name}, about ${knownIncome(p, k.station)} credits a day. ${lastSeen(g, p)} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`,
+                      ? `${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop), or drag a fleet or ships here from the fleets panel.`
+                      : `${p.name}: ${PLANET_KINDS[p.kind].name}, about ${knownIncome(p, k.station)} credits a day. ${lastSeen(g, p)} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop), or drag a fleet or ships here from the fleets panel.`,
                   }
                   // (They fade in with the planets, as the group round these did.)
                   const fade = { opacity: 'var(--d)' }
@@ -1401,6 +1419,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const [invClosed, setInvClosed] = useState<string | null>(null)
   /** 'move': the next click on the map sends the selected fleets there (as a right-click would). */
   const [mode, setMode] = useState<'normal' | 'move'>('normal')
+  /** Ships dragged from the fleet inventory over the map: the planet or system they'd go to, ringed,
+   * and the way there (in map units), green or (refused) red. */
+  const [dropShow, setDropShow] = useState<DropShow | null>(null)
   /** Phones and short screens hide the galaxy map until it's asked for (the map button). */
   const [mapOpen, setMapOpen] = useState(false)
   const viewEl = useRef<HTMLDivElement>(null)
@@ -2007,8 +2028,22 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     for (const [id, n] of grouped(f.ships)) for (let i = 0; i < Math.min(n, take[id] ?? n); i++) out.push(id)
     return out
   }
-  /** Send the selected fleets to a planet; with `queue` (Shift), as a stop after what they're doing. */
-  const send = (planet: number, queue = false) => {
+  /** Send the selected fleets to a planet; with `queue` (Shift), as a stop after what they're doing.
+   * `only`: that fleet of ours, whole, instead of the selection (a drag from the fleet inventory);
+   * it becomes the selection. */
+  const send = (planet: number, queue = false, only?: Fleet) => {
+    if (only) {
+      const why = moveFleet(g, ME, only.id, planet, undefined, queue)
+      if (why) {
+        sound.error()
+        toast(why, 'bad')
+        return
+      }
+      setSel({ kind: 'fleet', id: only.id })
+      setTake({})
+      sound.order('move', myFaction)
+      return
+    }
     // Several fleets: each flies there whole, and they join up when they arrive.
     if (selFleets.length) {
       let sent = 0
@@ -2047,12 +2082,13 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     setTake({})
     sound.order('move', myFaction)
   }
-  /** Right-click on a system: the planet worth going to (an enemy's, then a free one, then ours). */
-  const sendToSystem = (s: number, queue = false) => {
+  /** The planet of a system worth going to (an enemy's, then a free one, then ours). */
+  const systemPick = (s: number) => {
     const ps = g.systems[s].planets.map((p) => g.planets[p])
-    const target = ps.find((p) => ownerFor(g, ME, p) >= 0 && ownerFor(g, ME, p) !== ME) ?? ps.find((p) => ownerFor(g, ME, p) < 0) ?? ps[0]
-    send(target.id, queue)
+    return ps.find((p) => ownerFor(g, ME, p) >= 0 && ownerFor(g, ME, p) !== ME) ?? ps.find((p) => ownerFor(g, ME, p) < 0) ?? ps[0]
   }
+  /** Right-click on a system: to the planet worth going to there. */
+  const sendToSystem = (s: number, queue = false, only?: Fleet) => send(systemPick(s).id, queue, only)
   const pickFleet = (f: Fleet) => {
     if (dragged.current) return
     setSel({ kind: 'fleet', id: f.id })
@@ -2636,6 +2672,91 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     }
     return null
   }
+  /** Where ships dragged out of the fleet inventory and let go at (cx, cy) would be sent: the
+   * planet (on a system, the one a right-click picks; on a fleet's badge, where that fleet is
+   * headed), with a name for the hint and where to ring it. Null off the map or away from anything. */
+  const dropTarget = (cx: number, cy: number) => {
+    const el = document.elementFromPoint(cx, cy)
+    if (!el || !viewEl.current?.contains(el) || el.closest('.ew-float, .ew-gzoom, .ew-orbithint')) return null
+    const hit = mapHit(el, cx, cy)
+    if (!hit) return null
+    if ('planet' in hit) return { planet: hit.planet.id, name: hit.planet.name, at: planetAt(g, hit.planet), r: planetR(hit.planet) }
+    if ('system' in hit) {
+      const s = g.systems[hit.system]
+      return { planet: systemPick(s.id).id, name: s.name, at: { x: s.x, y: s.y }, r: 0 }
+    }
+    const f = hit.fleets[0]
+    const to = f.leg ? (f.route.length ? f.route[f.route.length - 1].planet : f.leg.planet) : f.planet
+    if (to < 0) return null
+    const p = g.planets[to]
+    return { planet: p.id, name: p.name, at: planetAt(g, p), r: planetR(p) }
+  }
+  /** Why a drag onto `planet` is refused (null: it isn't), checked on a copy (`sendPreview`) so a
+   * refused order splits nothing off: what the order itself would refuse, and ships split off only
+   * to stay where they are. */
+  const dropWhyNot = (pv: ReturnType<typeof sendPreview>, what: SendWhat, queue: boolean) =>
+    pv.why ?? (!('fleet' in what) && pv.hops.length === 0 && !queue ? 'They are there already' : null)
+  /** The last drag hint worked out, kept while the pointer stays on the same target. */
+  const dropMemo = useRef<{ key: string; hint: MapDropHint; show: DropShow } | null>(null)
+  /** Ships dragged from the fleet inventory onto the map (see FleetInventory's `mapDrop`): the same
+   * orders a right-click gives, for the dragged fleet (or ships split off as a new fleet) rather
+   * than the selection, with a hint while over a target. */
+  const mapDrop: MapDrop = {
+    over: (what, who, cx, cy, queue) => {
+      const t = dropTarget(cx, cy)
+      if (!t) {
+        dropMemo.current = null
+        setDropShow(null)
+        return null
+      }
+      const key = `${JSON.stringify(what)}:${t.planet}:${t.name}:${queue}:${Math.floor(g.time)}`
+      if (dropMemo.current?.key !== key) {
+        const src = g.fleets.find((f) => f.id === ('fleet' in what ? what.fleet : what.item.fleet))
+        const pv = sendPreview(g, ME, what, t.planet, queue)
+        const why = dropWhyNot(pv, what, queue)
+        let text: string
+        if (why) text = `${who} can't go to ${t.name}. ${why}`
+        else if (!pv.hops.length) text = `${who}: stay at ${t.name}`
+        else {
+          let at = pv.system
+          let jumps = 0
+          let secs = 0
+          for (const h of pv.hops) {
+            if (h.system !== at) jumps++
+            at = h.system
+            secs += 'left' in h ? (h as { left: number }).left : h.total
+          }
+          const days = secs / DAY
+          const when = days < 1 ? 'under a day' : `~${Math.round(days)} day${Math.round(days) === 1 ? '' : 's'}`
+          text = `${queue ? 'Add a stop: ' : 'Send '}${who} to ${t.name} · ${jumps ? `${jumps} jump${jumps === 1 ? '' : 's'}` : 'in the system'}, ${when}`
+        }
+        const from = src ? fleetAt(g, src) : t.at
+        const pts = why ? [] : [from, ...pv.hops.map((h) => (h.planet >= 0 ? planetAt(g, g.planets[h.planet]) : g.systems[h.system]))]
+        dropMemo.current = { key, hint: { ok: !why, text }, show: { at: t.at, r: t.r, ok: !why, pts } }
+      }
+      setDropShow(dropMemo.current.show)
+      return dropMemo.current.hint
+    },
+    drop: (what, cx, cy, queue) => {
+      dropMemo.current = null
+      setDropShow(null)
+      const t = dropTarget(cx, cy)
+      if (!t) return false
+      const why = dropWhyNot(sendPreview(g, ME, what, t.planet, queue), what, queue)
+      const f = why ?? fleetToSend(g, ME, what)
+      if (typeof f === 'string') {
+        sound.error()
+        toast(f, 'bad')
+        return true
+      }
+      send(t.planet, queue, f)
+      return true
+    },
+    clear: () => {
+      dropMemo.current = null
+      setDropShow(null)
+    },
+  }
   /** Opens the action wheel (from the WheelHost round the screen). */
   const wheel = useRef<(r: WheelRequest | null) => void>(() => {})
   /** A long press on the map: what can be done with what's under the finger, on the action wheel. */
@@ -2891,6 +3012,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
               <button onClick={() => (sound.click(), leaveOrbit(true))} data-tip="Back out to the system (Esc)">{compact ? 'Leave' : 'Leave · Esc'}</button>
             </div>
           )}
+          {dropShow && <DropPreview view={view} size={size} show={dropShow} />}
           {box && <div className="ew-gbox" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />}
           <div className="ew-gzoom">
             <button onClick={() => zoomBy(2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
@@ -3007,6 +3129,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
               }
             }}
             onClose={() => setInvClosed(invKey)}
+            mapDrop={mapDrop}
           />
         )}
         {orbitP && orbitSel && (

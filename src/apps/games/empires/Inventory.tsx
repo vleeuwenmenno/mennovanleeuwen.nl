@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import {
   CAPTURE_TIME, GRID_H, GRID_W, MAX_FLEETS, arrangeFleet, canSee, cellsUsed, dropWhy, eta, factionName, fleetsAt, fleetsHere, holdFleet, holdItem, itemAt, mergeFleets, moveItem, stacks,
-  type Fleet, type Galaxy, type Item, type ItemDrop, type ItemRef,
+  type Fleet, type Galaxy, type Item, type ItemDrop, type ItemRef, type SendWhat,
 } from './galaxy'
 import { UNIT } from './data'
 import { Floating, Icon, ShipArt, unitTip, type IconName } from './Hud'
@@ -26,9 +26,18 @@ import './inventory.css'
 // move of strike craft a bar under the title sets the exact count. Fingers: tap a ship to pick it
 // up and tap a spot to put it there (with the touch bar's Shift: half a stack); a long press opens
 // a wheel with the rest.
+//
+// Out of the panel onto the map (`mapDrop`, from Conquest.tsx): a fleet's header or a ship dragged
+// onto a system or planet sends it there, as a right-click would (Shift: a stop); ships are split
+// off as a new fleet first. A finger drags too, moving off a ship or header before the long press:
+// once it leaves the panel, the panel fades and lets it through to the map until the drag ends.
 
 const ME = 0
 const CELLS = GRID_W * GRID_H
+/** How far above a finger what it drags is shown (under the finger it couldn't be seen). */
+const LIFT = 48
+/** The map hint's width at most (inventory.css). */
+const HINT_W = 260
 
 /** A ship (or squadrons of a stack) picked up: the item it comes from, how many go (of how many),
  * which way it's turned now, and which of its cells the pointer holds. */
@@ -38,6 +47,26 @@ type Carry = { from: ItemRef; unit: string; n: number; of: number; w: number; h:
 type Hit = { fleet: number | 'new'; cell: { x: number; y: number } | null; item?: Item; head: boolean; toggle: boolean }
 /** Where a carried ship would go, and whether it fits there. */
 type Hover = { fleet: number; x: number; y: number; w: number; h: number; ok: boolean }
+
+/** What the map says about ships dragged over it: the order they'd get, or why it's refused. */
+export type MapDropHint = { ok: boolean; text: string }
+/** The galaxy map's side of dragging ships (or a whole fleet) out of the panel onto it: `over`
+ * lights up the planet or system under the pointer and says what letting go there would do (null:
+ * nothing there); `drop` gives that order (false: nothing there, the ships go back); `clear` takes
+ * the light down. `who` names what's dragged, for the hint; `queue` (Shift) adds a stop. */
+export type MapDrop = {
+  over: (what: SendWhat, who: string, cx: number, cy: number, queue: boolean) => MapDropHint | null
+  drop: (what: SendWhat, cx: number, cy: number, queue: boolean) => boolean
+  clear: () => void
+}
+
+/** The game's theme colours (CSS variables set on .ew-root), for what's portalled out of it. */
+const THEME = ['--ew-good', '--ew-bad', '--ew-bg', '--ew-text']
+function themeOf(el: Element | null): CSSProperties {
+  if (!el) return {}
+  const cs = getComputedStyle(el)
+  return Object.fromEntries(THEME.map((v) => [v, cs.getPropertyValue(v)]))
+}
 
 const half = (n: number) => Math.max(1, Math.ceil(n / 2))
 const shipsN = (n: number) => `${n} ship${n === 1 ? '' : 's'}`
@@ -59,7 +88,7 @@ function hitAt(g: Galaxy, el: Element | null, cx: number, cy: number): Hit | nul
   return { fleet, cell, item: f && cell ? itemAt(f, cell.x, cell.y) : undefined, head: !!el.closest('[data-inv-head]'), toggle: !!el.closest('[data-inv-toggle]') }
 }
 
-export function FleetInventory({ g, planet, flight, selected, sound, toast, onSelect, onMoved, onClose }: {
+export function FleetInventory({ g, planet, flight, selected, sound, toast, onSelect, onMoved, onClose, mapDrop }: {
   g: Galaxy
   /** The planet whose fleets of ours it shows, or -1 for `flight`, one of ours in flight. */
   planet: number
@@ -72,6 +101,8 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
   /** Ships went from one fleet to another (which may have emptied and gone). */
   onMoved: (from: number, to: Fleet) => void
   onClose: () => void
+  /** Ships dragged out of the panel onto the map: sent there (see MapDrop). */
+  mapDrop?: MapDrop
 }) {
   const coarse = useCoarse()
   const [, setTick] = useState(0)
@@ -93,6 +124,17 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
   const [adjust, setAdjust] = useState<{ from: ItemRef; to: ItemRef; unit: string; moved: number } | null>(null)
   /** A whole fleet being dragged by its header, to join it to another. */
   const [fleetGhost, setFleetGhost] = useState<{ fleet: number; n: number; x: number; y: number } | null>(null)
+  /** What the map says about a drag over it, shown by the pointer. */
+  const [mapHint, setMapHint] = useState<(MapDropHint & { x: number; y: number }) | null>(null)
+  /** A finger's drag has left the panel: until it ends the panel fades and lets the finger through
+   * to the map (on a phone it covers much of it). */
+  const [out, setOut] = useState(false)
+  /** The drag is a finger's: its ghost sits above the finger, where it can be seen. */
+  const [finger, setFinger] = useState(false)
+  const mapRef = useRef(mapDrop)
+  mapRef.current = mapDrop
+  /** The panel's body: the hint (portalled out of the game) takes the game's theme colours from it. */
+  const bodyRef = useRef<HTMLDivElement>(null)
   const wheel = useWheel()
   const press = useRef(new LongPress())
   const fleets = planet >= 0 ? fleetsHere(g, ME, planet) : flight ? [flight] : []
@@ -105,6 +147,19 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     const f = fleetOf(r.fleet)
     const it = f && itemAt(f, r.x, r.y)
     return it && it.unit === unit ? it : undefined
+  }
+  /** A carried ship, as what the map sends, and its name for the hint. */
+  const sendOf = (c: Carry): SendWhat => ({ item: c.from, n: c.n })
+  const whoOf = (c: Carry) => `${UNIT[c.unit].name}${c.n > 1 ? ` ×${c.n}` : ''}`
+  /** A drag at (x, y) outside the fleets: what the map says about it there. */
+  const overMap = (what: SendWhat, who: string, x: number, y: number, queue: boolean) => {
+    const h = mapRef.current?.over(what, who, x, y, queue) ?? null
+    setMapHint(h && { ...h, x, y })
+  }
+  /** A drag is over (or back over the fleets): the map's hint and light go. */
+  const offMap = () => {
+    setMapHint(null)
+    mapRef.current?.clear()
   }
 
   // What's carried, or the move being adjusted, that no longer exists is let go.
@@ -148,7 +203,11 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     const move = (m: PointerEvent) => {
       if (m.pointerType === 'touch') return
       setAt({ x: m.clientX, y: m.clientY })
-      setHover(hoverAt(carry, hitAt(g, document.elementFromPoint(m.clientX, m.clientY), m.clientX, m.clientY)))
+      const hit = hitAt(g, document.elementFromPoint(m.clientX, m.clientY), m.clientX, m.clientY)
+      setHover(hoverAt(carry, hit))
+      // Dragged out of the fleets: over the map, a planet or system to send them to.
+      if (dragging && !hit) overMap(sendOf(carry), whoOf(carry), m.clientX, m.clientY, m.shiftKey)
+      else if (mapHint) offMap()
     }
     const menu = (e: MouseEvent) => {
       e.preventDefault()
@@ -358,23 +417,95 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     wheel({ x, y, title, items })
   }
 
-  /** Every press in the panel comes here: drags and clicks with a mouse, taps and long presses with a finger. */
+  /** A drag let go at (x, y): over the fleets (`to`), the ship goes there or the fleet joins that one;
+   * outside them, onto the map, they're sent to the planet or system there (Shift: as a stop);
+   * anywhere else the ship goes back. `it`: the ship dragged, else it's fleet `f` by its header. */
+  const letGo = (f: Fleet, it: Item | undefined, to: Hit | null, x: number, y: number, queue: boolean) => {
+    offMap()
+    if (it) {
+      setDragging(false)
+      // The drop goes by the carry as it is now (it may have been turned on the way).
+      const c = carryRef.current
+      if (c && to) return put(c, dropFor(c, to))
+      if (c && !to) mapRef.current?.drop(sendOf(c), x, y, queue)
+      setCarry(null)
+      setHover(null)
+    } else if (to && typeof to.fleet === 'number' && to.fleet !== f.id) merge(f.id, to.fleet)
+    else if (!to) mapRef.current?.drop({ fleet: f.id }, x, y, queue)
+  }
+
+  /** Every press in the panel comes here: drags and clicks with a mouse, taps, drags and long presses with a finger. */
   const down = (e: React.PointerEvent) => {
     const target = e.target as Element
     if (target.closest('button')) return
     const hit = hitAt(g, target, e.clientX, e.clientY)
     if (!hit) return
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const f = typeof hit.fleet === 'number' ? fleetOf(hit.fleet) : undefined
+    const it = hit.item
     if (isTouch(e)) {
-      const x0 = e.clientX
-      const y0 = e.clientY
       if (hit.item || hit.head) press.current.start(e, () => wheelFor(hit, x0, y0))
-      const pm = (m: PointerEvent) => void (m.pointerId === e.pointerId && press.current.move(m))
+      // A finger that moves off a ship or a fleet's header before the long press drags it: within
+      // the panel as a mouse would, or out of it onto the map (the panel then fades out of the way).
+      // (From a ship's hold toggle too: a tap there still toggles it.)
+      const draggable = !carry && f && (it || hit.head)
+      let went = false
+      let left = false
+      const pm = (m: PointerEvent) => {
+        if (m.pointerId !== e.pointerId) return
+        press.current.move(m)
+        if (!draggable || press.current.fired) return
+        if (!went) {
+          if (Math.hypot(m.clientX - x0, m.clientY - y0) <= TAP_SLOP) return
+          went = true
+          press.current.cancel()
+          setFinger(true)
+          if (it) {
+            pickUp(f, it, it.n, hit.cell ?? undefined)
+            setDragging(true)
+          }
+        }
+        const x = m.clientX
+        const y = m.clientY
+        if (it) setAt({ x, y })
+        else setFleetGhost({ fleet: f.id, n: f.ships.length, x, y })
+        const queue = getTouchMods().shift
+        if (!left) {
+          const el = document.elementFromPoint(x, y)
+          const over = hitAt(g, el, x, y)
+          const c = carryRef.current
+          if (it && c) setHover(hoverAt(c, over))
+          if (el?.closest('.ew-inv')) return offMap()
+          left = true
+          setOut(true)
+          setHover(null)
+        }
+        const c = carryRef.current
+        if (it && c) overMap(sendOf(c), whoOf(c), x, y, queue)
+        else if (!it) overMap({ fleet: f.id }, label(f), x, y, queue)
+      }
       const up = (u: PointerEvent) => {
         if (u.pointerId !== e.pointerId) return
         window.removeEventListener('pointermove', pm)
         window.removeEventListener('pointerup', up)
         window.removeEventListener('pointercancel', up)
         press.current.cancel()
+        if (went && f) {
+          setFleetGhost(null)
+          setOut(false)
+          setFinger(false)
+          setAt(null)
+          if (u.type !== 'pointerup') {
+            offMap()
+            setDragging(false)
+            setCarry(null)
+            setHover(null)
+            return
+          }
+          const to = left ? null : hitAt(g, document.elementFromPoint(u.clientX, u.clientY), u.clientX, u.clientY)
+          return letGo(f, it, to, u.clientX, u.clientY, getTouchMods().shift)
+        }
         if (press.current.fired || u.type !== 'pointerup' || Math.hypot(u.clientX - x0, u.clientY - y0) > TAP_SLOP) return
         activate(hit, { half: getTouchMods().shift, one: false })
       }
@@ -386,19 +517,15 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     // The right button turns a ship where it lies (while one is carried, the carried one: see above).
     if (e.button === 2) {
       e.preventDefault()
-      const f = typeof hit.fleet === 'number' ? fleetOf(hit.fleet) : undefined
       if (!carry && f && hit.item && !hit.toggle) rotate(f, hit.item)
       return
     }
     if (e.button !== 0) return
     e.preventDefault()
-    const x0 = e.clientX
-    const y0 = e.clientY
-    const f = typeof hit.fleet === 'number' ? fleetOf(hit.fleet) : undefined
-    const it = hit.item
-    // What a drag carries: the ship (all, half or one squadron of a stack), or with the header the whole fleet.
+    // What a drag carries: the ship (all, half or one squadron of a stack), or with the header the
+    // whole fleet (onto another fleet to join it, or onto the map to send it).
     const n = it ? (e.ctrlKey || e.metaKey ? 1 : e.shiftKey ? half(it.n) : it.n) : 0
-    const draggable = !carry && !hit.toggle && f && (it || (hit.head && !moving))
+    const draggable = !carry && !hit.toggle && f && (it || hit.head)
     let went = false
     const pm = (m: PointerEvent) => {
       if (m.pointerId !== e.pointerId || !draggable) return
@@ -408,7 +535,10 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
         setDragging(true)
       }
       went = true
-      if (!it) setFleetGhost({ fleet: f.id, n: f.ships.length, x: m.clientX, y: m.clientY })
+      if (it) return
+      setFleetGhost({ fleet: f.id, n: f.ships.length, x: m.clientX, y: m.clientY })
+      if (!hitAt(g, document.elementFromPoint(m.clientX, m.clientY), m.clientX, m.clientY)) overMap({ fleet: f.id }, label(f), m.clientX, m.clientY, m.shiftKey)
+      else offMap()
     }
     const up = (u: PointerEvent) => {
       if (u.pointerId !== e.pointerId) return
@@ -416,18 +546,8 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
       window.removeEventListener('pointerup', up)
       setFleetGhost(null)
       if (!went) return activate(hit, { half: e.shiftKey, one: e.ctrlKey || e.metaKey })
-      const to = hitAt(g, document.elementFromPoint(u.clientX, u.clientY), u.clientX, u.clientY)
-      if (it) {
-        setDragging(false)
-        // The drop goes by the carry as it is now (it may have been turned on the way); let go
-        // outside the fleets, it goes back.
-        const c = carryRef.current
-        if (c && to) put(c, dropFor(c, to))
-        else {
-          setCarry(null)
-          setHover(null)
-        }
-      } else if (f && to && typeof to.fleet === 'number' && to.fleet !== f.id) merge(f.id, to.fleet)
+      if (!f) return
+      letGo(f, it, hitAt(g, document.elementFromPoint(u.clientX, u.clientY), u.clientX, u.clientY), u.clientX, u.clientY, u.shiftKey)
     }
     window.addEventListener('pointermove', pm)
     window.addEventListener('pointerup', up)
@@ -523,18 +643,18 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
   ) : (
     <p className="ew-inv-strip ew-muted ew-small">
       {moving
-        ? 'In flight: ships move between fleets only in orbit. Held back ships wait in the reserve when a battle starts.'
+        ? 'In flight: ships move between fleets only in orbit. Drag the fleet by its header onto a system on the map to send it there. Held back ships wait in the reserve when a battle starts.'
         : coarse
-          ? 'Tap a ship, then a spot, to move it (Shift: half a stack). Long-press for more. Bigger ships take more room; gold ones are held back in the reserve.'
-          : 'Drag ships to a spot where they fit (R turns them), onto another fleet, or into a new one. Bigger ships take more room; gold ones are held back in the reserve.'}
+          ? 'Tap a ship, then a spot, to move it (Shift: half a stack), or drag a ship or a fleet onto a system on the map to send it there. Long-press for more. Bigger ships take more room; gold ones are held back in the reserve.'
+          : 'Drag ships to a spot where they fit (R turns them), onto another fleet, into a new one, or onto a system on the map to send them there (Shift: as a stop). Bigger ships take more room; gold ones are held back in the reserve.'}
     </p>
   )
 
   return (
-    <Floating id="gInv" title={p ? `Fleets at ${p.name}` : 'Fleet in flight'} at={{ right: 6, top: 56 }} className={`ew-inv ${carry ? 'is-carrying' : ''}`} layout={galaxyLayout} onClose={onClose}
+    <Floating id="gInv" title={p ? `Fleets at ${p.name}` : 'Fleet in flight'} at={{ right: 6, top: 56 }} className={`ew-inv ${carry ? 'is-carrying' : ''} ${out ? 'is-out' : ''}`} layout={galaxyLayout} onClose={onClose}
       aside={!moving && <b className="ew-selcount" data-tip={`Fleets of ours here, of at most ${MAX_FLEETS}`}>{fleets.length}/{MAX_FLEETS}</b>}>
       {strip}
-      <div className="ew-inv-body" data-nodrag onPointerDown={down} onDoubleClick={dbl} onKeyDown={keyed} onContextMenu={(e) => e.preventDefault()}>
+      <div className="ew-inv-body" ref={bodyRef} data-nodrag onPointerDown={down} onDoubleClick={dbl} onKeyDown={keyed} onContextMenu={(e) => e.preventDefault()}>
         {fleets.map((f) => {
           const sel = selected.has(f.id)
           const allHeld = f.items.every((i) => i.held)
@@ -542,7 +662,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
           return (
             <div key={f.id} className={`ew-inv-fleet ${sel ? 'is-sel' : ''} ${used >= CELLS ? 'is-full' : ''}`} data-inv-fleet={f.id}>
               <div className="ew-inv-head" data-inv-head="" data-longpress="" role="button" tabIndex={0}
-                data-tip={coarse ? 'Tap to select this fleet for orders; long-press to join it to another, arrange it or hold it all back.' : 'Click to select this fleet for orders. Drag it onto another fleet to join them; drop a ship here to put it wherever it fits.'}>
+                data-tip={coarse ? 'Tap to select this fleet for orders; drag it onto a system on the map to send it there; long-press to join it to another, arrange it or hold it all back.' : 'Click to select this fleet for orders. Drag it onto another fleet to join them, or onto a system on the map to send it there (Shift: as a stop); drop a ship here to put it wherever it fits.'}>
                 <b>{label(f)}</b>
                 <small>{shipsN(f.ships.length)} · {status(f)}</small>
                 <i className="ew-inv-room" data-tip={`${used} of ${CELLS} cells taken${used >= CELLS ? ': full' : ''}`}><b style={{ width: `${(used / CELLS) * 100}%` }} /></i>
@@ -570,18 +690,31 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
         )}
       </div>
       {enemy.length > 0 && <p className="ew-inv-enemy ew-small">{factionName(g, enemy[0].owner)} here: {enemy.reduce((n, f) => n + f.ships.length, 0)} ships in {enemy.length} fleet{enemy.length > 1 ? 's' : ''}</p>}
-      {carry && at && !coarse && createPortal(
+      {carry && at && (!coarse || (dragging && finger)) && createPortal(
         <div className={`ew-inv-ghost ${carry.w > carry.h ? 'is-side' : ''} ${hover ? 'is-over' : ''}`}
-          style={{ left: at.x - (carry.dx + 0.5) * slot.current, top: at.y - (carry.dy + 0.5) * slot.current, width: carry.w * slot.current, height: carry.h * slot.current, ['--gw' as string]: `${carry.w * slot.current}px`, ['--gh' as string]: `${carry.h * slot.current}px` }}>
+          style={{ left: at.x - (carry.dx + 0.5) * slot.current, top: at.y - (carry.dy + 0.5) * slot.current - (finger ? LIFT : 0), width: carry.w * slot.current, height: carry.h * slot.current, ['--gw' as string]: `${carry.w * slot.current}px`, ['--gh' as string]: `${carry.h * slot.current}px` }}>
           <span className="ew-inv-art"><ShipArt t={UNIT[carry.unit]} /></span>
           {carry.of > 1 && <em>{carry.n}</em>}
         </div>,
         document.body,
       )}
       {fleetGhost && createPortal(
-        <div className="ew-inv-ghost is-fleet" style={{ left: fleetGhost.x - 22, top: fleetGhost.y - 22 }}>
+        <div className="ew-inv-ghost is-fleet" style={{ left: fleetGhost.x - 22, top: fleetGhost.y - 22 - (finger ? LIFT : 0) }}>
           <Icon name="fleet" size={26} />
           <em>{fleetGhost.n}</em>
+        </div>,
+        document.body,
+      )}
+      {/* What letting go over the map would do: the order, or why it's refused. */}
+      {mapHint && (carry || fleetGhost) && createPortal(
+        <div className={`ew-inv-maphint ${mapHint.ok ? 'is-ok' : 'is-bad'} ${finger ? 'is-finger' : ''}`} role="status"
+          style={{
+            // By the mouse pointer, or centred above a finger (and the ship it carries), on screen.
+            left: finger ? clampTo(mapHint.x, HINT_W / 2 + 6, window.innerWidth - HINT_W / 2 - 6) : clampTo(mapHint.x + 14, 6, window.innerWidth - HINT_W - 6),
+            top: finger ? Math.max(6, mapHint.y - LIFT - 70) : mapHint.y + 22,
+            ...themeOf(bodyRef.current),
+          }}>
+          {mapHint.text}
         </div>,
         document.body,
       )}

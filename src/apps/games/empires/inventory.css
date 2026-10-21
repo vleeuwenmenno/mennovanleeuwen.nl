@@ -374,6 +374,10 @@
   .ew-root .ew-inv-item.is-big .ew-inv-hold {
     opacity: 1;
   }
+  /* (Hidden, it takes no taps either: a finger on a small ship picks it up or drags it.) */
+  .ew-root .ew-inv-item:not(.is-big) .ew-inv-hold:not(.is-held) {
+    pointer-events: none;
+  }
 }
 @media (pointer: coarse), (max-width: 719px) {
 @container (max-width: 680px) {
@@ -407,4 +411,74 @@
   font-size: 10.5px;
   color: var(--ew-gold);
   white-space: nowrap;
+}
+
+/* Dragged out of the panel over the map: what letting go there would do, by the pointer (green: the
+   order and the way there; red: why it's refused). Portalled out of the game, it gets its theme
+   colours inline (Inventory.tsx, themeOf). */
+.ew-inv-maphint {
+  position: fixed;
+  z-index: 10001;
+  max-width: 260px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--ew-good);
+  background: var(--ew-bg);
+  color: var(--ew-text);
+  font: 600 12px/1.3 system-ui, sans-serif;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.ew-inv-maphint.is-finger {
+  transform: translateX(-50%);
+  text-align: center;
+}
+.ew-inv-maphint.is-bad {
+  border-color: var(--ew-bad);
+  color: var(--ew-bad);
+}
+
+/* A finger dragging out of the panel: it fades and lets the finger through to the map below it
+   until the drag ends (on a phone it covers a good part of the map). */
+.ew-root .ew-float.ew-inv.is-out {
+  opacity: 0.18;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.ew-root .ew-float.ew-inv.is-out * {
+  pointer-events: none;
+}
+/* A finger on a fleet's header drags it (out onto the map), rather than scrolling the fleets. */
+@media (pointer: coarse) {
+  .ew-root .ew-inv-head[data-inv-head] {
+    touch-action: none;
+  }
+}
+
+/* On the map while ships are dragged over it (Conquest.tsx, DropPreview): the planet or system
+   they'd go to, ringed, and the way there, green; red when the order would be refused. */
+.ew-root .ew-gdrop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: visible;
+}
+.ew-root .ew-gdrop polyline {
+  fill: none;
+  stroke: var(--ew-good);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  animation: ew-route 0.8s linear infinite;
+}
+.ew-root .ew-gdrop circle {
+  fill: color-mix(in srgb, var(--ew-good) 14%, transparent);
+  stroke: var(--ew-good);
+  stroke-width: 2;
+}
+.ew-root .ew-gdrop.is-bad circle {
+  fill: color-mix(in srgb, var(--ew-bad) 14%, transparent);
+  stroke: var(--ew-bad);
+  stroke-dasharray: 4 3;
 }
