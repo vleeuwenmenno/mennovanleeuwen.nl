@@ -2360,6 +2360,20 @@ a double-click or a double tap on a planet, the zoom keys and buttons, *Orbit vi
 action wheel and the planet picture in its shipyard. Zooming or pinching back out (`ORBIT_LEAVE`),
 Esc, the banner's *Leave* or a look anywhere else lets go.
 
+The camera's glides (the wheel's zoom, flights to a place, going into the orbit view) are critically
+damped springs (`Glide` in Conquest.tsx): the zoom (as its log, so every doubling takes as long) and
+where one point is on screen each glide toward their aim, solved exactly for each frame's time, so
+it's the same at any frame rate. A glide starts from however the camera was already moving, so the
+wheel's or a pinch's speed carries into the snap rather than stopping and restarting; it never
+overshoots; and more notches or a snap on the way re-aim it instead of jumping. The planet glides
+sideways to its place beside the panel as the zoom settles; in the orbit view the wheel and a pinch
+only zoom while it stays put, and leaving carries on from where the camera is. A flight far out
+zooms round the point that stays in place, so nothing swings out and back. The orbit view's
+pictures, panel and banner fade in as it's entered, and out over `ORBIT_FADE_MS` (taking no clicks)
+after it's left, on top of the fade the zoom gives them. With *reduce motion* set in the system,
+flights and the orbit view's ease go at once and nothing fades (the wheel still takes its short
+glide, as it follows the hand).
+
 - **Every planet has its own battle map** ([`conquestMap.ts`](src/apps/games/empires/conquestMap.ts)
   `planetMap`): generated from the galaxy's seed and the planet's id, its terrain by the planet's
   kind (asteroid fields round barren, volcanic and crystal worlds, nebulas round gas giants), the
