@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTION_IDS, FACTIONS, MODULE, ORBITAL_MAX, ORBITAL_TOP, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, orbitalName, orbitalSprite, orbitalType, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { FACTION_IDS, FACTIONS, MODULE, ORBITAL_MAX, ORBITAL_TOP, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, orbitalName, orbitalSlots, orbitalSprite, orbitalType, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
-  orbitalAt, orbitalsUp, parseOrbital, queueName, resetLayout,
+  orbitalAt, orbitalCost, orbitalTime, orbitalsUp, parseOrbital, queueName, rebuildLevel, resetLayout,
   type StructId, type PlanetLayout,
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, clashBattle, buildAt, buildWork, cantRushAt, queueShare, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
@@ -3020,6 +3020,11 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             onClose={() => setSel(null)}
             onFleet={pickFleet}
             onLook={() => enterOrbit(selPlanet.id)}
+            onOpen={(id) => {
+              // As a click on that structure in the orbit view: into the view (if not in it), and it picked.
+              if (orbitRef.current !== selPlanet.id) enterOrbit(selPlanet.id)
+              setOrbitSel(id)
+            }}
             toast={toast}
           />
         )}
@@ -3288,7 +3293,7 @@ function GalaxyMinimap({ g, view, onLook, onCapital, onIdle, idle, onEconomy, ec
  * strike craft on two pages) with the build queue as holograms standing on the window's edge. A
  * planet that isn't ours shows what holds it instead.
  */
-function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galaxy; p: Planet; sound: EmpiresSound; onClose: () => void; onFleet: (f: Fleet) => void; onLook: () => void; toast: (t: string, tone?: GToast['tone']) => void }) {
+function PlanetDock({ g, p, sound, onClose, onFleet, onLook, onOpen, toast }: { g: Galaxy; p: Planet; sound: EmpiresSound; onClose: () => void; onFleet: (f: Fleet) => void; onLook: () => void; onOpen: (id: StructId) => void; toast: (t: string, tone?: GToast['tone']) => void }) {
   const ours = p.owner === ME
   // What we know of it: as it is where we see the system, else as we last saw it.
   const kn = known(g, ME, p)
@@ -3446,7 +3451,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
                 ]}
                 page={page} onPick={(id) => pickPage(id as YardPage)} badges={{ buildings: `${yardsUp + p.base.mods.length + orbitalsUp(p.base).length}/${2 + allMods + ORBITAL_MAX}` }}>
                 {page === 'defense' ? (
-                  <PlanetDefense g={g} p={p} sound={sound} toast={toast} />
+                  <DefenseSites g={g} p={p} sound={sound} onOpen={onOpen} />
                 ) : page === 'yards' || page === 'expansions' ? (
                   <PlanetBuildings g={g} p={p} sound={sound} toast={toast} grid={grid} show={page} />
                 ) : (
@@ -3553,6 +3558,65 @@ function OrbitCard({ g, p, id, sound, toast, onClose }: { g: Galaxy; p: Planet; 
         </Frame>
       </div>
     </Floating>
+  )
+}
+
+/**
+ * The shipyard's Defense page: the planet's defense sites as two compact tiles (picture at its real
+ * level, name, state). A tap picks the structure as a click on it in the orbit view does, which opens
+ * its card there (OrbitCard: levels, module slots, build or rebuild), so the card exists once.
+ */
+function DefenseSites({ g, p, sound, onOpen }: { g: Galaxy; p: Planet; sound: EmpiresSound; onOpen: (id: StructId) => void }) {
+  const f = g.sides[ME].faction
+  return (
+    <div className="ew-yard ew-gbuild ew-gsites">
+      {Array.from({ length: ORBITAL_MAX }, (_, i) => {
+        const id: StructId = i ? 'def1' : 'def0'
+        const o = orbitalAt(p, i)
+        // The work ordered on this site: the first in the queue shows its progress.
+        const at = p.queue.findIndex((q) => parseOrbital(q.unit)?.i === i)
+        const q = at >= 0 ? p.queue[at] : null
+        const work = q ? parseOrbital(q.unit) : null
+        const bar = q && at === 0 ? <i className="ew-modbar" style={{ transform: `scaleX(${1 - q.left / q.total})` }} /> : null
+        const wait = q ? (at === 0 ? `${Math.ceil(q.left)}s left` : `Queued #${at + 1}`) : ''
+        let name: string
+        let line: string
+        let t: UnitType
+        let cls = ''
+        if (o && !o.ruin) {
+          t = orbitalType(f, o.level, o.mods)
+          name = orbitalName(f, o.level)
+          const fitted = o.mods.filter(Boolean).length
+          line = work?.k === 'up' ? `Upgrading · ${wait}` : work?.k === 'mod' ? `Fitting a module · ${wait}` : `Level ${o.level} · ${fitted}/${orbitalSlots(o.level)} modules`
+          cls = 'is-built'
+        } else if (o?.ruin) {
+          const lv = rebuildLevel(g, ME, p, i)
+          t = orbitalType(f, lv, [])
+          name = orbitalName(f, lv)
+          line = work?.k === 'build' ? `Under construction · ${wait}` : `Ruin · rebuild for half`
+          cls = 'is-ruin'
+        } else {
+          t = orbitalType(f, 1, [])
+          name = orbitalName(f, 1)
+          const w = { k: 'build', i } as const
+          line = work?.k === 'build' ? `Under construction · ${wait}` : `Empty · build ${name} ${orbitalCost(g, ME, p, w)} / ${Math.round(orbitalTime(g, ME, p, w))}s`
+          cls = 'is-empty'
+        }
+        const label = `Defense site ${i + 1}`
+        return (
+          <button key={id} className={`ew-gsite ${cls} ${bar ? 'is-busy' : ''}`} onClick={() => (sound.click(), onOpen(id))} aria-label={`${label}: ${name}. ${line}`}
+            data-tip={`${label}: click for its card, with its levels, module slots and orders.`}>
+            <ShipArt t={t} className={cls === 'is-ruin' ? 'is-ruin' : cls === 'is-empty' ? 'is-ghost' : ''} />
+            <span className="ew-gsite-txt">
+              <small>{label}</small>
+              <strong>{cls === 'is-empty' && !work ? 'Empty site' : name}</strong>
+              <span className="ew-modline">{line}</span>
+            </span>
+            {bar}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
