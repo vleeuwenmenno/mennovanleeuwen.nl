@@ -1,0 +1,324 @@
+import type { GroundKit } from '../groundKit.ts'
+import { UNIT } from '../data.ts'
+import type { Owner, World } from '../sim.ts'
+import { sees } from './fog.ts'
+import { TF, TILE, type GroundLayer } from './types.ts'
+import { crystalModel } from '../models/ground.ts'
+import { SITE_DRAW, powerReport } from './power.ts'
+import { TIER_MAX, cantJob } from './jobs.ts'
+import { drawHull } from '../models/paint.ts'
+import { drawEffects } from './effects.ts'
+import { drawBodies, drawSquad, squadFell, squadRing, walkerPose } from './squadDraw.ts'
+import { CARRY, jobOrder, crystalAt, fieldAt, groundMapDef, groundMapOf, groundMaps, groundPlacement, knownBuildings, type GroundPlacement } from './world.ts'
+
+// The battle screen's ground pieces (see groundKit.ts): thumbnails of the tile map, the fog veil,
+// the placement ghost and the minimap's ground. In the browser only; ground/load.ts hands them to the
+// screen.
+
+const OWN = '#7dffa0'
+const ENEMY = '#ff5a50'
+
+/** Each terrain's colour at a pixel a tile (types.ts TERRAINS order), lit by height. */
+const TERRAIN_RGB: [number, number, number][] = [
+  [122, 98, 72], // dirt
+  [93, 112, 64], // grass
+  [138, 133, 126], // rocky
+  [176, 158, 112], // sand
+  [214, 220, 226], // snow
+  [70, 66, 66], // ash
+  [128, 104, 80], // cracked
+  [110, 112, 118], // urban
+  [120, 128, 136], // metal
+]
+
+const thumbs = new Map<string, HTMLCanvasElement>()
+function thumb(id: string): HTMLCanvasElement | null {
+  let c = thumbs.get(id)
+  if (c) return c
+  const map = groundMapOf(id)
+  if (!map) return null
+  const g = map.grid
+  c = document.createElement('canvas')
+  c.width = g.cols
+  c.height = g.rows
+  const x = c.getContext('2d')!
+  const img = x.createImageData(g.cols, g.rows)
+  for (let i = 0; i < g.cols * g.rows; i++) {
+    let [r, gg, b] = TERRAIN_RGB[g.terrain[i]] ?? TERRAIN_RGB[0]
+    let k = 0.72 + 0.17 * g.height[i]
+    if (g.flags[i] & TF.water) [r, gg, b, k] = [53, 90, 122, 1]
+    else if (g.flags[i] & TF.deposit) [r, gg, b, k] = [143, 133, 117, 1]
+    else if (g.flags[i] & TF.blocked) k *= 0.55
+    img.data[i * 4] = Math.min(255, r * k)
+    img.data[i * 4 + 1] = Math.min(255, gg * k)
+    img.data[i * 4 + 2] = Math.min(255, b * k)
+    img.data[i * 4 + 3] = 255
+  }
+  x.putImageData(img, 0, 0)
+  thumbs.set(id, c)
+  return c
+}
+
+/** The fog's alpha outside our sight (0-255): dims the land without hiding it. */
+const VEIL = 120
+
+/**
+ * The fog of war at one pixel a tile, blurred a little ([1 4 6 4 1] across and down) so a sight
+ * disc's stepped edge reads as a soft round one once scaled up with smoothing: clear in sight, a
+ * half-dark veil everywhere else. Worked out again only after the sim's fog refresh (four times a
+ * second), for the team looking.
+ */
+class FogShade {
+  readonly canvas = document.createElement('canvas')
+  private g: CanvasRenderingContext2D
+  private img: ImageData
+  private a: Float32Array
+  private b: Float32Array
+  key = ''
+  constructor(readonly cols: number, readonly rows: number) {
+    this.canvas.width = cols
+    this.canvas.height = rows
+    this.g = this.canvas.getContext('2d')!
+    this.img = this.g.createImageData(cols, rows)
+    for (let i = 0; i < cols * rows; i++) {
+      this.img.data[i * 4] = 3
+      this.img.data[i * 4 + 1] = 5
+      this.img.data[i * 4 + 2] = 8
+    }
+    this.a = new Float32Array(cols * rows)
+    this.b = new Float32Array(cols * rows)
+  }
+  update(w: World, team: number, reveal: boolean) {
+    const key = `${team}:${reveal}:${Math.floor(w.time * 4)}:${w.units.length}`
+    if (key === this.key) return
+    this.key = key
+    const { cols, rows, a, b } = this
+    const fog = w.ground!.fog
+    const n = cols * rows
+    for (let i = 0; i < n; i++) a[i] = reveal || sees(fog, team, i) ? 0 : VEIL
+    const cl = (k: number, hi: number) => (k < 0 ? 0 : k > hi ? hi : k)
+    for (let r = 0; r < rows; r++) {
+      const o = r * cols
+      for (let c = 0; c < cols; c++)
+        b[o + c] = (a[o + cl(c - 2, cols - 1)] + 4 * a[o + cl(c - 1, cols - 1)] + 6 * a[o + c] + 4 * a[o + cl(c + 1, cols - 1)] + a[o + cl(c + 2, cols - 1)]) / 16
+    }
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        a[r * cols + c] = (b[cl(r - 2, rows - 1) * cols + c] + 4 * b[cl(r - 1, rows - 1) * cols + c] + 6 * b[r * cols + c] + 4 * b[cl(r + 1, rows - 1) * cols + c] + b[cl(r + 2, rows - 1) * cols + c]) / 16
+    const d = this.img.data
+    for (let i = 0; i < n; i++) d[i * 4 + 3] = a[i]
+    this.g.putImageData(this.img, 0, 0)
+  }
+}
+
+/** One fog canvas per world (the battle's, the minimap's share it). */
+const shades = new WeakMap<World, FogShade>()
+function shadeOf(w: World, team: number, reveal: boolean) {
+  let s = shades.get(w)
+  const g = w.ground!.map.grid
+  if (!s) shades.set(w, (s = new FogShade(g.cols, g.rows)))
+  s.update(w, team, reveal)
+  return s
+}
+
+function fog(ctx: CanvasRenderingContext2D, w: World, team: number, reveal: boolean) {
+  const s = shadeOf(w, team, reveal)
+  const smooth = ctx.imageSmoothingEnabled
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(s.canvas, 0, 0, w.w, w.h)
+  ctx.imageSmoothingEnabled = smooth
+}
+
+function ghost(ctx: CanvasRenderingContext2D, _w: World, _me: Owner, unitId: string, p: GroundPlacement, zoom: number) {
+  const px = 1 / zoom
+  const spec = UNIT[unitId]?.ground
+  const [fw, fh] = spec?.foot ?? [6, 6]
+  for (const t of p.tiles) {
+    ctx.fillStyle = t.ok ? 'rgba(90, 255, 130, 0.32)' : 'rgba(255, 70, 60, 0.5)'
+    ctx.fillRect(t.tc * TILE + 1, t.tr * TILE + 1, TILE - 2, TILE - 2)
+  }
+  // Its exit (a building that trains: the row in front of its door, kept clear so units can leave):
+  // one dashed strip, not tiles to build on, with an arrow pointing out of the door.
+  if (p.door.length) {
+    const ok = p.door.every((t) => t.ok)
+    const x0 = p.door[0].tc * TILE + 3
+    const y0 = p.door[0].tr * TILE + 3
+    const wd = p.door.length * TILE - 6
+    const ht = TILE - 6
+    ctx.strokeStyle = ok ? 'rgba(150, 215, 255, 0.85)' : 'rgba(255, 70, 60, 0.9)'
+    ctx.fillStyle = ok ? 'rgba(150, 215, 255, 0.1)' : 'rgba(255, 70, 60, 0.18)'
+    ctx.lineWidth = 1.5 * px
+    ctx.setLineDash([6 * px, 4 * px])
+    ctx.fillRect(x0, y0, wd, ht)
+    ctx.strokeRect(x0, y0, wd, ht)
+    ctx.setLineDash([])
+    for (const t of p.door)
+      if (!t.ok) {
+        ctx.fillStyle = 'rgba(255, 70, 60, 0.45)'
+        ctx.fillRect(t.tc * TILE + 3, t.tr * TILE + 3, TILE - 6, TILE - 6)
+      }
+    // The arrow: out of the door, down the middle of the strip.
+    const ax = x0 + wd / 2
+    const a = Math.min(ht * 0.42, TILE * 0.4)
+    ctx.fillStyle = ok ? 'rgba(150, 215, 255, 0.9)' : 'rgba(255, 70, 60, 0.95)'
+    ctx.beginPath()
+    ctx.moveTo(ax - a * 0.35, y0 + ht * 0.12)
+    ctx.lineTo(ax + a * 0.35, y0 + ht * 0.12)
+    ctx.lineTo(ax + a * 0.35, y0 + ht * 0.48)
+    ctx.lineTo(ax + a * 0.8, y0 + ht * 0.48)
+    ctx.lineTo(ax, y0 + ht * 0.9)
+    ctx.lineTo(ax - a * 0.8, y0 + ht * 0.48)
+    ctx.lineTo(ax - a * 0.35, y0 + ht * 0.48)
+    ctx.closePath()
+    ctx.fill()
+  }
+  ctx.strokeStyle = p.why ? ENEMY : OWN
+  ctx.lineWidth = 2 * px
+  ctx.strokeRect(p.tc * TILE, p.tr * TILE, fw * TILE, fh * TILE)
+}
+
+function minimap(ctx: CanvasRenderingContext2D, w: World, team: number, ox: number, oy: number, s: number, reveal: boolean) {
+  const t = thumb(w.map.ground!)
+  if (!t) return
+  const smooth = ctx.imageSmoothingEnabled
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(t, ox, oy, w.w * s, w.h * s)
+  ctx.drawImage(shadeOf(w, team, reveal).canvas, ox, oy, w.w * s, w.h * s)
+  // Kyber crystal clusters with kyber left: orange dots, over the veil (the land is known from orbit).
+  ctx.fillStyle = KYBER_DOT
+  const d = Math.max(2, TILE * s)
+  for (const c of w.crystals ?? []) {
+    if (!(c.left > 0)) continue
+    const p = crystalAt(c)
+    ctx.fillRect(ox + p.x * s - d / 2, oy + p.y * s - d / 2, d, d)
+  }
+  ctx.imageSmoothingEnabled = smooth
+}
+
+/** The kyber crystal cluster with kyber left under (x, y), within about a tile of its middle (the
+ * nearest when two are), or -1. */
+function crystalUnder(w: World, x: number, y: number): number {
+  let best = -1
+  let bestD = (TILE * 1.05) ** 2
+  w.crystals?.forEach((c, i) => {
+    if (!(c.left > 0)) return
+    const p = crystalAt(c)
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
+}
+
+/** The minimap's colour for a crystal cluster. */
+const KYBER_DOT = '#ff9a3c'
+/** A cluster's size when full, world units across, and the smallest it is drawn on screen (CSS
+ * pixels), so a field reads at the default zoom. */
+const CRYSTAL_SIZE = TILE * 1.9
+const CRYSTAL_MIN_PX = 18
+const FRESH = { detached: 0, scorch: 0, variant: 0 }
+
+let glowImg: HTMLCanvasElement | null = null
+/** A soft orange glow, drawn once and reused under every cluster. */
+function glow() {
+  if (glowImg) return glowImg
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const g = c.getContext('2d')!
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32)
+  grad.addColorStop(0, 'rgba(255, 150, 60, 0.75)')
+  grad.addColorStop(0.45, 'rgba(255, 110, 30, 0.3)')
+  grad.addColorStop(1, 'rgba(255, 90, 20, 0)')
+  g.fillStyle = grad
+  g.fillRect(0, 0, 64, 64)
+  return (glowImg = c)
+}
+
+/** The kyber crystal clusters inside `box`: a soft glow, then the cluster's model (one of a few
+ * shapes), smaller the less kyber it has left; a mined-out one is gone. Drawn under the fog veil
+ * like the land itself: every side knows where they are. */
+function crystals(ctx: CanvasRenderingContext2D, w: World, zoom: number, zdpr: number, box: { x0: number; y0: number; x1: number; y1: number }, me: Owner, color: string) {
+  const all = w.crystals
+  if (!all?.length) return
+  // Which cluster each of our gathering engineers works: a thin dashed line in our colour from the
+  // engineer to it (like an order line, under the fog), and the clusters being worked.
+  const worked = new Set<number>()
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(1.2 / zoom, 1)
+  ctx.globalAlpha = 0.6
+  ctx.setLineDash([6 / zoom, 5 / zoom])
+  ctx.beginPath()
+  for (const u of w.units) {
+    if (u.dead || u.owner !== me || jobOrder(u).k !== 'gather' || u.gm?.cl === undefined || u.gm.drop) continue
+    const c = all[u.gm.cl]
+    if (!c || !(c.left > 0)) continue
+    worked.add(u.gm.cl)
+    const p = crystalAt(c)
+    ctx.moveTo(u.x, u.y)
+    ctx.lineTo(p.x, p.y)
+  }
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.globalAlpha = 1
+  const g = glow()
+  for (const c of all) {
+    if (!(c.left > 0)) continue
+    const p = crystalAt(c)
+    if (p.x < box.x0 || p.x > box.x1 || p.y < box.y0 || p.y > box.y1) continue
+    const full = c.left / c.max
+    const size = Math.max(CRYSTAL_SIZE * (0.45 + 0.55 * full), CRYSTAL_MIN_PX / zoom)
+    const r = size * 1.05
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = 0.55 + 0.35 * full
+    ctx.drawImage(g, p.x - r, p.y - r, r * 2, r * 2)
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 1
+    drawHull(ctx, crystalModel(c.shape), p.x, p.y, 0, size, zdpr, FRESH)
+  }
+  // A marker on each cluster our engineers are working: four ticks round it in our colour.
+  if (!worked.size) return
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(2 / zoom, 1.5)
+  ctx.beginPath()
+  for (const i of worked) {
+    const p = crystalAt(all[i])
+    if (p.x < box.x0 || p.x > box.x1 || p.y < box.y0 || p.y > box.y1) continue
+    const r = Math.max(CRYSTAL_SIZE * 0.62, (CRYSTAL_MIN_PX * 0.7) / zoom)
+    const k = Math.max(5 / zoom, r * 0.3)
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      ctx.moveTo(p.x + sx * r, p.y + sy * (r - k))
+      ctx.lineTo(p.x + sx * r, p.y + sy * r)
+      ctx.lineTo(p.x + sx * (r - k), p.y + sy * r)
+    }
+  }
+  ctx.stroke()
+}
+
+/** The kit, with the picture of the ground from `layer` (the WebGL2 one, or the 2D stand-in). */
+export const screenKit = (layer: () => GroundLayer): GroundKit => ({
+  maps: groundMaps,
+  map: groundMapDef,
+  thumb,
+  layer,
+  placement: groundPlacement,
+  known: knownBuildings,
+  fog,
+  ghost,
+  minimap,
+  fieldAt,
+  crystalUnder,
+  crystals,
+  carry: CARRY,
+  power: powerReport,
+  siteDraw: SITE_DRAW,
+  cantJob,
+  tierMax: TIER_MAX,
+  effects: drawEffects,
+  squad: drawSquad,
+  ring: squadRing,
+  pose: walkerPose,
+  fell: squadFell,
+  bodies: drawBodies,
+})

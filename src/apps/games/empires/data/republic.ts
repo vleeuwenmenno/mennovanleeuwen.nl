@@ -3,7 +3,7 @@
 // data.ts. Points on a ship are on the 0-10 grid over its box, x from the left and y from the nose
 // (see data.ts).
 
-import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundMedium, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] }
 
@@ -268,6 +268,112 @@ const SHIPS: UnitType[] = [
 /** The warships' hardpoints at their size: where they are written (see SHIPS). */
 const LAYOUT: Record<string, Layout> = Object.fromEntries(SHIPS.filter((t) => t.hardpoints.length).map((t) => [t.id, t.hardpoints.map(({ x, y, s }) => ({ x, y, s }))]))
 
+/** Ground battles: the Republic's tracked crane rig, steady and sturdy, its Command Center and its
+ * Supply Depot. */
+const GROUND: UnitType[] = [
+  groundEngineer({
+    id: 'r-g-engineer', faction: 'republic', name: 'Mason field engineer', sprite: 'republic-g-engineer',
+    blurb: 'A tracked utility rig with a crane arm and a welding torch. Unarmed: it mines kyber crystals and hauls them to a Command Center, raises buildings and welds damaged ones back together.',
+    hull: 150, cost: 140, build: 11, speed: 100, turn: 4.4, ground: { radius: 11, accel: 250, builds: ['r-g-supply', 'r-g-generator', 'r-g-barracks', 'r-g-vfactory', 'r-g-research', 'r-g-center'] },
+  }),
+  groundCenter({
+    id: 'r-g-center', faction: 'republic', name: 'Command Center', sprite: 'republic-g-center',
+    blurb: 'A white armoured block with a landing pad and a comms dish. It trains engineers, takes in the kyber they mine and supports 5 units.',
+    hull: 5200, cost: 1200, build: 60, ground: { trains: ['r-g-engineer', 'r-g-scout'] },
+    // A light defence turret on its roof (ground/combat.ts).
+    hardpoints: [{ ...gun('flak', 5, 6.6, 0.13, 900, groundWeapon('pulse', 22, { range: 352, cooldown: 0.8 })), key: 'tur' }],
+  }),
+  groundSupply({
+    id: 'r-g-supply', faction: 'republic', name: 'Supply Depot', sprite: 'republic-g-supply',
+    blurb: 'Armoured stores and a fuel tank behind blast walls. Each one supports 10 more units. Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.',
+    hull: 1500, cost: 100, build: 25, ground: {},
+  }),
+  groundGenerator({
+    id: 'r-g-generator', faction: 'republic', name: 'Power Generator', sprite: 'republic-g-generator',
+    blurb: 'A compact fusion plant with cooling fins and a humming core. It powers the base and burns a trickle of kyber to run.',
+    hull: 1100, cost: 150, build: 20, ground: {},
+  }),
+  groundResearch({
+    id: 'r-g-research', faction: 'republic', name: 'Research Station', sprite: 'republic-g-research',
+    blurb: 'Sensor dishes and a lab dome round a data spire. It makes research points while powered; the factories spend them on upgrades.',
+    hull: 1600, cost: 200, build: 30, ground: {},
+  }),
+  groundFactory({
+    id: 'r-g-barracks', faction: 'republic', name: 'Barracks', sprite: 'republic-g-barracks', makes: 'foot',
+    blurb: 'A white blast-walled hall with a red-striped drop door and an armoury on its roof. It trains clone trooper squads, who march out of its wide door; it draws power while it trains.',
+    hull: 2600, cost: 250, build: 35, ground: { trains: ['r-g-troopers', 'r-g-repeaters', 'r-g-lancers'] },
+  }),
+  groundFactory({
+    id: 'r-g-vfactory', faction: 'republic', name: 'Vehicle Factory', sprite: 'republic-g-vfactory', makes: 'vehicle',
+    blurb: 'A long assembly hangar with a gantry crane over its roof and a wide armoured gate. It builds the Republic\'s walkers and speeders, which roll out of the gate; it draws power while it builds.',
+    hull: 3400, cost: 400, build: 45, ground: { trains: ['r-g-raider', 'r-g-hailstorm', 'r-g-bastion'] },
+  }),
+  groundScout({
+    id: 'r-g-scout', faction: 'republic', name: 'Pathfinder speeder', sprite: 'republic-g-scout',
+    blurb: 'A light repulsor speeder with twin pulse lasers along its nose. Fast, with long sight: it finds the enemy and picks off engineers, but heavy armour shrugs it off.',
+    hull: 140, cost: 90, build: 9, speed: 165, turn: 5, ground: { radius: 11, sight: 12 },
+    weapons: [groundWeapon('pulse', 6, { arc: 0.3 }), groundWeapon('pulse', 6, { arc: 0.3 })],
+  }),
+  // Tier 1: the fast units of the Barracks and the Vehicle Factory (trained there, phase 4a).
+  groundSquad({
+    id: 'r-g-troopers', faction: 'republic', name: 'Trooper squad', sprite: 'republic-g-troopers',
+    blurb: 'Five clone troopers with pulse rifles. Cheap and quick to train, they cut down light units and engineers; they fall one by one under fire, and fight less with every trooper lost.',
+    hull: 300, cost: 105, build: 12, speed: 70, turn: 4, ground: {},
+    squad: { n: 5, member: 'r-gm-trooper', size: 16, spacing: 12 },
+    role: { role: 'Infantry', strong: ['light units', 'engineers'], weak: ['splash', 'heavy armour'] },
+    weapons: [groundWeapon('pulse', 3.5, { range: 176, cooldown: 0.9 })],
+  }),
+  groundFast({
+    id: 'r-g-raider', faction: 'republic', name: 'Raider hover tank', sprite: 'republic-g-raider',
+    blurb: 'A light repulsor tank with a pulse cannon in a turret that turns on its own, so it fires on the move. Quick and handy, thinly armoured.',
+    hull: 340, cost: 150, build: 14, speed: 125, turn: 3.5, ground: { radius: 14 },
+    role: { role: 'Raider', strong: ['light units', 'firing on the move'], weak: ['heavy armour', 'rockets'] },
+    hardpoints: [{ ...gun('flak', 5, 4.6, 0.34, 300, groundWeapon('pulse', 22, { range: 224, cooldown: 1 })), key: 'tur' }],
+    weapons: [],
+  }),
+  // Tier 2: the anti-swarm units of the Barracks and the Vehicle Factory (once they reach tier 2).
+  groundSquad({
+    id: 'r-g-repeaters', faction: 'republic', name: 'Repeater squad', sprite: 'republic-g-repeaters', pop: 2,
+    blurb: 'Four heavy troopers with rapid-fire pulse cannons and frag grenades. They hose down light units and break up packs with frag; armour and artillery are their bane.',
+    hull: 520, cost: 220, build: 22, speed: 60, turn: 3.5, ground: { tier: 2, sight: 9 },
+    squad: { n: 4, member: 'r-gm-repeater', size: 18, spacing: 13 },
+    role: { role: 'Anti-swarm', strong: ['light units', 'squads', 'groups'], weak: ['armour', 'artillery'] },
+    weapons: [groundWeapon('pulse', 2.2, { range: 192, cooldown: 0.3 }), groundWeapon('artillery', 9, { range: 192, min: 48, splash: 40, cooldown: 4 })],
+  }),
+  groundMedium({
+    id: 'r-g-hailstorm', faction: 'republic', name: 'Hailstorm carrier', sprite: 'republic-g-hailstorm',
+    blurb: 'A tracked carrier with an airburst artillery turret. Its shells burst over groups of light units from long range; it needs others to spot for it, and anything that gets close is under its guns.',
+    hull: 700, cost: 300, build: 28, speed: 80, turn: 2.5, ground: { sight: 9 },
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'buildings'], weak: ['anything close', 'fast raiders'] },
+    hardpoints: [{ ...gun('turbo', 5, 5.2, 0.36, 500, groundWeapon('artillery', 34, { range: 480, min: 96, splash: 60, cooldown: 3 })), key: 'tur' }],
+    weapons: [],
+  }),
+  // Tier 3: the heavy units of the Barracks and the Vehicle Factory (the big ones, phase 5c).
+  {
+    ...groundSquad({
+      id: 'r-g-lancers', faction: 'republic', name: 'Lancer team', sprite: 'republic-g-lancers',
+      blurb: 'Four heavy clone troopers in thick armour, each with a rocket launcher on the shoulder. Their rockets crack walkers, tanks and buildings; their armour keeps them going long after a trooper squad would have fallen, but light, fast units dodge most of what they fire.',
+      hull: 1500, cost: 440, build: 48, speed: 56, turn: 3.5, ground: { radius: 18, tier: 3 },
+      squad: { n: 4, member: 'r-gm-lancer', size: 22, spacing: 17 },
+      role: { role: 'Anti-armour', strong: ['heavy armour', 'buildings'], weak: ['fast light units', 'sprays'] },
+      weapons: [groundWeapon('rocket', 34, { range: 256, cooldown: 2.8 })],
+    }),
+    pop: 4,
+  },
+  groundHeavy({
+    id: 'r-g-bastion', faction: 'republic', name: 'Bastion walker tank', sprite: 'republic-g-bastion',
+    blurb: 'A six-legged armoured walker the size of a house. A heavy shell cannon in its main turret breaks other heavy units, and a pulse gun turret on its back keeps light ones honest. Slow to turn: quick raiders with rockets get round it.',
+    hull: 2000, cost: 600, build: 56, speed: 48, turn: 1.5, ground: { size: 3, radius: 36 },
+    aspect: 1.06,
+    role: { role: 'Walker tank', strong: ['heavy armour', 'anti-swarm units'], weak: ['fast rocket raiders', 'flanking'] },
+    hardpoints: [
+      { ...gun('turbo', 5, 3.9, 0.36, 900, groundWeapon('shell', 150, { range: 288, cooldown: 2.8 })), look: 'triple', key: 'main' },
+      { ...gun('flak', 5, 7.3, 0.2, 500, groundWeapon('pulse', 16, { range: 224, cooldown: 0.7 })), look: 'pd', key: 'pd' },
+    ],
+    weapons: [],
+  }),
+]
+
 export const REPUBLIC: FactionData = {
   id: 'republic',
   info: {
@@ -363,6 +469,7 @@ export const REPUBLIC: FactionData = {
   },
   layout: LAYOUT,
   // The Bastion defense station (Galactic conquest): a command hub that grows gun decks on truss arms.
+  ground: GROUND,
   orbital: {
     name: 'Bastion defense station',
     blurb: 'An armoured defense station in orbit beside the Command Station, built from the Bastion\'s standard modules. Each level adds module slots, and each slot takes the module we pick for it.',

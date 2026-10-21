@@ -303,6 +303,277 @@ const skirmishHuge: Scene = {
   },
 }
 
+// --- A ground battle ---
+
+/** Launches a ground battle on Dustfall Ridge (the Republic against the droids) through the lobby
+ * and waits until its terrain has loaded, the clock stopped (manual frames). */
+async function launchGround(page: Page, url: string) {
+  await page.send('Page.navigate', { url: `${url}/play/empires` })
+  await page.waitFor(MENU)
+  // The lobby as it was left: a ground battle on Dustfall Ridge, the Republic against the droids.
+  const setup = {
+    mode: 'ground', groundMap: 'dustfall-ridge', map: 'vanth', credits: 2500,
+    slots: [
+      { kind: 'you', faction: 'republic', team: 0, difficulty: 'easy', profile: 'balanced' },
+      { kind: 'ai', faction: 'droid', team: 1, difficulty: 'easy', profile: 'balanced' },
+    ],
+  }
+  await page.eval(`localStorage.setItem('mvlos.empires.lobby', ${JSON.stringify(JSON.stringify(setup))})`)
+  await press(page, '.ew-menu-btn', 'Single player')
+  await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
+  await press(page, '.ew-menu-btn', 'Skirmish')
+  // Ground battles load in the lobby (the Ground switch lights once they have).
+  await page.waitFor(`[...document.querySelectorAll('.ew-seg button.is-on')].some((b) => b.textContent.includes('Ground')) && !!document.querySelector('.ew-go')`)
+  await page.eval(`__perf.manual(11)`)
+  await press(page, '.ew-go', 'Launch battle')
+  // The terrain's pictures load in real time with the clock stopped.
+  await settleUntil(page, `!!window.__ew && !!window.__ewGround && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth`)
+  await page.eval(`window.__ewGround.ready.then(() => (window.__groundReady = true))`)
+  await settleUntil(page, `!!window.__groundReady`)
+}
+
+/**
+ * A ground battle (dev builds only, as the perf check's server is) on Dustfall Ridge, through the
+ * space game's battle screen: three dozen vehicles of both sides driving across the low ground in
+ * sight of each other, fog of war on, the camera panning over the terrain as they go. The ground is
+ * on its own canvas under the battle canvas (groundKit's layer); the metrics are the battle canvas's.
+ */
+const groundBase: Scene = {
+  name: 'ground-base',
+  about: 'Ground battle on Dustfall Ridge, 36 vehicles driving over terrain, fog on, camera panning',
+  async run(page, url) {
+    await launchGround(page, url)
+    const spawned = await page.eval<number>(`(async () => {
+      const sim = await import('/src/apps/games/empires/sim.ts')
+      const nav = await import('/src/apps/games/empires/ground/nav.ts')
+      const w = __ew.world
+      // Each side's own vehicle type (its engineer), 24 of ours and 12 of theirs in two blocks on
+      // the low ground between the bases, ours sent across theirs.
+      const typeOf = (o) => w.units.find((u) => u.owner === o && u.t.tier === 'vehicle').t
+      const cx = w.w * 0.45, cy = w.h * 0.55
+      let made = 0
+      const block = (o, n, x0, y0) => {
+        const t = typeOf(o)
+        const ids = []
+        for (let i = 0; i < 400 && ids.length < n; i++) {
+          const x = x0 + (i % 8) * 56, y = y0 + Math.floor(i / 8) * 56
+          if (nav.standsAt(w.ground.nav, t.ground.size, x, y)) ids.push(sim.spawn(w, t.id, o, x, y, 0).id)
+        }
+        made += ids.length
+        return ids
+      }
+      const ours = block(0, 24, cx - 520, cy - 160)
+      const theirs = block(1, 12, cx - 40, cy + 120)
+      sim.cmdMove(w, 0, ours, cx + 500, cy, false)
+      sim.cmdMove(w, 1, theirs, cx - 500, cy, false)
+      Object.assign(__ew.cam, { x: cx - 300, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 2400)) })
+      return made
+    })()`)
+    // The terrain bakes and the fog clears round the vehicles, then a second is measured while
+    // the camera pans across them.
+    await page.eval(`__perf.frames(120)`)
+    const pan = await measure(page, 60, `__ew.cam.x += 10`)
+    const after = await page.eval<{ mb: number; terrain: number; nodes: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, terrain: (window.__ewGround.cacheBytes ?? 0) / 1048576, nodes: document.getElementsByTagName('*').length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 36 * 0.9) throw new Error(`Only ${spawned} of 36 vehicles spawned`)
+    return {
+      metrics: {
+        ...canvasMetrics(pan, 60),
+        'bitmap cache MB': count(after.mb),
+        'terrain cache MB': count(after.terrain),
+        'React commits / sim s': commitsPerSec(pan, 60),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(pan),
+      },
+      shots: { 'ground-base': shot },
+    }
+  },
+}
+
+// --- A ground fight ---
+
+/**
+ * The same ground battle with a fight in it: the dev weapon test (ground/testWeapons.ts) three times
+ * over on the low ground, 42 test units of both sides carrying all seven ground weapons (pulse,
+ * beam, rockets, shells, artillery, swarm rockets, spray) shooting it out, with their shots, beams,
+ * spray cones, splashes, burns and wrecks. The camera holds on the fight.
+ */
+const groundCombat: Scene = {
+  name: 'ground-combat',
+  about: 'Ground battle on Dustfall Ridge, 42 test units fighting with all seven ground weapons',
+  async run(page, url) {
+    await launchGround(page, url)
+    const spawned = await page.eval<number>(`(async () => {
+      const test = await import('/src/apps/games/empires/ground/testWeapons.ts')
+      const w = __ew.world
+      const cx = w.w * 0.45, cy = w.h * 0.55
+      let made = 0
+      for (const dy of [-260, 0, 260]) made += test.spawnWeaponTest(w, 0, 1, cx, cy + dy).length
+      Object.assign(__ew.cam, { x: cx, y: cy, zoom: Math.max(0.3, Math.min(1, document.querySelector('canvas.ew-canvas').clientWidth / 1800)) })
+      return made
+    })()`)
+    // They close and open fire, then a second of the fight is measured.
+    await page.eval(`__perf.frames(240)`)
+    const fight = await measure(page, 60)
+    const after = await page.eval<{ mb: number; nodes: number; shots: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, nodes: document.getElementsByTagName('*').length, shots: (__ew.world.gshots ?? []).length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 42) throw new Error(`Only ${spawned} of 42 test units spawned`)
+    return {
+      metrics: {
+        ...canvasMetrics(fight, 60),
+        'bitmap cache MB': count(after.mb),
+        'React commits / sim s': commitsPerSec(fight, 60),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(fight),
+      },
+      shots: { 'ground-combat': shot },
+    }
+  },
+}
+
+// --- A squad fight ---
+
+/**
+ * The same ground battle with foot squads fighting: the dev squad test (ground/testWeapons.ts) on
+ * the low ground, five trooper squads and a walker against five battle droid squads, five times
+ * over side by side, about a hundred members walking in step through their leg poses, firing a
+ * shot each and falling; with them a few test units with swarm rockets and sprays, so members fall
+ * thrown by splash, melted and shot down while the second is measured (ground/deaths.ts: bodies,
+ * flying parts, stains and bursts). The camera holds on the fight. The bitmap cache is measured
+ * with the poses and the bodies in it.
+ */
+const groundSquads: Scene = {
+  name: 'ground-squads',
+  about: 'Ground battle on Dustfall Ridge, 20 test squads and 2 walkers walking and fighting',
+  async run(page, url) {
+    await launchGround(page, url)
+    const spawned = await page.eval<number>(`(async () => {
+      const test = await import('/src/apps/games/empires/ground/testWeapons.ts')
+      const w = __ew.world
+      const cx = w.w * 0.45, cy = w.h * 0.55
+      let made = 0
+      for (const dy of [-150, 150]) made += test.spawnSquadTest(w, 0, 1, cx, cy + dy, 5).length
+      // Splash and spray among ours, so members die every way.
+      const sim = await import('/src/apps/games/empires/sim.ts')
+      test.registerWeaponTest()
+      const extra = []
+      for (const [k, dx] of [['swarm', -6], ['spray', -3]])
+        for (const dy of [-150, -60, 60, 150]) extra.push(sim.spawn(w, test.testWeaponId('republic', k), 0, cx + dx * 32, cy + dy, 0).id)
+      sim.cmdMove(w, 0, extra, cx + 7 * 32, cy, true)
+      Object.assign(__ew.cam, { x: cx, y: cy, zoom: Math.max(0.3, Math.min(1.4, document.querySelector('canvas.ew-canvas').clientWidth / 1100)) })
+      return made
+    })()`)
+    // They walk at each other and open fire, then a second of the fight is measured.
+    await page.eval(`__perf.frames(150)`)
+    const deaths = `(async () => (await import('/src/apps/games/empires/ground/deaths.ts')).deathCounts().bodies)()`
+    const before = await page.eval<number>(deaths)
+    const fight = await measure(page, 60)
+    const fell = (await page.eval<number>(deaths)) - before
+    if (fell < 3) throw new Error(`Only ${fell} squad members fell while the fight was measured`)
+    const after = await page.eval<{ mb: number; bitmaps: number; nodes: number }>(`(async () => {
+      const p = await import('/src/apps/games/empires/models/paint.ts')
+      return { mb: p.cacheStats().mb, bitmaps: p.cacheStats().bitmaps, nodes: document.getElementsByTagName('*').length }
+    })()`)
+    await page.eval(`__perf.noText = true; __perf.frames(1)`)
+    const shot = await canvasShot(page, 'canvas.ew-canvas')
+    if (spawned < 22) throw new Error(`Only ${spawned} of 22 test squads and walkers spawned`)
+    return {
+      metrics: {
+        ...canvasMetrics(fight, 60),
+        'bitmap cache MB': count(after.mb),
+        'bitmaps cached': count(after.bitmaps),
+        'React commits / sim s': commitsPerSec(fight, 60),
+        'DOM nodes': count(after.nodes),
+        'main thread ms / frame': msPerFrame(fight),
+      },
+      shots: { 'ground-squads': shot },
+    }
+  },
+}
+
+// --- The ground layer ---
+
+/**
+ * The WebGL2 ground layer (ground/gl.ts) on Ashwater Crossing, alone on the page at 1280 × 720:
+ * built once, then a second of frames panning across the river with the water moving. The canvas
+ * counters don't see WebGL, so the scene counts GL draw calls and texture uploads itself.
+ */
+const groundLayer: Scene = {
+  name: 'ground-layer',
+  about: 'WebGL2 ground layer on Ashwater Crossing, panning over the river, water moving',
+  async run(page, url) {
+    await page.send('Page.navigate', { url: `${url}/play/empires` })
+    await page.waitFor(MENU)
+    await page.eval(`(async () => {
+      const P = WebGL2RenderingContext.prototype
+      window.__glCount = { draws: 0, uploads: 0 }
+      for (const k of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced']) {
+        const f = P[k]
+        P[k] = function (...a) { window.__glCount.draws++; return f.apply(this, a) }
+      }
+      for (const k of ['texImage2D', 'texSubImage2D']) {
+        const f = P[k]
+        P[k] = function (...a) { window.__glCount.uploads++; return f.apply(this, a) }
+      }
+      const { createGroundLayer } = await import('/src/apps/games/empires/ground/gl.ts')
+      const { buildGroundMap } = await import('/src/apps/games/empires/ground/terrain.ts')
+      const { GROUND_MAP } = await import('/src/apps/games/empires/ground/maps.ts')
+      document.body.innerHTML = ''
+      const layer = createGroundLayer()
+      Object.assign(layer.canvas.style, { position: 'fixed', inset: '0', width: '1280px', height: '720px' })
+      layer.canvas.id = 'perf-ground'
+      document.body.appendChild(layer.canvas)
+      const map = buildGroundMap(GROUND_MAP['ashwater-crossing'])
+      layer.setMap(map)
+      const view = { x: 1100, y: 1500, zoom: 0.8 }
+      window.__groundLayer = { layer, view, frame: () => layer.draw(view, 1280, 720, 1, performance.now() / 1000) }
+      ;(layer.ready ?? Promise.resolve()).then(() => (window.__groundLayerReady = true))
+    })()`)
+    // Every texture and the trees' atlas in, then the stepped clock: the water moves with
+    // performance.now(), so on real time each run would draw it at a different moment.
+    await settleUntil(page, `!!window.__groundLayerReady`)
+    await page.eval(`__perf.manual(7)`)
+    const gl = await page.eval<boolean>(`window.__groundLayer.layer.gl`)
+    await page.eval(`__perf.frames(10, () => window.__groundLayer.frame())`)
+    await page.eval(`window.__glCount = { draws: 0, uploads: 0 }`)
+    const pan = await measure(page, 60, `window.__groundLayer.view.x += 8; window.__groundLayer.frame()`)
+    const counts = await page.eval<{ draws: number; uploads: number }>(`window.__glCount`)
+    // A snapshot drawn and read in one go (a WebGL canvas keeps its picture only until the frame ends).
+    const b64 = await page.eval<string>(`(() => {
+      window.__groundLayer.frame()
+      const c = document.createElement('canvas')
+      c.width = ${SHOT_W}
+      c.height = ${SHOT_H}
+      const g = c.getContext('2d')
+      g.imageSmoothingEnabled = true
+      g.imageSmoothingQuality = 'high'
+      g.drawImage(window.__groundLayer.layer.canvas, 0, 0, c.width, c.height)
+      const d = g.getImageData(0, 0, c.width, c.height).data
+      let s = ''
+      for (let i = 0; i < d.length; i += 8192) s += String.fromCharCode.apply(null, d.subarray(i, i + 8192))
+      return btoa(s)
+    })()`)
+    if (!gl) throw new Error('The ground layer fell back to flat: no WebGL2 in this browser')
+    return {
+      metrics: {
+        'GL draw calls / frame': count(counts.draws / 60),
+        'GL texture uploads / frame': count(counts.uploads / 60),
+        ...canvasMetrics(pan, 60),
+        'main thread ms / frame': msPerFrame(pan),
+      },
+      shots: { 'ground-layer': { width: SHOT_W, height: SHOT_H, data: new Uint8Array(Buffer.from(b64, 'base64')) } },
+    }
+  },
+}
+
 // --- A skirmish picked up again after a reload ---
 
 /** The window sizes the resumed battle is looked at in: a laptop, a small window (the map and the
@@ -596,7 +867,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishHuge, skirmishResume, groundBase, groundCombat, groundSquads, groundLayer, galaxy('start'), galaxy('late'), galaxyOrbit, desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))

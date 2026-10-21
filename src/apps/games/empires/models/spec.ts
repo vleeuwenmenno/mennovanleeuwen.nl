@@ -23,6 +23,9 @@ export type ModelSpec = {
   breakStyle?: BreakStyle
   /** The core sphere a 'ring' break leaves whole. */
   core?: { x: number; y: number; r: number }
+  /** A design that walks: its poses in walking order (see Model `walk`); its legs are parts with a
+   * `pose`. */
+  walk?: number[]
 }
 
 export type ModelDef = (c: BuildCtx) => ModelSpec

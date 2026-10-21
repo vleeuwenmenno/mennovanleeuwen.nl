@@ -71,8 +71,10 @@ export type DevCtx = {
 }
 
 /** Ships and structures to spawn: every faction's, except stations (one per player) and mining
- * platforms (they need an ore asteroid). Yards only where the battle has hybrid bases. */
-const spawnable = (w: World) => Object.values(UNIT).filter((t) => t.tier !== 'station' && t.tier !== 'mine' && (t.tier !== 'yard' || w.hybrid))
+ * platforms (they need an ore asteroid). Yards only where the battle has hybrid bases. A ground
+ * battle spawns only its vehicles (its buildings stand on the tile grid, which a plain spawn doesn't
+ * do), and a space battle no ground units. */
+const spawnable = (w: World) => Object.values(UNIT).filter((t) => (t.ground ? !!w.ground && t.tier === 'vehicle' : !w.ground && t.tier !== 'station' && t.tier !== 'mine' && (t.tier !== 'yard' || w.hybrid)))
 
 /** Spawns `n` of a unit for `owner` in a loose grid round (x, y), facing the middle of the map. */
 function spawnAt(w: World, id: string, owner: Owner, x: number, y: number, n: number) {
@@ -185,6 +187,56 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
     return () => clearInterval(t)
   }, [open])
 
+  /** Ground battles: the seven ground weapons at work (ground/testWeapons.ts), at the camera. */
+  const weaponTest = async () => {
+    const { spawnWeaponTest } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnWeaponTest(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Weapon test: the seven ground weapons, ours against theirs', 'info')
+    redraw()
+  }
+  /** Ground battles: squads and a walker walking and fighting (ground/testWeapons.ts), at the camera. */
+  const squadTest = async () => {
+    const { spawnSquadTest } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnSquadTest(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Squad test: our squads and a walker against theirs', 'info')
+    redraw()
+  }
+  /** Ground battles: the six tier 1 units, ours against the same six of theirs, at the camera. */
+  const tierTest = async () => {
+    const { spawnTierTest } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnTierTest(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Tier 1 test: the six tier 1 units, ours against theirs', 'info')
+    redraw()
+  }
+  /** Ground battles: the six tier 2 units of ours against a crowd of tier 1 units of theirs. */
+  const tier2Test = async () => {
+    const { spawnTier2Test } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnTier2Test(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Tier 2 test: the six tier 2 units against a crowd of tier 1', 'info')
+    redraw()
+  }
+  /** Ground battles: the six tier 3 units, ours against the same six of theirs, at the camera. */
+  const tier3Test = async () => {
+    const { spawnTier3Test } = await import('./ground/testWeapons.ts')
+    const foe = w.players.findIndex((p) => p.team !== w.players[ctx.me].team)
+    if (foe < 0) return ctx.toast('No enemy to test against', 'bad')
+    const at = ctx.camera()
+    spawnTier3Test(w, ctx.me, foe, at.x, at.y)
+    ctx.toast('Tier 3 test: the six tier 3 units, ours against theirs', 'info')
+    redraw()
+  }
   const spawnNow = (at: Pt) => {
     const f = form.current
     const world = ctx.world()
@@ -361,6 +413,25 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
             </button>
           </div>
           {armed && <div className="ew-dev-hint ew-small">Left click places (again and again), right click or Esc stops.</div>}
+          {w.ground && (
+            <div className="ew-dev-line">
+              <button className="ew-chip" onClick={() => void weaponTest()} data-tip="Ground battles: test units carrying each of the seven ground weapons, ours against the first enemy's, at the camera">
+                Weapon test
+              </button>
+              <button className="ew-chip" onClick={() => void squadTest()} data-tip="Ground battles: three of our foot squads and a test walker against three of the first enemy's squads, at the camera">
+                Squad test
+              </button>
+              <button className="ew-chip" onClick={() => void tierTest()} data-tip="Ground battles: every faction's tier 1 foot squad and fast vehicle, six of ours against the same six of the first enemy's, at the camera">
+                Tier 1 test
+              </button>
+              <button className="ew-chip" onClick={() => void tier2Test()} data-tip="Ground battles: every faction's tier 2 anti-swarm units of ours against a crowd of tier 1 units of the first enemy's, at the camera">
+                Tier 2 test
+              </button>
+              <button className="ew-chip" onClick={() => void tier3Test()} data-tip="Ground battles: every faction's tier 3 heavy units (foot factory and vehicle factory), six of ours against the same six of the first enemy's, at the camera">
+                Tier 3 test
+              </button>
+            </div>
+          )}
           {w.fleet && <div className="ew-muted ew-small">Campaign battle: what you spawn counts in the result.</div>}
         </div>
       </Floating>

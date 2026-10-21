@@ -22,6 +22,8 @@
 import { BIG_LAYOUT, FACTION_IDS, ORBITAL_MODS, ORBITAL_TOP, STATIONS, TECHS, UNITS, mineType, modulesFor, orbitalSlots, orbitalType, stationType, worksOf, yardType, type UnitType } from '../src/apps/games/empires/data.ts'
 import { sizeClass } from '../src/apps/games/empires/models/sizes.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
+// Ground battles' models load into the lookup when their file is imported.
+import '../src/apps/games/empires/models/ground.ts'
 import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
@@ -85,8 +87,9 @@ for (const [t, style] of types.flatMap((t) => looksOf(t, false))) {
 const looks = types.flatMap((t) => looksOf(t, true))
 console.log(`Looks: ${looks.length} (${looks.filter(([t]) => t.faction === 'swarm').length} of them the Swarm's)`)
 // Every ship bigger than strike craft is built bigger than written, with a layout for its
-// hardpoints, one entry each; the yards grow with what they build.
-for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense')) {
+// hardpoints, one entry each; the yards grow with what they build. (Ground units are written at
+// their size.)
+for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense' && !u.ground)) {
   ok(sizeClass(t) > 1, `${t.id}: not built at a size of its own`)
   if (t.hardpoints.length && t.tier !== 'yard') ok(BIG_LAYOUT[t.id]?.length === t.hardpoints.length, `${t.id}: its layout has ${BIG_LAYOUT[t.id]?.length ?? 0} entries for ${t.hardpoints.length} hardpoints`)
 }

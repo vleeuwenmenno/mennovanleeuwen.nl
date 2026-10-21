@@ -14,7 +14,7 @@
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret
 // the Feeding Node's point defence, and the brood chambers are hangars.
 
-import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun as baseGun, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type Hardpoint, type Layout, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundMedium, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5], corners: [[2.6, 2.9], [7.4, 2.9], [2.6, 7.2], [7.4, 7.2]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5.1], [8.2, 5.1]], core: [5, 5], pd: [5, 8], pad: [5, 1.7] }
 
@@ -253,6 +253,104 @@ const BROODMOTHER: UnitType = {
 /** A warship's layout at its size: the same points and sizes as written. */
 const asWritten = (t: UnitType): Layout => t.hardpoints.map((h) => ({ x: h.x, y: h.y, s: h.s }))
 
+/** Ground battles: the Swarm's low crawler, which builds like the others for now, its Hive Nexus and
+ * its Brood Cache. */
+const GROUND: UnitType[] = [
+  groundEngineer({
+    id: 's-g-engineer', faction: 'swarm', name: 'Shaper drone', sprite: 'swarm-g-engineer',
+    blurb: 'A low crawler with mandibles that spits resin. Cheap and quick to grow: it chews kyber crystals loose and carries them to a Hive Nexus, raises buildings and knits damaged ones back together.',
+    hull: 120, cost: 130, build: 10, speed: 96, turn: 4.8, ground: { radius: 10, accel: 240, builds: ['s-g-supply', 's-g-generator', 's-g-brood', 's-g-nest', 's-g-research', 's-g-center'] },
+  }),
+  groundCenter({
+    id: 's-g-center', faction: 'swarm', name: 'Hive Nexus', sprite: 'swarm-g-center',
+    blurb: 'A chitin mound round a glowing violet core. It grows Shaper drones, takes in the kyber they bring and supports 5 units.',
+    hull: 5400, cost: 1200, build: 60, ground: { trains: ['s-g-engineer', 's-g-scout'] },
+    // A light defence turret on its roof (ground/combat.ts).
+    hardpoints: [{ ...gun('flak', 2.7, 6.7, 0.13, 900, groundWeapon('pulse', 22, { range: 352, cooldown: 0.8 })), key: 'tur' }],
+  }),
+  groundSupply({
+    id: 's-g-supply', faction: 'swarm', name: 'Brood Cache', sprite: 'swarm-g-supply',
+    blurb: 'A cluster of resin pods full of nutrient. Each one supports 10 more units. Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.',
+    hull: 1600, cost: 100, build: 25, ground: {},
+  }),
+  groundGenerator({
+    id: 's-g-generator', faction: 'swarm', name: 'Bio-reactor', sprite: 'swarm-g-generator',
+    blurb: 'A pulsing sac that digests kyber into power. It powers the hive and burns a trickle of kyber to live.',
+    hull: 1100, cost: 150, build: 20, ground: {},
+  }),
+  groundResearch({
+    id: 's-g-research', faction: 'swarm', name: 'Mind Node', sprite: 'swarm-g-research',
+    blurb: 'A ganglion of nerve pods round a thinking core. It makes research points while fed power; the factories spend them on upgrades.',
+    hull: 1600, cost: 200, build: 30, ground: {},
+  }),
+  groundFactory({
+    id: 's-g-brood', faction: 'swarm', name: 'Brood Chamber', sprite: 'swarm-g-brood', makes: 'foot',
+    blurb: 'A ribbed mound of hardened resin round a warm brood pit, with a wide maw in its side. Packs of swarmlings crawl out of it; it draws power while it breeds.',
+    hull: 2400, cost: 220, build: 30, ground: { trains: ['s-g-swarmlings', 's-g-spewer', 's-g-ravager'] },
+  }),
+  groundFactory({
+    id: 's-g-nest', faction: 'swarm', name: 'Vehicle Nest', sprite: 'swarm-g-nest', makes: 'vehicle',
+    blurb: 'A great shell of chitin plates over a birthing pool, its maw wide enough for the beasts the Swarm rides to war. They crawl out of the maw; it draws power while it grows them.',
+    hull: 3000, cost: 360, build: 40, ground: { trains: ['s-g-racer', 's-g-spores', 's-g-behemoth'] },
+  }),
+  groundScout({
+    id: 's-g-scout', faction: 'swarm', name: 'Skitterling', sprite: 'swarm-g-scout',
+    blurb: 'A quick six-legged skitterer that spits bolts of acid. The fastest thing on the ground and the first to find the enemy, but it bursts under any real fire.',
+    hull: 110, cost: 80, build: 8, speed: 175, turn: 6, ground: { radius: 10, sight: 12 },
+    weapons: [groundWeapon('pulse', 9.5, { arc: 0.35, cooldown: 0.5 })],
+  }),
+  // Tier 1: the fast units of the Brood Chamber and the Vehicle Nest (trained there, phase 4a).
+  groundSquad({
+    id: 's-g-swarmlings', faction: 'swarm', name: 'Swarmling pack', sprite: 'swarm-g-swarmlings',
+    blurb: 'Six swarmlings that spit acid bolts as they come and tear with their claws up close. The quickest feet on the ground; each one lost is a mouth less.',
+    hull: 230, cost: 90, build: 9, speed: 95, turn: 5, ground: {},
+    squad: { n: 6, member: 's-gm-swarmling', size: 14, spacing: 11 },
+    role: { role: 'Infantry', strong: ['light units', 'engineers', 'close in'], weak: ['splash', 'heavy armour'] },
+    weapons: [groundWeapon('pulse', 2.2, { range: 128, cooldown: 0.9 }), groundWeapon('pulse', 3, { range: 40, cooldown: 0.5 })],
+  }),
+  groundFast({
+    id: 's-g-racer', faction: 'swarm', name: 'Racer beast', sprite: 'swarm-g-racer',
+    blurb: 'A long-legged runner that flings barbed spine darts from its back and bites what it catches. The darts home in and bite deep into armour; light, quick targets shake them off.',
+    hull: 320, cost: 105, build: 11, speed: 160, turn: 4, ground: { radius: 13 },
+    role: { role: 'Raider', strong: ['armour (spine darts)', 'speed'], weak: ['light units', 'massed fire'] },
+    weapons: [groundWeapon('rocket', 46, { range: 224, cooldown: 1.6, arc: 0.6 }), groundWeapon('pulse', 9, { range: 40, cooldown: 0.7, arc: 0.8 })],
+  }),
+  // Tier 2: the anti-swarm units of the Brood Chamber and the Vehicle Nest (once they reach tier 2).
+  groundMedium({
+    id: 's-g-spewer', faction: 'swarm', name: 'Spewer', sprite: 'swarm-g-spewer',
+    blurb: 'A squat six-legged beast that sprays a cone of acid from its maw, burning everything in front of it. Murderous to packs up close; it has to get there first.',
+    hull: 600, cost: 220, build: 22, speed: 74, turn: 3.2, ground: { radius: 17 },
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['range', 'heavy armour', 'buildings'] },
+    weapons: [groundWeapon('spray', 9, { range: 104, arc: 0.5 })],
+  }),
+  groundMedium({
+    id: 's-g-spores', faction: 'swarm', name: 'Spore carrier', sprite: 'swarm-g-spores',
+    blurb: 'A lumbering four-legged carrier with a spore sac on its back that turns and looses swarms of spores. They burst over packs of light units; armour shrugs them off.',
+    hull: 720, cost: 290, build: 27, speed: 78, turn: 2.6, ground: {},
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['heavy armour', 'fast raiders'] },
+    hardpoints: [{ ...baseGun('flak', 5, 4.8, 0.36, 500, groundWeapon('swarm', 5.5, { burst: 8, range: 288, splash: 40, cooldown: 4 })), key: 'tur', look: 'spore' }],
+    weapons: [],
+  }),
+  // Tier 3: the heavy units of the Brood Chamber and the Vehicle Nest (the big ones, phase 5c).
+  groundHeavy({
+    id: 's-g-ravager', faction: 'swarm', name: 'Ravager', sprite: 'swarm-g-ravager',
+    blurb: 'A great armoured beast on four thick legs that spits heavy globs of bile from a sac in its throat, and bites what comes close. The bile eats through armour; quick, light hunters dodge it.',
+    hull: 1300, cost: 360, build: 36, speed: 60, turn: 2.2, ground: { radius: 30 },
+    aspect: 0.8,
+    role: { role: 'Siege beast', strong: ['heavy armour', 'anti-swarm units'], weak: ['fast rocket raiders', 'packs'] },
+    weapons: [groundWeapon('shell', 95, { range: 256, cooldown: 2.6, arc: 0.5 }), groundWeapon('pulse', 20, { range: 56, cooldown: 0.8, arc: 0.8 })],
+  }),
+  groundHeavy({
+    id: 's-g-behemoth', faction: 'swarm', name: 'Behemoth', sprite: 'swarm-g-behemoth',
+    blurb: 'A huge, slow beast with a living bile mortar grown into its back, which turns on its own and lobs bile across the field at what its allies see. Nothing close can be hit by the mortar, only bitten: fast hunters that get in under it bring it down.',
+    hull: 1700, cost: 420, build: 44, speed: 40, turn: 1.2, ground: { size: 3, radius: 40, sight: 11 },
+    aspect: 0.94,
+    role: { role: 'Artillery beast', strong: ['buildings', 'clumps', 'anti-swarm units'], weak: ['fast units up close'] },
+    hardpoints: [{ ...gun('turbo', 5, 5.6, 0.34, 900, groundWeapon('artillery', 85, { splash: 72 })), look: 'spore', key: 'mortar' }],
+    weapons: [groundWeapon('pulse', 16, { range: 64, cooldown: 0.9, arc: 0.9 })],
+  }),
+]
+
 export const SWARM: FactionData = {
   id: 'swarm',
   info: {
@@ -438,6 +536,7 @@ export const SWARM: FactionData = {
     's-battleship': asWritten(BROODMOTHER),
   },
   // The Guardian (Galactic conquest): a living defense organism that grows weapon lobes as it matures.
+  ground: GROUND,
   orbital: {
     name: 'Guardian',
     blurb: 'A living defense organism anchored in orbit beside the Hive: a chitin bulb round a violet core that grows weapon lobes as it matures. Each level adds module slots, and each slot grows the organ we pick for it. No shields; its hull grows back between attacks.',

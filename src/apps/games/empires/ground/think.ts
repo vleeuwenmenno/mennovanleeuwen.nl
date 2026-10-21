@@ -1,0 +1,378 @@
+import type { Brain } from '../ai.ts'
+import * as M from '../detmath.ts'
+import { GROUND_TECH, UNIT, groundTechsFor } from '../data.ts'
+import { cmdBuild, cmdGroundJob, cmdCancelSite, cmdConstruct, cmdGather, cmdMove, cmdPlace, cantBuild, type Unit, type World } from '../sim.ts'
+import { TILE, type Pt } from './types.ts'
+import { armyCap, armyThink, isFighter, pickFighter } from './army.ts'
+import { SITE_DRAW } from './power.ts'
+import { TIER_MAX, cantJob, jobCost } from './jobs.ts'
+import { POP_MAX, crystalAt, fieldLeft, groundIds, groundPlacement, jobOrder, knownBuildings, trainsOf } from './world.ts'
+
+// The AI's decisions in a ground battle: a branch of ai.ts's think (same brain, clock and random
+// stream): on its seat it keeps its engineers gathering kyber, puts up supply before it reaches its
+// unit cap, builds power generators to keep power ahead of what it needs, a foot factory, a vehicle
+// factory and a research station or two, upgrades its factories' tiers (saving up for them once it
+// has an army to hold its base with) and takes a research or two there, trains more engineers and
+// the factories' units (what counters the enemy it has seen, army.ts), expands with a second Command Center towards the crystal fields on
+// its own side of the map, finishes its sites and repairs its buildings, and fields a few Scouts that
+// scout, defend its buildings and raid the enemy's engineers and buildings (army.ts). It reads only
+// what its team knows (its own units, the land and its crystal fields, which every side sees from
+// orbit, the enemy it sees and the enemy buildings it remembers) and gives the same orders a player
+// does, so every copy of a battle makes the same choices.
+
+/** Engineers it keeps for each standing Command Center, and at most; with fewer than the least it
+ * spends nothing on anything else until it has trained them. */
+const ENGINEERS_PER_CENTER = 7
+const ENGINEERS_MAX = 14
+const ENGINEERS_MIN = 4
+/** Engineers' worth of kyber it keeps back from everything else, to rebuild them after a raid. */
+const KEEP_ENGINEERS = 2
+/** How near (tiles) an armed enemy makes an engineer run for a Command Center. */
+const FLEE = 7
+/** Room it keeps under the unit cap: it builds supply once fewer than this many more fit. */
+const SUPPLY_ROOM = 3
+/** A field this far (tiles, middle to middle) from every drop-off of ours, mined by at least
+ * DEPOT_CREW of our engineers, gets a supply building beside it (drop-offs too): when it needs supply
+ * anyway, or as soon as it can pay with DEPOT_RESERVE kyber left over. */
+const DEPOT_FAR = 16
+const DEPOT_CREW = 3
+const DEPOT_RESERVE = 150
+/** Command Centers it wants: its own and one expansion. */
+const CENTERS = 2
+/** Engineers it has before it saves up for the expansion. */
+const EXPAND_AT = 6
+/** Engineers on one site at most. */
+const CREW = 2
+/** Seconds a site may wait for work to start before it is called off (refunded in full). */
+const SITE_PATIENCE = 90
+/** How far from a crystal field's middle it puts an expansion's middle, in tiles, and the ways it tries. */
+const BESIDE = 8
+const AROUND: [number, number][] = [[0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1]]
+/** Engineers it has before it builds its first generator, and before its research stations. */
+const POWER_AT = 3
+const RESEARCH_AT = 5
+/** Research stations it keeps: one a standing Command Center, at most this many. */
+const LABS_MAX = 2
+/** Engineers it has before it builds its foot factory, and before its vehicle factory (which also
+ * waits for a generator to run). */
+const BARRACKS_AT = 4
+const VFACTORY_AT = 6
+/** Units of each factory it trains even while saving for its expansion, and kyber it keeps back
+ * from them for engineers. */
+const ARMY_MIN = 1
+const ARMY_RESERVE = 150
+/** Research it takes at its factories (on top of their tier upgrades), and kyber it keeps back from
+ * upgrades. */
+const AI_TECHS = 2
+const JOB_RESERVE = 300
+/** Kyber it keeps back from a factory's next tier, and the army (in kyber) it keeps training while it
+ * saves up for one. */
+const TIER_RESERVE = 100
+const HOLD = 600
+/** Further than this (tiles) from its nearest crystal field with kyber left, a Command Center by it
+ * comes first. */
+const FAR = 20
+/** A crystal field this near (tiles) one of its Command Centers is already served by it. */
+const SERVED = 13
+
+const d2 = (a: Pt, b: Pt) => (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)
+const wants = (u: Unit) => !!u.site || u.hull < u.hullMax - 0.5
+const plans = (u: Unit) => [u.order, ...u.queue]
+
+/** Its decisions when its turn to think comes (ai.ts think, in a battle with terrain). */
+export function groundThink(w: World, b: Brain) {
+  const o = b.o
+  const p = w.players[o]
+  const ids = groundIds(p.faction)
+  const mine = w.units.filter((u) => !u.dead && u.owner === o)
+  const centers = mine.filter((u) => u.t.id === ids.center)
+  const standing = centers.filter((u) => !u.site)
+  const supplies = mine.filter((u) => u.t.id === ids.supply)
+  const engineers = mine.filter((u) => u.t.id === ids.engineer)
+  if (!standing.length && !engineers.length) return
+  const building = (u: Unit) => plans(u).some((x) => x.k === 'construct')
+  const crewOf = (s: Unit) => engineers.filter((u) => plans(u).some((x) => x.k === 'construct' && x.id === s.id)).length
+  const idle = engineers.filter((u) => u.order.k === 'idle' && !u.queue.length)
+  /** An engineer to take off its work for a job at `at`: an idle one, else the nearest gatherer. */
+  const spare = (at: Pt) => {
+    const pool = idle.length ? idle : engineers.filter((u) => !building(u))
+    return pool.slice().sort((a, c) => d2(a, at) - d2(c, at) || a.id - c.id)[0]
+  }
+  // Engineers under attack run for the nearest Command Center (and go back to work once it is over:
+  // they are idle there, step 4 below).
+  const team = p.team
+  for (const u of engineers) {
+    if (u.order.k === 'move' && !u.order.attack) continue
+    const foe = w.units.some((e) => !e.dead && !e.foot && w.players[e.owner].team !== team && e.seen[team] && e.guns.length && d2(e, u) < FLEE * TILE * FLEE * TILE)
+    if (!foe) continue
+    // The nearest with no enemy near it (else the first, its oldest).
+    const quiet = standing.filter((c) => !w.units.some((e) => !e.dead && !e.foot && w.players[e.owner].team !== team && e.seen[team] && e.guns.length && d2(e, c) < 10 * TILE * 10 * TILE))
+    const safe = (quiet.length ? quiet : standing.slice(0, 1)).sort((a, c) => d2(a, u) - d2(c, u) || a.id - c.id)[0]
+    if (safe && d2(safe, u) > 5 * TILE * 5 * TILE) {
+      cmdMove(w, o, [u.id], safe.x, safe.y, false)
+      const i = idle.indexOf(u)
+      if (i >= 0) idle.splice(i, 1)
+    }
+  }
+  // With too few engineers left, everything waits until it has trained more.
+  const broke = engineers.length < ENGINEERS_MIN
+  // Its crystal fields far from every Command Center of its (a long haul for every load): a Command
+  // Center by the nearest comes first, before anything else it spends on.
+  const centerCost = UNIT[ids.center].cost
+  const nearest = (w.ground!.fields ?? []).reduce((m, f, i) => (fieldLeft(w, i) > 0 ? Math.min(m, ...standing.map((c) => d2(f, c))) : m), Infinity)
+  const farField = standing.length > 0 && nearest > FAR * TILE * FAR * TILE
+  if (farField && centers.length < CENTERS + 1 && !centers.some((c) => c.site) && p.credits >= centerCost && engineers.length) {
+    const spot = expansionSpot(w, o, ids.center, standing)
+    const who = spot && spare(spot)
+    if (spot && who) return void cmdPlace(w, o, [who.id], ids.center, spot.x, spot.y)
+  }
+  const savingNear = farField && centers.length < CENTERS + 1
+  // Its expansion: a second Command Center beside a crystal field on its own side that none of ours
+  // serves yet. Once it can pay for one it is placed before anything else is bought; until then it
+  // saves up for it: most of the army and a second research station wait.
+  const expand = !broke && centers.length < CENTERS && !centers.some((c) => c.site) && engineers.length >= EXPAND_AT && standing.length > 0
+  if (expand && p.credits >= centerCost + UNIT[ids.engineer].cost) {
+    const spot = expansionSpot(w, o, ids.center, standing)
+    const who = spot && spare(spot)
+    if (spot && who) return void cmdPlace(w, o, [who.id], ids.center, spot.x, spot.y)
+  }
+  const saving = expand && p.credits < centerCost + UNIT[ids.engineer].cost
+  // Kyber it always keeps back for engineers (spends only above it on anything else).
+  const keep = UNIT[ids.engineer].cost * KEEP_ENGINEERS
+  const can = (cost: number) => p.credits >= cost + keep + (savingNear ? centerCost : 0)
+  // Units waiting in any of its queues (Command Centers and factories) count against the cap.
+  const queued = mine.reduce((n, c) => n + (c.yq ?? []).reduce((k, q) => k + UNIT[q.unit].pop, 0), 0)
+  const room = p.popCap - p.pop - queued
+
+  // 1. Supply before the cap: one building at a time, beside a Command Center, or beside a far field
+  // its engineers mine (supply buildings take in kyber too), and there even before the cap once it
+  // can pay: the walk to drop the kyber off is short again.
+  const supplyCost = UNIT[ids.supply].cost
+  const far = standing.length ? farMinedField(w, mine) : -1
+  const depot = far >= 0 ? depotSpot(w, o, ids.supply, far) : null
+  const needed = room < SUPPLY_ROOM && p.popCap < POP_MAX
+  // (A depot is cheap: it doesn't wait for the kyber kept back for a Command Center.)
+  if (!broke && ((needed && can(supplyCost)) || (depot && p.credits >= supplyCost + DEPOT_RESERVE)) && !supplies.some((u) => u.site) && standing.length) {
+    const spot = depot ?? supplySpot(w, o, ids.supply, standing[0])
+    const who = spot && spare(spot)
+    if (spot && who) cmdPlace(w, o, [who.id], ids.supply, spot.x, spot.y)
+  }
+
+  // 1b. Power ahead of what it needs (a site going up, and the next building that draws power it
+  // wants), one generator at a time; then, one site at a time, its foot factory, its vehicle factory
+  // (once a generator runs) and a research station a Command Center (two at most).
+  const gens = mine.filter((u) => u.t.id === ids.generator)
+  const labs = mine.filter((u) => u.t.id === ids.research)
+  const barracks = mine.filter((u) => u.t.id === ids.barracks)
+  const vfactories = mine.filter((u) => u.t.id === ids.vfactory)
+  const pw = p.power ?? { made: 0, used: 0, ratio: 1 }
+  const wantLabs = Math.min(LABS_MAX, standing.length)
+  const running = gens.some((u) => !u.site)
+  const next =
+    ids.barracks && !barracks.length && engineers.length >= BARRACKS_AT ? ids.barracks
+    : ids.vfactory && !vfactories.length && running && engineers.length >= VFACTORY_AT ? ids.vfactory
+    : ids.research && labs.length < wantLabs && running && engineers.length >= RESEARCH_AT ? ids.research
+    : ''
+  const drawOf = (id: string) => (id ? (UNIT[id].ground!.draw ?? 0) : 0)
+  const ahead = SITE_DRAW + drawOf(next || (labs.length < wantLabs ? ids.research : ''))
+  const raising = [...barracks, ...vfactories, ...labs].some((u) => u.site)
+  if (broke) {
+    // (Only engineers until it has enough.)
+  } else if (ids.generator && standing.length && engineers.length >= POWER_AT && !gens.some((u) => u.site) && (pw.ratio < 1 || pw.made - pw.used < ahead) && can(UNIT[ids.generator].cost)) {
+    const spot = supplySpot(w, o, ids.generator, standing[0])
+    const who = spot && spare(spot)
+    if (spot && who) cmdPlace(w, o, [who.id], ids.generator, spot.x, spot.y)
+  } else if (next && !raising && !(saving && next === ids.research && labs.length > 0) && standing.length && can(UNIT[next].cost)) {
+    const home = next === ids.research ? standing[labs.length % standing.length] : standing[0]
+    const spot = supplySpot(w, o, next, home)
+    const who = spot && spare(spot)
+    if (spot && who) cmdPlace(w, o, [who.id], next, spot.x, spot.y)
+  }
+
+  // 2. Engineers: up to a few a Command Center, trained where the queue is shortest, unless it is
+  // saving for the expansion.
+  const want = Math.min(ENGINEERS_MAX, ENGINEERS_PER_CENTER * Math.max(1, standing.length))
+  if (engineers.length + queued < want && room > 0 && !saving) {
+    const at = standing
+      .filter((c) => (c.yq?.length ?? 0) < 2 && !cantBuild(w, o, ids.engineer, false, c.id))
+      .sort((a, c) => (a.yq?.length ?? 0) - (c.yq?.length ?? 0) || a.id - c.id)[0]
+    if (at) cmdBuild(w, o, ids.engineer, false, at.id)
+  }
+
+  // 3. Sites and repairs: idle engineers (or, for a site nobody is building, a gatherer) go to what
+  // needs work, nearest first.
+  for (const s of mine.filter((u) => !!u.foot && wants(u))) {
+    const crew = crewOf(s)
+    if (crew >= (s.site ? CREW : 1)) continue
+    const who = idle.length ? idle.sort((a, c) => d2(a, s) - d2(c, s) || a.id - c.id)[0] : crew ? undefined : spare(s)
+    if (!who) continue
+    if (idle.includes(who)) idle.splice(idle.indexOf(who), 1)
+    cmdConstruct(w, o, [who.id], s.id)
+  }
+  // A site that nobody gets started (its way blocked, an enemy parked on it) is called off.
+  const waiting = mine.find((c) => c.site && !c.site.started)
+  if (!waiting) b.gSite = 0
+  else if (b.gSite !== waiting.id) {
+    b.gSite = waiting.id
+    b.gSiteAt = w.time
+  } else if (w.time - (b.gSiteAt ?? w.time) > SITE_PATIENCE) cmdCancelSite(w, o, waiting.id)
+
+  // 4. Gathering: every idle engineer to the crystal field nearest one of our Command Centers
+  // (the nearest the engineer on a tie), all of them in one order a field.
+  if (idle.length && standing.length) {
+    const byField = new Map<number, Unit[]>()
+    for (const u of idle) {
+      const f = fieldFor(w, standing, u)
+      if (f < 0) continue
+      const list = byField.get(f)
+      if (list) list.push(u)
+      else byField.set(f, [u])
+    }
+    for (const [f, us] of byField) {
+      // At one of the field's clusters with kyber left (the order finds the field from it).
+      const at = (w.crystals ?? []).find((c) => c.f === f && c.left > 0)
+      if (at) cmdGather(w, o, us.map((u) => u.id), crystalAt(at).x, crystalAt(at).y)
+    }
+  }
+
+  // 4b. Its factories: what counters the enemy army it has seen (army.ts pickFighter), one at a time
+  // a factory, keeping a little kyber back for engineers (and, while it saves up for its expansion,
+  // only a unit or two a factory); the easy levels stop at a smaller army.
+  const fighters = mine.filter(isFighter)
+  const armyWorth = fighters.reduce((n, u) => n + u.t.cost, 0)
+  const cap = armyCap(b)
+  // A factory's next tier it has the research points for comes before more units (once it has an
+  // army to hold its base with): it saves its kyber for it.
+  const tierDue = [...barracks, ...vfactories].some((f) => {
+    if (f.site || f.gj || (f.t.ground!.tier ?? 1) >= TIER_MAX) return false
+    const c = jobCost(f, 'tier')
+    return !!c && (p.rp ?? 0) >= c.rp && p.credits < c.cost + TIER_RESERVE
+  })
+  if (!broke && room > 0 && (!cap || armyWorth < cap) && !(tierDue && armyWorth >= HOLD)) {
+    for (const f of [...barracks, ...vfactories]) {
+      if (f.site || (f.yq?.length ?? 0) >= 1) continue
+      const kinds = trainsOf(f)
+      if (saving && fighters.filter((u) => kinds.some((t) => t.id === u.t.id)).length >= ARMY_MIN) continue
+      const pick = pickFighter(w, b, f, mine)
+      if (pick && can(pick.cost + ARMY_RESERVE) && !cantBuild(w, o, pick.id, false, f.id)) cmdBuild(w, o, pick.id, false, f.id)
+    }
+  }
+
+  // 4c. Upgrades at its factories, one job a factory: the next tier when it can pay for it (research
+  // points, and kyber with some kept back), then a research or two for their units.
+  const researched = p.techs.filter((id) => GROUND_TECH[id]).length + mine.filter((u) => u.gj && u.gj.id !== 'tier').length
+  for (const f of broke ? [] : [...barracks, ...vfactories]) {
+    if (f.site || f.gj) continue
+    const options = [...((f.t.ground!.tier ?? 1) < TIER_MAX ? ['tier'] : []), ...(researched < AI_TECHS ? groundTechsFor(f.t.id).map((t) => t.id) : [])]
+    for (const job of options) {
+      const c = jobCost(f, job)
+      if (!c || !can(c.cost + (job === 'tier' ? TIER_RESERVE : JOB_RESERVE)) || cantJob(w, o, f, job)) continue
+      cmdGroundJob(w, o, f.id, job)
+      break
+    }
+  }
+
+  // 5. Its Scouts: training, scouting, defending, raiding (army.ts).
+  armyThink(w, b, mine)
+
+  // 6. Expanding: placed first thing (see the top), once it can pay for it.
+}
+
+/** The crystal field with kyber left nearest one of `centers` (the nearest `u` on a tie), or -1. */
+function fieldFor(w: World, centers: Unit[], u: Unit): number {
+  let best = -1
+  let bestD = Infinity
+  let bestU = Infinity
+  w.ground!.fields.forEach((f, i) => {
+    if (!(fieldLeft(w, i) > 0)) return
+    const d = Math.min(...centers.map((c) => d2(f, c)))
+    const du = d2(f, u)
+    // Fields about as near home count the same: then the one nearer the engineer.
+    if (d < bestD - TILE * TILE * 16 || (d < bestD + TILE * TILE * 16 && du < bestU)) {
+      best = i
+      bestD = Math.min(bestD, d)
+      bestU = du
+    }
+  })
+  return best
+}
+
+/** The crystal field its engineers mine (at least DEPOT_CREW of them) that lies furthest from every
+ * drop-off of ours (finished or going up), when that is more than DEPOT_FAR tiles; -1 otherwise. */
+function farMinedField(w: World, mine: Unit[]): number {
+  const crews = new Map<number, number>()
+  for (const u of mine) {
+    const j = jobOrder(u)
+    if (j.k === 'gather') crews.set(j.f, (crews.get(j.f) ?? 0) + 1)
+  }
+  const homes = mine.filter((u) => !!u.foot && !!u.t.ground?.dropOff)
+  let best = -1
+  let bestD = DEPOT_FAR * TILE
+  for (const [f, n] of [...crews].sort((a, b) => a[0] - b[0])) {
+    if (n < DEPOT_CREW || !(fieldLeft(w, f) > 0)) continue
+    const at = w.ground!.fields[f]
+    const d = homes.length ? Math.min(...homes.map((h) => Math.sqrt(d2(h, at)))) : Infinity
+    if (d > bestD) {
+      bestD = d
+      best = f
+    }
+  }
+  return best
+}
+
+/** Where a supply building goes beside crystal field `f` to take its kyber in: rings round the
+ * field's middle from 4 tiles out, the first spot the placement accepts. */
+function depotSpot(w: World, o: number, type: string, f: number): Pt | null {
+  const at = w.ground!.fields[f]
+  for (let r = 4; r <= 9; r++)
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2
+      const pl = groundPlacement(w, o, type, at.x + M.cos(a) * r * TILE, at.y + M.sin(a) * r * TILE)
+      if (!pl.why || pl.why === 'Not enough kyber') return { x: pl.x, y: pl.y }
+    }
+  return null
+}
+
+/** Where a supply building goes beside Command Center `home`: rings round it from 6 to 12 tiles out,
+ * the spots away from the crystal fields first (so it doesn't stand in the engineers' way), the first
+ * the placement accepts. */
+function supplySpot(w: World, o: number, type: string, home: Unit): Pt | null {
+  const fields = w.ground!.fields
+  const tries: { at: Pt; score: number; k: number }[] = []
+  for (let r = 6; r <= 12; r += 2)
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2
+      const at = { x: home.x + M.cos(a) * r * TILE, y: home.y + M.sin(a) * r * TILE }
+      const near = fields.length ? Math.min(...fields.map((f) => Math.sqrt(d2(f, at)))) : 0
+      tries.push({ at, score: r * TILE - Math.min(near, TILE * 12) * 0.6, k: tries.length })
+    }
+  tries.sort((a, c) => a.score - c.score || a.k - c.k)
+  for (const t of tries) {
+    const pl = groundPlacement(w, o, type, t.at.x, t.at.y)
+    if (!pl.why) return { x: pl.x, y: pl.y }
+  }
+  return null
+}
+
+/** Where to put a new Command Center: beside the crystal fields with kyber left, nearer home than
+ * any enemy building it knows of and not served by one of ours yet, nearest home first, the first
+ * spot the placement accepts. */
+function expansionSpot(w: World, o: number, type: string, centers: Unit[]): Pt | null {
+  const home = centers[0]
+  const enemies = knownBuildings(w, o).map((k) => {
+    const [fw, fh] = UNIT[k.unit].ground!.foot!
+    return { x: (k.tc + fw / 2) * TILE, y: (k.tr + fh / 2) * TILE }
+  })
+  const served = SERVED * TILE
+  const fields = w.ground!.map.deposits
+    .map((d, i) => ({ d, i, far: d2(d, home) }))
+    .filter(({ d, i, far }) => fieldLeft(w, i) > 0 && enemies.every((e) => d2(d, e) > far) && centers.every((c) => d2(d, c) > served * served))
+    .sort((a, c) => a.far - c.far || a.i - c.i)
+  for (const { d } of fields)
+    for (const [dx, dy] of AROUND) {
+      const k = BESIDE / Math.sqrt(dx * dx + dy * dy)
+      const at = { x: d.x + dx * k * TILE, y: d.y + dy * k * TILE }
+      if (!groundPlacement(w, o, type, at.x, at.y).why) return at
+    }
+  return null
+}

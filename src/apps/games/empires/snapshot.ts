@@ -1,6 +1,7 @@
 import type { Brain } from './ai.ts'
 import type { UnitType } from './data.ts'
-import { buildGrid, type World } from './sim.ts'
+import { buildGrid, groundHooks, type World } from './sim.ts'
+import type { GroundSnap } from './ground/world.ts'
 
 // A battle frozen mid-fight, so a reload carries on from the same moment (keep.ts stores it): the
 // whole world (every ship with its damage, orders and reload timers, the shots in flight, the
@@ -46,11 +47,15 @@ export function snapshotWorld(w: World): string {
   delete rest.grid
   delete rest.nav
   delete rest.units
+  // A ground battle's terrain layer is rebuilt from the map; only its nav grid's version and waiting
+  // stamps are kept (see restoreGround).
+  delete rest.ground
+  const groundNav = w.ground ? groundHooks()!.snap(w) : undefined
   // The lookup grid is rebuilt at the start of every tick, but the AI thinks before the tick, on the
   // grid the last tick built (from where the units were then). A restored world must think on that
   // same grid, or its admirals see a different battle for one think and the copies drift apart.
   const cells = [...w.grid].map(([k, us]) => [k, us.map((u) => u.id)])
-  return JSON.stringify({ v: 2, ...rest, units, types, cells }, write)
+  return JSON.stringify({ v: 2, ...rest, units, types, cells, ...(groundNav ? { groundNav } : {}) }, write)
 }
 
 export function restoreWorld(s: string): World | null {
@@ -61,10 +66,17 @@ export function restoreWorld(s: string): World | null {
     const units = o.units.map((u) => ({ ...u, t: o.types[u.t] }))
     const byId = new Map(units.map((u) => [u.id, u]))
     const cells = Array.isArray(o.cells) ? (o.cells as [number, number[]][]) : null
-    const w = { ...o, units, byId, grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown; cells?: unknown }
+    const w = { ...o, units, byId, grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown; cells?: unknown; groundNav?: GroundSnap }
+    const groundNav = w.groundNav
     delete w.v
     delete w.types
     delete w.cells
+    delete w.groundNav
+    if (w.map.ground) {
+      const g = groundHooks()
+      if (!g) return null
+      g.restore(w, groundNav)
+    }
     // Saved before snapshots kept the grid: built from where the units are, as a tick would.
     if (cells) for (const [k, ids] of cells) w.grid.set(k, ids.map((id) => byId.get(id)).filter((u) => !!u))
     else buildGrid(w)

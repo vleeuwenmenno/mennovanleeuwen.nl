@@ -2784,6 +2784,14 @@ brood chambers) drawn in [`swarm/mounts.ts`](src/apps/games/empires/models/swarm
   Big flagship at that size is about half a megabyte and a full turn paints 32, so caching it
   filled about 53 MB of a 48 MB phone budget (`memTuning` in paint.ts; `legacy` puts the old 720-pixel rule back, to
   measure against).
+- **Walk cycles** (ground squads' members and walkers): a model that walks gives its poses in
+  walking order (`walk` in its spec, 2 to 4 poses, pose 0 its rest pose) and its legs as parts with
+  a `pose`, shown only in that pose. The pose is one more key of the hull bitmaps (with size, light
+  heading and damage), so a walking unit draws a cached bitmap like any other and never repaints
+  as it steps. A unit steps through its poses by how far it has walked, so faster units step faster,
+  and holds its rest pose standing. Ships, stations and vehicles declare no poses and paint as
+  before. In the ground-squads perf scene (about a hundred members walking and fighting) the walk
+  cycles take 77 bitmaps and 0.72 MB of the cache.
 - **Damage:** scorch marks spread as the hull drops (four levels, with burnt-through holes at the
   worst); parts come off at their hull share and fly away tumbling and smoking; wrecked mounts
   show broken. All of it follows from the battle's own state.
@@ -3303,6 +3311,798 @@ pnpm check:empires-rejoin                                       # stepping away:
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
 ```
 
+## Empires At War ground battles
+
+Ground (land) battles are being built next to the space battles, in
+[`src/apps/games/empires/ground/`](src/apps/games/empires/ground). They run in the space game's own
+sim (see [The ground sim](#the-ground-sim)); a battle without terrain behaves and hashes as before.
+Until ground units can fight, the mode is in
+dev builds only: the Skirmish setup shows a **Space / Ground** switch when `import.meta.env.DEV` is
+set, and Ground plays the battle on the space game's own screen (see
+[The ground battle screen](#the-ground-battle-screen)), with a **Map viewer** for the ground maps
+that is also their editor (see [The ground map editor](#the-ground-map-editor)). Production builds
+contain none of it but the ground units' entries in the factions' data and the sim's empty hooks.
+
+**Tiles.** The battlefield is a grid of 32-unit tiles ([`types.ts`](src/apps/games/empires/ground/types.ts)).
+Each tile has a terrain (dirt, grass, rocky, sand, mud, road, and later snow, ash, cracked earth and
+plating), a height of 0, 1 or 2, and flags: blocked, no building, ramp, deposit (a kyber crystal
+field), water, bridge, ford and forest. Cliffs stand where heights differ, and only ramps join two
+levels (`canStep`, the one rule the reach check, path finding and movement share). The tile at the
+foot of every cliff is blocked (the slope or the rubble covers it), on all four sides alike so
+mirrored maps stay fair. Water is blocked except where it is a bridge or a ford; forests are
+blocked. For drawing, the grid also carries `elev`, the land's elevation at every tile corner: each
+level stands 64 units higher, ramps climb evenly, riverbeds sink away from the banks, and the open
+ground is smoothed and given a gentle roll, so slopes stay steep at cliffs and soft elsewhere.
+
+**Maps** ([`maps.ts`](src/apps/games/empires/ground/maps.ts)) come in two forms. Round 2 maps are
+drawn with shapes in tile units (`features`, GroundFeatures in types.ts): plateau polygons with
+their level, ramps from foot to top, rivers along polylines (swelling and narrowing, deep in the
+middle), bridges and fords across them, dirt roads along polylines, forest polygons, crystal fields,
+ruins (old foundations, unbuildable but walkable) and spawns. A plateau that a ramp climbs keeps the
+low ground's grass; one with no way up is bare rock. Edges wobble with the seed. Shapes may be drawn
+on any side: the map's symmetry copies each one to every side (`expandFeatures` in terrain.ts), and
+then copies one side's tiles onto the others, so the sides match exactly. Besides the space maps'
+symmetries, a square map can be mirrored across its diagonal (`mirror: 'diagonal'`, from the top
+right corner to the bottom left), which puts two bases in the other corners and lets a river on
+the mirror line carry one shared bridge and one shared ford. No props: woods are drawn by the
+ground layer.
+
+Round 1 maps are coarse sketches for one side,
+copied to the others by the same symmetries as space maps. Each character covers `cell` × `cell`
+tiles: `0` `1` `2` heights, `/` a ramp (it joins the levels on either side of it, and gets walls on
+its open sides), `~` water, `S` a spawn on the plateau, `d` a deposit on low ground, and `.` or a
+missing row for "take it from the mirror copy". [`terrain.ts`](src/apps/games/empires/ground/terrain.ts)
+builds the map from the sketch and its seed, the same on every machine (exactly rounded maths and a
+seeded random stream only):
+- cliff lines wobble: each tile reads the sketch at a position nudged by smooth noise, which fades
+  out near ramps so they meet their levels square, and a majority pass smooths away slivers;
+- terrain: rocky plateaus with dirt pockets away from the rim, rocky scree spilling one to three
+  tiles below every cliff foot, and dirt and grass by noise on the lower ground, grass kept back
+  from cliffs;
+- props by ground type, seeded and spaced: stone only on the plateau (never trees), rubble and heaps
+  on scree and along every cliff foot, trees and bushes on grass, rocks on dirt. They stay off
+  spawns and their build area (16 × 16 tiles), ramps and deposits. Trees, boulders and other big
+  props block the tiles under them; flat ones (rubble, cracked stone) only decorate.
+
+The first map is **Ashwater Crossing** (two players, 96 × 96 tiles, mirrored across the diagonal),
+after a Star Wars: Empire at War ground map (the look Menno picked): a river runs corner to corner
+between two bases on open ground, crossed only by a metal bridge and a rocky ford. A dirt road
+joins the bases over the bridge, past old ruins. Each side has a rocky mesa with one ramp and a
+crystal field on top, solid woods round the edges, and calm grass and dirt everywhere else; the
+third crystal field lies in the ford's shallows, shared. The other maps:
+
+| Map | Players | Size | The idea |
+| --- | --- | --- | --- |
+| Ashwater Crossing | 2 | 96 × 96 | A river between the bases, one bridge and one ford, a mesa each |
+| Forkwater | 3 | 140 × 140 | A river forks in a lake between three bases; each arm has a bridge and a ford |
+| Highcairn | 4 | 112 × 112 | Plateau bases in the corners round a central mesa; rocky ridges with a pass each |
+| Dustfall Ridge | 2 | 128 × 96 | Round 1 sketch: plateau bases, mid shelves, a hill and a pond (no crystals near the bases yet) |
+
+Forkwater and Highcairn were laid out by the generator (below) and kept as maps of their own.
+
+**Generated maps** ([`generate.ts`](src/apps/games/empires/ground/generate.ts)) come from a recipe, a
+player count (2, 3, 4 or 6), a size (small, medium or large: 76, 96 or 120 tiles a side for two
+players, more for more) and a seed. A generated map travels as its id,
+`gen:<recipe>:<players>:<size>:<seed>`: `GROUND_MAP` builds it the first time it's asked for, the
+same on every machine. Each recipe lays out one player's sector and the symmetry copies it (two
+players: mirrored across the diagonal for Rivers, turned half way for the rest; three: turned a
+third; four: mirrored both ways; six: turned a sixth). A sector's edges are the lines it shares with
+its neighbours, so what lies on them (a river with its crossings, a pass, a crystal field) is shared.
+Woods and ridges go only where they keep clear of roads, ramps, crossings, crystals and build areas.
+- **Rivers:** rivers along the sector edges, meeting in a lake, each with a bridge and a ford (the
+  ford holds a shared crystal field); a mesa a side with a ramp and crystals on top; woods.
+- **Highlands:** each base on a plateau with a ramp; a central mesa with crystals and a ramp from
+  every side; bare rocky ridges along the edges with a pass and a crystal field in each.
+- **Forest:** big solid woods with lanes kept open between the bases and out to the edges, and
+  crystals in the clearings; a pond.
+- **Open plains:** open grass and dirt, roads to a pond in the middle, a few small woods, a low
+  ridge, ruins, crystals between the bases.
+
+A finished map is checked (every base reaches every other and every crystal field, build areas are
+open level ground, a crystal field within 20 tiles' walk of each base, and every base about as far
+from its nearest field and from the others as the rest: `problem()`), and laid out again from a
+varied stream if it fails, so every seed gives a playable map. In the lobby, the ground map picker's
+**Generated** entry picks one, and Battle settings then shows its recipe, players, size and seed
+(with a **New seed** button); the preview and the slots follow each change.
+
+**The ground layer** ([`gl.ts`](src/apps/games/empires/ground/gl.ts), the GroundLayer in types.ts)
+draws the ground under a battle with WebGL2: one full-screen triangle a frame (one draw call, no
+texture uploads), its fragment shader working out each pixel's world point. Everything that
+doesn't move is baked once per map, in `setMap`: the corner elevations upsampled to 4 samples a
+tile and smoothed into slopes about two tiles wide, a shade map (where the sun, top left at 38°,
+is hidden behind higher ground, soft edged, and how deep each spot sits in a valley), and blend
+masks at 4 samples a tile, blurred a little: grass, dirt, sand, mud, road, rock, forest, crystals,
+water with its depth, ford and bridge. The shader warps the mask lookups with noise so edges come
+out organic, mixes muted colours with a little low-frequency variation and the round 1 textures as
+detail (warm grass and dirt, blue water, grey rock), lights the land from the heightmap in a few
+hard-ish tones (the game's cel-shaded look), with higher ground a touch brighter,
+puts rock on steep slopes and bare ridges (angular blocks, strata, strong light), casts shadows,
+and paints:
+- water darker away from the banks, with slow swells, a few glints and foam on the edge, moving;
+- boulders along the banks, thicker round the ford, each lit and casting a shadow;
+- the ford as clear shallow water over a stony bed, its crystal field's gravel in it;
+- bridges straight from their shapes: steel plates on girders with bolts, round pylons at the
+  corners, a dark outline and a shadow on the water;
+- ruins: a foundation of flagstones with broken walls and corner columns, casting shadows;
+- forests as a dark canopy floor in the forest's shape, with a soft shadow down and to the right,
+  under the trees (below);
+- crystal fields as plain gravel with a few pebbles (the crystal clusters on them are objects the
+  battle draws, see Kyber below);
+- past the map's edge, the map mirrored, greyed and darkened, with a faint line on the edge.
+
+The trees are flat cel-shaded canopies seen from straight above (big rounded leaf lobes, three hard
+tones lit from the top left, a bold dark outline), nine of them, one a conifer, in one atlas
+(`public/games/empires/ground/trees/canopies.webp`). Where they stand is worked out once per map
+([`trees.ts`](src/apps/games/empires/ground/trees.ts)): crowns packed tightly over every forest, sizes
+varied, about one in twelve a conifer; looser ones over its edges; and now and then a small group out
+on open grass, away from bases, roads, water and slopes. It's seeded by the map, so a map always looks
+the same. The layer draws them as instanced quads over the ground: a pass of soft shadows cast down
+and to the right, then the crowns top to bottom, so lower crowns overlap higher ones, each a little
+lighter or darker than its neighbours. That's 1 + 2 draw calls for each mirror region in view, and
+the CPU does nothing per crown each frame. The mirrored border shows them greyed. It's drawing only:
+forests stay `TF.forest` tiles, and units go round them.
+
+There are no chunks, so no seams in any browser (checked in Chromium and Firefox). Round 1 maps
+draw through it too, their blocking trees and boulders becoming forest and rock in the masks.
+Where WebGL2 is missing, `createGroundLayer` returns a flat 2D layer (`gl: false`) that draws one
+baked picture of the same masks, lit by the same heightmap, with the same crowns baked in once (8
+pixels a tile) and the same grey mirror round it.
+The viewer's **Flat** button shows it. The battle screen draws ground battles with this layer: its
+canvas sits under the battle canvas and is drawn first each frame with the same camera, while units,
+buildings, effects, fog and the HUD stay on the 2D canvas over it. (Round 1's chunk-baked 2D
+renderer and its rock-chunk cliffs are gone.)
+
+```sh
+pnpm check:ground-map           # every hand-made map, then 96 generated ones: builds the same twice, symmetric, reach, open build areas, fairness, crystal clusters (3 to 7 a field, its kyber, none side by side, open ground to mine from)
+pnpm check:ground-map --quick   # the hand-made maps only
+```
+
+### The ground map editor
+
+The ground lobby's **Map viewer** ([`Viewer.tsx`](src/apps/games/empires/ground/Viewer.tsx), dev
+builds only) shows a ground map on the battle's own ground layer: drag or one finger to pan, wheel
+or pinch to zoom, a debug overlay of the tile grid, heights and tile flags (hovering or tapping a
+tile shows what it is), and **Flat** for the fallback. **Edit** turns it into an editor for a round 2
+map's shapes (round 1 sketch maps are view only), opened from any map in the list or **New map…**:
+- **Level** paints raised ground with a round brush (each dab a plateau at level 1 or 2);
+- **Plateau** and **Forest** draw polygons, **River** and **Road** polylines with a width: a tap a
+  point, then **Finish** (or Enter, or a double-click); Escape drops the one being drawn;
+- **Ramp** and **Bridge** are a drag, from the ramp's foot to its top or from bank to bank;
+- **Ford** (with a radius), **Crystals**, **Ruin** and **Spawn** are a tap; **Erase** removes the
+  shape tapped; **Undo** (or Ctrl+Z) takes back the last change;
+- the map's name, symmetry (none, point, diagonal, quad, three- or six-way) and size.
+
+The shapes drawn are outlined, their symmetric copies faintly, and the ground layer redraws after
+each change. **Export** copies the map as TypeScript, ready to paste into `GROUND_MAPS` in
+`ground/maps.ts` (if the browser won't allow copying, the text shows in a box to copy by hand).
+With touch, one finger draws with the tool and two pan and pinch; it is laid out for a tablet.
+
+### The ground sim
+
+A ground battle is a space-game battle whose map has terrain: one sim
+([`sim.ts`](src/apps/games/empires/sim.ts)), one `World`, the same orders, multiplayer protocol,
+snapshots and AI framework. A ground map's `MapDef` names its terrain (`ground`, built from the map's
+id by [`ground/world.ts`](src/apps/games/empires/ground/world.ts) `groundMapDef`), and the world gets
+a terrain layer (`World.ground`: the tile map, its nav grid with building stamps and the fog),
+rebuilt from the map and never saved. The ground code reaches the sim through a few hooks
+(`GroundHooks`), each called only when the world has terrain, so a space battle behaves and hashes
+exactly as it did before. `ground/world.ts` fills the hooks in when it is imported (the dev lobby and
+the checks do), so a production build, where ground battles aren't offered yet, carries none of it.
+
+Ground units are ordinary unit types in each faction's data (`data/<faction>.ts`, UnitType
+`ground`), with tiers of their own (`vehicle` and `building`), so the space game's tier checks and
+the shield code leave them alone. Vehicles count as ships for orders and selection (`isShip`), so
+they take the same orders, queues, control groups and shortcuts; code for ships in space skips them
+with `isGround`.
+
+- **Movement.** A vehicle follows the space game's own orders (move, patrol, construct, stop, with
+  shift queues) on paths found on the tile grid, turns towards its next waypoint and drives once it
+  faces near enough, slower the further off it points, and brakes to stop on the last one. A group
+  sent somewhere spreads over spots round the point. Ground vehicles that overlap push each other
+  apart gently, a parked one giving way to a moving one. None drives onto a tile it can't stand on:
+  it slides along the wall instead. One that ends up somewhere it can't stand (a building went up on
+  it) is pushed onto the nearest open ground. A vehicle that makes no headway finds its path again,
+  and one held up close to its destination by others parked there counts as arrived.
+- **Path finding** ([`ground/nav.ts`](src/apps/games/empires/ground/nav.ts)): A* on the tile grid,
+  8 ways, through the terrain's one stepping rule (`canStep`: no blocked tile, heights the same
+  unless one tile is a ramp, no cutting a corner), with whole-number costs and a fixed neighbour
+  order and tie-break, then pulled tight into straight legs that are checked tile by tile. Units
+  come in size classes, the square of tiles they need: small 1, vehicle 2, large 3. A clearance
+  map gives each tile the biggest open square (with no cliff inside) starting there, so a vehicle
+  never squeezes through a one-tile gap. Each class knows which pieces of ground connect, so a
+  destination that can't be reached becomes the reachable spot nearest it.
+- **Buildings** stamp the tiles under their footprint while they stand. A stamp waits until the
+  start of the next tick, where all of them are applied at once and the clearance map is worked out
+  again (under half a millisecond on a 48 × 36 map), so every copy of the battle changes its grid at
+  the same moment; units on the way find their paths again.
+- **Fog** ([`ground/fog.ts`](src/apps/games/empires/ground/fog.ts)) takes the place of space's
+  sight circles: per team a count of the eyes on each tile. Each unit stamps a disc of its sight
+  radius in tiles, precomputed per radius, and moves it only when it changes tile, four times a
+  second (when space works out its sight). Height limits sight: a unit sees its own level and lower,
+  plus the row of higher tiles along the top of a cliff next to its level. A ramp counts as both
+  levels it joins, and a unit on one sees from the top. So a base on a plateau stays hidden until
+  someone drives up. A unit is seen (`seen`, as in space) when its tile is, a building when any tile
+  of its footprint is, and each team remembers the enemy buildings it has seen (`World.known`), as
+  last seen, until it sees their ground again with nothing there.
+- **Snapshots** keep the units and the memory as for any battle, plus the nav grid's version and
+  the stamps not yet applied; the terrain, the grid and the fog are rebuilt from those on loading.
+
+The checks run on Dustfall Ridge and on small maps built tile by tile
+([`ground/testmaps.ts`](src/apps/games/empires/ground/testmaps.ts)); their own test vehicles of every
+size class and a small test building are registered by the check scripts only.
+
+### Ground units, building and the AI
+
+**The first units** are one Engineer, one Command Center and one supply building a faction.
+Engineers are small vehicles and drones (no walking animation): size class 1, unarmed, sight 8
+tiles; they gather kyber, build and repair. Command Centers stand on 6 × 6 tiles, see 10 tiles, train
+their faction's engineer and Scout (see Ground combat), take in the kyber engineers gather and support 5 units. Supply buildings
+stand on 3 × 3 tiles, support 10 more each and take in kyber too, as Age of Empires' storehouses do:
+one beside a far crystal field saves the engineers the walk home. Prices are in kyber (see
+below), near the space game's: a battle starts with 1,600.
+
+| Faction | Engineer | Cost, time | Command Center | Hull | Supply building | Hull |
+| --- | --- | --- | --- | --- | --- | --- |
+| Republic | Mason field engineer: a tracked crane rig with a welding torch (hull 150, speed 100) | 140, 11 s | Command Center | 5,200 | Supply Depot: armoured stores and a fuel tank behind blast walls | 1,500 |
+| Confederacy | Forger builder droid: a hovering fabricator with cutting arms (hull 110, speed 104) | 140, 11 s | Command Hub | 5,000 | Supply Relay: a hexagonal power and parts deck round a humming mast | 1,400 |
+| Swarm | Shaper drone: a low crawler that spits resin (hull 120, speed 96) | 130, 10 s | Hive Nexus | 5,400 | Brood Cache: resin pods full of glowing nutrient | 1,600 |
+
+A Command Center costs 1,200 and takes one engineer 60 seconds; a supply building costs 100 and
+takes 25 seconds. Their models are drawn like the
+ships ([`models/<faction>/ground.ts`](src/apps/games/empires/models), built by
+[`models/ground.ts`](src/apps/games/empires/models/ground.ts), which loads them into the game's
+model lookup when imported): parts and facets in the faction's palette, cel shaded from straight
+above with the light top left. Buildings face south (their door) and never turn.
+
+**Starting:** each side gets its Command Center in the middle of its spawn's plateau (it is the
+player's station: the queue and the AI go by it), one engineer in front of its door, the rally
+point a little way out, and the starting kyber (the lobby's starting-credits slider, called
+Starting kyber on the ground). Every team knows where the others start: the enemy
+Command Centers are in its memory of buildings from the first second.
+
+**Placing a building** (`groundPlacement`, through the space game's `place` order). The ghost checks
+every tile of the footprint and reports the first rule that fails, in this order:
+1. Every tile is buildable (no ramp, cliff, water or blocking prop), off crystal fields, on one
+   level, and free of buildings and of another building's exit.
+2. It is at least 20 tiles from every enemy building we know of (middle to middle), so nobody builds
+   up against the enemy's base or walls in its door. Otherwise there is no limit: no command range,
+   no distance from our Command Centers. The land is known everywhere from the start (a side always
+   has eyes in orbit), so no tile needs exploring first; enemies only count where we see or
+   remember them.
+3. No enemy unit we can see stands on it.
+4. Its exit is open: for a building that trains units (a Command Center, a factory; `hasExit`),
+   the row of tiles in front of its door, kept clear so they can always roll out. A building that
+   trains nothing (a generator, a research station, supply) has no exit, and others may stand right
+   against its south side.
+5. There is enough kyber.
+
+The order also needs one of its engineers to be able to drive up to the footprint ("Your engineers
+can't get there" otherwise). A site placed on top of a building hidden in the fog is given up, refunded in full, when its
+engineer gets there.
+
+**Building** uses the space game's sites: placing pays at once, and until work starts the site is
+the owner's secret (no stamp on the grid, no sight). Its engineers (`construct`) drive to spots round
+it, spread out, nearest first, and work starts when the first arrives: our own units standing on it
+are sent off it first (after 3 seconds whatever is left is pushed off), enemy units on it hold the
+work up, then the footprint stamps the grid. The site's hull grows from a tenth with the work, and
+more engineers build faster: 1, 1.7, 2.2 and 2.5 times as fast for one to four. Engineers also repair
+our damaged buildings, free, at half the speed of building (so a building under fire can be
+outgunned). Calling a site off (`cancelSite`)
+refunds it as a space site: in full before work starts, less the further along it is. A destroyed
+site or building frees its stamp; a player with no building left, finished or going up, is out.
+
+**Training** uses the space game's `build` order at a building (as at a yard): a Command Center or a
+factory trains from its own queue of up to 10 (a shift-click queues 5), each paid when queued and refunded in full when cancelled
+(`cancel`). A trained unit rolls out of the door, the middle of the south side, and drives to the
+building's rally point (`rally`). Training stops at the unit cap: each finished Command Center
+supports 5 units and each finished supply building 10 more (200 at most), engineers count 1, and a
+unit queued counts too. At the cap the card says why: "Needs more supply: build a Supply Depot".
+
+**Kyber** is the ground battle's one resource, and it is the side's credits: the top bar, cards and
+prices show it with a crystal icon, and nothing trickles in (space keeps its station income). It
+lies in crystal clusters, objects standing on the crystal fields (the TF.deposit tiles round each of
+the map's deposits), like the gold and stone piles of Age of Empires (`World.crystals`, saved with a
+battle and in its hash). When a battle starts, each field gets one cluster for about every two of
+its tiles, 3 to 7 (5 a field on Ashwater Crossing), laid out from the map's seed (the same on every
+machine and apart from the world's random stream): the field's edge tiles first, never side by
+side, each with open ground round it, in one of three shapes. The field's 15,000 kyber is shared
+out between them, each a fifth more or less than an even share (about 3,000 each on Ashwater): a
+side's own fields with half the shared one hold 37,500 there, about half an hour of gathering with
+fourteen engineers. A cluster blocks its tile like a tree (its stamp on the nav grid, and nothing
+builds on a field anyway). Engineers gather it (`gather`, a right-click on a cluster or the touch
+wheel's Gather kyber): each picks a cluster of the field, the nearest it can reach with ones that
+fewer engineers are mining counting as nearer, drives to an open tile next to it (each engineer on
+its own when there are enough), mines 2.5 a second into a load of 20, hauls the load to the nearest
+finished drop-off of ours, drops it off (the side's kyber, the economy's "Kyber gathered" and
+the log) and goes back, about 1.5 kyber a second for each engineer on a field 13 tiles out.
+Drop-offs are Command Centers and supply buildings, finished ones only. Each trip the engineer picks
+the one nearest by the way it has to drive (path length; the lower id on a tie, so every copy picks
+the same) and keeps to it; when that one is destroyed (or stops taking kyber) it picks again. With a
+supply building beside a far field, mining there is several times faster: four engineers on
+Ashwater Crossing's far field (40 tiles from the Command Center) bring in about 125 kyber a minute
+hauling home and about 600 with a Supply Depot beside the field (the home field, 13 tiles out:
+about 390); on Dustfall Ridge's far field (61 tiles) 80 and 475. A
+cluster shrinks as it is mined and is gone when empty: its stamp comes off the nav grid at the next
+tick's flush, the same fixed point as building stamps, so every copy agrees; its engineers move on
+to the next cluster in the field, and once the field is dry to the nearest other field with a
+cluster they can reach (and the screen says so). An engineer taken off gathering to build goes back
+to its field once the building is done. A battle saved before clusters gets them laid out when it
+loads, each field's kyber shared out as it was.
+
+**The AI** is the space game's (`ai.ts`: same brain, think clock, random stream, difficulty and
+style) with decisions of its own on the ground ([`ground/think.ts`](src/apps/games/empires/ground/think.ts)
+for its base and economy, [`ground/army.ts`](src/apps/games/empires/ground/army.ts) for its army). It
+reads only what its team knows and gives the same orders a player does, so every copy of a battle
+makes the same choices.
+- **Economy.** Every idle engineer gathers at the crystal field nearest its Command Centers. It trains
+  engineers where the queue is shortest (seven a Command Center, fourteen at most) and keeps two
+  engineers' worth of kyber back from everything else, so it can rebuild them after a raid; with
+  fewer than four left it buys nothing but engineers. Engineers that see an armed enemy within 7
+  tiles run for the nearest Command Center with no enemy near it, and go back to work after.
+- **Expanding.** Once it has six engineers it saves up for a second Command Center beside a crystal
+  field on its own side that none of its Command Centers serves yet (most of the army and a second
+  research station wait meanwhile) and places it the moment it can pay, before anything else. When
+  its nearest crystal field is more than 20 tiles from every Command Center it has (a long haul for
+  every load, as on Dustfall Ridge), a Command Center by the field comes first of all.
+- **Base.** Supply before the cap (once fewer than three more units fit), beside a Command Center, or,
+  when three or more of its engineers mine a field more than 16 tiles from every drop-off of ours,
+  beside that field (and there as soon as it can pay with 150 kyber left over, cap or not), a power
+  generator whenever
+  its power isn't ahead of a site going up and of the next building that draws power it wants, then
+  its foot factory (from 4 engineers), its vehicle factory (from 6, once a generator runs) and a
+  research station for each Command Center (two at most). It sends idle engineers to its sites and
+  damaged buildings and calls off a site nobody manages to start within 90 seconds.
+- **Upgrades.** It upgrades its factories a tier whenever it has the research points, saving its
+  kyber for it once it has an army of 600 kyber to hold its base with, and takes two pieces of
+  research at them.
+- **Army.** Its factories train what counters the enemy army it has seen (the counter loop: fast
+  tier 1 units beat heavy tier 3 ones, heavy beat anti-swarm tier 2, anti-swarm beat fast), with a
+  taste for the newest tier it has and some variety; the easy levels stop at a smaller army. The
+  army gathers at a rally point in front of the base and attacks in waves: once its quiet start is
+  over and the army is worth enough (each wave a little more than the last, and more as the battle
+  goes on, or whatever it has once it fills its unit cap), it attack-moves on the nearest enemy
+  building it knows of, leaving a fifth of the army home as guards; on Medium and Hard its guns go
+  on one target at a time (the weakest near the wave). Units trained while a wave is out follow it
+  in groups. A wave that loses more than its style allows comes home and the next waits for more;
+  after 25 minutes its waves fight to the end. Damaged tier 2 and 3 units leave the wave and guard
+  the base.
+- **Defence.** Anything that comes within 14 tiles of its buildings or engineers is met, after its
+  difficulty's reaction time, by everything at home, and a big enough attack calls the wave back.
+- **Finishing.** Once every enemy building it knows of is down it hunts for the rest: the spawns,
+  the crystal fields and a grid over the whole map, nearest first, moving on from each once it has
+  seen it (or after 90 seconds of trying to get there). Once it sees no enemy army left, a smaller
+  army is enough to go and finish the job.
+- **Scouts.** Two from the Command Center, one a minute at most and six in a battle: one scouts
+  (during the quiet start only the crystal fields on its own side, then the enemy's start first and
+  the map after), the other raids enemy engineers once the quiet start is over.
+- **Difficulty and style** work as in space: Very easy and Easy earn less (55% and 68% of every
+  load of kyber), think and react slower, never focus their fire and stop at a smaller army; Hard
+  earns a quarter more and reacts in a second. The quiet start (no waves or raids) is the space
+  game's, but at least 4 minutes on Medium (6 on Easy, 10 on Very easy, none on Hard), long enough
+  to put up a generator and a factory. The style sets how big its waves are, how long it rests
+  between them, when a wave turns back and how much stays home.
+
+**Power and research points** ([`ground/power.ts`](src/apps/games/empires/ground/power.ts)), per
+side, worked out once a tick by the buildings' work:
+
+| Building | Republic | Confederacy | Swarm | Size | Cost, time | Power |
+| --- | --- | --- | --- | --- | --- | --- |
+| Command Center | Command Center | Command Hub | Hive Nexus | 6 × 6 | 1,200, 60 s | makes 6; draws 2 while training |
+| Power generator | Power Generator | Power Relay | Bio-reactor | 2 × 2 | 150, 20 s | makes 10, burning 0.25 kyber a second (15 a minute) |
+| Research station | Research Station | Data Core | Mind Node | 3 × 3 | 200, 30 s | draws 4 all the time; makes 0.5 research points a second (30 a minute) |
+| Any site | | | | | | draws 3 while engineers build it |
+
+- **Made:** finished buildings with power (GroundSpec `power`). A generator burns its kyber every
+  tick; when the side can't pay a tick's burn, it makes nothing that tick, and starts again once
+  there is kyber.
+- **Used:** whatever is busy (`busyDraw`): a site while engineers build it, a building with a `draw`
+  while its queue isn't empty (the Command Center and the factories while they train), a factory's
+  upgrade or research its own draw while it runs, and a research station all the time.
+- **Short of power,** every consumer of that side runs at made / used of its speed: sites, training
+  and research points alike, the same share for all, so nothing depends on their order. A new base
+  runs on its Command Center alone (training and one site draw 5 of its 6); a second job at once, or
+  a research station while training or building, needs a generator.
+- **Research points** are banked per side (Player `rp`, in the hash and in snapshots, with the kyber
+  burnt), and spent at the factories (below). The top bar shows them, with what the upgrades under
+  way have taken (−N) beside them.
+
+**Factories** train each faction's fighting units: a foot factory its squads, a vehicle factory its
+vehicles. Engineers build them like any building; a trained unit leaves by the wide door in the
+middle of the south side and drives to the factory's rally point. Each draws power only while its
+queue isn't empty, and short of power it trains at made / used of its speed like everything else.
+
+| Faction | Foot factory | Cost, time, hull | Vehicle factory | Cost, time, hull | Units, tier 1, 2, 3 |
+| --- | --- | --- | --- | --- | --- |
+| Republic | Barracks: a white blast-walled hall, an armoury on its roof, a red-striped drop door | 250, 35 s, 2,600 | Vehicle Factory: an assembly hangar under a gantry crane, a wide armoured gate | 400, 45 s, 3,400 | foot `r-g-troopers`, `r-g-repeaters`, `r-g-lancers`; vehicles `r-g-raider`, `r-g-hailstorm`, `r-g-bastion` |
+| Confederacy | Bot Factory: an eight-sided deck round a stamping press, droids on the line to the shutter | 230, 32 s, 2,300 | Vehicle Foundry: a smelting block with smokestacks, glowing furnace vents and a casting pit | 380, 42 s, 3,100 | foot `d-g-droids`, `d-g-salvo`, `d-g-bulwark`; vehicles `d-g-razor`, `d-g-breaker`, `d-g-juggernaut` |
+| Swarm | Brood Chamber: a ribbed resin mound round a pit of eggs, a wide maw | 220, 30 s, 2,400 | Vehicle Nest: a shell of chitin plates round a violet birthing pool | 360, 40 s, 3,000 | foot `s-g-swarmlings`, `s-g-spewer`, `s-g-ravager`; vehicles `s-g-racer`, `s-g-spores`, `s-g-behemoth` |
+
+Foot factories stand on 4 × 4 tiles and draw 3 power; vehicle factories on 5 × 5 and draw 5. A
+`trains` id the game doesn't know yet is left off the cards and can't be ordered (`trainsOf`).
+
+**Tiers** (Menno's rule: tier 1 small and simple, tier 2 medium, tier 3 the big ones). A building
+that trains stands at a tier (GroundSpec `tier`; `tierOf`), and a unit's GroundSpec `tier` is the
+tier its trainer must have reached (1 when left out; `tierNeeded`). A card for a unit above the
+factory's tier says "Needs the Vehicle Factory at tier 2: upgrade it on its Upgrades page".
+
+**Upgrades and research at the factories** ([`ground/jobs.ts`](src/apps/games/empires/ground/jobs.ts)).
+The research stations only make research points; everything they buy is done at a factory, on its
+panel's Upgrades page (the Units page has what it trains). A factory does one job at a time (Unit
+`gj`, the `groundJob` and `cancelGroundJob` orders): paid with research points and kyber when it
+starts, drawing its power while it runs, slowed at made / used of its speed when power is short,
+and refunded in full when called off (right-click the card, long-press on touch).
+
+| Job | Foot factory | Vehicle factory | Power |
+| --- | --- | --- | --- |
+| Tier 2 | 100 RP, 250 kyber, 35 s | 150 RP, 350 kyber, 45 s | draws 4 |
+| Tier 3 | 250 RP, 500 kyber, 50 s | 350 RP, 700 kyber, 60 s | draws 6 |
+| Weapons: its units deal 15% more damage | 80 RP, 150 kyber, 30 s | same | draws 3 |
+| Armour: its units have 15% more hull | 80 RP, 150 kyber, 30 s | same | draws 3 |
+| Speed: its units move 10% faster (needs tier 2) | 100 RP, 200 kyber, 35 s | same | draws 3 |
+
+- **A tier upgrade** swaps the factory for the same factory at the next tier (`factoryType`): 25%
+  more hull at tier 2, 50% at tier 3 (its damage kept), and its model grows as the space game's
+  stations do: the Republic's Barracks gets annexes, a second armoury and a roof turret, its Vehicle
+  Factory a service annex, a second crane bridge and a twin turret; the Bot Factory assembly arms,
+  more spires and a turret, the Foundry a third smokestack, a casting line and a crane; the Brood
+  Chamber side chambers, horns and a second pit, the Vehicle Nest spines and a crown of horns; and
+  every door grows wider. A battle saved before upgrades keeps its factories at tier 1.
+- **Research** (data/groundTech.ts, three a factory with names of its own, such as the Republic
+  Barracks' Marksman drills, Phase II armour and Forced march) goes into the side's `techs` like
+  space research and works through the same path: `techBonus` adds it to every unit type the
+  factory trains, so units already out take it (`remod`) as well as those trained later. Ground
+  units' weapons and speed read those bonuses (`mods.damage`, `mods.speed`).
+
+### Ground combat
+
+Ground units fight with the space game's machinery
+([`ground/combat.ts`](src/apps/games/empires/ground/combat.ts), run from the ground tick): attack
+and attack-move orders, stances (hold, maneuver, roam), focus fire, target picking, hits and misses,
+kills, veterancy and rank-ups, health bars, wrecks and debris all work as in space. What is the
+ground's own:
+- **Sight.** A unit only fires at what its team sees. Artillery is the exception: it fires at
+  anything an ally sees, so a Scout can spot for it.
+- **Turrets and fixed guns.** Turrets turn through the hardpoints and mounts the models carry; guns
+  in a hull (a Scout's) fire only within their arc, so the unit turns to face its target.
+- **Chasing.** An idle unit takes on enemies that come within 4 tiles, chases them up to 9 tiles
+  from where it was, then drives back. A unit sent at a building turns on enemy units in its reach
+  first.
+- **Dying.** A destroyed unit breaks up into a wreck and debris; a building burns as it loses hull
+  and collapses when destroyed. Its stamp comes off the nav grid at the next tick's flush, the same
+  fixed point as a mined-out crystal cluster's.
+
+**Seven weapons** (`GROUND_WEAPONS` in
+[`data/kit.ts`](src/apps/games/empires/data/kit.ts)), each borrowing a space weapon's sound and
+sparks, in the firing side's colours:
+
+| Weapon | Reach, reload | How it works |
+| --- | --- | --- |
+| Pulse | 6 tiles, 0.6 s | Fast bolts in the side's bolt colour |
+| Beam | 4 tiles, continuous | Holds on its target; its damage ramps up to twice over 2 seconds |
+| Rockets | 8 tiles, 2.6 s | Slow, homing, with smoke trails |
+| Heavy shell | 8 tiles, 2.8 s | A fast cannon shell, poor against light vehicles |
+| Artillery | 20 tiles, 4.5 s | Lobbed in an arc, 2-tile splash, no closer than 6 tiles, lands with a scatter that grows with range |
+| Swarm rockets | 8 tiles, 4 s | A salvo of 6 small rockets, each with a small splash |
+| Spray | 3 tiles, continuous | A cone (flame, gas or acid by faction) that hurts everything in it and leaves it burning for 2 seconds |
+
+**Armour.** Every ground unit has an armour class: light, medium, heavy, or structure for
+buildings. The ground has its own damage and accuracy tables (`GROUND_VS` and `GROUND_ACC`), so the
+space game's tables, tiers and hashes are untouched. Damage is multiplied by:
+
+| Weapon | Light | Medium | Heavy | Structure |
+| --- | --- | --- | --- | --- |
+| Pulse | 1 | 0.7 | 0.35 | 0.25 |
+| Beam | 0.6 | 1.1 | 1.3 | 0.6 |
+| Rockets | 0.5 | 1 | 1.4 | 1.3 |
+| Heavy shell | 0.6 | 1 | 1.4 | 0.9 |
+| Artillery | 0.8 | 0.9 | 0.7 | 1.5 |
+| Swarm rockets | 1.3 | 0.8 | 0.4 | 0.35 |
+| Spray | 1.4 | 0.9 | 0.5 | 0.3 |
+
+Shots miss light vehicles more often: rockets hit them 55% of the time and heavy shells 40%, while
+pulse bolts hit 90%. Beams, sprays, artillery and swarm rockets don't roll to hit (artillery and
+swarm rockets land where they were aimed, give or take their scatter). A miss flies wide.
+
+**Scouts** are the first fighters, trained at the Command Center: fast, light armour, sight 12
+tiles, pop 1, cheap, and small and simple (tier 1 is small and simple, tier 2 medium, tier 3 the
+big ones).
+
+| Faction | Scout | Hull | Cost, time | Speed | Guns |
+| --- | --- | --- | --- | --- | --- |
+| Republic | Pathfinder speeder: a slim repulsor wedge | 140 | 90, 9 s | 165 | Twin pulse lasers along its nose (6 each) |
+| Confederacy | Probe droid: a hovering sensor head (sight 13) | 120 | 85, 8 s | 150 | Pulse blaster (14.5, 0.7 s) |
+| Swarm | Skitterling: a six-legged runner | 110 | 80, 8 s | 175 | Spit bolts (9.5, 0.5 s) |
+
+**Tier 1 units** are the fast units of the factories (the foot factory trains the squad, the vehicle
+factory the vehicle; the factories themselves are phase 4a's): small and simple, light armour,
+pop 1, sight 8 or 9 tiles, a little dearer than a Scout (GroundSpec `tier: 1`, which the factories'
+tier upgrades will check). Their numbers were set by fights of equal kyber (about 720 a side)
+between every pair of them and the Scouts: the squads, the Raider, the Razor and the Scouts trade
+about evenly (each pair within about a third of the kyber either way), while the Racer, an
+anti-armour unit, loses to light units and beats medium armour by as much.
+
+| Faction | Unit | Factory | Hull | Cost, time | Speed | Weapons |
+| --- | --- | --- | --- | --- | --- | --- |
+| Republic | Trooper squad: five troopers in white armour | Barracks | 300 | 105, 12 s | 70 | Pulse rifles (3.5 each a trooper, 5.5 tiles, 0.9 s) |
+| Republic | Raider hover tank: a white wedge on a repulsor skirt | Vehicle Factory | 340 | 150, 14 s | 125 | Pulse cannon in a turret that turns on its own (22, 7 tiles, 1 s) |
+| Confederacy | Battle droid squad: five tan droids | Bot Factory | 250 | 95, 10 s | 66 | Pulse blasters (2.7 each a droid, 5.5 tiles, 0.8 s) |
+| Confederacy | Razor hover bike: a droid on a pronged bike | Vehicle Foundry | 220 | 120, 12 s | 180 | Twin pulse guns (6 each, 0.6 s) and light rockets (16, 7 tiles, 2.6 s) |
+| Swarm | Swarmling pack: six purple bugs | Brood Chamber | 230 | 90, 9 s | 95 | Spit bolts (2.2 each a bug, 4 tiles, 0.9 s) and claws (3, close in, 0.5 s) |
+| Swarm | Racer beast: a four-legged runner that trots | Vehicle Nest | 320 | 105, 11 s | 160 | Spine darts, homing (46, 7 tiles, 1.6 s), and a bite (9, close in) |
+
+The squads and the Racer walk (their legs step through poses, see Walk cycles); the Raider's turret
+turns on its hull. The damage table needs no change for squads: they are light armour, so pulse
+weapons and (later) swarm rockets and sprays, the anti-swarm weapons, cut them down, and rockets
+and shells, the anti-armour ones, do little. Splash hits a squad once, as one unit.
+
+**Tier 2 units** are the anti-swarm units, trained once a factory reaches tier 2 (`ground.tier: 2`;
+the factory upgrades are the economy side's): medium size and armour (the Repeater squad stays
+light, as squads do), more parts, a turret that turns on its own on most, and weapons that hurt
+groups: splash, rocket salvos and spray. They cost, take and use about twice what tier 1 does (pop
+2). In fights of equal kyber (about 1,200 a side) each keeps about 0.2 to 0.8 more of its kyber
+than the tier 1 unit it fights (the Hailstorm only breaks even with the Razor, which gets inside
+its minimum range), except against the Racer, whose spine darts bite into their armour and beat all
+but the Repeater squad by about half; together the six beat a crowd of tier 1 twice their number.
+
+| Faction | Unit | Factory | Hull | Cost, time | Speed | Weapons |
+| --- | --- | --- | --- | --- | --- | --- |
+| Republic | Repeater squad: four heavy troopers with ammunition drums | Barracks | 520 (light) | 220, 22 s | 60 | Rapid pulse cannons (2.2 each a trooper, 6 tiles, 0.3 s) and frag grenades (9, lobbed 1.5 to 6 tiles, splash 1.25 tiles, 4 s) |
+| Republic | Hailstorm carrier: a white tracked hull | Vehicle Factory | 700 | 300, 28 s | 80 | Airburst artillery in a turret (34, 3 to 15 tiles, splash 2 tiles, 3 s), firing at what allies see |
+| Confederacy | Salvo droid: a two-legged walker with a rocket pod on each shoulder | Bot Factory | 600 | 220, 22 s | 62 | Two swarm rocket pods, fixed (4 rockets of 5 each, 8 tiles, 3.6 s) |
+| Confederacy | Breaker tank: a broad grey tracked hull | Vehicle Foundry | 760 | 300, 28 s | 78 | Swarm rocket battery in a turret (8 rockets of 6, 9 tiles, splash 1.25 tiles, 4.4 s) |
+| Swarm | Spewer: a squat six-legged beast with a glowing maw | Brood Chamber | 600 | 220, 22 s | 74 | Acid spray cone (9 a second, 3 tiles, burns) |
+| Swarm | Spore carrier: a four-legged beast with a spore sac turret | Vehicle Nest | 720 | 290, 27 s | 78 | Spore swarm in a turret (8 spores of 5.5, 9 tiles, splash 1.25 tiles, 4 s) |
+
+The Repeater squad, the Salvo droid, the Spewer and the Spore carrier walk; the Hailstorm and the
+Breaker roll on tracks.
+
+**Tier 3 units** are the heavy units of the factories (Menno: "tier 3 is the big boys"; GroundSpec
+`tier: 3`, so a factory must reach tier 3 to train them): big hulls on size class 2 or 3, two to
+three times a tier 1 vehicle's size, slow, heavy armour (the Lancer team stays light, but tough),
+pop 4, and about four times their factory's tier 1 unit in kyber and build time (a factory draws
+power while it trains, so a four times longer build takes four times the power). The vehicles carry
+several turrets or one heavy main gun, each turning on its own; the walkers and beasts step through
+their walk poses.
+
+| Faction | Unit | Factory | Hull | Cost, time | Speed | Size class | Weapons |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Republic | Lancer team: four heavy troopers, rocket launchers on their shoulders | Barracks | 1,500 | 440, 48 s | 56 | 1 (a squad) | Rockets (34 each a trooper, 8 tiles, 2.8 s) |
+| Republic | Bastion walker tank: an armoured hull on six legs | Vehicle Factory | 2,000 | 600, 56 s | 48 | 3 | Heavy shell cannon in its main turret (150, 9 tiles, 2.8 s) and a pulse gun turret (16, 7 tiles, 0.7 s) |
+| Confederacy | Bulwark droid: a two-legged war droid with a shield slab and a beam arm | Bot Factory | 1,300 | 380, 40 s | 46 | 2 | Beam on its arm, fixed (28 a second, 5 tiles; it turns to aim) |
+| Confederacy | Juggernaut crawler: a wide tracked hull with a dozer prow | Vehicle Foundry | 1,450 | 480, 48 s | 42 | 3 | Heavy beam in its turret (26 a second, 5.5 tiles) and two pulse gun turrets at its back corners (7, 6 tiles, 0.6 s) |
+| Swarm | Ravager: a great four-legged beast with bile sacs at its throat | Brood Chamber | 1,300 | 360, 36 s | 60 | 2 | Heavy bile shell from its mouth (95, 8 tiles, 2.6 s) and a bite (20, close in) |
+| Swarm | Behemoth: a huge six-legged beast, a bile mortar grown into its back | Vehicle Nest | 1,700 | 420, 44 s | 40 | 3 | Bile artillery in a turret on its back (85, 20 tiles, 4.5 s, splash) and a bite (16, close in) |
+
+In the counter loop they beat the anti-swarm units (pulse, swarm rockets, sprays, airburst shells all
+do little to heavy armour) and lose to massed fast units with anti-armour weapons: at equal kyber
+(about 1,200 a side), on open ground, they win 34 of their 36 fights against the six tier 2 units
+(the Repeater squad's rapid pulse beats the light Lancers and, narrowly, the Ravager), and every one
+loses to Racers (`check:ground` fights it). The Lancers are the anti-armour squad: they beat every other tier
+3 unit at equal kyber. Big hulls cross every ramp, bridge and ford of every map (`check:ground-nav`).
+
+**Command Centers** carry a defence turret on their roof: pulse, 22 damage, 11 tiles, every 0.8
+seconds.
+
+**Winning.** A side is out once every one of its buildings is destroyed, finished or going up; the
+last side standing wins ("Every enemy building is destroyed.").
+
+**The AI's army**: see The AI above.
+
+**Balance and the ground tournament.** `pnpm empires:ground` plays AI against AI ground battles,
+headless, every pairing of different factions from both spawns on every ground map, and reports
+each faction's wins, each pairing, how long battles took, the fighting units each side built by
+tier, research and factory tiers, and the kills by the killer's weapon; battles still going at the
+time limit are stalls (listed, and given to the side with clearly more army and buildings left).
+A dash between two difficulties plays them against each other. Battles run in parallel worker
+threads (`TOURNAMENT_WORKERS`; each takes a few hundred megabytes).
+
+```sh
+pnpm empires:ground                      # 45 minutes, 2 seeds, medium, every ground map
+pnpm empires:ground 45 2 hard-medium     # minutes, seeds, difficulty (or two: first faction's - second's)
+pnpm empires:ground 45 1 medium forkwater,highcairn
+```
+
+At Medium on the four hand-made maps (48 battles, 2 seeds), after tuning:
+
+| | Republic | Confederacy | Swarm |
+| --- | --- | --- | --- |
+| Wins of decided battles | 54% | 50% | 47% |
+| Fighting units built a battle (tier 1, 2, 3) | 48, 18, 2 | 62, 18, 4 | 62, 23, 2 |
+
+39 of 48 battles end within 45 minutes (median 21 minutes; Dustfall Ridge about 16, Forkwater about
+36); the rest are even armies trading at the unit cap. Every weapon kills (most with pulse, then
+rockets, swarm rockets and sprays; beams, artillery and shells far less). Medium beats Easy 24 to 0
+and Hard beats Medium 24 to 0. Before tuning (the AI kept a fixed small army that only defended and
+raided with Scouts), the Swarm won 16%, half the battles stalled, and the AI built about 80 Scouts a
+battle and almost no tier 2 or 3.
+
+**Squads** ([`ground/squad.ts`](src/apps/games/empires/ground/squad.ts),
+[`ground/squadDraw.ts`](src/apps/games/empires/ground/squadDraw.ts)): foot soldiers (trooper
+squads, battle droid squads, bug packs) are one unit each, a squad of a few members (GroundSpec
+`squad`: how many, the member's model and size, their spacing). The squad is selected, ordered,
+pathed and counted as one unit; its members walk on their own round it:
+- **Loose formation.** Each member heads for its place in a loose cluster round the squad's middle,
+  nudged by a drift of its own that changes every few seconds, and walks there at its own pace,
+  keeping a little apart from the others. So on the move they spread, bunch and drift, each stops at
+  a slightly different spot, and standing still they shuffle now and then.
+- **Through narrow ground.** Where a member's place is blocked, or it can't walk straight there (a
+  gap, a bridge, a ramp, a ford), it follows the squad's trail instead, in order, so the squad files
+  through in a column and fans out again beyond.
+- **Shooting.** Each member standing fires the squad's weapons from where it stands, on a reload of
+  its own (a little more or less than the gun's, from the battle's random stream) and at a target of
+  its own: the squad's when it is told to attack one, else the one it shot last while it can, else
+  one of the few best in its reach. So a squad's shots come one by one and spread over what is near,
+  and a squad with fewer members fires less; a beam or a spray pours each member's share from the
+  middle. Members turn to their own targets, else to where they walk.
+- **Falling.** The hull is the squad's: a member falls for every share of it lost (a squad of five
+  loses one at 80%, 60% and so on), which one from the random stream, and the last one falls with
+  the unit. How it falls is drawn on screen only (see Deaths below).
+- **Deaths** ([`ground/deaths.ts`](src/apps/games/empires/ground/deaths.ts)). The sim decides only
+  when a member falls; it also notes, for the screen and outside the hash, the ground weapon that
+  hit the squad last, where that hit came from and whose it was (Unit `gHit`, `gHitX`, `gHitY`,
+  `gHitF`). A member then falls by its faction, cartoon rather than gore:
+  - a trooper is knocked back in a burst of blaster sparks and lies where it lands, burnt;
+  - a droid comes apart with an electrical pop (a cyan ring and a spark jag): three of its head, arms
+    and blaster fly off spinning and lie round its body as scrap, on a splash of oil;
+  - a bug bursts in a spray of chitin and ichor and lies curled up, legs drawn in, on a green stain.
+
+  Explosives (rockets, shells, artillery, swarm rockets) throw a body two or three times further,
+  spinning through the air, and leave a scorch mark where it stood. A spray melts it instead: a
+  Republic flame chars it to ash, droid gas and Swarm acid dissolve it into a bubbling puddle. Each
+  member falls its own way, from a seed of its own (its squad and number: direction, distance, spin,
+  which parts fly, its pose on the ground), so a squad never dies in step. Bodies lie 24 seconds and
+  fade over 6 (a melted one is gone in under 2), stains last 30 seconds and fade over 6, and at most
+  160 bodies and 120 stains stay, the oldest going first. Each death makes a small sound of its
+  faction (`EmpiresSound.death`: a trooper's grunt and armour clatter, a droid's servo whine and pop,
+  a bug's squeal), panned where it is, at most four in 0.4 seconds and two of a faction in 0.3, so
+  a big fight doesn't turn into noise. It stays cheap with big armies: bodies are the members' own
+  cached bitmaps, all lit from one heading so every body of a look shares one bitmap (a droid breaks
+  one of four ways), flying parts the cached part bitmaps wrecks use, stains three sprites a kind in
+  one canvas painted once, and nothing is allocated per frame. In the ground-squads perf scene,
+  which now has splash and spray test units among the squads so members die every way while it is
+  measured, the deaths add about 40 bitmaps and no measurable main thread time.
+- **On screen.** Each member steps through its own walk cycle, out of step with the others, and has
+  a small shadow and a rim in its side's colour at its feet instead of a disc under the squad; the
+  selection ring takes in the members wherever they stand, and clicking any member picks the squad.
+  When zoomed far out the members grow and spread so the squad stays about 24 pixels across.
+
+- **Spread out** (the ability of every squad from a foot factory, all tiers; data/kit.ts `SPREAD`): a
+  toggle on the ability key (F), the command card's ability button (it reads Spread out or Close up)
+  and the touch action wheel; with Shift it waits until the squads have done the orders they have.
+  Spread out, the members walk out to 2.6 times their usual spacing (about a tile and a half from
+  the middle for a trooper squad, still plainly one squad; through a narrow gap they still file
+  through and fan out again after), and incoming hits miss the squad more often: 40% of artillery
+  shells and swarm rockets (their splash too), 10% of direct fire (pulse, rockets, shells), and it
+  escapes 30% of a spray (its burn too) and 10% of a beam. A squad is one target, so the wider
+  spacing makes nothing miss by itself: the evasion is all of the bonus. The price: it moves at 70%
+  of its pace and its members reload a fifth slower. A dashed ring round the members shows it, and
+  the unit card says so with the speed it costs and the evasion it gives (as does the ability's
+  tooltip). Used again, they close back up. The rolls come from the battle's random stream, the
+  order goes through the referee like any other (`spread`), and the flag is in the hash and
+  snapshots. The AI spreads its squads out while an enemy with artillery, swarm rockets or a spray
+  is within 14 tiles of them and they hold their ground or advance (idle, attack-moving, or fighting
+  what is in their reach), and closes them up once none is within 20, or to chase a target or fall
+  back.
+
+Squads are light armour and path on size class 1. Their members (where each stands and faces, its
+drift, its reloads and targets) and the squad's trail are in the battle's hash and snapshots; a
+squad from a save made before members walked on their own gets them in their places.
+
+**The weapon test** (dev builds only, the F9 cheat panel's *Weapon test* in a ground battle,
+[`ground/testWeapons.ts`](src/apps/games/empires/ground/testWeapons.ts)) spawns one test unit per
+weapon for us and for the first enemy at the camera, in two rows facing each other (artillery
+further back), and sends them at each other: every weapon's effects side by side. The test units
+are each faction's Scout with the weapon on a turret, medium armour and 600 hull, and appear in no
+lobby or Codex. The panel's *Squad test* spawns three of our faction's foot squads and a test walker
+(two legs, a pulse turret on its back, walking through its poses) against three of the first
+enemy's squads at the camera; its *Tier 1 test* spawns all six tier 1 units (every faction's foot
+squad and fast vehicle) for us and the same six for the first enemy, sent at each other; its
+*Tier 2 test* spawns all six tier 2 units for us against a crowd of tier 1 units (all six, twice
+over) for the first enemy; and its *Tier 3 test* spawns all six tier 3 units for us and the same six for
+the first enemy, the big ones further apart (the Behemoth further back, as artillery can't fire
+close).
+
+```sh
+pnpm check:ground        # placement rules; a building battle (train, place, build, cancel, repair, rally, the AI expands, with its Scouts off), an economy battle (clusters laid out and blocking, gathering, drop-off, a cluster mined out and its stamp freed, the next cluster picked, a field running dry, the supply cap, kyber neither made nor lost, the AI's economy) and a crowd battle of every size class, a combat battle (Scouts fighting, the turret firing, deaths, a building destroyed, a win, the stamp freed), a power battle (Command Center power alone, a shortage slowing training, research and a site by made / used to the tick, a generator burning its kyber and stopping without it, the AI building power and research), a factory battle (an engineer building a Barracks, a factory's queue of five, one cancelled and refunded, units out of its door to its rally point, its power drawn only while busy and its training slowed by made / used, the tier rule, an unknown id refused; the AI's factories and its mix of units), an upgrade battle (the tier gate on units and research, a tier upgrade paid in research points and kyber, its power drawn only while it runs, called off with both refunded, slowed by made / used to the tick, done: tier 2, more hull, the tier 2 unit trained; weapons research reaching the units already out and those trained after; the AI upgrading a factory and researching), a drop-off battle (four engineers on a far field: a Supply Depot site beside it ignored, a finished one taking the loads, kyber a minute with and without it, destroyed with an engineer on its way and that one re-routing to the Command Center; the AI putting a supply building beside the further field it mines), an orders battle (a move with a Shift-queued gather and two sites: the move, the two sites built one after the other, then gathering; an engineer assisting another through a build, a repair and gathering, and following it on), a squad battle (foot squads and a test walker: members falling one by one, never below one while alive, a squad destroyed), a tier 1 battle (all six tier 1 units firing, losses on both sides), a tier 2 battle (the six tier 2 units against a crowd of tier 1: all six firing, splash catching several units at once, the anti-swarm side ahead) and a tier 3 battle (all six tier 3 units firing, beams included, losses on both sides), each in step across two copies, a snapshot thaw and a replay; the member count in the hash; a squad's members firing on their own timing, from where each stands, spread over the targets in reach and about three fifths as often with three of five left; members shuffling standing still, crossing a river and gathering again, and filing through a gap one tile wide and fanning out beyond; Spread out (a spread battle: spreading at once and Shift-queued behind a move, closing up, the flag in the hash; much wider yet still one squad; less taken from splash; 70% speed; still filing through the gap); artillery's sight and minimum range, pulse on structure, and the weapon test firing all seven weapons; tier 3 units' tier, armour, pop, price and size; two of any tier 3 unit losing to equal kyber of Racers
+pnpm check:ground-panels http://localhost:5263 [dir]  # needs a dev server: an engineer's Build cards and a factory's Units and Upgrades pages at 1280x720, 1000x820, 1920x1080 and a phone upright and on its side: no name or price line cut, no card out of the panel (a row may scroll sideways), nothing scrolling; with a dir, screenshots and the placement ghosts of a generator and a factory
+pnpm check:ground-nav    # ramps not cliffs, size classes and gaps, buildings closing and opening a way, walled-in goals, the fog height rule; size classes 2 and 3 crossing every bridge, ford and ramp and reaching every spawn on every hand-made map and 16 generated ones
+pnpm check:ground-models # every ground unit (the dev test walker too) has a model through the model lookup, every squad member and crystal cluster shape one, sound and the same every time; models that walk have 2 to 4 poses, each with legs of its own
+pnpm check:empires       # also a ground battle on Dustfall Ridge, its hash printed apart from the space ones
+```
+
+### The ground battle screen
+
+A ground battle is played on the space game's own battle screen
+([`EmpiresAtWar.tsx`](src/apps/games/EmpiresAtWar.tsx)) and set up in its own Skirmish lobby: in a
+dev build the lobby's **Space / Ground** switch loads ground battles
+([`ground/load.ts`](src/apps/games/empires/ground/load.ts)) and swaps the map list for the ground
+maps, each previewed from its tile map (terrain, height, water, crystal fields). The slots, factions,
+teams, spawns, starting credits and AI rows are the same; what doesn't apply on the ground hides:
+reinforcements, defense stations, defense platforms on ore and start areas. The map picker's
+**Generated** entry makes a random ground map (see Generated maps above), with its own controls. A
+**Map viewer** chip opens the ground map viewer and editor. The choice is remembered with the rest of the lobby.
+
+Everything else comes from the space game: the camera, controls and shortcuts, the pause menu,
+selection (click, Shift-click, box, double-click), control groups, shift queues, order lines, the
+touch wheel and touch bar, the HUD panels and tooltips, and resuming after a reload. Where ground
+differs:
+- **The ground** is drawn on a canvas of its own right under the battle canvas, at the same size
+  and camera, first each frame, through the `GroundLayer` interface (`ground/types.ts`): the WebGL2
+  layer ([`ground/gl.ts`](src/apps/games/empires/ground/gl.ts)). The battle canvas then starts
+  clear: no backdrop, stars or map-edge dimming, and no shade behind the bottom panels (over the
+  bright ground it read as a dark band across the battlefield; the panels have backgrounds of their own).
+- **Fog** is a half-dark veil by tile outside our sight, never black (the land is known from
+  orbit), over the units and everything on the ground, so route lines stay under it. Enemy
+  buildings we remember but don't see now are drawn as faded ghosts where we saw them. The minimap
+  shows the terrain under the same veil.
+- **Building:** an engineer's panel has a card for each building it puts up (B, or the touch wheel's
+  Build entry), each with its full name and its price (kyber, time, and the power it makes or
+  draws), the details in its tooltip. With more than four they sit in two rows of three; where three
+  don't fit (a narrow window, a phone) the rows scroll sideways, and on a short screen they are one
+  row. The ghost under the pointer colours every tile of the footprint green or red, outlines
+  a building's exit (a dashed strip with an arrow out of the door, for one that trains units; the
+  hint says what it is) and names the first rule that fails; buildings never turn. On touch the ghost is pinned where the wheel
+  opened, then **Build here** or **Cancel**.
+- **A Command Center's panel** (H selects it, as the station) has its train cards, its queue and
+  rally by right-click, like a yard's; a site shows its progress, its crew and Cancel with the refund.
+- **A factory's panel** has two pages, as a yard's: Units (its train cards, locked ones saying the
+  tier they need) and Upgrades (its next tier and its research, each card with its price in research
+  points, kyber, time and power, a bar while it runs, and right-click or long-press to call it off).
+- **Shift-queue** works on the ground as in space (Shift held, or the touch bar's Shift toggle): move,
+  attack, attack-move and patrol, gather, repair and build. With Shift a building's placement stays
+  open, so several sites go down in a row and the engineers build them in order. Gathering never
+  ends, so an order queued behind it goes before it: a gathering engineer does its queued orders,
+  then goes back to its field. The selected units' queues show as dashed legs from stop to stop
+  (gold to a site, orange to a crystal field, green to a move or an engineer assisted), under the
+  fog.
+- **Assist** (Order `assist`, the `assist` order through commands.ts), as Age of Empires villagers
+  do: with engineers selected, a right-click on another engineer of ours (the cursor and a
+  "Right-click: assist" tag show over it; on touch the wheel's Assist) makes them help with what it
+  does: build the same site, repair the same building, gather the same field (more engineers on a
+  site build faster, as always). They follow it on to its next job until told otherwise, and stay
+  near it while it has none; a chain of assists leads to the first engineer with a job. A
+  right-click on a site or a damaged building of ours sends them straight to it, as before.
+- **Kyber:** a right-click on a crystal cluster with engineers selected (or the touch wheel's Gather
+  kyber, the first entry when the wheel opens on a cluster) sets them gathering. Hovering a cluster
+  with engineers selected says so: a crystal-and-pick cursor and a "Right-click: mine kyber" tag,
+  and an idle engineer's build line starts with "Right-click a kyber crystal to mine it". Each of
+  our gathering engineers shows the cluster it works: a thin dashed line in our colour from the
+  engineer to it (under the fog, like order lines), and corner ticks round every cluster ours are
+  working; its card says "Going to a crystal", "Mining a crystal: 14 of 20" or "Hauling to Command
+  Center". The clusters are orange and dark-orange crystals in the models'
+  style ([`models/kyber.ts`](src/apps/games/empires/models/kyber.ts): faceted, cel shaded, a bold
+  outline, light from the top left, three shapes) over a soft orange glow, drawn at least 18 pixels
+  across and smaller the less they hold; they show under the fog veil (the land is known from
+  orbit), and as orange dots on the minimap and the lobby's preview. An engineer carrying kyber
+  shows an orange crystal on its back, bigger as its load fills, and sparks while it mines. A field
+  running dry is a toast. Kyber's icon and the economy panel's kyber are orange too.
+- **Power and research points** sit in the top bar after the units: power as made / used (red
+  when short), its tip breaking it down (Command Centers and generators, those stopped for want of
+  kyber, the kyber burnt a minute; construction, training and research), and the research points
+  banked, their tip saying how fast they come. Build cards show a building's power (+10, −4), a site
+  or a building slowed for want of power says so ("Low power: 70% speed"), a generator's and a
+  research station's panels say what they make, and the economy panel adds power and research
+  points.
+- The top bar shows kyber with its crystal icon and what was gathered a minute lately, the units
+  against the cap, and an **idle engineer** button (with a count) that selects the next idle
+  engineer and looks at it, round them all in turn. It leaves out ore, beacons and research. The
+  economy panel shows kyber, what was gathered a minute, what is being carried in and what is left
+  in the fields, and what was gathered and spent.
+- **Engineers at work** fire the space engineers' welding beam (render.ts `drawWelds`), in their
+  side's weld colour, at the welding front of a site going up or a spot on a building they repair,
+  with its flash and sparks where it hits. On the ground it comes from the engineer's tool, found in
+  its model: the Republic rig's torch, a beam from each of the droid's two cutters, one from between
+  the Swarm drone's mandibles (`weldTips`), moving out with the model when it is drawn bigger.
+- Engineers are drawn at least 24 pixels across however far out the view is, over a dark pool and a
+  rim in their side's colour, so they stand out from the ground.
+- The camera keeps the grey mirrored land past the map's edge to about a fifth of the view.
+- The tactical map's filters say Units and Buildings, and the lobby's AI line says what the ground AI
+  does instead of the space admiral's words.
+
+The ground screen's pieces reach the battle screen, the renderer and the lobby through
+[`groundKit.ts`](src/apps/games/empires/groundKit.ts), which `ground/load.ts` fills in; a
+production build never loads it.
+
 ## Performance guardrails
 
 The bar is the display's full refresh rate (up to 240 Hz) without giving up anything on screen.
@@ -3324,7 +4124,15 @@ middle of the map, the camera panning across); six admirals on a huge map (Velka
 each sent at the middle, seen zoomed all the way out and then panning across the fight; a skirmish reloaded from the tab's resume snapshot
 with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
 view (the battle screen must never scroll, and the panels laid out round each other must settle:
-no React update loop, few commits); the galactic conquest map of a new and a late
+no React update loop, few commits); a ground battle on Dustfall Ridge on the battle screen (dev
+builds, as the check's server is) with three dozen vehicles of both sides driving across the low
+ground, fog on, the camera panning over the terrain (its metrics and snapshot are the battle
+canvas's: the ground layer is a canvas of its own under it); the same battle with the dev weapon
+test spawned three times over, 42 test units fighting with all seven ground weapons; the same battle
+with the dev squad test, 20 foot squads and two test walkers walking and fighting (it also counts the
+bitmaps cached, walk poses included); the WebGL2 ground layer alone on
+Ashwater Crossing, panning over the river with the water moving (it counts its own GL draw calls
+and texture uploads, which the canvas counters don't see); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
 the desktop with a few apps open, left idle, then hidden.
 
@@ -3338,7 +4146,7 @@ scenes reach into the game through its modules and the dev-only `window.__ew`.
 
 **What's measured**, per scene: canvas calls per frame (draw calls, `drawImage`, fills and strokes,
 save/restore, gradients, filters and shadows, pixel reads, and what's drawn off screen into bitmap
-caches), new canvases per second, the model bitmap cache's size, React commits per second (while
+caches), new canvases per second, the model bitmap cache's size (and the ground terrain's chunk cache), React commits per second (while
 zooming and panning, the galaxy map should hardly render), DOM nodes, map elements drawn through a
 CSS filter, and, idle, frame callbacks, timer callbacks and live intervals, shown and hidden.
 Budgets are the measurement plus 15%, or plus 2 for counts near zero.

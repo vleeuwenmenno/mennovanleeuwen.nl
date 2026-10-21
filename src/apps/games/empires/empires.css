@@ -11,6 +11,7 @@
   --ew-good: #7dffa0;
   --ew-bad: #ff6a5e;
   --ew-gold: #f2c14a;
+  --ew-kyber: #ff9a3c;
   --ew-display: 'Orbitron', 'Eurostile', 'Segoe UI', system-ui, sans-serif;
   position: relative;
   flex: 1;
@@ -814,6 +815,11 @@
 }
 .ew-legend .is-ore {
   background: #4fe3d8;
+  transform: rotate(45deg) scale(0.8, 1);
+}
+/* A ground map's kyber crystal fields. */
+.ew-legend .is-kyber {
+  background: var(--ew-kyber);
   transform: rotate(45deg) scale(0.8, 1);
 }
 .ew-legend .is-beacon {
@@ -1637,6 +1643,15 @@ span.ew-teamtag {
   touch-action: none;
   cursor: default;
 }
+/* A ground battle's picture of the ground (groundKit.ts), right under the battle canvas. */
+.ew-groundlayer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
 .ew-canvas.is-targeting {
   cursor: crosshair;
 }
@@ -1659,6 +1674,16 @@ span.ew-teamtag {
 .ew-canvas.is-repair:not(.is-targeting) {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Ccircle cx='16' cy='16' r='12.5'/%3E%3Cpath d='M16 9.5v13M9.5 16h13'/%3E%3C/g%3E%3Cg stroke='%237dffa0' stroke-width='2'%3E%3Ccircle cx='16' cy='16' r='12.5'/%3E%3Cpath d='M16 9.5v13M9.5 16h13'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") 16 16, copy;
 }
+/* Engineers selected, over a kyber crystal: a right-click mines it (an orange crystal and a pick, as
+   on its "Right-click: mine kyber" tag). */
+.ew-canvas.is-mine:not(.is-targeting):not(.is-repair) {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M12 6l4-3.5 4 3.5-4 14zM12 6h8M5 27l11-11M13 12.5l5.5 5.5'/%3E%3C/g%3E%3Cg stroke='%23ff9a3c' stroke-width='2'%3E%3Cpath d='M12 6l4-3.5 4 3.5-4 14zM12 6h8M5 27l11-11M13 12.5l5.5 5.5'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") 5 27, pointer;
+}
+/* A ground battle's engineers selected, over another of our engineers: a right-click makes them
+   assist it (two engineers side by side, as on its "Right-click: assist" tag). */
+.ew-canvas.is-assist:not(.is-targeting):not(.is-repair) {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M11 6.5a3.5 3.5 0 1 0 0.01 0zM21 6.5a3.5 3.5 0 1 0 0.01 0zM4.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5M14.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5'/%3E%3C/g%3E%3Cg stroke='%237dffa0' stroke-width='2'%3E%3Cpath d='M11 6.5a3.5 3.5 0 1 0 0.01 0zM21 6.5a3.5 3.5 0 1 0 0.01 0zM4.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5M14.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") 16 16, copy;
+}
 .ew-canvas.is-mode-rally {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M6 29V4M6 5h15l-3.5 5 3.5 5H6'/%3E%3C/g%3E%3Cg stroke='%23f2c14a' stroke-width='2'%3E%3Cpath d='M6 29V4M6 5h15l-3.5 5 3.5 5H6'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") 6 29, crosshair;
 }
@@ -1669,6 +1694,11 @@ span.ew-teamtag {
 }
 .ew-gold {
   color: var(--ew-gold);
+}
+/* A ground battle's money: kyber, blue, wherever a price or the top bar shows it. */
+.ew-kyber,
+.ew-icon.is-kyber {
+  color: var(--ew-kyber);
 }
 .ew-good {
   color: var(--ew-good);
@@ -4779,6 +4809,28 @@ span.ew-teamtag {
   background: var(--ew-gold);
   transform-origin: left;
 }
+/* Ground battles: a factory's upgrade cards (GroundUpgradeCards in Hud.tsx): the tier it goes to in
+   the ring, and the price in research points, kyber, time and power on two short lines. */
+.ew-tiermark {
+  font: 800 14px/1 system-ui;
+  letter-spacing: 0.02em;
+}
+.ew-modline.ew-jobcost {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 6px;
+  white-space: normal;
+}
+.ew-modline.ew-jobcost > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ew-rpspent {
+  color: #b08cff;
+  opacity: 0.8;
+}
 .ew-yardnote {
   grid-row: 1 / span 2;
   align-self: center;
@@ -7585,6 +7637,75 @@ span.ew-teamtag {
   width: 100%;
   min-width: 0;
 }
+/* More than four buildings to put up (a ground battle's engineers): two rows of cards sharing the
+   panel's width (three columns on a wide one), each its picture on the left and its full name and
+   price beside it (kyber, time, power). Where three columns don't fit, the rows scroll sideways
+   rather than squeeze the names (the panel can't grow taller). */
+.ew-engbuild .ew-engbuild-cards.is-many {
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  grid-template-rows: repeat(2, 40px);
+  grid-auto-columns: minmax(134px, 1fr);
+  gap: 4px;
+  max-width: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-shipcard.ew-yardcard.is-poor {
+  width: auto;
+  height: 40px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  column-gap: 5px;
+  row-gap: 3px;
+  padding: 3px 5px;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard .ew-art {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  height: 22px;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard strong {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.1;
+  text-align: left;
+}
+.ew-deck .ew-engbuild .ew-yard.is-many .ew-yardcard .ew-yc-line {
+  grid-column: 2;
+  justify-content: flex-start;
+  gap: 6px;
+  overflow: visible;
+}
+.ew-engbuild .ew-yc-line > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* On a phone the panel can't grow: the engineer's cards stay in two rows that scroll sideways, and a
+   factory's unit cards are as tall as its row, as its upgrade cards are. */
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-engbuild .ew-engbuild-cards.is-many {
+    grid-auto-columns: 150px;
+  }
+  .ew-deck .ew-yard.is-groundyard .ew-shipcard:not(.ew-modcard) {
+    height: auto;
+    aspect-ratio: auto;
+    align-self: stretch;
+  }
+}
+
+/* A short screen (a phone on its side): one row of them. */
+@media (max-height: 500px) {
+  .ew-engbuild .ew-engbuild-cards.is-many {
+    grid-template-rows: 40px;
+  }
+}
 
 /* --- Galactic conquest: what stands round a planet, and the orbit view (Orbit.tsx) ------------- */
 
@@ -8122,4 +8243,52 @@ span.ew-teamtag {
 }
 .ew-dockguides.is-touch .ew-dockghost span {
   font-size: 13px;
+}
+
+/* --- Ground battles: the top bar's idle engineer button (TopBar in Hud.tsx). --- */
+.ew-top-cell.ew-idlebtn {
+  position: relative;
+  padding: 0 12px;
+  color: var(--ew-muted);
+}
+.ew-top-cell.ew-idlebtn.is-idle {
+  color: var(--ew-gold);
+}
+.ew-idlebtn em {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--ew-gold);
+  color: #061020;
+  font: 700 9.5px/14px system-ui;
+  font-style: normal;
+  text-align: center;
+}
+
+/* --- Ground battles: power and research points in the top bar (TopBar in Hud.tsx). --- */
+.ew-top-cell.ew-powercell,
+.ew-top-cell.ew-rpcell {
+  gap: 5px;
+}
+.ew-power {
+  color: #ffd36e;
+}
+.ew-top-cell.ew-powercell.is-short b,
+.ew-top-cell.ew-powercell.is-short .ew-power {
+  color: var(--ew-bad);
+}
+.ew-rp {
+  color: #b08cff;
+}
+/* What a building draws once it is busy (a card's price line): a cost, not a warning. */
+.ew-powerdraw {
+  color: #c9b98a;
+}
+/* A consumer slowed for want of power (a site, training, research). */
+.ew-lowpower {
+  color: var(--ew-bad);
 }

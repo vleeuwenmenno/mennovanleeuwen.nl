@@ -224,8 +224,10 @@ export function outlineOf(m: Model) {
   let o = outlines.get(m)
   if (!o) {
     const frame = new Path2D()
-    for (const q of m.parts) if (q.pts.length >= 3 && !q.glow && !q.id.startsWith('socket')) frame.addPath(pathOf(q))
-    outlines.set(m, (o = { solid: silhouette(m.parts), frame }))
+    // A model that walks: as it stands (its rest pose).
+    const parts = m.walk ? posed(m, 0) : m.parts
+    for (const q of parts) if (q.pts.length >= 3 && !q.glow && !q.id.startsWith('socket')) frame.addPath(pathOf(q))
+    outlines.set(m, (o = { solid: silhouette(parts), frame }))
   }
   return o
 }
@@ -245,12 +247,22 @@ export type PaintOpts = {
   debug?: boolean
 }
 
-/** The parts still on a hull in this state. */
+/** The parts still on a hull in this state (in its pose, for a model that walks). */
 function partsLeft(m: Model, state: HullState) {
-  if (!state.detached) return m.parts
+  const all = m.walk ? posed(m, state.pose ?? 0) : m.parts
+  if (!state.detached) return all
   const gone = new Set<number>()
   for (let i = 0; i < m.detachable.length; i++) if (state.detached & (1 << i)) gone.add(m.detachable[i])
-  return m.parts.filter((_, i) => !gone.has(i))
+  const kept = m.parts.filter((_, i) => !gone.has(i))
+  return m.walk ? kept.filter((p) => all.includes(p)) : kept
+}
+
+/** A walking model's parts in pose `pose`: those in every pose and that pose's own (legs). */
+const poses = new WeakMap<Model, Part[][]>()
+function posed(m: Model, pose: number) {
+  let byPose = poses.get(m)
+  if (!byPose) poses.set(m, (byPose = []))
+  return (byPose[pose] ??= m.parts.filter((p) => p.pose === undefined || p.pose === pose))
 }
 
 /**
@@ -609,10 +621,12 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
     // The model's runs by look and size, as one number: what's come off, burns (when baked in),
     // wreck or not, size step, headings.
     const runs = modelRuns(hullRuns, m)
-    const keyOf = (det: number) => ((((det * 4 + sc) * 4 + va) * 2 + (wreck ? 1 : 0)) * 16 + k) * 128 + n
+    // A model that walks has a look per pose too (a few, see Model `walk`); others one.
+    const pose = m.walk ? (state.pose ?? 0) : 0
+    const keyOf = (det: number) => (((((det * 4 + sc) * 4 + va) * 2 + (wreck ? 1 : 0)) * 16 + k) * 128 + n) * (m.walk ? 8 : 1) + pose
     const look = (det: number) => runs.get(keyOf(det))
     const run = runIn(runs, keyOf(state.detached))
-    const paintAs: HullState = baked ? { detached: state.detached, scorch: sc, variant: va } : { detached: state.detached, ...UNBURNT }
+    const paintAs: HullState = baked ? { detached: state.detached, scorch: sc, variant: va, pose } : { detached: state.detached, ...UNBURNT, pose }
     const place = (c: HTMLCanvasElement) => ctx.drawImage(c, (-cw / 2) * s, (-ch / 2) * s, cw * s, ch * s)
     drawLit(
       ctx,
@@ -652,7 +666,7 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
       big ? lightTuning.bigBlend : lightTuning.blend,
     )
     if (!baked && (state.scorch > 0 || state.detached)) {
-      const burns = runIn(modelRuns(burnRuns, m), ((state.detached * 4 + state.scorch) * 4 + state.variant) * 16 + k)
+      const burns = runIn(modelRuns(burnRuns, m), (((state.detached * 4 + state.scorch) * 4 + state.variant) * 16 + k) * (m.walk ? 8 : 1) + pose)
       place(
         slot(burns, 0, 'burns', cw, ch, (g) => {
           g.translate(cw / 2, ch / 2)

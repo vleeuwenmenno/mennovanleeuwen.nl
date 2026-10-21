@@ -1,0 +1,148 @@
+/* The dev-only ground map viewer (Viewer.tsx): a bar over a full-size canvas. */
+
+.ew-groundview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.ew-groundview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  background: var(--ew-bg);
+  border-bottom: 1px solid var(--ew-line);
+}
+.ew-groundview-gap {
+  flex: 1;
+}
+.ew-groundview-group {
+  display: flex;
+  gap: 4px;
+}
+.ew-groundview-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.ew-groundview-stage canvas,
+.ew-groundview-stage canvas.ew-groundview-ground {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.ew-groundview-stage canvas.ew-groundview-ground {
+  pointer-events: none;
+}
+.ew-groundview-stage canvas:active {
+  cursor: grabbing;
+}
+.ew-groundview-info {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--ew-bg);
+  border: 1px solid var(--ew-line);
+  pointer-events: none;
+}
+.ew-groundview-legend {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--ew-bg);
+  border: 1px solid var(--ew-line);
+  pointer-events: none;
+}
+.ew-groundview-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+@media (pointer: coarse) {
+  .ew-groundview-bar button {
+    min-height: 36px;
+    min-width: 36px;
+  }
+}
+@container (max-width: 560px) {
+  .ew-groundview-dev {
+    display: none;
+  }
+}
+.ew-groundview-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--ew-bg);
+  border-bottom: 1px solid var(--ew-line);
+}
+.ew-groundview-tools,
+.ew-groundview-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.ew-groundview-opts label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ew-groundview-opts input[type='number'] {
+  width: 4.5em;
+}
+.ew-groundview-opts input[type='range'] {
+  width: 110px;
+}
+.ew-groundview-toast {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--ew-bg);
+  border: 1px solid var(--ew-accent);
+}
+.ew-groundview-export {
+  position: absolute;
+  inset: 10% 10%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--ew-bg-2);
+  border: 1px solid var(--ew-line);
+}
+.ew-groundview-export textarea {
+  flex: 1;
+  font: 12px ui-monospace, monospace;
+  color: inherit;
+  background: var(--ew-bg);
+  border: 1px solid var(--ew-line);
+}
+@media (pointer: coarse) {
+  .ew-groundview-edit button,
+  .ew-groundview-edit select,
+  .ew-groundview-edit input {
+    min-height: 36px;
+  }
+}

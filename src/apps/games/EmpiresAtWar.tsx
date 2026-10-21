@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { BEACON_POP, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, cleanDefense, defenseId, dims, isEngineer, isShip, placeType, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type OrbitalModId, type Tier } from './empires/data'
-import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { BEACON_POP, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, GROUND_TECH, UNIT, WORKS_NAME, buildable, cleanDefense, defenseId, dims, isEngineer, isShip, placeType, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type OrbitalModId, type Tier } from './empires/data'
+import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, KeptInside, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, setKyberMoney, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type SettingsTab, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
@@ -19,6 +19,8 @@ import { DoublePress, addToGroup, groupInfo, members, setGroup as putGroup, type
 import { HP_NAME, hpName } from './empires/icons'
 import { Renderer, drawRank, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
+import { groundKit } from './empires/groundKit'
+import type { GroundLayer } from './empires/ground/types'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
   STEP, RANKS, oreGuns, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantHeal, closedLoop, isRepairer, cantWarp, escorts, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
@@ -76,6 +78,13 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const [conquestAt, setConquestAt] = useState<'new' | 'load'>('new')
   const [setup, setSetup] = useState<Setup | null>(() => skirmish?.setup ?? null)
   const [round, setRound] = useState(0)
+  // A ground battle (dev builds only, ground/load.ts) needs ground battles loaded before it starts:
+  // one resumed after a reload loads them first.
+  const needsGround = import.meta.env.DEV && setup?.mode === 'ground'
+  const [groundOn, setGroundOn] = useState(() => !!groundKit())
+  useEffect(() => {
+    if (import.meta.env.DEV && needsGround && !groundOn) void import('./empires/ground/load.ts').then((m) => m.loadGround()).then(() => setGroundOn(true))
+  }, [needsGround, groundOn])
   const { best } = useHighScore('empires')
   const sound = useRef<EmpiresSound>(null as unknown as EmpiresSound)
   if (!sound.current) sound.current = new EmpiresSound()
@@ -258,6 +267,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
         }}
       />
     )
+  if (needsGround && !groundOn) return null
   return (
     <Battle
       key={round}
@@ -381,15 +391,33 @@ const ToastStack = memo(function ToastStack({ store, low, look }: { store: Toast
   )
 })
 
+/** A ground battle's power and research points for the top bar, with the tips that break them down. */
+function groundPowerHud(w: World, me: Owner): Pick<Hud, 'power' | 'rp' | 'rpSpent' | 'powerTip' | 'rpTip'> {
+  const r = groundKit()?.power(w, me)
+  if (!r) return {}
+  const n = (v: number) => Math.round(v * 10) / 10
+  const powerTip = [
+    `Power: ${n(r.made)} made, ${n(r.used)} used${r.ratio < 1 ? `. Short: everything that uses power runs at ${Math.round(r.ratio * 100)}% speed. Build a power generator.` : '.'}`,
+    `Made: Command Centers ${n(r.centers)}, generators ${n(r.generators)}${r.stopped ? ` (${r.stopped} stopped: no kyber)` : ''}, burning ${n(r.burn * 60)} kyber a minute.`,
+    `Used: construction ${n(r.sites)}, training ${n(r.training)}, factory upgrades and research ${n(r.upgrades)}, research stations ${n(r.research)}.`,
+  ].join('\n')
+  const rpTip = `Research points: ${Math.floor(r.rp)} banked, ${n(r.rpRate * 60)} a minute from research stations.${r.rpSpent ? ` ${Math.round(r.rpSpent)} spent on the factory upgrades and research under way (back if called off).` : ''} The factories spend them: select one, then its Upgrades page.`
+  return { power: { made: r.made, used: r.used, ratio: r.ratio }, rp: r.rp, rpSpent: r.rpSpent, powerTip, rpTip }
+}
+
 function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
   const p = w.players[me]
   return {
     groups: groupInfo(w, me, groups),
     idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && u.stance !== 'hold').length,
-    credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
+    idleEngineers: w.ground ? w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'idle' && !u.queue.length).length : 0,
+    // A ground battle earns only what its engineers gather: the rate lately, for the top bar.
+    credits: p.credits, income: w.ground ? (p.gatherRate ?? 0) : p.income,
+    ...(w.ground ? groundPowerHud(w, me) : {}), pop: p.pop, popCap: p.popCap, faction: p.faction, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
     hybrid: !!w.hybrid,
+    ground: !!w.ground,
     yards: w.units
       .filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard')
       .map((u) => ({ id: u.id, unit: u.t.id, queue: (u.yq ?? []).map((q) => ({ ...q })), built: !u.site, progress: u.site ? 1 - u.building / u.t.build : 1 })),
@@ -433,7 +461,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         kind: (i === conquest.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team as 0 | 1, difficulty: conquest.ai, profile: profileOf(conquest.profile), spawn: i, name: conquest.names[i], area: defaultArea(map, i),
       }))
     const areas = setupAreas(setup!, map)
-    return setup!.slots.map((s, i) => ({ ...s, spawn: i, name: setup!.names?.[i] ?? slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
+    return setup!.slots.slice(0, map.spawns.length).map((s, i) => ({ ...s, spawn: i, name: setup!.names?.[i] ?? slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
   })
   const me: Owner = seats.findIndex((s) => s.kind === 'you')
   // Leaving a campaign battle (won, lost, or pulled out of) hands it back to the galaxy.
@@ -463,6 +491,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   if (!world.current && online) world.current = matchWorld(online.info)
   if (!world.current && conquest) world.current = newFleetBattle(map, conquest.sides, { seed: map.seed })
+  // A ground battle: every side starts on its spawn's plateau (there are no start areas).
+  if (!world.current && map.ground) world.current = makeWorld(seats.map((s) => map.spawns[s.spawn]))
   if (!world.current) {
     const base = makeWorld(seats.map((s) => map.spawns[s.spawn]))
     for (const s of seats) starts.current.push(autoStart(base, s.area, map.spawns[s.spawn], starts.current))
@@ -470,8 +500,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   /** Before the battle: time stands still while the player picks where to start. Our station
    * isn't placed (or shown) until they've clicked a spot. */
-  const deploying = useRef(!conquest && !online && !resumed.current)
-  const placed = useRef(!!conquest || !!online || !!resumed.current)
+  // A ground battle's money is kyber: every price and card shows it so.
+  setKyberMoney(!!world.current?.ground)
+  const deploying = useRef(!conquest && !online && !resumed.current && !map.ground)
+  const placed = useRef(!!conquest || !!online || !!resumed.current || !!map.ground)
   const myTeam = world.current.players[me].team
   const myFaction = world.current.players[me].faction
   const brains = useRef<Brain[]>(
@@ -518,7 +550,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const wheelAcc = useRef(0)
   /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
   const pickedNode = useRef(-1)
-  const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0 })
+  const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0, crystal: -1 })
   // A long hover on a ship or structure brings up its unit card beside the cursor (on a capture
   // beacon, what it gives: `beacon`, its index).
   const [intel, setIntel] = useState<{ id: number; x: number; y: number; beacon?: number } | null>(null)
@@ -642,8 +674,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // The camera may run well past the map's edge, so ships in a corner can be brought clear of
     // the HUD (more room at the bottom, where the panels are), zoomed out as well as in.
     const fit = (v: number, lo: number, hi: number, mid: number) => (lo > hi ? mid : Math.max(lo, Math.min(hi, v)))
-    c.x = fit(c.x, hw - (vw * 0.35) / c.zoom, w.w - hw + (vw * 0.35) / c.zoom, w.w / 2)
-    c.y = fit(c.y, hh - (vh * 0.3) / c.zoom, w.h - hh + (vh * 0.5) / c.zoom, w.h / 2)
+    // A ground battle keeps the grey mirrored land past the edge to about a fifth of the view (a
+    // little more at the bottom, under the panels).
+    const [mx, mt, mb] = w.ground ? [0.2, 0.2, 0.28] : [0.35, 0.3, 0.5]
+    c.x = fit(c.x, hw - (vw * mx) / c.zoom, w.w - hw + (vw * mx) / c.zoom, w.w / 2)
+    c.y = fit(c.y, hh - (vh * mt) / c.zoom, w.h - hh + (vh * mb) / c.zoom, w.h / 2)
   }
   const where = (x: number, y: number) => {
     const { vw, vh } = view()
@@ -713,7 +748,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const ly = dx * s + dy * c
       // A little wider than the hull's box, so its edges still count.
       const inside = Math.abs(lx) <= Math.max(uw * 0.55, minR) && Math.abs(ly) <= Math.max(uh * 0.55, minR)
-      if (!inside) continue
+      // A ground squad: any of its members, wherever they stand.
+      const member = !!u.crew?.some((m) => Math.hypot(m.x - p.x, m.y - p.y) <= Math.max((u.t.ground?.squad?.size ?? 0) * 0.6, minR))
+      if (!inside && !member) continue
       const score = -drawRank(u) * 1e6 + u.t.size + Math.hypot(dx, dy) * 0.1
       if (score < bestScore) {
         bestScore = score
@@ -757,6 +794,19 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const repairHint = (id: number) => {
     const u = id ? world.current.byId.get(id) : undefined
     return u && (medicsFor(u).length || weldersFor(u).length) ? u.id : undefined
+  }
+  /** The kyber crystal cluster `i` (World `crystals`) as a spot to tag "Right-click: mine kyber",
+   * when our selection has engineers to mine it; null otherwise. */
+  const mineHint = (i: number) => {
+    const c = i >= 0 ? world.current.crystals?.[i] : undefined
+    if (!c || !(c.left > 0) || !mySelection().some((u) => u.owner === me && isEngineer(u.t))) return null
+    return { x: (c.c + 0.5) * 32, y: (c.r + 0.5) * 32 }
+  }
+  /** A ground battle: our engineer `id` under the pointer, when our selection has other engineers that
+   * a right-click would send to assist it (Order `assist`). */
+  const assistHint = (id: number) => {
+    const u = id ? world.current.byId.get(id) : undefined
+    return u && world.current.ground && u.owner === me && isEngineer(u.t) && mySelection().some((s) => s.id !== u.id && isEngineer(s.t)) ? u.id : undefined
   }
   /** Sends repair ships to repair `unit`; false (and says why) when it can't be done. */
   const repairOrder = (unit: Unit, medics: Unit[], queued = false) => {
@@ -875,6 +925,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // warship of ours finishes it), on our ruin of a yard rebuilds it; the rest of the selection
     // carries on as usual.
     const crew = ships.filter((u) => isEngineer(u.t))
+    // A ground battle: a right-click on another of our engineers makes the selected engineers assist
+    // it (help with what it does, and follow it on); the rest of the selection moves there.
+    if (crew.length && !attackMove && w.ground && unit && unit.owner === me && isEngineer(unit.t) && crew.some((u) => u.id !== unit.id)) {
+      assistOrder(crew.filter((u) => u.id !== unit.id), unit, queued)
+      const rest = ships.filter((u) => !isEngineer(u.t))
+      if (rest.length) order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
+      return
+    }
     if (crew.length && !attackMove) {
       const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < UNIT[r.unit].size * 0.45)
       // (An ally's damaged structure too: they weld it back for them.)
@@ -893,6 +951,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         const rest = ships.filter((u) => !isEngineer(u.t))
         if (!rest.length) return
         order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
+        return
+      }
+      // A ground battle: a right-click on a kyber crystal field sets them gathering there.
+      const kit = w.ground ? groundKit() : null
+      if (kit && !unit && kit.fieldAt(w, at.x, at.y) >= 0) {
+        gatherAt(crew, at, queued)
+        const rest = ships.filter((u) => !isEngineer(u.t))
+        if (rest.length) order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
         return
       }
     }
@@ -940,6 +1006,29 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
   }
 
+  /** Engineers `crew` assist engineer `lead` of ours (a ground battle). */
+  const assistOrder = (crew: Unit[], lead: Unit, queued: boolean) => {
+    const why = order('assist', crew.map((u) => u.id), lead.id, queued)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return
+    }
+    renderer.current.ping(lead.x, lead.y, '#7dffa0')
+    sound.order('move', myFaction, 'fighter')
+  }
+  /** Engineers `crew` gather kyber at the crystal field at `at` (a ground battle). */
+  const gatherAt = (crew: Unit[], at: Pt, queued: boolean) => {
+    const why = order('gather', crew.map((u) => u.id), at.x, at.y, queued)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return
+    }
+    renderer.current.ping(at.x, at.y, '#ff9a3c')
+    sound.order('move', myFaction, 'fighter')
+  }
+
   const buildSite = (node: number, id: string) => {
     sound.unlock()
     const why = order('site', node, id)
@@ -966,7 +1055,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const rallyAt = () => {
     const mine = mySelection()
     if (mine.some((u) => u.t.tier === 'station')) return 0
-    return mine.find((u) => u.t.tier === 'yard' && !!u.yq)?.id ?? 0
+    return mine.find((u) => (u.t.tier === 'yard' || u.t.tier === 'building') && !!u.yq)?.id ?? 0
   }
   /** Start placing a yard: with the engineers selected, or else every one of ours (idle ones
    * first). Without any, it says how to get some. */
@@ -976,7 +1065,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const ours = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t))
     const chosen = mySelection().filter((u) => isEngineer(u.t))
     const crew = chosen.length ? chosen : ours
-    const why = !w.hybrid ? 'No yards in this battle' : !crew.length ? 'No engineers: build an engineer squadron at the Command Station first' : null
+    const why = w.ground
+      ? !crew.length ? 'No engineers: train one at a Command Center first' : null
+      : !w.hybrid ? 'No yards in this battle' : !crew.length ? 'No engineers: build an engineer squadron at the Command Station first' : null
     // The rest (level, credits, one at a time) shows on the ghost itself.
     if (why) {
       toast(why, 'bad')
@@ -1007,7 +1098,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     renderer.current.ping(at.x, at.y, '#ffc86e')
     sound.constructing()
     toast(`${placeType(pl.unit)?.name ?? 'The site'}: the engineers are on their way`, 'info')
-    setMode('normal')
+    // A ground battle: Shift keeps placing, so several sites go down in a row (the engineers work them
+    // in order).
+    if (!queued || !world.current.ground) setMode('normal')
   }
   /** Touch (the action wheel): start placing a yard with its spot already pinned at `at`. */
   const pinYard = (at: Pt, unit = nextYard()) => {
@@ -1026,7 +1119,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   /** Turn the yard being placed by `deg` degrees (positive: clockwise on screen). */
   const rotatePlace = (deg: number) => {
     const pl = placing.current
-    if (!pl) return
+    // Ground buildings never turn: they face south.
+    if (!pl || world.current.ground) return
     pl.a = wrapAngle((pl.a ?? placeGhost()?.a ?? 0) + (deg * Math.PI) / 180)
     setUi((u) => ({ ...u }))
   }
@@ -1034,12 +1128,23 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const placeGhost = () => {
     const pl = placing.current
     const w = world.current
-    if (!pl || mode.current !== 'place') return null
+    if (!pl || mode.current !== 'place' || w.ground) return null
     const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
     const st = w.byId.get(w.players[me].station)
     if (!at || !st) return null
     const g = placement(w, me, pl.unit, at.x, at.y, pl.a ?? undefined)
     return { t: placeType(pl.unit) ?? yardOf(myFaction), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+  }
+  /** A ground battle's building being placed, for the renderer: its tiles under the pointer (or the
+   * pinned spot), green or red, with the first rule that fails. */
+  const groundGhost = () => {
+    const pl = placing.current
+    const w = world.current
+    const kit = groundKit()
+    if (!pl || mode.current !== 'place' || !w.ground || !kit) return null
+    const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
+    if (!at) return null
+    return { unit: pl.unit, p: kit.placement(w, me, pl.unit, at.x, at.y) }
   }
   /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
    * neither standing nor going up and the station is upgraded for, else the Frigate Yard (its ghost
@@ -1047,6 +1152,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const nextYard = () => {
     const w = world.current
     const p = w.players[me]
+    // A ground battle: the first building our engineers put up.
+    if (w.ground) return w.units.find((u) => !u.dead && u.owner === me && isEngineer(u.t))?.t.ground?.builds?.[0] ?? ''
     const lacking = yardsFor(p.faction).filter((t) => !w.units.some((u) => !u.dead && u.owner === me && u.t.id === t.id))
     return (lacking.find((t) => t.level <= p.level) ?? lacking[0] ?? yardOf(p.faction)).id
   }
@@ -1112,6 +1219,22 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     if (idle.length) sound.select(myFaction, voice())
     else sound.error()
   }
+  /** A ground battle: the next idle engineer (round them all in turn), selected and looked at. */
+  const idleEngineerAt = useRef(0)
+  const selectIdleEngineer = () => {
+    const idle = world.current.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'idle' && !u.queue.length)
+    if (!idle.length) {
+      toast('No idle engineers', 'info')
+      sound.error()
+      return
+    }
+    // The first one after the last picked (by id), so repeated clicks go round them all.
+    const u = idle.find((x) => x.id > idleEngineerAt.current) ?? idle[0]
+    idleEngineerAt.current = u.id
+    select([u.id])
+    centerOn(u.x, u.y)
+    sound.select(myFaction, 'fighter')
+  }
   /** Select a control group (its key, a click or a tap on its chip); twice in quick succession also
    * looks at it. A group of one yard (or the station) opens its build panel, as selecting it does. */
   const groupPress = useRef(new DoublePress())
@@ -1133,11 +1256,21 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
     if (mySelection().length) sound.select(myFaction, voice())
   }
-  /** `target`: what Field repair should mend; the ship or station under the pointer when left out. */
-  const useAbility = (target = hover.current.unit) => {
-    const ready = mySelection().filter((u) => u.t.ability && u.abilityCd <= 0)
+  /** `target`: what Field repair should mend; the ship or station under the pointer when left out.
+   * `queued` (Shift): a ground squad's Spread out waits for the orders it has. */
+  const useAbility = (target = hover.current.unit, queued = shiftOf()) => {
+    // Ground squads' Spread out is a toggle: all of them spread out, or (all spread already) close up.
+    const squads = mySelection().filter((u) => u.t.ability === 'spreadOut')
+    if (squads.length) {
+      const on = !squads.every((u) => u.spread)
+      order('spread', squads.map((u) => u.id), on, queued)
+      sound.ability('spreadOut', undefined, myFaction)
+      toast(on ? 'Spreading out: harder to hit, above all by splash, but slower' : 'Closing up', 'info')
+      if (squads.length === mySelection().length) return
+    }
+    const ready = mySelection().filter((u) => u.t.ability && u.t.ability !== 'spreadOut' && u.abilityCd <= 0)
     // Online the count isn't known yet: the abilities that are ready will fire.
-    const n = order('ability', mySelection().map((u) => u.id), target) ?? ready.length
+    const n = order('ability', mySelection().filter((u) => u.t.ability !== 'spreadOut').map((u) => u.id), target) ?? ready.length
     if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id, undefined, myFaction)
     else if (mySelection().some((u) => u.t.ability)) {
       sound.error()
@@ -1242,6 +1375,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // selected and this one hurt: they repair it (both, on a station).
       const crew = ships.filter((u) => isEngineer(u.t))
       const medics = medicsFor(unit)
+      // A ground battle: another of our engineers, assisted by the selected ones.
+      const helpers = w.ground && isEngineer(unit.t) ? crew.filter((u) => u.id !== unit.id) : []
+      if (helpers.length) items.push(it('assist', 'Assist', 'engineer', () => assistOrder(helpers, unit, shiftOf())))
       if (crew.length && !cantConstruct(w, me, unit))
         items.push(it('construct', unit.site ? 'Build it' : unit.rush ? 'Finish it' : 'Repair it', 'slip', () => {
           const why = order('construct', crew.map((u) => u.id), unit.id, shiftOf())
@@ -1275,6 +1411,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const withAb = ships.filter((u) => u.t.ability)
       // Engineers: put a yard down here (pinned, for the confirm button).
       if (w.hybrid && ships.some((u) => isEngineer(u.t))) items.push(it('yard', 'Build yard', 'slip', () => pinYard(at)))
+      // A ground battle's engineers on a kyber crystal field: gather it.
+      const crewHere = ships.filter((u) => isEngineer(u.t))
+      if (w.ground && crewHere.length && (groundKit()?.fieldAt(w, at.x, at.y) ?? -1) >= 0) items.push(it('gather', 'Gather kyber', 'kyber', () => gatherAt(ships.filter((u) => isEngineer(u.t)), at, shiftOf())))
+      // A ground battle's engineers: each building they put up, pinned here.
+      if (w.ground) for (const id of [...new Set(ships.flatMap((u) => u.t.ground?.builds ?? []))]) items.push(it(`build:${id}`, `Build ${UNIT[id].name}`, 'slip', () => pinYard(at, id)))
       // ...or a defense station, in a battle that has them.
       if (w.defense && ships.some((u) => isEngineer(u.t))) items.push(it('fort', 'Build defense station', 'hold', () => pinYard(at, defenseId(myFaction))))
       items.push(
@@ -1292,7 +1433,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         ...(several ? [it('face', 'Face', 'roam', () => setDraw('face'))] : []),
         it('stance', 'Stance', 'hold', () => runCommand('hold')),
         it('stop', 'Stop', 'stop', () => runCommand('stop')),
-        ...(withAb.length ? [it('ability', 'Ability', 'ability', () => runCommand('ability'), !withAb.some((u) => u.abilityCd <= 0) && 'Not ready yet')] : []),
+        // (Ground squads' Spread out reads as what it will do: spread out, or close up.)
+        ...(withAb.length
+          ? [withAb.every((u) => u.t.ability === 'spreadOut')
+              ? it('ability', withAb.every((u) => u.spread) ? 'Close up' : 'Spread out', 'ability', () => runCommand('ability'))
+              : it('ability', 'Ability', 'ability', () => runCommand('ability'), !withAb.some((u) => u.abilityCd <= 0) && 'Not ready yet')]
+          : []),
         ...(mine.some(canRetreat) ? [{ ...it('retreat', 'Retreat', 'jump', () => runCommand('retreat')), danger: true }] : []),
         ...info,
       )
@@ -1439,6 +1585,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const m = mini.current!
     const ctx = c.getContext('2d')!
     const mctx = m.getContext('2d')!
+    // A ground battle: the picture of the ground on a canvas of its own right under this one, the
+    // same size and camera, drawn first each frame (groundKit.ts).
+    const kit = world.current.ground ? groundKit() : null
+    const layer: GroundLayer | null = kit ? kit.layer() : null
+    if (layer) {
+      layer.setMap(world.current.ground!.map)
+      layer.canvas.className = 'ew-groundlayer'
+      c.parentElement!.insertBefore(layer.canvas, c)
+      // Dev builds: the perf scene and the console reach it here.
+      if (import.meta.env.DEV) (window as unknown as { __ewGround: unknown }).__ewGround = layer
+    }
     sound.unlock()
     sound.setMusicScene('skirmish')
     const fit = () => {
@@ -1582,6 +1739,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         else if (e.k === 'hpdown') {
           sound.hardpointDown(where(e.x, e.y), w.players[e.owner]?.faction)
           if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
+        } else if (e.k === 'dry') {
+          // A kyber field ran dry: news for whoever was mining it.
+          if (w.units.some((u) => !u.dead && u.owner === me && u.order.k === 'gather' && Math.hypot(u.x - e.x, u.y - e.y) < 900)) toast('A kyber field ran dry: the engineers there move on to the nearest other field', 'info', { x: e.x, y: e.y })
+        } else if (e.k === 'trained' && e.owner === me) {
+          const t = UNIT[e.unit]
+          sound.shipReady(myFaction, 'gunship')
+          toast(`${t.name} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+        } else if (e.k === 'built' && e.owner === me && UNIT[e.unit]?.tier === 'building') {
+          sound.structureDone('yard')
+          toast(`${UNIT[e.unit].name} complete`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'built' && e.owner === me) {
           const t = placeType(e.unit)
           if (!t) continue
@@ -1665,7 +1832,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           } else toast(`You sent ${seats[e.to].name} ${fmt(e.amount)} credits`, 'good')
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
-          toast(`Research complete: ${TECH[e.id].name}`, 'good')
+          toast(`Research complete: ${(TECH[e.id] ?? GROUND_TECH[e.id]).name}`, 'good')
+        } else if (e.k === 'tierUp' && e.owner === me) {
+          sound.researchDone()
+          toast(`${UNIT[e.unit].name} reached tier ${e.tier}: it trains its tier ${e.tier} units now`, 'good', { x: e.x, y: e.y })
         } else if (e.k === 'level' && e.owner === me) {
           sound.levelUp()
           const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
@@ -1701,21 +1871,31 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         warpGhost: warpGhost(),
         hideOwner: deploying.current && !placed.current ? me : -1,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
+        groundPlace: groundGhost(),
         // A finger has no hover: the selection shows its ranges instead.
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
         place: placeGhost(),
         escortHint: mode.current === 'guard' ? escortHint(h.unit) : undefined,
         repairHint: mode.current === 'normal' && !touchLast.current ? repairHint(h.unit) : undefined,
+        mineHint: mode.current === 'normal' && !touchLast.current ? mineHint(h.crystal) : null,
+        assistHint: mode.current === 'normal' && !touchLast.current ? assistHint(h.unit) : undefined,
         buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
         })() : null,
       }
+      layer?.draw(cm, vw, vh, Math.min(2, window.devicePixelRatio || 1), now / 1000)
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       // The repair cursor, over what a right-click would repair (React's className leaves it be
       // until the mode changes, so it is checked on the element itself).
       const fixing = v.repairHint !== undefined
       if (canvas.current && canvas.current.classList.contains('is-repair') !== fixing) canvas.current.classList.toggle('is-repair', fixing)
+      // The mining cursor, over a kyber crystal our selected engineers would mine on a right-click.
+      const mining = !!v.mineHint
+      if (canvas.current && canvas.current.classList.contains('is-mine') !== mining) canvas.current.classList.toggle('is-mine', mining)
+      // The assist cursor, over one of our engineers our selected engineers would assist.
+      const assisting = v.assistHint !== undefined
+      if (canvas.current && canvas.current.classList.contains('is-assist') !== assisting) canvas.current.classList.toggle('is-assist', assisting)
       sound.ambience(paused.current ? 0 : dt)
       miniT -= dt
       const hideMine = deploying.current && !placed.current ? me : -1
@@ -1748,6 +1928,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      layer?.canvas.remove()
+      layer?.dispose()
       // Parent screen effect restores menu / galaxy music.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1814,7 +1996,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           pickedNode.current = -1
         } else openMenu()
       } else if (action === 'attack' || action === 'move' || action === 'patrol' || action === 'rally' || action === 'hold' || action === 'stop' || action === 'retreat' || action === 'guard') runCommand(action)
-      else if (action === 'ability') useAbility()
+      else if (action === 'ability') useAbility(undefined, e.shiftKey || shiftOf())
       else if (action === 'station' || k === 'home') selectStation()
       else if (action === 'yard') selectYard()
       else if (action === 'cyard') selectCapitalYard()
@@ -2029,7 +2211,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
     }
     const h = pick(p.x, p.y)
-    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node, wreck: h.wreck }
+    // A ground battle: the kyber crystal cluster under the pointer, if any (a right-click mines it).
+    const crystal = !h.unit && world.current.ground ? (groundKit()?.crystalUnder(world.current, h.at.x, h.at.y) ?? -1) : -1
+    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node, wreck: h.wreck, crystal }
     const w0 = world.current
     const hover0 = !drag.current && e.pointerType !== 'touch'
     // (A beacon under the pointer, with no ship or structure over it, counts as minus its index plus one.)
@@ -2203,7 +2387,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // Lines or pages (some mice) rather than pixels: scale to about one notch's worth.
     const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
     // A yard being placed: the wheel turns it (15 degrees a notch, 5 with Shift) instead of zooming.
-    if (mode.current === 'place' && placing.current) {
+    if (mode.current === 'place' && placing.current && !world.current.ground) {
       wheelAcc.current += dy || e.deltaX
       const n = Math.trunc(wheelAcc.current / 90)
       if (n) {
@@ -2557,7 +2741,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           onPointerCancel={() => ((drag.current = null), (line.current = null), touches.current.clear(), (pinch.current = null), press.current.cancel())}
           onPointerLeave={(e) => {
             mouse.current.inside = false
-            hover.current = { unit: 0, hp: -1, node: -1, wreck: 0 }
+            hover.current = { unit: 0, hp: -1, node: -1, wreck: 0, crystal: -1 }
             // A finger "leaves" as it lifts: a unit card opened from the wheel stays up.
             if (!isTouch(e)) dropIntel()
           }}
@@ -2582,7 +2766,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           />
         )}
         <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onYard={selectOne} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
-          onGift={allies.length ? () => setUi((u) => ({ ...u, gift: !u.gift })) : undefined} giftOpen={ui.gift}
+          onGift={allies.length ? () => setUi((u) => ({ ...u, gift: !u.gift })) : undefined} giftOpen={ui.gift} onIdleEngineer={hud.ground ? selectIdleEngineer : undefined}
           onMenu={() => (ui.menu ? closeMenu() : openMenu())}
           onTechTree={() => setTree(!ui.tree)}
           onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
@@ -2645,20 +2829,25 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
                 : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
                 : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near. On a ship two classes bigger it escorts it: flies over its hull and moves with it.`
+                  : ui.mode === 'place' && w.ground ? <>{`${UNIT[placing.current?.unit ?? '']?.name ?? 'Building'}: ${click} a spot where every tile is green.${touchUi ? ' Then build it here.' : ''}`}{UNIT[placing.current?.unit ?? '']?.ground?.trains?.length ? <> <span data-tip="Exit: kept clear so units can leave. Nothing may be built on it.">The dashed strip with the arrow is its exit, kept clear so units can leave.</span></> : null}</>
                   : ui.mode === 'place' ? `${(placeType(placing.current?.unit ?? '') ?? yardOf(myFaction)).name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
-            {ui.mode === 'place'
+            {ui.mode === 'place' && w.ground
+              ? touchUi ? 'Shift on: after the engineers\' other orders, and keep placing more. ✕ to cancel.' : <>Shift-click: after the engineers' other orders, and keep placing more. <kbd>Esc</kbd> or right-click to cancel.</>
+              : ui.mode === 'place'
               ? touchUi ? 'Turn it with the buttons. Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Wheel or <kbd>[</kbd> <kbd>]</kbd> turn it (Shift: finer), or drag to aim its mouth. Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
               : touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
             {ui.mode === 'place' && touchUi && placing.current?.at && (
               <div className="ew-placebar">
+                {!w.ground && <>
                 <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(-15)} aria-label="Turn it anticlockwise" data-tip="Turn 15 degrees anticlockwise">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
                 </button>
                 <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(15)} aria-label="Turn it clockwise" data-tip="Turn 15 degrees clockwise">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: 'scaleX(-1)' }}><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
                 </button>
-                <button className="ew-go" onClick={confirmPlace} disabled={!placeGhost()?.ok}>
+                </>}
+                <button className="ew-go" onClick={confirmPlace} disabled={w.ground ? !!groundGhost()?.p.why : !placeGhost()?.ok}>
                   Build here
                 </button>
                 <button className="ew-menu-btn" onClick={() => setMode('normal')}>
@@ -2680,14 +2869,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {/* The tactical map floats: it can be dragged anywhere. While it sits in its corner the dock
             leaves room for it, so the unit card stays beside it. */}
         <TacticalMap canvas={mini} sides={sides} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini} onPointerEnd={() => miniPress.current.cancel()}
-          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle}
+          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle} ground={hud.ground}
           fogGrid={settings.fogGrid} onFogGrid={() => setSettings({ fogGrid: !settings.fogGrid })}
           onAlert={() => (lastAlarm.current ? centerOn(lastAlarm.current.x, lastAlarm.current.y) : toast('No alerts yet', 'info'))}
           onMove={mapMoved}
         />
-        {/* The bottom of the screen: a shade for the panels to sit on; the unit card (beside the map
-            while it sits in its corner) and the selection float like the map, and can be moved. */}
-        <div className="ew-dockshade" />
+        {/* The bottom of the screen: a shade for the panels to sit on (space only: over the bright
+            ground it read as a dark band across the battlefield, and the panels have backgrounds of
+            their own); the unit card (beside the map while it sits in its corner) and the selection
+            float like the map, and can be moved. */}
+        {!hud.ground && <div className="ew-dockshade" />}
         <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} vars={{ '--ew-dleft': `${mapRoom ? mapRoom + 12 : 6}px` }} className="ew-detailfloat">
             <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
               onOnly={(id, drop) => {
@@ -2701,6 +2892,20 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               onSelect={selectOne}
               onCancelSite={(id) => {
                 const why = order('cancelSite', id)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.unqueued()
+              }}
+              onJob={(uid, job) => {
+                const why = order('groundJob', uid, job)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.queued()
+              }}
+              onCancelJob={(uid) => {
+                const why = order('cancelGroundJob', uid)
                 if (why) {
                   toast(why, 'bad')
                   sound.error()

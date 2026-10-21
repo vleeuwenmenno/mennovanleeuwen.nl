@@ -13,6 +13,9 @@ export const reach = (r: number) => Math.round(r * RANGE_SCALE)
 
 export type FactionId = 'republic' | 'droid' | 'swarm'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense' | 'yard'
+  /** Ground battles (see UnitType `ground`): units that drive on the tile grid, and buildings that
+   * stand on it. The space game's tier checks never match them. */
+  | 'vehicle' | 'building'
 export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 /** The mount a module is drawn with (models/mounts.ts). */
@@ -26,7 +29,7 @@ export type ModuleArt = 'turbo' | 'flak' | 'ion' | 'shield' | 'hangar' | 'refine
 export type MountExtra =
   | 'torpedo' | 'pd' | 'triple' | 'missileBox' | 'strike' | 'railgun' | 'beam' | 'quad'
   | 'spore' | 'acid' | 'lance' | 'bioturret' | 'parasite' | 'regen' | 'engineSac' | 'broodSac' | 'spine' | 'projector'
-export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair'
+export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair' | 'spreadOut'
 
 export type Weapon = {
   kind: WeaponKind
@@ -43,6 +46,14 @@ export type Weapon = {
    * nose, so the whole ship turns to aim it (the AI and the sim's closing in already do: see sim.ts
    * bearing). Its mount doesn't turn on the model. Made with `spinal()`. */
   spinal?: true
+  /** Ground battles' weapons (groundWeapon): which of the seven it is. Its `kind` is then the space
+   * weapon it sounds and sparks like; the ground's own table (GROUND_VS) sets what it does. */
+  ground?: GroundWeaponKind
+  /** Ground: the radius its shells or rockets hurt everything in where they land (artillery, swarm
+   * rockets), in world units. */
+  splash?: number
+  /** Ground: the nearest it can fire (artillery), in world units. */
+  min?: number
 }
 
 /**
@@ -134,9 +145,132 @@ export type UnitType = {
   /** An orbital defense station (Galactic conquest, see OrbitalPlan): its level, what each of its
    * slots holds (null: empty), and which of its planet's two defense sites it stands on. */
   orbital?: { level: number; slots: (OrbitalModId | null)[]; i?: number }
+  /** A ground battle's unit or building (ground/world.ts): how it stands and moves on the tile
+   * grid. Only units with it are in ground battles, and space battles never have them. */
+  ground?: GroundSpec
+}
+
+/**
+ * How a ground unit or building lives on the ground battle's tile grid (32-unit tiles). A vehicle
+ * drives (turns towards its next waypoint, then goes) on paths for its size class; a building
+ * stamps its footprint on the grid, faces south (its door the middle of its south side) and never
+ * turns.
+ */
+export type GroundSpec = {
+  /** Path finding size class: the square of tiles it needs (1 small, 2 vehicle, 3 large). */
+  size: 1 | 2 | 3
+  /** Body radius in world units: how close other ground units come. */
+  radius: number
+  /** Acceleration and braking, world units a second squared. */
+  accel: number
+  /** Sight radius in tiles. */
+  sight: number
+  /** Buildings: footprint in tiles, columns × rows. */
+  foot?: [number, number]
+  /** Buildings: credits a second it earns once built (none do on the ground: kyber is gathered). */
+  income?: number
+  /** Buildings: how many units it supports once built (the side's unit cap is the sum). */
+  supply?: number
+  /** Buildings: engineers drop off the kyber they gather here (a Command Center). */
+  dropOff?: boolean
+  /** Buildings: power it makes once built (ground/power.ts), for as long as it can pay its `burn`. */
+  power?: number
+  /** Buildings: kyber a second it burns to make its power (a generator); with none left it stops. */
+  burn?: number
+  /** Buildings: power it draws while busy (ground/power.ts busy: training or upgrading, or for a
+   * research station, all the time). Construction sites draw SITE_DRAW besides, while being built. */
+  draw?: number
+  /** Buildings: research points a second it makes while powered (a research station). */
+  research?: number
+  /** Buildings: what it trains, in card order. Ids the game doesn't know (a unit not added yet) are
+   * left out of its cards and can't be ordered. */
+  trains?: string[]
+  /** Factories: whether it trains foot units (squads) or vehicles; the AI picks its factories by it. */
+  factory?: 'foot' | 'vehicle'
+  /**
+   * Tiers. For a building that trains: the tier it stands at once built (1 when left out; upgrades
+   * raise it later). For a unit: the tier its trainer must have reached to train it (1 when left
+   * out). Tier 1 units are small and simple, tier 2 medium, tier 3 the big ones.
+   */
+  tier?: number
+  /** Factories: what upgrading to each next tier costs (index 0: to tier 2, 1: to tier 3), in
+   * research points and kyber, the seconds it takes and the power it draws while it runs
+   * (ground/jobs.ts). */
+  tierUp?: { rp: number; cost: number; time: number; draw: number }[]
+  /** Engineers: the buildings it puts up, in card order. */
+  builds?: string[]
+  /** Armour class (ground/combat.ts, GROUND_VS): vehicles light unless they say, buildings structure. */
+  armour?: Armour
+  /** The ground unit whose model it is drawn with, when not its own (the dev weapon test's units). */
+  look?: string
+  /**
+   * A squad (troopers, battle droids, a pack of bugs): one unit of `n` members in a loose formation
+   * `spacing` world units apart, each drawn as model `member` (models/<faction>/ground.ts), `size`
+   * world units long, walking. The hull is the squad's: members fall one by one as it drops, and
+   * each member left fires the unit's weapons (ground/squad.ts).
+   */
+  squad?: { n: number; member: string; size: number; spacing: number }
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
+
+// --- Ground weapons ---------------------------------------------------------------------------------
+
+/** The seven ground weapons (ground battles only; ground/combat.ts fires them):
+ * - pulse: fast bolts, accurate, the all-rounder, good against light armour;
+ * - beam: a continuous beam that burns harder the longer it holds one target, short range;
+ * - rocket: slow to reload, homing, good against heavy armour and buildings;
+ * - shell: a heavy shell, slow, misses fast light units, good against heavy armour;
+ * - artillery: a lobbed shell from long range, a minimum range, splash; fires at what allies see;
+ * - swarm: a salvo of small rockets with splash, good against light units in groups;
+ * - spray: a short cone (flame, gas, acid) that keeps burning, good against light units. */
+export type GroundWeaponKind = 'pulse' | 'beam' | 'rocket' | 'shell' | 'artillery' | 'swarm' | 'spray'
+export const GROUND_WEAPONS: GroundWeaponKind[] = ['pulse', 'beam', 'rocket', 'shell', 'artillery', 'swarm', 'spray']
+/** Ground armour classes: what a ground unit or building is (GroundSpec `armour`). */
+export type Armour = 'light' | 'medium' | 'heavy' | 'structure'
+export const ARMOURS: Armour[] = ['light', 'medium', 'heavy', 'structure']
+
+/** Damage of each ground weapon against each armour class, as a share of its damage (the ground's
+ * own table, beside space's VS: space units never meet these). */
+export const GROUND_VS: Record<GroundWeaponKind, Record<Armour, number>> = {
+  pulse: { light: 1, medium: 0.7, heavy: 0.35, structure: 0.25 },
+  beam: { light: 0.6, medium: 1.1, heavy: 1.3, structure: 0.6 },
+  rocket: { light: 0.5, medium: 1, heavy: 1.4, structure: 1.3 },
+  shell: { light: 0.6, medium: 1, heavy: 1.4, structure: 0.9 },
+  artillery: { light: 0.8, medium: 0.9, heavy: 0.7, structure: 1.5 },
+  swarm: { light: 1.3, medium: 0.8, heavy: 0.4, structure: 0.35 },
+  spray: { light: 1.4, medium: 0.9, heavy: 0.5, structure: 0.3 },
+}
+/** Chance a ground weapon's shot connects with each armour class (lighter is faster and harder to
+ * hit). A beam and a spray don't miss; artillery and swarm rockets land where they were aimed, give
+ * or take a scatter, and hurt what is there. */
+export const GROUND_ACC: Record<GroundWeaponKind, Record<Armour, number>> = {
+  pulse: { light: 0.9, medium: 0.95, heavy: 1, structure: 1 },
+  beam: { light: 1, medium: 1, heavy: 1, structure: 1 },
+  rocket: { light: 0.55, medium: 0.85, heavy: 0.95, structure: 1 },
+  shell: { light: 0.4, medium: 0.75, heavy: 0.9, structure: 1 },
+  artillery: { light: 1, medium: 1, heavy: 1, structure: 1 },
+  swarm: { light: 0.85, medium: 0.9, heavy: 0.95, structure: 1 },
+  spray: { light: 1, medium: 1, heavy: 1, structure: 1 },
+}
+/** The space weapon each ground weapon sounds and sparks like. */
+const GROUND_LOOK: Record<GroundWeaponKind, WeaponKind> = { pulse: 'laser', beam: 'laser', rocket: 'missile', shell: 'turbo', artillery: 'turbo', swarm: 'missile', spray: 'flak' }
+/** Each ground weapon's usual reach and reload, in world units (32 a tile) and seconds. A beam's and
+ * a spray's damage is a second's worth, dealt while they hold. */
+const GROUND_BASE: Record<GroundWeaponKind, { range: number; cooldown: number; splash?: number; min?: number; burst?: number }> = {
+  pulse: { range: 192, cooldown: 0.6 },
+  beam: { range: 128, cooldown: 0 },
+  rocket: { range: 256, cooldown: 2.6 },
+  shell: { range: 256, cooldown: 2.8 },
+  artillery: { range: 640, cooldown: 4.5, splash: 64, min: 192 },
+  swarm: { range: 256, cooldown: 4, splash: 36, burst: 6 },
+  spray: { range: 96, cooldown: 0 },
+}
+/** A ground weapon of kind `g` doing `damage` (a shot's, or a beam's and a spray's a second), with
+ * its kind's usual reach and reload unless `o` says otherwise; `arc` (radians either side of the nose)
+ * makes it fixed, so the unit turns to aim it. */
+export const groundWeapon = (g: GroundWeaponKind, damage: number, o: Partial<Pick<Weapon, 'range' | 'cooldown' | 'arc' | 'splash' | 'min' | 'burst'>> = {}): Weapon =>
+  ({ kind: GROUND_LOOK[g], damage, ground: g, ...GROUND_BASE[g], ...o })
 
 // --- Guns -------------------------------------------------------------------------------------------
 
@@ -158,6 +292,155 @@ export const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?
 /** A module with a mount of its own, `s` as a share of the ship's longest side. */
 export const M = (kind: HardpointKind, art: ModuleArt, x: number, y: number, s: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, art, x, y, s, hp, weapon })
 export const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: number, hp: number, weapon: Weapon) => M('turret', art, x, y, s, hp, weapon)
+
+// --- Ground units -----------------------------------------------------------------------------------
+
+/** Ground battle units by role, each faction's written with these (see GroundSpec). Prices are in
+ * kyber, which engineers gather from crystal fields (a ground battle's credits), in the space game's
+ * ballpark: an engineer squadron there costs 300 for three craft (one vehicle here, 150 or so); a
+ * yard costs 900 and a Command Center, a whole new base, 1,200. */
+type GroundWritten = Pick<UnitType, 'id' | 'faction' | 'name' | 'blurb' | 'hull' | 'cost' | 'build'> & { sprite: string; pop?: number; ground: Partial<GroundSpec>; speed?: number; turn?: number; aspect?: number; hardpoints?: Hardpoint[] }
+
+/** An engineer: a small unarmed vehicle (size class 1) that gathers kyber, puts up buildings and
+ * repairs them. */
+export const groundEngineer = (o: GroundWritten & { speed: number; turn: number }): UnitType => ({
+  tier: 'vehicle', kind: 'engineer', aspect: 0.8, size: Math.round((o.ground.radius ?? 11) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 8) * 32, weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Construction', strong: ['gathering kyber', 'building', 'repairing buildings'], weak: ['anything that shoots'] },
+  ...o,
+  ground: { size: 1, radius: 11, accel: 220, sight: 8, ...o.ground },
+})
+
+/** A Command Center: a 6 × 6 base building that trains engineers, takes in the kyber they gather and
+ * supports a few units; it may go up anywhere, to start a new base. */
+export const groundCenter = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 6 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 10 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Base', strong: ['training engineers', 'taking in kyber'], weak: ['being left unguarded'] },
+  ...o,
+  ground: { size: 3, radius: 96, accel: 0, sight: 10, foot: [6, 6], supply: 5, dropOff: true, power: 6, draw: 2, ...o.ground },
+})
+
+/** A power generator: a 2 × 2 plant that makes power for the side's base (ground/power.ts), burning
+ * a trickle of kyber to run; with no kyber left it stops. */
+export const groundGenerator = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 2 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 4 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Power', strong: ['powering the base'], weak: ['being left unguarded', 'running out of kyber'] },
+  ...o,
+  ground: { size: 2, radius: 32, accel: 0, sight: 4, foot: [2, 2], power: 10, burn: 0.25, ...o.ground },
+})
+
+/** A research station: a 3 × 3 building that trains nothing but makes research points while it has
+ * power (ground/power.ts); more stations make them faster. */
+export const groundResearch = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 3 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 5 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Research', strong: ['research points'], weak: ['being left unguarded', 'a power cut'] },
+  ...o,
+  ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], draw: 4, research: 0.5, ...o.ground },
+})
+
+/** A factory: a building that trains a faction's fighting units, foot units (squads) at a 4 × 4 one
+ * and vehicles at a 5 × 5 one, out of a wide door in its south side. It draws power while it trains
+ * (ground/power.ts) and stands at tier 1 once built. */
+export const groundFactory = (o: GroundWritten & { makes: 'foot' | 'vehicle' }): UnitType => {
+  const { makes, ...rest } = o
+  const n = makes === 'foot' ? 4 : 5
+  return {
+    tier: 'building', aspect: 1, size: n * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: (n + 2) * 32,
+    weapons: [], hardpoints: [], engines: [],
+    role: makes === 'foot'
+      ? { role: 'Infantry', strong: ['training foot squads'], weak: ['being left unguarded', 'a power cut'] }
+      : { role: 'Vehicles', strong: ['training vehicles'], weak: ['being left unguarded', 'a power cut'] },
+    ...rest,
+    ground: {
+      size: 3, radius: n * 16, accel: 0, sight: n + 2, foot: [n, n], factory: makes, tier: 1, draw: makes === 'foot' ? 3 : 5,
+      tierUp: makes === 'foot'
+        ? [{ rp: 100, cost: 250, time: 35, draw: 4 }, { rp: 250, cost: 500, time: 50, draw: 6 }]
+        : [{ rp: 150, cost: 350, time: 45, draw: 4 }, { rp: 350, cost: 700, time: 60, draw: 6 }],
+      ...rest.ground,
+    },
+  }
+}
+
+/** A supply building: a 3 × 3 store that raises the side's unit cap, as an Age of Empires house does,
+ * and takes in the kyber engineers gather, as a storehouse does: one beside a far crystal field
+ * shortens their walk. */
+export const groundSupply = (o: GroundWritten): UnitType => ({
+  tier: 'building', aspect: 1, size: 3 * 32, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 5 * 32,
+  weapons: [], hardpoints: [], engines: [],
+  role: { role: 'Supply', strong: ['raising the unit cap', 'taking in kyber near a far field'], weak: ['being left unguarded'] },
+  ...o,
+  ground: { size: 3, radius: 48, accel: 0, sight: 5, foot: [3, 3], supply: 10, dropOff: true, ...o.ground },
+})
+
+/** A Scout: tier 1, small and simple, fast and lightly armoured with long sight, a light weapon fixed
+ * along its nose, cheap. Trained at the Command Center. */
+export const groundScout = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.75, size: Math.round((o.ground.radius ?? 11) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 12) * 32, hardpoints: [], engines: [],
+  role: { role: 'Scout', strong: ['scouting', 'engineers', 'light units'], weak: ['heavy armour', 'buildings'] },
+  ...o,
+  ground: { size: 1, radius: 11, accel: 320, sight: 12, armour: 'light', ...o.ground },
+})
+
+/** A tier 1 vehicle, the fast unit of a vehicle factory: small and simple, light armour, quick,
+ * a light weapon or two (on a turret, or fixed along its nose); cheap. */
+export const groundFast = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role'] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.75, size: Math.round((o.ground.radius ?? 13) * 2.6), shield: 0, regen: 0, pop: 1, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 9) * 32, hardpoints: [], engines: [],
+  ...o,
+  ground: { size: 1, radius: 13, accel: 260, sight: 9, armour: 'light', tier: 1, ...o.ground },
+})
+
+/** A tier 3 unit, the heavy unit of a factory (Menno: "tier 3 is the big boys"): a big hull on size
+ * class 2 or 3, heavy armour, slow, a heavy main gun or several turrets that turn on their own; about
+ * four times a tier 1 unit's price, build time and pop. */
+export const groundHeavy = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role'] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.8, size: Math.round((o.ground.radius ?? 32) * 2.6), shield: 0, regen: 0, pop: 4, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 10) * 32, hardpoints: [], engines: [],
+  ...o,
+  ground: { size: 2, radius: 32, accel: 110, sight: 10, armour: 'heavy', tier: 3, ...o.ground },
+})
+
+/**
+ * Spread out (a squad's ability, a toggle; ground/squad.ts and ground/combat.ts): its members walk
+ * out to `spacing` times their usual spacing; incoming hits miss it by weapon (`evade`: the chance a
+ * shot or splash misses it, or for a beam or spray the share of its damage it escapes, burns too),
+ * most against splash and sprays; while spread it moves at `speed` of its pace and its members reload
+ * `reload` times slower.
+ */
+export const SPREAD = {
+  spacing: 2.6,
+  speed: 0.7,
+  reload: 1.2,
+  evade: { pulse: 0.1, beam: 0.1, rocket: 0.1, shell: 0.1, artillery: 0.4, swarm: 0.4, spray: 0.3 } as Record<GroundWeaponKind, number>,
+}
+
+/** A tier 1 squad, the fast unit of a foot factory: a few members on foot (GroundSpec `squad`),
+ * one unit with one hull, light armour, each member firing the squad's weapons; cheap. Drawn as its
+ * members (the member's model). */
+export const groundSquad = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role']; squad: NonNullable<GroundSpec['squad']> }): UnitType => {
+  const { squad, ...rest } = o
+  return {
+    tier: 'vehicle', aspect: 1, size: 36, shield: 0, regen: 0, pop: 1, level: 1, squad: 1, ability: 'spreadOut',
+    sensor: (o.ground.sight ?? 8) * 32, hardpoints: [], engines: [],
+    ...rest,
+    ground: { size: 1, radius: 14, accel: 200, sight: 8, armour: 'light', tier: 1, look: squad.member, squad, ...o.ground },
+  }
+}
+
+/** A tier 2 unit, the anti-swarm unit of a factory: medium size and armour, more parts, usually a
+ * turret that turns on its own, weapons that hurt groups (splash, salvos, sprays); about twice a
+ * tier 1 unit's cost, time and pop. (A tier 2 squad is a groundSquad with `tier: 2`: squads stay
+ * light.) */
+export const groundMedium = (o: GroundWritten & { speed: number; turn: number; weapons: Weapon[]; role: UnitType['role'] }): UnitType => ({
+  tier: 'vehicle', aspect: 0.8, size: Math.round((o.ground.radius ?? 19) * 2.5), shield: 0, regen: 0, pop: 2, level: 1, squad: 1,
+  sensor: (o.ground.sight ?? 9) * 32, hardpoints: [], engines: [],
+  ...o,
+  ground: { size: 2, radius: 19, accel: 180, sight: 9, armour: 'medium', tier: 2, ...o.ground },
+})
 
 // --- Stations ---------------------------------------------------------------------------------------
 
@@ -396,4 +679,6 @@ export type FactionData = {
   layout: Record<string, Layout>
   /** Its orbital defense station (Galactic conquest). */
   orbital: OrbitalPlan
+  /** Its ground battle units and buildings (UnitType `ground`): the Engineer, the Command Center and the supply building. */
+  ground: UnitType[]
 }

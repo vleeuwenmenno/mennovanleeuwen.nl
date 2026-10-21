@@ -9,7 +9,7 @@
 // power: thinner shields than the Republic's, weaker repair crews, and ships that fare badly caught
 // alone.
 
-import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon } from './kit.ts'
+import { M, P, flak, gun, ion, laser, missile, sGun, sPart, spinal, tech, torpedo, turbo, type DefenseKind, type Deck, type FactionData, type UnitType, type Weapon, groundCenter, groundEngineer, groundSupply, groundGenerator, groundResearch, groundFactory, groundScout, groundWeapon, groundFast, groundSquad, groundMedium, groundHeavy } from './kit.ts'
 
 const DECK: Deck = { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] }
 
@@ -138,6 +138,108 @@ const DOMINATOR: At[] = [
   { x: 3.39, y: 2.4, s: 0.07 }, { x: 6.61, y: 2.4, s: 0.07 }, { x: 2.26, y: 4.4, s: 0.07 }, { x: 7.74, y: 4.4, s: 0.07 }, { x: 2.74, y: 6.8, s: 0.07 }, { x: 7.26, y: 6.8, s: 0.07 },
   { x: 4.03, y: 1, s: 0.04 }, { x: 5.97, y: 1, s: 0.04 }, { x: 0.81, y: 5.4, s: 0.04 }, { x: 9.19, y: 5.4, s: 0.04 },
   { x: 3.87, y: 5.4, s: 0.06 }, { x: 6.13, y: 5.4, s: 0.06 }, { x: 5, y: 9.4 }, { x: 5, y: 7.6, s: 0.1 },
+]
+
+/** Ground battles: the Confederacy's hovering fabricator droid, quick and light, its Command Hub and
+ * its Supply Relay. */
+const GROUND: UnitType[] = [
+  groundEngineer({
+    id: 'd-g-engineer', faction: 'droid', name: 'Forger builder droid', sprite: 'droid-g-engineer',
+    blurb: 'A hovering fabricator droid with cutting arms and a plate rack. Unarmed and light, but quick: it cuts kyber crystals and ferries them to a Command Hub, raises buildings and patches damaged ones.',
+    hull: 110, cost: 140, build: 11, speed: 104, turn: 5.2, ground: { radius: 10, accel: 260, builds: ['d-g-supply', 'd-g-generator', 'd-g-botfactory', 'd-g-foundry', 'd-g-research', 'd-g-center'] },
+  }),
+  groundCenter({
+    id: 'd-g-center', faction: 'droid', name: 'Command Hub', sprite: 'droid-g-center',
+    blurb: 'An eight-sided industrial deck round a sphere core. It trains builder droids, takes in the kyber they cut and supports 5 units.',
+    hull: 5000, cost: 1200, build: 60, ground: { trains: ['d-g-engineer', 'd-g-scout'] },
+    // A light defence turret on its roof (ground/combat.ts).
+    hardpoints: [{ ...gun('flak', 2.9, 7.1, 0.13, 900, groundWeapon('pulse', 22, { range: 352, cooldown: 0.8 })), key: 'tur' }],
+  }),
+  groundSupply({
+    id: 'd-g-supply', faction: 'droid', name: 'Supply Relay', sprite: 'droid-g-supply',
+    blurb: 'A hexagonal power and parts relay with a humming mast. Each one supports 10 more units. Engineers drop off the kyber they gather here too: one beside a far crystal field saves them the walk home.',
+    hull: 1400, cost: 100, build: 25, ground: {},
+  }),
+  groundGenerator({
+    id: 'd-g-generator', faction: 'droid', name: 'Power Relay', sprite: 'droid-g-generator',
+    blurb: 'A squat reactor stack with heavy conduits. It powers the base and burns a trickle of kyber to run.',
+    hull: 1100, cost: 150, build: 20, ground: {},
+  }),
+  groundResearch({
+    id: 'd-g-research', faction: 'droid', name: 'Data Core', sprite: 'droid-g-research',
+    blurb: 'A shielded computing block round a glowing core. It makes research points while powered; the factories spend them on upgrades.',
+    hull: 1600, cost: 200, build: 30, ground: {},
+  }),
+  groundFactory({
+    id: 'd-g-botfactory', faction: 'droid', name: 'Bot Factory', sprite: 'droid-g-botfactory', makes: 'foot',
+    blurb: 'An eight-sided assembly deck round a stamping press, with a wide shutter in its side. Battle droids march out of it in squads, fresh off the line; it draws power while it works.',
+    hull: 2300, cost: 230, build: 32, ground: { trains: ['d-g-droids', 'd-g-salvo', 'd-g-bulwark'] },
+  }),
+  groundFactory({
+    id: 'd-g-foundry', faction: 'droid', name: 'Vehicle Foundry', sprite: 'droid-g-foundry', makes: 'vehicle',
+    blurb: 'A heavy smelting block with glowing furnace vents and a wide hangar shutter. It casts the Confederacy\'s tanks and speeders, which roll out of the shutter; it draws power while it works.',
+    hull: 3100, cost: 380, build: 42, ground: { trains: ['d-g-razor', 'd-g-breaker', 'd-g-juggernaut'] },
+  }),
+  groundScout({
+    id: 'd-g-scout', faction: 'droid', name: 'Probe droid', sprite: 'droid-g-scout',
+    blurb: 'A hovering probe droid with a pulse blaster under its sensor head. Fast and far-sighted, cheap and thin-skinned: a scout and an engineer hunter.',
+    hull: 120, cost: 85, build: 8, speed: 150, turn: 5.5, ground: { radius: 10, sight: 13 },
+    weapons: [groundWeapon('pulse', 14.5, { arc: 0.4, cooldown: 0.7 })],
+  }),
+  // Tier 1: the fast units of the Bot Factory and the Vehicle Foundry (trained there, phase 4a).
+  groundSquad({
+    id: 'd-g-droids', faction: 'droid', name: 'Battle droid squad', sprite: 'droid-g-droids',
+    blurb: 'Five battle droids with pulse blasters: cheap, fast to build, and made to be spent. Each droid lost is a blaster less.',
+    hull: 250, cost: 95, build: 10, speed: 66, turn: 4, ground: {},
+    squad: { n: 5, member: 'd-gm-droid', size: 16, spacing: 12 },
+    role: { role: 'Infantry', strong: ['light units', 'engineers', 'numbers'], weak: ['splash', 'heavy armour'] },
+    weapons: [groundWeapon('pulse', 2.7, { range: 176, cooldown: 0.8 })],
+  }),
+  groundFast({
+    id: 'd-g-razor', faction: 'droid', name: 'Razor hover bike', sprite: 'droid-g-razor',
+    blurb: 'A droid on a fast hover bike, twin pulse guns under its prongs and a pod of light rockets. Strikes and runs; the rockets bite into armour, but it bursts under fire.',
+    hull: 220, cost: 120, build: 12, speed: 180, turn: 4.5, ground: { radius: 12 },
+    role: { role: 'Raider', strong: ['hit and run', 'armour (rockets)'], weak: ['massed fire', 'splash'] },
+    weapons: [groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('pulse', 6, { arc: 0.35, cooldown: 0.6 }), groundWeapon('rocket', 16, { range: 224, arc: 0.6 })],
+  }),
+  // Tier 2: the anti-swarm units of the Bot Factory and the Vehicle Foundry (once they reach tier 2).
+  groundMedium({
+    id: 'd-g-salvo', faction: 'droid', name: 'Salvo droid', sprite: 'droid-g-salvo',
+    blurb: 'A two-legged droid walker with a swarm rocket pod on each shoulder. It turns to face its target and empties both pods over a group at once.',
+    hull: 600, cost: 220, build: 22, speed: 62, turn: 3, ground: { radius: 17 },
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['armour', 'fast flankers'] },
+    weapons: [groundWeapon('swarm', 5, { burst: 4, arc: 0.6, cooldown: 3.6 }), groundWeapon('swarm', 5, { burst: 4, arc: 0.6, cooldown: 3.6 })],
+  }),
+  groundMedium({
+    id: 'd-g-breaker', faction: 'droid', name: 'Breaker tank', sprite: 'droid-g-breaker',
+    blurb: 'A broad tracked tank with a swarm rocket battery in its turret. Its salvos rain over packs of light units; heavy armour shrugs them off.',
+    hull: 760, cost: 300, build: 28, speed: 78, turn: 2.5, ground: {},
+    role: { role: 'Anti-swarm', strong: ['groups', 'light units', 'squads'], weak: ['heavy armour', 'beams'] },
+    hardpoints: [{ ...gun('flak', 5, 5.2, 0.36, 500, groundWeapon('swarm', 6, { burst: 8, range: 288, splash: 40, cooldown: 4.4 })), key: 'tur', look: 'missileBox' }],
+    weapons: [],
+  }),
+  // Tier 3: the heavy units of the Bot Factory and the Vehicle Foundry (the big ones, phase 5c).
+  groundHeavy({
+    id: 'd-g-bulwark', faction: 'droid', name: 'Bulwark droid', sprite: 'droid-g-bulwark',
+    blurb: 'A hulking two-legged war droid that carries a great slab of a shield on one arm and a beam projector on the other. The beam burns hotter the longer it holds a target, so it melts armour; it has to turn its whole body to aim, and it is slow.',
+    hull: 1300, cost: 380, build: 40, speed: 46, turn: 2, ground: { radius: 30 },
+    aspect: 0.86,
+    role: { role: 'Assault droid', strong: ['heavy armour', 'anti-swarm units'], weak: ['fast rocket raiders', 'long range'] },
+    weapons: [groundWeapon('beam', 28, { range: 160, arc: 0.6 })],
+  }),
+  groundHeavy({
+    id: 'd-g-juggernaut', faction: 'droid', name: 'Juggernaut crawler', sprite: 'droid-g-juggernaut',
+    blurb: 'A wide tracked crawler of riveted plate, a heavy beam projector in its turret and two small pulse guns at its back corners. It grinds forward and burns through anything armoured that stands in front of it; fast raiders with rockets swarm it.',
+    hull: 1450, cost: 480, build: 48, speed: 42, turn: 1.3, ground: { size: 3, radius: 38 },
+    aspect: 0.84,
+    role: { role: 'Crawler', strong: ['heavy armour', 'buildings', 'anti-swarm units'], weak: ['fast rocket raiders', 'flanking'] },
+    hardpoints: [
+      { ...gun('turbo', 5, 4.4, 0.36, 900, groundWeapon('beam', 26, { range: 176 })), look: 'triple', key: 'main' },
+      { ...gun('flak', 2.2, 8.1, 0.16, 400, groundWeapon('pulse', 7, { range: 192, cooldown: 0.6 })), look: 'pd', key: 'pdL' },
+      { ...gun('flak', 7.8, 8.1, 0.16, 400, groundWeapon('pulse', 7, { range: 192, cooldown: 0.6 })), look: 'pd', key: 'pdR' },
+    ],
+    weapons: [],
+  }),
 ]
 
 export const DROID: FactionData = {
@@ -372,6 +474,7 @@ export const DROID: FactionData = {
     'd-battleship': TYRANT,
   },
   // The Bulwark defense station (Galactic conquest): an armoured gun hub that grows sponsons on girders.
+  ground: GROUND,
   orbital: {
     name: 'Bulwark defense station',
     blurb: 'A fortified gun hub in orbit beside the Command Hub, bolted together from the Dominion\'s armoured blocks. Each level adds module slots, and each slot takes the module we pick for it.',

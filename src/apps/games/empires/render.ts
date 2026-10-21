@@ -10,6 +10,8 @@ import { PALETTES } from './models/palettes.ts'
 import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
 import { AFTER, STREAK, WARP_STYLE, WarpFx, type Rift } from './warpfx.ts'
+import { groundKit } from './groundKit.ts'
+import type { GroundPlacement } from './ground/world.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships and structures (procedural cel-shaded
@@ -24,6 +26,10 @@ const TAG_PATHS = {
   patrol: 'M6 13a10 10 0 0 1 17-5M26 19a10 10 0 0 1-17 5M23 3.5v4.8h-4.8M9 28.5v-4.8h4.8',
   guard: 'M16 4l9 3.5v7c0 6-4 10-9 12.5-5-2.5-9-6.5-9-12.5v-7z',
   repair: 'M16 3.5a12.5 12.5 0 1 0 0.01 0zM16 9.5v13M9.5 16h13',
+  // A crystal and a pick: mine (a ground battle's kyber).
+  mine: 'M12 6l4-3.5 4 3.5-4 14zM12 6h8M5 27l11-11M13 12.5l5.5 5.5',
+  // Two engineers side by side: assist (a ground battle's engineers).
+  assist: 'M11 6.5a3.5 3.5 0 1 0 0.01 0zM21 6.5a3.5 3.5 0 1 0 0.01 0zM4.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5M14.5 22c0-5 3-8.5 6.5-8.5s6.5 3.5 6.5 8.5M11 27h10M18 24l3 3-3 3',
 }
 const tagIcons = new Map<string, Path2D>()
 const tagIcon = (k: keyof typeof TAG_PATHS) => {
@@ -92,6 +98,9 @@ export type View = {
   /** Hybrid bases: a yard being placed, its ghost where it would go (green where it can, red with
    * why where it can't) and the Command Station's build radius round it. */
   place?: { t: UnitType; x: number; y: number; a: number; ok: boolean; why: string | null; cost: number; rebuild: boolean; ring: { x: number; y: number; r: number } } | null
+  /** A ground battle's building being placed (ground/world.ts groundPlacement): its tiles under the
+   * pointer, green or red, the first rule that fails, and the building over them. */
+  groundPlace?: { unit: string; p: GroundPlacement } | null
   /** The build radius, faintly, while the station or engineers are selected. */
   buildRing?: { x: number; y: number; r: number } | null
   /** Guard armed, and the ship under the pointer is one the selection would escort: tagged "Escort". */
@@ -99,6 +108,12 @@ export type View = {
   /** No order armed, and the pointer is over a damaged ship or structure of ours or an ally's that
    * the selection's repair ships would repair on a right-click: tagged "Repair". */
   repairHint?: number
+  /** A ground battle, no order armed, engineers selected and the pointer over a kyber crystal
+   * cluster (its middle): tagged "Right-click: mine kyber". */
+  mineHint?: Pt | null
+  /** A ground battle: our engineer under the pointer that our selected engineers would assist on a
+   * right-click. */
+  assistHint?: number
 }
 
 type Particle = {
@@ -198,6 +213,33 @@ const WELD = {
   minFlashPx: 2.5,
   minSparkPx: 4,
 }
+/** The parts of a ground engineer's model its welding beam comes from: the Republic rig's torch,
+ * the droid's two cutters (a beam each), the Swarm drone's mandibles (one beam from between them). */
+const TOOL_PARTS = /^(torch|cutter|mandible)/
+const toolTips = new Map<string, [number, number][] | null>()
+/**
+ * Where a ground engineer's welding beams start: the front tip of each tool part in its model, as
+ * (forward, right) offsets from the unit's middle in world units; null for a unit that isn't a
+ * ground unit or whose model has no tool (it fires from its nose). Worked out once per unit type.
+ */
+function weldTips(t: UnitType): [number, number][] | null {
+  const known = toolTips.get(t.id)
+  if (known !== undefined) return known
+  let tips: [number, number][] | null = null
+  const m = t.ground ? modelFor(t) : null
+  if (m) {
+    // Model space: nose up (-y), x to the right; `size` world units across its long side.
+    const k = t.size / Math.max(m.w, m.h)
+    const tipOf = (pts: [number, number][]) => pts.reduce((a, p) => (p[1] < a[1] ? p : a))
+    const found = m.parts.filter((p) => TOOL_PARTS.test(p.id) && p.pts.length).map((p) => tipOf(p.pts))
+    // The mandibles meet: one beam from between their tips.
+    const mouth = m.parts.some((p) => p.id.startsWith('mandible'))
+    const at = mouth && found.length ? [found.reduce((a, p) => [a[0] + p[0] / found.length, a[1] + p[1] / found.length] as [number, number], [0, 0] as [number, number])] : found
+    if (at.length) tips = at.map(([x, y]) => [-y * k, x * k])
+  }
+  toolTips.set(t.id, tips)
+  return tips
+}
 /** A launch's docking light: a small amber glow sprite. */
 const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba(255,214,120,0.95)'], [1, 'rgba(255,170,60,0)']] as const }
 
@@ -212,6 +254,8 @@ const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba
  * All drawn only on screen, a few calls per ship that has one, so a big battle (where few ships
  * have them) pays next to nothing.
  */
+/** The smallest a ground vehicle is drawn, in CSS pixels across, however far out the view is. */
+const GROUND_MIN_PX = 24
 const MECH = { tendrils: 6, lines: 8, links: 8, sparkEvery: 0.18, beamLife: 0.22, chargeFrom: 0.55, minPx: 18 }
 /** Factions whose ships are alive: their launches hatch, with a wet burst instead of a ring. */
 const ORGANIC: Partial<Record<FactionId, true>> = { swarm: true }
@@ -342,7 +386,7 @@ const RANGE_STYLE: Record<WeaponKind, { rgb: string; dash: number[]; name: strin
   missile: { rgb: '255,140,222', dash: [3, 6], name: 'Missiles' },
   ion: { rgb: '176,146,255', dash: [14, 5, 3, 5], name: 'Ion cannon' },
 }
-const TIER_ORDER: Record<Tier, number> = { station: 0, yard: 0.5, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
+const TIER_ORDER: Record<Tier, number> = { station: 0, yard: 0.5, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6, building: 0, vehicle: 5 }
 /** How high a unit is drawn: structures lowest, then ships from the biggest class up to fighters, so
  * a smaller ship is always drawn over a bigger one it flies over. Equals go by id (the order they
  * came), so the stacking never flickers. Clicks pick the same way: the topmost first. */
@@ -531,6 +575,8 @@ export class Renderer {
     for (const e of events) {
       if (e.k === 'fire') {
         if (e.kind === 'turbo') this.add({ kind: 'muzzle', x: e.x, y: e.y, life: 0.12, size: 10, color: FACTIONS[w.players[e.owner].faction].bolt })
+        // On the ground every gun flashes as it fires (a squad's from each member).
+        else if (w.ground && e.light) this.add({ kind: 'muzzle', x: e.x, y: e.y, life: 0.08, size: 5, color: FACTIONS[w.players[e.owner].faction].bolt })
       } else if (e.k === 'hit') {
         if (e.shield) {
           this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.25, size: 3, grow: 30, color: FACTIONS[w.players[e.owner].faction].glow })
@@ -542,6 +588,11 @@ export class Renderer {
           }
           if (e.kind === 'turbo' || e.kind === 'missile') this.add({ kind: 'fire', x: e.x, y: e.y, life: 0.35, size: 6, grow: 22, color: '#ff8a3a' })
         }
+      } else if (e.k === 'splash') {
+        // A ground battle's artillery shell or swarm rocket bursting: a flash and a ring of dust.
+        if (!seen(e.x, e.y)) continue
+        this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.4, size: e.r * 0.3, grow: e.r * 1.4, color: 'rgba(210,190,150,0.8)' })
+        this.add({ kind: 'fire', x: e.x, y: e.y, life: 0.3, size: e.r * 0.2, grow: e.r * 0.5, color: '#ffae5a' })
       } else if (e.k === 'boom') {
         this.kills.push({ x: e.x, y: e.y, at: this.clock })
         if (!seen(e.x, e.y)) continue
@@ -674,62 +725,68 @@ export class Renderer {
     this.trackModels(w, view, (x, y, r) => Math.abs(x - cam.x) < nx + r && Math.abs(y - cam.y) < ny + r)
     const zdpr = z * canvasDpr()
     ctx.save()
-    ctx.fillStyle = '#04060d'
-    ctx.fillRect(0, 0, vw, vh)
+    // A ground battle: the ground is on its own canvas under this one (groundKit's layer), so this
+    // one starts clear, with no space behind it.
+    const ground = w.ground ? groundKit() : null
+    if (w.ground) ctx.clearRect(0, 0, vw, vh)
+    else {
+      ctx.fillStyle = '#04060d'
+      ctx.fillRect(0, 0, vw, vh)
 
-    // Backdrop and stars, sliding slower than the battle for depth.
-    const bg = this.imgs.get('backdrop')
-    if (bg?.complete && bg.naturalWidth) {
-      const s = Math.max(vw / bg.naturalWidth, vh / bg.naturalHeight) * 1.25
-      const bw = bg.naturalWidth * s
-      const bh = bg.naturalHeight * s
-      const fx = (cam.x / w.w - 0.5) * (bw - vw)
-      const fy = (cam.y / w.h - 0.5) * (bh - vh)
-      ctx.globalAlpha = 0.9
-      ctx.drawImage(bg, (vw - bw) / 2 - fx, (vh - bh) / 2 - fy, bw, bh)
-      ctx.globalAlpha = 1
-    }
-    this.stars.forEach((tile, i) => {
-      this.patterns[i] ??= ctx.createPattern(tile, 'repeat')
-      const pat = this.patterns[i]
-      if (!pat) return
-      const par = i === 0 ? 0.12 : 0.3
-      const sc = 0.6 + z * (i === 0 ? 0.25 : 0.5)
-      ctx.save()
-      ctx.translate(vw / 2, vh / 2)
-      ctx.scale(sc, sc)
-      ctx.translate(-cam.x * par, -cam.y * par)
-      ctx.fillStyle = pat
-      const ext = Math.max(vw, vh) / sc
-      ctx.fillRect(cam.x * par - ext, cam.y * par - ext, ext * 2, ext * 2)
-      ctx.restore()
-    })
-
-    // A fleet battle's planet: huge and far off, sliding slower than the battle.
-    const pl = w.map.planet
-    if (pl) {
-      const key = `planet-${pl.kind}`
-      if (!this.imgs.has(key)) this.imgs.set(key, load(`${BASE}planets/${pl.kind}.webp`))
-      const img = this.imgs.get(key)!
-      if (img.complete && img.naturalWidth) {
-        const par = 0.3
-        const sc = 0.5 + z * 0.3
-        const x = vw / 2 + (pl.x - cam.x) * par * sc
-        const y = vh / 2 + (pl.y - cam.y) * par * sc
-        const rad = pl.r * sc
-        // Dimmed, so the ships in front of it stay easy to read.
-        ctx.globalAlpha = 0.62
-        ctx.drawImage(img, x - rad, y - rad, rad * 2, rad * 2)
-        // Its night side fades into space.
-        const shade = ctx.createRadialGradient(x - rad * 0.35, y - rad * 0.35, rad * 0.2, x, y, rad * 1.05)
-        shade.addColorStop(0, 'rgba(4,6,13,0.2)')
-        shade.addColorStop(0.75, 'rgba(4,6,13,0.4)')
-        shade.addColorStop(1, 'rgba(4,6,13,0.75)')
-        ctx.fillStyle = shade
-        ctx.beginPath()
-        ctx.arc(x, y, rad, 0, Math.PI * 2)
-        ctx.fill()
+      // Backdrop and stars, sliding slower than the battle for depth.
+      const bg = this.imgs.get('backdrop')
+      if (bg?.complete && bg.naturalWidth) {
+        const s = Math.max(vw / bg.naturalWidth, vh / bg.naturalHeight) * 1.25
+        const bw = bg.naturalWidth * s
+        const bh = bg.naturalHeight * s
+        const fx = (cam.x / w.w - 0.5) * (bw - vw)
+        const fy = (cam.y / w.h - 0.5) * (bh - vh)
+        ctx.globalAlpha = 0.9
+        ctx.drawImage(bg, (vw - bw) / 2 - fx, (vh - bh) / 2 - fy, bw, bh)
         ctx.globalAlpha = 1
+      }
+      this.stars.forEach((tile, i) => {
+        this.patterns[i] ??= ctx.createPattern(tile, 'repeat')
+        const pat = this.patterns[i]
+        if (!pat) return
+        const par = i === 0 ? 0.12 : 0.3
+        const sc = 0.6 + z * (i === 0 ? 0.25 : 0.5)
+        ctx.save()
+        ctx.translate(vw / 2, vh / 2)
+        ctx.scale(sc, sc)
+        ctx.translate(-cam.x * par, -cam.y * par)
+        ctx.fillStyle = pat
+        const ext = Math.max(vw, vh) / sc
+        ctx.fillRect(cam.x * par - ext, cam.y * par - ext, ext * 2, ext * 2)
+        ctx.restore()
+      })
+
+      // A fleet battle's planet: huge and far off, sliding slower than the battle.
+      const pl = w.map.planet
+      if (pl) {
+        const key = `planet-${pl.kind}`
+        if (!this.imgs.has(key)) this.imgs.set(key, load(`${BASE}planets/${pl.kind}.webp`))
+        const img = this.imgs.get(key)!
+        if (img.complete && img.naturalWidth) {
+          const par = 0.3
+          const sc = 0.5 + z * 0.3
+          const x = vw / 2 + (pl.x - cam.x) * par * sc
+          const y = vh / 2 + (pl.y - cam.y) * par * sc
+          const rad = pl.r * sc
+          // Dimmed, so the ships in front of it stay easy to read.
+          ctx.globalAlpha = 0.62
+          ctx.drawImage(img, x - rad, y - rad, rad * 2, rad * 2)
+          // Its night side fades into space.
+          const shade = ctx.createRadialGradient(x - rad * 0.35, y - rad * 0.35, rad * 0.2, x, y, rad * 1.05)
+          shade.addColorStop(0, 'rgba(4,6,13,0.2)')
+          shade.addColorStop(0.75, 'rgba(4,6,13,0.4)')
+          shade.addColorStop(1, 'rgba(4,6,13,0.75)')
+          ctx.fillStyle = shade
+          ctx.beginPath()
+          ctx.arc(x, y, rad, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.globalAlpha = 1
+        }
       }
     }
 
@@ -743,21 +800,51 @@ export class Renderer {
     const bottom = cam.y + vh / 2 / z + 300
     const onScreen = (x: number, y: number, r = 0) => x + r > left && x - r < right && y + r > top && y - r < bottom
 
-    // Past the map's edge (the camera may run out there): dim, so the edge reads at a glance.
-    if (left < 0 || top < 0 || right > w.w || bottom > w.h) {
+    // Past the map's edge (the camera may run out there): dim, so the edge reads at a glance. (The
+    // ground layer shows a ground battle's edge itself.)
+    if (!w.ground && (left < 0 || top < 0 || right > w.w || bottom > w.h)) {
       ctx.fillStyle = 'rgba(2,4,10,0.5)'
       ctx.beginPath()
       ctx.rect(left, top, right - left, bottom - top)
       ctx.rect(0, 0, w.w, w.h)
       ctx.fill('evenodd')
     }
-    ctx.strokeStyle = 'rgba(140,170,220,0.3)'
-    ctx.lineWidth = 2 / z
-    ctx.setLineDash([24 / z, 18 / z])
-    ctx.strokeRect(0, 0, w.w, w.h)
-    ctx.setLineDash([])
+    if (!w.ground) {
+      ctx.strokeStyle = 'rgba(140,170,220,0.3)'
+      ctx.lineWidth = 2 / z
+      ctx.setLineDash([24 / z, 18 / z])
+      ctx.strokeRect(0, 0, w.w, w.h)
+      ctx.setLineDash([])
+    }
 
     this.drawTerrain(ctx, w, z, onScreen)
+
+    // A ground battle: the building being placed (its tiles, the row before its door, our command
+    // ranges), and the enemy buildings we remember but don't see now, as ghosts where we saw them.
+    if (ground) {
+      // Kyber crystal clusters: objects on the ground, shrinking as they're mined (under the ghost).
+      ground.crystals(ctx, w, z, zdpr, { x0: left, y0: top, x1: right, y1: bottom }, view.me, relColor(w, view.me, view.me))
+      // Squad members that fell, lying where they fell (under the units).
+      ground.bodies(ctx, zdpr, this.clock, { x0: left, y0: top, x1: right, y1: bottom })
+      const gp = view.groundPlace
+      if (gp) {
+        ground.ghost(ctx, w, view.me, gp.unit, gp.p, z)
+        const m = modelFor(UNIT[gp.unit])
+        if (m) drawHull(ctx, m, gp.p.x, gp.p.y, 0, UNIT[gp.unit].size, zdpr, FRESH, { alpha: gp.p.why ? 0.35 : 0.6 })
+      }
+      const team = w.players[view.me].team
+      for (const k of ground.known(w, view.me)) {
+        const u = w.byId.get(k.id)
+        if (u && !u.dead && u.seen[team]) continue
+        const t = UNIT[k.unit]
+        const [fw, fh] = t.ground!.foot!
+        const x = (k.tc + fw / 2) * 32
+        const y = (k.tr + fh / 2) * 32
+        if (!onScreen(x, y, t.size)) continue
+        const m = modelFor(t)
+        if (m) drawHull(ctx, m, x, y, 0, t.size, zdpr, FRESH, { alpha: 0.4 })
+      }
+    }
 
     // Picking start positions: each player's area, ours brighter, and the station's footprint
     // under the pointer (red where it can't go).
@@ -992,7 +1079,7 @@ export class Renderer {
     // Selected yards' own rally points, in the yard colour.
     for (const id of view.selected) {
       const y = w.byId.get(id)
-      if (!y || y.owner !== view.me || y.t.tier !== 'yard' || !y.yr) continue
+      if (!y || y.owner !== view.me || (y.t.tier !== 'yard' && y.t.tier !== 'building') || !y.yr) continue
       ctx.strokeStyle = 'rgba(255,200,110,0.55)'
       ctx.lineWidth = 1.5 / z
       ctx.setLineDash([8 / z, 8 / z])
@@ -1179,12 +1266,30 @@ export class Renderer {
           ctx.lineTo(at.x, at.y)
           ctx.stroke()
         }
+      } else if ((o.k === 'construct' || o.k === 'assist') && w.ground) {
+        // A ground battle's engineer: a dotted line to the site or building it works on (gold), or to
+        // the engineer it assists (green). (A gatherer's line to its crystal is the ground's own.)
+        const t = w.byId.get(o.id)
+        if (t && !t.dead) {
+          ctx.strokeStyle = o.k === 'construct' ? 'rgba(255,200,110,0.45)' : 'rgba(125,255,160,0.45)'
+          ctx.setLineDash([2 / z, 5 / z])
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.lineTo(t.x, t.y)
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
       }
       // Shift-queued orders: dashed legs on from the current one, a dot at each stop.
       if (u.queue.length) {
-        const spot = (q: typeof o) => {
+        const spot = (q: typeof o): Pt | null => {
           if (q.k === 'move' || q.k === 'patrol' || q.k === 'area') return { x: q.x, y: q.y }
-          if (q.k === 'attack') return w.byId.get(q.id) ?? null
+          if (q.k === 'attack' || q.k === 'construct' || q.k === 'mend' || q.k === 'assist' || q.k === 'guard') {
+            const t = w.byId.get(q.id)
+            return t && !t.dead ? t : null
+          }
+          // A ground battle's crystal field: its middle.
+          if (q.k === 'gather') return w.ground?.fields[q.f] ?? null
           return null
         }
         let from = spot(o) ?? u
@@ -1192,7 +1297,7 @@ export class Renderer {
         for (const q of u.queue) {
           const to = spot(q)
           if (!to) continue
-          const col = q.k === 'attack' || q.k === 'area' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : '125,255,160'
+          const col = q.k === 'attack' || q.k === 'area' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : q.k === 'construct' ? '255,200,110' : q.k === 'gather' ? '255,154,60' : '125,255,160'
           ctx.strokeStyle = `rgba(${col},0.3)`
           ctx.beginPath()
           ctx.moveTo(from.x, from.y)
@@ -1247,6 +1352,11 @@ export class Renderer {
     // Repair ships selected over a damaged ship of ours or an ally's: what a right-click will do.
     const fix = view.repairHint ? w.byId.get(view.repairHint) : undefined
     if (fix && !fix.dead && !guarded.has(fix.id)) tags.push([ctx, fix, Math.hypot(...dims(fix.t)) * 0.5 * z + 10, 'Repair', 'repair', '125,255,160', z])
+    // Engineers selected over a kyber crystal: what a right-click will do.
+    if (view.mineHint) tags.push([ctx, view.mineHint, 28 * z + 12, 'Right-click: mine kyber', 'mine', '255,154,60', z])
+    // Engineers selected over another of our engineers: they would assist it.
+    const help = view.assistHint ? w.byId.get(view.assistHint) : undefined
+    if (help && !help.dead) tags.push([ctx, help, Math.hypot(...dims(help.t)) * 0.5 * z + 10, 'Right-click: assist', 'assist', '125,255,160', z])
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
     // (Engineers weld with beams of their own, see drawWelds.)
@@ -1296,6 +1406,8 @@ export class Renderer {
     const hulls = this.hulls
     hulls.length = 0
     let fighterRings = false
+    // A ground battle's vehicles stand out from the ground: their pools and rims, all at once.
+    if (w.ground) this.vehiclePools(ctx, w, view, z, shown)
     for (const u of shown) {
       // Strike craft come last (drawRank): their team rings go down in one stroke per colour first.
       if (!fighterRings && u.t.tier === 'fighter') {
@@ -1460,6 +1572,11 @@ export class Renderer {
     }
     ctx.globalAlpha = 1
 
+    // A ground battle's fog: a half-dark veil by tile outside our sight (never black: the land is known
+    // from orbit), over the units and everything on the ground, under the move markers.
+    if (ground) ground.effects(ctx, w, view.me, z, this.clock)
+    if (ground) ground.fog(ctx, w, w.players[view.me].team, !!view.reveal)
+
     // Move markers.
     this.pings = this.pings.filter((g) => this.clock - g.t < 0.6)
     for (const g of this.pings) {
@@ -1475,30 +1592,34 @@ export class Renderer {
     ctx.restore()
 
     // Fog of war: dark everywhere except around our ships and structures and the beacons we hold.
-    const fs = 4
-    const fw = Math.ceil(vw / fs)
-    const fh = Math.ceil(vh / fs)
-    if (!fw || !fh) return
-    if (this.fog.width !== fw || this.fog.height !== fh) {
-      this.fog.width = fw
-      this.fog.height = fh
+    // (A ground battle's is drawn above, by tile.)
+    if (!w.ground) {
+      const fs = 4
+      const fw = Math.ceil(vw / fs)
+      const fh = Math.ceil(vh / fs)
+      if (fw && fh) {
+        if (this.fog.width !== fw || this.fog.height !== fh) {
+          this.fog.width = fw
+          this.fog.height = fh
+      }
+      const f = this.fog.getContext('2d')!
+      f.globalCompositeOperation = 'source-over'
+      f.clearRect(0, 0, fw, fh)
+      f.fillStyle = view.reveal ? 'rgba(2,4,12,0)' : 'rgba(2,4,12,0.55)'
+      f.fillRect(0, 0, fw, fh)
+      f.globalCompositeOperation = 'destination-out'
+      for (const e of eyesOf(w, w.players[view.me].team)) {
+        const r = (e.r * z) / fs
+        const sx = ((e.x - cam.x) * z + vw / 2) / fs
+        const sy = ((e.y - cam.y) * z + vh / 2) / fs
+        if (sx + r < 0 || sy + r < 0 || sx - r > fw || sy - r > fh) continue
+        f.drawImage(this.disc, sx - r, sy - r, r * 2, r * 2)
+      }
+      ctx.imageSmoothingEnabled = true
+      ctx.drawImage(this.fog, 0, 0, fw * fs, fh * fs)
+      if (view.fogGrid) this.drawFogGrid(ctx, w, cam, vw, vh, view.me)
+      }
     }
-    const f = this.fog.getContext('2d')!
-    f.globalCompositeOperation = 'source-over'
-    f.clearRect(0, 0, fw, fh)
-    f.fillStyle = view.reveal ? 'rgba(2,4,12,0)' : 'rgba(2,4,12,0.55)'
-    f.fillRect(0, 0, fw, fh)
-    f.globalCompositeOperation = 'destination-out'
-    for (const e of eyesOf(w, w.players[view.me].team)) {
-      const r = (e.r * z) / fs
-      const sx = ((e.x - cam.x) * z + vw / 2) / fs
-      const sy = ((e.y - cam.y) * z + vh / 2) / fs
-      if (sx + r < 0 || sy + r < 0 || sx - r > fw || sy - r > fh) continue
-      f.drawImage(this.disc, sx - r, sy - r, r * 2, r * 2)
-    }
-    ctx.imageSmoothingEnabled = true
-    ctx.drawImage(this.fog, 0, 0, fw * fs, fh * fs)
-    if (view.fogGrid) this.drawFogGrid(ctx, w, cam, vw, vh, view.me)
 
     // Drag box.
     if (view.box) {
@@ -1721,7 +1842,9 @@ export class Renderer {
       this.tracked.delete(id)
       const u = tr.u
       if (!u.dead || !tr.vis || !this.kills.some((q) => Math.abs(q.x - u.x) < 1 && Math.abs(q.y - u.y) < 1)) continue
-      if (BREAK_WEIGHTS[u.t.tier]) this.deaths.push({ x: u.x, y: u.y, det: tr.det, at: this.clock })
+      // A ground squad's last members fall where they stood (ground/squadDraw.ts).
+      if (u.t.ground?.squad) groundKit()?.fell(u, this.clock)
+      else if (BREAK_WEIGHTS[u.t.tier]) this.deaths.push({ x: u.x, y: u.y, det: tr.det, at: this.clock })
       else this.fx.shatter(tr.m, u.t.tier, u.x, u.y, u.a + Math.PI / 2, u.t.size, Math.cos(u.a) * u.v, Math.sin(u.a) * u.v, u.id, hullState(tr.m, u, u.t.tier))
     }
     const listed = new Set<number>()
@@ -2521,8 +2644,10 @@ export class Renderer {
     let on = false
     const px = 1 / z
     for (const u of w.units) {
-      if (u.dead || !u.mending.length || !isEngineer(u.t) || !u.seen[team] || u.owner === hide || !onScreen(u.x, u.y, 400)) continue
-      const o = w.byId.get(u.mending[0])
+      // A ground engineer at work marks the building it works on in its ground move (`gm.busy`).
+      const job = u.mending.length ? u.mending[0] : (u.gm?.busy ?? 0)
+      if (u.dead || !job || !isEngineer(u.t) || !u.seen[team] || u.owner === hide || !onScreen(u.x, u.y, 400)) continue
+      const o = w.byId.get(job)
       if (!o || o.dead) continue
       if (!on) {
         on = true
@@ -2554,11 +2679,27 @@ export class Renderer {
       }
       const hx = o.x + lx * c - ly * s
       const hy = o.y + lx * s + ly * c
-      const nose = u.t.size * 0.45
-      const nx = u.x + Math.cos(u.a) * nose
-      const ny = u.y + Math.sin(u.a) * nose
       const flick = 0.7 + 0.3 * Math.sin(t * 37 + u.id * 3.1)
-      this.beam(ctx, nx, ny, hx, hy, look, WELD.engineer, flick, px, z, u.id)
+      const fx = Math.cos(u.a)
+      const fy = Math.sin(u.a)
+      const tips = weldTips(u.t)
+      if (tips) {
+        // A ground engineer fires from its tool (the rig's torch, each of the droid's cutters, the
+        // drone's mandibles), the beams spread a little along the welding front. The model is drawn
+        // at least GROUND_MIN_PX across (see drawUnit), and its tool moves out with it.
+        const g = Math.max(1, GROUND_MIN_PX / z / u.t.size)
+        tips.forEach(([tf, tr], i) => {
+          const f = tf * g
+          const r = tr * g
+          const sx = u.x + fx * f - fy * r
+          const sy = u.y + fy * f + fx * r
+          const spread = (i - (tips.length - 1) / 2) * 0.18 * sw
+          this.beam(ctx, sx, sy, hx + spread * c, hy + spread * s, look, WELD.engineer, flick, px, z, u.id + i * 7)
+        })
+        continue
+      }
+      const nose = u.t.size * 0.45
+      this.beam(ctx, u.x + fx * nose, u.y + fy * nose, hx, hy, look, WELD.engineer, flick, px, z, u.id)
     }
     if (on) ctx.restore()
   }
@@ -2937,6 +3078,47 @@ export class Renderer {
    * rather than one each, since a battle has a great many of them. The same ellipses, under the
    * craft and over the bigger hulls, as when each was drawn with its craft.
    */
+  /**
+   * Ground vehicles, drawn at least GROUND_MIN_PX across (see drawUnit), stand out from the busy
+   * ground: a dark pool under each and a rim in its side's colour (none while selected or hovered,
+   * which have rings of their own). One fill for every pool and one stroke a colour, under the units.
+   */
+  private vehiclePools(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, shown: Unit[]) {
+    const rimOf = (u: Unit) => {
+      const [sw, sh] = dims(u.t)
+      return Math.max(sw, sh) * 0.5 * (Math.max(u.t.size, GROUND_MIN_PX / z) / u.t.size)
+    }
+    // (A squad's members each have their own at their feet, see ground/squadDraw.ts.)
+    const cars = shown.filter((u) => u.t.tier === 'vehicle' && !u.site && !u.t.ground?.squad)
+    if (!cars.length) return
+    ctx.fillStyle = 'rgba(8, 10, 14, 0.42)'
+    ctx.beginPath()
+    for (const u of cars) {
+      const rr = rimOf(u)
+      ctx.moveTo(u.x + 2 / z + rr * 1.05, u.y + 3 / z)
+      ctx.ellipse(u.x + 2 / z, u.y + 3 / z, rr * 1.05, rr * 0.95, 0, 0, Math.PI * 2)
+    }
+    ctx.fill()
+    ctx.globalAlpha = 0.6
+    ctx.lineWidth = Math.max(1.3 / z, 1.2)
+    const done = new Set<string>()
+    for (const first of cars) {
+      const rel = relColor(w, view.me, first.owner)
+      if (done.has(rel)) continue
+      done.add(rel)
+      ctx.strokeStyle = rel
+      ctx.beginPath()
+      for (const u of cars) {
+        if (view.selected.has(u.id) || view.hover === u.id || relColor(w, view.me, u.owner) !== rel) continue
+        const rr = rimOf(u) + 1.5 / z
+        ctx.moveTo(u.x + rr, u.y)
+        ctx.ellipse(u.x, u.y, rr, rr * 0.92, 0, 0, Math.PI * 2)
+      }
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+  }
+
   private fighterRings(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, shown: Unit[]) {
     ctx.globalAlpha = 0.35
     ctx.lineWidth = Math.max(1 / z, 1.2)
@@ -2964,14 +3146,50 @@ export class Renderer {
     ctx.globalAlpha = 1
   }
 
+  /** An engineer's load of kyber (Unit `carry`) and the sparks of its mining (see drawUnit). */
+  private drawKyber(ctx: CanvasRenderingContext2D, u: Unit, size: number, z: number) {
+    const full = Math.min(1, (u.carry ?? 0) / (groundKit()?.carry ?? 20))
+    const bx = u.x - Math.cos(u.a) * size * 0.22
+    const by = u.y - Math.sin(u.a) * size * 0.22
+    if (full > 0) {
+      const r = size * (0.1 + 0.12 * full) + 1.5 / z
+      ctx.fillStyle = '#ff9a3c'
+      ctx.strokeStyle = '#4a1c06'
+      ctx.lineWidth = 1 / z
+      ctx.beginPath()
+      ctx.moveTo(bx, by - r)
+      ctx.lineTo(bx + r * 0.62, by)
+      ctx.lineTo(bx, by + r)
+      ctx.lineTo(bx - r * 0.62, by)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    }
+    if (u.gm?.mine) {
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.fillStyle = '#ffc070'
+      const fx = u.x + Math.cos(u.a) * size * 0.45
+      const fy = u.y + Math.sin(u.a) * size * 0.45
+      for (let i = 0; i < 3; i++) {
+        const a = Math.random() * Math.PI * 2
+        const d = Math.random() * size * 0.25
+        const r = (0.8 + Math.random() * 1.4) / z
+        ctx.fillRect(fx + Math.cos(a) * d - r, fy + Math.sin(a) * d - r, r * 2, r * 2)
+      }
+      ctx.globalCompositeOperation = 'source-over'
+    }
+  }
+
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View, shadow: Shadow | null = null) {
     const t = u.t
     const fac = FACTIONS[t.faction]
-    // Small craft keep a minimum size on screen when zoomed far out, so fleets stay readable.
-    const minPx = t.tier === 'fighter' ? 9 : t.tier === 'gunship' ? 14 : 0
+    // Small craft keep a minimum size on screen when zoomed far out, so fleets stay readable; ground
+    // vehicles (engineers are small) more so, against the busy ground.
+    const minPx = t.tier === 'fighter' ? 9 : t.tier === 'gunship' ? 14 : t.tier === 'vehicle' ? GROUND_MIN_PX : 0
     const size = Math.max(t.size, minPx / z)
     const k = size / t.size
     const [sw, sh] = dims(t)
+
     const sel = view.selected.has(u.id)
     const hov = view.hover === u.id
     const rel = relColor(w, view.me, u.owner)
@@ -3008,7 +3226,7 @@ export class Renderer {
 
     // Team ring: a faint ellipse in the relative colour, so allies and enemies of the same faction
     // can be told apart. (Strike craft have theirs drawn together, see fighterRings.)
-    if (view.rings && !sel && !hov && t.tier !== 'fighter') {
+    if (view.rings && !sel && !hov && t.tier !== 'fighter' && t.tier !== 'vehicle') {
       ctx.strokeStyle = rel
       ctx.globalAlpha = 0.28
       ctx.lineWidth = Math.max(1 / z, 1.2)
@@ -3025,7 +3243,9 @@ export class Renderer {
       ctx.globalAlpha = sel ? 0.9 : 0.5
       ctx.lineWidth = 1.6 / z
       ctx.beginPath()
-      ctx.ellipse(u.x, u.y, Math.max(sw, sh) * 0.55 * k + 4 / z, Math.max(sw, sh) * 0.55 * k + 4 / z, 0, 0, Math.PI * 2)
+      // A squad's ring takes in its members wherever they stand.
+      const rr = t.ground?.squad && w.ground ? (groundKit()?.ring(u, z) ?? 0) + 3 / z : Math.max(sw, sh) * 0.55 * k + 4 / z
+      ctx.ellipse(u.x, u.y, rr, rr, 0, 0, Math.PI * 2)
       ctx.stroke()
       ctx.globalAlpha = 1
     }
@@ -3033,14 +3253,21 @@ export class Renderer {
     // A defense wing craft far from its station fights at a fraction of its strength: drawn faded.
     const alpha = building(u) ? 0.55 : t.kind === 'wing' && !atHome(w, u) ? 0.45 : 1
     if (u.site) this.drawSite(ctx, u, w, m, size, z)
+    // A ground squad: its members, walking (ground/squadDraw.ts).
+    else if (t.ground?.squad && w.ground) groundKit()?.squad(ctx, u, z, z * canvasDpr(), alpha, this.clock, rel)
     else if (m && st) {
       const zdpr = z * canvasDpr()
-      drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha, shadow })
+      // A walker steps through its poses as it goes.
+      const posed = m.walk && w.ground ? { ...st, pose: groundKit()?.pose(u, m, this.clock) ?? 0 } : st
+      drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, posed, { alpha, shadow })
       if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha, u.rush?.parts)
       if (u.rush) this.drawScaffolds(ctx, u, m, size, z)
     }
     if (t.regrow && !u.site) this.drawRegrow(ctx, u, w, size)
+    // A ground engineer's kyber: an orange crystal on its back, bigger the fuller its load, and
+    // sparks while it mines.
+    if (u.carry || u.gm?.mine) this.drawKyber(ctx, u, size, z)
     if (u.guns.length && spinalsOf(t).length && size * z >= MECH.minPx) this.drawSpinalCharge(ctx, u, z)
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
     // An expansion going up on its socket: a scaffold ring turning round it, filling as it's built.
@@ -3241,45 +3468,50 @@ export class Renderer {
     ctx.clearRect(0, 0, mw, mh)
     ctx.fillStyle = '#03050c'
     ctx.fillRect(0, 0, mw, mh)
-    const bg = this.imgs.get('backdrop')
-    if (bg?.complete && bg.naturalWidth) {
-      ctx.globalAlpha = 0.55
-      ctx.drawImage(bg, ox, oy, w.w * s, w.h * s)
-      ctx.globalAlpha = 1
-    }
-    // What we can see, lit up; the rest stays dim.
-    ctx.fillStyle = 'rgba(2,4,12,0.45)'
-    ctx.fillRect(ox, oy, w.w * s, w.h * s)
-    ctx.globalCompositeOperation = 'lighter'
-    ctx.fillStyle = 'rgba(70,110,170,0.09)'
-    for (const u of w.units) {
-      if (u.owner === hide) continue
-      if (w.players[u.owner].team !== w.players[me].team) continue
+    // A ground battle: its terrain under the fog veil (groundKit.ts); else space, lit where we see.
+    const ground = w.ground ? groundKit() : null
+    if (ground) ground.minimap(ctx, w, w.players[me].team, ox, oy, s, false)
+    else {
+      const bg = this.imgs.get('backdrop')
+      if (bg?.complete && bg.naturalWidth) {
+        ctx.globalAlpha = 0.55
+        ctx.drawImage(bg, ox, oy, w.w * s, w.h * s)
+        ctx.globalAlpha = 1
+      }
+      // What we can see, lit up; the rest stays dim.
+      ctx.fillStyle = 'rgba(2,4,12,0.45)'
+      ctx.fillRect(ox, oy, w.w * s, w.h * s)
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.fillStyle = 'rgba(70,110,170,0.09)'
+      for (const u of w.units) {
+        if (u.owner === hide) continue
+        if (w.players[u.owner].team !== w.players[me].team) continue
+        ctx.beginPath()
+        ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      // The beacons we hold see round themselves too.
+      for (const b of w.beacons) {
+        if (b.owner !== w.players[me].team) continue
+        ctx.beginPath()
+        ctx.arc(X(b.x), Y(b.y), BEACON_SENSOR * s, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.globalCompositeOperation = 'source-over'
+      // A faint grid.
+      ctx.strokeStyle = 'rgba(140,180,240,0.07)'
+      ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
-      ctx.fill()
+      for (let gx = 700; gx < w.w; gx += 700) {
+        ctx.moveTo(X(gx), oy)
+        ctx.lineTo(X(gx), oy + w.h * s)
+      }
+      for (let gy = 680; gy < w.h; gy += 680) {
+        ctx.moveTo(ox, Y(gy))
+        ctx.lineTo(ox + w.w * s, Y(gy))
+      }
+      ctx.stroke()
     }
-    // The beacons we hold see round themselves too.
-    for (const b of w.beacons) {
-      if (b.owner !== w.players[me].team) continue
-      ctx.beginPath()
-      ctx.arc(X(b.x), Y(b.y), BEACON_SENSOR * s, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.globalCompositeOperation = 'source-over'
-    // A faint grid.
-    ctx.strokeStyle = 'rgba(140,180,240,0.07)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    for (let gx = 700; gx < w.w; gx += 700) {
-      ctx.moveTo(X(gx), oy)
-      ctx.lineTo(X(gx), oy + w.h * s)
-    }
-    for (let gy = 680; gy < w.h; gy += 680) {
-      ctx.moveTo(ox, Y(gy))
-      ctx.lineTo(ox + w.w * s, Y(gy))
-    }
-    ctx.stroke()
     drawTerrainOverview(ctx, w.map, ox, oy, s)
     // Every rock in one path: one fill rather than one each.
     ctx.fillStyle = 'rgba(150,150,165,0.4)'

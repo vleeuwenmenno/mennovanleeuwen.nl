@@ -2,7 +2,7 @@ import { DIFFICULTY, aidAllies, newBrain, profileOf, think, type Brain, type Dif
 import { runCmd, type Cmd } from './commands.ts'
 import { cleanDefense, isShip, type FactionId } from './data.ts'
 import { GENERATED, MAP, MAPS, defaultArea, generateMap, type MapDef, type MapRules, type Pt } from './maps.ts'
-import { STEP, autoStart, cleanReinforce, newWorld, tick, type Owner, type Reinforce, type World } from './sim.ts'
+import { STEP, autoStart, cleanReinforce, groundHooks, newWorld, tick, type Owner, type Reinforce, type World } from './sim.ts'
 
 // A multiplayer battle, the same on the server and on every player's machine: how its world is
 // built from the lobby, and how one turn (the orders given in one tick, then the AI, then the
@@ -24,13 +24,15 @@ export type MatchInfo = { id: string; seed: number; map: string; gen: MapRules; 
  * from this tick (the player stepped away, and the others voted for that). */
 export type Turn = { n: number; c: [Owner, Cmd][]; ai?: [Owner, Difficulty][]; give?: [Owner, Owner][] }
 
-export const matchMap = (m: MatchInfo): MapDef => (m.map === GENERATED ? generateMap(m.gen) : (MAP[m.map] ?? MAPS[0]))
+export const matchMap = (m: MatchInfo): MapDef => (m.map === GENERATED ? generateMap(m.gen) : (MAP[m.map] ?? groundHooks()?.mapDef(m.map) ?? MAPS[0]))
 
 /** The world at tick 0. Stations start where the single-player lobby would put them by default. */
 export function matchWorld(m: MatchInfo): World {
   const map = matchMap(m)
   const seat = (s: MatchSeat, at: Pt) => ({ faction: s.faction, team: s.team, spawn: s.spawn, at, incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })
   const opts = { seed: m.seed, credits: m.credits, reinforce: cleanReinforce(m.reinforce), defense: cleanDefense(m.stations), oreDefense: m.oreDefense !== false }
+  // A ground battle: every side starts on its spawn's plateau (there are no start areas).
+  if (map.ground) return newWorld(map, m.seats.map((s) => seat(s, map.spawns[s.spawn])), opts)
   const base = newWorld(map, m.seats.map((s) => seat(s, map.spawns[s.spawn])), opts)
   const starts: Pt[] = []
   for (const s of m.seats) starts.push(autoStart(base, defaultArea(map, s.spawn), map.spawns[s.spawn], starts))

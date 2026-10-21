@@ -3,7 +3,7 @@ import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, REPAIR_TIME, REPAIR_FIRE, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  oreGuns, cantFortify, cmdFortFit, cmdFortUp, defenseCap, defensesOf, fortWork, canSee, cantReinforce, dpsVs, fleet, shipPrice, speedOf, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World, groundHooks,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -194,6 +194,34 @@ export const profileOf = (v: unknown): Profile => (typeof v === 'string' && (PRO
 
 export type Brain = {
   o: Owner
+  /** Ground battles (ground/think.ts): the site of ours it is waiting on to be started, and since when
+   * (world seconds); one that never gets started is called off. Absent in space battles. */
+  gSite?: number
+  gSiteAt?: number
+  /** Ground battles (ground/army.ts): its Scout out scouting, and how many trips it has sent it on. */
+  gScout?: number
+  gScouted?: number
+  /** Ground battles: it fields no fighters at all (the checks' economy battles). */
+  peaceful?: boolean
+  /** Ground battles (ground/army.ts): the units of the wave out now, what it was worth when it set
+   * out (and as reinforcements joined), when it set out and when the last reinforcements followed,
+   * the army value its next wave waits for, its heavies sent home hurt, the enemy fighters it has
+   * seen (id to type), when it first saw an attack on its base (-1: none), and where it has got to
+   * on its hunt for the last enemy buildings. */
+  gWave?: number[]
+  gWaveFrom?: number
+  gWaveAt?: number
+  gFollowAt?: number
+  gWaveV?: number
+  gHurt?: number[]
+  gFoes?: Record<number, string>
+  gAlarm?: number
+  gHunt?: number
+  gHunted?: number[]
+  gHuntAt?: number
+  /** Ground battles: when it last trained a Scout, and how many it has trained. */
+  gScoutAt?: number
+  gScoutsMade?: number
   diff: Difficulty
   /** How it plays (see PROFILES). Brains saved before profiles play Balanced. */
   profile: Profile
@@ -357,8 +385,9 @@ function reinforcements(w: World, b: Brain, st: Unit, army: Unit[]) {
 }
 
 /** The quiet start before it attacks anything of ours: its difficulty's, stretched or shortened
- * by its profile and its faction's doctrine; never shorter than the easy levels promise. */
-const calmOf = (w: World, b: Brain) => {
+ * by its profile and its faction's doctrine; never shorter than the easy levels promise. (Ground
+ * battles use it too, see ground/army.ts.) */
+export const calmOf = (w: World, b: Brain) => {
   const D = DIFFICULTY[b.diff]
   const c = D.calm * PROFILES[b.profile].calm * doctrineOf(w, b).calm
   return b.diff === 'easy' || b.diff === 'veryEasy' ? Math.max(D.calm, c) : c
@@ -777,6 +806,8 @@ export function think(w: World, b: Brain, dt: number) {
   b.t = D.think * (0.8 + rand(w) * 0.4)
   const o = b.o
   const p = w.players[o]
+  // A ground battle has decisions of its own (ground/think.ts).
+  if (w.ground) return groundHooks()!.think(w, b)
   const st = w.byId.get(p.station)
   if (!st || st.dead) return
   const team = p.team

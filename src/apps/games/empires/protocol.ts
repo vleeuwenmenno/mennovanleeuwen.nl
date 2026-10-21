@@ -18,11 +18,12 @@ export const MP_PATH = '/api/empires/ws'
  * the AI's flagship pick; version 6: the new maps, five and six spawns, and generated maps for five
  * and six players; version 7: defense stations in skirmishes, their orders and the lobby's limit of
  * them; version 8: vision from captured beacons, calmer idle strike craft and the lobby's switch for
- * defense platforms on ore). The server turns away a client of another version,
+ * defense platforms on ore; version 9: ground battles in the battle sim, with their units in the
+ * factions' data). The server turns away a client of another version,
  * closing with OUTDATED_CODE, and the game asks the player to reload. Clients from before there was
  * a version send none: they count as version 1.
  */
-export const PROTOCOL = 8
+export const PROTOCOL = 9
 /** WebSocket close code for a client whose PROTOCOL isn't the server's. */
 export const OUTDATED_CODE = 4001
 export const CHAT_MAX = 240

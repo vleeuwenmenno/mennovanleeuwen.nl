@@ -305,6 +305,50 @@ export function turnPart(p: Part, a: number, cx = 0, cy = 0): Part {
   }
 }
 
+/** The four bevelled edges of a box centred on (x, y), `b` wide, as facets facing up, right, down
+ * and left: how a ground building's armoured block or a vehicle's hull is cel shaded from above. */
+export function bevel(x: number, y: number, w: number, h: number, b: number, k = 0.8): { pts: Pt[]; slope: Pt }[] {
+  const l = x - w / 2
+  const r = x + w / 2
+  const t = y - h / 2
+  const d = y + h / 2
+  return [
+    { pts: [[l, t], [r, t], [r - b, t + b], [l + b, t + b]], slope: [0, -k] },
+    { pts: [[r, t], [r, d], [r - b, d - b], [r - b, t + b]], slope: [k, 0] },
+    { pts: [[r, d], [l, d], [l + b, d - b], [r - b, d - b]], slope: [0, k] },
+    { pts: [[l, d], [l, t], [l + b, t + b], [l + b, d - b]], slope: [-k, 0] },
+  ]
+}
+
+/** A regular polygon of `n` sides round (x, y), radius `r` to its corners, the first corner at
+ * angle `a0`: an eight-sided deck, a hex pad. */
+export function ngon(x: number, y: number, r: number, n: number, a0 = 0): Pt[] {
+  return Array.from({ length: n }, (_, i) => [x + Math.cos(a0 + (i / n) * TAU) * r, y + Math.sin(a0 + (i / n) * TAU) * r] as Pt)
+}
+
+/** Facets between an outline and a smaller copy of it scaled towards (x, y) by `inner` (0 a cone to
+ * the middle): each side's band faces outwards, so a deck's rim or a mound is cel shaded round. */
+export function rimFacets(outline: Pt[], x: number, y: number, inner: number, k = 0.8): { pts: Pt[]; slope: Pt }[] {
+  const n = outline.length
+  const inPt = ([px, py]: Pt): Pt => [x + (px - x) * inner, y + (py - y) * inner]
+  return outline.map((a, i) => {
+    const b = outline[(i + 1) % n]
+    const mx = (a[0] + b[0]) / 2 - x
+    const my = (a[1] + b[1]) / 2 - y
+    const l = Math.hypot(mx, my) || 1
+    return { pts: [a, b, inPt(b), inPt(a)], slope: [(mx / l) * k, (my / l) * k] as Pt }
+  })
+}
+
+/** Track or tread lines across a band from (x0, y0) to (x1, y1), `n` of them evenly spaced down it:
+ * the treads of a tracked vehicle seen from above. */
+export function treads(x0: number, x1: number, y0: number, y1: number, n: number): Detail[] {
+  return Array.from({ length: n }, (_, i) => {
+    const y = y0 + ((y1 - y0) * (i + 0.5)) / n
+    return { k: 'line' as const, pts: [[x0, y], [x1, y]] as Pt[] }
+  })
+}
+
 /** A blob for a scorch mark: a lumpy circle. */
 export function blob(x: number, y: number, r: number, r0: () => number, n = 9): Pt[] {
   const out: Pt[] = []
@@ -382,4 +426,44 @@ export function toneIndex(slope: Pt | undefined, light: Pt) {
   if (!slope) return 1
   const d = slope[0] * light[0] + slope[1] * light[1]
   return d > 0.16 ? 0 : d < -0.16 ? 2 : 1
+}
+
+/** A pair of legs that walk (Part `pose`): from hips `hx` either side of the middle at `hy`, to feet
+ * at `rest` (y of each foot standing, front of the box negative) or mid-stride `step` (y of the leg
+ * in front, y of the one behind), as a leg capsule `r` thick with a boot at its end; pose 1 the
+ * left leg in front, pose 2 the right. */
+export function stride(id: string, hx: number, hy: number, rest: [number, number], step: [number, number], r: number, tone: Tone, boot: Tone): Part[] {
+  const out: Part[] = []
+  for (const pose of [0, 1, 2])
+    for (const side of [-1, 1]) {
+      const front = (pose === 1 && side < 0) || (pose === 2 && side > 0)
+      const fy = pose === 0 ? rest[side < 0 ? 0 : 1] : front ? step[0] : step[1]
+      const x = side * hx
+      const name = `${id}${side < 0 ? 'L' : 'R'}${pose}`
+      out.push(part(name, capsule([x, hy], [x + side, fy], r, r * 0.85), tone, 1, { lift: 3, pose }))
+      out.push(part(`${name}boot`, circle(x + side, fy + (fy < hy ? -2 : 2), r * 0.95, 10), boot, 2, { lift: 3, pose }))
+    }
+  return out
+}
+
+/**
+ * Legs that walk in two alternating sets (Part `pose`), for beasts and bugs: each leg from its hip
+ * (`hx` either side of the middle, at `hy`) to its foot (`fx`, `fy` on the left side, mirrored on
+ * the right), standing in pose 0; in pose 1 the legs of set A swing `swing` forward and the others
+ * back, in pose 2 the other way round. Set A holds the left legs at even indices and the right legs
+ * at odd ones, a trot on four legs and a tripod gait on six. A claw at each foot.
+ */
+export function gait(id: string, legs: { hx: number; hy: number; fx: number; fy: number }[], swing: number, r: number, tone: Tone, claw: Tone): Part[] {
+  const out: Part[] = []
+  for (const pose of [0, 1, 2])
+    for (const side of [-1, 1])
+      legs.forEach((l, j) => {
+        const a = (j % 2 === 0) === side < 0
+        const fy = l.fy + (pose === 0 ? 0 : (pose === 1) === a ? -swing : swing)
+        const fx = side * Math.abs(l.fx)
+        const name = `${id}${side < 0 ? 'L' : 'R'}${j}${pose}`
+        out.push(part(name, capsule([side * l.hx, l.hy], [fx, fy], r, r * 0.6), tone, 1, { lift: 5, pose }))
+        out.push(part(`${name}claw`, circle(fx, fy, r * 0.8, 8), claw, 2, { lift: 5, pose }))
+      })
+  return out
 }

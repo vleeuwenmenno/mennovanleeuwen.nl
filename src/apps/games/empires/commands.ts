@@ -1,8 +1,8 @@
-import { LEVEL_UP, MODULE, ORBITAL_MODS, SITE_UPGRADES, TECH, UNIT, defenseFaction, type ModuleId, type OrbitalModId, type SiteUpgradeId } from './data.ts'
+import { GROUND_TECH, LEVEL_UP, MODULE, ORBITAL_MODS, SITE_UPGRADES, TECH, UNIT, defenseFaction, type ModuleId, type OrbitalModId, type SiteUpgradeId } from './data.ts'
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdMend, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, cmdFortUp, cmdFortFit, cmdCancelFort, cmdGather, cmdAssist, cmdGroundJob, cmdSpread, cmdCancelGroundJob, GIFT_MAX, oreGuns, cantReinforce, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -10,7 +10,7 @@ import {
 // to run at the same tick; a malformed order from a tampered client never reaches anyone. The
 // owner is never part of an order: the server fills in the sender's own seat.
 
-type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module' | 'seat' | 'credits' | 'structure' | 'orbmod'
+type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module' | 'seat' | 'credits' | 'structure' | 'orbmod' | 'gjob'
 
 /** The functions, by order name, with what each argument must be. */
 const TABLE = {
@@ -25,6 +25,8 @@ const TABLE = {
   attack: { run: cmdAttack, args: ['ids', 'id', 'int', 'bool', 'bool'] },
   stop: { run: cmdStop, args: ['ids'] },
   ability: { run: cmdAbility, args: ['ids', 'id'] },
+  // Ground battles: squads spread out or close up, at once or Shift-queued.
+  spread: { run: cmdSpread, args: ['ids', 'bool', 'bool'] },
   rally: { run: cmdRally, args: ['x', 'y', 'id'] },
   upgradeSite: { run: cmdUpgradeSite, args: ['id', 'upgrade'] },
   cancelUpgradeSite: { run: cmdCancelSiteUpgrade, args: ['id'] },
@@ -39,6 +41,13 @@ const TABLE = {
   // Hybrid bases: engineers place a yard, build or repair a structure; a site can be called off.
   place: { run: cmdPlace, args: ['ids', 'structure', 'x', 'y', 'bool', 'angle'] },
   construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
+  // Ground battles: engineers gather kyber at the crystal field at a point.
+  gather: { run: cmdGather, args: ['ids', 'x', 'y', 'bool'] },
+  // Ground battles: engineers assist another engineer of ours (help with what it does, follow it).
+  assist: { run: cmdAssist, args: ['ids', 'id', 'bool'] },
+  // Ground battles: a factory upgrades to its next tier or researches, or calls that off.
+  groundJob: { run: cmdGroundJob, args: ['id', 'gjob'] },
+  cancelGroundJob: { run: cmdCancelGroundJob, args: ['id'] },
   // Repair ships: repair a damaged ship or station of ours or an ally's (the sim refuses an enemy's).
   mend: { run: cmdMend, args: ['ids', 'id', 'bool'] },
   cancelSite: { run: cmdCancelSite, args: ['id'] },
@@ -95,6 +104,9 @@ function cleanArg(kind: Arg, v: unknown, w: World): unknown {
       return typeof v === 'string' && Object.hasOwn(UNIT, v) ? v : null
     case 'tech':
       return typeof v === 'string' && (v === LEVEL_UP || Object.hasOwn(TECH, v)) ? v : null
+    case 'gjob':
+      // A factory's job in a ground battle: its next tier, or a piece of ground research.
+      return typeof v === 'string' && (v === 'tier' || Object.hasOwn(GROUND_TECH, v)) ? v : null
     case 'upgrade':
       return typeof v === 'string' && SITE_UPGRADES.some((u) => u.id === v) ? (v as SiteUpgradeId) : null
     case 'angle':
