@@ -2381,6 +2381,12 @@ glide, as it follows the hand).
   its terrain, its rocks (scattered from the map's seed, as the battle scatters them), the planet,
   the Command Station's build radius and every structure as its real model at its true size and
   heading. The holder starts on the left (the home spawn).
+- **Only what is built shows**, on the battle map and round the planet, each as it looks built: the
+  Command Station at its level, a yard with its expansions, a defense station at its level with its
+  modules. Ruins show darkened where they lie (rebuilt for half). An empty yard or defense site shows
+  nothing; it is ordered from the shipyard's Yards and Defense pages, or from the Command Station's
+  card, which lists the empty sites (each opens its site card). Once built, it appears at its spot in
+  the layout: its default, unless it was placed before.
 - **Entry zones:** each hyperlane into the planet's system has an entry zone of its own along the
   far side of the map, named after the system at its other end, in the order the lanes leave the
   system (from the west round through north, east and south), and a planet with neighbours in its
@@ -2396,13 +2402,27 @@ glide, as it follows the hand).
   along; the yards and defense stations move within its build radius, clear of rocks, asteroid
   fields, the map's edge and each other, kept apart by the size each grows to (`layoutTop`). A drop
   where one can't stand goes to the nearest clear spot (`nearestClear`), or is refused with the
-  reason. Empty yard and defense sites show as ghost outlines and can be placed before they are
-  built. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
-  the card's *Reset layout* puts everything back at its default.
+  reason. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
+  the card's *Reset layout* puts everything back at its default place and heading.
+- **Turning structures** (our planets): a picked structure that stands shows a handle at its nose on
+  the battle map; drag it round (mouse or finger, a bigger handle on touch screens) and the structure
+  turns with it, in 5° steps. On a desktop the wheel over a structure, or R and Shift+R while it is
+  picked or being dragged, turn it 15° either way (caught before R's fleet order). A double click on
+  the handle turns it back the way it faces by default. The heading is kept in the layout
+  (`LayoutPlace.a`, radians as a unit's), and battles there stand it turned so. A turn that no longer
+  fits moves it to the nearest clear spot. Left unturned, a structure faces as before: the station
+  towards the middle of the map, a yard away from the station, a defense station the way the station
+  faces (so turning the station turns the defense stations nobody turned). Saves from before turning
+  load with every structure facing its default way; enemy planets show the headings we last saw.
+- **The wheel and pinches on the panel** never zoom the galaxy map or let go of the orbit view,
+  anywhere on it, so a wheel meant to turn a structure that slips off it does nothing (over a
+  structure of ours it turns it). A touchpad pinch (Ctrl + wheel) and a two-finger pinch on the
+  panel are caught the same way.
 - **Exactly as in battle:** the panel and the battle both work out where everything stands with
   `standBase` ([`sim.ts`](src/apps/games/empires/sim.ts)) on the same map with the same rocks: the
   station first, then the yards and the defense stations, each at its place in the layout
-  (`Planet.layout`, in the map's world units) if it may stand there, else the nearest clear spot. A
+  (`Planet.layout`, in the map's world units, with its heading if turned) if it may stand there, else
+  the nearest clear spot. A
   structure left out of the layout stands at its default (`autoLayout`: the yards on either flank a
   little behind the station, away from the entry zones, the defense stations either side in front of
   it), worked out for every structure at its biggest, so the defaults never shift as more is built.
@@ -2410,9 +2430,11 @@ glide, as it follows the hand).
 - **Round the planet:** the planet with its Command Station, yards (ruins greyed) and defense
   stations, each drawn as its real model from the same cached picture as the cards (`structArt`:
   nothing is painted per frame), pictured where the battle map has them turned back round the planet
-  (`mapToPolar`, the station up and to the left of it). They orbit the planet together, once in
-  twelve minutes (held still while one is picked, and for *reduce motion*). Moving them happens on the
-  battle map only. The camera places and fades the whole view with one transform, as the map's own
+  (`mapToPolar`, the station up and to the left of it), each turned as it stands on the battle map
+  (its heading turned back round the planet the same way, `Spot.h`), so the two views always agree,
+  default headings included. They orbit the planet together, once in twelve minutes, their headings
+  turning with them (held still while one is picked, and for *reduce motion*). Moving and turning
+  them happens on the battle map only. The camera places and fades the whole view with one transform, as the map's own
   layer is, so zooming renders nothing.
 - **Enemy and neutral planets** show read only: terrain and entry zones always, and their structures
   as the fog of war allows (see below): where they stand now while we see the system, else where we
@@ -2422,7 +2444,7 @@ glide, as it follows the hand).
   with a station shows a small picture of each structure where it sits round it, at least a little
   way out past the planet's edge, the station's level on the station's picture.
 - **Orders:** a structure's card is built from the shipyard's own pages: the station's upgrade and
-  expansions, a yard (or the site to build it on, or its ruin to rebuild) and its expansions, a
+  expansions (and the empty sites), a yard (or the site to build it on, or its ruin to rebuild) and its expansions, a
   defense station's levels and module slots, with the planet's queue on top. A click on open space,
   or Esc, puts the card away.
 

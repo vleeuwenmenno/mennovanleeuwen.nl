@@ -5002,14 +5002,18 @@ export type FleetSide = { faction: FactionId; team: number; ships: string[]; res
   orbitals?: { i: number; level: number; mods: (OrbitalModId | null)[] }[]
   /** Where the holder's structures stand on this map (a conquest planet's layout, conquestMap.ts
    * PlanetLayout: its station, yards and defense stations by id), as the player placed them on the
-   * planet's preview; any left out stand at their defaults (see standBase). */
-  layout?: Partial<Record<LayoutId, Pt>>
+   * planet's preview, each turned to its heading `a` if the player turned it (else the way it
+   * faces by default); any left out stand at their defaults (see standBase). */
+  layout?: Partial<Record<LayoutId, LayoutPt>>
   /** Which of the map's spawns the side starts at (left out: its own index). An attacker drops out
    * of hyperspace at the entry zone of the lane it came down (conquestMap.ts entrySpawn). */
   spawn?: number }
 /** The structures of a conquest planet's layout (galaxy.ts StructId), in the order a battle stands them. */
 export type LayoutId = 'station' | 'yard' | 'cyard' | 'def0' | 'def1'
 export const LAYOUT_IDS: LayoutId[] = ['station', 'yard', 'cyard', 'def0', 'def1']
+/** Where a layout wants a structure: its place and, if the player turned it, its heading `a`
+ * (radians, as a unit's; left out: the way it faces by default, see layoutFace). */
+export type LayoutPt = Pt & { a?: number }
 
 /**
  * A galactic conquest battle over a planet. The first side holds it: its station (if any) stands
@@ -5174,13 +5178,15 @@ export function stationProblem(w: World, f: FactionId, home: Pt, x: number, y: n
   return null
 }
 /** Why structure `t` (as `id` of the layout) can't stand at (x, y) round the station `st`, clear of
- * `others` (what stands already), or null: the battle's own check (siteProblem). Yards face away
- * from the station, defense stations as it does. */
-export function layoutProblem(w: World, owner: Owner, t: UnitType, st: Standing, x: number, y: number, others: readonly Standing[]): string | null {
+ * `others` (what stands already), or null: the battle's own check (siteProblem). Turned to heading
+ * `a` if given, else as it faces by default (see layoutFace). */
+export function layoutProblem(w: World, owner: Owner, t: UnitType, st: Standing, x: number, y: number, others: readonly Standing[], a?: number): string | null {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Not a place'
-  return structProblem(w, owner, t, st, x, y, layoutFace(t, st, x, y), others)
+  return structProblem(w, owner, t, st, x, y, Number.isFinite(a) ? a! : layoutFace(t, st, x, y), others)
 }
-const layoutFace = (t: UnitType, st: Standing, x: number, y: number) => (t.tier === 'yard' ? M.atan2(y - st.y, x - st.x) : st.a)
+/** Which way a structure of a layout faces when the player hasn't turned it: a yard away from the
+ * station, a defense station as the station does. */
+export const layoutFace = (t: UnitType, st: Standing, x: number, y: number) => (t.tier === 'yard' ? M.atan2(y - st.y, x - st.x) : st.a)
 
 /**
  * Where a conquest planet's base stands on its battle map: the Command Station where `plan` has it
@@ -5193,20 +5199,24 @@ const layoutFace = (t: UnitType, st: Standing, x: number, y: number) => (t.tier 
  * Battles stand their bases this way (newFleetBattle), and the orbit view's preview shows them this
  * way, on the same map with the same rocks: they always agree.
  */
-export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: Partial<Record<LayoutId, Pt>> | undefined, attackers: Pt[], items: LayoutItem[]): Stood[] {
+export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: Partial<Record<LayoutId, LayoutPt>> | undefined, attackers: Pt[], items: LayoutItem[]): Stood[] {
   const auto: Partial<Record<LayoutId, Pt>> = autoLayout(home, attackers)
   const want = plan?.station
   const sp = want && !stationProblem(w, f, home, want.x, want.y) ? want : home
-  const st: Stood = { id: 'station', t: stationType(f, MAX_LEVEL, []), x: sp.x, y: sp.y, a: stationFace(w, sp.x, sp.y) }
+  // (A station the player turned faces that way wherever it stands.)
+  const sa = want && Number.isFinite(want.a) ? want.a! : stationFace(w, sp.x, sp.y)
+  const st: Stood = { id: 'station', t: stationType(f, MAX_LEVEL, []), x: sp.x, y: sp.y, a: sa }
   const dx = sp.x - home.x
   const dy = sp.y - home.y
-  const stand = (list: LayoutItem[], wants: (id: LayoutId) => Pt | undefined): Stood[] => {
+  const stand = (list: LayoutItem[], wants: (id: LayoutId) => LayoutPt | undefined): Stood[] => {
     const out: Stood[] = [st]
     for (const { id, t } of list) {
-      const face = (x: number, y: number) => layoutFace(t, st, x, y)
       const q = wants(id)
+      // Turned by the player: that way wherever it ends up; else as it faces by default.
+      const turned = q && Number.isFinite(q.a) ? q.a! : null
+      const face = (x: number, y: number) => turned ?? layoutFace(t, st, x, y)
       let at: { x: number; y: number; a: number } | null = null
-      if (q && !layoutProblem(w, owner, t, st, q.x, q.y, out)) at = { x: q.x, y: q.y, a: face(q.x, q.y) }
+      if (q && !layoutProblem(w, owner, t, st, q.x, q.y, out, turned ?? undefined)) at = { x: q.x, y: q.y, a: face(q.x, q.y) }
       if (!at && q) at = clearNear(w, st, t, q, face, out)
       // Nowhere near where it wants: where it would stand with nothing to go by.
       if (!at && t.tier === 'yard') at = baseSpots(w, st, [id as 'yard' | 'cyard'], attackers, out)[0] ?? null
@@ -5220,7 +5230,12 @@ export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: 
     return out.slice(1)
   }
   const defaults = new Map(stand(LAYOUT_IDS.slice(1).map((id) => ({ id, t: layoutTop(f, id) })), (id) => (auto[id] ? { x: auto[id]!.x + dx, y: auto[id]!.y + dy } : undefined)).map((s) => [s.id, s]))
-  return [st, ...stand(items, (id) => plan?.[id] ?? defaults.get(id))]
+  // (A default spot carries no heading of its own: it faces as it would by default.)
+  const spot = (id: LayoutId): LayoutPt | undefined => {
+    const d = defaults.get(id)
+    return d ? { x: d.x, y: d.y } : undefined
+  }
+  return [st, ...stand(items, (id) => plan?.[id] ?? spot(id))]
 }
 
 /** The clear spot nearest `at` for structure `t` round station `st`, clear of `others` (see
@@ -5243,8 +5258,10 @@ function clearNear(w: World, st: Standing, t: UnitType, at: Pt, face: (x: number
 }
 
 /** The clear spot nearest `at` for structure `t` (as a layout places it, see layoutProblem) round
- * the station `st`, clear of `others`; null when there is none within reach. */
-export const nearestClear = (w: World, st: Standing, t: UnitType, at: Pt, others: readonly Standing[]) => clearNear(w, st, t, at, (x, y) => layoutFace(t, st, x, y), others)
+ * the station `st`, clear of `others`, turned to heading `a` if given; null when there is none
+ * within reach. */
+export const nearestClear = (w: World, st: Standing, t: UnitType, at: Pt, others: readonly Standing[], a?: number) =>
+  clearNear(w, st, t, at, (x, y) => (Number.isFinite(a) ? a! : layoutFace(t, st, x, y)), others)
 
 /** A conquest planet's battle map as a battle there starts out, before anything stands on it: its
  * rocks scattered from the map's seed as the battle scatters them (newFleetBattle with the map's
