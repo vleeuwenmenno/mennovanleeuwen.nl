@@ -1422,6 +1422,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   /** Ships dragged from the fleet inventory over the map: the planet or system they'd go to, ringed,
    * and the way there (in map units), green or (refused) red. */
   const [dropShow, setDropShow] = useState<DropShow | null>(null)
+  /** Ships are being dragged from the fleet inventory over the map: on a phone, what covers the
+   * map fades and lets the finger through (touch-conquest.css) until the drag ends. */
+  const [dragAway, setDragAway] = useState(false)
   /** Phones and short screens hide the galaxy map until it's asked for (the map button). */
   const [mapOpen, setMapOpen] = useState(false)
   const viewEl = useRef<HTMLDivElement>(null)
@@ -2703,6 +2706,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
    * than the selection, with a hint while over a target. */
   const mapDrop: MapDrop = {
     over: (what, who, cx, cy, queue) => {
+      setDragAway(true)
       const t = dropTarget(cx, cy)
       if (!t) {
         dropMemo.current = null
@@ -2740,6 +2744,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     drop: (what, cx, cy, queue) => {
       dropMemo.current = null
       setDropShow(null)
+      setDragAway(false)
       const t = dropTarget(cx, cy)
       if (!t) return false
       const why = dropWhyNot(sendPreview(g, ME, what, t.planet, queue), what, queue)
@@ -2755,6 +2760,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     clear: () => {
       dropMemo.current = null
       setDropShow(null)
+      setDragAway(false)
     },
   }
   /** Opens the action wheel (from the WheelHost round the screen). */
@@ -2847,7 +2853,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   }
 
   return (
-    <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction} ${selPlanet ? 'has-dock' : ''} ${mapOpen ? 'is-map-open' : ''} ${sheetOpen ? 'has-sheet' : ''}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
+    <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction} ${selPlanet ? 'has-dock' : ''} ${mapOpen ? 'is-map-open' : ''} ${sheetOpen ? 'has-sheet' : ''} ${dragAway ? 'is-dragaway' : ''}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
       <WheelHost>
         <WheelHook to={wheel} />
         <Tips />

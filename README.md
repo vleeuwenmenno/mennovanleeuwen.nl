@@ -2329,7 +2329,8 @@ grid with a bar of how full it is, and an empty *New fleet* column while there a
   can't go to Catonis. Blockaded: ..."); a refused drop gives no order and splits nothing off. Let go anywhere
   else and the ships go back. The new or sent fleet becomes the selection. A finger drags too: move
   off a ship or a header before the long press; once the finger leaves the panel it fades out of
-  the way (and lets the finger through to the map under it) until the drag ends, with the ship and
+  the way, with the selection's sheet and any other panel over the map (letting the finger through
+  to the systems under them) until the drag ends, with the ship and
   the label shown above the finger. The order logic is `fleetToSend` and `sendPreview` in
   [`galaxy.ts`](src/apps/games/empires/galaxy.ts) (the preview runs the real orders on a copy).
 - **Held back:** the corner icon on a ship holds it back or deploys it (the header's shield does the
