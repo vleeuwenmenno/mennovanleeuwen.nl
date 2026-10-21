@@ -7650,29 +7650,6 @@ span.ew-teamtag {
 .ew-ostruct.is-ruin img {
   filter: grayscale(0.9) brightness(0.45) sepia(0.4);
 }
-.ew-ostruct.is-ghost img {
-  opacity: 0.2;
-  filter: grayscale(1) brightness(1.4);
-}
-/* An empty site: a dashed ring with a plus, to order from. */
-.ew-ostruct-ghost {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: calc(var(--r) * 2);
-  height: calc(var(--r) * 2);
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 2px dashed color-mix(in srgb, var(--ew-accent) 60%, transparent);
-  background: color-mix(in srgb, var(--ew-accent) 8%, transparent);
-  color: var(--ew-accent);
-  display: grid;
-  place-items: center;
-  font-style: normal;
-  font-size: calc(var(--r) * 0.7);
-  font-weight: 700;
-  line-height: 1;
-}
 .ew-ostruct:hover img,
 .ew-ostruct.is-sel img {
   filter: drop-shadow(0 0 4px var(--ew-accent)) drop-shadow(0 0 1px var(--ew-accent));
@@ -7680,18 +7657,12 @@ span.ew-teamtag {
 .ew-ostruct.is-sel.is-ruin img {
   filter: grayscale(0.9) brightness(0.45) sepia(0.4) drop-shadow(0 0 4px var(--ew-accent));
 }
-.ew-ostruct.is-sel .ew-ostruct-ghost {
-  border-style: solid;
-  background: color-mix(in srgb, var(--ew-accent) 18%, transparent);
-}
 .ew-ostruct.is-dragging .ew-ostruct-in {
   cursor: grabbing;
   opacity: 0.85;
 }
-.ew-ostruct.is-dragging.is-bad img,
-.ew-ostruct.is-dragging.is-bad .ew-ostruct-ghost {
+.ew-ostruct.is-dragging.is-bad img {
   filter: drop-shadow(0 0 5px var(--ew-bad));
-  border-color: var(--ew-bad);
 }
 .ew-ostruct-name {
   position: absolute;
@@ -7742,6 +7713,73 @@ span.ew-teamtag {
   align-items: center;
   justify-content: space-between;
   margin-top: 6px;
+}
+/* The Defense page's site tiles: a picture and a few lines each, a tap opens the site's card. */
+.ew-yard.ew-gbuild.ew-gsites {
+  display: grid;
+  grid-template-rows: none;
+  grid-auto-flow: row;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  grid-auto-columns: auto;
+  gap: 10px;
+  max-width: none;
+  overflow: visible;
+  min-width: min(560px, 60vw);
+}
+.ew-gsite {
+  position: relative;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 84px;
+  padding: 8px 10px;
+  overflow: hidden;
+  text-align: left;
+  color: var(--ew-text);
+  font: inherit;
+  background: var(--ew-bg-2);
+  border: 1px solid var(--ew-line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.ew-gsite:hover,
+.ew-gsite:focus-visible {
+  border-color: var(--ew-gold);
+}
+.ew-gsite .ew-art {
+  width: 96px;
+  height: 72px;
+}
+.ew-gsite.is-empty {
+  border-style: dashed;
+}
+.ew-gsite.is-empty .ew-art {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+.ew-gsite.is-busy {
+  border-color: var(--ew-gold);
+}
+.ew-gsite-txt {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ew-gsite-txt small {
+  color: var(--ew-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.ew-gsite-txt .ew-modline {
+  white-space: normal;
+  font-size: 12px;
+}
+@media (pointer: coarse) {
+  .ew-gsite {
+    min-height: 96px;
+  }
 }
 /* The Defense page: a group per defense site, its slots and the modules to pick from. */
 /* Each site gets a column at least 320px wide (two side by side on a wide panel, one when narrow or
@@ -8068,11 +8106,8 @@ span.ew-teamtag {
     min-height: 34px;
   }
 }
-/* A site whose building is under way in the planet's queue. */
-.ew-ostruct.is-building .ew-ostruct-ghost {
-  border-style: solid;
-  border-color: var(--ew-gold);
-  color: var(--ew-gold);
+/* A ruin whose rebuilding is under way in the planet's queue. */
+.ew-ostruct.is-building img {
   animation: ew-orbit-build 1.6s ease-in-out infinite;
 }
 @keyframes ew-orbit-build {
@@ -8081,7 +8116,7 @@ span.ew-teamtag {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ew-ostruct.is-building .ew-ostruct-ghost {
+  .ew-ostruct.is-building img {
     animation: none;
   }
 }

@@ -1776,7 +1776,7 @@ export function resetLayout(g: Galaxy, owner: number, planet: number): string | 
   delete p.layout
   return null
 }
-const copyLayout = (l: PlanetLayout | undefined): PlanetLayout | undefined => (l ? Object.fromEntries(Object.entries(l).map(([id, q]) => [id, { x: q.x, y: q.y }])) : undefined)
+const copyLayout = (l: PlanetLayout | undefined): PlanetLayout | undefined => (l ? Object.fromEntries(Object.entries(l).map(([id, q]) => [id, { x: q.x, y: q.y, ...(q.a !== undefined ? { a: q.a } : {}) }])) : undefined)
 
 // --- Battles ---------------------------------------------------------------------------------------
 

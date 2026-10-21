@@ -22,7 +22,7 @@ import type { Galaxy, PlanetKind, StructId } from './galaxy.ts'
 /** Where a structure sits round its planet in the orbit view's pictures: a bearing `a` (radians,
  * screen-wise: 0 to the right, clockwise) and a distance `d` in planet radii from its middle. Saves
  * from before the battle maps kept the layout this way (see polarToMap). */
-export type Spot = { a: number; d: number }
+export type Spot = { a: number; d: number; /** (The orbit view's pictures, see mapToPolar.) Its heading round the planet, as its heading on the battle map turned the same way. */ h?: number }
 /** Each structure's own spot round its planet before the battle maps: what an old save's layout left
  * out stood at (see fromPolar), and where a picture goes with no place on the map. */
 export const AUTO_SPOT: Record<StructId, Spot> = {
@@ -42,9 +42,20 @@ export const LAYOUT_SCALE = { unit: mapDist(560), min: mapDist(760), max: BUILD_
 
 /** A place on a planet's battle map (world units). */
 export type Place = { x: number; y: number }
+/** Where a structure of a layout stands, and its heading `a` (radians, as a unit's in a battle) if
+ * its holder turned it; left out, it faces the way it does by default (sim.ts layoutFace: the
+ * station towards the middle of the map, a yard away from the station, a defense station as the
+ * station does). Saves from before structures could be turned have none. */
+export type LayoutPlace = Place & { a?: number }
 /** Where a planet's structures stand on its battle map, as its holder placed them (each missing one
  * stands at its default, see autoLayout). */
-export type PlanetLayout = Partial<Record<StructId, Place>>
+export type PlanetLayout = Partial<Record<StructId, LayoutPlace>>
+
+/** A heading brought into (-PI, PI], to four decimals (what a layout keeps). */
+export function cleanTurn(a: number): number {
+  const t = a - Math.PI * 2 * Math.floor((a + Math.PI) / (Math.PI * 2))
+  return Math.round(t * 1e4) / 1e4
+}
 
 /** An entry zone: where an attacker coming from `system` (a neighbouring system down a hyperlane,
  * or the planet's own system for a fleet from another planet there) drops out of hyperspace. */
@@ -201,9 +212,10 @@ export function fromPolar(pm: Pick<PlanetMap, 'map' | 'home'>, spots: Partial<Re
 /**
  * The pictures round the planet in the orbit view: each structure's place on the battle map (`at`,
  * the station at `at.station`) turned back round the planet (the inverse of polarToMap, the station
- * on its own spot), kept between SPOT_D's distances.
+ * on its own spot), kept between SPOT_D's distances. Given its heading on the map (`a`), its picture
+ * is turned the same way (`h`), so the two views always agree.
  */
-export function mapToPolar(map: MapDef, at: Partial<Record<StructId, Place>>): Partial<Record<StructId, Spot>> {
+export function mapToPolar(map: MapDef, at: Partial<Record<StructId, LayoutPlace>>): Partial<Record<StructId, Spot>> {
   // (Up and to the left of the planet: the battle map's panel sits to its right.)
   const S = RING_STATION
   const st = at.station
@@ -213,7 +225,7 @@ export function mapToPolar(map: MapDef, at: Partial<Record<StructId, Place>>): P
   const turn = planetTurn(map, st) - Math.atan2(-sy, -sx)
   const c = Math.cos(-turn)
   const s = Math.sin(-turn)
-  const out: Partial<Record<StructId, Spot>> = { station: S }
+  const out: Partial<Record<StructId, Spot>> = { station: Number.isFinite(st.a) ? { ...S, h: st.a! - turn } : S }
   for (const id of STRUCT_ORDER) {
     const q = at[id]
     if (!q || id === 'station') continue
@@ -221,7 +233,7 @@ export function mapToPolar(map: MapDef, at: Partial<Record<StructId, Place>>): P
     const dy = (q.y - st.y) / LAYOUT_SCALE.unit
     const x = sx + dx * c - dy * s
     const y = sy + dx * s + dy * c
-    out[id] = { a: Math.atan2(y, x), d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, Math.hypot(x, y))) }
+    out[id] = { a: Math.atan2(y, x), d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, Math.hypot(x, y))), ...(Number.isFinite(q.a) ? { h: q.a! - turn } : {}) }
   }
   return out
 }
@@ -234,9 +246,9 @@ export function cleanLayout(l: unknown, pm: () => Pick<PlanetMap, 'map' | 'home'
   const polar: Partial<Record<StructId, Spot>> = {}
   const out: PlanetLayout = {}
   for (const id of STRUCT_ORDER) {
-    const s = v[id] as Partial<Spot & Place> | undefined
+    const s = v[id] as Partial<Spot & LayoutPlace> | undefined
     if (!s || typeof s !== 'object') continue
-    if (Number.isFinite(s.x) && Number.isFinite(s.y)) out[id] = { x: s.x!, y: s.y! }
+    if (Number.isFinite(s.x) && Number.isFinite(s.y)) out[id] = { x: s.x!, y: s.y!, ...(Number.isFinite(s.a) ? { a: cleanTurn(s.a!) } : {}) }
     else if (Number.isFinite(s.a) && Number.isFinite(s.d)) polar[id] = { a: s.a!, d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, s.d!)) }
   }
   if (Object.keys(polar).length) {
