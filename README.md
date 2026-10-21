@@ -2317,6 +2317,22 @@ grid with a bar of how full it is, and an empty *New fleet* column while there a
   half a stack); a long press opens a wheel: *Move*, *Move half*, *Move one*, *New fleet*, *Turn*,
   *Hold back* or *Deploy*, *Select fleet*. A long press on a fleet's header: select, hold back
   all, arrange, join another fleet. On a phone the fleets sit two by two.
+- **Onto the map:** drag a fleet's header, or a ship (a stack, or with the mouse's Shift/Ctrl part
+  of one), out of the panel onto a system or a planet (zoomed in), or onto a fleet's badge (where
+  that fleet is headed), and let go: it gets the same move order a right-click there gives, over the
+  hyperlanes and by the same rules (blockades, the front line). A system sends it to the planet a
+  right-click would pick there. Shift (the touch bar's Shift with a finger) as you let go adds it as
+  a stop instead. Dragged ships are split off first as a new fleet, the way *New fleet* makes one,
+  so the cap of 4 and "only in orbit" apply; ships that are their fleet's whole grid just send that
+  fleet. While over a target it's ringed with the way there drawn, and a label by the pointer says
+  what letting go does ("Send Fleet 1 to Alderra · 2 jumps, ~3 days"), or in red why not ("Fleet 1
+  can't go to Catonis. Blockaded: ..."); a refused drop gives no order and splits nothing off. Let go anywhere
+  else and the ships go back. The new or sent fleet becomes the selection. A finger drags too: move
+  off a ship or a header before the long press; once the finger leaves the panel it fades out of
+  the way, with the selection's sheet and any other panel over the map (letting the finger through
+  to the systems under them) until the drag ends, with the ship and
+  the label shown above the finger. The order logic is `fleetToSend` and `sendPreview` in
+  [`galaxy.ts`](src/apps/games/empires/galaxy.ts) (the preview runs the real orders on a copy).
 - **Held back:** the corner icon on a ship holds it back or deploys it (the header's shield does the
   whole fleet). When the fleet fights, the rest jump in and the held back ships start in the
   battle's reserve tray, to be called in during the fight; ones never called in come out of a won

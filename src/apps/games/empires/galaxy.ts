@@ -1266,6 +1266,45 @@ function noWay(g: Galaxy, f: Fleet, planet: number) {
   return wall !== undefined ? `Blockaded: the ${factionName(g, blockedBy(g, wall, f.owner))} holds ${g.systems[wall].name}, and every way round` : 'No hyperlane leads there'
 }
 
+/** What a drag from the fleet inventory onto the map sends: a whole fleet (by its header), or `n` of
+ * the ships of one item of a fleet's grid (split off as a new fleet first). */
+export type SendWhat = { fleet: number } | { item: ItemRef; n: number }
+
+/**
+ * The fleet a drag sends: the fleet itself, or the dragged ships split off as a new fleet the way
+ * the inventory's "New fleet" makes one (`moveItem`, with its rules: the fleet cap, not in flight).
+ * Ships that are all their fleet has are that fleet. Returns the fleet, or why not.
+ */
+export function fleetToSend(g: Galaxy, owner: number, what: SendWhat): Fleet | string {
+  if ('fleet' in what) {
+    const f = g.fleets.find((x) => x.id === what.fleet)
+    return f && f.owner === owner ? f : 'Not our fleet'
+  }
+  const f = g.fleets.find((x) => x.id === what.item.fleet)
+  if (!f || f.owner !== owner) return 'Not our fleet'
+  const it = itemAt(f, what.item.x, what.item.y)
+  if (!it) return 'Nothing there'
+  if (f.items.length === 1 && what.n >= it.n) return f
+  return moveItem(g, owner, what.item, { fleet: 'new' }, what.n)
+}
+
+/**
+ * What a drag onto the map would do, worked out on a copy without changing anything: why it can't
+ * (null: it can), and the hops the fleet would have ahead of it then (with `queue`, after what it's
+ * doing now), from `system` (where it is, or flies from). The order itself is `fleetToSend`, then `moveFleet`.
+ */
+export function sendPreview(g: Galaxy, owner: number, what: SendWhat, planet: number, queue: boolean): { why: string | null; hops: Hop[]; system: number } {
+  const copy: Galaxy = {
+    ...g,
+    fleets: g.fleets.map((f) => ({ ...f, items: cloneItems(f.items), ships: [...f.ships], route: [...f.route], waypoints: [...(f.waypoints ?? [])], leg: f.leg && { ...f.leg } })),
+  }
+  const f = fleetToSend(copy, owner, what)
+  if (typeof f === 'string') return { why: f, hops: [], system: -1 }
+  const system = f.system
+  const why = moveFleet(copy, owner, f.id, planet, undefined, queue)
+  return { why, hops: why ? [] : plannedHops(copy, f), system }
+}
+
 /** Stop: no more stops, and a fleet in flight halts at the next system it reaches (at one of our
  * planets there if there is one). */
 export function stopFleet(g: Galaxy, owner: number, fleetId: number): string | null {
