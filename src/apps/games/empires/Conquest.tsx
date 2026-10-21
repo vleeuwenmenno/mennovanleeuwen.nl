@@ -2887,7 +2887,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           )}
           {orbitP && (
             <div className="ew-orbithint" onPointerDown={(e) => e.stopPropagation()}>
-              <span><b>Orbit view</b> · {orbitP.name}{orbitP.owner === ME ? (compact ? ': tap a structure for its orders, drag it on the battle map to place it' : ': click a structure for its orders, drag it on the battle map to place it') : ''}</span>
+              <span><b>Orbit view</b> · {orbitP.name}{orbitP.owner === ME ? (compact ? ': tap a structure for its orders, drag it on the battle map to place it' : ': click a structure for its orders, drag it on the battle map to place it, R to turn it') : ''}</span>
               <button onClick={() => (sound.click(), leaveOrbit(true))} data-tip="Back out to the system (Esc)">{compact ? 'Leave' : 'Leave · Esc'}</button>
             </div>
           )}
@@ -3010,7 +3010,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           />
         )}
         {orbitP && orbitSel && (
-          <OrbitCard key={`${orbitP.id}:${orbitSel}`} g={g} p={orbitP} id={orbitSel} sound={sound} toast={toast} onClose={() => (sound.click(), setOrbitSel(null))} />
+          <OrbitCard key={`${orbitP.id}:${orbitSel}`} g={g} p={orbitP} id={orbitSel} sound={sound} toast={toast} onClose={() => (sound.click(), setOrbitSel(null))} onPick={(s) => (sound.click(), setOrbitSel(s))} />
         )}
         {selPlanet && !(orbitSel && orbitP === selPlanet) && (!compact || sheetOpen) && (
           <PlanetDock
@@ -3496,12 +3496,15 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, onOpen, toast }: { 
  * site, or its ruin) and its expansions, a defense station's levels and module slots; the planet's
  * queue under them, and putting the layout back.
  */
-function OrbitCard({ g, p, id, sound, toast, onClose }: { g: Galaxy; p: Planet; id: StructId; sound: EmpiresSound; toast: (t: string, tone?: GToast['tone']) => void; onClose: () => void }) {
+function OrbitCard({ g, p, id, sound, toast, onClose, onPick }: { g: Galaxy; p: Planet; id: StructId; sound: EmpiresSound; toast: (t: string, tone?: GToast['tone']) => void; onClose: () => void; /** Picks another structure (or an empty site) for the card. */ onPick: (id: StructId) => void }) {
   const ours = p.owner === ME
   const coarse = useCoarse()
   const kn = known(g, ME, p)
   const fac = kn.owner >= 0 ? g.sides[kn.owner].faction : g.sides[ME].faction
-  const th = orbitThings(fac, kn.station, kn.base, ours).find((x) => x.id === id)
+  const all = orbitThings(fac, kn.station, kn.base, ours)
+  const th = all.find((x) => x.id === id)
+  // The empty sites (ours), which show nowhere else in the orbit view: each picked here to order it.
+  const sites = all.filter((x) => x.state === 'ghost')
   if (!th) return null
   const who = ours ? { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' } : { who: FACTIONS[fac].long, rel: 'enemy' }
   const upWhy = cantUpgradeStation(g, ME, p.id)
@@ -3539,7 +3542,25 @@ function OrbitCard({ g, p, id, sound, toast, onClose }: { g: Galaxy; p: Planet; 
                 <p className="ew-gp-note">{kn.live ? 'What stands there now.' : 'As we last saw it: it may have changed since.'} {th.t.blurb}</p>
               </div>
             ) : id === 'station' ? (
-              <PlanetBuildings g={g} p={p} sound={sound} toast={toast} show="expansions" only="station" />
+              <>
+                <PlanetBuildings g={g} p={p} sound={sound} toast={toast} show="expansions" only="station" />
+                {sites.length > 0 && (
+                  <div className="ew-gorbit-sites" role="group" aria-label="Empty sites">
+                    <small className="ew-muted">Empty sites: built ones show round the planet and on its battle map.</small>
+                    <div className="ew-gorbit-siterow">
+                      {sites.map((s) => {
+                        const busy = p.queue.some((q) => q.unit === (s.id === 'def0' ? 'orb0' : s.id === 'def1' ? 'orb1' : s.id))
+                        return (
+                          <button key={s.id} className={`ew-gp-up ${busy ? 'is-busy' : ''}`} onClick={() => onPick(s.id)} data-site={s.id}
+                            data-tip={`${s.name}: nothing built here yet.${busy ? ' Being built (see the queue).' : ''} Click to order it.`}>
+                            <Icon name="yard" size={13} /> {s.name}{busy ? ' · building' : ''}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             ) : yard ? (
               <>
                 <PlanetBuildings g={g} p={p} sound={sound} toast={toast} show="yards" only={yard} />
@@ -3551,8 +3572,8 @@ function OrbitCard({ g, p, id, sound, toast, onClose }: { g: Galaxy; p: Planet; 
           </div>
           {ours && (
             <footer className="ew-gorbit-foot">
-              <small className="ew-muted">{coarse ? 'Drag a structure on the battle map to place it.' : 'Drag a structure on the battle map to place it; battles here stand it there.'}</small>
-              <button className="ew-gp-up" disabled={!p.layout} onClick={reset} data-tip="Put every structure back where it stands by default on the planet's battle map">Reset layout</button>
+              <small className="ew-muted">{coarse ? 'Drag a structure on the battle map to place it; pick it to turn it by its handle.' : 'Drag a structure on the battle map to place it; pick it to turn it (its handle, the wheel or R). Battles here stand it so.'}</small>
+              <button className="ew-gp-up" disabled={!p.layout} onClick={reset} data-tip="Put every structure back where it stands by default on the planet's battle map, facing its default way">Reset layout</button>
             </footer>
           )}
         </Frame>

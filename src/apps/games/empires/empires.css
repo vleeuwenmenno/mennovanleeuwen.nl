@@ -7650,29 +7650,6 @@ span.ew-teamtag {
 .ew-ostruct.is-ruin img {
   filter: grayscale(0.9) brightness(0.45) sepia(0.4);
 }
-.ew-ostruct.is-ghost img {
-  opacity: 0.2;
-  filter: grayscale(1) brightness(1.4);
-}
-/* An empty site: a dashed ring with a plus, to order from. */
-.ew-ostruct-ghost {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: calc(var(--r) * 2);
-  height: calc(var(--r) * 2);
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 2px dashed color-mix(in srgb, var(--ew-accent) 60%, transparent);
-  background: color-mix(in srgb, var(--ew-accent) 8%, transparent);
-  color: var(--ew-accent);
-  display: grid;
-  place-items: center;
-  font-style: normal;
-  font-size: calc(var(--r) * 0.7);
-  font-weight: 700;
-  line-height: 1;
-}
 .ew-ostruct:hover img,
 .ew-ostruct.is-sel img {
   filter: drop-shadow(0 0 4px var(--ew-accent)) drop-shadow(0 0 1px var(--ew-accent));
@@ -7680,18 +7657,12 @@ span.ew-teamtag {
 .ew-ostruct.is-sel.is-ruin img {
   filter: grayscale(0.9) brightness(0.45) sepia(0.4) drop-shadow(0 0 4px var(--ew-accent));
 }
-.ew-ostruct.is-sel .ew-ostruct-ghost {
-  border-style: solid;
-  background: color-mix(in srgb, var(--ew-accent) 18%, transparent);
-}
 .ew-ostruct.is-dragging .ew-ostruct-in {
   cursor: grabbing;
   opacity: 0.85;
 }
-.ew-ostruct.is-dragging.is-bad img,
-.ew-ostruct.is-dragging.is-bad .ew-ostruct-ghost {
+.ew-ostruct.is-dragging.is-bad img {
   filter: drop-shadow(0 0 5px var(--ew-bad));
-  border-color: var(--ew-bad);
 }
 .ew-ostruct-name {
   position: absolute;
@@ -8135,11 +8106,8 @@ span.ew-teamtag {
     min-height: 34px;
   }
 }
-/* A site whose building is under way in the planet's queue. */
-.ew-ostruct.is-building .ew-ostruct-ghost {
-  border-style: solid;
-  border-color: var(--ew-gold);
-  color: var(--ew-gold);
+/* A ruin whose rebuilding is under way in the planet's queue. */
+.ew-ostruct.is-building img {
   animation: ew-orbit-build 1.6s ease-in-out infinite;
 }
 @keyframes ew-orbit-build {
@@ -8148,7 +8116,7 @@ span.ew-teamtag {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ew-ostruct.is-building .ew-ostruct-ghost {
+  .ew-ostruct.is-building img {
     animation: none;
   }
 }
