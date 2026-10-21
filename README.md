@@ -2385,8 +2385,18 @@ glide, as it follows the hand).
   Command Station at its level, a yard with its expansions, a defense station at its level with its
   modules. Ruins show darkened where they lie (rebuilt for half). An empty yard or defense site shows
   nothing; it is ordered from the shipyard's Yards and Defense pages, or from the Command Station's
-  card, which lists the empty sites (each opens its site card). Once built, it appears at its spot in
-  the layout: its default, unless it was placed before.
+  card, which lists the empty sites (each opens its site card).
+- **Under construction:** once a yard or a defense station is being built (the head of the planet's
+  queue; one waiting behind other work isn't started and doesn't show yet), it shows on the battle
+  map and round the planet at its spot in the layout, drawn as what it will be, faint and hatched,
+  with a bar under it filling up and the seconds left (`structWork`, `WorkBar` in
+  [`Orbit.tsx`](src/apps/games/empires/Orbit.tsx); it updates with the galaxy's clock, ten times a
+  second). A ruin being rebuilt shows the same way. It can be dragged and turned while it builds, and
+  is saved in the layout; finished, it stands built at the same spot and heading. A station, yard or
+  defense station being upgraded, or getting an expansion or a module, keeps its current look with
+  the same bar. Its tooltip says *under construction* (or *upgrading*) and the seconds left. Battles
+  fought before it is finished don't have it. On other sides' planets it shows only while we see the
+  system (the fog of war hides their queues).
 - **Entry zones:** each hyperlane into the planet's system has an entry zone of its own along the
   far side of the map, named after the system at its other end, in the order the lanes leave the
   system (from the west round through north, east and south), and a planet with neighbours in its
@@ -2398,11 +2408,21 @@ glide, as it follows the hand).
   (`MapDef.keep`), and the map's rocks are its own all over (`sym: 'none'`), so the map is the same
   whichever lane the attack comes down.
 - **Placing structures** (our planets): drag a structure on the battle map, with a mouse or a finger.
-  The Command Station moves within its home zone round the home spawn (`HOME_R`) and takes the rest
-  along; the yards and defense stations move within its build radius, clear of rocks, asteroid
-  fields, the map's edge and each other, kept apart by the size each grows to (`layoutTop`). A drop
-  where one can't stand goes to the nearest clear spot (`nearestClear`), or is refused with the
-  reason. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
+  The Command Station moves anywhere in the defender's third of the map (`homeZone` in
+  [`sim.ts`](src/apps/games/empires/sim.ts): the third on the side of the middle the home spawn is
+  on, along the axis it is furthest out on as a share of the map's size; every conquest map has its
+  home on the left, so that is the left third), keeping `STATION_ENTRY_GAP` from the middle of every
+  entry zone so attackers never drop out of hyperspace on top of the base, and takes the rest along.
+  While it is dragged the third shows as a tinted box and the entry zones' keep-out rings in red; a
+  spot outside says why and a drop there is refused. Anywhere within `HOME_R` of the home spawn (the
+  old home circle) always stays allowed, so older layouts stand where they did. In battle its reserve
+  jumps in by the station wherever it stands; the yards and defense stations move within its build radius, clear of rocks, asteroid
+  fields, the map's edge and each other, each by its real size (the station at its level, a defense
+  station at its level, one being built as what it will be). Only what shows counts: an empty site
+  takes no room. A structure that grows later (a station or defense station upgraded) and no longer
+  fits where it was moves to the nearest clear spot, in battle and on the map alike. A drop on another
+  structure is refused naming it (*Too close to the Frigate Yard*); a drop on rocks, a field or past
+  the edge goes to the nearest clear spot (`nearestClear`); anything else is refused with the reason. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
   the card's *Reset layout* puts everything back at its default place and heading.
 - **Turning structures** (our planets): a picked structure that stands shows a handle at its nose on
   the battle map; drag it round (mouse or finger, a bigger handle on touch screens) and the structure
