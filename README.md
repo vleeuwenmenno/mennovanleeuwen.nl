@@ -3478,6 +3478,10 @@ visits and who played most. Open it from Spotlight (Enter on the Minecraft entry
 *Overview* button in the top bar's Minecraft popup, or `open mcserver`. `MC_WATCH=off` stops the
 pinger; the window then shows the live status only.
 
+A ping that goes unanswered is tried again twice, 2 seconds apart, before the server counts as
+offline, and the "went offline" notification only comes after three such pings in a row (about a
+minute and a half), so a dropped packet or a slow answer doesn't send a false alarm.
+
 The ping's player list is not reliable for names: players who switch off *Allow Server Listings*
 in Minecraft come through as "Anonymous Player", and the same player can be named in one ping and
 anonymous in the next. Those are left out, and while anyone is hidden nobody is marked as gone.

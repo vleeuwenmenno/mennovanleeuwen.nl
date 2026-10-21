@@ -28,14 +28,21 @@ const admins = () => accounts().filter((u) => u.admin)
 
 // --- Minecraft -----------------------------------------------------------------------------------
 
-/** The last ping: who was on, with how many pings in a row each has been missing from the sample. */
-let lastMc: { online: boolean; count: number; misses: Map<string, number> } | null = null
+/**
+ * The last ping: who was on, with how many pings in a row each has been missing from the sample,
+ * and how many pings in a row the server has not answered while still counted as online.
+ */
+let lastMc: { online: boolean; downs: number; count: number; misses: Map<string, number> } | null = null
+/** Pings in a row (30 s apart, each already tried three times) without an answer before the server counts as down. */
+const MC_DOWN_AFTER = 3
 const head = (name: string) => `https://mc-heads.net/avatar/${encodeURIComponent(name)}/32`
 
 export function minecraft(st: McStatus) {
   const prev = lastMc
+  // A missed ping or two is no outage: until then, leave everything as the last answer had it.
+  if (!st.online && prev?.online && ++prev.downs < MC_DOWN_AFTER) return
   const misses = new Map<string, number>()
-  lastMc = { online: st.online, count: st.players.online, misses }
+  lastMc = { online: st.online, downs: 0, count: st.players.online, misses }
   for (const name of st.players.list) misses.set(name, 0)
   if (!prev) return // the first ping is where things stand, not news
 

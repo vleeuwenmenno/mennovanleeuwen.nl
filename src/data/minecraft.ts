@@ -115,8 +115,8 @@ function fromPublicApis(get: (url: string) => Promise<Json>): Promise<State> {
     })
 }
 
-// Join, leave and up/down notifications. The first answer is the baseline. A live answer from the
-// server itself is trusted at once; with the public APIs a player only counts as gone after two
+// Join, leave and up/down notifications. The first answer is the baseline. The server only counts
+// as down after three polls in a row say so. A live answer from the server itself is trusted at once; with the public APIs a player only counts as gone after two
 // polls in a row without them, since their caches can briefly disagree.
 // Switched on and off with the other notifications (Settings → Notifications, src/os/notifyPrefs.ts).
 export const mcNotificationsOn = () => sourceOn('minecraft.players') || sourceOn('minecraft.status')
@@ -126,13 +126,17 @@ export function setMcNotifications(on: boolean) {
   listeners.forEach((l) => l())
 }
 
-let last: { online: boolean; count: number; misses: Map<string, number> } | null = null
+let last: { online: boolean; downs: number; count: number; misses: Map<string, number> } | null = null
+/** Polls in a row reporting the server offline before it counts as down (the public APIs often get it wrong). */
+const DOWN_AFTER = 3
 const head = (name: string) => `https://mc-heads.net/avatar/${encodeURIComponent(name)}/32`
 
 function watch(st: McStatus, live = false) {
   const prev = last
+  // A missed poll or two is no outage: until then, leave everything as the last answer had it.
+  if (!st.online && prev?.online && ++prev.downs < DOWN_AFTER) return
   const misses = new Map<string, number>()
-  last = { online: st.online, count: st.players.online, misses }
+  last = { online: st.online, downs: 0, count: st.players.online, misses }
   for (const name of st.players.list) misses.set(name, 0)
   if (!prev) return
 
