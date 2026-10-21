@@ -42,9 +42,20 @@ export const LAYOUT_SCALE = { unit: mapDist(560), min: mapDist(760), max: BUILD_
 
 /** A place on a planet's battle map (world units). */
 export type Place = { x: number; y: number }
+/** Where a structure of a layout stands, and its heading `a` (radians, as a unit's in a battle) if
+ * its holder turned it; left out, it faces the way it does by default (sim.ts layoutFace: the
+ * station towards the middle of the map, a yard away from the station, a defense station as the
+ * station does). Saves from before structures could be turned have none. */
+export type LayoutPlace = Place & { a?: number }
 /** Where a planet's structures stand on its battle map, as its holder placed them (each missing one
  * stands at its default, see autoLayout). */
-export type PlanetLayout = Partial<Record<StructId, Place>>
+export type PlanetLayout = Partial<Record<StructId, LayoutPlace>>
+
+/** A heading brought into (-PI, PI], to four decimals (what a layout keeps). */
+export function cleanTurn(a: number): number {
+  const t = a - Math.PI * 2 * Math.floor((a + Math.PI) / (Math.PI * 2))
+  return Math.round(t * 1e4) / 1e4
+}
 
 /** An entry zone: where an attacker coming from `system` (a neighbouring system down a hyperlane,
  * or the planet's own system for a fleet from another planet there) drops out of hyperspace. */
@@ -234,9 +245,9 @@ export function cleanLayout(l: unknown, pm: () => Pick<PlanetMap, 'map' | 'home'
   const polar: Partial<Record<StructId, Spot>> = {}
   const out: PlanetLayout = {}
   for (const id of STRUCT_ORDER) {
-    const s = v[id] as Partial<Spot & Place> | undefined
+    const s = v[id] as Partial<Spot & LayoutPlace> | undefined
     if (!s || typeof s !== 'object') continue
-    if (Number.isFinite(s.x) && Number.isFinite(s.y)) out[id] = { x: s.x!, y: s.y! }
+    if (Number.isFinite(s.x) && Number.isFinite(s.y)) out[id] = { x: s.x!, y: s.y!, ...(Number.isFinite(s.a) ? { a: cleanTurn(s.a!) } : {}) }
     else if (Number.isFinite(s.a) && Number.isFinite(s.d)) polar[id] = { a: s.a!, d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, s.d!)) }
   }
   if (Object.keys(polar).length) {

@@ -165,15 +165,6 @@
 .ew-pstruct.is-ruin img {
   filter: grayscale(0.9) brightness(0.45) sepia(0.4);
 }
-.ew-pstruct.is-ghost .ew-pstruct-in {
-  outline: 1.5px dashed color-mix(in srgb, var(--ew-accent) 70%, transparent);
-  outline-offset: 1px;
-  border-radius: 3px;
-}
-.ew-pstruct.is-ghost img {
-  opacity: 0.3;
-  filter: grayscale(1) brightness(1.4);
-}
 .ew-pmap.is-fog .ew-pstruct img {
   opacity: 0.6;
 }
@@ -183,6 +174,67 @@
 }
 .ew-pstruct.is-bad {
   box-shadow: 0 0 0 1.5px var(--ew-bad), 0 0 10px color-mix(in srgb, var(--ew-bad) 50%, transparent);
+}
+/* The handle a picked structure of ours is turned by: at its nose, on an arm from its middle. */
+.ew-pmap .ew-pturn-arm {
+  position: absolute;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--ew-accent) 70%, transparent);
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.ew-pmap button.ew-pturn {
+  position: absolute;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px solid var(--ew-accent);
+  background: color-mix(in srgb, var(--ew-bg) 85%, transparent);
+  color: var(--ew-accent);
+  cursor: grab;
+  touch-action: none;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--ew-bg) 80%, transparent);
+}
+.ew-pmap .ew-pturn svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+.ew-pmap button.ew-pturn:hover:not(:disabled),
+.ew-pmap button.ew-pturn.is-on {
+  background: var(--ew-accent);
+  color: var(--ew-bg);
+}
+.ew-pmap button.ew-pturn.is-on {
+  cursor: grabbing;
+}
+/* A finger needs a bigger target. */
+.ew-pmap button.ew-pturn.is-coarse {
+  width: 34px;
+  height: 34px;
+}
+.ew-pmap .ew-pturn.is-coarse svg {
+  width: 18px;
+  height: 18px;
+}
+/* The Command Station's orbit card: the empty sites, to order something built on them. */
+.ew-gorbit-sites {
+  display: grid;
+  gap: 4px;
+}
+.ew-gorbit-siterow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ew-gorbit-siterow .is-busy {
+  border-color: var(--ew-gold);
+  color: var(--ew-gold);
 }
 /* The pictures round the planet are picked, not dragged: structures move on the battle map. */
 .ew-orbit .ew-ostruct.is-ours .ew-ostruct-in {

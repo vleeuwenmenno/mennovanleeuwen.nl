@@ -15,7 +15,7 @@ import { generateMap, DEFAULT_RULES } from '../src/apps/games/empires/maps.ts'
 import { BUILD_RADIUS, yardOf, ORBITALS, ORBITAL_MAX, REBUILD, UNIT, orbitalKey, orbitalMod, orbitalSlots, orbitalType, type FactionId, type OrbitalModId } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
 import { LAYOUT_IDS, baseLeft, layoutTop, layoutWorld, nearestClear, newFleetBattle, standBase, type FleetSide, type LayoutItem } from '../src/apps/games/empires/sim.ts'
-import { AUTO_SPOT, SPOT_D, planetMap, polarToMap } from '../src/apps/games/empires/conquestMap.ts'
+import { AUTO_SPOT, SPOT_D, cleanTurn, planetMap, polarToMap } from '../src/apps/games/empires/conquestMap.ts'
 import * as G from '../src/apps/games/empires/galaxy.ts'
 import type { Galaxy, OrbitalWork, PlanetBase } from '../src/apps/games/empires/galaxy.ts'
 
@@ -269,6 +269,68 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   check('not off the map', G.setLayout(g, 0, cap.id, { def0: { x: -5, y: 1800 } }) === 'Nothing to move')
   check('not on someone else\'s planet', G.setLayout(g, 0, g.planets.find((p) => p.owner === 1)!.id, { station: { x: 2000, y: 2000 } }) === 'Not our planet')
   check('reset puts them all back', G.resetLayout(g, 0, cap.id) === null && !cap.layout)
+}
+
+// --- Turned structures: the layout keeps a heading, battles stand them so --------------------------------------
+{
+  const { g, cap } = campaign()
+  const pm = planetMap(g, cap.id)
+  cap.base.yards = { yard: 'up', cyard: 'up' }
+  cap.base.orb = [{ level: 2, mods: ['battery', null] }, { level: 1, mods: [null] }]
+  const orbitals = [{ i: 0, level: 2, mods: ['battery', null] as (OrbitalModId | null)[] }, { i: 1, level: 1, mods: [null] as (OrbitalModId | null)[] }]
+  const fight = (layout: G.Planet['layout']) => newFleetBattle(pm.map, [
+    { faction: 'republic', team: 0, ships: ['r-frigate'], station: 3, yards: ['yard', 'cyard'], exp: [], orbitals, ...(layout ? { layout } : {}), spawn: 0 },
+    { faction: 'droid', team: 1, ships: ['d-frigate'], spawn: 1 },
+  ], { seed: pm.map.seed })
+  const unitOf = (w: ReturnType<typeof fight>, id: string) => w.units.find((u) => (id === 'station' ? u.t.tier === 'station' : id === 'yard' ? u.t.id === 'r-yard' : id === 'cyard' ? u.t.id === 'r-cyard' : u.t.orbital?.i === (id === 'def1' ? 1 : 0)))!
+  const plain = fight(undefined)
+  const lw = layoutWorld(pm.map)
+  const items: LayoutItem[] = [{ id: 'yard', t: yardOf('republic', 'yard') }, { id: 'cyard', t: yardOf('republic', 'cyard') }, ...orbitals.map((d) => ({ id: (d.i ? 'def1' : 'def0') as LayoutItem['id'], t: orbitalType('republic', d.level, d.mods, d.i) }))]
+  const stood = (layout: G.Planet['layout']) => standBase(lw, 0, 'republic', pm.home, layout, pm.map.spawns.slice(1), items)
+  const base = stood(undefined)
+  // Each one turned a quarter round from where it faces by default, in place.
+  const turned: G.Planet['layout'] = Object.fromEntries(base.map((s) => [s.id, { x: s.x, y: s.y, a: Math.round((s.a + Math.PI / 2) * 1e4) / 1e4 }]))
+  check('a turned layout is kept with its headings', G.setLayout(g, 0, cap.id, turned!) === null && LAYOUT_IDS.every((id) => Math.abs(cleanTurn(cap.layout?.[id]?.a ?? NaN) - cleanTurn(turned![id]!.a!)) < 1e-9), JSON.stringify(cap.layout))
+  const preview = stood(cap.layout)
+  // (Turned, one may no longer fit where it stood: it moves to the nearest clear spot, still turned.)
+  check('the preview stands each turned so', preview.every((s) => Math.abs(s.a - cap.layout![s.id]!.a!) < 1e-9), preview.map((s) => `${s.id}:${s.a.toFixed(3)}`).join(' '))
+  const w = fight(cap.layout)
+  check('a battle there stands every structure turned so', LAYOUT_IDS.every((id) => { const u = unitOf(w, id); const s = preview.find((x) => x.id === id)!; return u.x === s.x && u.y === s.y && u.a === s.a }), LAYOUT_IDS.map((id) => `${id}:${unitOf(w, id).a.toFixed(3)}`).join(' '))
+  check('which is not how it stood unturned', LAYOUT_IDS.every((id) => Math.abs(unitOf(w, id).a - unitOf(plain, id).a) > 1))
+  const pos = (x: typeof w) => x.units.filter((u) => u.t.tier !== 'frigate').map((u) => `${u.t.id}@${u.x},${u.y},${u.a}`).join(' ')
+  check('the same every time (lockstep-safe)', pos(fight(cap.layout)) === pos(w))
+  // Unturned, a structure faces as it did before structures could be turned.
+  const placed: G.Planet['layout'] = Object.fromEntries(base.map((s) => [s.id, { x: s.x, y: s.y }]))
+  check('a layout with no headings faces the default way', pos(fight(placed)) === pos(plain))
+  // Only the station turned: the defense stations nobody turned face as it does.
+  const st = { ...placed!, station: { ...placed!.station!, a: 0.5 } }
+  const sw = fight(st)
+  check('defense stations nobody turned face as the station does', Math.abs(unitOf(sw, 'station').a - 0.5) < 1e-9 && Math.abs(unitOf(sw, 'def0').a - 0.5) < 1e-9 && Math.abs(unitOf(sw, 'yard').a - unitOf(plain, 'yard').a) < 1e-9)
+  // The clash the galaxy hands a battle carries the headings.
+  const c = G.clashAt(g, cap.id) ?? { planet: cap.id, holder: 0, attacker: 1, station: cap.station, holderShips: [], attackerShips: ['d-frigate'], holderHeld: [], attackerHeld: [], base: cap.base, layout: cap.layout }
+  const cb = G.clashBattle(g, { ...c, base: cap.base, layout: JSON.parse(JSON.stringify(cap.layout)) })
+  check('the galaxy\'s battle setup passes the headings on', LAYOUT_IDS.every((id) => cb.sides[0].layout?.[id]?.a === cap.layout![id]!.a))
+  // Save and load.
+  check('a save keeps them', G.saveGalaxy(g))
+  const back = G.loadSave(g.save.id)!
+  check('loaded, the headings are there', LAYOUT_IDS.every((id) => back.planets[cap.id].layout?.[id]?.a === cap.layout![id]!.a), JSON.stringify(back.planets[cap.id].layout))
+  // What another side saw: the headings as they were (the fog of war).
+  const seen = back.sides[1].intel?.[cap.id]
+  check('intel keeps headings when it has a layout', !seen?.layout || LAYOUT_IDS.every((id) => seen.layout?.[id]?.a === undefined || Number.isFinite(seen.layout[id]!.a)))
+  // A save from before turning: no heading anywhere, every structure the default way.
+  const key = `mvlos.empires.save.${g.save.id}`
+  const old = JSON.parse(store.get(key)!) as Galaxy
+  for (const id of LAYOUT_IDS) delete old.planets[cap.id].layout![id]!.a
+  store.set(key, JSON.stringify(old))
+  const o = G.loadSave(g.save.id)!
+  check('an older save loads facing the default way', !!o && LAYOUT_IDS.every((id) => o.planets[cap.id].layout?.[id] && o.planets[cap.id].layout![id]!.a === undefined) && pos(fight(o.planets[cap.id].layout)) === pos(fight(placed)))
+  // Nonsense headings are dropped, not kept.
+  const bad = JSON.parse(store.get(key)!) as Galaxy
+  ;(bad.planets[cap.id].layout as unknown as Record<string, { a: unknown }>).yard.a = 'x'
+  ;(bad.planets[cap.id].layout as unknown as Record<string, { a: unknown }>).def0.a = 40
+  store.set(key, JSON.stringify(bad))
+  const b2 = G.loadSave(g.save.id)!
+  check('a bad heading is dropped, a big one brought round', b2.planets[cap.id].layout?.yard?.a === undefined && Math.abs(b2.planets[cap.id].layout!.def0!.a! - cleanTurn(40)) < 1e-9 && Math.abs(b2.planets[cap.id].layout!.def0!.a!) <= Math.PI)
 }
 
 // --- The galaxy AI builds and arms them -----------------------------------------------------------------------

@@ -16,7 +16,8 @@ import { TAP_SLOP } from './Touch'
 // cards: one painted picture per look), slowly orbiting together, where the planet's layout on its
 // battle map puts them, turned back round the planet (conquestMap.ts mapToPolar; they are placed on
 // the map's preview beside it, PlanetMap.tsx). Each can be picked (the orbit card then shows its
-// orders); empty yard and defense sites show as ghost outlines to order them from. The same
+// orders); only what is built shows (and ruins), each as it looks at its level, the empty yard and
+// defense sites listed on the Command Station's card to order them from. The same
 // structures show as small pictures round every planet at the zoom between (see orbitThings and the
 // galaxy map's pins), so what a planet has is plain to see without zooming all the way in.
 //
@@ -93,7 +94,9 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
   const root = useRef<HTMLDivElement>(null)
   const world = useRef<HTMLDivElement>(null)
   const ours = p.owner === ME && live
-  const things = orbitThings(faction, station, base, ours)
+  // What stands there (and ruins): a site with nothing built on it shows nothing (the station's
+  // card lists them to build on).
+  const things = orbitThings(faction, station, base, false)
   // The orbit's turn so far (radians), and whether it's held still (something picked).
   const phase = useRef(0)
   const held = useRef(false)
@@ -184,11 +187,9 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
           const f = (structLong(th.t) * RD) / long
           const w = (dw + long * 0.08) * f
           const h = (dh + long * 0.08) * f
-          const tip = th.state === 'ghost'
-            ? `${th.name}: nothing built here yet. Click to order it${ours ? '; drag it on the battle map beside the planet to place it' : ''}.`
-            : `${th.name}${th.state === 'ruin' ? ': destroyed in a battle, rebuilt for half' : ''}. Click for its orders${ours ? '; drag it on the battle map beside the planet to place it' : ''}.`
-          // A site whose building is in the planet's queue (a yard, a defense station) shows it.
-          const busy = ours && th.state !== 'up' && p.queue.some((q) => q.unit === (th.id === 'def0' ? 'orb0' : th.id === 'def1' ? 'orb1' : th.id))
+          const tip = `${th.name}${th.state === 'ruin' ? ': destroyed in a battle, rebuilt for half' : ''}. Click for its orders${ours ? `; drag it on the battle map beside the planet to place it${th.state === 'up' ? ' and turn it' : ''}` : ''}.${ours && th.id === 'station' ? ' Its card lists the empty sites to build on.' : ''}`
+          // A ruin whose rebuilding is in the planet's queue shows it.
+          const busy = ours && th.state === 'ruin' && p.queue.some((q) => q.unit === (th.id === 'def0' ? 'orb0' : th.id === 'def1' ? 'orb1' : th.id))
           return (
             <div
               key={th.id}
@@ -205,7 +206,6 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
               onContextMenu={(e) => e.preventDefault()}
             >
               <span className="ew-ostruct-in" style={{ width: w, height: h, marginLeft: -w / 2, marginTop: -h / 2 }}>
-                {th.state === 'ghost' ? <i className="ew-ostruct-ghost" style={{ ['--r' as string]: `${long * f * 0.55}px` }}>+</i> : null}
                 {art && <img src={art.url} alt="" draggable={false} />}
               </span>
               <b className="ew-ostruct-name" style={{ top: h / 2 + 4 }}>{th.name}</b>
