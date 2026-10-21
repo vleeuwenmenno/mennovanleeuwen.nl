@@ -99,6 +99,14 @@ type Shown = Stood & { state: 'up' | 'ruin'; name: string }
 
 /** How far one step of the wheel or of R turns a structure, and what the handle snaps to (radians). */
 const TURN_STEP = Math.PI / 12
+/** How far the wheel scrolls (CSS pixels) for one turn step: about one notch of a plain wheel. */
+const WHEEL_STEP_PX = 100
+/** A wheel line (deltaMode 1, Firefox on some wheels) in CSS pixels. */
+const WHEEL_LINE_PX = 40
+/** The smallest single wheel event taken as a whole notch (high-resolution wheels send less). */
+const WHEEL_NOTCH_PX = 40
+/** How long a pause in the wheel forgets a part-scrolled step (ms). */
+const WHEEL_IDLE_MS = 300
 const TURN_SNAP = Math.PI / 36
 
 /**
@@ -320,15 +328,31 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     commit(moved(id, me.x, me.y, (Math.round(me.a / TURN_STEP) + Math.sign(by)) * TURN_STEP))
   }
   // The wheel over one of our structures turns it (and doesn't zoom the galaxy map).
+  // A step per notch of a plain wheel: high-resolution wheels and touchpads send many small events
+  // for one notch, so the distance is gathered up (per structure, forgotten after a pause) and a
+  // step taken for each WHEEL_STEP_PX of it.
   const wheelRef = useRef<(e: WheelEvent) => void>(() => {})
+  const wheelSum = useRef<{ id: StructId | null; sum: number; at: number }>({ id: null, sum: 0, at: 0 })
   wheelRef.current = (e: WheelEvent) => {
     const el = (e.target as HTMLElement | null)?.closest?.('[data-struct]') as HTMLElement | null
     const id = el?.dataset.struct as StructId | undefined
     if (!id || !canTurn(id)) return
     e.preventDefault()
     e.stopPropagation()
-    const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
-    if (d) turnBy(id, d)
+    const raw = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+    const d = raw * (e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_STEP_PX * 3 : 1)
+    const w = wheelSum.current
+    if (w.id !== id || e.timeStamp - w.at > WHEEL_IDLE_MS || Math.sign(d) !== Math.sign(w.sum)) w.sum = 0
+    w.id = id
+    w.at = e.timeStamp
+    w.sum += d
+    // A single event as big as a plain wheel's notch (some scroll ~50 px a notch) is a step itself.
+    if (Math.abs(d) >= WHEEL_NOTCH_PX) w.sum = Math.sign(d) * WHEEL_STEP_PX
+    if (Math.abs(w.sum) < WHEEL_STEP_PX) return
+    turnBy(id, w.sum)
+    w.sum -= Math.sign(w.sum) * WHEEL_STEP_PX
+    // At most a step per event: a fast flick doesn't spin it round.
+    w.sum = Math.max(-WHEEL_STEP_PX, Math.min(WHEEL_STEP_PX, w.sum))
   }
   useEffect(() => {
     const el = box.current
