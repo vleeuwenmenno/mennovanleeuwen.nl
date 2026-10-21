@@ -2400,6 +2400,10 @@ Esc, the banner's *Leave* or a look anywhere else lets go.
   towards the middle of the map, a yard away from the station, a defense station the way the station
   faces (so turning the station turns the defense stations nobody turned). Saves from before turning
   load with every structure facing its default way; enemy planets show the headings we last saw.
+- **The wheel and pinches on the panel** never zoom the galaxy map or let go of the orbit view,
+  anywhere on it, so a wheel meant to turn a structure that slips off it does nothing (over a
+  structure of ours it turns it). A touchpad pinch (Ctrl + wheel) and a two-finger pinch on the
+  panel are caught the same way.
 - **Exactly as in battle:** the panel and the battle both work out where everything stands with
   `standBase` ([`sim.ts`](src/apps/games/empires/sim.ts)) on the same map with the same rocks: the
   station first, then the yards and the defense stations, each at its place in the layout
@@ -2412,9 +2416,11 @@ Esc, the banner's *Leave* or a look anywhere else lets go.
 - **Round the planet:** the planet with its Command Station, yards (ruins greyed) and defense
   stations, each drawn as its real model from the same cached picture as the cards (`structArt`:
   nothing is painted per frame), pictured where the battle map has them turned back round the planet
-  (`mapToPolar`, the station up and to the left of it). They orbit the planet together, once in
-  twelve minutes (held still while one is picked, and for *reduce motion*). Moving them happens on the
-  battle map only. The camera places and fades the whole view with one transform, as the map's own
+  (`mapToPolar`, the station up and to the left of it), each turned as it stands on the battle map
+  (its heading turned back round the planet the same way, `Spot.h`), so the two views always agree,
+  default headings included. They orbit the planet together, once in twelve minutes, their headings
+  turning with them (held still while one is picked, and for *reduce motion*). Moving and turning
+  them happens on the battle map only. The camera places and fades the whole view with one transform, as the map's own
   layer is, so zooming renders nothing.
 - **Enemy and neutral planets** show read only: terrain and entry zones always, and their structures
   as the fog of war allows (see below): where they stand now while we see the system, else where we

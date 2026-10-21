@@ -107,11 +107,19 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
   // The content pixels per planet radius (each structure is drawn its own length of them, see
   // structLong).
   const RD = R * 100
+  // Each picture turned as it stands on the battle map (Spot.h), turning on with the orbit; one
+  // with no heading stands nose up.
   const place = (id: StructId, el: HTMLElement) => {
     const s = spotsRef.current[id] ?? AUTO_SPOT[id]
     const a = s.a + phase.current
     const t = `translate(${(Math.cos(a) * s.d * RD).toFixed(2)}px, ${(Math.sin(a) * s.d * RD).toFixed(2)}px)`
     if (el.style.transform !== t) el.style.transform = t
+    const inner = el.firstElementChild as HTMLElement | null
+    if (!inner) return
+    const r = s.h === undefined ? '' : `rotate(${(s.h + phase.current + Math.PI / 2).toFixed(4)}rad)`
+    if (inner.style.transform !== r) inner.style.transform = r
+    if (s.h === undefined) delete inner.dataset.heading
+    else inner.dataset.heading = (s.h + phase.current).toFixed(4)
   }
   // The camera places the whole view (one transform) and fades it in; nothing renders for it.
   useLayoutEffect(() => {
@@ -208,7 +216,7 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
               <span className="ew-ostruct-in" style={{ width: w, height: h, marginLeft: -w / 2, marginTop: -h / 2 }}>
                 {art && <img src={art.url} alt="" draggable={false} />}
               </span>
-              <b className="ew-ostruct-name" style={{ top: h / 2 + 4 }}>{th.name}</b>
+              <b className="ew-ostruct-name" style={{ top: Math.max(w, h) / 2 + 4 }}>{th.name}</b>
             </div>
           )
         })}

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { BUILD_RADIUS, dims, orbitalType, yardOf, type FactionId, type UnitType } from './data'
 import { calendar, setLayout, type Galaxy, type Known, type Planet, type StructId } from './galaxy'
 import { orbitThings, structArt, type OrbitCam } from './Orbit'
-import { ENTRY_R, STRUCT_ORDER, cleanTurn, planetMap, type LayoutPlace, type PlanetLayout, type PlanetMap, type Place } from './conquestMap'
+import { ENTRY_R, STRUCT_ORDER, cleanTurn, planetMap, type LayoutPlace, type PlanetLayout, type PlanetMap } from './conquestMap'
 import { drawTerrainOverview } from './render'
 import { HOME_R, LAYOUT_IDS, layoutProblem, layoutTop, layoutWorld, nearestClear, standBase, stationProblem, type LayoutItem, type Stood, type World } from './sim'
 import type { EmpiresSound } from './sound'
@@ -143,8 +143,8 @@ export function shownLayout(g: Galaxy, p: Planet, kn: Known): { pm: PlanetMap; w
   return { pm, w, f, shown }
 }
 
-/** The structures' places on the map for the orbit view's pictures round the planet. */
-export const placesOf = (shown: Shown[]) => Object.fromEntries(shown.map((s) => [s.id, { x: s.x, y: s.y }])) as Partial<Record<StructId, Place>>
+/** The structures' places and headings on the map for the orbit view's pictures round the planet. */
+export const placesOf = (shown: Shown[]) => Object.fromEntries(shown.map((s) => [s.id, { x: s.x, y: s.y, a: s.a }])) as Partial<Record<StructId, LayoutPlace>>
 export type ShownLayout = ReturnType<typeof shownLayout>
 /** shownLayout for planet `p` (or nothing), worked out again only when what stands there or its
  * layout changes. */
@@ -327,18 +327,22 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     if (!me || !canTurn(id)) return
     commit(moved(id, me.x, me.y, (Math.round(me.a / TURN_STEP) + Math.sign(by)) * TURN_STEP))
   }
-  // The wheel over one of our structures turns it (and doesn't zoom the galaxy map).
+  // The wheel anywhere on the panel never zooms the galaxy map (nor lets go of the orbit view): a
+  // wheel meant to turn a structure that slips off it would otherwise fly out of the planet. Over
+  // one of our structures it turns it; elsewhere it does nothing. (A touchpad pinch is a wheel with
+  // Ctrl held: caught the same way.)
   // A step per notch of a plain wheel: high-resolution wheels and touchpads send many small events
   // for one notch, so the distance is gathered up (per structure, forgotten after a pause) and a
   // step taken for each WHEEL_STEP_PX of it.
   const wheelRef = useRef<(e: WheelEvent) => void>(() => {})
   const wheelSum = useRef<{ id: StructId | null; sum: number; at: number }>({ id: null, sum: 0, at: 0 })
   wheelRef.current = (e: WheelEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.ctrlKey) return
     const el = (e.target as HTMLElement | null)?.closest?.('[data-struct]') as HTMLElement | null
     const id = el?.dataset.struct as StructId | undefined
     if (!id || !canTurn(id)) return
-    e.preventDefault()
-    e.stopPropagation()
     const raw = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
     const d = raw * (e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_STEP_PX * 3 : 1)
     const w = wheelSum.current
@@ -355,7 +359,7 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     w.sum = Math.max(-WHEEL_STEP_PX, Math.min(WHEEL_STEP_PX, w.sum))
   }
   useEffect(() => {
-    const el = box.current
+    const el = root.current
     if (!el) return
     const on = (e: WheelEvent) => wheelRef.current(e)
     el.addEventListener('wheel', on, { passive: false })

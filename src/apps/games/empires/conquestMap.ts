@@ -22,7 +22,7 @@ import type { Galaxy, PlanetKind, StructId } from './galaxy.ts'
 /** Where a structure sits round its planet in the orbit view's pictures: a bearing `a` (radians,
  * screen-wise: 0 to the right, clockwise) and a distance `d` in planet radii from its middle. Saves
  * from before the battle maps kept the layout this way (see polarToMap). */
-export type Spot = { a: number; d: number }
+export type Spot = { a: number; d: number; /** (The orbit view's pictures, see mapToPolar.) Its heading round the planet, as its heading on the battle map turned the same way. */ h?: number }
 /** Each structure's own spot round its planet before the battle maps: what an old save's layout left
  * out stood at (see fromPolar), and where a picture goes with no place on the map. */
 export const AUTO_SPOT: Record<StructId, Spot> = {
@@ -212,9 +212,10 @@ export function fromPolar(pm: Pick<PlanetMap, 'map' | 'home'>, spots: Partial<Re
 /**
  * The pictures round the planet in the orbit view: each structure's place on the battle map (`at`,
  * the station at `at.station`) turned back round the planet (the inverse of polarToMap, the station
- * on its own spot), kept between SPOT_D's distances.
+ * on its own spot), kept between SPOT_D's distances. Given its heading on the map (`a`), its picture
+ * is turned the same way (`h`), so the two views always agree.
  */
-export function mapToPolar(map: MapDef, at: Partial<Record<StructId, Place>>): Partial<Record<StructId, Spot>> {
+export function mapToPolar(map: MapDef, at: Partial<Record<StructId, LayoutPlace>>): Partial<Record<StructId, Spot>> {
   // (Up and to the left of the planet: the battle map's panel sits to its right.)
   const S = RING_STATION
   const st = at.station
@@ -224,7 +225,7 @@ export function mapToPolar(map: MapDef, at: Partial<Record<StructId, Place>>): P
   const turn = planetTurn(map, st) - Math.atan2(-sy, -sx)
   const c = Math.cos(-turn)
   const s = Math.sin(-turn)
-  const out: Partial<Record<StructId, Spot>> = { station: S }
+  const out: Partial<Record<StructId, Spot>> = { station: Number.isFinite(st.a) ? { ...S, h: st.a! - turn } : S }
   for (const id of STRUCT_ORDER) {
     const q = at[id]
     if (!q || id === 'station') continue
@@ -232,7 +233,7 @@ export function mapToPolar(map: MapDef, at: Partial<Record<StructId, Place>>): P
     const dy = (q.y - st.y) / LAYOUT_SCALE.unit
     const x = sx + dx * c - dy * s
     const y = sy + dx * s + dy * c
-    out[id] = { a: Math.atan2(y, x), d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, Math.hypot(x, y))) }
+    out[id] = { a: Math.atan2(y, x), d: Math.max(SPOT_D.min, Math.min(SPOT_D.max, Math.hypot(x, y))), ...(Number.isFinite(q.a) ? { h: q.a! - turn } : {}) }
   }
   return out
 }
