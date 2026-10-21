@@ -2417,9 +2417,12 @@ glide, as it follows the hand).
   spot outside says why and a drop there is refused. Anywhere within `HOME_R` of the home spawn (the
   old home circle) always stays allowed, so older layouts stand where they did. In battle its reserve
   jumps in by the station wherever it stands; the yards and defense stations move within its build radius, clear of rocks, asteroid
-  fields, the map's edge and each other, kept apart by the size each grows to (`layoutTop`). A drop
-  where one can't stand goes to the nearest clear spot (`nearestClear`), or is refused with the
-  reason. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
+  fields, the map's edge and each other, each by its real size (the station at its level, a defense
+  station at its level, one being built as what it will be). Only what shows counts: an empty site
+  takes no room. A structure that grows later (a station or defense station upgraded) and no longer
+  fits where it was moves to the nearest clear spot, in battle and on the map alike. A drop on another
+  structure is refused naming it (*Too close to the Frigate Yard*); a drop on rocks, a field or past
+  the edge goes to the nearest clear spot (`nearestClear`); anything else is refused with the reason. A click or tap on a structure (on the map or round the planet) picks it and opens its card;
   the card's *Reset layout* puts everything back at its default place and heading.
 - **Turning structures** (our planets): a picked structure that stands shows a handle at its nose on
   the battle map; drag it round (mouse or finger, a bigger handle on touch screens) and the structure

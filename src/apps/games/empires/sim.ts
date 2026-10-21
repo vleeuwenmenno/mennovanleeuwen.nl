@@ -2450,8 +2450,9 @@ function structProblem(w: World, owner: Owner, t: UnitType, st: Pt, x: number, y
   if (w.beacons.some((b) => gap(b.x, b.y) < 240)) return 'Too close to a beacon'
   if (w.wrecks.some((h) => gap(h.x, h.y) < h.size * 0.6)) return 'A wreck is in the way'
   // Kept clear of other structures: a yard by its box, the rest by their longest side, a station by the size it grows to.
-  // (A skirmish's defense station by the size it grows to; Galactic conquest's stand as they are.)
-  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o.orbital && !w.fleet ? orbitalType(o.faction, ORBITAL_TOP, []) : o)) * 0.5
+  // (A skirmish's station and defense station by the size they grow to; Galactic conquest's stand
+  // as they are: a conquest planet's layout is worked out again whenever one grows, see standBase.)
+  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' && !w.fleet ? stationType(o.faction, MAX_LEVEL, []) : o.orbital && !w.fleet ? orbitalType(o.faction, ORBITAL_TOP, []) : o)) * 0.5
   const crowded = (u: Standing) => {
     if (u.t.tier === 'yard') {
       const b = yardBox(u.t)
@@ -2459,7 +2460,11 @@ function structProblem(w: World, owner: Owner, t: UnitType, st: Pt, x: number, y
     }
     return gap(u.x, u.y) < half(u.t) + 60
   }
-  if (others ? others.some(crowded) : w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return 'Too close to another structure'
+  if (others) {
+    // (A layout's: which one it would crowd, by name.)
+    const hit = others.find(crowded)
+    if (hit) return `Too close to the ${hit.t.name}`
+  } else if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return 'Too close to another structure'
   if ((w.ruins ?? []).some((q) => q !== ruin && d2(x, y, q.x, q.y) < sq(r * 2))) return 'A ruin is in the way'
   return null
 }
@@ -5051,7 +5056,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
         ...YARD_IDS.filter((k) => s.yards?.includes(k)).map((id) => ({ id, t: yardOf(p.faction, id) })),
         ...(s.orbitals ?? []).map((d) => ({ id: (d.i ? 'def1' : 'def0') as LayoutId, t: orbitalType(p.faction, d.level, d.mods, d.i) })),
       ] : []
-      const stood = standBase(w, o, p.faction, sp, s.layout, attackers, items)
+      const stood = standBase(w, o, p.faction, sp, s.layout, attackers, items, stationType(p.faction, s.station, []))
       sp = stood[0]
       p.start = { x: sp.x, y: sp.y }
       // Its reserve jumps in by the station, wherever in its third of the map the layout put it.
@@ -5226,7 +5231,7 @@ export const layoutFace = (t: UnitType, st: Standing, x: number, y: number) => (
  * Battles stand their bases this way (newFleetBattle), and the orbit view's preview shows them this
  * way, on the same map with the same rocks: they always agree.
  */
-export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: Partial<Record<LayoutId, LayoutPt>> | undefined, attackers: Pt[], items: LayoutItem[]): Stood[] {
+export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: Partial<Record<LayoutId, LayoutPt>> | undefined, attackers: Pt[], items: LayoutItem[], stationT?: UnitType): Stood[] {
   const auto: Partial<Record<LayoutId, Pt>> = autoLayout(home, attackers)
   const want = plan?.station
   const sp = want && !stationProblem(w, f, home, want.x, want.y) ? want : home
@@ -5235,7 +5240,9 @@ export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: 
   const st: Stood = { id: 'station', t: stationType(f, MAX_LEVEL, []), x: sp.x, y: sp.y, a: sa }
   const dx = sp.x - home.x
   const dy = sp.y - home.y
-  const stand = (list: LayoutItem[], wants: (id: LayoutId) => LayoutPt | undefined): Stood[] => {
+  // `items` keep clear of the station as it is (`stationT`: its level now; the defaults of the one
+  // it grows to, so they never shift).
+  const stand = (list: LayoutItem[], wants: (id: LayoutId) => LayoutPt | undefined, st: Stood): Stood[] => {
     const out: Stood[] = [st]
     for (const { id, t } of list) {
       const q = wants(id)
@@ -5256,13 +5263,13 @@ export function standBase(w: World, owner: Owner, f: FactionId, home: Pt, plan: 
     }
     return out.slice(1)
   }
-  const defaults = new Map(stand(LAYOUT_IDS.slice(1).map((id) => ({ id, t: layoutTop(f, id) })), (id) => (auto[id] ? { x: auto[id]!.x + dx, y: auto[id]!.y + dy } : undefined)).map((s) => [s.id, s]))
+  const defaults = new Map(stand(LAYOUT_IDS.slice(1).map((id) => ({ id, t: layoutTop(f, id) })), (id) => (auto[id] ? { x: auto[id]!.x + dx, y: auto[id]!.y + dy } : undefined), st).map((s) => [s.id, s]))
   // (A default spot carries no heading of its own: it faces as it would by default.)
   const spot = (id: LayoutId): LayoutPt | undefined => {
     const d = defaults.get(id)
     return d ? { x: d.x, y: d.y } : undefined
   }
-  return [st, ...stand(items, (id) => plan?.[id] ?? spot(id))]
+  return [st, ...stand(items, (id) => plan?.[id] ?? spot(id), stationT ? { ...st, t: stationT } : st)]
 }
 
 /** The clear spot nearest `at` for structure `t` round station `st`, clear of `others` (see
