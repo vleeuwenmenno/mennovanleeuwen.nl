@@ -2371,8 +2371,18 @@ Esc, the banner's *Leave* or a look anywhere else lets go.
   Command Station at its level, a yard with its expansions, a defense station at its level with its
   modules. Ruins show darkened where they lie (rebuilt for half). An empty yard or defense site shows
   nothing; it is ordered from the shipyard's Yards and Defense pages, or from the Command Station's
-  card, which lists the empty sites (each opens its site card). Once built, it appears at its spot in
-  the layout: its default, unless it was placed before.
+  card, which lists the empty sites (each opens its site card).
+- **Under construction:** once a yard or a defense station is being built (the head of the planet's
+  queue; one waiting behind other work isn't started and doesn't show yet), it shows on the battle
+  map and round the planet at its spot in the layout, drawn as what it will be, faint and hatched,
+  with a bar under it filling up and the seconds left (`structWork`, `WorkBar` in
+  [`Orbit.tsx`](src/apps/games/empires/Orbit.tsx); it updates with the galaxy's clock, ten times a
+  second). A ruin being rebuilt shows the same way. It can be dragged and turned while it builds, and
+  is saved in the layout; finished, it stands built at the same spot and heading. A station, yard or
+  defense station being upgraded, or getting an expansion or a module, keeps its current look with
+  the same bar. Its tooltip says *under construction* (or *upgrading*) and the seconds left. Battles
+  fought before it is finished don't have it. On other sides' planets it shows only while we see the
+  system (the fog of war hides their queues).
 - **Entry zones:** each hyperlane into the planet's system has an entry zone of its own along the
   far side of the map, named after the system at its other end, in the order the lanes leave the
   system (from the west round through north, east and south), and a planet with neighbours in its
