@@ -27,8 +27,69 @@ import { TAP_SLOP } from './Touch'
 const ME = 0
 
 /** One structure round a planet as the views show it: what it is now (null: an empty site), standing,
- * a ruin, or a site to build on. */
-export type OrbitThing = { id: StructId; t: UnitType; state: 'up' | 'ruin' | 'ghost'; name: string }
+ * a ruin, being built (or rebuilt from its ruin: drawn as what it will be), or a site to build on. */
+export type OrbitThing = { id: StructId; t: UnitType; state: 'up' | 'ruin' | 'ghost' | 'building'; name: string }
+
+/** The work under way on one of a planet's structures (the head of its queue, the one being worked
+ * on): a new one going up (or a ruin rebuilt, `t` what it will be), or one that stands being
+ * upgraded or fitted (an upgrade, a module, an expansion). */
+export type StructWork = { id: StructId; kind: 'build' | 'up'; unit: string; t?: UnitType; name?: string }
+
+/**
+ * The work under way on planet `p`'s structures, as side ME can see it: only while we see the system
+ * (`live`; the fog of war hides queues), and only what is being worked on now (the head of the
+ * queue; what waits behind it isn't started). Faction `f`'s, the planet's holder.
+ */
+export function structWork(f: FactionId, p: Planet, base: PlanetBase, live: boolean): StructWork | null {
+  const q = p.queue[0]
+  if (!live || !q || p.station <= 0) return null
+  if (q.unit === 'yard' || q.unit === 'cyard') {
+    if (base.yards[q.unit] === 'up') return null
+    const t = yardOf(f, q.unit)
+    return { id: q.unit, kind: 'build', unit: q.unit, t, name: t.name }
+  }
+  const w = parseOrbital(q.unit)
+  if (w) {
+    const id: StructId = w.i ? 'def1' : 'def0'
+    const o = base.orb?.[w.i]
+    if (w.k === 'build' && (!o || o.ruin)) {
+      const lv = q.lv ?? o?.level ?? 1
+      return { id, kind: 'build', unit: q.unit, t: orbitalType(f, lv, []), name: orbitalName(f, lv) }
+    }
+    return o && !o.ruin ? { id, kind: 'up', unit: q.unit } : null
+  }
+  if (q.unit === 'station') return { id: 'station', kind: 'up', unit: q.unit }
+  const m = MODULE[q.unit as keyof typeof MODULE]
+  if (m) return m.on === 'station' || base.yards[m.on] === 'up' ? { id: m.on, kind: 'up', unit: q.unit } : null
+  return null
+}
+
+/** `things` with work `w` shown: a structure going up (or a ruin being rebuilt) as what it will be. */
+export function withWork(things: OrbitThing[], w: StructWork | null): OrbitThing[] {
+  if (!w || w.kind !== 'build' || !w.t) return things
+  const order: StructId[] = ['station', 'yard', 'cyard', 'def0', 'def1']
+  const out = things.filter((th) => th.id !== w.id)
+  out.push({ id: w.id, t: w.t, state: 'building', name: w.name ?? w.t.name })
+  return out.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+}
+
+/** How far the work at the head of planet `p`'s queue is (0 to 1) and the seconds it has left. */
+export function workProgress(p: Planet): { done: number; left: number } {
+  const q = p.queue[0]
+  if (!q) return { done: 0, left: 0 }
+  return { done: q.total > 0 ? Math.max(0, Math.min(1, 1 - q.left / q.total)) : 0, left: Math.max(0, Math.ceil(q.left)) }
+}
+
+/** A thin progress bar with the seconds left, for a structure being built or upgraded. */
+export function WorkBar({ p, className, style }: { p: Planet; className: string; style?: React.CSSProperties }) {
+  const { done, left } = workProgress(p)
+  return (
+    <span className={className} style={style} aria-hidden>
+      <i style={{ transform: `scaleX(${done.toFixed(3)})` }} />
+      <b>{left}s</b>
+    </span>
+  )
+}
 
 /**
  * What stands round a planet with a station of level `station` and buildings `base` (faction `f`'s):
@@ -94,9 +155,10 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
   const root = useRef<HTMLDivElement>(null)
   const world = useRef<HTMLDivElement>(null)
   const ours = p.owner === ME && live
-  // What stands there (and ruins): a site with nothing built on it shows nothing (the station's
-  // card lists them to build on).
-  const things = orbitThings(faction, station, base, false)
+  // What stands there (and ruins), and what is being built: a site with nothing built or being built
+  // on it shows nothing (the station's card lists them to build on).
+  const work = structWork(faction, p, base, live)
+  const things = withWork(orbitThings(faction, station, base, false), work)
   // The orbit's turn so far (radians), and whether it's held still (something picked).
   const phase = useRef(0)
   const held = useRef(false)
@@ -195,7 +257,8 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
           const f = (structLong(th.t) * RD) / long
           const w = (dw + long * 0.08) * f
           const h = (dh + long * 0.08) * f
-          const tip = `${th.name}${th.state === 'ruin' ? ': destroyed in a battle, rebuilt for half' : ''}. Click for its orders${ours ? `; drag it on the battle map beside the planet to place it${th.state === 'up' ? ' and turn it' : ''}` : ''}.${ours && th.id === 'station' ? ' Its card lists the empty sites to build on.' : ''}`
+          const busyHere = work?.id === th.id
+          const tip = `${th.name}${th.state === 'building' ? `: under construction, ${workProgress(p).left}s left` : busyHere ? `: upgrading, ${workProgress(p).left}s left` : th.state === 'ruin' ? ': destroyed in a battle, rebuilt for half' : ''}. Click for its orders${ours ? `; drag it on the battle map beside the planet to place it${th.state !== 'ruin' ? ' and turn it' : ''}` : ''}.${ours && th.id === 'station' ? ' Its card lists the empty sites to build on.' : ''}`
           // A ruin whose rebuilding is in the planet's queue shows it.
           const busy = ours && th.state === 'ruin' && p.queue.some((q) => q.unit === (th.id === 'def0' ? 'orb0' : th.id === 'def1' ? 'orb1' : th.id))
           return (
@@ -216,7 +279,8 @@ export function OrbitView({ p, at, R, view, kIn, sel, faction, live, base, stati
               <span className="ew-ostruct-in" style={{ width: w, height: h, marginLeft: -w / 2, marginTop: -h / 2 }}>
                 {art && <img src={art.url} alt="" draggable={false} />}
               </span>
-              <b className="ew-ostruct-name" style={{ top: Math.max(w, h) / 2 + 4 }}>{th.name}</b>
+              {busyHere && <WorkBar p={p} className="ew-owork" style={{ top: Math.max(w, h) / 2 + 2, width: Math.max(40, Math.min(w, h) * 0.9) }} />}
+              <b className="ew-ostruct-name" style={{ top: Math.max(w, h) / 2 + (busyHere ? 24 : 4) }}>{th.name}</b>
             </div>
           )
         })}

@@ -305,3 +305,20 @@
     line-height: 1.05;
   }
 }
+/* (Ships dragged from the fleets panel over the map with a finger: the selection's sheet, its head
+   and any other panel over the map fade and let the finger through to the systems behind them until
+   the drag ends; the fleets panel does the same itself (inventory.css). The touch bar stays, for
+   its Shift.) */
+@media (pointer: coarse) {
+  .ew-root.ew-galaxy.is-dragaway .ew-float:not(.ew-inv),
+  .ew-root.ew-galaxy.is-dragaway .ew-gselhead,
+  .ew-root.ew-galaxy.is-dragaway .ew-gselchipbar {
+    opacity: 0.18;
+    pointer-events: none;
+    transition: opacity 0.15s;
+  }
+  .ew-root.ew-galaxy.is-dragaway .ew-float:not(.ew-inv) *,
+  .ew-root.ew-galaxy.is-dragaway .ew-gselhead * {
+    pointer-events: none;
+  }
+}

@@ -120,9 +120,10 @@
 .ew-pmap-entry:hover i {
   border-style: solid;
 }
-/* The station's build radius, and (while it's moved) its home zone. */
+/* The station's build radius, and (while it's moved) where it may go: our third of the map, and the
+   rings round the entry zones it keeps out of. */
 .ew-pmap-reach,
-.ew-pmap-home {
+.ew-pmap-keep {
   position: absolute;
   transform: translate(-50%, -50%);
   border-radius: 50%;
@@ -132,9 +133,16 @@
   border: 1px dashed color-mix(in srgb, var(--ew-accent) 45%, transparent);
   background: color-mix(in srgb, var(--ew-accent) 5%, transparent);
 }
-.ew-pmap-home {
-  border: 1.5px solid color-mix(in srgb, var(--ew-good) 60%, transparent);
-  background: color-mix(in srgb, var(--ew-good) 8%, transparent);
+.ew-pmap-zone {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed color-mix(in srgb, var(--ew-good) 65%, transparent);
+  background: color-mix(in srgb, var(--ew-good) 9%, transparent);
+  pointer-events: none;
+}
+.ew-pmap-keep {
+  border: 1px dashed color-mix(in srgb, var(--ew-bad) 55%, transparent);
+  background: color-mix(in srgb, var(--ew-bad) 6%, transparent);
 }
 /* A structure: its picture at its true size and heading, in a hit area big enough for a finger. */
 .ew-pstruct {
@@ -223,6 +231,58 @@
 .ew-pmap .ew-pturn.is-coarse svg {
   width: 18px;
   height: 18px;
+}
+/* Under construction: what it will be, faint and hatched, on the map and round the planet. */
+.ew-pstruct.is-building .ew-pstruct-in,
+.ew-ostruct.is-building .ew-ostruct-in {
+  outline: 1.5px dashed color-mix(in srgb, var(--ew-gold) 75%, transparent);
+  outline-offset: 1px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--ew-gold) 14%, transparent) 0 3px, transparent 3px 7px);
+}
+.ew-pstruct.is-building img,
+.ew-ostruct.is-building img {
+  opacity: 0.5;
+  filter: saturate(0.35);
+}
+/* Its progress: a bar under it with the seconds left (an upgrade under way too). */
+.ew-pwork,
+.ew-owork {
+  position: absolute;
+  display: block;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ew-bg) 75%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--ew-gold) 60%, transparent);
+  pointer-events: none;
+}
+.ew-owork {
+  left: 0;
+  height: 6px;
+}
+.ew-pwork i,
+.ew-owork i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--ew-gold);
+  transform-origin: 0 50%;
+}
+.ew-pwork b,
+.ew-owork b {
+  position: absolute;
+  left: 50%;
+  top: 5px;
+  transform: translateX(-50%);
+  font: 600 9px/1 var(--ew-display);
+  color: var(--ew-gold);
+  text-shadow: 0 1px 2px var(--ew-bg);
+  white-space: nowrap;
+}
+.ew-owork b {
+  top: 7px;
+  font-size: 11px;
 }
 /* The Command Station's orbit card: the empty sites, to order something built on them. */
 .ew-gorbit-sites {

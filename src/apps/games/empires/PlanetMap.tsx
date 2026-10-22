@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { BUILD_RADIUS, dims, orbitalType, yardOf, type FactionId, type UnitType } from './data'
 import { calendar, setLayout, type Galaxy, type Known, type Planet, type StructId } from './galaxy'
-import { orbitThings, structArt, type OrbitCam } from './Orbit'
-import { ENTRY_R, STRUCT_ORDER, cleanTurn, planetMap, type LayoutPlace, type PlanetLayout, type PlanetMap } from './conquestMap'
+import { WorkBar, orbitThings, structArt, structWork, withWork, workProgress, type OrbitCam, type StructWork } from './Orbit'
+import { ENTRY_R, cleanTurn, planetMap, type LayoutPlace, type PlanetLayout, type PlanetMap } from './conquestMap'
 import { drawTerrainOverview } from './render'
-import { HOME_R, LAYOUT_IDS, layoutProblem, layoutTop, layoutWorld, nearestClear, standBase, stationProblem, type LayoutItem, type Stood, type World } from './sim'
+import { LAYOUT_IDS, STATION_ENTRY_GAP, homeZone, layoutProblem, layoutTop, layoutWorld, nearestClear, standBase, stationProblem, type LayoutItem, type Stood, type World } from './sim'
 import type { EmpiresSound } from './sound'
 import { TAP_SLOP } from './Touch'
 import './planetmap.css'
@@ -22,7 +22,7 @@ import './planetmap.css'
 // its spot in the layout (its default unless placed before).
 //
 // On our own planets the structures can be dragged (mouse or finger): the Command Station within its
-// home zone, the yards and defense stations within its build radius, clear of the rocks, fields, the
+// third of the map (sim.ts homeZone) clear of the entry zones, the yards and defense stations within its build radius, clear of the rocks, fields, the
 // map's edge and each other. A picked one of ours can be turned too: by the handle at its nose (mouse
 // or finger), the wheel over it, or R and Shift+R (also while dragging it); a double click on the
 // handle turns it back to its default heading. Battles here stand it turned so (the layout keeps the
@@ -95,7 +95,7 @@ function worldOf(pm: PlanetMap) {
 }
 
 /** One structure on the map as the panel draws it. */
-type Shown = Stood & { state: 'up' | 'ruin'; name: string }
+type Shown = Stood & { state: 'up' | 'ruin' | 'building'; name: string }
 
 /** How far one step of the wheel or of R turns a structure, and what the handle snaps to (radians). */
 const TURN_STEP = Math.PI / 12
@@ -111,15 +111,19 @@ const TURN_SNAP = Math.PI / 36
 
 /**
  * Where everything stands on planet `p`'s map as side ME knows it (`kn`): the structures that would
- * fight there (as a battle stands them, each its built type at its level), then the ruins where
- * they'd go. Sites with nothing built on them don't show. Nothing for a planet with no station.
+ * fight there (as a battle stands them, each its built type at its level), then the ruins and the
+ * one being built (drawn as what it will be) where they'd go, each at its real size. Sites with
+ * nothing built or being built on them don't show and take no room. Nothing for a planet with no
+ * station. `work`: the work under way there (structWork); `items` and `stationT`: what stands,
+ * by the types standBase keeps them apart by (for the panel's checks).
  */
-export function shownLayout(g: Galaxy, p: Planet, kn: Known): { pm: PlanetMap; w: World; f: FactionId | null; shown: Shown[] } {
+export function shownLayout(g: Galaxy, p: Planet, kn: Known): { pm: PlanetMap; w: World; f: FactionId | null; shown: Shown[]; work: StructWork | null; items: LayoutItem[]; stationT: UnitType | null } {
   const pm = planetMap(g, p.id)
   const w = worldOf(pm)
   const f = kn.owner >= 0 && kn.station > 0 ? g.sides[kn.owner].faction : null
-  if (!f) return { pm, w, f, shown: [] }
-  const things = orbitThings(f, kn.station, kn.base, false)
+  if (!f) return { pm, w, f, shown: [], work: null, items: [], stationT: null }
+  const work = structWork(f, p, kn.base, kn.live)
+  const things = withWork(orbitThings(f, kn.station, kn.base, false), work)
   const attackers = pm.map.spawns.slice(1)
   // What fights there, by the types the battle checks them by.
   const battleType = (id: StructId): UnitType => {
@@ -128,19 +132,21 @@ export function shownLayout(g: Galaxy, p: Planet, kn: Known): { pm: PlanetMap; w
     const o = kn.base.orb?.[i]
     return o && !o.ruin ? orbitalType(f, o.level, o.mods, i) : layoutTop(f, id)
   }
+  // What fights there first, as a battle stands it (later items never move earlier ones), then the
+  // ruins and the one being built where they'd go among it (a battle has those not: one being built
+  // joins the battles once it is finished, where it shows now).
   const up = things.filter((th) => th.state === 'up' && th.id !== 'station')
-  const items: LayoutItem[] = up.map((th) => ({ id: th.id, t: battleType(th.id) }))
-  const stood = standBase(w, ME, f, pm.home, kn.layout, attackers, items)
-  // The ruins: where they'd stand among the rest (shown only; a battle has none).
-  const rest = things.filter((th) => th.state === 'ruin')
-  const all = rest.length ? standBase(w, ME, f, pm.home, kn.layout, attackers, STRUCT_ORDER.slice(1).map((id) => ({ id, t: up.some((u) => u.id === id) ? battleType(id) : layoutTop(f, id) }))) : []
+  const rest = things.filter((th) => th.state === 'ruin' || th.state === 'building')
+  const items: LayoutItem[] = [...up.map((th) => ({ id: th.id, t: battleType(th.id) })), ...rest.map((th) => ({ id: th.id, t: th.t }))]
+  const stationT = things.find((th) => th.id === 'station')?.t ?? null
+  const stood = standBase(w, ME, f, pm.home, kn.layout, attackers, items, stationT ?? undefined)
   const shown: Shown[] = []
   for (const th of things) {
-    const s = th.id === 'station' ? stood[0] : th.state === 'up' ? stood.find((x) => x.id === th.id) : all.find((x) => x.id === th.id)
+    const s = th.id === 'station' ? stood[0] : stood.find((x) => x.id === th.id)
     if (!s || th.state === 'ghost') continue
     shown.push({ ...s, t: th.t, state: th.state, name: th.name })
   }
-  return { pm, w, f, shown }
+  return { pm, w, f, shown, work, items, stationT }
 }
 
 /** The structures' places and headings on the map for the orbit view's pictures round the planet. */
@@ -149,7 +155,8 @@ export type ShownLayout = ReturnType<typeof shownLayout>
 /** shownLayout for planet `p` (or nothing), worked out again only when what stands there or its
  * layout changes. */
 export function useShownLayout(g: Galaxy, p: Planet | null, kn: Known | null): ShownLayout | null {
-  const key = p && kn ? `${p.id}:${kn.owner}:${kn.station}:${JSON.stringify(kn.base)}:${JSON.stringify(kn.layout ?? null)}:${kn.live}` : ''
+  // (The work under way by what it is, not how far: the panel shows its progress as it renders.)
+  const key = p && kn ? `${p.id}:${kn.owner}:${kn.station}:${JSON.stringify(kn.base)}:${JSON.stringify(kn.layout ?? null)}:${kn.live}:${kn.live ? (p.queue[0]?.unit ?? '') : ''}` : ''
   // eslint-disable-next-line react-hooks/exhaustive-deps
   return useMemo(() => (p && kn ? shownLayout(g, p, kn) : null), [key])
 }
@@ -181,7 +188,7 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
   const cv = useRef<HTMLCanvasElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const ours = kn.owner === ME && kn.live && p.owner === ME
-  const { pm, w, f, shown } = lay
+  const { pm, w, f, shown, work, items, stationT } = lay
   const map = pm.map
   const mw = frame.pw - PAD
   const s = mw / map.w
@@ -242,10 +249,15 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
   const turnOf = (id: StructId) => kn.layout?.[id]?.a
   /** A place in the layout, with the heading `a` it keeps (if any). */
   const placeOf = (x: number, y: number, a: number | undefined): LayoutPlace => (a === undefined ? { x, y } : { x, y, a: cleanTurn(a) })
-  /** Where everything stands now, for the checks: each at its biggest, as it is turned. */
+  /** The type structure `id` is kept apart from the rest by, as standBase does: its real one (the
+   * station at its level, one being built as what it will be). */
+  const typeOf = (id: StructId): UnitType => (id === 'station' ? (stationT ?? layoutTop(f!, id)) : (items.find((i) => i.id === id)?.t ?? layoutTop(f!, id)))
+  const nameOf = (id: StructId) => shown.find((x) => x.id === id)?.name ?? id
+  /** Where everything shown stands now, for the checks: each at its real size, as it is turned.
+   * (Empty sites take no room.) */
   const full = (): Partial<Record<StructId, Stood>> => {
     const out: Partial<Record<StructId, Stood>> = {}
-    for (const x of shown) out[x.id] = { ...x, t: layoutTop(f!, x.id) }
+    for (const x of shown) out[x.id] = { ...x, t: typeOf(x.id) }
     return out
   }
   /** Why structure `id` can't stand at (x, y) (turned to `a`, else as the layout has it) with the
@@ -256,7 +268,7 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     const now = full()
     const st = now.station!
     const others = LAYOUT_IDS.filter((o) => o !== id && o !== 'station' && now[o]).map((o) => now[o]!)
-    return layoutProblem(w, ME, layoutTop(f, id), st, x, y, [st, ...others], a)
+    return layoutProblem(w, ME, typeOf(id), st, x, y, [st, ...others], a)
   }
   /**
    * The layout with `id` put at (x, y) and turned to `a` (null: back to its default heading; left
@@ -268,9 +280,10 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     if (!f || !station) return { why: 'Nothing stands here' }
     const now = full()
     const attackers = map.spawns.slice(1)
-    const all = LAYOUT_IDS.slice(1).map((o) => ({ id: o, t: layoutTop(f, o) }))
     const turned = (o: StructId) => (o === id ? (a === null ? undefined : (a ?? turnOf(o))) : turnOf(o))
-    const keep = (res: Stood[]): PlanetLayout => Object.fromEntries(res.map((r) => [r.id, placeOf(r.x, r.y, turned(r.id))]))
+    // Where standBase stood what shows, and where the layout has the empty sites (kept as they are:
+    // they take no room until something is built there).
+    const keep = (res: Stood[]): PlanetLayout => ({ ...Object.fromEntries(LAYOUT_IDS.filter((o) => !now[o] && want[o]).map((o) => [o, want[o]!])), ...Object.fromEntries(res.map((r) => [r.id, placeOf(r.x, r.y, turned(r.id))])) })
     // What the layout has already (sites placed before they were built), then what stands.
     const want: PlanetLayout = {}
     for (const o of LAYOUT_IDS) {
@@ -285,24 +298,28 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
       for (const o of LAYOUT_IDS.slice(1)) if (want[o]) want[o] = placeOf(want[o]!.x + dx, want[o]!.y + dy, turned(o))
       want.station = placeOf(x, y, turned('station'))
       // Each of the others where it went along with the station, else the nearest clear spot.
-      return { layout: keep(standBase(w, ME, f, pm.home, want, attackers, all)) }
+      return { layout: keep(standBase(w, ME, f, pm.home, want, attackers, items, stationT ?? undefined)) }
     }
     const ta = turned(id)
     let q: { x: number; y: number } | null = { x, y }
-    if (problem(id, x, y, ta)) {
+    const bad = problem(id, x, y, ta)
+    // Dropped onto another structure: refused, naming it (a drop on rocks or a field, or past the
+    // edge, goes to the nearest clear spot instead).
+    if (bad?.startsWith('Too close to the ')) return { why: bad }
+    if (bad) {
       const st = now.station!
       const others = LAYOUT_IDS.filter((o) => o !== id && o !== 'station' && now[o]).map((o) => now[o]!)
-      q = nearestClear(w, st, layoutTop(f, id), q, [st, ...others], ta)
+      q = nearestClear(w, st, typeOf(id), q, [st, ...others], ta)
     }
     if (!q) return { why: problem(id, x, y, ta) ?? 'No room there' }
     want[id] = placeOf(q.x, q.y, ta)
-    // As a battle would stand them, every one that stands where we want it (an empty site makes way).
-    const res = standBase(w, ME, f, pm.home, want, attackers, all)
-    const off = res.find((r) => {
+    // As a battle would stand what shows (at their real sizes), every one where we want it.
+    const res = standBase(w, ME, f, pm.home, want, attackers, items, stationT ?? undefined)
+    const off = res.slice(1).find((r) => {
       const v = want[r.id]
-      return (r.id === id || !!now[r.id]) && (!v || Math.abs(v.x - r.x) > 0.5 || Math.abs(v.y - r.y) > 0.5)
+      return !v || Math.abs(v.x - r.x) > 0.5 || Math.abs(v.y - r.y) > 0.5
     })
-    if (off || res.length < LAYOUT_IDS.length) return { why: 'Too close to another structure' }
+    if (off) return { why: off.id === id ? (problem(id, q.x, q.y, ta) ?? 'No room there') : `Too close to the ${nameOf(off.id)}` }
     return { layout: keep(res) }
   }
   /** Puts layout `r` in place (or says why not). */
@@ -319,8 +336,9 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     } else sound.click()
     onChange()
   }
-  /** Whether structure `id` is ours to turn: one that stands (a ruin is rebuilt where it lies). */
-  const canTurn = (id: StructId) => ours && shown.some((x) => x.id === id && x.state === 'up')
+  /** Whether structure `id` is ours to turn: one that stands or is being built (a ruin is rebuilt
+   * where it lies). */
+  const canTurn = (id: StructId) => ours && shown.some((x) => x.id === id && x.state !== 'ruin')
   /** Structure `id` turned a step (TURN_STEP) either way (`by`'s sign), to the nearest whole step. */
   const turnBy = (id: StructId, by: number) => {
     const me = shown.find((x) => x.id === id)
@@ -438,26 +456,16 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     } catch {
       // (A pointer that went away.)
     }
-    const toMap = (cx: number, cy: number) => {
-      let x = me.x + (cx - x0) / s
-      let y = me.y + (cy - y0) / s
-      if (id === 'station') {
-        // Kept within its home zone.
-        const d = Math.hypot(x - pm.home.x, y - pm.home.y)
-        if (d > HOME_R) {
-          x = pm.home.x + ((x - pm.home.x) / d) * HOME_R
-          y = pm.home.y + ((y - pm.home.y) / d) * HOME_R
-        }
-      }
-      return { x, y }
-    }
+    // (The station may go anywhere in our third of the map: outside it, it shows why not, and a drop
+    // there is refused.)
+    const toMap = (cx: number, cy: number) => ({ x: me.x + (cx - x0) / s, y: me.y + (cy - y0) / s })
     // Turned with R while dragged: the heading it is let go with (undefined: as the layout has it).
     let a = turnOf(id)
     const move = (m: PointerEvent) => {
       if (m.pointerId !== e.pointerId) return
       if (!moving && Math.hypot(m.clientX - x0, m.clientY - y0) <= slop) return
       if (!ours) return
-      if (!moving && me.state === 'up')
+      if (!moving && me.state !== 'ruin')
         dragging.current = {
           id,
           turnBy: (by) => {
@@ -496,6 +504,8 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
     ? fog ? (kn.t <= 0 ? 'Pre-war charts' : 'As last seen') : 'No station'
     : fog ? (kn.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(kn.t)}`) : ours ? (coarse ? 'Drag to place, pick to turn' : 'Drag to place, pick to turn: battles here stand them so') : 'Live'
   const st = drag?.id === 'station' ? drag : station
+  // Where the station may go (while it's dragged): our third of the map, clear of the entry zones.
+  const zone = homeZone(map, pm.home)
   const px = (v: number) => `${(v * s).toFixed(1)}px`
   return (
     <div
@@ -527,7 +537,12 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
             <span>{e.name}</span>
           </div>
         ))}
-        {ours && drag?.id === 'station' && <i className="ew-pmap-home" style={{ left: px(pm.home.x), top: px(pm.home.y), width: HOME_R * 2 * s, height: HOME_R * 2 * s }} />}
+        {ours && drag?.id === 'station' && (
+          <>
+            <i className="ew-pmap-zone" style={{ left: px(zone.x0), top: px(zone.y0), width: (zone.x1 - zone.x0) * s, height: (zone.y1 - zone.y0) * s }} />
+            {map.spawns.slice(1).map((q, i) => <i key={i} className="ew-pmap-keep" style={{ left: px(q.x), top: px(q.y), width: STATION_ENTRY_GAP * 2 * s, height: STATION_ENTRY_GAP * 2 * s }} />)}
+          </>
+        )}
         {st && <i className="ew-pmap-reach" style={{ left: px(st.x), top: px(st.y), width: BUILD_RADIUS * 2 * s, height: BUILD_RADIUS * 2 * s }} data-tip="The Command Station's build radius: its yards and defense stations stand within it" />}
         {shown.map((x) => {
           const d = drag?.id === x.id ? drag : null
@@ -544,7 +559,8 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
           const hit = Math.max(24, long * s)
           const turnable = canTurn(x.id)
           const why = d?.why ?? tr?.why ?? null
-          const tip = `${x.name}${x.state === 'ruin' ? ': a ruin, rebuilt for half' : ''}${fog ? ' (as last seen)' : ''}.${ours ? ` Drag it to where it stands in battles here; click for its orders${turnable ? `, then turn it by its handle${coarse ? '' : ', the wheel or R'}` : ''}.${x.id === 'station' ? ' The station moves within its home zone, and takes the rest along.' : ''}` : ' Click for what it is.'}`
+          const busy = work?.id === x.id
+          const tip = `${x.name}${x.state === 'building' ? `: under construction, ${workProgress(p).left}s left` : busy ? `: upgrading, ${workProgress(p).left}s left` : x.state === 'ruin' ? ': a ruin, rebuilt for half' : ''}${fog ? ' (as last seen)' : ''}.${ours ? ` Drag it to where it stands in battles here; click for its orders${turnable ? `, then turn it by its handle${coarse ? '' : ', the wheel or R'}` : ''}.${x.id === 'station' ? ' The station moves anywhere in our third of the map, clear of the entry zones, and takes the rest along.' : ''}` : ' Click for what it is.'}`
           // The handle it is turned by, at its nose, a little way out past its hit area.
           const reach = hit / 2 + (coarse ? 22 : 14)
           const handle = turnable && sel === x.id && !d
@@ -562,6 +578,7 @@ export function PlanetMapPanel({ g, p, kn, lay, view, at, span, kIn, frame, sel,
                   {art && <img src={art.url} alt="" draggable={false} />}
                 </span>
               </div>
+              {busy && <WorkBar p={p} className="ew-pwork" style={{ left: px(cx), top: `calc(${px(cy)} + ${(hit / 2 + 2).toFixed(1)}px)`, width: Math.max(28, Math.min(64, hit)) }} />}
               {handle && (
                 <>
                   <i className="ew-pturn-arm" style={{ left: px(cx), top: px(cy), width: reach, transform: `rotate(${a.toFixed(4)}rad)` }} />

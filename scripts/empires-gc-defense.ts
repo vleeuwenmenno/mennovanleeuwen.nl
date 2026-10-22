@@ -14,7 +14,7 @@
 import { generateMap, DEFAULT_RULES } from '../src/apps/games/empires/maps.ts'
 import { BUILD_RADIUS, yardOf, ORBITALS, ORBITAL_MAX, REBUILD, UNIT, orbitalKey, orbitalMod, orbitalSlots, orbitalType, type FactionId, type OrbitalModId } from '../src/apps/games/empires/data.ts'
 import { modelFor } from '../src/apps/games/empires/models/index.ts'
-import { LAYOUT_IDS, baseLeft, layoutTop, layoutWorld, nearestClear, newFleetBattle, standBase, type FleetSide, type LayoutItem } from '../src/apps/games/empires/sim.ts'
+import { HOME_R, LAYOUT_IDS, STATION_ENTRY_GAP, baseLeft, homeZone, layoutTop, layoutWorld, nearestClear, newFleetBattle, standBase, stationProblem, tick, type FleetSide, type LayoutItem } from '../src/apps/games/empires/sim.ts'
 import { AUTO_SPOT, SPOT_D, cleanTurn, planetMap, polarToMap } from '../src/apps/games/empires/conquestMap.ts'
 import * as G from '../src/apps/games/empires/galaxy.ts'
 import type { Galaxy, OrbitalWork, PlanetBase } from '../src/apps/games/empires/galaxy.ts'
@@ -331,6 +331,61 @@ const mod = (i: number, slot: number, m: OrbitalModId): OrbitalWork => ({ k: 'mo
   store.set(key, JSON.stringify(bad))
   const b2 = G.loadSave(g.save.id)!
   check('a bad heading is dropped, a big one brought round', b2.planets[cap.id].layout?.yard?.a === undefined && Math.abs(b2.planets[cap.id].layout!.def0!.a! - cleanTurn(40)) < 1e-9 && Math.abs(b2.planets[cap.id].layout!.def0!.a!) <= Math.PI)
+}
+
+// --- The Command Station anywhere in our third of the map --------------------------------------------------
+{
+  const { g, cap } = campaign()
+  const pm = planetMap(g, cap.id)
+  const lw = layoutWorld(pm.map)
+  const z = homeZone(pm.map, pm.home)
+  check('a conquest map\'s home is on the left: the zone is its left third', z.x0 === 0 && Math.abs(z.x1 - pm.map.w / 3) < 1e-9 && z.y0 === 0 && z.y1 === pm.map.h, JSON.stringify(z))
+  check('the zone rule follows the home: right, top and bottom thirds', JSON.stringify(homeZone({ w: 900, h: 600 }, { x: 800, y: 300 })) === JSON.stringify({ x0: 600, y0: 0, x1: 900, y1: 600 }) && homeZone({ w: 900, h: 600 }, { x: 450, y: 50 }).y1 === 200 && homeZone({ w: 900, h: 600 }, { x: 450, y: 560 }).y0 === 400)
+  // The farthest clear spot from home in the zone, out along its far edge.
+  let far: { x: number; y: number } | null = null
+  for (let x = z.x1; x > z.x1 - 600 && !far; x -= 20)
+    for (let y = 300; y < pm.map.h - 300 && !far; y += 40) if (!stationProblem(lw, 'republic', pm.home, x, y) && Math.hypot(x - pm.home.x, y - pm.home.y) > HOME_R * 1.5) far = { x, y }
+  check('a spot at the far edge of our third, well past the old home circle, is allowed', !!far, JSON.stringify(far))
+  check('placing the station there is kept', G.setLayout(g, 0, cap.id, { station: far! }) === null && cap.layout?.station?.x === far!.x)
+  const sides = (layout: G.Planet['layout']): FleetSide[] => [
+    { faction: 'republic', team: 0, ships: ['r-frigate'], reserve: ['r-frigate'], station: 3, yards: ['yard', 'cyard'], exp: [], orbitals: [{ i: 0, level: 1, mods: [null] }], ...(layout ? { layout } : {}), spawn: 0 },
+    { faction: 'droid', team: 1, ships: ['d-frigate', 'd-frigate'], spawn: 1 },
+  ]
+  const w = newFleetBattle(pm.map, sides(cap.layout), { seed: pm.map.seed })
+  const st = w.byId.get(w.players[0].station)!
+  check('a battle stands the station there', st.x === far!.x && st.y === far!.y, `${st.x},${st.y}`)
+  check('with its yards and defense station round it', w.units.filter((u) => u.owner === 0 && (u.t.tier === 'yard' || u.t.orbital)).every((u) => Math.hypot(u.x - st.x, u.y - st.y) <= BUILD_RADIUS))
+  check('and its reserve jumps in by the station', w.fleet!.entry[0].x === st.x && w.fleet!.entry[0].y === st.y)
+  // A station left at home: the reserve's entry is the home spawn, as before.
+  const w0 = newFleetBattle(pm.map, sides(undefined), { seed: pm.map.seed })
+  check('a station at home keeps the home spawn as its entry', w0.fleet!.entry[0].x === pm.home.x && w0.fleet!.entry[0].y === pm.home.y)
+  // The battle plays on with the station far out (the AI holds by it).
+  for (let i = 0; i < 600; i++) tick(w)
+  check('the battle plays on with the station out there', w.time > 9 && w.units.some((u) => u.owner === 0 && !u.dead))
+  // Outside the third, or by an entry zone: refused.
+  const out = { x: z.x1 + 400, y: pm.home.y }
+  check('outside our third is refused', /third of the map/.test(stationProblem(lw, 'republic', pm.home, out.x, out.y) ?? ''), stationProblem(lw, 'republic', pm.home, out.x, out.y) ?? 'allowed')
+  const e = [...pm.entries].sort((a, b) => b.x - a.x)[0]
+  const near = { x: e.x - STATION_ENTRY_GAP * 0.5, y: e.y }
+  // (A home on the far side, so the spot is inside its zone: still refused for the entry zone.)
+  const rightHome = { x: pm.map.w - 300, y: e.y }
+  const nearWhy = stationProblem(lw, 'republic', rightHome, near.x, near.y)
+  check('near an entry zone is refused, even inside the zone', near.x >= homeZone(pm.map, rightHome).x0 && /entry zone/.test(nearWhy ?? ''), nearWhy ?? 'allowed')
+  // A battle with a layout outside the third stands the station at home instead.
+  const wb = newFleetBattle(pm.map, sides({ station: out }), { seed: pm.map.seed })
+  const sb = wb.byId.get(wb.players[0].station)!
+  check('a layout outside the third stands the station at home', sb.x === pm.home.x && sb.y === pm.home.y)
+  // Old layouts: anywhere within the old home circle stays allowed.
+  let oldOk = 0
+  let oldAll = 0
+  for (let k = 0; k < 16; k++) {
+    const q = { x: pm.home.x + Math.cos(k) * HOME_R * 0.9, y: pm.home.y + Math.sin(k) * HOME_R * 0.9 }
+    const why = stationProblem(lw, 'republic', pm.home, q.x, q.y)
+    if (why && /third|entry/.test(why)) continue
+    oldAll++
+    if (!why || !/third|entry/.test(why)) oldOk++
+  }
+  check('spots in the old home circle are never refused for the zone or the entries', oldAll === 16, `${oldAll}/16`)
 }
 
 // --- The galaxy AI builds and arms them -----------------------------------------------------------------------
