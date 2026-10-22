@@ -129,14 +129,39 @@
   justify-content: center;
   gap: 6px;
 }
-.ew-cx-reset {
+/* Reset view, Warp out and the hint, along the bottom of the view. The hint wraps under them
+   on a narrow screen rather than covering the buttons. */
+.ew-cx-acts {
   position: absolute;
-  left: 10px;
-  bottom: 10px;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.ew-cx-acts > button {
+  pointer-events: auto;
+}
+.ew-cx-reset,
+.ew-cx-warp {
+  display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 11.5px;
+}
+.ew-cx-warp:focus-visible {
+  outline: 2px solid var(--ew-accent);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .ew-cx-warp {
+    min-height: 44px;
+    padding: 8px 14px;
+  }
 }
 .ew-cx-tip {
   position: absolute;
@@ -221,11 +246,8 @@
   background: rgba(40, 90, 120, 0.28);
 }
 .ew-cx-hint {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  max-width: calc(100% - 150px);
-  margin: 0;
+  margin: 0 0 0 auto;
+  max-width: min(420px, 100%);
   padding: 3px 8px;
   border-radius: 4px;
   background: rgba(4, 6, 13, 0.7);

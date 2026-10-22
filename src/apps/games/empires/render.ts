@@ -9,7 +9,7 @@ import { hash, rng as seeded } from './models/kit.ts'
 import { PALETTES } from './models/palettes.ts'
 import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
-import { AFTER, STREAK, WARP_STYLE, WarpFx, type Rift } from './warpfx.ts'
+import { AFTER, STREAK, WARP_STYLE, WarpFx, type Rift, type ShipFn } from './warpfx.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships and structures (procedural cel-shaded
@@ -332,6 +332,104 @@ type Ping = { x: number; y: number; t: number; color: string }
 /** A ship jumping in, on the renderer's clock: charging from `start`, dropping out at `at`. Its
  * side picks how it looks (WARP_STYLE, see warpfx.ts); `rift`: a Confederacy crack's shape. */
 type Warp = { x: number; y: number; a: number; size: number; unit: string; faction: FactionId; glow: string; start: number; at: number; rift?: Rift }
+/** A ship that has jumped out, on the renderer's clock from `start`. Same shape the depart list keeps. */
+type Depart = Omit<Warp, 'at'>
+
+/**
+ * A ship type drawn whole and undamaged, optionally stretched along its length: jumps into and out
+ * of hyperspace, in battle and in the Codex. `model` left out: the type's own, as a battle draws it.
+ */
+export function drawJumpShip(ctx: CanvasRenderingContext2D, unit: string, x: number, y: number, rot: number, size: number, z: number, alpha: number, stretch?: [number, number], model?: Model | null) {
+  const t = UNIT[unit]
+  const m = model === undefined ? (t ? modelFor(t) : null) : model
+  if (!m) return
+  const zdpr = z * canvasDpr()
+  if (!stretch) return drawHull(ctx, m, x, y, rot, size, zdpr, FRESH, { alpha })
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.rotate(rot)
+  ctx.scale(stretch[0], stretch[1])
+  drawHull(ctx, m, 0, 0, 0, size, zdpr, FRESH, { alpha, lightRot: rot })
+  ctx.restore()
+}
+
+/**
+ * A warship charging its drive to retreat: light gathering round it, rings tightening, and an arc
+ * filling as the drive charges. A Swarm ship opens a wormhole ahead of it instead, a Confederacy
+ * one tears a rift (warpFx); the arc is the same for all. Battle and the Codex both draw this.
+ */
+export function drawRetreatCharge(ctx: CanvasRenderingContext2D, fx: WarpFx, id: number, faction: FactionId, x: number, y: number, a: number, size: number, k: number, now: number, z: number, glow: string) {
+  const own = WARP_STYLE[faction] !== 'hyperspace'
+  if (own) fx.charge(ctx, id, faction, x, y, a, size, k, now, z)
+  ctx.save()
+  ctx.globalCompositeOperation = 'lighter'
+  if (!own) hyperspaceCharge(ctx, x, y, k, glow, size, z, now)
+  // How far along the charge is.
+  ctx.globalAlpha = 0.9
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = Math.max(2 / z, size * 0.012)
+  ctx.beginPath()
+  ctx.arc(x, y, size * 0.9, -Math.PI / 2, -Math.PI / 2 + k * TAU)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/** The Republic's retreat charge: light gathering round the ship and two rings tightening. */
+function hyperspaceCharge(ctx: CanvasRenderingContext2D, x: number, y: number, k: number, glow: string, size: number, z: number, now: number) {
+  const pulse = 0.85 + 0.15 * Math.sin(now * (6 + k * 20))
+  const g = ctx.createRadialGradient(x, y, size * 0.2, x, y, size * 0.75)
+  g.addColorStop(0, 'rgba(0,0,0,0)')
+  g.addColorStop(0.6, glow)
+  g.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.globalAlpha = (0.1 + k * 0.35) * pulse
+  ctx.fillStyle = g
+  ctx.beginPath()
+  ctx.arc(x, y, size * 0.75, 0, TAU)
+  ctx.fill()
+  ctx.strokeStyle = glow
+  ctx.lineWidth = Math.max(1.2 / z, size * 0.01)
+  for (const dir of [1, -1]) {
+    const rr = size * (0.8 - k * 0.2) * (dir > 0 ? 1 : 0.88)
+    ctx.globalAlpha = 0.3 + k * 0.5
+    ctx.setLineDash([rr * 0.45, rr * 0.3])
+    ctx.lineDashOffset = now * rr * (1 + k * 2) * dir
+    ctx.beginPath()
+    ctx.arc(x, y, rr, 0, TAU)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+}
+
+/**
+ * One ship jumping out. The caller has set `lighter`, as the battle's depart pass does, so a
+ * Republic hull adds; a Swarm ship or a Confederacy one goes to warpFx, which sets its own drawing.
+ */
+export function drawRetreatDepart(ctx: CanvasRenderingContext2D, fx: WarpFx, v: Depart, now: number, z: number, ship: ShipFn) {
+  if (WARP_STYLE[v.faction] !== 'hyperspace') {
+    fx.depart(ctx, v, now, z)
+    return
+  }
+  const dx = Math.cos(v.a)
+  const dy = Math.sin(v.a)
+  const q = (now - v.start) / AFTER
+  const p = Math.min(1, (now - v.start) / STREAK)
+  const cx = v.x + dx * v.size * 10 * p * p
+  const cy = v.y + dy * v.size * 10 * p * p
+  if (p < 1) ship(ctx, v.unit, cx, cy, v.a + Math.PI / 2, v.size, z, 1 - p * 0.6, [1 - 0.35 * p, 1 + 7 * p])
+  // The wake from where it was to where it went, fading.
+  const fade = (1 - q) ** 2
+  const wl = ctx.createLinearGradient(v.x, v.y, cx, cy)
+  wl.addColorStop(0, 'rgba(0,0,0,0)')
+  wl.addColorStop(0.7, v.glow)
+  wl.addColorStop(1, `rgba(255,255,255,${0.9 * fade})`)
+  ctx.strokeStyle = wl
+  ctx.globalAlpha = fade
+  ctx.lineWidth = Math.max(1.5 / z, v.size * 0.06 * (1 - q * 0.5))
+  ctx.beginPath()
+  ctx.moveTo(v.x, v.y)
+  ctx.lineTo(cx, cy)
+  ctx.stroke()
+}
 
 /** How each kind of gun's range ring looks: its colour (as r,g,b), dash pattern in screen pixels
  * (solid for lasers), and its name on the label. */
@@ -1657,17 +1755,7 @@ export class Renderer {
   /** A ship type drawn whole and undamaged, optionally stretched along its length: for jumps into
    * and out of hyperspace. */
   private drawShip(ctx: CanvasRenderingContext2D, unit: string, x: number, y: number, rot: number, size: number, z: number, alpha: number, stretch?: [number, number]) {
-    const t = UNIT[unit]
-    const m = t ? modelFor(t) : null
-    if (!m) return
-    const zdpr = z * canvasDpr()
-    if (!stretch) return drawHull(ctx, m, x, y, rot, size, zdpr, FRESH, { alpha })
-    ctx.save()
-    ctx.translate(x, y)
-    ctx.rotate(rot)
-    ctx.scale(stretch[0], stretch[1])
-    drawHull(ctx, m, 0, 0, 0, size, zdpr, FRESH, { alpha, lightRot: rot })
-    ctx.restore()
+    drawJumpShip(ctx, unit, x, y, rot, size, z, alpha, stretch)
   }
 
   /**
@@ -2146,54 +2234,11 @@ export class Renderer {
     }
   }
 
-  /**
-   * A warship charging its drive to retreat: light gathering round it, rings tightening, and an arc
-   * filling as the drive charges. A Swarm ship opens a wormhole ahead of it instead, a Confederacy
-   * one tears a rift (warpFx); the arc is the same for all.
-   */
+  /** A warship charging its drive to retreat (drawRetreatCharge: the same drawing the Codex uses). */
   private drawCharge(ctx: CanvasRenderingContext2D, u: Unit, z: number) {
     const total = RETREAT_TIME[u.t.tier] ?? 10
     const k = Math.min(1, Math.max(0, 1 - u.retreat / total))
-    const size = u.t.size
-    const own = WARP_STYLE[u.t.faction] !== 'hyperspace'
-    if (own) this.warpFx.charge(ctx, u.id, u.t.faction, u.x, u.y, u.a, size, k, this.clock, z)
-    ctx.save()
-    ctx.globalCompositeOperation = 'lighter'
-    if (!own) this.hyperspaceCharge(ctx, u, k, FACTIONS[u.t.faction].glow, size, z)
-    // How far along the charge is.
-    ctx.globalAlpha = 0.9
-    ctx.strokeStyle = '#ffffff'
-    ctx.lineWidth = Math.max(2 / z, size * 0.012)
-    ctx.beginPath()
-    ctx.arc(u.x, u.y, size * 0.9, -Math.PI / 2, -Math.PI / 2 + k * TAU)
-    ctx.stroke()
-    ctx.restore()
-  }
-
-  /** The Republic's retreat charge: light gathering round the ship and two rings tightening. */
-  private hyperspaceCharge(ctx: CanvasRenderingContext2D, u: Unit, k: number, glow: string, size: number, z: number) {
-    const pulse = 0.85 + 0.15 * Math.sin(this.clock * (6 + k * 20))
-    const g = ctx.createRadialGradient(u.x, u.y, size * 0.2, u.x, u.y, size * 0.75)
-    g.addColorStop(0, 'rgba(0,0,0,0)')
-    g.addColorStop(0.6, glow)
-    g.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.globalAlpha = (0.1 + k * 0.35) * pulse
-    ctx.fillStyle = g
-    ctx.beginPath()
-    ctx.arc(u.x, u.y, size * 0.75, 0, TAU)
-    ctx.fill()
-    ctx.strokeStyle = glow
-    ctx.lineWidth = Math.max(1.2 / z, size * 0.01)
-    for (const dir of [1, -1]) {
-      const rr = size * (0.8 - k * 0.2) * (dir > 0 ? 1 : 0.88)
-      ctx.globalAlpha = 0.3 + k * 0.5
-      ctx.setLineDash([rr * 0.45, rr * 0.3])
-      ctx.lineDashOffset = this.clock * rr * (1 + k * 2) * dir
-      ctx.beginPath()
-      ctx.arc(u.x, u.y, rr, 0, TAU)
-      ctx.stroke()
-    }
-    ctx.setLineDash([])
+    drawRetreatCharge(ctx, this.warpFx, u.id, u.t.faction, u.x, u.y, u.a, u.t.size, k, this.clock, z, FACTIONS[u.t.faction].glow)
   }
 
   /** Ships jumping out: stretched long and gone ahead in a streak, a wake fading behind them (or into
@@ -2204,32 +2249,7 @@ export class Renderer {
     if (!this.departs.length) return
     ctx.save()
     ctx.globalCompositeOperation = 'lighter'
-    for (const v of this.departs) {
-      if (WARP_STYLE[v.faction] !== 'hyperspace') {
-        this.warpFx.depart(ctx, v, now, z)
-        continue
-      }
-      const dx = Math.cos(v.a)
-      const dy = Math.sin(v.a)
-      const q = (now - v.start) / AFTER
-      const p = Math.min(1, (now - v.start) / STREAK)
-      const cx = v.x + dx * v.size * 10 * p * p
-      const cy = v.y + dy * v.size * 10 * p * p
-      if (p < 1) this.drawShip(ctx, v.unit, cx, cy, v.a + Math.PI / 2, v.size, z, 1 - p * 0.6, [1 - 0.35 * p, 1 + 7 * p])
-      // The wake from where it was to where it went, fading.
-      const fade = (1 - q) ** 2
-      const wl = ctx.createLinearGradient(v.x, v.y, cx, cy)
-      wl.addColorStop(0, 'rgba(0,0,0,0)')
-      wl.addColorStop(0.7, v.glow)
-      wl.addColorStop(1, `rgba(255,255,255,${0.9 * fade})`)
-      ctx.strokeStyle = wl
-      ctx.globalAlpha = fade
-      ctx.lineWidth = Math.max(1.5 / z, v.size * 0.06 * (1 - q * 0.5))
-      ctx.beginPath()
-      ctx.moveTo(v.x, v.y)
-      ctx.lineTo(cx, cy)
-      ctx.stroke()
-    }
+    for (const v of this.departs) drawRetreatDepart(ctx, this.warpFx, v, now, z, drawJumpShip)
     ctx.restore()
   }
 

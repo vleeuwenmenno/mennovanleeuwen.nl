@@ -11,7 +11,10 @@ import { PALETTES } from './models/palettes.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
 import type { BreakKind } from './models/types.ts'
 import { averageRings, moduleRing } from './ranges.ts'
+import { drawJumpShip, drawRetreatCharge, drawRetreatDepart } from './render'
 import type { EmpiresSound } from './sound'
+import { RETREAT_TIME } from './sim'
+import { AFTER, WARP_STYLE, WarpFx, type Rift, type ShipFn } from './warpfx'
 import { Seg } from './Menus'
 import { LongPress, TAP_SLOP, WheelHost, isTouch, useCoarse, useWheel } from './Touch'
 import './codex.css'
@@ -28,8 +31,8 @@ import './codex.css'
 // Workshop mode is for checking models: part outlines, hardpoints, weapon ranges and engine glow
 // can be switched on, the hull can be dragged down, a tool picks what a click does (inspect,
 // damage, detach), and Destroy plays the death break-up the battle would show, re-rolled to see
-// the other ways it can break. On a touch screen, holding a finger on a part opens a wheel with
-// the same actions.
+// the other ways it can break. Warp out, on a gunship or bigger, plays that side's retreat on the
+// view. On a touch screen, holding a finger on a part opens a wheel with the same actions.
 
 const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
   { name: 'Strike craft', tiers: ['fighter'] },
@@ -43,6 +46,41 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
 const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
+/** A Codex retreat charges for this long, then uses the battle's jump and wake (AFTER). Short enough
+ * to watch and replay; the drawing is the battle's, only the wait is shorter than RETREAT_TIME. */
+const WARP_CHARGE = 2.8
+/** The ship stays gone this long after the wake, then fades back in. */
+const WARP_GONE = 0.55
+const WARP_FADE = 0.45
+const WARP_JUMP_END = WARP_CHARGE + AFTER
+const WARP_BACK = WARP_JUMP_END + WARP_GONE
+/** Gunships and bigger, the same rule as a battle (canRetreat): a ship whose class has a drive. */
+const canWarp = (t: UnitType) => isShip(t) && RETREAT_TIME[t.tier] !== undefined
+const smooth01 = (v: number) => {
+  const k = v < 0 ? 0 : v > 1 ? 1 : v
+  return k * k * (3 - 2 * k)
+}
+/** Where the preview frames the ship. `pull` 0: close enough to read the charge. `pull` 1: far
+ * enough to see a hyperspace streak, the ship shifted back so the streak has the canvas ahead of it. */
+function warpFrame(t: number, userZ: number, size: number, hyperspace: boolean, half: number) {
+  const zLocal = half / (size * 1.85)
+  const zWide = half / (size * 7)
+  const introEnd = 0.4
+  if (t < introEnd) return { z: userZ + (zLocal - userZ) * smooth01(t / introEnd), pull: 0 }
+  if (!hyperspace) {
+    if (t < WARP_BACK) return { z: zLocal, pull: 0 }
+    return { z: zLocal + (userZ - zLocal) * smooth01((t - WARP_BACK) / WARP_FADE), pull: 0 }
+  }
+  const pullStart = WARP_CHARGE - 0.65
+  if (t < pullStart) return { z: zLocal, pull: 0 }
+  if (t < WARP_CHARGE) {
+    const k = smooth01((t - pullStart) / 0.65)
+    return { z: zLocal + (zWide - zLocal) * k, pull: k }
+  }
+  if (t < WARP_BACK) return { z: zWide, pull: 1 }
+  const k = smooth01((t - WARP_BACK) / WARP_FADE)
+  return { z: zWide + (userZ - zWide) * k, pull: 1 - k }
+}
 
 /** The unit as the Codex shows it: a station at the level picked, with every module it can have
  * (its expansions too); a yard with every expansion fitted. */
@@ -360,7 +398,7 @@ type Tool = 'inspect' | 'damage' | 'detach'
  * pointer hits are worked out from this, so they match what's on screen. */
 type ViewState = { rot: number; zoom: number; z: number; w: number; h: number }
 
-function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey, onHover, onClick, onLongPress, onNote }: {
+function Viewer({ t, model, workshop, show, dmg, boom, warp, hover, selected, resetKey, onHover, onClick, onLongPress, onNote, onJump }: {
   t: UnitType
   model: Model | null
   workshop: boolean
@@ -368,6 +406,8 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
   dmg: Damage
   /** The destroy preview: a counter that changes for every Destroy or re-roll, and the outcome forced (or null). */
   boom: { n: number; force: BreakKind | null } | null
+  /** The warp-out preview: a counter that changes for every Warp out, so a press restarts it. */
+  warp: { n: number } | null
   hover: Sel | null
   selected: Sel | null
   /** Changes when the view should go back to nose up at its fitting zoom. */
@@ -379,13 +419,23 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
   /** A finger held down on the model (touch): opens the action wheel. */
   onLongPress: (s: Sel, x: number, y: number) => void
   onNote: (text: string) => void
+  /** The jump itself, once per press: the battle's arrive sound. */
+  onJump: () => void
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const view = useRef<ViewState>({ rot: 0, zoom: 1, z: 1, w: 1, h: 1 })
-  const live = useRef({ t, model, workshop, show, dmg, boom, hover, selected, onNote })
-  live.current = { t, model, workshop, show, dmg, boom, hover, selected, onNote }
+  const live = useRef({ t, model, workshop, show, dmg, boom, warp, hover, selected, onNote, onJump })
+  live.current = { t, model, workshop, show, dmg, boom, warp, hover, selected, onNote, onJump }
   const fx = useMemo(() => new ModelFx(), [])
   const stars = useMemo(starfield, [])
+  // The streak draws the model on screen (an alt design included), through the battle's jump ship.
+  const jumpShip = useRef<ShipFn>(() => {})
+  jumpShip.current = (ctx, unit, x, y, rot, size, zz, alpha, stretch) => drawJumpShip(ctx, unit, x, y, rot, size, zz, alpha, stretch, live.current.model)
+  const warpFxRef = useRef<{ id: string; fx: WarpFx } | null>(null)
+  if (!warpFxRef.current || warpFxRef.current.id !== t.id) warpFxRef.current = { id: t.id, fx: new WarpFx((...args) => jumpShip.current(...args)) }
+  const play = useRef<{ n: number; t: number; rot: number; riftTaken: boolean; rift?: Rift } | null>(null)
+  /** 'off' and 'back' take pointer hits; the ship is leaving in between. */
+  const phaseRef = useRef<'off' | 'charge' | 'jump' | 'gone' | 'fade' | 'back'>('off')
   // A new unit (or Reset view): nose up at the fitting zoom, the previous one's debris swept away.
   useEffect(() => fx.clear(), [t, fx])
   useEffect(() => {
@@ -441,7 +491,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
       raf = requestAnimationFrame(frame)
       const dt = Math.min(0.05, (now - last) / 1000)
       last = now
-      const { t, model, show, dmg, boom, hover, selected } = live.current
+      const { t, model, show, dmg, boom, warp, hover, selected } = live.current
       const dpr = Math.min(2, window.devicePixelRatio || 1)
       const w = c.clientWidth
       const h = c.clientHeight
@@ -451,8 +501,17 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
         c.height = Math.round(h * dpr)
       }
       const v = view.current
+      // A Warp out holds the heading it started at. Spin waits until the ship is back.
+      const spec = boom ? null : warp
+      if (!spec) play.current = null
+      else if (!play.current || play.current.n !== spec.n) play.current = { n: spec.n, t: dt, rot: v.rot, riftTaken: false }
+      else play.current.t += dt
+      const wp = play.current
+      const phase = !wp ? 'off' : wp.t < WARP_CHARGE ? 'charge' : wp.t < WARP_JUMP_END ? 'jump' : wp.t < WARP_BACK ? 'gone' : wp.t < WARP_BACK + WARP_FADE ? 'fade' : 'back'
+      phaseRef.current = phase
+      const leaving = phase !== 'off' && phase !== 'back'
       // Off by default: the model sits still, nose up, until it's dragged round.
-      if (show.spin && !drag.current) v.rot += dt * 0.25
+      if (show.spin && !drag.current && !leaving) v.rot += dt * 0.25
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.fillStyle = '#04060d'
       g.fillRect(0, 0, w, h)
@@ -466,13 +525,27 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
       glow.addColorStop(1, 'rgba(0,0,0,0)')
       g.fillStyle = glow
       g.fillRect(0, 0, w, h)
-      const z = fitOf(w, h) * v.zoom
+      const userZ = fitOf(w, h) * v.zoom
+      let z = userZ
+      let pull = 0
+      if (wp && leaving) {
+        const framed = warpFrame(wp.t, userZ, t.size, WARP_STYLE[t.faction] === 'hyperspace', Math.min(w, h) * 0.44)
+        z = framed.z
+        pull = framed.pull
+      }
       Object.assign(v, { z, w, h })
       const zdpr = z * dpr
       g.translate(w / 2, h / 2)
       g.scale(z, z)
+      // A hyperspace streak runs many lengths ahead of the nose. Shift the ship back while the
+      // view pulls out, so the streak stays on the canvas and the charge was readable up close.
+      if (pull && wp) {
+        const a = wp.rot - Math.PI / 2
+        const along = t.size * 3.5 * pull
+        g.translate(-Math.cos(a) * along, -Math.sin(a) * along)
+      }
       fx.step(dt)
-      const rot = v.rot
+      const rot = wp && leaving ? wp.rot : v.rot
       const st = model ? hullState(model, { id: 1, hull: dmg.hull * t.hull, hullMax: t.hull, hps: dmg.hps }, t.tier) : null
       if (st) st.detached |= dmg.forced
       // Parts coming off in the workshop fly away, as they would in battle.
@@ -509,15 +582,19 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
       // the battle fires it; otherwise, with Ranges on, the unit's average reach per kind of gun.
       const gunSel = [hover, selected].find((s): s is { hp: number } => !!s && 'hp' in s && !!t.hardpoints[s.hp]?.weapon)
       const one = gunSel ? moduleRing(t, gunSel.hp) : null
-      if (one && gunSel && !boom) {
+      const hideShip = phase === 'jump' || phase === 'gone'
+      const fadeK = phase === 'fade' && wp ? smooth01((wp.t - WARP_BACK) / WARP_FADE) : 1
+      if (one && gunSel && !boom && !leaving) {
         const [x, y] = hpAt(gunSel.hp)
         ring(x, y, one.range, one.kind, `${weaponName(one.kind, t.faction)} #${gunSel.hp + 1} · ${one.range}`)
-      } else if (show.ranges) {
+      } else if (show.ranges && !leaving) {
         for (const x of averageRings(t, (i) => (dmg.hps[i]?.hp ?? 1) > 0)) ring(0, 0, x.reach, x.kind, `${weaponName(x.kind, t.faction)} ${x.n > 1 ? '· avg ' : ''}${Math.round(x.reach)}`)
       }
       if (boom && model) {
         fx.drawHulk(g, 1000 + boom.n, zdpr)
-      } else if (model && st) {
+      } else if (model && st && !hideShip) {
+        g.save()
+        if (fadeK < 1) g.globalAlpha = fadeK
         // Engine glow under the hull, as in battle.
         if (show.glow) {
           g.globalCompositeOperation = 'lighter'
@@ -548,11 +625,29 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
           if (dmg.hps[i]?.hp > 0) scan.set(i, a)
           return scan.get(i) ?? a
         })
+        g.restore()
+      }
+      if (wp && !boom && (phase === 'charge' || phase === 'jump')) {
+        const a = wp.rot - Math.PI / 2
+        const wfx = warpFxRef.current!.fx
+        if (phase === 'charge') {
+          drawRetreatCharge(g, wfx, 1, t.faction, 0, 0, a, t.size, Math.min(1, wp.t / WARP_CHARGE), wp.t, z, FACTIONS[t.faction].glow)
+        } else {
+          if (!wp.riftTaken) {
+            wp.riftTaken = true
+            wp.rift = WARP_STYLE[t.faction] === 'rift' ? wfx.takeRift(0, 0, t.size) : undefined
+            live.current.onJump()
+          }
+          g.save()
+          g.globalCompositeOperation = 'lighter'
+          drawRetreatDepart(g, wfx, { x: 0, y: 0, a, size: t.size, unit: t.id, faction: t.faction, glow: FACTIONS[t.faction].glow, start: WARP_CHARGE, rift: wp.rift }, wp.t, z, jumpShip.current)
+          g.restore()
+        }
       }
       fx.draw(g, zdpr)
       // The hovered and the selected module or part: a glowing outline round it, the selected one
       // solid and pulsing, the hovered one fainter.
-      if (!boom) {
+      if (!boom && !leaving) {
         const mark = (s: Sel, strong: boolean) => {
           g.save()
           g.shadowColor = '#7ff0ff'
@@ -594,7 +689,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
         if (hover && !sameSel(hover, selected)) mark(hover, false)
         if (selected) mark(selected, true)
       }
-      if (show.hardpoints && !boom) {
+      if (show.hardpoints && !boom && !leaving) {
         t.hardpoints.forEach((hp, i) => {
           const [x, y] = hpAt(i)
           const r = Math.max(7 / z, (hp.s ?? 0.05) * t.size * 0.55)
@@ -652,7 +747,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
    * the last frame placed them (zoom, turn), mounts within a finger's width however small. */
   const hitAt = (cx: number, cy: number): Sel | null => {
     const { t, model, dmg, boom } = live.current
-    if (boom) return null
+    if (boom || (phaseRef.current !== 'off' && phaseRef.current !== 'back')) return null
     const rect = canvas.current!.getBoundingClientRect()
     const { z, rot } = view.current
     const wx = (cx - rect.left - rect.width / 2) / z
@@ -867,6 +962,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   const [tool, setTool] = useState<Tool>('inspect')
   const [dmg, setDmg] = useState<Damage>(() => fresh(t))
   const [boom, setBoom] = useState<{ n: number; force: BreakKind | null } | null>(null)
+  const [warp, setWarp] = useState<{ n: number; unit: string } | null>(null)
   const [force, setForce] = useState<BreakKind | null>(null)
   const [note, setNote] = useState('')
   const [selected, setSelected] = useState<Sel | null>(null)
@@ -878,6 +974,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   useEffect(() => {
     setDmg(fresh(t))
     setBoom(null)
+    setWarp(null)
     setNote('')
     setSelected(null)
     setHover(null)
@@ -1009,6 +1106,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
               show={show}
               dmg={dmg}
               boom={boom}
+              warp={warp && warp.unit === t.id ? warp : null}
               hover={hover?.sel ?? null}
               selected={selected}
               resetKey={resetKey}
@@ -1016,6 +1114,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
               onClick={use}
               onLongPress={longPress}
               onNote={setNote}
+              onJump={() => sound.arrive({ pan: 0, gain: 1 }, t.size, t.faction)}
             />
             {hover && !hover.fromList && <HoverTip t={t} model={model} sel={hover.sel} x={hover.x} y={hover.y} dmg={dmg} />}
             {(t.tier === 'station' || !!t.orbital || styles.length > 0) && (
@@ -1025,14 +1124,30 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, STYLE_NAMES[s] ?? s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>
             )}
-            <button className="ew-cx-reset" onClick={click(() => setResetKey((k) => k + 1))} data-tip="Back to nose up at the starting zoom">
-              <Icon name="restart" size={13} /> Reset view
-            </button>
-            <p className="ew-cx-hint ew-muted ew-small">
+            <div className="ew-cx-acts">
+              {canWarp(t) && (
+                <button
+                  type="button"
+                  className="ew-cx-warp"
+                  onClick={click(() => {
+                    setBoom(null)
+                    setWarp((w) => ({ n: (w?.unit === t.id ? w.n : 0) + 1, unit: t.id }))
+                    sound.warp({ pan: 0, gain: 1 }, WARP_CHARGE, t.faction)
+                  })}
+                  data-tip="Plays this ship's retreat: its drive charges, then it jumps out the way it would in battle. Press again to replay."
+                >
+                  <Icon name="jump" size={13} /> Warp out
+                </button>
+              )}
+              <button className="ew-cx-reset" onClick={click(() => setResetKey((k) => k + 1))} data-tip="Back to nose up at the starting zoom">
+                <Icon name="restart" size={13} /> Reset view
+              </button>
+              <p className="ew-cx-hint ew-muted ew-small">
               {coarse ? 'Drag to turn, pinch to zoom' : 'Drag to turn, scroll to zoom'}
               {` · ${coarse ? 'tap' : 'click'} a module or part to ${toolHint}`}
               {coarse ? ', hold for more' : ''}
-            </p>
+              </p>
+            </div>
           </div>
           {workshop && (
             <div className="ew-cx-tools">
@@ -1071,7 +1186,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                     </div>
                   )}
                   <div className="ew-cx-row">
-                    <button className="ew-cx-destroy" onClick={click(() => setBoom({ n: (boom?.n ?? 0) + 1, force }))} data-tip="Plays the death the battle would show; again for another roll of how it breaks">
+                    <button className="ew-cx-destroy" onClick={click(() => (setWarp(null), setBoom({ n: (boom?.n ?? 0) + 1, force })))} data-tip="Plays the death the battle would show; again for another roll of how it breaks">
                       {boom ? 'Re-roll' : 'Destroy'}
                     </button>
                     {wreckable && (
