@@ -2964,6 +2964,15 @@ breaks, or the break can be forced (intact, half, pieces). On a touch screen, ho
 a module or part opens a wheel: Inspect, Damage, Destroy, Detach. On a phone the list becomes a
 row of chips over the view and the numbers.
 
+**Warp out**, on a gunship, frigate, cruiser or flagship, plays that ship's retreat on the view.
+The drive charges for a few seconds (the same drawing as a battle, only the wait is shorter), then
+it jumps out the way its side does: the Republic stretches into a hyperspace streak, the
+Confederacy lurches through the rift it tore open, the Swarm flies into the wormhole ahead of it.
+After a short pause the ship fades back in where it was. Pressing the button again restarts the
+sequence; choosing another unit cancels it. Fighters, bombers and structures have no hyperspace
+drive, so they have no button. The charge and the jump play the battle's sounds when the game's
+sound is on.
+
 ```sh
 pnpm check:empires-models   # every unit has a model that builds, its mounts match the hardpoints, parts come off soundly, breaks are deterministic and weighted, small craft and structures burst into real fragments
 ```
