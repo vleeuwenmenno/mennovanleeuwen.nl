@@ -8,11 +8,14 @@
 //   http://<port>.localhost:5200/   its own origin (own localStorage and cookies); browsers resolve
 //                                   *.localhost to loopback, so it goes through the same tunnel
 //   http://localhost:5200/          pick one at /__dev: sets a `devtarget` cookie and every other
-//                                   path is proxied to it
+//                                   path is proxied to it (works on any allowed host name, e.g. the
+//                                   machine's Tailscale name behind `tailscale serve`)
 //
 // Only discovered ports are ever proxied (never SSH, databases, ...), the listener is loopback only,
 // request bodies are never logged, and responses (SSE included) stream through unbuffered.
-// Extra Host names to accept (besides localhost, 127.0.0.1, [::1] and *.localhost): ALLOWED_HOSTS=a.b,c.d
+// Extra Host names to accept (besides localhost, 127.0.0.1, [::1] and *.localhost): ALLOWED_HOSTS=a.b,c.d.
+// This machine's Tailscale name (from `tailscale status`) is accepted too, when Tailscale runs, so a
+// `tailscale serve --https=5200 http://127.0.0.1:5200` makes the proxy reachable on the tailnet.
 import { execFile } from 'node:child_process'
 import { readFileSync, readdirSync, readlinkSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
@@ -24,6 +27,22 @@ const PORT = Number(process.env.PORT) || 5200
 const RANGE: [number, number] = [5170, 5299]
 const COOKIE = 'devtarget'
 const EXTRA_HOSTS = (process.env.ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
+
+/** Adds this machine's Tailscale DNS name to EXTRA_HOSTS, if Tailscale is installed and up. */
+function allowTailscaleName() {
+  execFile('tailscale', ['status', '--json', '--peers=false'], { timeout: 3000 }, (err, out) => {
+    if (err) return
+    try {
+      const name = String(JSON.parse(out)?.Self?.DNSName ?? '').replace(/\.$/, '').toLowerCase()
+      if (name && !EXTRA_HOSTS.includes(name)) {
+        EXTRA_HOSTS.push(name)
+        console.log(`also accepting https://${name}:${PORT}/__dev (with tailscale serve)`)
+      }
+    } catch {
+      // Not JSON: an old or broken tailscale; only the usual names then.
+    }
+  })
+}
 
 type Server = {
   port: number
@@ -323,23 +342,28 @@ function dashboard(list: Server[], current: number | null) {
   const data = JSON.stringify({ servers: list, current }).replace(/</g, '\\u003c')
   return page(
     'Dev proxy',
-    `<h1>Dev proxy</h1><p>Test servers on this machine. Open one on its own address (best: separate storage), or pick one for plain <b>localhost</b>.</p>
-<div id="list"></div><p><small>Refreshes every 3 s. Plain-localhost pick is a cookie: <a href="/__dev/clear">clear it</a>.</small></p>
+    `<h1>Dev proxy</h1><p>Test servers on this machine. <span id="how"></span></p>
+<div id="list"></div><p><small>Refreshes every 3 s. The pick for this address is a cookie: <a href="/__dev/clear">clear it</a>.</small></p>
 <script>
 let state=${data};
 const list=document.getElementById('list');
 const e=(s)=>String(s).replace(/[&<>"']/g,(c)=>'&#'+c.charCodeAt(0)+';');
 const dur=(s)=>s<60?s+' s':s<3600?Math.floor(s/60)+' min':s<86400?Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min':Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h';
 const sub=(p)=>location.protocol+'//'+p+'.localhost'+(location.port?':'+location.port:'');
+// <port>.localhost only resolves on the machine itself (or through a tunnel to it); on any other name
+// (a Tailscale one, say) the only way in is picking a server for this address.
+const h=location.hostname;
+const local=h==='localhost'||h==='127.0.0.1'||h==='[::1]'||h.endsWith('.localhost');
+document.getElementById('how').innerHTML=local?'Open one on its own address (best: separate storage), or pick one for plain <b>'+e(location.host)+'</b>.':'Pick one to use on <b>'+e(location.host)+'</b>.';
 function draw(){
   if(!state.servers.length){list.innerHTML='<div class="empty">No test servers running</div>';return}
   list.innerHTML=state.servers.map((s)=>{
     const on=state.current===s.port;
     const pick=(to)=>'/__dev/select?port='+s.port+'&to='+encodeURIComponent(to);
-    return '<div class="card'+(on?' on':'')+'"><div class="top"><span class="dot'+(s.up?' up':'')+'" title="'+(s.up?'responds':'not responding')+'"></span><span class="port">'+s.port+'</span><b>'+e(s.worktree)+'</b><span>'+(s.branch?e(s.branch):'')+'</span>'+(on?'<small>selected for localhost</small>':'')+'</div>'
+    return '<div class="card'+(on?' on':'')+'"><div class="top"><span class="dot'+(s.up?' up':'')+'" title="'+(s.up?'responds':'not responding')+'"></span><span class="port">'+s.port+'</span><b>'+e(s.worktree)+'</b><span>'+(s.branch?e(s.branch):'')+'</span>'+(on?'<small>selected here</small>':'')+'</div>'
     +'<div class="meta">up '+dur(s.uptime)+' · '+(s.up?'responds':'not responding')+' · <span title="'+e(s.cwd)+'">'+e(s.cwd)+'</span></div>'
-    +'<div class="links"><a class="btn" href="'+sub(s.port)+'/">open '+s.port+'.localhost</a><a href="'+sub(s.port)+'/play/empires">/play/empires</a>'
-    +'<a href="'+pick('/')+'">use on localhost: /</a><a href="'+pick('/play/empires')+'">/play/empires</a></div></div>';
+    +'<div class="links">'+(local?'<a class="btn" href="'+sub(s.port)+'/">open '+s.port+'.localhost</a><a href="'+sub(s.port)+'/play/empires">/play/empires</a>':'')
+    +'<a'+(local?'':' class="btn"')+' href="'+pick('/')+'">use here: /</a><a href="'+pick('/play/empires')+'">/play/empires</a></div></div>';
   }).join('');
 }
 draw();
@@ -349,10 +373,9 @@ setInterval(()=>fetch('/__dev/api/servers',{cache:'no-store'}).then((r)=>r.json(
 }
 
 function errorPage(req: IncomingMessage, res: ServerResponse, port: number, why: string) {
-  const hostPort = /:(\d+)$/.exec(req.headers.host ?? '')?.[1] ?? String(PORT)
   const p = page(
     'No test server',
-    `<h1>Nothing on port ${port}</h1><p>${esc(why)} The test server may have been stopped or replaced.</p><p><a class="btn" href="http://localhost:${hostPort}/__dev">Back to the dev proxy</a></p>`,
+    `<h1>Nothing on port ${port}</h1><p>${esc(why)} The test server may have been stopped or replaced.</p><p><a class="btn" href="/__dev">Back to the dev proxy</a></p>`,
     502,
   )
   send(res, p.status, p.html)
@@ -434,4 +457,5 @@ server.on('upgrade', async (req, socket, head) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`dev proxy on http://localhost:${PORT}/__dev  (test servers: http://<port>.localhost:${PORT}/)`)
+  allowTailscaleName()
 })

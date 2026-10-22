@@ -65,6 +65,7 @@ fails for a reason unrelated to the change, say so rather than rerunning it repe
   - When you hand over a server, give the proxy link `http://<port>.localhost:5200/` (for example `http://5251.localhost:5200/play/empires`), not a bare port.
   - Start the proxy if nothing is listening on 5200.
   - Start servers from your git worktree, not a copied folder, so the dashboard shows the branch.
+  - On a phone over Tailscale, `<port>.localhost` doesn't resolve. The proxy also accepts the machine's Tailscale name, so with `tailscale serve --https=5200 http://127.0.0.1:5200` running, hand over `https://<tailscale name>:5200/__dev/select?port=<port>&to=/play/empires`.
 - Mute sound in every browser tab you test in, unless the test is about sound.
 
 ## Worktrees and other sessions
