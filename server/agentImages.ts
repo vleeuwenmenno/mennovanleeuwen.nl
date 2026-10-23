@@ -107,7 +107,7 @@ export async function saveThreadImageSettings(user: User, thread: string, value:
   return threadImageSettings(user, thread)
 }
 
-async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown) {
+async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown, optional = false) {
   if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Agents → Images first')
   // Egress checks every request, pinning DNS for non-admins; LAN endpoints are admin-only.
   const res = await guardedFetch(user, `${s.url}${path}`, {
@@ -120,6 +120,7 @@ async function request(user: User, s: ImageSettings, path: string, signal: Abort
     if (error instanceof HttpError) throw error
     throw new HttpError(502, 'ComfyUI did not answer; check the connection settings')
   })
+  if (optional && res.status === 404) return res
   if (!res.ok) {
     await res.body?.cancel().catch(() => {})
     throw new HttpError(502, `ComfyUI answered ${res.status}; check the connection and selected models`)
@@ -250,7 +251,72 @@ export async function generateImage(user: User, thread: string, input: ImageInpu
   } finally { active.delete(user.id) }
 }
 
+// Opaque short-lived preview handles bind an exact catalog asset to its owner's backend.
+// Backend filesystem paths and credentials never leave the server.
+const modelPreviews = new Map<string, { owner: number; settings: ImageSettings; path: string; expires: number }>()
+const normalizedPath = (value: string) => value.replaceAll('\\', '/')
+const safeModelName = (value: string) => value.length > 0 && value.length <= 2048 && !/[\x00-\x1f?#:]/.test(value) && !normalizedPath(value).startsWith('/') && normalizedPath(value).split('/').every((part) => part && part !== '.' && part !== '..')
+async function modelMetadata(user: User, category: string, name: string) {
+  const categories = { checkpoints: ['CheckpointLoaderSimple', 'ckpt_name'], diffusion_models: ['UNETLoader', 'unet_name'], text_encoders: ['CLIPLoader', 'clip_name'], vae: ['VAELoader', 'vae_name'] } as const
+  if (!Object.hasOwn(categories, category) || !safeModelName(name)) throw new HttpError(400, 'Choose a valid catalog category and model identifier')
+  const [node, field] = categories[category as keyof typeof categories]
+  const settings = imageSettings(user), signal = AbortSignal.timeout(10_000)
+  const bytes = await readCapped(await request(user, settings, `/object_info/${node}`, signal), 1024 * 1024)
+  let info: NodeInfo
+  try { info = JSON.parse(bytes.toString()) } catch { throw new HttpError(502, 'ComfyUI returned invalid model metadata') }
+  if (!info || typeof info !== 'object' || Array.isArray(info)) throw new HttpError(502, 'ComfyUI returned invalid model metadata')
+  if (!options(info, node, field).includes(name)) throw new HttpError(404, 'Model is not installed in this account’s catalog')
+  const fallback = { available: false, reason: 'No matching preview metadata is available. Plain ComfyUI does not supply model artwork.' }
+  if (category !== 'checkpoints' && category !== 'diffusion_models') return fallback
+  const canonical = normalizedPath(name), leaf = canonical.split('/').at(-1)!, stem = leaf.replace(/\.[^.]+$/, '')
+  // LoRA Manager is optional. Search one bounded page, never enumerate its entire library.
+  const response = await request(user, settings, `/api/lm/checkpoints/list?page=1&page_size=50&search=${encodeURIComponent(stem)}`, signal, undefined, true)
+  if (response.status === 404) { await response.body?.cancel(); return fallback }
+  let data: Record<string, any>
+  try { data = JSON.parse((await readCapped(response, 1024 * 1024)).toString()) } catch { throw new HttpError(502, 'Model preview metadata is invalid or too large') }
+  if (!Array.isArray(data.items) || data.items.length > 50) return fallback
+  const matches = data.items.filter((item: any) => {
+    if (!item || typeof item.file_path !== 'string' || typeof item.folder !== 'string') return false
+    const base = normalizedPath(item.file_path).split('/').at(-1)
+    return item.sub_type === (category === 'checkpoints' ? 'checkpoint' : 'diffusion_model') && [normalizedPath(item.folder), base].filter(Boolean).join('/') === canonical
+  })
+  if (matches.length !== 1) return fallback
+  const item = matches[0]
+  const clean = (value: unknown, max = 200) => typeof value === 'string' ? value.slice(0, max) : undefined
+  const metadata: Record<string, unknown> = { available: true, source: 'LoRA Manager', title: clean(item.model_name), baseModel: clean(item.base_model), size: Number.isSafeInteger(item.file_size) && item.file_size >= 0 ? item.file_size : undefined, tags: Array.isArray(item.tags) ? item.tags.filter((v: unknown) => typeof v === 'string').slice(0, 16).map((v: string) => v.slice(0, 80)) : [] }
+  if (typeof item.preview_url !== 'string' || !item.preview_url.startsWith('/api/lm/previews?')) return metadata
+  const preview = new URL(item.preview_url, 'http://preview.invalid')
+  const path = preview.searchParams.get('path') ?? '', normalized = normalizedPath(path), modelPath = normalizedPath(item.file_path)
+  const directory = modelPath.slice(0, modelPath.lastIndexOf('/') + 1)
+  const previewLeaf = normalized.slice(directory.length)
+  // Accept only sidecar artwork for this exact model, never an arbitrary backend URL/path.
+  if (preview.pathname !== '/api/lm/previews' || [...preview.searchParams.keys()].some((key) => key !== 'path') || path.length > 4096 || /[\x00-\x1f]/.test(path) || normalized.split('/').includes('..') || !normalized.startsWith(directory) || ![`${stem}.png`, `${stem}.jpg`, `${stem}.jpeg`, `${stem}.webp`, `${stem}.preview.png`, `${stem}.preview.jpg`, `${stem}.preview.webp`].includes(previewLeaf)) return metadata
+  const now = Date.now()
+  for (const [id, value] of modelPreviews) if (value.expires < now) modelPreviews.delete(id)
+  while (modelPreviews.size >= 128) modelPreviews.delete(modelPreviews.keys().next().value!)
+  const id = randomUUID()
+  modelPreviews.set(id, { owner: user.id, settings, path: `/api/lm/previews?path=${encodeURIComponent(path)}`, expires: now + 5 * 60_000 })
+  metadata.preview = `/api/agents/images/model-previews/${id}`
+  return metadata
+}
+async function sendModelPreview(user: User, id: string, res: ServerResponse) {
+  const preview = modelPreviews.get(id), current = imageSettings(user)
+  if (!preview || preview.owner !== user.id || preview.expires < Date.now() || preview.settings.url !== current.url || preview.settings.token !== current.token) throw new HttpError(404, 'No such model preview')
+  const response = await request(user, preview.settings, preview.path, AbortSignal.timeout(10_000))
+  const mime = response.headers.get('content-type')?.split(';')[0]
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime ?? '')) { await response.body?.cancel(); throw new HttpError(502, 'Model preview must be PNG, JPEG or WebP') }
+  const bytes = await readCapped(response, 5 * 1024 * 1024)
+  // LoRA Manager may label a WebP sidecar image/jpeg. Serve only recognized raster
+  // signatures, with their actual MIME type rather than trusting the filename/header.
+  const actual = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? 'image/png' : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? 'image/jpeg' : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null
+  if (!actual) throw new HttpError(502, 'Model preview is not a recognized raster image')
+  res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': actual, 'Content-Length': bytes.length, 'Cache-Control': 'private, no-store' }).end(bytes)
+}
+
 export async function handleImageApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string, user: User): Promise<boolean> {
+  if (url.pathname === '/api/agents/images/model-metadata' && method === 'GET') return json(res, 200, await modelMetadata(user, url.searchParams.get('category') ?? '', url.searchParams.get('name') ?? '')), true
+  const preview = /^\/api\/agents\/images\/model-previews\/([0-9a-f-]{36})$/.exec(url.pathname)
+  if (preview && method === 'GET') return await sendModelPreview(user, preview[1], res), true
   const session = /^\/api\/agents\/images\/threads\/([0-9a-f-]{36})$/.exec(url.pathname)
   if (session) {
     if (method === 'GET') return json(res, 200, threadImageSettings(user, session[1])), true

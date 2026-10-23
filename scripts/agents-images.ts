@@ -10,7 +10,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 const send = (res: ServerResponse, data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
 const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
 info.CheckpointLoaderSimple.input.required.ckpt_name = [['test.safetensors']]
-info.UNETLoader.input.required.unet_name = [['z-test.safetensors']]
+info.UNETLoader.input.required.unet_name = [['z-test.safetensors', 'krea-raw.safetensors', 'krea-turbo.safetensors']]
 info.CLIPLoader.input.required = { clip_name: [['encoder.safetensors']], type: [['lumina2', 'krea2']] }
 info.VAELoader.input.required.vae_name = [['vae.safetensors']]
 info.KSampler.input.required = { sampler_name: [['euler', 'euler_ancestral']], scheduler: [['simple', 'beta']] }
@@ -18,6 +18,7 @@ let catalogBehavior: 'ok' | 'oversize' | 'aggregate' | 'invalid' | 'missing' = '
 const discoveryRequests: string[] = []
 const irrelevantCatalog = JSON.stringify({ ...info, IrrelevantCustomNode: { description: 'x'.repeat(9 * 1024 * 1024) } })
 let fullCatalogRequests = 0
+let previewMode: 'ok' | 'missing' | 'wrong-category' | 'unsafe-path' | 'oversize' | 'mime' | 'invalid' | 'duplicate' | 'mislabeled' = 'ok'
 let behavior: 'ok' | 'wait' | 'error' | 'invalid' | 'oversize' = 'ok'
 let submissions = 0
 let historyReads = 0
@@ -43,6 +44,17 @@ const comfy = createServer((req, res) => {
       if (catalogBehavior === 'invalid') return res.end('not JSON')
       if (catalogBehavior === 'missing' && node === 'SaveImage') return send(res, {})
       return send(res, { [node]: info[node], ...(catalogBehavior === 'aggregate' ? { padding: 'x'.repeat(900 * 1024) } : {}) })
+    }
+    if (path === '/api/lm/checkpoints/list') {
+      if (previewMode === 'missing') return res.writeHead(404).end()
+      const item = { model_name: 'Test model', file_name: 'test', folder: '', file_path: '/models/test.safetensors', sub_type: previewMode === 'wrong-category' ? 'diffusion_model' : 'checkpoint', file_size: 12345, base_model: 'SDXL', tags: ['test'], preview_url: previewMode === 'unsafe-path' ? '/api/lm/previews?path=/private/secret.png' : '/api/lm/previews?path=%2Fmodels%2Ftest.png' }
+      return send(res, { items: previewMode === 'duplicate' ? [item, item] : [item], total_pages: 1 })
+    }
+    if (path === '/api/lm/previews') {
+      assert.equal(req.headers.authorization, 'Bearer test-secret')
+      assert.equal(new URL(req.url!, 'http://test').searchParams.get('path'), '/models/test.png')
+      if (previewMode === 'oversize') return res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': 6 * 1024 * 1024 }).end()
+      return res.writeHead(200, { 'Content-Type': previewMode === 'mime' ? 'image/svg+xml' : previewMode === 'mislabeled' ? 'image/jpeg' : 'image/png' }).end(previewMode === 'invalid' ? Buffer.from('bad') : png)
     }
     if (path === '/prompt') {
       assert.equal(req.headers.authorization, 'Bearer test-secret')
@@ -144,7 +156,7 @@ try {
   assert.equal((await json('GET', '/api/agents/images/settings', undefined, 1)).url, '')
   const catalog = await json('GET', '/api/agents/images/catalog')
   assert.deepEqual(catalog.checkpoints, ['test.safetensors'])
-  assert.deepEqual(catalog.diffusionModels, ['z-test.safetensors'])
+  assert.deepEqual(catalog.diffusionModels, ['z-test.safetensors', 'krea-raw.safetensors', 'krea-turbo.safetensors'])
   assert.deepEqual(catalog.clips, ['encoder.safetensors'])
   assert.deepEqual(catalog.vaes, ['vae.safetensors'])
   assert.deepEqual(catalog.clipTypes, ['lumina2', 'krea2'])
@@ -173,7 +185,10 @@ try {
     assert.equal(graph.graph['7'].inputs.seed, 0)
     assert.equal(graph.graph['1'].class_type, !['sd15', 'sdxl'].includes(preset) ? 'UNETLoader' : 'CheckpointLoaderSimple')
     assert.equal(graph.graph['9'].class_type, 'SaveImage')
-    if (preset === 'z_image_turbo') assert.equal(graph.graph['7'].inputs.cfg, 1)
+    if (preset === 'z_image_turbo' || preset === 'krea2_turbo') {
+      assert.equal(graph.graph['7'].inputs.cfg, 1)
+      assert.throws(() => imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'test', negative_prompt: 'blur' }), /positive prompt only/)
+    }
   }
   assert.throws(() => imageWorkflow(settings, { prompt: 'test', width: 513 }))
   assert.throws(() => imageWorkflow(settings, { prompt: 'test', width: 1536, height: 1536 }))
@@ -298,7 +313,7 @@ try {
   assert.equal(submitted['1'].class_type, 'UNETLoader')
   assert.equal(submitted['2'].inputs.type, 'lumina2')
   for (const preset of ['krea2_raw', 'krea2_turbo'] as const) {
-    const selection = { preset, model: 'z-test.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors' }
+    const selection = { preset, model: preset === 'krea2_raw' ? 'krea-raw.safetensors' : 'krea-turbo.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors' }
     info.CLIPLoader.input.required.type = [['lumina2']]
     assert.equal((await api('PUT', endpoint(second.id), selection)).status, 400)
     info.CLIPLoader.input.required.type = [['lumina2', 'krea2']]
@@ -316,6 +331,34 @@ try {
     else assert.deepEqual(submitted['5'].inputs.conditioning, ['4', 0])
   }
   console.log('PASS session ownership, strict field validation, exact model identifiers, default fallback, restart persistence, per-call precedence, secret exclusion and offline reset')
+  const zeroNode = info.ConditioningZeroOut
+  delete info.ConditioningZeroOut
+  const beforeMissingZero = submissions
+  assert.match(result(await turn(second.id)).error, /missing nodes/)
+  assert.equal(submissions, beforeMissingZero)
+  info.ConditioningZeroOut = zeroNode
+  const metadataPath = '/api/agents/images/model-metadata?category=checkpoints&name=test.safetensors'
+  const metadata = await json('GET', metadataPath)
+  assert.equal(metadata.source, 'LoRA Manager')
+  assert.equal(metadata.size, 12345)
+  assert.ok(metadata.preview.startsWith('/api/agents/images/model-previews/'))
+  assert.ok(!JSON.stringify(metadata).includes('/models/') && !JSON.stringify(metadata).includes('test-secret'))
+  assert.equal((await api('GET', metadata.preview, undefined, 1)).status, 404)
+  assert.equal((await fetch(server.origin + metadata.preview)).status, 401)
+  assert.deepEqual(Buffer.from(await (await api('GET', metadata.preview)).arrayBuffer()), png)
+  for (const name of ['../test.safetensors', '/test.safetensors', 'folder/../test.safetensors', 'http://test', 'a\\..\\b']) assert.equal((await api('GET', '/api/agents/images/model-metadata?' + new URLSearchParams({ category: 'checkpoints', name }))).status, 400)
+  assert.equal((await api('GET', '/api/agents/images/model-metadata?category=__proto__&name=test')).status, 400)
+  assert.equal((await api('GET', '/api/agents/images/model-metadata?category=checkpoints&name=unknown.safetensors')).status, 404)
+  for (const mode of ['missing', 'wrong-category', 'duplicate'] as const) { previewMode = mode; assert.equal((await json('GET', metadataPath)).available, false) }
+  previewMode = 'mislabeled'
+  assert.equal((await api('GET', metadata.preview)).headers.get('content-type'), 'image/png')
+  previewMode = 'unsafe-path'
+  assert.equal((await json('GET', metadataPath)).preview, undefined)
+  for (const mode of ['oversize', 'mime', 'invalid'] as const) { previewMode = mode; assert.ok((await api('GET', metadata.preview)).status >= 400) }
+  previewMode = 'ok'
+  await json('PUT', '/api/agents/images/settings', { token: 'changed' })
+  assert.equal((await api('GET', metadata.preview)).status, 404)
+  console.log('PASS private exact-identity previews, optional backend fallback, category/path validation, credential binding, MIME/signature/size limits')
   assert.equal(fullCatalogRequests, 0)
   console.log('All image generation checks passed')
 } finally {

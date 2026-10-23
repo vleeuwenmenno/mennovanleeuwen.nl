@@ -33,7 +33,7 @@ export function AgentsImageSettings() {
   return <>
     <p className="muted set-help">Connect directly to your ComfyUI server. Save the connection to discover installed models, select a matching preset and model, then save again. Ask Agents to generate an image in the app or terminal.</p>
     {!settings && !error && <p className="muted">Loading…</p>}
-    {settings && <form className="set-form ws-form" onSubmit={save}>
+    {settings && <form className="set-form ws-form image-settings-form" onSubmit={save}>
       <label><span>ComfyUI URL</span><input value={settings.url} onChange={(e) => { setSettings({ ...settings, url: e.target.value }); setCatalog(null) }} placeholder="https://comfy.example.com" spellCheck={false} autoComplete="off" disabled={busy} /></label>
       <label><span>Bearer token</span><SecretInput value={token} onChange={(e) => setToken(e.target.value)} placeholder={settings.token ? 'Saved; leave empty to keep' : 'Optional'} disabled={busy} /></label>
       {settings.token && <label><span>Remove saved token</span><input type="checkbox" checked={clearToken} onChange={(e) => setClearToken(e.target.checked)} disabled={busy} /></label>}

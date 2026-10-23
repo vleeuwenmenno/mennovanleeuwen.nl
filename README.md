@@ -1343,14 +1343,14 @@ non-admin accounts. The server must be able to reach ComfyUI; browsers never con
 
 Every image model field opens the same **model browser**, in account settings and session
 settings: checkpoints/diffusion models, text encoders and VAEs. It shows the installed catalog as
-folders, with breadcrumbs and a folder sidebar, search across all paths, full wrapping filenames,
+folders, with breadcrumbs and a folder sidebar, search across all paths, full horizontally scrollable filenames,
 a current-selection marker and details for the selected file. Slash and backslash separators both
 form folders, but the original identifier is sent unchanged to ComfyUI. Folder/name/extension are
 shown; sizes, compatibility claims and thumbnails are not invented. Arrow keys move through rows,
 Right opens a folder, Left goes to its parent, Enter selects a row, and **Use selected model** or
 a double-click confirms. Escape cancels and returns focus to the picker. On phones, folder rows
-and breadcrumbs replace the sidebar. The workflow picker has descriptive cards for the four
-supported families; selecting a card does not imply that an arbitrary installed model supports it.
+and breadcrumbs replace the sidebar. The workflow picker has descriptive cards for the six
+supported presets; selecting a card does not imply that an arbitrary installed model supports it.
 
 **Session image settings** are available from **Images** in the conversation toolbar (including a
 new thread), or `/images` in the Agents terminal. Both open the same browser and settings dialog.
@@ -1365,7 +1365,7 @@ Changing settings affects subsequent tool calls; an already submitted job keeps 
 The CLI also supports `/images show`, `/images reset`, and
 `/images set {"width":768,"height":1024,"seed":42}` to merge explicit overrides into this thread.
 A workflow/model change can be supplied together in that JSON; separate diffusion workflows also
-need a compatible installed `clip` and `vae`. Unknown fields, unsupported presets and absent models
+need a compatible installed `clip` and `vae`. Krea2 preset IDs are `krea2_raw` and `krea2_turbo`. Unknown fields, unsupported presets and absent models
 are rejected by the shared server. Opening `/images` before the first message creates the session.
 The model can discover effective settings through `list_image_models`; it cannot reconfigure the
 backend or persist session settings. Explicit width/height/seed on `generate_image` override the
@@ -1384,13 +1384,26 @@ its generated images.
 The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 px) and SDXL
 (1024 px) use a complete checkpoint with its text encoder and VAE; Z-Image and Z-Image Turbo use
 an installed diffusion model, a compatible `lumina2` text encoder and a separately selected VAE.
-Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Image uses 20 steps and CFG 4;
+Z-Image Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Image uses 20 steps and CFG 4;
 checkpoint presets use 25 steps and CFG 7. Choose the family that matches the actual model:
 Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be selected explicitly; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
 `/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
 LoRAs, image editing and model downloads are not included in these initial presets.
+
+Model browsers and account/session selectors use the available window width, with aligned controls
+and horizontally readable long filenames. Visible model rows lazily request artwork. If the optional
+ComfyUI LoRA Manager extension is installed, Agents searches one bounded page for an exact
+catalog category, folder and filename match, showing its real title, base-model label, file size,
+tags and sidecar PNG/JPEG/WebP preview. It never guesses compatibility from those labels.
+Plain ComfyUI, missing artwork, ambiguous matches, encoders and VAEs show a neutral fallback.
+No extension installation is required. Metadata requests are capped at 1 MiB and ten seconds;
+artwork is capped at 5 MiB and ten seconds. Preview handles expire after five minutes, are private
+to the account and bound to its current backend credentials. The server checks the installed
+catalog identity and sidecar path, applies the same egress protections as generation, and proxies
+image bytes without exposing backend paths, URLs or tokens. Remote preview URLs and video
+artwork are not supported; refresh the browser if a preview handle expires.
 
 Each call makes one PNG. Width/height can be requested in multiples of 64 from 256 to 1536,
 with at most 1536 × 1024 pixels; the result includes a reproducible seed. One generation runs per

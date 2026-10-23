@@ -1508,7 +1508,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
     tool('list_image_models', 'Discover the installed ComfyUI image models and selected preset. Backend connection and model defaults are configured by the user in Agents Images settings.', {}, []),
     tool('generate_image', 'Generate one image from a text prompt using the session image settings (falling back to account defaults). list_image_models shows effective model, size and seed; explicit width/height/seed arguments override them for this call only. Returns a durable private image URL: show it to the user. Can take several minutes. Only generate when the user requests an image. Never configure a backend or claim success before this tool succeeds.', {
       prompt: str('Describe the requested image, including any exact text'),
-      negative_prompt: str('Optional unwanted content; not supported by Z-Image Turbo'),
+      negative_prompt: str('Optional unwanted content; not supported by Z-Image Turbo or Krea2 Turbo'),
       width: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; defaults to session size, otherwise preset size' },
       height: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; maximum area 1536 × 1024' },
       seed: { type: 'integer', description: 'Optional non-negative seed for reproducibility' },

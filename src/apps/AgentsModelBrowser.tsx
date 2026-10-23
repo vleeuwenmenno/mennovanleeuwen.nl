@@ -1,3 +1,4 @@
+import { getModelMetadata, type ModelCategory, type ModelMetadata } from '../data/agentImages'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { IMAGE_PRESETS, imagePresetSpec, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
@@ -33,15 +34,41 @@ export function PresetPicker({ value, onChange, disabled }: { value: ImagePreset
   </>
 }
 
-export function ModelPicker({ label, values, value, onChange, disabled, loading, error, onRefresh }: { label: string; values: string[]; value: string; onChange: (value: string) => void; disabled?: boolean; loading?: boolean; error?: string; onRefresh?: () => void }) {
+/** Fetch artwork only when its tile becomes visible, and cancel when it leaves the UI. */
+function ModelArtwork({ category, name, details = false }: { category?: ModelCategory; name: string; details?: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [metadata, setMetadata] = useState<ModelMetadata | null>(null)
+  const [error, setError] = useState('')
+  const [failedImage, setFailedImage] = useState(false)
+  useEffect(() => {
+    setMetadata(null); setError(''); setFailedImage(false)
+    if (!category || !name) return
+    const abort = new AbortController()
+    let started = false
+    const start = () => {
+      if (started) return
+      started = true
+      void getModelMetadata(category, name, abort.signal).then((value) => { if (!abort.signal.aborted) setMetadata(value) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) })
+    }
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) { start(); observer.disconnect() } })
+    if (ref.current) observer.observe(ref.current)
+    return () => { abort.abort(); observer.disconnect() }
+  }, [category, name])
+  return <span ref={ref} className={details ? 'image-artwork-details' : 'image-artwork'}>
+    {metadata?.preview && !failedImage ? <img src={metadata.preview} alt={details ? `Preview of ${name}` : ''} loading="lazy" onError={() => setFailedImage(true)} /> : <span className="image-artwork-empty" aria-hidden>◇</span>}
+    {details && <span className="image-metadata muted">{error || (failedImage ? 'Preview unavailable. Refresh the catalog to retry.' : !metadata ? 'Loading model details…' : metadata.available ? <>{metadata.title && <strong>{metadata.title}</strong>}{metadata.baseModel && <span>Base model: {metadata.baseModel}</span>}{metadata.size !== undefined && <span>{(metadata.size / 1024 ** 3).toFixed(2)} GiB</span>}{!!metadata.tags?.length && <span>{metadata.tags.join(' · ')}</span>}<span>Source: {metadata.source}{!metadata.preview ? ' · No artwork supplied' : ''}</span></> : metadata.reason)}</span>}
+  </span>
+}
+
+export function ModelPicker({ category, label, values, value, onChange, disabled, loading, error, onRefresh }: { category?: ModelCategory; label: string; values: string[]; value: string; onChange: (value: string) => void; disabled?: boolean; loading?: boolean; error?: string; onRefresh?: () => void }) {
   const [open, setOpen] = useState(false)
   return <>
-    <button type="button" className="image-picker" disabled={disabled} aria-haspopup="dialog" aria-label={`Browse ${label}`} onClick={() => setOpen(true)}><strong>{value ? modelAssets([value])[0].name : `Choose ${label.toLowerCase()}`}</strong>{value && <span className="muted image-path">{value}</span>}<span>Browse models →</span></button>
-    {open && <ModelBrowser label={label} values={values} value={value} onChoose={(v) => { onChange(v); setOpen(false) }} onClose={() => setOpen(false)} loading={loading} error={error} onRefresh={onRefresh} />}
+    <button type="button" className="image-picker" disabled={disabled} aria-haspopup="dialog" aria-label={`Browse ${label}`} onClick={() => setOpen(true)}><span className="image-picker-content">{value && <ModelArtwork category={category} name={value} />}<span className="image-picker-text"><strong>{value ? modelAssets([value])[0].name : `Choose ${label.toLowerCase()}`}</strong>{value && <span className="muted image-path">{value}</span>}<span>Browse models →</span></span></span></button>
+    {open && <ModelBrowser category={category} label={label} values={values} value={value} onChoose={(v) => { onChange(v); setOpen(false) }} onClose={() => setOpen(false)} loading={loading} error={error} onRefresh={onRefresh} />}
   </>
 }
 
-export function ModelBrowser({ label, values, value, onChoose, onClose, loading, error, onRefresh }: { label: string; values: string[]; value: string; onChoose: (value: string) => void; onClose: () => void; loading?: boolean; error?: string; onRefresh?: () => void }) {
+export function ModelBrowser({ category, label, values, value, onChoose, onClose, loading, error, onRefresh }: { category?: ModelCategory; label: string; values: string[]; value: string; onChoose: (value: string) => void; onClose: () => void; loading?: boolean; error?: string; onRefresh?: () => void }) {
   const assets = useMemo(() => modelAssets(values), [values])
   const tree = useMemo(() => modelFolders(assets), [assets])
   const current = assets.find((a) => a.value === value)
@@ -49,6 +76,7 @@ export function ModelBrowser({ label, values, value, onChoose, onClose, loading,
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(value)
   const [shown, setShown] = useState(150)
+  const [artworkRevision, setArtworkRevision] = useState(0)
   const list = useRef<HTMLUListElement>(null)
   const picked = assets.find((a) => a.value === selected)
   const files = useMemo(() => visibleModelAssets(assets, folder, query), [assets, folder, query])
@@ -72,7 +100,7 @@ export function ModelBrowser({ label, values, value, onChoose, onClose, loading,
     else if (e.key === 'ArrowRight' && buttons[index].dataset.folder !== undefined) { e.preventDefault(); buttons[index].click() }
   }
   return <ImageDialog title={`Browse ${label.toLowerCase()}`} onClose={onClose} wide>
-    <div className="image-browser-tools"><input data-image-autofocus="" aria-label="Search model names and folders" placeholder="Search all folders…" onKeyDown={(e) => { if (e.key === 'ArrowDown') { e.preventDefault(); list.current?.querySelector<HTMLButtonElement>('button')?.focus() } }} value={query} onChange={(e) => { setQuery(e.target.value); setShown(150) }} />{onRefresh && <button type="button" className="btn" disabled={loading} onClick={onRefresh}>{loading ? 'Refreshing…' : 'Refresh'}</button>}</div>
+    <div className="image-browser-tools"><input data-image-autofocus="" aria-label="Search model names and folders" placeholder="Search all folders…" onKeyDown={(e) => { if (e.key === 'ArrowDown') { e.preventDefault(); list.current?.querySelector<HTMLButtonElement>('button')?.focus() } }} value={query} onChange={(e) => { setQuery(e.target.value); setShown(150) }} />{onRefresh && <button type="button" className="btn" disabled={loading} onClick={() => { setArtworkRevision((n) => n + 1); onRefresh() }}>{loading ? 'Refreshing…' : 'Refresh'}</button>}</div>
     <div className="image-browser-body">
       <nav className="image-folders" aria-label="Model folders"><ul>{branch(tree)}</ul></nav>
       <section className="image-browser-main">
@@ -84,13 +112,13 @@ export function ModelBrowser({ label, values, value, onChoose, onClose, loading,
         {query && !files.length && !!assets.length && <p className="muted">No matching models. Try another name or folder.</p>}
         <ul ref={list} className="image-model-list" aria-label={`${label} catalog`} onKeyDown={keys}>
           {!query && here.children.map((f) => <li key={`folder:${f.path}`}><button type="button" data-folder="" className="image-model-row" onClick={() => go(f.path)}><span className="image-file-icon" aria-hidden>▱</span><span><strong>{f.name}</strong><small>{f.count} {f.count === 1 ? 'model' : 'models'} in this folder</small></span><span aria-hidden>→</span></button></li>)}
-          {files.slice(0, shown).map((asset) => <li key={asset.value}><button type="button" className={`image-model-row ${selected === asset.value ? 'is-selected' : ''}`} aria-pressed={selected === asset.value} onFocus={() => setSelected(asset.value)} onClick={() => setSelected(asset.value)} onDoubleClick={() => onChoose(asset.value)}><span className="image-file-icon" aria-hidden>◇</span><span><strong>{asset.name}</strong><small>{query ? asset.value : asset.extension}</small></span>{value === asset.value && <span className="image-current">Current</span>}</button></li>)}
+          {files.slice(0, shown).map((asset) => <li key={asset.value}><button type="button" className={`image-model-row ${selected === asset.value ? 'is-selected' : ''}`} aria-pressed={selected === asset.value} onFocus={() => setSelected(asset.value)} onClick={() => setSelected(asset.value)} onDoubleClick={() => onChoose(asset.value)}><ModelArtwork key={artworkRevision} category={category} name={asset.value} /><span><strong>{asset.name}</strong><small>{query ? asset.value : asset.extension}</small></span>{value === asset.value && <span className="image-current">Current</span>}</button></li>)}
         </ul>
         {files.length > shown && <button type="button" className="btn" onClick={() => setShown((n) => n + 150)}>Show more ({files.length - shown} left)</button>}
       </section>
       <aside className="image-model-details" aria-label="Selected model details">
         <span className="image-eyebrow muted">SELECTION</span>
-        {picked ? <><h3>{picked.name}</h3><dl><dt>Catalog</dt><dd>{label}</dd><dt>Folder</dt><dd>{picked.folder || 'Root'}</dd><dt>Format</dt><dd>{picked.extension}</dd><dt>Exact identifier</dt><dd className="copyable image-path">{picked.value}</dd></dl><p className="muted">Listed by ComfyUI. Compatibility, size and previews are not supplied by this catalog.</p></> : <p className="muted">{selected ? 'The saved selection is not in this catalog. Refresh or choose an installed model.' : 'Select a model to inspect its full path.'}</p>}
+        {picked ? <><ModelArtwork key={`${picked.value}:${artworkRevision}`} category={category} name={picked.value} details /><h3>{picked.name}</h3><dl><dt>Catalog</dt><dd>{label}</dd><dt>Folder</dt><dd>{picked.folder || 'Root'}</dd><dt>Format</dt><dd>{picked.extension}</dd><dt>Exact identifier</dt><dd className="copyable image-path">{picked.value}</dd></dl><p className="muted">Catalog identity comes from ComfyUI. Artwork and metadata do not establish workflow compatibility.</p></> : <p className="muted">{selected ? 'The saved selection is not in this catalog. Refresh or choose an installed model.' : 'Select a model to inspect its full path.'}</p>}
       </aside>
     </div>
     <footer className="image-dialog-foot"><span className="muted">Arrow keys navigate · Enter selects · Double-click confirms</span><button type="button" className="btn" onClick={onClose}>Cancel</button><button type="button" className="btn btn-primary" disabled={!picked || loading} onClick={() => picked && onChoose(picked.value)}>Use selected model</button></footer>
@@ -105,7 +133,7 @@ export function ImageModelFields({ value, catalog, onChange, disabled, loading, 
   extra?: (field: 'preset' | 'model' | 'clip' | 'vae') => ReactNode
 }) {
   const diffusion = Boolean(imagePresetSpec(value.preset).clipType)
-  const picker = (field: 'model' | 'clip' | 'vae', label: string, values: string[]) => <div className="image-config-field"><div className="image-config-label"><strong>{label}</strong>{extra?.(field)}</div><ModelPicker label={label} values={values} value={value[field]} onChange={(v) => onChange({ [field]: v })} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} /></div>
+  const picker = (field: 'model' | 'clip' | 'vae', label: string, values: string[]) => <div className="image-config-field"><div className="image-config-label"><strong>{label}</strong>{extra?.(field)}</div><ModelPicker category={field === 'model' ? diffusion ? 'diffusion_models' : 'checkpoints' : field === 'clip' ? 'text_encoders' : 'vae'} label={label} values={values} value={value[field]} onChange={(v) => onChange({ [field]: v })} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} /></div>
   return <div className="image-config-fields">
     <div className="image-config-field"><div className="image-config-label"><strong>Workflow preset</strong>{extra?.('preset')}</div><PresetPicker value={value.preset} onChange={(preset) => onChange({ preset, model: '' })} disabled={disabled} /></div>
     {picker('model', diffusion ? 'Diffusion model' : 'Checkpoint', (diffusion ? catalog?.diffusionModels : catalog?.checkpoints) ?? [])}

@@ -39,6 +39,7 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        Ask for an image after configuring ComfyUI in Settings → Apps → Agents → Images.
        /images opens the model browser and session overrides; /images show prints effective
        settings, /images reset follows account defaults, /images set {"seed":42} updates them.
+       Krea2 presets are krea2_raw and krea2_turbo; both need installed model, clip and vae.
        Generated images show a private download URL; /open previews them in the app.
 
        /help lists the commands: /resume, /model, /tools, /skills, /context, /export, ….
