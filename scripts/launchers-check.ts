@@ -190,7 +190,8 @@ database()
   .run('seafile', encrypt(JSON.stringify({ url: mock.base, username: 'check@example.com', token: 'mock-token', name: 'Check', version: '12.0.0' })), now)
 await server.start()
 
-const headers = { Cookie: `mvlos_sid=${sid}`, Origin: server.origin }
+// As a page does: it says whose state it holds (src/os/accountSpace.ts).
+const headers = { Cookie: `mvlos_sid=${sid}`, Origin: server.origin, 'X-MvL-Account': '1' }
 async function api<T>(path: string, init: { method?: string; json?: unknown } = {}): Promise<T> {
   const res = await fetch(`${server.origin}${path}`, { method: init.method ?? 'GET', headers: { ...headers, ...(init.json ? { 'Content-Type': 'application/json' } : {}) }, body: init.json ? JSON.stringify(init.json) : undefined })
   const body = await res.json().catch(() => null)

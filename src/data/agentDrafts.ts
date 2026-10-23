@@ -1,8 +1,10 @@
 import type { Attachment } from './agents'
+import { accountStorage } from '../os/accountSpace'
 
 // What is typed in a thread's message box (and attached) but not sent yet, per thread, with 'new'
 // for a thread not started. Kept in memory while the page is open and in localStorage for the
-// next visit, per browser. Pictures and big files stay in memory only: localStorage is small.
+// next visit, in this browser under the account (src/os/accountSpace.ts). Pictures and big files
+// stay in memory only: localStorage is small.
 
 export type Draft = { text: string; files: Attachment[]; at: number }
 
@@ -14,7 +16,7 @@ const STORED = 1_500_000
 
 const drafts = new Map<string, Draft>()
 try {
-  const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, Draft>
+  const saved = JSON.parse(accountStorage.get(KEY) ?? '{}') as Record<string, Draft>
   for (const [id, d] of Object.entries(saved)) if (d && typeof d.text === 'string' && Date.now() - d.at < KEEP) drafts.set(id, { text: d.text, files: Array.isArray(d.files) ? d.files : [], at: d.at })
 } catch {
   /* none saved */
@@ -36,7 +38,7 @@ function store() {
     out[id] = { ...d, files }
   }
   try {
-    localStorage.setItem(KEY, JSON.stringify(out))
+    accountStorage.set(KEY, JSON.stringify(out))
   } catch {
     /* full or blocked: the drafts stay in memory */
   }

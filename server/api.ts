@@ -5,7 +5,7 @@ import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
-import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
+import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
@@ -91,6 +91,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (read && path === '/api/auth/github/callback') return await finishLogin(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)
+      const fix = uidCookieFix(req, user)
       json(res, 200, {
         authEnabled: authEnabled(),
         // Whether a new account could sign up now (the sign-in button says so before GitHub does).
@@ -102,7 +103,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         caldav: user ? listCaldav(user) : [],
         integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
         seafile: user ? seafileInfo(user) : null,
-      })
+      }, fix.length ? { 'Set-Cookie': fix } : {})
       return true
     }
 
@@ -119,6 +120,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
 
     // Everything below changes something or reads private data.
     if (!read && !sameOrigin(req)) throw new HttpError(403, 'Cross-site request')
+    // A page of another account than the session's is refused (server/auth.ts accountMismatch).
+    // Synced state and notifications must say whose they are.
+    {
+      const header = req.headers['x-mvl-account']
+      const held = typeof header === 'string' ? header : path === '/api/notifications/stream' ? url.searchParams.get('holds') : null
+      const required = path === '/api/state' || path.startsWith('/api/state/') || (path === '/api/notifications' && !read)
+      const refused = accountMismatch(req, held, required)
+      if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
+    }
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
     // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
     if (method === 'DELETE' && path === '/api/me') {
@@ -152,17 +162,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return json(res, 200, empiresAway(body?.token, currentUser(req)?.login ?? null)), true
     }
 
-    // Synced state. A tab says whose state it holds (X-MvL-Account: that account's id). Signed in as
-    // someone else by now (another tab switched account, with the same cookie): refused, so one
-    // account's state never reaches another (src/os/synced.ts).
+    if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
     const stateKey = /^\/api\/state\/([^/]+)$/.exec(path)?.[1]
-    if ((path === '/api/state' && read) || (stateKey && method === 'PUT')) {
-      const user = requireUser(req)
-      const holds = req.headers['x-mvl-account']
-      if (typeof holds === 'string' && holds !== String(user.id)) return json(res, 409, { error: 'Signed in as another account', accountChanged: true }), true
-      if (!stateKey) return json(res, 200, readState(user)), true
-      return json(res, 200, writeState(user, decodeURIComponent(stateKey), await readJson(req))), true
-    }
+    if (stateKey && method === 'PUT') return json(res, 200, writeState(requireUser(req), decodeURIComponent(stateKey), await readJson(req))), true
 
     if (path === '/api/forges' && method === 'POST') {
       const user = requireUser(req)
@@ -434,7 +436,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     throw new HttpError(404, 'Not found')
   } catch (e) {
     if (res.headersSent) return true
-    if (e instanceof HttpError) json(res, e.status, { error: e.message })
+    // No valid session: the page's account cookie goes too (src/os/accountSpace.ts).
+    if (e instanceof HttpError) json(res, e.status, { error: e.message }, e.status === 401 ? { 'Set-Cookie': uidCookieFix(req, null) } : {})
     else {
       console.error(e)
       json(res, 500, { error: 'Something went wrong' })

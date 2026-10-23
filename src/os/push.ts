@@ -1,4 +1,5 @@
 import { api, signedIn, subscribeAccount } from './account'
+import { accountStorage } from './accountSpace'
 
 // Web Push on this device (server/webpush.ts): Agents answers and questions arrive as system
 // notifications even when MvL OS is closed. It needs the service worker (production builds) and,
@@ -68,7 +69,7 @@ export async function enablePush(): Promise<PushState> {
   if (permission !== 'granted') return pushState()
   await register(reg)
   try {
-    localStorage.setItem(FLAG, 'on')
+    accountStorage.set(FLAG, 'on')
   } catch {
     /* only the refresh on the next visit needs it */
   }
@@ -77,7 +78,7 @@ export async function enablePush(): Promise<PushState> {
 
 export async function disablePush(): Promise<PushState> {
   try {
-    localStorage.removeItem(FLAG)
+    accountStorage.remove(FLAG)
   } catch {
     /* nothing to forget */
   }
@@ -101,7 +102,7 @@ export function startPush() {
     if (!signedIn() || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     let on = false
     try {
-      on = localStorage.getItem(FLAG) === 'on'
+      on = accountStorage.get(FLAG) === 'on'
     } catch {
       /* treated as off */
     }

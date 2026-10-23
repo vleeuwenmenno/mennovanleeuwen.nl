@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { api } from './account'
 import { keepMs, notifyPrefs, sourceOn, type SourceId } from './notifyPrefs'
 import type { Entry, NoticeAction } from '../data/notifySources'
+import { accountStorage } from './accountSpace'
 
 export type { Entry, NoticeAction } from '../data/notifySources'
 
@@ -92,7 +93,7 @@ const MAX_KEPT = 100
 
 const load = (): Entry[] => {
   try {
-    const v = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]') as unknown
+    const v = JSON.parse(accountStorage.get(HISTORY_KEY) ?? '[]') as unknown
     return Array.isArray(v) ? (v as Entry[]).filter((e) => e && typeof e.id === 'string' && typeof e.title === 'string' && typeof e.at === 'number') : []
   } catch {
     return []
@@ -107,7 +108,7 @@ function save(next: Entry[]) {
   entries = next
   if (!accountList) {
     try {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+      accountStorage.set(HISTORY_KEY, JSON.stringify(next))
     } catch {
       /* kept for this page only */
     }
@@ -203,9 +204,9 @@ setInterval(() => !accountList && pruneEntries(), 5 * 60_000)
 /** True the first time a `once` key is seen on this device (signed out; the server remembers them for accounts). */
 function firstTime(key: string): boolean {
   try {
-    const seen = JSON.parse(localStorage.getItem(SEEN_KEY) ?? '[]') as string[]
+    const seen = JSON.parse(accountStorage.get(SEEN_KEY) ?? '[]') as string[]
     if (seen.includes(key)) return false
-    localStorage.setItem(SEEN_KEY, JSON.stringify([...seen, key].slice(-500)))
+    accountStorage.set(SEEN_KEY, JSON.stringify([...seen, key].slice(-500)))
   } catch {
     /* without storage: once per page load, as before */
   }

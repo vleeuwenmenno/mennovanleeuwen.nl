@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { cvMode } from './cvMode'
 import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
+import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID } from './accountSpace'
 import type { OrgsResponse } from '../data/code'
 
 // Who is signed in (GitHub, see server/auth.ts) and which Gitea/Forgejo instances they linked.
@@ -33,100 +34,36 @@ export type Account = {
 let account: Account = { status: 'loading', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
 const listeners = new Set<() => void>()
 
-/** Whose saved state this browser holds: their user id, so another account never inherits it. */
-const ACCOUNT_KEY = 'mvlos.account'
-/** The older "the owner was signed in here" flag, from before anyone could sign up. */
-const LEGACY_HINT = 'mvlos.owner'
 /**
- * What belongs to whoever is signed in rather than to this device: their synced state, the
- * notification history, terminal history, Files' places, the Agents window layout and push.
- * Themes, games and the like stay.
+ * Clears this tab's account from the browser (signing out, or the account deleted): its space in
+ * localStorage (src/os/accountSpace.ts) goes, and its push messages stop arriving here. Nothing of
+ * this tab writes the account's state back meanwhile: it is frozen first.
  */
-const PER_ACCOUNT = [/^mvlos\.sync\./, /^mvlos\.notify\.history$/, /^mvlos\.history$/, /^mvlos\.files\.v1$/, /^mvlos\.desktop\.v1$/, /^mvlos\.dock\.v1$/, /^mvlos\.agents\./, /^mvlos\.push$/, /^mvlos\.browser\./]
-
-function storedAccount(): string | null {
-  try {
-    return localStorage.getItem(ACCOUNT_KEY) ?? (localStorage.getItem(LEGACY_HINT) ? 'legacy' : null)
-  } catch {
-    return null
-  }
-}
-
-/** Clears what the last account left in this browser, and stops its push messages arriving here. */
 async function forgetBrowserAccount() {
-  // First: synced stores stop saving (src/os/synced.ts), so nothing writes the old state back
-  // between here and the page starting again.
+  freezeAccount(false)
   window.dispatchEvent(new Event('mvlos:forget'))
-  const clear = () => {
-    try {
-      for (const k of Object.keys(localStorage)) if (PER_ACCOUNT.some((r) => r.test(k))) localStorage.removeItem(k)
-      localStorage.removeItem(ACCOUNT_KEY)
-      localStorage.removeItem(LEGACY_HINT)
-    } catch {
-      /* no storage: nothing was kept either */
-    }
-  }
-  clear()
+  clearAccountSpace()
   try {
     const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription()
     await sub?.unsubscribe()
   } catch {
     /* no push here */
   }
-  // Anything else that wrote meanwhile (the notification history, say) goes too.
-  clear()
-}
-
-/**
- * Whether this browser holds another account's state: someone else signed in, or the last
- * account's session ran out and a guest is here now. A browser from before sign-up was open
- * (LEGACY_HINT) belongs to whoever signs in first.
- */
-function heldByAnother(next: Account): boolean {
-  if (next.status !== 'user' && next.status !== 'anon') return false // unknown (offline, no sign-in): leave it
-  const was = storedAccount()
-  if (!was) return false
-  if (was === 'legacy') return next.status === 'anon'
-  return was !== String(next.user?.id ?? '')
+  // Anything else that wrote meanwhile goes too.
+  clearAccountSpace()
 }
 
 function set(next: Account) {
   account = next
-  // Remembered so the next visit knows who this browser's state belongs to (and boots quicker).
-  try {
-    if (next.status === 'user') {
-      localStorage.setItem(ACCOUNT_KEY, String(next.user!.id))
-      localStorage.removeItem(LEGACY_HINT)
-    } else if (next.status === 'anon') localStorage.removeItem(ACCOUNT_KEY)
-  } catch {
-    /* no storage: the quick boot just starts once /api/me answers */
-  }
   listeners.forEach((l) => l())
 }
 
-/** The key the browser's account is kept under: another tab signing in, out or as someone else changes it. */
-export const ACCOUNT_STORAGE_KEY = ACCOUNT_KEY
-
-/** Whose state this browser holds, by its marker: `u:<id>`, or `visitor` (null: storage can't be read). */
-export function browserAccountTag(): string | null {
-  try {
-    const id = localStorage.getItem(ACCOUNT_KEY)
-    return id ? `u:${id}` : 'visitor'
-  } catch {
-    return null
-  }
-}
-
-/** Signed in, or (while that is still being checked) signed in on the last visit. */
+/** Signed in, or (while that is still being checked) signed in as the browser's cookie says. */
 export function useLikelySignedIn() {
   const { status } = useAccount()
   if (status === 'user') return true
   if (status !== 'loading') return false
-  try {
-    return !!storedAccount()
-  } catch {
-    return false
-  }
+  return TAB_UID !== null
 }
 
 export const getAccount = () => account
@@ -144,10 +81,12 @@ export function useAccount() {
 /** JSON request to the site's own API; throws with the server's message on failure. */
 export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = init
+  // A tab of another account than the browser's now sends nothing (src/os/accountSpace.ts).
+  if (!accountGuard()) throw new Error('Signed in as another account')
   const res = await fetch(path, {
     ...rest,
     credentials: 'same-origin',
-    headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...rest.headers },
+    headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...rest.headers, 'X-MvL-Account': TAB_ACCOUNT },
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   })
   const body = await res.json().catch(() => null)
@@ -159,9 +98,20 @@ export async function loadAccount() {
   try {
     const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
     const next: Account = { status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null }
-    // Another account's notes, history and layouts are still here: clear them and start clean.
-    const stale = heldByAnother(next)
-    if (stale) await forgetBrowserAccount()
+    // This tab took its account from the browser's cookie as it loaded (src/os/accountSpace.ts).
+    // The server says otherwise (the session ran out, or the cookie was from before it was kept):
+    // its answer has put the cookie right, so start again as that account, keeping this one's
+    // space as it is (its unsynced changes come back when it signs in again). Only when the cookie
+    // took, or this would loop; if it didn't, sync stays off rather than use the wrong space.
+    const uid = next.status === 'user' ? String(next.user!.id) : null
+    if ((next.status === 'user' || next.status === 'anon') && uid !== TAB_UID) {
+      if (cookieUid() === uid) {
+        freezeAccount()
+        return
+      }
+      set({ ...next, status: 'off' })
+      return
+    }
     // The desktop booted as someone else (src/os/identity.ts read an old or missing login cookie):
     // fix the cookie and boot again, once. Only when the cookie took, or this would loop.
     const login = next.status === 'user' ? next.user!.login : null
@@ -170,7 +120,7 @@ export async function loadAccount() {
       setLoginCookie(login)
       rename = loginCookie() === login
     }
-    if (stale || rename) {
+    if (rename) {
       location.reload()
       return
     }

@@ -4,6 +4,7 @@ import { ask } from '../../os/Dialogs'
 import { htmlToMarkdown } from './markdown'
 import type { At } from './route'
 import { Tabs } from './ui'
+import { accountKey } from '../../os/accountSpace'
 
 // Writing in the Git app: a new comment, or a description or comment of your own being edited.
 // One Markdown editor with Write and Preview, Ctrl/Cmd+Enter to send. What is typed is kept as a
@@ -14,7 +15,9 @@ import { Tabs } from './ui'
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
 const drafts = new Map<string, string>()
-const STORE = 'mvlos.git.draft:'
+// Per account, under this tab's account space (src/os/accountSpace.ts): sessionStorage outlives a
+// reload as someone else.
+const STORE = accountKey('mvlos.git.draft:')
 
 /** The start of every draft key of one pull request or issue (they share numbers on both hosts). */
 export const itemKey = (at: At, number: number) => `${at.src}/${at.owner}/${at.repo}#${number}:`.toLowerCase()

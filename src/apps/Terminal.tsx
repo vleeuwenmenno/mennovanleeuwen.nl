@@ -30,6 +30,7 @@ import { VtSession, type TermPort } from '../terminal/vt/session'
 import { VtLines, VtView } from '../terminal/vt/VtView'
 import { encodeKey, encodePaste } from '../terminal/vt/keys'
 import { CmdError } from '../terminal/types'
+import { accountStorage } from '../os/accountSpace'
 
 /** The query's letters in `name`, in order and case-insensitively, marked the way fzf does. */
 function Matched({ name, query }: { name: string; query: string }) {
@@ -244,7 +245,7 @@ const HISTORY_KEY = 'mvlos.history'
 
 function loadHistory(): string[] {
   try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+    return JSON.parse(accountStorage.get(HISTORY_KEY) ?? '[]')
   } catch {
     return []
   }
@@ -703,7 +704,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       history.current.push(trimmed)
       history.current = history.current.slice(-200)
       try {
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(history.current))
+        accountStorage.set(HISTORY_KEY, JSON.stringify(history.current))
       } catch {
         /* history just won't persist */
       }

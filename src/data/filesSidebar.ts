@@ -1,5 +1,6 @@
 import { synced } from '../os/synced'
 import { HOME } from '../terminal/vfs'
+import { accountStorage } from '../os/accountSpace'
 
 // Files' sidebar, as you arranged it: the order of the sections, the order of the items in each,
 // what is hidden, and the bookmarks. Synced, so every Files window and device shows the same.
@@ -21,7 +22,7 @@ const DEFAULT_BOOKMARKS = [`${HOME}/projects`, `${HOME}/games`, `${HOME}/contrib
 /** Bookmarks used to live with the view settings in this browser only; they move along once. */
 function legacyBookmarks(): string[] {
   try {
-    const old = JSON.parse(localStorage.getItem('mvlos.files.v1') ?? '{}') as { bookmarks?: unknown }
+    const old = JSON.parse(accountStorage.get('mvlos.files.v1') ?? '{}') as { bookmarks?: unknown }
     if (Array.isArray(old.bookmarks)) return old.bookmarks.filter((b): b is string => typeof b === 'string')
   } catch {
     /* none */

@@ -188,7 +188,9 @@ async function endToEnd() {
   }
 
   const call = async (method: string, path: string, body?: unknown, who = sid, headers: Record<string, string> = {}) => {
-    const res = await fetch(`${origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(body !== undefined && !(body instanceof Uint8Array) ? { 'Content-Type': 'application/json' } : {}), ...headers }, body: body === undefined ? undefined : body instanceof Uint8Array ? body : JSON.stringify(body) })
+    // As a page does: it says whose state it holds (src/os/accountSpace.ts).
+    const account = { 'X-MvL-Account': who === sid ? '1' : who === other ? '2' : 'visitor' }
+    const res = await fetch(`${origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...account, ...(body !== undefined && !(body instanceof Uint8Array) ? { 'Content-Type': 'application/json' } : {}), ...headers }, body: body === undefined ? undefined : body instanceof Uint8Array ? body : JSON.stringify(body) })
     const text = await res.text()
     let json: J = {}
     try {

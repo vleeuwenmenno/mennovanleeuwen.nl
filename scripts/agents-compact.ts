@@ -101,7 +101,7 @@ database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) V
 await server.start()
 
 const call = async (method: string, path: string, body?: unknown) =>
-  fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json', 'X-MvL-Account': '1' }, body: body === undefined ? undefined : JSON.stringify(body) })
 const api = async (method: string, path: string, body?: unknown) => {
   const res = await call(method, path, body)
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)

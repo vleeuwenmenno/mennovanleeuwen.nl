@@ -603,15 +603,35 @@ Launchers are a URL, a name and an optional emoji (otherwise the site's own favi
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
 That state never crosses accounts, even with several tabs open while one of them signs out or in
-as someone else (tabs share the browser's storage and its sign-in cookie). Each tab takes an owner
-as it starts (the account the browser holds then, or a visitor), tags what it saves with it, and
-only takes in its own owner's values (or a visitor's: what you did before signing in comes
-along); another account's value found as a tab starts is dropped. Before every save, pull and push
-a tab checks its owner is still the account; when another tab has changed it, the tab writes and
-sends nothing more and starts again. Requests say whose state they carry (`X-MvL-Account`), and
-the server refuses them once the cookie is someone else's; an answer that arrives after the
-account changed is dropped. Storage that is full or blocked keeps working as before.
-`pnpm check:sync-accounts` checks this in memory.
+as someone else (tabs share the browser's storage and its sign-in cookie)
+([`src/os/accountSpace.ts`](src/os/accountSpace.ts)):
+
+- **Which account.** Next to the sign-in cookie the server sets a readable one, `mvlos_uid` (the
+  account's id), and clears it on signing out or when the session is no longer valid. A page knows
+  at once, before `/api/me` answers, which account the browser is signed in as, and each tab takes
+  that as its account when it loads.
+- **A space per account.** Everything that belongs to an account is kept under its own prefix in
+  localStorage, `mvlos.u.<id>.…` (a visitor's under `mvlos.visitor.…`): the synced state, terminal
+  and agent history, the notification history, Agents' drafts and layout, Files' settings and
+  places, push, the git app's last repository and drafts. A page only reads its own account's
+  space, so nothing of another account shows, even from a cache. What belongs to the browser stays
+  in plain keys: the theme, motion, sounds, the dock's look, the workspace on screen, window-drag
+  keys, the photo viewer's panel, the media player's volume, the browser's own location for
+  Weather, and games.
+- **The guard.** Before writing to its space and before every request to the site's API, a page
+  checks the cookie still names its account; if not, it writes and sends nothing more and reloads
+  at once, as the account the browser has now. Requests say whose page they are from
+  (`X-MvL-Account`); the server refuses one from a page of another account than the session's, and
+  synced state and notifications can't be written without it (a tab from before this asks for a
+  reload).
+- **Signing out** clears that account's space. A session that just ran out doesn't: the page
+  starts again as a visitor and the account's unsynced changes come back when it signs in again.
+- **Moving in.** The first time a space is used, what the release before spaces kept in plain keys
+  moves into it, if the old marker says it was that account's; later writes to those keys (by a
+  tab still running the old release) are never read. A visitor signing in brings their synced
+  state along into a new account's space, once.
+
+`pnpm check:sync-accounts` checks this against the real server and with tabs in memory.
 
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).

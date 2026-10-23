@@ -128,7 +128,7 @@ const { decide, clearedByRules } = await import('../server/agents.ts')
 await server.start()
 
 const api = async (method: string, path: string, body?: unknown) => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json', 'X-MvL-Account': '1' }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)
   return res
 }

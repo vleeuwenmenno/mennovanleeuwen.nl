@@ -119,7 +119,9 @@ database()
 await server.start()
 
 const call = async <T = J>(who: string, method: string, path: string, body?: unknown, expect = 200): Promise<T> => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
+  // As a page does: it says whose state it holds (src/os/accountSpace.ts).
+  const account = who === sid ? '1' : '2'
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin, 'X-MvL-Account': account }, body: body === undefined ? undefined : JSON.stringify(body) })
   const text = await res.text()
   if (res.status !== expect) throw new Error(`${method} ${path}: ${res.status} ${text.slice(0, 400)}`)
   return (text ? JSON.parse(text) : {}) as T

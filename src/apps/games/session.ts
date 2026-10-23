@@ -1,5 +1,6 @@
 import type { SavedWindow } from '../../os/wm'
 import { startupPrefs } from '../../os/startup'
+import { accountKey } from '../../os/accountSpace'
 
 // A game in progress belongs to its window. Each game window gets a session id (props.session,
 // saved with the window layout), and whatever a game keeps so a reload can carry on (Empires'
@@ -15,7 +16,8 @@ import { startupPrefs } from '../../os/startup'
 const PREFIX = 'mvlos.gamewin.'
 const keyOf = (session: string, name: string) => `${PREFIX}${session}.${name}`
 /** Where os/synced.ts keeps the saved window layouts (windows:desktop and windows:mobile). */
-const LAYOUTS = 'mvlos.sync.windows:'
+// The window layouts of this tab's account (src/os/accountSpace.ts).
+const LAYOUTS = accountKey('mvlos.sync.windows:')
 
 export const newSession = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`
 

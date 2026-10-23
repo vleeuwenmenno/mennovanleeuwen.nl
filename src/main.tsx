@@ -22,6 +22,7 @@ import { WindowManagerProvider } from './os/wm'
 import './styles.css'
 import './home.css'
 import './mobile.css'
+import { installApiGuard } from './os/accountSpace'
 
 // A game's direct link (/play/<game>, src/os/playMode.ts) is the game alone: the theme, the
 // installed app, menus and long presses, and the account and syncing (high scores and saves follow
@@ -44,6 +45,9 @@ installContextMenuFallback()
 installTouchContextMenu()
 // Only text meant to be read can be selected; Ctrl+A and dragged pictures follow (src/os/selection.ts).
 installSelectionRules()
+// Every request to the site's API checks the browser is still this tab's account, and says so
+// (src/os/accountSpace.ts).
+installApiGuard()
 void loadAccount()
 
 // Saved windows of apps that no longer exist are dropped. (The CV apps' windows from /cv are kept

@@ -3,6 +3,7 @@ import { applyChange, receive, setAccountList } from './notify'
 import { calendarChangedElsewhere } from '../data/calendar'
 import { mailChangedElsewhere } from '../data/mail'
 import { pullAll } from './synced'
+import { accountGuard, TAB_ACCOUNT } from './accountSpace'
 
 // The live line to the server's notification hub (server/notifier.ts) while signed in: new
 // notifications for the account (a pop-up when this page is in view), and other pages reading or
@@ -25,7 +26,9 @@ const onVisibility = () => presence()
 
 function connect() {
   if (stream) return
-  stream = new EventSource(`/api/notifications/stream?page=${PAGE}`, { withCredentials: true })
+  // A stream can't carry the header: it says whose page this is in its address (server/api.ts).
+  if (!accountGuard()) return
+  stream = new EventSource(`/api/notifications/stream?page=${PAGE}&holds=${TAB_ACCOUNT}`, { withCredentials: true })
   // Each (re)connection: the list again, for anything missed while away, and where this page stands.
   stream.addEventListener('hello', () => {
     void setAccountList(true)

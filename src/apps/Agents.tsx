@@ -103,6 +103,7 @@ import { AttachedFiles, memoryPicture, sentPicture } from './AgentsImages'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
+import { accountStorage } from '../os/accountSpace'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
 // archived ones, and what the agent remembers), the conversation on the right with each tool call
@@ -145,7 +146,7 @@ type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | n
 const FOLDED_PROJECTS = 'mvlos.agents.folded'
 const readFolded = (): number[] => {
   try {
-    return JSON.parse(localStorage.getItem(FOLDED_PROJECTS) ?? '[]') as number[]
+    return JSON.parse(accountStorage.get(FOLDED_PROJECTS) ?? '[]') as number[]
   } catch {
     return []
   }
@@ -321,7 +322,7 @@ function AgentsApp({ win }: { win: WinState }) {
     setFolded((f) => {
       const next = f.includes(id) ? f.filter((x) => x !== id) : [...f, id]
       try {
-        localStorage.setItem(FOLDED_PROJECTS, JSON.stringify(next))
+        accountStorage.set(FOLDED_PROJECTS, JSON.stringify(next))
       } catch {
         /* not remembered */
       }
@@ -385,7 +386,7 @@ function AgentsApp({ win }: { win: WinState }) {
   }, [])
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return localStorage.getItem(SIDEBAR_KEY) === 'collapsed'
+      return accountStorage.get(SIDEBAR_KEY) === 'collapsed'
     } catch {
       return false
     }
@@ -393,7 +394,7 @@ function AgentsApp({ win }: { win: WinState }) {
   const fold = (c: boolean) => {
     setCollapsed(c)
     try {
-      localStorage.setItem(SIDEBAR_KEY, c ? 'collapsed' : 'open')
+      accountStorage.set(SIDEBAR_KEY, c ? 'collapsed' : 'open')
     } catch {
       /* not remembered */
     }

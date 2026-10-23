@@ -21,7 +21,7 @@ import './git.css'
 // browser.
 
 /** The repository open last, per browser (storage may be blocked: then it just isn't kept). */
-const lastRepo = localPref<string>('mvlos.git.lastRepo', (raw) => raw ?? '', (v) => v)
+const lastRepo = localPref<string>('mvlos.git.lastRepo', (raw) => raw ?? '', (v) => v, { account: true })
 
 function initialStack(route: string | undefined): GitView[] {
   const v = routeToView(route) ?? routeToView(lastRepo.get())
