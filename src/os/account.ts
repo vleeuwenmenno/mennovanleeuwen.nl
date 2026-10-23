@@ -104,6 +104,19 @@ function set(next: Account) {
   listeners.forEach((l) => l())
 }
 
+/** The key the browser's account is kept under: another tab signing in, out or as someone else changes it. */
+export const ACCOUNT_STORAGE_KEY = ACCOUNT_KEY
+
+/** Whose state this browser holds, by its marker: `u:<id>`, or `visitor` (null: storage can't be read). */
+export function browserAccountTag(): string | null {
+  try {
+    const id = localStorage.getItem(ACCOUNT_KEY)
+    return id ? `u:${id}` : 'visitor'
+  } catch {
+    return null
+  }
+}
+
 /** Signed in, or (while that is still being checked) signed in on the last visit. */
 export function useLikelySignedIn() {
   const { status } = useAccount()

@@ -602,6 +602,16 @@ them. The terminal's `visited` lists the same history (`visited <text>`, `visite
 Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order, the top bar and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
+That state never crosses accounts, even with several tabs open while one of them signs out or in
+as someone else (tabs share the browser's storage and its sign-in cookie). Each tab takes an owner
+as it starts (the account the browser holds then, or a visitor), tags what it saves with it, and
+only takes in its own owner's values (or a visitor's: what you did before signing in comes
+along); another account's value found as a tab starts is dropped. Before every save, pull and push
+a tab checks its owner is still the account; when another tab has changed it, the tab writes and
+sends nothing more and starts again. Requests say whose state they carry (`X-MvL-Account`), and
+the server refuses them once the cookie is someone else's; an answer that arrives after the
+account changed is dropped. Storage that is full or blocked keeps working as before.
+`pnpm check:sync-accounts` checks this in memory.
 
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).

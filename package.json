@@ -65,6 +65,7 @@
     "check:pim-links": "node scripts/pim-check.ts",
     "check:note-links": "node scripts/note-links-check.ts",
     "check:window-props": "node scripts/window-props-check.ts",
+    "check:sync-accounts": "node scripts/sync-accounts-check.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "empires:tournament": "node scripts/empires-tournament.ts",

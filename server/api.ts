@@ -152,9 +152,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return json(res, 200, empiresAway(body?.token, currentUser(req)?.login ?? null)), true
     }
 
-    if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
+    // Synced state. A tab says whose state it holds (X-MvL-Account: that account's id). Signed in as
+    // someone else by now (another tab switched account, with the same cookie): refused, so one
+    // account's state never reaches another (src/os/synced.ts).
     const stateKey = /^\/api\/state\/([^/]+)$/.exec(path)?.[1]
-    if (stateKey && method === 'PUT') return json(res, 200, writeState(requireUser(req), decodeURIComponent(stateKey), await readJson(req))), true
+    if ((path === '/api/state' && read) || (stateKey && method === 'PUT')) {
+      const user = requireUser(req)
+      const holds = req.headers['x-mvl-account']
+      if (typeof holds === 'string' && holds !== String(user.id)) return json(res, 409, { error: 'Signed in as another account', accountChanged: true }), true
+      if (!stateKey) return json(res, 200, readState(user)), true
+      return json(res, 200, writeState(user, decodeURIComponent(stateKey), await readJson(req))), true
+    }
 
     if (path === '/api/forges' && method === 'POST') {
       const user = requireUser(req)
