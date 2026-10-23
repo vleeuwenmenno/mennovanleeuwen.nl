@@ -207,7 +207,7 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
       )}
       <span className="nb-spacer" />
       {tools.map((t) => (
-        <button key={t.id} className={`ml-icon ml-tool ${t.on ? 'is-on is-flagged' : ''}`} onClick={t.run} title={t.title} aria-label={t.label} aria-haspopup={t.menu ? 'menu' : undefined} disabled={t.disabled}>
+        <button key={t.id} data-minor={t.id === 'junk' || t.id === 'move' || t.id === 'unread' ? '' : undefined} className={`ml-icon ml-tool ${t.on ? 'is-on is-flagged' : ''}`} onClick={t.run} title={t.title} aria-label={t.label} aria-haspopup={t.menu ? 'menu' : undefined} disabled={t.disabled}>
           <Icon name={t.icon} />
           <span className="ml-tool-label" aria-hidden>
             {t.label}

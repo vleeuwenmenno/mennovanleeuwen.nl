@@ -87,7 +87,7 @@ export function iconLinks(html: string, base: URL): { href: string; size: number
   return out
 }
 
-export async function fetchHead(start: URL): Promise<{ url: URL; html: string }> {
+export async function fetchHead(start: URL, cancel?: AbortSignal): Promise<{ url: URL; html: string }> {
   let url = start
   for (let hop = 0; hop < 4; hop++) {
     const addresses = await websiteAddresses(url)
@@ -95,7 +95,7 @@ export async function fetchHead(start: URL): Promise<{ url: URL; html: string }>
     const res = await fetchPinned(url, {
       redirect: 'manual',
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mvlos link preview)', Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en' },
-      signal: AbortSignal.timeout(6000),
+      signal: cancel ? AbortSignal.any([cancel, AbortSignal.timeout(6000)]) : AbortSignal.timeout(6000),
     }, addresses).catch(() => null)
     if (!res) throw new HttpError(502, 'The site did not answer')
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {

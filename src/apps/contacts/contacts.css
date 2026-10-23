@@ -583,9 +583,10 @@
   letter-spacing: 0.02em;
   line-height: 1;
 }
-/* A sender's logo (Mail) over the initials, shown once it has loaded. A plain white plate behind
-   it, in every theme, as behind HTML mail: logos are drawn for a light page, and a transparent or
-   dark one would vanish on a dark theme. */
+/* A sender's logo (Mail) over the initials, shown once it has loaded, clipped to the same circle.
+   A square, opaque logo (an app icon) fills it edge to edge; any other sits whole, slightly inset,
+   on the theme's raised surface. A thin ring in the theme's border colour keeps a dark logo
+   visible on a dark theme. */
 .pp-avatar.has-logo {
   position: relative;
   overflow: hidden;
@@ -596,14 +597,17 @@
   box-sizing: border-box;
   width: 100%;
   height: 100%;
-  padding: 9%;
+  padding: 6%;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px var(--line);
+  background: var(--bg-light);
   object-fit: contain;
-  /* An SVG logo drawn for the light plate, not its dark-mode (often white) variant. */
-  color-scheme: light;
+  outline: 1px solid var(--line-strong);
+  outline-offset: -1px;
   visibility: hidden;
+}
+.pp-avatar-logo.is-cover {
+  padding: 0;
+  object-fit: cover;
 }
 .pp-avatar-logo.is-loaded {
   visibility: visible;

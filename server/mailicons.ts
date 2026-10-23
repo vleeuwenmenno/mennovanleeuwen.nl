@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { resolveTxt } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
@@ -10,50 +10,70 @@ import { fetchHead, iconLinks, websiteAddresses } from './preview.ts'
 
 // Senders' brand icons for Mail's avatars (src/apps/mail/parts.tsx): the logo a domain publishes
 // for mail (BIMI, a DNS record pointing at an SVG), else the best of its web site's own icons
-// (apple-touch-icon, <link rel=icon>, /favicon.ico), the largest square one. Only the domain is
-// ever looked up, never anyone's address, and only by the server: the browser asks this site, so
-// senders don't learn who looked at their logo or when.
+// (apple-touch-icon, <link rel=icon>, /favicon.ico), the largest square one. Only the
+// organisation's domain is ever looked up (anwb.nl for service@verzekeren.anwb.nl), never anyone's
+// address and never the full host: a sender who gave each recipient a host of their own
+// (notice@recipient-9384.example.net) can't learn from the lookup who opened the mail, or when.
+// Only the server looks: senders never see the reader's browser.
 //
-// The server fetches other sites here, so: signed-in users only (server/jmap.ts), public
-// addresses only, also after redirects (server/egress.ts), the usual web ports, at most 256 KB per
-// picture and a few seconds per request, a handful of lookups at once. What was found (and what
-// wasn't) is kept in DATA_DIR/mail-icons for weeks, and the browser keeps it for a week.
+// The server fetches other sites here, so: signed-in users only (server/jmap.ts), each held to
+// 60 new lookups a minute; public addresses only, also after redirects (server/egress.ts), the
+// usual web ports; at most 256 KB per picture, 5 seconds per request and 15 per lookup (after
+// which everything it was still fetching is cancelled); four lookups at once and 50 waiting (more
+// get a 503, and the avatar keeps its initials). What was found, and what wasn't, is kept in
+// DATA_DIR/mail-icons (30 and 3 days; at most 2000 domains and 100 MB, the oldest going first),
+// and the browser keeps it for a week.
 
 const DIR = join(resolve(process.env.DATA_DIR ?? 'data'), 'mail-icons')
 const FOUND_TTL = 30 * 864e5
 const NONE_TTL = 3 * 864e5
+/** A lookup that ran out of time: tried again sooner. */
+const TIMEOUT_TTL = 3600_000
 const MAX_BYTES = 256 * 1024
 const MIN_SIZE = 16
 /** Big enough to stop looking further. */
 const GOOD_SIZE = 96
 const AT_ONCE = 4
+const MAX_WAITING = 50
+const LOOKUP_MS = Number(process.env.MAIL_ICON_LOOKUP_MS) || 15_000
+const REQUEST_MS = 5000
+/** How long a lookup may wait for its turn. */
+const WAIT_MS = 20_000
+const MAX_ENTRIES = 2000
+const MAX_TOTAL = 100 * 1024 * 1024
+const MISSES_PER_MINUTE = 60
 
 type Found = { type: string; bytes: Buffer }
-type Entry = { at: number; type: string | null }
+type Entry = { at: number; type: string | null; ttl?: number }
 
-/** Country domains sold one level down (example.co.uk): the organisation is a level further in. */
-const SECOND_LEVEL = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'com.au', 'net.au', 'org.au', 'gov.au', 'co.nz', 'org.nz', 'co.jp', 'ne.jp', 'or.jp', 'com.br', 'com.mx', 'co.za', 'com.tr', 'com.cn', 'co.in', 'co.kr', 'com.sg', 'com.hk', 'com.tw', 'co.il', 'com.ar', 'co.id', 'com.my', 'com.ph'])
-/** Host names that send mail rather than serve a site: skipped on the way to the organisation's domain. */
-const MAILER = /^(e?mails?\d*|em\d*|e|m|t|news(letters?)?|nieuwsbrief|notifications?|notify|noreply|no-reply|bounces?|mailer|mg|mkt|marketing|updates?|send|smtp|out|mta\d*|click|links?|reply|alerts?|messages?|info|mailings?|post|outbound|delivery|transactional|comms?)$/i
+// ---------------------------------------------------------------------------------------------
+// Domains
 
-/** The organisation's domain: example.com for mail.example.com, example.co.uk for a.example.co.uk. */
-export function orgDomain(host: string): string {
-  const parts = host.split('.')
-  return parts.slice(SECOND_LEVEL.has(parts.slice(-2).join('.')) ? -3 : -2).join('.')
+/**
+ * Public suffixes two labels deep (example.co.uk, example.com.au): the common generic second
+ * levels under a two-letter country code, and a few others. Not the whole Public Suffix List, but
+ * the usual senders' domains.
+ */
+const GENERIC_SECOND = new Set(['co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'go', 'gob', 'gv', 'mil', 'nic', 'ltd', 'plc', 'sch', 'nom', 'info', 'biz', 'lg', 'ad', 'gr', 'ed', 'in', 'web'])
+const EXTRA_SUFFIXES = new Set(['me.uk', 'nhs.uk', 'police.uk', 'id.au', 'asn.au', 'gen.nz', 'kiwi.nz', 'school.nz', 'govt.nz', 'blogspot.com', 'github.io', 'gitlab.io', 'herokuapp.com', 'netlify.app', 'vercel.app', 'pages.dev', 'workers.dev', 'azurewebsites.net', 'cloudfront.net', 'appspot.com', 'firebaseapp.com', 'web.app', 'myshopify.com', 'wordpress.com', 'substack.com', 'mailchimpapp.com', 'sendgrid.net', 'amazonses.com', 'mcsv.net', 'rsgsv.net', 'mcdlv.net'])
+
+/** Whether two labels (`co.uk`) are a public suffix rather than an organisation's domain. */
+function twoLabelSuffix(last2: string): boolean {
+  if (EXTRA_SUFFIXES.has(last2)) return true
+  const [second, tld] = last2.split('.')
+  return tld.length === 2 && GENERIC_SECOND.has(second)
 }
 
 /**
- * Where to look, most specific first, at most two: the sender's own host when it looks like a
- * site (verzekeren.anwb.nl), then the organisation's domain (anwb.nl). Mail-sending hosts
- * (mail.…, notifications.…, em123.…) go straight to the organisation.
+ * The organisation's registrable domain (eTLD+1): anwb.nl for verzekeren.anwb.nl, example.co.uk
+ * for a.b.example.co.uk; null for a bare public suffix (co.uk).
  */
-export function candidates(domain: string): string[] {
-  const org = orgDomain(domain)
-  let parts = domain.split('.')
-  const depth = org.split('.').length
-  while (parts.length > depth && MAILER.test(parts[0])) parts = parts.slice(1)
-  const own = parts.join('.')
-  return own === org ? [org] : [own, org]
+export function orgDomain(host: string): string | null {
+  const parts = host.split('.')
+  if (parts.length < 2) return null
+  const deep = twoLabelSuffix(parts.slice(-2).join('.'))
+  if (deep && parts.length < 3) return null
+  return parts.slice(deep ? -3 : -2).join('.')
 }
 
 /** A domain as asked for, or null when it isn't one (an address, a port, an IP, nonsense). */
@@ -67,6 +87,43 @@ export function cleanDomain(raw: string): string | null {
 
 // ---------------------------------------------------------------------------------------------
 // Pictures: what they are and how big, from their bytes (never their Content-Type)
+
+/**
+ * Whether text starts as an SVG document: a BOM and white space, an optional <?xml …?>, then any
+ * comments and one optional <!DOCTYPE …>, then `<svg` and a space or `>`. Answers the position
+ * of `<svg`, or -1. One pass, no backtracking: what a server sends can't stall it.
+ */
+export function svgStart(text: string): number {
+  let i = 0
+  const n = text.length
+  const space = () => {
+    while (i < n && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r' || text[i] === '﻿')) i++
+  }
+  const at = (s: string) => text.slice(i, i + s.length).toLowerCase() === s
+  space()
+  if (at('<?xml')) {
+    const end = text.indexOf('?>', i)
+    if (end < 0) return -1
+    i = end + 2
+  }
+  let doctype = false
+  for (;;) {
+    space()
+    if (at('<!--')) {
+      const end = text.indexOf('-->', i + 4)
+      if (end < 0) return -1
+      i = end + 3
+    } else if (!doctype && at('<!doctype')) {
+      const end = text.indexOf('>', i)
+      if (end < 0) return -1
+      i = end + 1
+      doctype = true
+    } else break
+  }
+  if (!at('<svg')) return -1
+  const next = text[i + 4]
+  return next === '>' || next === ' ' || next === '\t' || next === '\n' || next === '\r' || next === '/' ? i : -1
+}
 
 /** The picture's type and its smaller side in pixels (SVG counts as big), or null when it isn't one. */
 export function inspect(b: Buffer): { type: string; size: number; square: boolean } | null {
@@ -98,26 +155,28 @@ export function inspect(b: Buffer): { type: string; size: number; square: boolea
     }
     return null
   }
-  const text = b.toString('utf8', 0, Math.min(b.length, 4096)).replace(/^﻿/, '').trimStart()
-  if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(text)) {
-    const tag = /<svg\b[^>]*>/i.exec(text)?.[0] ?? ''
-    const vb = /viewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(tag)
-    return { type: 'image/svg+xml', size: 512, square: vb ? Math.max(+vb[1], +vb[2]) <= Math.min(+vb[1], +vb[2]) * 1.25 : true }
-  }
-  return null
+  const text = b.toString('utf8', 0, Math.min(b.length, 4096))
+  const start = svgStart(text)
+  if (start < 0) return null
+  const close = text.indexOf('>', start)
+  const tag = close < 0 ? '' : text.slice(start, close + 1)
+  const vb = /viewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(tag)
+  return { type: 'image/svg+xml', size: 512, square: vb ? Math.max(+vb[1], +vb[2]) <= Math.min(+vb[1], +vb[2]) * 1.25 : true }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Fetching
+// Fetching, all of it cancelled by the lookup's `signal`
+
+type Sized = Found & { size: number; square: boolean }
 
 /** One picture from a public address (following up to four redirects, each checked), or null. */
-async function fetchPicture(start: URL): Promise<Found & { size: number; square: boolean } | null> {
+async function fetchPicture(start: URL, signal: AbortSignal): Promise<Sized | null> {
   let url = start
   for (let hop = 0; hop < 4; hop++) {
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+    if (signal.aborted || (url.protocol !== 'https:' && url.protocol !== 'http:')) return null
     const addresses = await websiteAddresses(url).catch(() => null)
-    if (!addresses) return null
-    const res = await fetchPinned(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mvlos mail icons)', Accept: 'image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8' }, signal: AbortSignal.timeout(5000) }, addresses).catch(() => null)
+    if (!addresses || signal.aborted) return null
+    const res = await fetchPinned(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mvlos mail icons)', Accept: 'image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8' }, signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_MS)]) }, addresses).catch(() => null)
     if (!res) return null
     const location = res.headers.get('location')
     if (res.status >= 300 && res.status < 400 && location) {
@@ -137,7 +196,7 @@ async function fetchPicture(start: URL): Promise<Found & { size: number; square:
         const { done, value } = await reader.read()
         if (done) break
         size += value.length
-        if (size > MAX_BYTES) {
+        if (size > MAX_BYTES || signal.aborted) {
           await reader.cancel().catch(() => {})
           return null
         }
@@ -153,9 +212,19 @@ async function fetchPicture(start: URL): Promise<Found & { size: number; square:
   return null
 }
 
+/** Resolves with `work`, or with `fallback` once `signal` aborts (DNS lookups can't be cancelled). */
+function orAbort<T>(work: Promise<T>, signal: AbortSignal, fallback: T): Promise<T> {
+  return new Promise<T>((done) => {
+    if (signal.aborted) return done(fallback)
+    const stop = () => done(fallback)
+    signal.addEventListener('abort', stop, { once: true })
+    work.then(done, () => done(fallback)).finally(() => signal.removeEventListener('abort', stop))
+  })
+}
+
 /** The BIMI logo a domain publishes for its mail (default._bimi TXT, "l=" an https SVG), if any. */
-async function bimi(host: string): Promise<Found | null> {
-  const records = await Promise.race([resolveTxt(`default._bimi.${host}`), new Promise<never>((_, no) => setTimeout(() => no(new Error('timeout')), 3000))]).catch(() => [] as string[][])
+async function bimi(host: string, signal: AbortSignal): Promise<Found | null> {
+  const records = await orAbort(resolveTxt(`default._bimi.${host}`), AbortSignal.any([signal, AbortSignal.timeout(3000)]), [] as string[][])
   for (const parts of records) {
     const txt = parts.join('')
     if (!/^\s*v\s*=\s*BIMI1\b/i.test(txt)) continue
@@ -164,7 +233,7 @@ async function bimi(host: string): Promise<Found | null> {
     try {
       const url = new URL(l)
       if (url.protocol !== 'https:') continue
-      const got = await fetchPicture(url)
+      const got = await fetchPicture(url, signal)
       if (got?.type === 'image/svg+xml') return { type: got.type, bytes: got.bytes }
     } catch {
       /* not an address */
@@ -173,15 +242,15 @@ async function bimi(host: string): Promise<Found | null> {
   return null
 }
 
-/** The best of a site's own icons: the largest square one, looked for in its page's <head> and at the usual places. */
-type Sized = Found & { size: number; square: boolean }
 /** How good an icon is: its size, a third of it when it isn't square (a wordmark). */
 const rank = (x: { size: number; square: boolean }) => (x.square ? x.size : x.size / 3)
 const good = (x: Sized | null) => !!x && x.square && x.size >= GOOD_SIZE
 
-async function siteIcon(host: string): Promise<Sized | null> {
+/** The best of a site's own icons: the largest square one, looked for in its page's <head> and at the usual places. */
+async function siteIcon(host: string, signal: AbortSignal): Promise<Sized | null> {
   const start = new URL(`https://${host}/`)
-  const page = await fetchHead(start).catch(() => null)
+  const page = await fetchHead(start, signal).catch(() => null)
+  if (signal.aborted) return null
   const base = page?.url ?? start
   const listed = page ? iconLinks(page.html, base) : []
   const tried = new Set<string>()
@@ -190,33 +259,81 @@ async function siteIcon(host: string): Promise<Sized | null> {
   queue.sort((a, b) => b.size - a.size)
   let best: Sized | null = null
   for (const c of queue.slice(0, 5)) {
+    if (signal.aborted) break
     let url: URL
     try {
       url = new URL(c.href)
     } catch {
       continue
     }
-    const got = await fetchPicture(url)
+    const got = await fetchPicture(url, signal)
     if (got && (!best || rank(got) > rank(best))) best = got
     if (good(best)) break
   }
   return best
 }
 
-/** A domain's icon: BIMI first (it is the logo meant for mail), then the site's own, for each candidate host. */
-async function find(domain: string): Promise<Found | null> {
-  const hosts = candidates(domain)
-  const marks = await Promise.all(hosts.map((h) => bimi(h)))
-  const mark = marks.find(Boolean)
+/** An organisation domain's icon: BIMI first (it is the logo meant for mail), then the site's own. */
+async function find(domain: string, signal: AbortSignal): Promise<Found | null> {
+  const mark = await bimi(domain, signal)
   if (mark) return mark
-  // The sender's own host first; a small favicon there still lets the organisation's site try.
-  let best: Sized | null = null
-  for (const h of hosts) {
-    const icon = await siteIcon(h).catch(() => null)
-    if (icon && (!best || rank(icon) > rank(best))) best = icon
-    if (good(best)) break
+  const icon = await siteIcon(domain, signal).catch(() => null)
+  return icon ? { type: icon.type, bytes: icon.bytes } : null
+}
+
+// ---------------------------------------------------------------------------------------------
+// Turns: four lookups at once, fifty waiting, each waiting at most WAIT_MS
+
+let running = 0
+const waiting: { go: () => void; timer: ReturnType<typeof setTimeout> }[] = []
+
+/** Runs `work` in a turn of its own; the turn is held until `work` has really finished. */
+async function slot<T>(work: () => Promise<T>): Promise<T> {
+  if (running >= AT_ONCE) {
+    if (waiting.length >= MAX_WAITING) throw new HttpError(503, 'Too many icon lookups at once')
+    await new Promise<void>((go, no) => {
+      const item = {
+        go,
+        timer: setTimeout(() => {
+          const i = waiting.indexOf(item)
+          if (i >= 0) waiting.splice(i, 1)
+          no(new HttpError(503, 'Too many icon lookups at once'))
+        }, WAIT_MS),
+      }
+      waiting.push(item)
+    })
   }
-  return best ? { type: best.type, bytes: best.bytes } : null
+  running++
+  try {
+    return await work()
+  } finally {
+    running--
+    const next = waiting.shift()
+    if (next) {
+      clearTimeout(next.timer)
+      next.go()
+    }
+  }
+}
+
+/** For checks: how many lookups are running and waiting. */
+export const lookupLoad = () => ({ running, waiting: waiting.length })
+
+// ---------------------------------------------------------------------------------------------
+// A user's new lookups: at most 60 a minute (what is cached costs nothing)
+
+const misses = new Map<number, number[]>()
+
+function allowMiss(user: number) {
+  const now = Date.now()
+  const recent = (misses.get(user) ?? []).filter((t) => now - t < 60_000)
+  if (recent.length >= MISSES_PER_MINUTE) {
+    misses.set(user, recent)
+    throw new HttpError(429, 'Too many new icons; try again in a minute')
+  }
+  recent.push(now)
+  misses.set(user, recent)
+  if (misses.size > 1000) for (const [k, v] of misses) if (!v.some((t) => now - t < 60_000)) misses.delete(k)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -224,24 +341,13 @@ async function find(domain: string): Promise<Found | null> {
 
 let dirMade = false
 const busy = new Map<string, Promise<Found | null>>()
-let running = 0
-const waiting: (() => void)[] = []
 
-async function slot<T>(work: () => Promise<T>): Promise<T> {
-  if (running >= AT_ONCE) await new Promise<void>((go) => waiting.push(go))
-  running++
-  try {
-    return await work()
-  } finally {
-    running--
-    waiting.shift()?.()
-  }
-}
+const expired = (e: Entry, now = Date.now()) => now - e.at > (e.ttl ?? (e.type ? FOUND_TTL : NONE_TTL))
 
 async function cached(domain: string): Promise<Found | null | undefined> {
   try {
     const entry = JSON.parse(await readFile(join(DIR, `${domain}.json`), 'utf8')) as Entry
-    if (Date.now() - entry.at > (entry.type ? FOUND_TTL : NONE_TTL)) return undefined
+    if (expired(entry)) return undefined
     if (!entry.type) return null
     return { type: entry.type, bytes: await readFile(join(DIR, `${domain}.img`)) }
   } catch {
@@ -249,42 +355,118 @@ async function cached(domain: string): Promise<Found | null | undefined> {
   }
 }
 
-async function store(domain: string, found: Found | null) {
+async function store(domain: string, found: Found | null, ttl?: number) {
   try {
     if (!dirMade) mkdirSync(DIR, { recursive: true })
     dirMade = true
     if (found) await writeFile(join(DIR, `${domain}.img`), found.bytes)
-    const tmp = join(DIR, `${domain}.json.${process.pid}`)
-    await writeFile(tmp, JSON.stringify({ at: Date.now(), type: found?.type ?? null } satisfies Entry))
+    else await unlink(join(DIR, `${domain}.img`)).catch(() => {})
+    const tmp = join(DIR, `${domain}.json.${process.pid}.tmp`)
+    await writeFile(tmp, JSON.stringify({ at: Date.now(), type: found?.type ?? null, ...(ttl ? { ttl } : {}) } satisfies Entry))
     await rename(tmp, join(DIR, `${domain}.json`))
+    writes++
   } catch (e) {
     console.error('mail icons: could not cache', (e as Error).message)
   }
+  // Every 50 new entries (and at startup, and hourly), the cache is tidied.
+  if (writes >= 50) void sweep()
 }
 
-/** A domain's icon, from the cache or looked up now (once at a time per domain, a few domains at once). */
-export async function senderIcon(raw: string): Promise<Found | null> {
-  const domain = cleanDomain(raw)
+let writes = 0
+let sweeping: Promise<void> | null = null
+
+/**
+ * Tidies the cache: expired entries and files without their other half (and left-over temporary
+ * files) go; then, while there are more than MAX_ENTRIES domains or MAX_TOTAL bytes, the oldest.
+ */
+export function sweep(): Promise<void> {
+  if (sweeping) return sweeping
+  writes = 0
+  sweeping = (async () => {
+    let names: string[]
+    try {
+      names = await readdir(DIR)
+    } catch {
+      return
+    }
+    const now = Date.now()
+    const drop = (name: string) => unlink(join(DIR, name)).catch(() => {})
+    const jsons = new Set(names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)))
+    const imgs = new Set(names.filter((n) => n.endsWith('.img')).map((n) => n.slice(0, -4)))
+    for (const n of names) if (!n.endsWith('.json') && !n.endsWith('.img')) await drop(n)
+    const live: { domain: string; at: number; bytes: number }[] = []
+    for (const domain of jsons) {
+      let entry: Entry | null = null
+      try {
+        entry = JSON.parse(await readFile(join(DIR, `${domain}.json`), 'utf8')) as Entry
+      } catch {
+        /* unreadable: dropped */
+      }
+      if (!entry || typeof entry.at !== 'number' || expired(entry, now) || (entry.type && !imgs.has(domain))) {
+        await drop(`${domain}.json`)
+        continue
+      }
+      if (!entry.type && imgs.has(domain)) await drop(`${domain}.img`)
+      const bytes = entry.type ? await stat(join(DIR, `${domain}.img`)).then((s) => s.size, () => 0) : 0
+      live.push({ domain, at: entry.at, bytes })
+    }
+    for (const domain of imgs) if (!jsons.has(domain) || !live.some((l) => l.domain === domain)) await drop(`${domain}.img`)
+    live.sort((a, b) => a.at - b.at)
+    let total = live.reduce((n, l) => n + l.bytes, 0)
+    let count = live.length
+    for (const l of live) {
+      if (count <= MAX_ENTRIES && total <= MAX_TOTAL) break
+      await drop(`${l.domain}.json`)
+      await drop(`${l.domain}.img`)
+      count--
+      total -= l.bytes
+    }
+  })().finally(() => (sweeping = null))
+  return sweeping
+}
+
+let swept = false
+function sweepNowAndHourly() {
+  if (swept) return
+  swept = true
+  void sweep()
+  setInterval(() => void sweep(), 3600_000).unref()
+}
+
+/**
+ * A sender domain's icon, from the cache or looked up now: by its organisation's domain only,
+ * once at a time per domain, a few domains at once, and (for a `user`) within their minute's
+ * allowance of new lookups.
+ */
+export async function senderIcon(raw: string, user?: number): Promise<Found | null> {
+  const asked = cleanDomain(raw)
+  const domain = asked && orgDomain(asked)
   if (!domain) throw new HttpError(400, 'Not a domain')
+  sweepNowAndHourly()
   const hit = await cached(domain)
   if (hit !== undefined) return hit
   let job = busy.get(domain)
   if (!job) {
-    job = slot(() => Promise.race([find(domain), new Promise<null>((done) => setTimeout(() => done(null), 15_000))]))
-      .catch(() => null)
-      .then(async (found) => {
-        await store(domain, found)
+    if (user !== undefined) allowMiss(user)
+    job = slot(async () => {
+      const deadline = new AbortController()
+      const timer = setTimeout(() => deadline.abort(), LOOKUP_MS)
+      try {
+        const found = await find(domain, deadline.signal).catch(() => null)
+        await store(domain, found, deadline.signal.aborted && !found ? TIMEOUT_TTL : undefined)
         return found
-      })
-      .finally(() => busy.delete(domain))
+      } finally {
+        clearTimeout(timer)
+      }
+    }).finally(() => busy.delete(domain))
     busy.set(domain, job)
   }
   return job
 }
 
 /** GET /api/mail/icon/<domain>: the picture, or 404 when the domain has none (both kept by the browser). */
-export async function serveSenderIcon(res: ServerResponse, raw: string, head: boolean) {
-  const found = await senderIcon(raw)
+export async function serveSenderIcon(res: ServerResponse, raw: string, head: boolean, user: number) {
+  const found = await senderIcon(raw, user)
   if (!found) {
     res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : 'No icon')
     return

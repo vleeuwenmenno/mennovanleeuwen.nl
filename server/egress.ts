@@ -21,15 +21,86 @@ const MAX_HOPS = 5
 /** Thrown for an address that isn't allowed; callers that swallow network errors let this one through. */
 export class EgressError extends HttpError {}
 
-/** Loopback, private, link-local, CGNAT (Tailscale), multicast and other non-public addresses. */
-export function isPrivate(ip: string): boolean {
-  if (isIP(ip) === 6) {
-    const v = ip.toLowerCase()
-    if (v.startsWith('::ffff:')) return isPrivate(v.slice(7))
-    return v === '::' || v === '::1' || /^f[cd]/.test(v) || /^fe[89ab]/.test(v) || v.startsWith('ff')
+/** An IPv4 address's four numbers, or null when it isn't one. */
+function v4Parts(ip: string): number[] | null {
+  const parts = ip.split('.')
+  if (parts.length !== 4 || parts.some((p) => !/^\d{1,3}$/.test(p) || Number(p) > 255)) return null
+  return parts.map(Number)
+}
+
+/** Loopback, private, link-local, CGNAT (Tailscale), benchmark, documentation, multicast and other non-public IPv4. */
+function privateV4([a, b, c]: number[]): boolean {
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b < 128) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b < 32) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224
+  )
+}
+
+/**
+ * An IPv6 address as its eight 16-bit groups, `::` expanded and a dotted IPv4 tail
+ * (::ffff:127.0.0.1) turned into two groups; null when it isn't one.
+ */
+export function v6Groups(raw: string): number[] | null {
+  let ip = raw.toLowerCase().replace(/^\[|\]$/g, '')
+  const zone = ip.indexOf('%')
+  if (zone >= 0) ip = ip.slice(0, zone)
+  const tail = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip)
+  if (tail) {
+    const v4 = v4Parts(tail[1])
+    if (!v4) return null
+    ip = `${ip.slice(0, -tail[1].length)}${((v4[0] << 8) | v4[1]).toString(16)}:${((v4[2] << 8) | v4[3]).toString(16)}`
   }
-  const [a, b] = ip.split('.').map(Number)
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || a >= 224
+  const halves = ip.split('::')
+  if (halves.length > 2) return null
+  const side = (s: string) => (s ? s.split(':') : [])
+  const head = side(halves[0])
+  const rest = halves.length === 2 ? side(halves[1]) : []
+  const missing = 8 - head.length - rest.length
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return null
+  const all = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...rest]
+  if (all.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null
+  return all.map((g) => parseInt(g, 16))
+}
+
+/** The IPv4 address in the last 32 bits of eight groups. */
+const lowV4 = (g: number[]) => [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255]
+
+/** Non-public IPv6, including IPv6 forms that carry an IPv4 address inside (judged by that address). */
+function privateV6(g: number[]): boolean {
+  const zero = (from: number, to: number) => g.slice(from, to).every((x) => x === 0)
+  // ::a.b.c.d (IPv4-compatible, and :: and ::1 with it), ::ffff:a.b.c.d (mapped) and ::ffff:0:a.b.c.d (SIIT).
+  if (zero(0, 6) || (zero(0, 5) && g[5] === 0xffff) || (zero(0, 4) && g[4] === 0xffff && g[5] === 0)) return privateV4(lowV4(g))
+  // NAT64, the well-known prefix 64:ff9b::/96 (the IPv4 inside), and the local-use 64:ff9b:1::/48.
+  if (g[0] === 0x64 && g[1] === 0xff9b) return g[2] === 1 || (zero(2, 6) ? privateV4(lowV4(g)) : true)
+  // 6to4, 2002:AABB:CCDD::/48 for a.b.c.d.
+  if (g[0] === 0x2002) return privateV4([g[1] >> 8, g[1] & 255, g[2] >> 8, g[2] & 255])
+  // Teredo (2001::/32, its IPv4 hidden), documentation (2001:db8::/32), discard (100::/64).
+  if (g[0] === 0x2001 && (g[1] === 0 || g[1] === 0xdb8)) return true
+  if (g[0] === 0x100 && zero(1, 4)) return true
+  // Unique local fc00::/7, link-local fe80::/10, old site-local fec0::/10, multicast ff00::/8.
+  return (g[0] & 0xfe00) === 0xfc00 || (g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0 || (g[0] & 0xff00) === 0xff00
+}
+
+/**
+ * Loopback, private, link-local, CGNAT (Tailscale), multicast and other non-public addresses, in
+ * IPv4 or IPv6 (whose IPv4-carrying forms count as the IPv4 inside them). Anything that doesn't
+ * parse counts as private.
+ */
+export function isPrivate(ip: string): boolean {
+  const v4 = v4Parts(ip)
+  if (v4) return privateV4(v4)
+  const v6 = v6Groups(ip)
+  return v6 ? privateV6(v6) : true
 }
 
 /** A host's addresses, for http(s) only and when every one of them is public; refuses otherwise. */

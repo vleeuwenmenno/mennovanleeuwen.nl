@@ -100,10 +100,16 @@ export function Mail({ win }: { win: WinState }) {
   // stays the one that was open, shown again when the selection is let go.
   const [picked, setPicked] = useState<ReadonlySet<string>>(NONE)
   const [fingerPick, setFingerPick] = useState(false)
+  // Selecting by the rows' checkboxes: like a finger's, any number (one too) counts as selected,
+  // but clicks elsewhere on a row still open it.
+  const [boxPick, setBoxPick] = useState(false)
   /** Where a Shift range starts, and where Shift+↑/↓ has got to. */
   const anchor = useRef<string | null>(null)
   const lead = useRef<string | null>(null)
-  const picking = picked.size > 1 || (fingerPick && picked.size > 0)
+  const sticky = fingerPick || boxPick
+  const picking = picked.size > 1 || (sticky && picked.size > 0)
+  /** How a selection made now keeps going: by finger, by checkbox, or as clicks (two or more). */
+  const pickMode = (): PickMode => (fingerPick ? 'finger' : boxPick ? 'box' : null)
   const [compose, setCompose] = useState<ComposeInit | null>(null)
   const version = useMailVersion()
   const searchBox = useRef<HTMLInputElement>(null)
@@ -177,8 +183,11 @@ export function Mail({ win }: { win: WinState }) {
     const here = new Set(rows.map((r) => r.threadId))
     if ([...picked].every((id) => here.has(id))) return
     const left = new Set([...picked].filter((id) => here.has(id)))
-    setPicked(left.size > 1 || (fingerPick && left.size) ? left : NONE)
-    if (!left.size) setFingerPick(false)
+    setPicked(left.size > 1 || (sticky && left.size) ? left : NONE)
+    if (!left.size) {
+      setFingerPick(false)
+      setBoxPick(false)
+    }
   }, [rows]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const more = useRef(false)
@@ -290,6 +299,7 @@ export function Mail({ win }: { win: WinState }) {
   function unpick() {
     setPicked(NONE)
     setFingerPick(false)
+    setBoxPick(false)
     lead.current = null
   }
   /** The conversations an action is for: those selected, in list order, or the open one. */
@@ -298,10 +308,11 @@ export function Mail({ win }: { win: WinState }) {
   /** What is selected now, as a set to change: the selection, or the open conversation. */
   const pickedNow = () => new Set(picking ? picked : selected ? [selected] : [])
   /** A new selection: two or more (or any, with a finger) show as selected; one is simply opened. */
-  const applyPick = (next: Set<string>, finger = fingerPick) => {
-    if (finger) {
+  const applyPick = (next: Set<string>, mode: PickMode = pickMode()) => {
+    if (mode) {
       setPicked(next.size ? next : NONE)
-      setFingerPick(next.size > 0)
+      setFingerPick(mode === 'finger' && next.size > 0)
+      setBoxPick(mode === 'box' && next.size > 0)
       return
     }
     if (next.size > 1) return setPicked(next)
@@ -319,7 +330,7 @@ export function Mail({ win }: { win: WinState }) {
     applyPick(next)
   }
   /** From the anchor to `id`, added to what is selected (`add`) or instead of it. */
-  const pickRange = (id: string, add: boolean) => {
+  const pickRange = (id: string, add: boolean, mode: PickMode = pickMode()) => {
     const from = anchor.current ?? selected ?? id
     const a = rows.findIndex((r) => r.threadId === from)
     const b = rows.findIndex((r) => r.threadId === id)
@@ -327,7 +338,7 @@ export function Mail({ win }: { win: WinState }) {
     if (a < 0) anchor.current = id
     const span = rows.slice(Math.min(a < 0 ? b : a, b), Math.max(a, b) + 1).map((r) => r.threadId)
     lead.current = id
-    applyPick(new Set([...(add ? pickedNow() : []), ...span]))
+    applyPick(new Set([...(add ? pickedNow() : []), ...span]), mode)
   }
   const pickAll = () => {
     if (!rows.length) return
@@ -344,7 +355,29 @@ export function Mail({ win }: { win: WinState }) {
     setSelected(r.threadId)
     setView('thread')
   }
-  const checkRow = (r: ThreadRow, e: MouseEvent) => (e.shiftKey ? pickRange(r.threadId, true) : togglePick(r.threadId))
+  /**
+   * A row's checkbox (or, while selecting with a finger, its picture): that row in or out of the
+   * selection, never opening it; Shift for the range from the last one. Starting from nothing
+   * selected, the open conversation is not taken along.
+   */
+  const checkRow = (r: ThreadRow, e: MouseEvent | KeyboardEvent) => {
+    const mode: PickMode = fingerPick ? 'finger' : 'box'
+    if (e.shiftKey && anchor.current && (picking || anchor.current !== r.threadId)) return pickRange(r.threadId, picking, mode)
+    const next = new Set(picking ? picked : [])
+    if (next.has(r.threadId)) next.delete(r.threadId)
+    else next.add(r.threadId)
+    anchor.current = r.threadId
+    lead.current = r.threadId
+    applyPick(next, mode)
+  }
+  /** The header's checkbox: every conversation loaded, or (when they all are) none. */
+  const checkAll = () => {
+    if (picking && rows.length > 0 && rows.every((r) => picked.has(r.threadId))) return unpick()
+    if (!rows.length) return
+    anchor.current = rows[0].threadId
+    lead.current = rows[rows.length - 1].threadId
+    applyPick(new Set(rows.map((r) => r.threadId)), fingerPick ? 'finger' : 'box')
+  }
   // A finger held on a row starts selecting (the click its lift sends is not also a tap).
   const lastPointer = useRef('mouse')
   const suppressClick = useRef(false)
@@ -362,7 +395,7 @@ export function Mail({ win }: { win: WinState }) {
         /* no vibration */
       }
       anchor.current = r.threadId
-      applyPick(new Set([r.threadId]), true)
+      applyPick(new Set([r.threadId]), 'finger')
     }, LONG_PRESS_MS)
     const move = (ev: PointerEvent) => Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > 10 && stop()
     function stop() {
@@ -786,10 +819,11 @@ export function Mail({ win }: { win: WinState }) {
         )}
         {showList && (
           <section className="ml-listpane" aria-label="Conversations">
-            {picking && narrow ? (
-              <Selection compact count={picked.size} rows={rowsOf(targets())} ids={targets()} canArchive={canArchive} inTrash={inTrash} inJunk={inJunk} moveItems={moveItems} change={change} flagRows={flagRows} onClear={unpick} />
+            {picking ? (
+              <Selection compact count={picked.size} rows={rowsOf(targets())} ids={targets()} canArchive={canArchive} inTrash={inTrash} inJunk={inJunk} moveItems={moveItems} change={change} flagRows={flagRows} onClear={unpick} all={rows.length > 0 && rows.every((r) => picked.has(r.threadId)) ? 'all' : 'some'} onAll={checkAll} />
             ) : (
               <div className="ml-list-head">
+                {rows.length > 0 && <PickBox state="none" label="Select all conversations" onToggle={checkAll} />}
                 <strong>{search ? `Search: ${search}` : (current?.name ?? '')}</strong>
                 {total !== null && <span className="muted">{total === 1 ? '1 conversation' : `${total} conversations`}</span>}
               </div>
@@ -863,6 +897,9 @@ function Selection(props: {
   change: (op: Op, threadIds: string[], opts?: { to?: string }) => Promise<void>
   flagRows: (list: ThreadRow[], on: boolean) => void
   onClear: () => void
+  /** The bar's select-all checkbox: whether every loaded conversation is selected, and what it does. */
+  all?: 'all' | 'some'
+  onAll?: () => void
 }) {
   const { count, rows, ids, change } = props
   const unread = rows.filter((r) => !r.seen).length
@@ -885,16 +922,21 @@ function Selection(props: {
     const few = actions.filter((a) => !/^(Mark as (un)?read|Flag|Unflag)$/.test(a.label) || a === read || a === flag)
     return (
       <div className="ml-sel-bar" role="toolbar" aria-label="Selected conversations">
+        {props.onAll && <PickBox state={props.all === 'all' ? 'all' : 'some'} label={props.all === 'all' ? 'Select none' : 'Select all conversations'} onToggle={props.onAll} />}
+        <strong className="ml-sel-count">{count} selected</strong>
+        <div className="ml-sel-tools">
+        {few.map((a) => (
+          <button key={a.label} className="ml-icon ml-tool" data-named={/^(Archive|Delete)/.test(a.label) ? '' : undefined} onClick={a.run} disabled={a.off} aria-label={a.label} title={a.title}>
+            <Icon name={a.glyph} />
+            <span className="ml-tool-label" aria-hidden>
+              {a.label.replace(/…$/, '')}
+            </span>
+          </button>
+        ))}
+        </div>
         <button className="ml-icon" onClick={props.onClear} aria-label="Clear selection" title="Clear selection (Esc)">
           <Icon name="close" />
         </button>
-        <strong className="ml-sel-count">{count} selected</strong>
-        <span className="nb-spacer" />
-        {few.map((a) => (
-          <button key={a.label} className="ml-icon" onClick={a.run} disabled={a.off} aria-label={a.label} title={a.title}>
-            <Icon name={a.glyph} />
-          </button>
-        ))}
       </div>
     )
   }
@@ -931,6 +973,24 @@ function Selection(props: {
 
 const CHECK = <path d="M6 12.5l4 4 8-9" />
 
+type PickMode = 'finger' | 'box' | null
+
+/**
+ * A checkbox drawn to match the rows' (`all`, `some`: indeterminate, `none`), for the list header:
+ * select all, or none when all are.
+ */
+function PickBox({ state, label, onToggle }: { state: 'all' | 'some' | 'none'; label: string; onToggle: () => void }) {
+  return (
+    <button type="button" className={`ml-check ml-check-all is-${state}`} role="checkbox" aria-checked={state === 'all' ? true : state === 'some' ? 'mixed' : false} aria-label={label} title={label} onClick={onToggle}>
+      <span className="ml-check-box">
+        <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+          {state === 'some' ? <path d="M6 12h12" /> : CHECK}
+        </svg>
+      </span>
+    </button>
+  )
+}
+
 /** The conversations, drawn only where they show; more are asked for near the end. */
 function ThreadList(props: {
   rows: ThreadRow[]
@@ -942,7 +1002,7 @@ function ThreadList(props: {
   listRef: RefObject<HTMLDivElement | null>
   trash: boolean
   onClick: (r: ThreadRow, e: MouseEvent) => void
-  onCheck: (r: ThreadRow, e: MouseEvent) => void
+  onCheck: (r: ThreadRow, e: MouseEvent | KeyboardEvent) => void
   onPress: (r: ThreadRow, e: RPointerEvent) => void
   onDrag: (r: ThreadRow, e: DragEvent) => void
   onMenu: (e: MouseEvent, r: ThreadRow) => void
@@ -1000,20 +1060,32 @@ function ThreadList(props: {
             >
               <span className="ml-row-pic">
                 <Avatar person={r.from[0]} size={30} />
-                <span
+                <button
+                  type="button"
                   className="ml-check"
                   role="checkbox"
-                  aria-checked={on}
-                  aria-label={on ? 'Selected' : 'Select'}
+                  aria-checked={props.picking && on}
+                  aria-label={`Select ${who}: ${r.subject || '(No subject)'}`}
+                  title={props.picking && on ? 'Selected (Shift: a range)' : 'Select (Shift: a range)'}
                   onClick={(e) => {
                     e.stopPropagation()
                     props.onCheck(r, e)
                   }}
+                  onKeyDown={(e) => {
+                    // Space and Enter tick it (as a button does), not the list's Enter (open).
+                    if (e.key === ' ' || e.key === 'Enter') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      props.onCheck(r, e)
+                    }
+                  }}
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
-                    {CHECK}
-                  </svg>
-                </span>
+                  <span className="ml-check-box">
+                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+                      {CHECK}
+                    </svg>
+                  </span>
+                </button>
               </span>
               <div className="ml-row-text">
                 <div className="ml-row-top">

@@ -1440,7 +1440,7 @@ export async function handleMailApi(req: IncomingMessage, res: ServerResponse, u
   }
   // A sender's brand icon by domain (server/mailicons.ts): for the avatars in the list and reader.
   const icon = /^\/api\/mail\/icon\/([a-z0-9.-]{1,253})$/i.exec(path)
-  if (icon && read) return await serveSenderIcon(res, icon[1], head), true
+  if (icon && read) return await serveSenderIcon(res, icon[1], head, user.id), true
   const removing = /^\/api\/mail\/accounts\/(\d+)$/.exec(path)
   if (removing && method === 'DELETE') return removeMail(user, Number(removing[1])), json(res, 200, { ok: true }), true
 
