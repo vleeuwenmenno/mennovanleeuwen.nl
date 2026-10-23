@@ -192,7 +192,7 @@ export async function guardedFetch(user: User | null, input: string | URL, init:
     if (user?.admin) {
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EgressError(400, 'Only web addresses')
       res = await fetch(url, opts)
-    } else res = await fetchPinned(url, opts, await publicAddresses(url))
+    } else res = await fetchPinned(url, opts, await publicAddresses(url, opts.signal ?? undefined))
     const location = res.headers.get('location')
     if (!follow || res.status < 300 || res.status >= 400 || !location) return res
     if (hop >= MAX_HOPS) throw new HttpError(502, `${url.host} redirected too often`)
