@@ -51,6 +51,10 @@ area you clicked in (or a field's text), never the whole page, and apps that sel
 items with it (Files, Photos, Archive) still do. Pictures and links on the chrome don't drag out
 of the page; rows meant to be dragged still do.
 
+Editable fields (inputs, text areas and rich-text editors) disable font ligatures and contextual
+alternates so punctuation such as `http://host/path`, `//`, `..` and `...` remains visually
+separate. This changes only font rendering: text values, selection and caret positions stay intact.
+
 For developers it is one rule, under *Text selection* at the top of
 [`src/styles.css`](src/styles.css): `body` is `user-select: none`, and fields, `code` and anything
 with the `selectable` class (or `data-selectable`; `copyable` for an error or notice) opt back in.

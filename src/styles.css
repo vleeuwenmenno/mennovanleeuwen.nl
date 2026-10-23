@@ -133,6 +133,16 @@ html[data-selecting] body {
   -webkit-user-select: text;
   user-select: text;
 }
+/* Editable text must show each typed character separately, including //, .. and ... in URLs
+   and paths. Disable contextual alternates as well as ligatures (JetBrains Mono uses them).
+   Important prevents app-specific `font` shorthands from resetting ligatures to normal. */
+input,
+textarea,
+[contenteditable]:not([contenteditable='false']),
+[contenteditable]:not([contenteditable='false']) * {
+  font-variant-ligatures: none !important;
+}
+
 input,
 textarea,
 select,
