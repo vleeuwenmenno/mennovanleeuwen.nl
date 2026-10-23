@@ -5,6 +5,7 @@ import { clearGoogleCache, googleByUid, googleEventInfo, markGoogleNote, type Ca
 import { HttpError } from './http.ts'
 import { tellPages } from './notifier.ts'
 import { readState, writeState } from './state.ts'
+import { relinkedNote } from '../src/data/noteClock.ts'
 import { cleanNoteEvents, linkMatches, MAX_NOTE_EVENTS, NOTE_ID, type NoteEvent } from '../src/data/noteEvents.ts'
 
 // Notes linked to calendar events (src/data/noteEvents.ts says how a link is kept): the server's
@@ -168,7 +169,7 @@ export async function findLinked(user: User, link: { uid: string; calendarId?: s
 // ---------------------------------------------------------------------------------------------
 // The notes, as synced desktop state (src/data/notes.ts keeps the same shape)
 
-export type NoteRow = { id: string; text: string; color?: string; tilt?: number; created?: number; updated?: number; deleted?: number; purged?: boolean; events?: NoteEvent[]; eventsAt?: number }
+export type NoteRow = { id: string; text: string; color?: string; tilt?: number; created?: number; updated?: number; edited?: number; deleted?: number; restored?: number; purged?: boolean; events?: NoteEvent[]; eventsAt?: number }
 
 export const readNotes = (user: User): NoteRow[] => {
   const v = readState(user).notes?.value
@@ -196,7 +197,7 @@ export function changeLinks(user: User, noteId: string, change: (links: NoteEven
       if (n.id !== noteId) return n
       const events = change(cleanNoteEvents(n.events) ?? []).slice(0, MAX_NOTE_EVENTS)
       // Not an edit of the text: `updated` stays (the Notebook sorts by it).
-      return { ...n, events, eventsAt: Date.now() }
+      return relinkedNote(n, { events })
     }),
   )
 }

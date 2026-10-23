@@ -1,8 +1,9 @@
 import { snapReserve } from './dockPrefs'
 import { persistentProps } from './windowProps'
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
+import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
 import { newTab } from './powerState'
@@ -120,6 +121,12 @@ type Action =
   | { type: 'claim'; n: number | null }
   /** The workspaces other tabs have, which this tab does not go to. */
   | { type: 'away'; ws: number[] }
+  /** The widgets on the desktop, from the synced set (src/os/widgetPlaces.ts): widget windows not
+   * in it close, the ones missing open, the others move to where it says. */
+  | { type: 'widgets'; list: WidgetShown[] }
+
+/** A widget as the synced set puts it on this screen (see widgetsShown). */
+type WidgetShown = { id: string; kind: string; g: Geometry; minimized: boolean; stack?: number }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
  * change re-applies the opening layout instead of just clamping. `focused` is the window that
@@ -216,7 +223,15 @@ let layout: LayoutStore | null = null
  * phone layout. */
 export function layoutStore(): LayoutStore {
   // When this device and another both changed the layout, the change just made here wins.
-  layout ??= synced<SavedWindow[] | null>(`windows:${window.innerWidth < 720 ? 'mobile' : 'desktop'}`, null, { merge: (local) => local })
+  // A browser that never saved a layout to the account (signing in for the first time) takes the
+  // account's instead: its opening windows must not replace the windows of every other device.
+  layout ??= synced<SavedWindow[] | null>(`windows:${window.innerWidth < 720 ? 'mobile' : 'desktop'}`, null, {
+    merge: (local) => local,
+    yieldWhenNew: true,
+    // Widgets in a layout an older release saved move into their own set before the merge above
+    // can drop that layout.
+    onIncoming: importLayoutWidgets,
+  })
   return layout
 }
 
@@ -244,7 +259,10 @@ function serialize(windows: WinState[]): SavedWindow[] {
 /** A state showing `saved`. Windows already open that match one (same app, same props) keep
  * their pid, so their app keeps running (a terminal keeps its history) and just moves. */
 function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State {
-  const unused = current.slice()
+  // Widgets aren't part of the layout (src/os/widgetPlaces.ts): the ones on the desktop stay.
+  const widgets = current.filter((w) => w.app === 'widget')
+  saved = saved.filter((w) => w.app !== 'widget')
+  const unused = current.filter((w) => w.app !== 'widget')
   const key = (w: { app: AppId; props: WinState['props'] }) => `${w.app}|${JSON.stringify(Object.entries(persistentProps(w.app, w.props)).sort())}`
   let pid = Math.max(100, ...current.map((w) => w.pid + 1))
   let z = 10
@@ -255,6 +273,7 @@ function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State
     w = { ...w, ws: NOTE_APPS.has(w.app) ? undefined : Math.min(WORKSPACES, Math.max(1, Math.round(w.ws ?? 1))) }
     return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: persistentProps(w.app, w.props), pid: pid++, z: ++z, openedAt: Date.now() }
   })
+  for (const w of widgets) windows.push({ ...w, z: ++z })
   const view = { ws, phone: isPhone() }
   return { windows, nextPid: pid, topZ: z, touched: true, focused: topShown(view, windows)?.pid ?? null, ...view, edits: 0, away: [], unplaced: null }
 }
@@ -266,9 +285,14 @@ function reducer(state: State, action: Action): State {
 
 function apply(state: State, action: Action): State {
   switch (action.type) {
-    case 'reset':
-      // A tab with a workspace of its own starts over on it.
-      return { ...fresh(action.layout, action.ws), away: state.away }
+    case 'reset': {
+      // A tab with a workspace of its own starts over on it. Widgets are part of the desktop, not
+      // windows: they stay.
+      const list = state.windows.filter((w) => w.app === 'widget').map((w) => ({ id: w.props.id ?? '', kind: w.props.kind ?? '', g: w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }, minimized: w.minimized, stack: w.stack }))
+      return { ...showWidgets(fresh(action.layout, action.ws), list), away: state.away }
+    }
+    case 'widgets':
+      return showWidgets(state, action.list)
     case 'restore':
       return { ...restored(action.windows, state.windows, state.ws), away: state.away, unplaced: state.unplaced }
     case 'workspace': {
@@ -448,6 +472,75 @@ export function fitNote(g: Geometry, width: number, height: number, drawn = g.h)
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Widgets: their windows follow the synced set of widgets (src/os/widgetPlaces.ts), not the layout.
+
+const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round(a.x) === Math.round(b.x) && Math.round(a.y) === Math.round(b.y) && Math.round(a.w) === Math.round(b.w) && Math.round(a.h) === Math.round(b.h)
+
+/**
+ * Where a widget from the set goes on this screen. A big screen puts it where it was put, moved
+ * along with the screen's size when that was another one (a widget near the right edge stays
+ * near the right edge), and fitted on after that. One placed on a phone has no place on a big
+ * screen yet: it gets the usual spot for a new widget. A phone stacks them in a column anyway.
+ */
+function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
+  if (phone) return { x: p.x, y: p.y, w: p.w, h: p.h }
+  if (p.vw < 720) return place(i)
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const along = (v: number, size: number, from: number, to: number, lo: number) => {
+    if (from === to) return v
+    const was = from - size - lo - NOTE_MARGIN
+    const now = to - size - lo - NOTE_MARGIN
+    return was > 0 && now > 0 ? Math.round(lo + ((v - lo) * now) / was) : v
+  }
+  return { x: along(p.x, p.w, p.vw, vw, NOTE_MARGIN), y: along(p.y, p.h, p.vh || vh, vh, NOTE_TOP), w: p.w, h: p.h }
+}
+
+/** The widgets of the set that this build knows, as this screen shows them. */
+function widgetsShown(all: WidgetSet, phone: boolean, known: (kind: string) => boolean, place: (n: number) => Geometry): WidgetShown[] {
+  return liveWidgets(all)
+    .filter((p) => known(p.kind))
+    .map((p, i) => ({ id: p.id, kind: p.kind, g: widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))
+}
+
+/** `state` with exactly these widgets: windows keep their pid where the widget was already open. */
+function showWidgets(state: State, list: WidgetShown[]): State {
+  const wanted = new Map(list.map((p) => [p.id, p]))
+  const seen = new Set<string>()
+  let changed = false
+  let z = state.topZ
+  let pid = state.nextPid
+  const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, window.innerWidth, window.innerHeight, p === undefined ? undefined : drawnHeights.get(p)))
+  const windows: WinState[] = []
+  for (const w of state.windows) {
+    if (w.app !== 'widget') {
+      windows.push(w)
+      continue
+    }
+    const p = w.props.id ? wanted.get(w.props.id) : undefined
+    // Taken off the desktop elsewhere (or a second window of the same widget).
+    if (!p || seen.has(p.id)) {
+      changed = true
+      continue
+    }
+    seen.add(p.id)
+    if (sameGeometry(w.want ?? w, p.g) && w.minimized === p.minimized && w.stack === p.stack) windows.push(w)
+    else {
+      changed = true
+      windows.push({ ...w, ...fit(p.g, w.pid), want: p.g, minimized: p.minimized, stack: p.stack, snap: undefined, maximized: false })
+    }
+  }
+  for (const p of list) {
+    if (seen.has(p.id)) continue
+    changed = true
+    windows.push({ pid: pid++, app: 'widget', ...fit(p.g), want: p.g, z: ++z, minimized: p.minimized, maximized: false, props: { kind: p.kind, id: p.id }, openedAt: Date.now(), stack: p.stack })
+  }
+  if (!changed) return state
+  const focused = windows.some((w) => w.pid === state.focused) ? state.focused : null
+  return { ...state, windows, nextPid: pid, topZ: z, focused }
+}
+
 type WM = {
   windows: WinState[]
   focusedPid: number | null
@@ -506,6 +599,7 @@ export function WindowManagerProvider({
   placement,
   isApp,
   nameOf = (w) => w.app,
+  knownWidget = () => true,
 }: {
   children: ReactNode
   initial: () => { app: AppId; geometry: Geometry; props?: WinState['props'] }[]
@@ -514,26 +608,36 @@ export function WindowManagerProvider({
   isApp: (app: string) => boolean
   /** A window's name, for telling where it is. */
   nameOf?: (w: WinState) => string
+  /** Whether this build has a widget of this kind (one from a newer release is left alone). */
+  knownWidget?: (kind: string) => boolean
 }) {
   // The saved windows that belong to another page (the CV apps' windows from /cv, on the plain
   // desktop): not shown here, but saved back with this page's windows so /cv keeps them.
   const held = useRef<SavedWindow[]>([])
+  // Widgets saved in a layout (before they had a set of their own, or by an older release) move
+  // into the set, unless it has them already (or had them, and they were removed since).
   const usable = useCallback(
     (saved: SavedWindow[] | null) => {
       const known = saved?.map(migrate).filter((w) => isApp(w.app)) ?? null
-      held.current = known?.filter((w) => !belongsHere(w)) ?? []
-      return known?.filter(belongsHere) ?? null
+      importLayoutWidgets(known)
+      const rest = known?.filter((w) => w.app !== 'widget') ?? null
+      held.current = rest?.filter((w) => !belongsHere(w)) ?? []
+      return rest?.filter(belongsHere) ?? null
     },
     [isApp],
   )
+  const widgetPlace = useCallback((n: number) => placement('widget', n), [placement])
+  const shownWidgets = useCallback((all: WidgetSet, phone: boolean) => widgetsShown(all, phone, knownWidget, widgetPlace), [knownWidget, widgetPlace])
   const [state, dispatch] = useReducer(reducer, null, () => {
     // Settings → Windows: last time's windows, the welcome windows, or an empty desktop.
+    // Widgets are there whatever the desktop starts with: they are part of it, not windows.
     const start = startupPrefs().windows
-    if (start === 'empty') return fresh([])
+    const saved = usable(layoutStore().get())
+    const withWidgets = (s: State) => showWidgets(s, shownWidgets(widgetPlaces.get(), s.phone))
+    if (start === 'empty') return withWidgets(fresh([]))
     // One workspace per tab: a reload starts on the workspace it had (it is about to get it back).
     const perTab = start === 'last' && tabWorkspacePrefs.get().perTab && tabWorkspacesSupported && !isPhone()
-    const saved = start === 'last' ? usable(layoutStore().get()) : null
-    const s = saved ? restored(saved, [], (perTab && rememberedWorkspace()) || savedWorkspace()) : fresh(relayout())
+    const s = withWidgets(start === 'last' && saved ? restored(saved, [], (perTab && rememberedWorkspace()) || savedWorkspace()) : fresh(relayout()))
     return perTab ? { ...s, unplaced: [] } : s
   })
 
@@ -613,6 +717,20 @@ export function WindowManagerProvider({
     [nameOf],
   )
 
+  // Widgets, both ways. Another device (or tab) changed the set: show it as it is now. A widget
+  // added, moved, minimized, put elsewhere in the phone's column or taken off here: into the set,
+  // right away, so a change arriving from elsewhere a moment later is merged with it, not undone.
+  // What showing the set did to the windows (`applied`) is not a change made here.
+  const applied = useRef(new Map<string, WidgetShown>())
+  const showSet = useCallback(
+    (all: WidgetSet) => {
+      const list = shownWidgets(all, stateRef.current.phone)
+      for (const p of list) applied.current.set(p.id, p)
+      dispatch({ type: 'widgets', list })
+    },
+    [shownWidgets],
+  )
+
   // Save what the visitor did (debounced), not what fitting the windows to this screen did. A
   // newer layout from another device replaces this one unless there is an unsaved change here;
   // the synced store has already checked that it really is newer than what this tab saved.
@@ -623,7 +741,7 @@ export function WindowManagerProvider({
     // when Last windows is chosen again (and other devices keep theirs).
     if (startupPrefs().windows !== 'last') return
     savedEdits.current = stateRef.current.edits
-    layoutStore().set([...held.current, ...serialize(stateRef.current.windows)])
+    layoutStore().set([...held.current, ...serialize(stateRef.current.windows.filter((w) => w.app !== 'widget'))])
   }, [])
   useEffect(() => {
     if (state.edits === savedEdits.current) return
@@ -641,10 +759,15 @@ export function WindowManagerProvider({
       window.removeEventListener('pagehide', saveNow, true)
     }
   }, [saveNow])
+  // A browser that never had the account's layout (signing in for the first time) takes the first
+  // copy of it, even though its own opening windows have just been fitted (which counts as a
+  // change). Only a copy that has been to the account counts (see layoutGate).
+  const gate = useRef<ReturnType<typeof layoutGate> | null>(null)
+  gate.current ??= layoutGate(!layoutStore().everSynced())
   useEffect(
     () =>
       layoutStore().onRemote((saved) => {
-        if (stateRef.current.edits !== savedEdits.current) return
+        if (!gate.current!(layoutStore().everSynced(), stateRef.current.edits !== savedEdits.current)) return
         // Starting fresh each time means not taking another device's windows either.
         if (startupPrefs().windows !== 'last') return
         const next = usable(saved)
@@ -653,8 +776,54 @@ export function WindowManagerProvider({
           dispatch({ type: 'restore', windows: next })
         }
       }),
-    [usable],
+    [usable, showSet],
   )
+
+  useEffect(() => widgetPlaces.onRemote(showSet), [showSet])
+  useEffect(() => onImport(() => showSet(widgetPlaces.get())), [showSet])
+  // The phone's column and a big screen's places differ: turning the screen into the other kind
+  // shows the set again for it.
+  const firstPhone = useRef(state.phone)
+  useEffect(() => {
+    if (state.phone === firstPhone.current) return
+    firstPhone.current = state.phone
+    showSet(widgetPlaces.get())
+  }, [state.phone, showSet])
+  const lastWidgets = useRef<Map<string, WinState> | null>(null)
+  useLayoutEffect(() => {
+    const now = new Map<string, WinState>()
+    for (const w of state.windows) if (w.app === 'widget' && w.props.id && w.props.kind && !now.has(w.props.id)) now.set(w.props.id, w)
+    const before = lastWidgets.current
+    lastWidgets.current = now
+    if (!before) return
+    const all = widgetPlaces.get()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const put: Record<string, WidgetPlace> = {}
+    const remove: string[] = []
+    for (const [id, w] of now) {
+      const was = before.get(id)
+      const g = w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }
+      if (was && sameGeometry(was.want ?? was, g) && was.minimized === w.minimized && was.stack === w.stack) continue
+      const shown = applied.current.get(id)
+      if (shown && sameGeometry(shown.g, g) && shown.minimized === w.minimized && shown.stack === w.stack) continue
+      const entry = entriesOf(all, id)[0]
+      const rec = entry?.place
+      const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh }
+      if (rec && state.phone) {
+        // A phone only says where in its column; the place on a big screen stays.
+        if (rec.stack === w.stack && !!rec.minimized === w.minimized) continue
+        put[entry.key] = { ...rec, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
+      } else put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
+      applied.current.delete(id)
+    }
+    for (const id of before.keys()) {
+      if (now.has(id)) continue
+      applied.current.delete(id)
+      for (const e of entriesOf(all, id)) remove.push(e.key)
+    }
+    if (Object.keys(put).length || remove.length) widgetPlaces.set((cur) => changeSet(cur, put, remove))
+  }, [state.windows, state.phone])
 
   // A CV app opened away from /cv opens right here, on every page from then on (WinState.anywhere).
   // Its window from /cv, if there is one and none is open here, makes way for it, so /cv doesn't

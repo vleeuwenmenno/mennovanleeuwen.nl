@@ -13,6 +13,7 @@ import { CALENDAR_TOOLS, CALENDAR_WRITES, calendarConnected, calendarLines, cale
 import { MAIL_READS, MAIL_TOOLS, MAIL_WRITES, mailClock as clock, mailError, mailLinked, mailLines, mailTools, prepareMailCall } from './agentMail.ts'
 import { NOTE_LINK_LINES, NOTE_LINK_TOOLS, NOTE_LINK_WRITES, noteLinkTools, prepareNoteLinkCall } from './agentNoteLinks.ts'
 import { readNotes as readNoteRows, writeNotes as writeNoteRows } from './noteLinks.ts'
+import { editedNote, trashedNote } from '../src/data/noteClock.ts'
 import { notify } from './notifier.ts'
 import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
@@ -1999,7 +2000,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         if (text.length > 100_000) throw new Error('That note is too long (over 100,000 characters)')
         const now = Date.now()
         const color = NOTE_COLORS.includes(args.color as (typeof NOTE_COLORS)[number]) ? (args.color as string) : 'yellow'
-        const note = { id: randomUUID(), text, color, tilt: Math.round((Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 2.7) * 10) / 10, created: now, updated: now }
+        const note = { id: randomUUID(), text, color, tilt: Math.round((Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 2.7) * 10) / 10, created: now, updated: now, edited: now }
         writeNotes(user, (all) => [...all, note])
         return JSON.stringify({ created: note.id, title: text.split('\n').find((l) => l.trim())?.replace(/^#+\s*/, '').slice(0, 80) })
       }
@@ -2011,13 +2012,13 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         const next = args.append === true ? `${note.text.replace(/\s+$/, '')}\n${text}` : text.trim()
         if (!next.trim()) throw new Error('That would leave the note empty: use delete_note to remove it')
         if (next.length > 100_000) throw new Error('That note would be too long (over 100,000 characters)')
-        writeNotes(user, (all) => all.map((n) => (n.id === id ? { ...n, text: next, updated: Date.now() } : n)))
+        writeNotes(user, (all) => all.map((n) => (n.id === id ? editedNote(n, { text: next }) : n)))
         return JSON.stringify({ updated: id, characters: next.length })
       }
       case 'delete_note': {
         const id = argString(args, 'id')
         if (!readNotes(user).some((n) => n.id === id && !n.purged && !n.deleted)) throw new Error(`No note with id ${id}`)
-        writeNotes(user, (all) => all.map((n) => (n.id === id ? { ...n, deleted: Date.now(), updated: Date.now() } : n)))
+        writeNotes(user, (all) => all.map((n) => (n.id === id ? trashedNote(n) : n)))
         return JSON.stringify({ deleted: id, note: "In the Notebook's trash, where the user can restore it" })
       }
       case 'search_code': {
