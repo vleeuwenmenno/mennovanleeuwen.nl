@@ -120,7 +120,8 @@ export function Sticky({ win }: { win: WinState }) {
   const wm = useWM()
   const windowMenu = useWindowMenu()
   const all = useAllNotes()
-  const note = all.find((n) => n.id === win.props.id && !n.deleted && !n.purged)
+  const storedNote = all.find((n) => n.id === win.props.id)
+  const note = storedNote && !storedNote.deleted && !storedNote.purged ? storedNote : undefined
   const text = useRef<HTMLTextAreaElement>(null)
   // Showing the note (ticks work) or editing it (a textarea). Empty notes are edited.
   const [editing, setEditing] = useState(() => !note?.text.trim())
@@ -138,16 +139,11 @@ export function Sticky({ win }: { win: WinState }) {
     },
   })
 
-  // A sticky whose note was deleted (here or on another device) goes away. A layout restored from
-  // the server can arrive a moment before its notes do, so look again before closing.
+  // Missing notes may still be syncing. Keep the widget entry and render nothing until
+  // the note arrives; only a known trash/purge should remove it from every device.
   useEffect(() => {
-    if (note) return
-    const t = setTimeout(() => {
-      const n = getNote(win.props.id ?? '')
-      if (!n || n.deleted) wm.close(win.pid)
-    }, 1500)
-    return () => clearTimeout(t)
-  }, [note, win.pid, win.props.id, wm])
+    if (storedNote?.deleted || storedNote?.purged) wm.close(win.pid)
+  }, [storedNote, win.pid, wm])
 
   // Grow with the text, like paper would; and put the caret where it was asked for.
   useLayoutEffect(() => {
@@ -263,7 +259,7 @@ export function Sticky({ win }: { win: WinState }) {
 
 function useStickyFrame(id: string): CSSProperties | undefined {
   const note = useAllNotes().find((n) => n.id === id)
-  if (!note) return undefined
+  if (!note || note.deleted || note.purged) return { display: 'none' }
   const c = NOTE_COLORS[note.color]
   return { ['--widget-bg' as string]: c.bg, ['--widget-fg' as string]: c.fg, ['--widget-tilt' as string]: `${note.tilt}deg` }
 }

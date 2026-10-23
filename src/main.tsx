@@ -19,6 +19,7 @@ import { initTheme } from './os/theme'
 import { initFurigana } from './data/furigana'
 import { initHomeCurrency } from './data/currency'
 import { WindowManagerProvider } from './os/wm'
+import { widgetDef } from './widgets/registry'
 import './styles.css'
 import './home.css'
 import './mobile.css'
@@ -60,7 +61,7 @@ createRoot(document.getElementById('root')!).render(
     {play ? (
       <PlayPage />
     ) : (
-      <WindowManagerProvider initial={initialLayout} placement={placement} isApp={isApp} nameOf={winTitle}>
+      <WindowManagerProvider initial={initialLayout} placement={placement} isApp={isApp} nameOf={winTitle} knownWidget={(kind) => !!widgetDef(kind)}>
         <Shell />
       </WindowManagerProvider>
     )}
