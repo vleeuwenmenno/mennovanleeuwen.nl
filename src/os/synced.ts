@@ -10,6 +10,15 @@ import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } 
 // Conflicts: the server refuses a save made on top of an older version. The store then merges
 // (if it knows how, e.g. notes by id) or takes the server's copy.
 //
+// A store made with `yieldWhenNew` takes the server's copy over a local one that was never saved to
+// the account (a browser signing in for the first time), instead of merging: the window layout,
+// whose merge keeps the local one, would otherwise put a new browser's opening windows over the
+// account's.
+//
+// Two tabs of one browser: a tab only takes in another tab's save (the storage event), it never
+// writes from there. A store with `mergeTabs` keeps both tabs' changes by merging right before it
+// saves: it reads what is stored, merges it into its own value with `merge`, and writes that.
+//
 // Each value is kept in this tab's account space (src/os/accountSpace.ts): another account's tab
 // never reads it, and this tab writes and sends nothing once the browser is signed in as someone
 // else (accountGuard). An answer from the server that arrives after that is dropped.
@@ -23,8 +32,10 @@ export type Synced<T> = {
   set: (next: T | ((v: T) => T)) => void
   use: () => T
   subscribe: (l: () => void) => () => void
-  /** Called when a newer value arrives from the server (not for local changes). */
+  /** Called when a newer value arrives from the server or another tab (not for local changes). */
   onRemote: (l: (v: T) => void) => () => void
+  /** Whether this browser's copy was ever saved to or loaded from the account. */
+  everSynced: () => boolean
 }
 
 type Internal = Synced<unknown> & {
@@ -33,6 +44,9 @@ type Internal = Synced<unknown> & {
   pushed: (updatedAt: number, sent: unknown) => void
   reset: () => void
   merge?: (local: unknown, remote: unknown) => unknown
+  normalize: (v: unknown) => unknown
+  yieldWhenNew?: boolean
+  onIncoming?: (remote: unknown) => void
 }
 
 const stores = new Map<string, Internal>()
@@ -61,16 +75,49 @@ function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (
   return { value: fallback, base: 0, dirty: false }
 }
 
-export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; normalize?: (v: unknown) => T; merge?: (local: T, remote: T) => T } = {}): Synced<T> {
+export function synced<T>(
+  key: string,
+  fallback: T,
+  opts: {
+    legacyKey?: string
+    normalize?: (v: unknown) => T
+    merge?: (local: T, remote: T) => T
+    /** A copy never saved to the account takes the account's on the first pull (see reconcile). */
+    yieldWhenNew?: boolean
+    /** Merge what another tab saved into this tab's value (with `merge`) right before saving. */
+    mergeTabs?: boolean
+    /** Sees every newer value from the server or another tab before any merge can drop it. */
+    onIncoming?: (remote: unknown) => void
+  } = {},
+): Synced<T> {
   let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
   const listeners = new Set<() => void>()
   const remoteListeners = new Set<(v: T) => void>()
   const emit = () => listeners.forEach((l) => l())
-  const save = () => {
-    if (frozen()) return
-    accountStorage.set(storageKey(key), JSON.stringify(meta))
-  }
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
+  const save = () => {
+    if (frozen() || !accountGuard()) return
+    let others = false
+    // Another tab's save this tab hasn't heard of yet: merged in first.
+    const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
+    if (raw !== null)
+      try {
+        const stored = JSON.parse(raw) as Meta<unknown>
+        const theirs = normalize(stored.value)
+        const merged = opts.merge!(meta.value, theirs)
+        others = JSON.stringify(merged) !== JSON.stringify(meta.value)
+        const base = Math.max(meta.base, stored.base ?? 0)
+        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || !!stored.dirty || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
+      } catch {
+        /* not readable: written over */
+      }
+    accountStorage.set(storageKey(key), JSON.stringify(meta))
+    // Another tab's changes came along: show them, as when they arrive by themselves.
+    if (others) {
+      emit()
+      remoteListeners.forEach((l) => l(meta.value))
+    }
+  }
 
   const store: Synced<T> = {
     key,
@@ -92,6 +139,7 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
       remoteListeners.add(l)
       return () => remoteListeners.delete(l)
     },
+    everSynced: () => meta.base > 0,
   }
 
   const internal: Internal = {
@@ -115,6 +163,9 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
       emit()
     },
     merge: opts.merge as Internal['merge'],
+    normalize,
+    yieldWhenNew: opts.yieldWhenNew,
+    onIncoming: opts.onIncoming,
   }
   stores.set(key, internal)
 
@@ -125,6 +176,7 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
+      if (e.newValue !== null) opts.onIncoming?.(meta.value)
       emit()
       if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
     })
@@ -192,10 +244,14 @@ function reconcile(s: Internal, remote: Remote | undefined) {
     return
   }
   if (remote.updatedAt > local.base) {
-    if (local.dirty && s.merge) {
+    s.onIncoming?.(remote.value)
+    // A copy never saved to the account (base 0) gives way to the account's, if the store says so.
+    if (local.dirty && s.merge && !(s.yieldWhenNew && local.base === 0)) {
       // Both changed: keep both sides' edits and save the result on top of the server's version.
-      const merged = s.merge(local.value, remote.value)
-      const differs = JSON.stringify(merged) !== JSON.stringify(remote.value)
+      // The server's copy is read as the store reads its own (an older format, junk) first.
+      const theirs = s.normalize(remote.value)
+      const merged = s.merge(local.value, theirs)
+      const differs = JSON.stringify(merged) !== JSON.stringify(theirs)
       // Nothing new to show when the merge kept this tab's own value.
       s.adopt({ value: merged, updatedAt: remote.updatedAt }, differs, merged !== local.value)
       if (differs) void push(s.key)
