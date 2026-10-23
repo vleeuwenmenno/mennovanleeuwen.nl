@@ -101,7 +101,7 @@ import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
-import { AttachedFiles, memoryPicture, sentPicture, Thumbnails } from './AgentsImages'
+import { AttachedFiles, memoryPicture, sentPicture, GeneratedPicture } from './AgentsImages'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
@@ -1060,10 +1060,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setLive(e.live)
       found(e.messages)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
+    else if (e.type === 'imageGeneration') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'image', width: e.width, height: e.height }])
     else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary, check: e.check }])
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
     else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
-    else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
+    else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone' || e.type === 'imageGenerationDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
     else if (e.type === 'compact') setCompacting(e.state === 'start' ? { auto: e.auto } : null)
     else if (e.type === 'message') {
       setMessages((ms) => [...ms, e.message])
@@ -2139,7 +2140,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
           const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
-          if (image) return <div key={j} data-tool={`${m.id}:${j}`}><p className="muted">Generated image · {image.width} × {image.height} · seed {image.seed}</p><Thumbnails pictures={[{ name: image.name, src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true }]} /></div>
+          if (image || wait?.kind === 'image' && wait.width && wait.height) return <div key={j} data-tool={`${m.id}:${j}`}><p className="muted">{image ? 'Generated image' : 'Generating image'} · {image?.width ?? wait?.width} × {image?.height ?? wait?.height}</p><GeneratedPicture image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} />{image && <p className="muted">Seed {image.seed}</p>}{image?.settings && <details className="agt-image-settings"><summary>Generation settings</summary><pre className="copyable">{JSON.stringify(image.settings, null, 2)}</pre><a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a></details>}</div>
           return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
         })}
       </Fragment>,
@@ -2279,7 +2280,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
         {call.name.startsWith('mail_') && (
           <p className="muted agt-ask-why">{MAIL_READ_TOOLS.has(call.name) ? 'Mail asks you first, in every mode: what it reads is private. You can let it search and read mail in this thread for 15 minutes, or always; sending and changes still ask.' : 'Mail always asks you first, in every mode: what it reads and sends is private.'}</p>
         )}
-        {call.name === 'generate_image' && <pre className="agt-tool-body">{JSON.stringify(call.arguments, null, 2)}</pre>}
+        {call.name === 'generate_image' && !summary && <pre className="agt-tool-body">{JSON.stringify(call.arguments, null, 2)}</pre>}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (

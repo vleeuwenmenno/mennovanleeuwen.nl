@@ -1,7 +1,7 @@
 import { getModelMetadata, type ModelCategory, type ModelMetadata } from '../data/agentImages'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { IMAGE_PRESETS, imagePresetSpec, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
+import { IMAGE_PRESETS, imagePresetSpec, resolveImageAssets, recommendedImageSampling, type ImageAssetCatalog, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
 import { useIsMobile } from '../os/useIsMobile'
 
 /** A themed OS dialog. Native modality traps focus and makes the underlying window inert. */
@@ -63,7 +63,7 @@ function ModelArtwork({ category, name, details = false }: { category?: ModelCat
 export function ModelPicker({ category, label, values, value, onChange, disabled, loading, error, onRefresh }: { category?: ModelCategory; label: string; values: string[]; value: string; onChange: (value: string) => void; disabled?: boolean; loading?: boolean; error?: string; onRefresh?: () => void }) {
   const [open, setOpen] = useState(false)
   return <>
-    <button type="button" className="image-picker" disabled={disabled} aria-haspopup="dialog" aria-label={`Browse ${label}`} onClick={() => setOpen(true)}><span className="image-picker-content">{value && <ModelArtwork category={category} name={value} />}<span className="image-picker-text"><strong>{value ? modelAssets([value])[0].name : `Choose ${label.toLowerCase()}`}</strong>{value && <span className="muted image-path">{value}</span>}<span>Browse models →</span></span></span></button>
+    <button type="button" className="image-picker" disabled={disabled} aria-haspopup="dialog" aria-label={`Browse ${label}`} onClick={() => setOpen(true)}><span className="image-picker-content">{value && <ModelArtwork category={category} name={value} />}<span className="image-picker-text"><strong>{value ? modelAssets([value])[0].name : `Choose ${label.toLowerCase()}`}</strong>{value && <span className="muted image-path">{value}</span>}<span>Browse / choose manually →</span></span></span></button>
     {open && <ModelBrowser category={category} label={label} values={values} value={value} onChoose={(v) => { onChange(v); setOpen(false) }} onClose={() => setOpen(false)} loading={loading} error={error} onRefresh={onRefresh} />}
   </>
 }
@@ -127,15 +127,28 @@ export function ModelBrowser({ category, label, values, value, onChoose, onClose
 
 export function ImageModelFields({ value, catalog, onChange, disabled, loading, error, onRefresh, extra }: {
   value: { preset: ImagePreset; model: string; clip: string; vae: string }
-  catalog: { checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[] } | null
+  catalog: ImageAssetCatalog | null
   onChange: (patch: Partial<{ preset: ImagePreset; model: string; clip: string; vae: string }>) => void
   disabled?: boolean; loading?: boolean; error?: string; onRefresh: () => void
   extra?: (field: 'preset' | 'model' | 'clip' | 'vae') => ReactNode
 }) {
   const diffusion = Boolean(imagePresetSpec(value.preset).clipType)
-  const picker = (field: 'model' | 'clip' | 'vae', label: string, values: string[]) => <div className="image-config-field"><div className="image-config-label"><strong>{label}</strong>{extra?.(field)}</div><ModelPicker category={field === 'model' ? diffusion ? 'diffusion_models' : 'checkpoints' : field === 'clip' ? 'text_encoders' : 'vae'} label={label} values={values} value={value[field]} onChange={(v) => onChange({ [field]: v })} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} /></div>
+  const resolved = catalog ? resolveImageAssets(value, catalog) : null
+  const sampling = recommendedImageSampling(value.preset, resolved?.effective.model ?? value.model, catalog ?? undefined)
+  const picker = (field: 'model' | 'clip' | 'vae', label: string, values: string[]) => {
+    const selection = resolved?.selection[field]
+    return <div className="image-config-field">
+      <div className="image-config-label"><strong>{label}</strong>{extra?.(field)}</div>
+      <button type="button" className="image-auto-control" aria-pressed={!value[field]} disabled={disabled} onClick={() => onChange({ [field]: '' })}>{value[field] ? 'Manual · Use automatic recommendation' : 'Automatic recommendation'}</button>
+      <ModelPicker category={field === 'model' ? diffusion ? 'diffusion_models' : 'checkpoints' : field === 'clip' ? 'text_encoders' : 'vae'} label={label} values={values} value={selection?.value ?? value[field]} onChange={(v) => onChange({ [field]: v })} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} />
+      <p className={`image-selection-reason ${selection && 'error' in selection && selection.error ? 't-red' : 'muted'}`}>{selection && 'error' in selection && selection.error || selection?.reason || 'Discover installed models to see recommendations.'}</p>
+      {selection?.automatic && !selection.value && selection.candidates.length > 0 && <div className="image-recommendations" aria-label={`Recommended ${label.toLowerCase()} choices`}>{selection.candidates.slice(0, 6).map((candidate) => <button type="button" key={candidate} disabled={disabled} onClick={() => onChange({ [field]: candidate })}>{candidate}</button>)}{selection.candidates.length > 6 && <span className="muted">More matches in the model browser.</span>}</div>}
+    </div>
+  }
   return <div className="image-config-fields">
-    <div className="image-config-field"><div className="image-config-label"><strong>Workflow preset</strong>{extra?.('preset')}</div><PresetPicker value={value.preset} onChange={(preset) => onChange({ preset, model: '' })} disabled={disabled} /></div>
+    <div className="image-auto-summary"><span className="muted">Automatic picks use installed family hints and Diffu’s asset preferences. Manual choices stay fixed; custom weights still need compatible components.</span><button type="button" className="btn btn-small" disabled={disabled} onClick={() => onChange({ model: '', clip: '', vae: '' })}>Use recommended assets</button></div>
+    <p className="image-sampling-default muted">Recommended sampling: {sampling.steps} steps · CFG {sampling.cfg} · {sampling.sampler || 'no supported sampler installed'} / {sampling.scheduler || 'no supported scheduler installed'}. Ask the agent to tune one generation; saved defaults stay unchanged.</p>
+    <div className="image-config-field"><div className="image-config-label"><strong>Workflow preset</strong>{extra?.('preset')}</div><span className="image-auto-control">Supported workflow</span><PresetPicker value={value.preset} onChange={(preset) => onChange({ preset })} disabled={disabled} /></div>
     {picker('model', diffusion ? 'Diffusion model' : 'Checkpoint', (diffusion ? catalog?.diffusionModels : catalog?.checkpoints) ?? [])}
     {diffusion && <>{picker('clip', `Text encoder (${imagePresetSpec(value.preset).clipType})`, catalog?.clips ?? [])}{picker('vae', 'VAE', catalog?.vaes ?? [])}</>}
   </div>

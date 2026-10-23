@@ -1,10 +1,10 @@
 import { api } from '../os/account'
 
-import type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
+import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
 export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string }
-export type ImageCatalog = { checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[] }
-export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset }
+export type ImageCatalog = ImageAssetCatalog
+export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
 export const saveImageSettings = (s: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s })
 export const resetImageSettings = () => api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' })
@@ -18,7 +18,7 @@ export function generatedImage(result?: string): GeneratedImage | null {
   } catch { return null }
 }
 
-export type ThreadImageSettings = { overrides: ImageOverrides; defaults: ImageConfig; effective: ImageConfig }
+export type ThreadImageSettings = { overrides: ImageOverrides; defaults: ImageConfig; effective: ImageConfig; selection?: Record<ImageAssetField, ImageSelection>; discoveryError?: string; sampling?: ImageSampling }
 export const getThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`)
 export const saveThreadImageSettings = (id: string, overrides: ImageOverrides) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'PUT', json: overrides })
 export const resetThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'DELETE' })

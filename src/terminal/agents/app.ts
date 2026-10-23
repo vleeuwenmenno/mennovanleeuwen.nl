@@ -1459,7 +1459,7 @@ export class Session {
           if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
           else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
-          this.setCallState(p.messageId, p.index, p.kind === 'question' ? 'question' : p.kind)
+          this.setCallState(p.messageId, p.index, p.kind === 'image' ? 'running' : p.kind === 'question' ? 'question' : p.kind)
         }
         this.next()
         break
@@ -1685,6 +1685,9 @@ export class Session {
               : null
             if (!settings) { this.say('Usage: /images | /images show | /images reset | /images set {"width":768,"height":1024,"seed":42}', 'yellow'); return true }
             this.out([[seg('Session image settings', 'bold')], ...Object.entries(settings.effective).flatMap(([key, value]) => wrap([seg(`${key}: ${value === null ? 'random' : value === '' ? '(not configured)' : value} (${key in settings.overrides ? 'session override' : 'account default / preset'})`)], w)), []])
+            for (const [field, selected] of Object.entries(settings.selection ?? {})) this.say(`${field}: ${selected.automatic ? 'automatic' : 'manual'} · ${selected.error ?? selected.reason}`, selected.error ? 'yellow' : 'gray')
+            if (settings.sampling) this.say(`Recommended sampling: ${settings.sampling.steps} steps · CFG ${settings.sampling.cfg} · ${settings.sampling.sampler}/${settings.sampling.scheduler}`, 'gray')
+            if (settings.discoveryError) this.say(settings.discoveryError, 'yellow')
           }
         } catch (e) { this.say(`Image settings: ${(e as Error).message}`, 'red') }
         this.draw()

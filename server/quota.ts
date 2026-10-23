@@ -16,7 +16,7 @@ export function usedBytes(userId: number): number {
     one('SELECT SUM(LENGTH(value) + LENGTH(key)) AS n FROM state WHERE user_id = ?') +
     one(`SELECT SUM(LENGTH(m.content) + IFNULL(LENGTH(m.thinking), 0) + IFNULL(LENGTH(m.tool_calls), 0) + IFNULL(LENGTH(m.attachments), 0)) AS n
          FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ?`) +
-    one('SELECT SUM(LENGTH(i.body)) AS n FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ?') +
+    one('SELECT SUM(LENGTH(i.body) + IFNULL(LENGTH(i.metadata), 0)) AS n FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ?') +
     one('SELECT SUM(LENGTH(text) + LENGTH(category)) AS n FROM agent_memories WHERE user_id = ?')
   )
 }

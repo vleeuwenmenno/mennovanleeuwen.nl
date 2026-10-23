@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { GeneratedImage } from '../data/agentImages'
 import { createPortal } from 'react-dom'
 import { fileSize, pictureUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
 import { useWM } from '../os/wm'
@@ -179,4 +180,41 @@ function Lightbox({ pictures, start, anchor, onClose }: { pictures: Picture[]; s
     </div>,
     host ?? document.body,
   )
+}
+
+/** Same frame before and after generation: only its contents change, never its aspect ratio. */
+export function GeneratedPicture({ image, width, height, pending }: { image?: GeneratedImage; width: number; height: number; pending: boolean }) {
+  const frame = useRef<HTMLDivElement>(null)
+  const displayedImage = useRef<HTMLImageElement>(null)
+  const [animate, setAnimate] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
+  useEffect(() => { setLoaded(!!displayedImage.current?.complete && displayedImage.current.naturalWidth > 0); setFailed(false) }, [image?.url])
+  useEffect(() => {
+    if (!pending || !frame.current) { setAnimate(false); return }
+    const element = frame.current
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)')
+    let intersects = false
+    const update = () => setAnimate(intersects && !document.hidden && !reduced.matches && (typeof element.checkVisibility !== 'function' || element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true })))
+    const observer = new IntersectionObserver(([entry]) => { intersects = entry.isIntersecting; update() })
+    observer.observe(element)
+    const attributes = new MutationObserver(update)
+    // Window visibility/workspace changes must stop the animation even with an open browser tab.
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) attributes.observe(parent, { attributes: true, attributeFilter: ['style', 'class', 'hidden'] })
+    document.addEventListener('visibilitychange', update)
+    reduced.addEventListener('change', update)
+    return () => { observer.disconnect(); attributes.disconnect(); document.removeEventListener('visibilitychange', update); reduced.removeEventListener('change', update) }
+  }, [pending])
+  const picture = image ? { name: image.name, src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
+  return <>
+    <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }}>
+      {(!image || !loaded) && !failed && <div className="agt-image-wait" role="status" aria-live="polite">
+        <div className="agt-cube-matrix" aria-hidden="true">{Array.from({ length: 49 }, (_, i) => <span className="agt-image-cube" key={i} style={{ animationDelay: `${-(Math.floor(i / 7) + i % 7) * .19}s` }}><i /><i /><i /></span>)}</div>
+        <span className="agt-image-status">{pending ? 'Generating image…' : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
+      </div>}
+      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={() => setOpen(true)}><img ref={displayedImage} src={image.url} alt="Generated image" width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
+    </div>
+    {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} />}
+  </>
 }

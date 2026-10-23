@@ -1,4 +1,4 @@
-import { imagePresetSpec } from '../src/data/imageModels.ts'
+import { imagePresetSpec, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -56,7 +56,7 @@ export function validateImageOverrides(value: unknown): ImageOverrides {
   }
   for (const key of ['model', 'clip', 'vae'] as const) {
     if (!(key in input)) continue
-    if (typeof input[key] !== 'string' || !input[key].trim() || input[key].length > 2048 || /[\x00-\x1f]/.test(input[key])) throw new HttpError(400, `Choose an installed ${key}`)
+    if (typeof input[key] !== 'string' || input[key].length > 2048 || /[\x00-\x1f]/.test(input[key])) throw new HttpError(400, `Choose an installed ${key}`)
     out[key] = input[key] // Preserve the exact catalog identifier, including separators and spaces.
   }
   for (const key of ['width', 'height'] as const) {
@@ -81,30 +81,44 @@ function effectiveConfig(s: ImageSettings, overrides: ImageOverrides) {
   const preset = overrides.preset ?? s.preset
   return { preset, model: overrides.model ?? s.model, clip: overrides.clip ?? s.clip, vae: overrides.vae ?? s.vae, width: overrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? (preset === 'sd15' ? 512 : 1024), seed: overrides.seed ?? null }
 }
-export function threadImageSettings(user: User, thread: string) {
+export function threadImageSettings(user: User, thread: string, catalog?: ImageAssetCatalog) {
   const row = ownImageThread(user, thread)
   const overrides = row.image_config ? validateImageOverrides(JSON.parse(row.image_config)) : {}
   const s = imageSettings(user)
   // No URL, token or auth flags enter thread data, tool results, or shared exports.
-  return { overrides, defaults: effectiveConfig(s, {}), effective: effectiveConfig(s, overrides) }
+  const configured = effectiveConfig(s, overrides)
+  const resolved = catalog ? resolveImageAssets(configured, catalog) : null
+  return { overrides, defaults: effectiveConfig(s, {}), effective: { ...configured, ...resolved?.effective }, selection: resolved?.selection, sampling: catalog ? recommendedImageSampling(configured.preset, resolved?.effective.model ?? configured.model, catalog) : undefined }
+}
+export async function discoverThreadImageSettings(user: User, thread: string) {
+  const current = threadImageSettings(user, thread)
+  try {
+    const awaitCatalog = await imageCatalog(user)
+    const resolved = resolveImageAssets(current.effective, awaitCatalog)
+    return { ...current, effective: { ...current.effective, ...resolved.effective }, selection: resolved.selection, sampling: recommendedImageSampling(resolved.effective.preset, resolved.effective.model, awaitCatalog) }
+  }
+  catch (error) { return { ...current, discoveryError: error instanceof Error ? error.message : 'Image discovery unavailable' } }
 }
 export async function saveThreadImageSettings(user: User, thread: string, value: unknown) {
   ownImageThread(user, thread)
   const overrides = validateImageOverrides(value)
   const s = imageSettings(user)
-  const effective = effectiveConfig(s, overrides)
+  let effective = effectiveConfig(s, overrides)
   if (effective.width * effective.height > 1536 * 1024) throw new HttpError(400, 'Image area must not exceed 1536 × 1024 pixels')
   // Resetting to defaults must also work with an offline or disconnected backend.
   if (['preset', 'model', 'clip', 'vae'].some((key) => key in overrides)) {
     const catalog = await imageCatalog(user)
+    const resolved = resolveImageAssets(effective, catalog)
+    for (const selected of Object.values(resolved.selection)) if (!selected.automatic && 'error' in selected && selected.error) throw new HttpError(400, selected.error)
+    effective = { ...effective, ...resolved.effective }
     const models = Boolean(imagePresetSpec(effective.preset).clipType) ? catalog.diffusionModels : catalog.checkpoints
-    if (!models.includes(effective.model)) throw new HttpError(400, 'Choose an installed model for the selected preset')
-    if (Boolean(imagePresetSpec(effective.preset).clipType) && (!catalog.clips.includes(effective.clip) || !catalog.vaes.includes(effective.vae) || !catalog.clipTypes.includes(imagePresetSpec(effective.preset).clipType))) throw new HttpError(400, 'This diffusion preset requires its supported text encoder type and an installed encoder and VAE')
+    if (effective.model && !models.includes(effective.model)) throw new HttpError(400, 'Choose an installed model for the selected preset')
+    if (Boolean(imagePresetSpec(effective.preset).clipType) && ((effective.clip && !catalog.clips.includes(effective.clip)) || (effective.vae && !catalog.vaes.includes(effective.vae)) || !catalog.clipTypes.includes(imagePresetSpec(effective.preset).clipType))) throw new HttpError(400, 'This diffusion preset requires its supported text encoder type and an installed encoder and VAE')
     // Explicit inactive encoder/VAE overrides must still refer to real catalog assets.
     if (overrides.clip && !catalog.clips.includes(overrides.clip) || overrides.vae && !catalog.vaes.includes(overrides.vae)) throw new HttpError(400, 'Choose an installed text encoder and VAE')
   }
   database().prepare('UPDATE agent_threads SET image_config = ? WHERE id = ? AND user_id = ?').run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, thread, user.id)
-  return threadImageSettings(user, thread)
+  return discoverThreadImageSettings(user, thread)
 }
 
 async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown, optional = false) {
@@ -169,9 +183,30 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
       throw error
     }
   }
-  return { presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  const modelHints = await imageModelHints(user, s, limit)
+  return { modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
-export type ImageInput = { prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown }
+/** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
+async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
+  try {
+    const res = await request(user, settings, '/api/lm/checkpoints/list?page=1&page_size=50', AbortSignal.any([signal, AbortSignal.timeout(3000)]), undefined, true)
+    if (res.status === 404) { await res.body?.cancel(); return [] }
+    const data = JSON.parse((await readCapped(res, 1024 * 1024)).toString())
+    if (!data || !Array.isArray(data.items) || data.items.length > 50) return []
+    const hints: ImageModelHint[] = []
+    const duplicates = new Set<string>()
+    for (const item of data.items) {
+      if (!item || typeof item.file_path !== 'string' || typeof item.folder !== 'string' || typeof item.base_model !== 'string' || !['checkpoint', 'diffusion_model'].includes(item.sub_type)) continue
+      const name = [item.folder.replaceAll('\\', '/'), item.file_path.split(/[\\/]/).at(-1)].filter(Boolean).join('/')
+      const category = item.sub_type === 'checkpoint' ? 'checkpoints' : 'diffusionModels'
+      const id = `${category}:${name}`
+      if (hints.some((h) => h.category === category && h.name === name)) duplicates.add(id)
+      if (safeModelName(name)) hints.push({ name, category, baseModel: item.base_model.slice(0, 200) })
+    }
+    return hints.filter((h) => !duplicates.has(`${h.category}:${h.name}`))
+  } catch { return [] } // Plain ComfyUI/offline optional extension does not block node discovery.
+}
+export type ImageInput = { prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export function imageWorkflow(s: ImageSettings, input: ImageInput) {
   if (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 6000) throw new HttpError(400, 'Supply an image prompt of 1–6000 characters')
@@ -186,6 +221,11 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput) {
   const seed = input.seed === undefined ? randomInt(2 ** 48 - 1) : input.seed
   if (typeof seed !== 'number' || !Number.isSafeInteger(seed) || seed < 0) throw new HttpError(400, 'Seed must be a non-negative safe integer')
   const spec = imagePresetSpec(s.preset), diffusion = Boolean(spec.clipType)
+  const sampling = { ...recommendedImageSampling(s.preset, s.model), ...Object.fromEntries(['steps', 'cfg', 'sampler', 'scheduler'].filter((key) => input[key as keyof ImageInput] !== undefined).map((key) => [key, input[key as keyof ImageInput]])) }
+  if (!Number.isInteger(sampling.steps) || sampling.steps < 1 || sampling.steps > 80) throw new HttpError(400, 'Steps must be an integer from 1 to 80')
+  if (typeof sampling.cfg !== 'number' || !Number.isFinite(sampling.cfg) || sampling.cfg < 0 || sampling.cfg > 20) throw new HttpError(400, 'CFG must be a finite number from 0 to 20')
+  if (!spec.negative && sampling.cfg !== 1) throw new HttpError(400, 'Turbo workflows require CFG 1')
+  if (!IMAGE_SAMPLERS.includes(sampling.sampler as typeof IMAGE_SAMPLERS[number]) || !IMAGE_SCHEDULERS.includes(sampling.scheduler as typeof IMAGE_SCHEDULERS[number])) throw new HttpError(400, 'Choose a supported image sampler and scheduler')
   if (!s.model || (diffusion && (!s.clip || !s.vae))) throw new HttpError(409, 'Select the model and required text encoder/VAE in Agents → Images settings')
   if (!spec.negative && input.negative_prompt) throw new HttpError(400, 'This Turbo preset uses a positive prompt only')
   const graph: Graph = {}
@@ -196,29 +236,65 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput) {
   const positive = node('4', 'CLIPTextEncode', { clip, text: input.prompt.trim() })
   const negative = spec.zeroNegative ? node('5', 'ConditioningZeroOut', { conditioning: positive }) : node('5', 'CLIPTextEncode', { clip, text: input.negative_prompt ?? '' })
   const latent = node('6', 'EmptyLatentImage', { width, height, batch_size: 1 })
-  const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: spec.steps, cfg: spec.cfg, sampler_name: spec.sampler, scheduler: spec.scheduler, denoise: 1 })
+  const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise: 1 })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
-  return { graph, width, height, seed }
+  return { graph, width, height, seed, sampling }
 }
 
-const active = new Set<number>()
+/** Only the current owner's current thread can supply bytes to a vision tool. */
+export function generatedImageForVision(user: User, thread: string, id?: unknown) {
+  ownImageThread(user, thread)
+  if (id !== undefined && (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id))) throw new HttpError(400, 'Choose a generated image ID from this thread')
+  const row = database().prepare(`SELECT i.id, i.body FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.id = ? AND t.user_id = ? ${id ? 'AND i.id = ?' : ''} ORDER BY i.created_at DESC, i.rowid DESC LIMIT 1`).get(thread, user.id, ...(id ? [id as string] : [])) as { id: string; body: Uint8Array } | undefined
+  if (!row) throw new HttpError(404, 'No generated image in this thread matches that request')
+  if (row.body.byteLength > 8 * 1024 * 1024) throw new HttpError(413, 'This image exceeds the 8 MiB vision limit; generate a smaller image to inspect it')
+  return { id: row.id, data: Buffer.from(row.body).toString('base64') }
+}
+
+type ImagePlan = { settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
+async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
+  const allowed = new Set(['prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler'])
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
+  const { effective, overrides: sessionOverrides } = threadImageSettings(user, thread)
+  const overrides = validateImageOverrides(Object.fromEntries(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed'].filter((key) => input[key as keyof ImageInput] !== undefined).map((key) => [key, input[key as keyof ImageInput]])))
+  // The entire plan, including credentials, is captured before approval. Per-call overrides never persist.
+  const preset = overrides.preset ?? effective.preset
+  const configured = { ...imageSettings(user), ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
+  const catalog = await imageCatalog(user, signal, configured)
+  const resolved = resolveImageAssets(configured, catalog)
+  if (resolved.errors.length) throw new HttpError(409, resolved.errors.join(' '))
+  const settings = { ...configured, ...resolved.effective }
+  const defaults = recommendedImageSampling(settings.preset, settings.model, catalog)
+  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input })
+  const spec = imagePresetSpec(settings.preset)
+  if (!spec.clipType && (input.clip !== undefined && input.clip !== '' || input.vae !== undefined && input.vae !== '')) throw new HttpError(400, 'Checkpoint workflows use embedded encoder and VAE; separate component overrides are not supported')
+  if (spec.clipType && !catalog.clipTypes.includes(spec.clipType)) throw new HttpError(409, 'ComfyUI does not support the required text encoder type')
+  if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes(workflow.sampling.sampler) || !catalog.schedulers.includes(workflow.sampling.scheduler)) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
+  const parameters: ImageGenerationSettings = { preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
+  return { settings, workflow, parameters }
+}
+export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
+  const plan = await planImageGeneration(user, thread, input, signal)
+  const p = plan.parameters
+  const rows: [string, string][] = [['Workflow', p.preset], ['Model', p.model], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
+  return { dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async () => JSON.stringify(await executeImagePlan(user, thread, plan, signal)) }
+}
 export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
-  // Check ownership here too: callers cannot write an artifact into another account's thread.
-  if (!database().prepare('SELECT 1 FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id)) throw new HttpError(404, 'No such thread')
+  return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal)
+}
+const active = new Set<number>()
+async function executeImagePlan(user: User, thread: string, plan: ImagePlan, signal: AbortSignal) {
+  ownImageThread(user, thread)
   if (active.has(user.id)) throw new HttpError(409, 'An image is already generating for this account')
-  const { effective } = threadImageSettings(user, thread)
-  const s = { ...imageSettings(user), preset: effective.preset, model: effective.model, clip: effective.clip, vae: effective.vae }
-  const workflow = imageWorkflow(s, { ...effective, seed: effective.seed ?? undefined, ...input })
+  const current = imageSettings(user), { settings: s, workflow, parameters } = plan
+  if (current.url !== s.url || current.token !== s.token) throw new HttpError(409, 'Image backend changed after planning; request a new generation approval')
   checkRoom(user, 1024 * 1024)
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
   active.add(user.id)
   let promptId: string | null = null
   try {
-    const catalog = await imageCatalog(user, limit, s)
-    const spec = imagePresetSpec(s.preset), diffusion = Boolean(spec.clipType)
-    if (!(diffusion ? catalog.diffusionModels : catalog.checkpoints).includes(s.model) || (diffusion && (!catalog.clips.includes(s.clip) || !catalog.vaes.includes(s.vae) || !catalog.clipTypes.includes(spec.clipType)))) throw new HttpError(409, 'Selected models are not installed in ComfyUI; refresh Images settings')
-    if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes(spec.sampler) || !catalog.schedulers.includes(spec.scheduler)) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
+    limit.throwIfAborted()
     const submitted = await readJSON(user, s, '/prompt', limit, { prompt: workflow.graph, client_id: randomUUID() })
     if (typeof submitted.prompt_id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(submitted.prompt_id)) throw new HttpError(502, 'ComfyUI did not return a prompt ID')
     promptId = submitted.prompt_id
@@ -236,9 +312,9 @@ export async function generateImage(user: User, thread: string, input: ImageInpu
         if (!bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new HttpError(502, 'ComfyUI did not return a PNG image')
         limit.throwIfAborted()
         const id = randomUUID(), name = `generated-${id}.png`
-        checkRoom(user, bytes.length)
-        database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now())
-        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, seed: workflow.seed, preset: s.preset }, message: 'Image saved privately to this thread. Show its link to the user.' }
+        checkRoom(user, bytes.length + Buffer.byteLength(JSON.stringify(parameters)))
+        database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now(), JSON.stringify(parameters))
+        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, seed: workflow.seed, preset: s.preset, settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without an image')
       await delay(1000, undefined, { signal: limit })
@@ -319,7 +395,7 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
   if (preview && method === 'GET') return await sendModelPreview(user, preview[1], res), true
   const session = /^\/api\/agents\/images\/threads\/([0-9a-f-]{36})$/.exec(url.pathname)
   if (session) {
-    if (method === 'GET') return json(res, 200, threadImageSettings(user, session[1])), true
+    if (method === 'GET') return json(res, 200, await discoverThreadImageSettings(user, session[1])), true
     if (method === 'PUT') return json(res, 200, await saveThreadImageSettings(user, session[1], await readJson(req, 16 * 1024))), true
     if (method === 'DELETE') return json(res, 200, await saveThreadImageSettings(user, session[1], {})), true
   }
@@ -332,6 +408,12 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
     }
   }
   if (url.pathname === '/api/agents/images/catalog' && method === 'GET') return json(res, 200, await imageCatalog(user)), true
+  const metadata = /^\/api\/agents\/images\/([0-9a-f-]{36})\/metadata$/.exec(url.pathname)
+  if (metadata && method === 'GET') {
+    const row = database().prepare('SELECT i.metadata FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(metadata[1], user.id) as { metadata: string | null } | undefined
+    if (!row) throw new HttpError(404, 'No such image')
+    return json(res, 200, { settings: row.metadata ? JSON.parse(row.metadata) : null }), true
+  }
   const image = /^\/api\/agents\/images\/([0-9a-f-]{36})$/.exec(url.pathname)
   if (image && (method === 'GET' || method === 'HEAD')) {
     const row = database().prepare('SELECT i.body, i.name FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(image[1], user.id) as { body: Uint8Array; name: string } | undefined

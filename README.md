@@ -1352,6 +1352,32 @@ a double-click confirms. Escape cancels and returns focus to the picker. On phon
 and breadcrumbs replace the sidebar. The workflow picker has descriptive cards for the six
 supported presets; selecting a card does not imply that an arbitrary installed model supports it.
 
+**Automatic asset recommendations** are shared by account settings, session settings, the CLI
+and generation. New empty model, encoder and VAE selections mean automatic; existing nonempty
+selections remain manual, so an upgrade or workflow/backend change never silently replaces them.
+**Use recommended assets** explicitly opts all three fields into automatic mode; each field also
+has its own automatic control and an advanced manual browser. Automatic encoder/VAE choices
+follow the selected workflow. Known incompatible manual choices are flagged and refused before
+generation; unknown custom names remain manual with an unverified-compatibility warning.
+
+Recommendations follow Diffu's family/style detection and asset rules: Krea2 requires an explicit
+Raw/Turbo family hint, Qwen3-VL 4B, and a Qwen Image/Krea2 VAE. Z-Image uses Qwen 3 4B and a
+Z-Image VAE or the documented Flux 1 `ae.safetensors` fallback; that fallback is never recommended
+for Krea2. See the [ComfyUI Z-Image example](https://comfyanonymous.github.io/ComfyUI_examples/z_image/).
+SD 1.5/SDXL use complete checkpoints. Video, Flux, Anima and other recognized unsupported
+families are excluded. Exact canonical encoder/VAE names rank ahead of variant names; model
+weights are not ranked by supposed quality, precision, filename order or hardware assumptions.
+One clear family match is selected automatically. Equally plausible matches show choices instead
+of picking arbitrarily; a manual current choice is preserved. Missing or unknown assets show
+installation/selection guidance. Catalog/name hints do not verify the tensors in custom weights.
+
+Optional LoRA Manager family labels enrich at most one 50-item page (1 MiB, three seconds),
+matched by exact category and relative path. Plain ComfyUI falls back to conservative filename/
+folder hints. This does not download or scan an entire model library. Automatic intent is stored
+as an empty string, while resolved filenames are computed from the current installed catalog
+on discovery and again before generation. Backend changes cannot reuse stale automatic choices;
+manual files missing from the new backend remain visible and require user action.
+
 **Session image settings** are available from **Images** in the conversation toolbar (including a
 new thread), or `/images` in the Agents terminal. Both open the same browser and settings dialog.
 A thread may override its preset, model, text encoder, VAE, width, height and seed. Fields marked
@@ -1364,15 +1390,18 @@ Changing settings affects subsequent tool calls; an already submitted job keeps 
 
 The CLI also supports `/images show`, `/images reset`, and
 `/images set {"width":768,"height":1024,"seed":42}` to merge explicit overrides into this thread.
+`/images set {"model":"","clip":"","vae":""}` enables automatic session recommendations;
+`/images show` reports resolved values, automatic/manual state and guidance. Removing overrides
+with `/images reset` restores account inheritance, including its automatic intent.
 A workflow/model change can be supplied together in that JSON; separate diffusion workflows also
 need a compatible installed `clip` and `vae`. Krea2 preset IDs are `krea2_raw` and `krea2_turbo`. Unknown fields, unsupported presets and absent models
 are rejected by the shared server. Opening `/images` before the first message creates the session.
 The model can discover effective settings through `list_image_models`; it cannot reconfigure the
-backend or persist session settings. Explicit width/height/seed on `generate_image` override the
-session only for that call. Use `/images` to change the saved model or workflow.
+backend or persist session settings. Explicit supported model/components, sampling and
+width/height/seed on `generate_image` override the session only for that call. Use `/images` to change the saved model or workflow.
 
 Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
-The **Images** tool group controls `list_image_models` and `generate_image`. Generation asks for
+The **Images** tool group controls `list_image_models`, `generate_image` and `view_generated_image`. Generation asks for
 approval in Ask first, Auto and Edits allowed; Plan cannot generate, and Bypass runs without a
 prompt. Non-interactive `agents -p` declines approvals as usual; use an interactive session to
 approve generation, or explicitly choose `--permission-mode bypass` when unattended generation
@@ -1381,16 +1410,72 @@ thread in the app, where the image has a thumbnail, full-size view, **Open in Pr
 **Download**. The link requires the owner's signed-in session; sharing a thread does not publish
 its generated images.
 
+After approval, the app reserves the resolved output aspect ratio in a larger responsive image
+frame (up to 640 px wide). A themed 7×7 matrix of cubes animates while generation is active and
+visible. Hidden windows/tabs and offscreen frames pause it; reduced-motion users get a static
+matrix. The finished image uses exactly the same frame dimensions. Stop retains the existing
+cancellation behavior; errors replace the pending status rather than leaving a fake progress image.
+
+Successful image generation ends the turn without any assistant follow-up text or automatic vision
+call. The app displays the image and settings; the CLI displays its private link. Tool batches that
+include generation execute in order: after the first successful image, later calls receive explicit
+skipped results, preserving the conversation protocol without running hidden work. Existing todos
+remain for later turns; failed generation still follows the normal error/explanation flow.
+
+On a later user turn, `view_generated_image` can inspect the latest image in the current thread,
+or an explicit image ID from that same thread. It sends actual PNG bytes through Ollama's `images`
+message field to the thread's selected vision-capable model in a dedicated bounded inspection
+call, then returns that model's visual analysis. A text-only model is told to switch to a vision-capable
+model; a URL alone is never presented as visual inspection. Input is limited to 8 MiB, instructions
+to 2000 characters, and the call to 45 seconds with bounded output. Owner and thread checks apply
+before reading bytes. Existing images remain inspectable after disconnecting ComfyUI. Inspection
+never silently generates, downloads models, changes settings, or guarantees an accurate diagnosis.
+
 The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 px) and SDXL
 (1024 px) use a complete checkpoint with its text encoder and VAE; Z-Image and Z-Image Turbo use
 an installed diffusion model, a compatible `lumina2` text encoder and a separately selected VAE.
 Z-Image Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Image uses 20 steps and CFG 4;
-checkpoint presets use 25 steps and CFG 7. Choose the family that matches the actual model:
-Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be selected explicitly; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
+SD 1.5 uses 20 steps/CFG 7 and SDXL uses 25 steps/CFG 7, preferring DPM++ 2M/Karras.
+A recognized Pony checkpoint follows Diffu’s 12 steps/CFG 5.5 recommendation. Sampler/scheduler
+preferences fall back only to supported installed options. Choose the family that matches the actual model:
+Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
 `/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
 LoRAs, image editing and model downloads are not included in these initial presets.
+
+**Per-generation tuning:** the agent can now select `preset`, `model`, `clip`, `vae`, `steps`,
+`cfg`, `sampler` and `scheduler`, as well as size and seed. Before this change, sampling was fixed
+and the agent could only adjust prompt, size and seed. Precedence is explicit per-call value,
+then session asset/size/seed override, then account assets and Diffu-grounded sampling/preset
+size defaults. Sampling changes apply only to the current image; there is no silent save or import
+of personal Diffu tuning presets. Empty asset strings opt that call into automatic selection.
+For checkpoint workflows encoder/VAE are embedded, so separate component overrides do not
+replace them. Changing the workflow does not erase explicit manual asset choices: supply matching
+components or empty strings if moving to another family.
+
+`list_image_models` reports effective settings, family recommendations, supported installed sampler/
+scheduler options and up to 40 filenames per category (queryable, maximum 100). The agent is told
+to discover once, prefer recommended defaults, preserve explicit user choices and tune only when
+requested or clearly needed. Steps are integers from 1 to 80; CFG is finite from 0 to 20, with CFG
+fixed at 1 for both Turbo workflows. Only the listed KSampler options are accepted. Denoise stays
+1 for text-to-image; arbitrary graphs, backend settings, model downloads, batch generation,
+prompt enhancement, LoRAs and upscaling are not tool options.
+
+Approvals show the complete resolved model/components, prompt, negative prompt, dimensions,
+steps, CFG, sampler/scheduler and seed. Those settings are frozen before approval; changing saved
+settings while waiting cannot widen the approved cost. Changing backend credentials invalidates
+the plan and requires a new call. Bypass retains its explicit no-approval behavior.
+The tool result, app’s **Generation settings** details, CLI output and private downloadable JSON
+record the actual settings, including prompts. Metadata survives restarts with the image; older
+images may have no metadata. Reproducing a result also requires the same backend/model weights.
+
+Poor output is not always a sampling problem. A wrong VAE/encoder or Raw/Turbo mismatch can
+break output; a compatible VAE swap is not a guaranteed quality improvement. Start with the
+recommended workflow, a known compatible model and a fixed seed. Ask for one controlled change
+(e.g. “keep this model and seed; use 32 steps and CFG 4.5”) and compare its recorded settings.
+Higher steps cost more and are not automatically better, especially with distilled Turbo models.
+These defaults are supported starting points, not GPU-tested quality guarantees for custom models.
 
 Model browsers and account/session selectors use the available window width, with aligned controls
 and horizontally readable long filenames. Visible model rows lazily request artwork. If the optional

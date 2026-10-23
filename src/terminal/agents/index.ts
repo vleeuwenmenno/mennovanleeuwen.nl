@@ -39,6 +39,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        Ask for an image after configuring ComfyUI in Settings → Apps → Agents → Images.
        /images opens the model browser and session overrides; /images show prints effective
        settings, /images reset follows account defaults, /images set {"seed":42} updates them.
+       Empty model/clip/vae values mean automatic recommendations: /images set {"vae":""}.
+       /images show explains automatic/manual choices and missing or ambiguous assets.
        Krea2 presets are krea2_raw and krea2_turbo; both need installed model, clip and vae.
        Generated images show a private download URL; /open previews them in the app.
 
@@ -158,6 +160,7 @@ async function listing(ctx: Ctx): Promise<string> {
 async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null; mode: 'quick' | 'deep'; model: string | null; projectId: number | null; permission: Permission; tools: ReturnType<typeof agentSettings>['tools'] }): Promise<string> {
   const thread = await createThread({ mode: o.mode, model: o.model ?? undefined, tools: o.tools, projectId: o.projectId, workdir: o.workdir, permission: o.permission })
   const imageLinks = new Set<string>()
+  const imageSettingsLinks = new Set<string>()
   let answer = ''
   let failure: string | null = null
   const dir = o.workdir ? workdirPath(o.workdir) : ctx.cwd
@@ -168,7 +171,7 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     (e) => {
       if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
         const image = generatedImage(e.message.content)
-        if (image) imageLinks.add(new URL(image.url, location.origin).href)
+        if (image) { imageLinks.add(new URL(image.url, location.origin).href); if (image.settings) imageSettingsLinks.add(new URL(image.url + '/metadata', location.origin).href) }
       }
       if (e.type === 'message' && e.message.role === 'assistant') {
         if (e.message.content.trim()) answer = e.message.content.trim()
@@ -185,6 +188,7 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
   )
   if (failure) throw new CmdError(`agents: ${failure}`)
   for (const link of imageLinks) if (!answer.includes(link)) answer += `\n\nGenerated image: ${link}`
+  for (const link of imageSettingsLinks) if (!answer.includes(link)) answer += `\nGeneration settings: ${link}`
   if (!ctx.tty) return answer
   return toMarkup(markdown(answer, Math.max(30, ctx.size.cols - 1)))
 }

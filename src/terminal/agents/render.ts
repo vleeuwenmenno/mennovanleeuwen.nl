@@ -48,6 +48,8 @@ export function toolTitle(call: ToolCall): [string, string] {
   switch (call.name) {
     case 'generate_image':
       return ['Generate image', s(call, 'prompt')]
+    case 'view_generated_image':
+      return ['Inspect image', String(call.arguments?.image_id ?? 'latest in this thread')]
     case 'list_image_models':
       return ['Image models', 'ComfyUI']
     case 'read_file':
@@ -190,7 +192,7 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
       const image = generatedImage(result)
       if (image) {
         const url = new URL(image.url, location.origin).href
-        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
       }
       return ok([under(oneLine(result))])
     }

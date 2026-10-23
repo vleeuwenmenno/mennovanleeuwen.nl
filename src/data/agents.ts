@@ -69,7 +69,7 @@ export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim(
 export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
-  { id: 'images', name: 'Images', detail: 'Generate pictures with ComfyUI; configure the connection and installed models in Images settings' },
+  { id: 'images', name: 'Images', detail: 'Generate and tune pictures with ComfyUI; inspect past output with a vision-capable model' },
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
@@ -119,9 +119,11 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 
 export type TurnEvent =
+  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  | { type: 'imageGenerationDone'; callId: string }
   | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
   /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
   | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
@@ -502,6 +504,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
   switch (call.name) {
     case 'generate_image':
       return result ? 'Generated image' : `Generate image: ${s('prompt').slice(0, 120)}`
+    case 'view_generated_image':
+      return 'Inspect generated image with vision'
     case 'list_image_models':
       return 'Discover image models'
     case 'web_search':
