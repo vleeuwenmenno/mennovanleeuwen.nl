@@ -163,12 +163,46 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   const taken: string[][] = []
   // Tab 2 has fitted its opening windows: unsaved changes, all along.
   s2.onRemote((v) => gate2(s2.everSynced(), true) && taken.push(v ?? []))
+  s2.onSynced(gate2.consume)
   as(t1, () => s1.set(['welcome']))
   check('two fresh tabs: tab 1’s opening windows reach tab 2 as not synced', s2.get()?.join() === 'welcome' && !s2.everSynced() && taken.length === 0)
+  // Real storage events arrive in later tasks, never reentrantly inside adopt().
+  held = true
   await pullAll()
+  flush()
   check('two fresh tabs: tab 2 takes the account’s layout from the pull', taken.length === 1 && taken[0].join() === 'account-terminal', taken)
   check('two fresh tabs: the account’s layout is not overwritten', JSON.stringify(server.get('windows:t1')!.value) === '["account-terminal"]')
   tabs.splice(tabs.indexOf(t1), 2)
+}
+
+// A successful first push consumes the gate even without a remote value callback.
+{
+  const s = synced<string[]>('windows:first-push', [])
+  const gate = wp.layoutGate(true)
+  let accepted = 0
+  s.onRemote(() => { if (gate(s.everSynced(), true)) accepted++ })
+  s.onSynced(gate.consume)
+  s.set(['my-terminal'])
+  await sleep(1200)
+  check('gate: first local layout reached the account', s.everSynced())
+  server.set(s.key, { value: ['remote-notebook'], updatedAt: ++clock })
+  await pullAll()
+  check('gate: after first push, incoming layout cannot replace unsaved windows', accepted === 0)
+}
+
+// Metadata-only storage events count, without pretending the value changed.
+{
+  const tab = new Tab()
+  tabs.push(tab)
+  const s = as(tab, () => synced<string[]>('windows:metadata', ['same']))
+  const gate = wp.layoutGate(true)
+  let accepted = 0
+  s.onRemote(() => { if (gate(s.everSynced(), true)) accepted++ })
+  s.onSynced(gate.consume)
+  localStorage.setItem('mvlos.u.1.sync.windows:metadata', JSON.stringify({ value: ['same'], base: 500, dirty: false }))
+  localStorage.setItem('mvlos.u.1.sync.windows:metadata', JSON.stringify({ value: ['new'], base: 600, dirty: false }))
+  check('gate: metadata-only account copy consumes first-layout exception', accepted === 0)
+  tabs.splice(tabs.indexOf(tab), 1)
 }
 
 // --- 2. a widget only in the account's (older-style) layout survives a local-wins merge ------------
@@ -251,6 +285,22 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   const p1 = { ...ahead, at: 5000, x: 1 }
   const p2 = { ...ahead, at: 5000, x: 2 }
   check('tie: two moves pick the same winner on both sides', wp.mergeSets(set(p1), set(p2)).places.W.x === wp.mergeSets(set(p2), set(p1)).places.W.x)
+}
+
+// Legacy coordinates are screen-unknown, and desktop migrations win equal counters.
+{
+  const mobile = { id: 'migration-tie', kind: 'status', x: 9, y: 90, w: 280, h: 220, vw: 390, vh: 800, screenUnknown: true, at: 0 }
+  const desktop = { ...mobile, x: 1100, vw: 1400, vh: 900 }
+  const set = (p: typeof mobile) => ({ places: { [p.id]: p }, removed: '' })
+  for (const [a, b] of [[mobile, desktop], [desktop, mobile]])
+    check('migration: desktop position wins in either merge order', wp.mergeSets(set(a), set(b)).places[mobile.id].x === 1100)
+  check('migration: larger desktop wins before coordinates', wp.wins({ ...desktop, vw: 1800, x: 1 }, desktop))
+  wp.importWidgets([mobile])
+  wp.importWidgets([desktop])
+  check('migration: a later desktop import upgrades an untouched phone import', wp.widgetPlaces.get().places[mobile.id].x === 1100)
+  check('migration: normalization keeps unknown-screen marker', wp.normalizeSet(set(desktop)).places[mobile.id].screenUnknown === true)
+  check('migration: imported layouts mark screen dimensions unknown', wp.widgetPlaces.get().places.onlyhere.screenUnknown === true)
+  check('migration: a genuine later phone change still wins', wp.wins({ ...mobile, at: 1 }, desktop))
 }
 
 // --- 5. removed stays removed for good, in little room -----------------------------------------------
@@ -376,6 +426,15 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   const oldA = { id: 'o', text: 'old A', color: 'yellow' as const, tilt: 0, created: 1, updated: 10 }
   const oldB = { ...oldA, text: 'old B', updated: 20 }
   check('notes: notes from earlier versions merge by `updated`', one(oldA, oldB).text === 'old B' && one(oldB, oldA).text === 'old B')
+
+  const legacyRestore = { ...oldA, updated: 300 }
+  const legacyTrash = { ...oldA, updated: 200, deleted: 200 }
+  for (const [a, b] of [[legacyRestore, legacyTrash], [legacyTrash, legacyRestore]]) {
+    const m = one(a, b)
+    check('notes: legacy restore survives stale trash in either order', !m.deleted && m.restored === 300)
+    check('notes: inferred legacy restore survives a second merge', !one(m, legacyTrash).deleted && !one(legacyTrash, m).deleted)
+  }
+  check('notes: explicit restore and legacy updated take the maximum', one({ ...legacyRestore, restored: 400 }, legacyTrash).restored === 400 && one({ ...legacyRestore, restored: 100 }, legacyTrash).restored === 300)
 
   // The server's writers (agents' update_note and delete_note, links) count on past the note's
   // counters, so an agent's edit doesn't lose to older text from a browser whose counter ran ahead.

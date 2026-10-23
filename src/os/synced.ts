@@ -36,6 +36,8 @@ export type Synced<T> = {
   onRemote: (l: (v: T) => void) => () => void
   /** Whether this browser's copy was ever saved to or loaded from the account. */
   everSynced: () => boolean
+  /** Called after account metadata is established, after any remote value callbacks. */
+  onSynced: (l: () => void) => () => void
 }
 
 type Internal = Synced<unknown> & {
@@ -93,6 +95,10 @@ export function synced<T>(
   let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
   const listeners = new Set<() => void>()
   const remoteListeners = new Set<(v: T) => void>()
+  const syncedListeners = new Set<() => void>()
+  const emitSynced = () => {
+    if (meta.base > 0) syncedListeners.forEach((l) => l())
+  }
   const emit = () => listeners.forEach((l) => l())
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
   const save = () => {
@@ -128,6 +134,7 @@ export function synced<T>(
       meta = { ...meta, value, dirty: true }
       save()
       emit()
+      emitSynced()
       schedulePush(key)
     },
     subscribe(l) {
@@ -140,6 +147,13 @@ export function synced<T>(
       return () => remoteListeners.delete(l)
     },
     everSynced: () => meta.base > 0,
+    onSynced(l) {
+      syncedListeners.add(l)
+      if (meta.base > 0) l()
+      return () => {
+        syncedListeners.delete(l)
+      }
+    },
   }
 
   const internal: Internal = {
@@ -150,11 +164,13 @@ export function synced<T>(
       save()
       emit()
       if (notify) remoteListeners.forEach((l) => l(meta.value))
+      emitSynced()
     },
     pushed(updatedAt, sent) {
       // Still dirty if it changed while the request was out.
       meta = { ...meta, base: updatedAt, dirty: meta.value !== sent }
       save()
+      emitSynced()
       if (meta.dirty) schedulePush(key)
     },
     reset() {
@@ -179,6 +195,7 @@ export function synced<T>(
       if (e.newValue !== null) opts.onIncoming?.(meta.value)
       emit()
       if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
+      emitSynced()
     })
 
   return store

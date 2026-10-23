@@ -80,7 +80,10 @@ function mergeNote(a: Note, b: Note): Note {
   const text = laterText(a, b) ? a : b
   // In the trash or not: the later of the last trashing and the last restore, from either side.
   const deleted = most(a.deleted, b.deleted)
-  const restored = most(a.restored, b.restored)
+  // Older restores only cleared deleted and advanced updated. Preserve that evidence
+  // before materializing edited, otherwise the next merge could retrash the note.
+  const restoredAt = (n: Note) => most(n.restored, n.edited === undefined && n.deleted === undefined ? n.updated : undefined)
+  const restored = most(restoredAt(a), restoredAt(b))
   const trashed = deleted !== undefined && deleted > (restored ?? 0)
   // Its links to events: the later change of them (a tie: the same pick on every side).
   const linksKey = (n: Note) => JSON.stringify(n.events ?? [])

@@ -656,9 +656,15 @@ on either side are kept once each, and a note deleted for good stays deleted (it
 kept for 90 days). Every change counts on past the note's own counters, in the browser and in
 the agents' note tools on the server alike ([`src/data/noteClock.ts`](src/data/noteClock.ts)),
 so a device whose clock runs behind doesn't lose its later edit.
-Two tabs changing notes or widgets at once both keep their changes: a tab merges what another
+Tabs merge independent note and widget changes: a tab merges what another
 tab saved into its own value right before it saves, and only ever reads when it hears of another
-tab's save.
+tab's save. This is not an atomic transaction: near-simultaneous tab saves can still lose one
+change if both read before either writes. Agent `update_note` uses last-writer-wins text updates
+and can replace typing that the browser has not pushed yet. Older notes without edit/restore
+counters use their live copy's `updated` time as evidence of a restore, so a stale trash copy
+cannot undo an old-version restore. Old-version edits and restores cannot be distinguished.
+The first-layout exception ends when this browser receives or successfully pushes an account
+layout; later remote layouts do not replace window changes that have not been saved locally.
 
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).
@@ -1954,7 +1960,9 @@ wins with a later change. Taking one off is final: its entry's key goes into a l
 keys, kept for good, so a browser or an old saved layout that still has the widget can't bring it
 back (a key is about 9 bytes, so 20,000 removals are under 200 KB). Putting a sticky back after
 taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync` checks
-these rules in memory.
+these rules in memory. `PORT=5273 node scripts/widgets-sync-e2e.ts` checks migration,
+cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
+accounts and data; it starts and stops its own server.
 A big screen puts a widget where it was put, moved along when its own screen is another size (a
 widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
 added on a phone gets the usual spot for a new widget there. Phones and big screens share the
@@ -1962,7 +1970,13 @@ set; a phone only changes a widget's place in its column. Widgets stay through *
 a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the set when that layout is loaded or arrives from the
 server or another tab (before a merge of the layouts could drop it) (unless the set already
-has them, or had them and they were removed since). Visitors keep their widgets in this browser;
+has newer entries, or had them and they were removed since). Migrated coordinates have an
+unknown-screen marker: they are shown as stored and clamped to fit, without scaling or assigning
+a default spot. Equal change counters prefer a desktop-width source (at least 720 px), then the
+larger width, then a deterministic tie-break. The width of the importing browser is only a
+migration preference, not the original screen size. A missing sticky note stays hidden locally
+while its contents sync; arriving contents reveal it again. Only a user close or a known trash
+or purge removes its widget entry. Visitors keep their widgets in this browser;
 ones placed before signing in join the account's.
 
 ## Touch screens

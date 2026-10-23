@@ -27,6 +27,8 @@ export type WidgetPlace = {
   y: number
   w: number
   h: number
+  /** Legacy layouts did not record screen dimensions; keep their coordinates without scaling. */
+  screenUnknown?: boolean
   vw: number
   vh: number
   /** Its place in the phone layout's column, once moved there by hand. */
@@ -51,6 +53,7 @@ function place(id: string, raw: Partial<WidgetPlace>): WidgetPlace {
     y: num(raw.y),
     w: num(raw.w, 280),
     h: num(raw.h, 260),
+    ...(raw.screenUnknown ? { screenUnknown: true } : {}),
     vw: num(raw.vw),
     vh: num(raw.vh),
     ...(typeof raw.stack === 'number' ? { stack: raw.stack } : {}),
@@ -85,7 +88,9 @@ export const nextAt = (existing?: Pick<WidgetPlace, 'at'>) => Math.max(Date.now(
 /** Whether `a` wins over `b`: the higher counter, then (a tie) the same pick on every device. */
 export function wins(a: WidgetPlace, b: WidgetPlace): boolean {
   if (a.at !== b.at) return a.at > b.at
-  return JSON.stringify(a) > JSON.stringify(b)
+  if ((a.vw >= 720) !== (b.vw >= 720)) return a.vw >= 720
+  if (a.vw !== b.vw) return a.vw > b.vw
+  return JSON.stringify(place(a.id, a)) > JSON.stringify(place(b.id, b))
 }
 
 /** Per entry, the side that changed it last wins; entries only one side has are kept; removed is removed. */
@@ -133,13 +138,18 @@ export function changeSet(set: WidgetSet, put: Record<string, WidgetPlace>, remo
 
 /**
  * Adds widgets from an older window layout that the set doesn't know yet (not even as removed),
- * with `at: 0` so any later change elsewhere wins. Returns whether anything was added.
+ * with `at: 0` so any later change elsewhere wins. Untouched migrations can be upgraded
+ * by the equal-counter preference (desktop first). Returns whether anything changed.
  */
 export function importWidgets(found: Omit<WidgetPlace, 'at'>[]): boolean {
-  const known = (set: WidgetSet, id: string) => !!set.places[id] || removedKeys(set).has(id) || entriesOf(set, id).length > 0
-  const missing = found.filter((f) => f.id && KEY.test(f.id) && !known(widgetPlaces.get(), f.id))
+  const eligible = (set: WidgetSet, f: Omit<WidgetPlace, 'at'>) => {
+    if (!f.id || !KEY.test(f.id) || removedKeys(set).has(f.id)) return false
+    const entries = entriesOf(set, f.id)
+    return !entries.length || (entries.length === 1 && entries[0].key === f.id && entries[0].place.at === 0 && wins({ ...f, at: 0 }, entries[0].place))
+  }
+  const missing = found.filter((f) => eligible(widgetPlaces.get(), f))
   if (!missing.length) return false
-  widgetPlaces.set((cur) => changeSet(cur, Object.fromEntries(missing.filter((f) => !known(cur, f.id)).map((f) => [f.id, { ...f, at: 0 }]))))
+  widgetPlaces.set((cur) => changeSet(cur, Object.fromEntries(missing.filter((f) => eligible(cur, f)).map((f) => [f.id, { ...f, at: 0 }]))))
   imported.forEach((l) => l())
   return true
 }
@@ -173,7 +183,7 @@ export function importLayoutWidgets(saved: unknown): boolean {
     const kind = w.app === 'widget' ? w.props?.kind : w.app === 'sticky' ? 'sticky' : undefined
     const id = w.props?.id
     if (typeof kind !== 'string' || typeof id !== 'string' || !kind || !id) continue
-    found.push({ id, kind, x: num(w.x), y: num(w.y), w: num(w.w, 280), h: num(w.h, 260), vw, vh, ...(typeof w.stack === 'number' ? { stack: w.stack } : {}), ...(w.minimized ? { minimized: true } : {}) })
+    found.push({ id, kind, x: num(w.x), y: num(w.y), w: num(w.w, 280), h: num(w.h, 260), vw, vh, screenUnknown: true, ...(typeof w.stack === 'number' ? { stack: w.stack } : {}), ...(w.minimized ? { minimized: true } : {}) })
   }
   return found.length > 0 && importWidgets(found)
 }
@@ -187,11 +197,16 @@ export function importLayoutWidgets(saved: unknown): boolean {
  */
 export function layoutGate(neverSynced: boolean) {
   let first = neverSynced
-  return (accountCopy: boolean, pendingEdits: boolean): boolean => {
+  const accept = (accountCopy: boolean, pendingEdits: boolean): boolean => {
     if (first && accountCopy) {
       first = false
       return true
     }
     return !pendingEdits
   }
+  return Object.assign(accept, {
+    consume: () => {
+      first = false
+    },
+  })
 }

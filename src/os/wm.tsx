@@ -484,7 +484,7 @@ const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round
  * screen yet: it gets the usual spot for a new widget. A phone stacks them in a column anyway.
  */
 function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
-  if (phone) return { x: p.x, y: p.y, w: p.w, h: p.h }
+  if (phone || p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
   if (p.vw < 720) return place(i)
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -778,6 +778,10 @@ export function WindowManagerProvider({
       }),
     [usable, showSet],
   )
+
+  // A successful first push also establishes this browser's layout. Metadata-only
+  // updates from another tab count too, even when no remote value callback runs.
+  useEffect(() => layoutStore().onSynced(() => gate.current!.consume()), [])
 
   useEffect(() => widgetPlaces.onRemote(showSet), [showSet])
   useEffect(() => onImport(() => showSet(widgetPlaces.get())), [showSet])
