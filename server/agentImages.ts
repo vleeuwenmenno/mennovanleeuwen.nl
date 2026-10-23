@@ -70,8 +70,39 @@ const options = (info: NodeInfo, node: string, field: string): string[] => {
   const list = (info[node]?.input?.required?.[field] ?? info[node]?.input?.optional?.[field])?.[0]
   return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string').slice(0, 2000) : []
 }
+// Query only the built-in classes our presets use. A full /object_info can contain many
+// megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage'] as const
+const NODE_INFO_LIMIT = 1024 * 1024
+const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user)) {
-  const info = await readJSON(user, s, '/object_info', signal) as NodeInfo
+  const info: NodeInfo = {}
+  const limit = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+  let remaining = CATALOG_LIMIT
+  for (const node of IMAGE_NODES) {
+    const cap = Math.min(NODE_INFO_LIMIT, remaining)
+    try {
+      const bytes = await readCapped(await request(user, s, `/object_info/${node}`, limit), cap)
+      remaining -= bytes.length
+      let value: unknown
+      try { value = JSON.parse(bytes.toString()) } catch { throw new HttpError(502, `ComfyUI returned invalid JSON for ${node}`) }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(502, `ComfyUI returned invalid node metadata for ${node}`)
+      const definition = (value as NodeInfo)[node]
+      // ComfyUI answers {} for an unavailable class. Leave it absent so graph validation
+      // can distinguish a missing required node from an empty list of installed models.
+      if (definition !== undefined) {
+        if (!definition || typeof definition !== 'object' || Array.isArray(definition)) throw new HttpError(502, `ComfyUI returned invalid node metadata for ${node}`)
+        info[node] = definition
+      }
+    } catch (error) {
+      if (limit.aborted) throw new HttpError(504, 'ComfyUI model discovery was cancelled or timed out; try refreshing the models')
+      if (error instanceof HttpError && error.status === 413) throw new HttpError(502, cap < NODE_INFO_LIMIT
+        ? 'ComfyUI model discovery exceeds the 4 MiB total metadata limit; reduce oversized node metadata and retry'
+        : `ComfyUI metadata for ${node} exceeds the 1 MiB per-node limit; reduce that node’s metadata and retry`)
+      if (error instanceof HttpError) throw new HttpError(error.status, `Could not discover ${node}: ${error.message}`)
+      throw error
+    }
+  }
   return { presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
 export type ImageInput = { prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown }

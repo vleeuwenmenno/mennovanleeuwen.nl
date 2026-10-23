@@ -13,6 +13,10 @@ info.UNETLoader.input.required.unet_name = [['z-test.safetensors']]
 info.CLIPLoader.input.required = { clip_name: [['encoder.safetensors']], type: [['lumina2']] }
 info.VAELoader.input.required.vae_name = [['vae.safetensors']]
 info.KSampler.input.required = { sampler_name: [['euler']], scheduler: [['simple']] }
+let catalogBehavior: 'ok' | 'oversize' | 'aggregate' | 'invalid' | 'missing' = 'ok'
+const discoveryRequests: string[] = []
+const irrelevantCatalog = JSON.stringify({ ...info, IrrelevantCustomNode: { description: 'x'.repeat(9 * 1024 * 1024) } })
+let fullCatalogRequests = 0
 let behavior: 'ok' | 'wait' | 'error' | 'invalid' | 'oversize' = 'ok'
 let submissions = 0
 let historyReads = 0
@@ -24,7 +28,20 @@ const comfy = createServer((req, res) => {
   req.on('data', (b) => raw += b)
   req.on('end', () => {
     const path = new URL(req.url!, 'http://test').pathname
-    if (path === '/object_info') return send(res, info)
+    if (path === '/object_info') { fullCatalogRequests++; return res.end(irrelevantCatalog) }
+    if (path.startsWith('/object_info/')) {
+      const node = path.slice('/object_info/'.length)
+      discoveryRequests.push(node)
+      if (catalogBehavior === 'oversize') {
+        // Chunked response: enforce limits even without a Content-Length header.
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.write('{"padding":"')
+        return res.end('x'.repeat(1024 * 1024) + '"}')
+      }
+      if (catalogBehavior === 'invalid') return res.end('not JSON')
+      if (catalogBehavior === 'missing' && node === 'SaveImage') return send(res, {})
+      return send(res, { [node]: info[node], ...(catalogBehavior === 'aggregate' ? { padding: 'x'.repeat(900 * 1024) } : {}) })
+    }
     if (path === '/prompt') {
       assert.equal(req.headers.authorization, 'Bearer test-secret')
       submitted = JSON.parse(raw).prompt
@@ -115,6 +132,30 @@ try {
   assert.equal((await json('GET', '/api/agents/images/settings', undefined, 1)).url, '')
   const catalog = await json('GET', '/api/agents/images/catalog')
   assert.deepEqual(catalog.checkpoints, ['test.safetensors'])
+  assert.deepEqual(catalog.diffusionModels, ['z-test.safetensors'])
+  assert.deepEqual(catalog.clips, ['encoder.safetensors'])
+  assert.deepEqual(catalog.vaes, ['vae.safetensors'])
+  assert.deepEqual(catalog.clipTypes, ['lumina2'])
+  assert.deepEqual(catalog.samplers, ['euler'])
+  assert.deepEqual(catalog.schedulers, ['simple'])
+  assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
+  assert.deepEqual(discoveryRequests, Object.keys(info))
+  assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)
+  assert.equal(fullCatalogRequests, 0)
+  for (const [mode, error] of [['oversize', /CheckpointLoaderSimple.*1 MiB/], ['aggregate', /4 MiB total/], ['invalid', /invalid JSON.*CheckpointLoaderSimple/]] as const) {
+    catalogBehavior = mode
+    const start = discoveryRequests.length
+    const response = await api('GET', '/api/agents/images/catalog')
+    assert.equal(response.status, 502)
+    assert.match((await response.json()).error, error)
+    assert.equal(discoveryRequests.length - start, mode === 'aggregate' ? 5 : 1)
+  }
+  catalogBehavior = 'missing'
+  const missing = await thread()
+  assert.match(result(await turn(missing.id)).error, /missing nodes/)
+  assert.equal(submissions, 0)
+  catalogBehavior = 'ok'
+  console.log('PASS targeted discovery ignores a >8 MiB catalog; per-node streaming and aggregate limits, invalid JSON and missing required nodes are handled')
   for (const preset of ['sd15', 'sdxl', 'z_image', 'z_image_turbo'] as const) {
     const graph = imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'test', seed: 0 })
     assert.equal(graph.graph['7'].inputs.seed, 0)
@@ -196,6 +237,7 @@ try {
   await json('DELETE', `/api/agents/threads/${t.id}`)
   assert.equal((await api('GET', made.image.url)).status, 404)
   console.log('PASS private-network egress denied for non-admin, cross-account generation denied, URL validation, missing-model refusal and cascade deletion')
+  assert.equal(fullCatalogRequests, 0)
   console.log('All image generation checks passed')
 } finally {
   await server.dispose()

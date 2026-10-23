@@ -1356,8 +1356,10 @@ The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 
 an installed diffusion model, a compatible `lumina2` text encoder and a separately selected VAE.
 Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Image uses 20 steps and CFG 4;
 checkpoint presets use 25 steps and CFG 7. Choose the family that matches the actual model:
-filenames alone do not establish compatibility. Discovery reads ComfyUI's `/object_info`, and
-required models, nodes and sampler options are checked before submission. Flux, custom workflows,
+filenames alone do not establish compatibility. Discovery reads only the nine required classes via ComfyUI's
+`/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
+1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
+oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
 LoRAs, image editing and model downloads are not included in these initial presets.
 
 Each call makes one PNG. Width/height can be requested in multiples of 64 from 256 to 1536,
