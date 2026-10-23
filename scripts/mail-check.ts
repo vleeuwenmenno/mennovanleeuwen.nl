@@ -20,6 +20,7 @@ import { sanitizeHtml } from '../server/mailhtml.ts'
 import { isAllowed, parseSender } from '../src/data/mailRemote.ts'
 import { parseInvite } from '../server/imip.ts'
 import { HOSTILE_HTML, PNG, startMockJmap } from './mail-mock.ts'
+import { asPage } from './as-page.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -188,7 +189,7 @@ async function endToEnd() {
   }
 
   const call = async (method: string, path: string, body?: unknown, who = sid, headers: Record<string, string> = {}) => {
-    const res = await fetch(`${origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(body !== undefined && !(body instanceof Uint8Array) ? { 'Content-Type': 'application/json' } : {}), ...headers }, body: body === undefined ? undefined : body instanceof Uint8Array ? body : JSON.stringify(body) })
+    const res = await fetch(`${origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), ...(body !== undefined && !(body instanceof Uint8Array) ? { 'Content-Type': 'application/json' } : {}), ...headers }, body: body === undefined ? undefined : body instanceof Uint8Array ? body : JSON.stringify(body) })
     const text = await res.text()
     let json: J = {}
     try {
@@ -303,15 +304,15 @@ async function endToEnd() {
       check('cid: a tampered link is refused', forged.status === 404)
     }
     const pdf = logo.attachments.find((a: J) => a.name === 'brief.pdf')
-    const dl = await fetch(`${origin}/api/mail/${acc}/blob/${pdf.blobId}?name=brief.pdf&type=application/pdf`, { headers: { Cookie: `mvlos_sid=${sid}` } })
+    const dl = await fetch(`${origin}/api/mail/${acc}/blob/${pdf.blobId}?name=brief.pdf&type=application/pdf`, { headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)) } })
     check('attachments: downloaded through the server, as a download', dl.status === 200 && (await dl.text()) === '%PDF-1.4 mock' && /^attachment/.test(dl.headers.get('content-disposition') ?? '') && dl.headers.get('content-type') === 'application/octet-stream')
-    const theirBlob = await fetch(`${origin}/api/mail/${acc}/blob/${pdf.blobId}?name=x`, { headers: { Cookie: `mvlos_sid=${other}` } })
+    const theirBlob = await fetch(`${origin}/api/mail/${acc}/blob/${pdf.blobId}?name=x`, { headers: { Cookie: `mvlos_sid=${other}`, ...(await asPage(other)) } })
     check('attachments: not for another user', theirBlob.status === 404)
     check('attachments: served with nosniff and a sandbox', dl.headers.get('x-content-type-options') === 'nosniff' && /sandbox/.test(dl.headers.get('content-security-policy') ?? ''))
     // Audio and video for Player: inline with their own type (an allowed one), seeking by ranges.
     const sound = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256))
     mock.blobs.set('Bsound1', { type: 'audio/wav', data: sound })
-    const cookie = { Cookie: `mvlos_sid=${sid}` }
+    const cookie = { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)) }
     const whole = await fetch(`${origin}/api/mail/${acc}/blob/Bsound1?name=a.wav&type=audio/wav&inline=1`, { headers: cookie })
     check('attachments: audio plays inline, with its type', whole.status === 200 && whole.headers.get('content-type') === 'audio/wav' && /^inline/.test(whole.headers.get('content-disposition') ?? '') && whole.headers.get('accept-ranges') === 'bytes' && Buffer.from(await whole.arrayBuffer()).equals(sound), [...whole.headers])
     const part = await fetch(`${origin}/api/mail/${acc}/blob/Bsound1?name=a.wav&type=audio/wav&inline=1`, { headers: { ...cookie, Range: 'bytes=100-199' } })
@@ -400,7 +401,7 @@ async function endToEnd() {
 
     // Push: the EventSource is open; new mail becomes a notification and pages hear of it.
     await waitFor('push: the EventSource is open', () => mock.streams() >= 1, 10_000)
-    const stream = await fetch(`${origin}/api/notifications/stream?page=mail-check-page`, { headers: { Cookie: `mvlos_sid=${sid}` } })
+    const stream = await fetch(`${origin}/api/notifications/stream?page=mail-check-page`, { headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)) } })
     const reader = stream.body!.pipeThrough(new TextDecoderStream()).getReader()
     let heard = ''
     void (async () => {

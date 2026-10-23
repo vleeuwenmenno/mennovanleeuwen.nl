@@ -26,6 +26,7 @@ function userById(id: number): User {
 
 /** Ends every session the account has, and stops its running Agents turns. */
 export function signOutEverywhere(id: number) {
+  database().prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(id)
   database().prepare('DELETE FROM sessions WHERE user_id = ?').run(id)
   stopTurnsOf(id)
   closeStreams(id)

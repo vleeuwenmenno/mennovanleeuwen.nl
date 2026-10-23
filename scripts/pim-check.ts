@@ -24,6 +24,7 @@ import { Server, check, finish } from './empires-harness.ts'
 import { startMockGoogle } from './google-mock.ts'
 import { ME, startMockJmap } from './mail-mock.ts'
 import { PASSWORD, startMock, USER } from './tasks-mock.ts'
+import { asPage } from './as-page.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -49,13 +50,13 @@ database()
 await server.start()
 
 const call = async <T = J>(who: string, method: string, path: string, body?: unknown, expect = 200): Promise<T> => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
   const text = await res.text()
   if (res.status !== expect) throw new Error(`${method} ${path}: ${res.status} ${text.slice(0, 400)}`)
   return (text ? JSON.parse(text) : {}) as T
 }
 const api = <T = J>(method: string, path: string, body?: unknown, expect = 200) => call<T>(sid, method, path, body, expect)
-const status = async (who: string, method: string, path: string, body?: unknown) => (await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })).status
+const status = async (who: string, method: string, path: string, body?: unknown) => (await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })).status
 
 const EVENTS = '/cal/mock/events/'
 const object = (path: string) => caldav.collections.get(path.slice(0, path.lastIndexOf('/') + 1))?.objects.get(path)?.text ?? ''

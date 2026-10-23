@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api, getAccount, subscribeAccount } from './account'
+import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } from './accountSpace'
 
 // State that follows the user between devices: notes, window layouts, desktop icons, launchers,
 // dock order. Every store keeps its value in localStorage, so visitors get it per browser.
@@ -8,6 +9,10 @@ import { api, getAccount, subscribeAccount } from './account'
 //
 // Conflicts: the server refuses a save made on top of an older version. The store then merges
 // (if it knows how, e.g. notes by id) or takes the server's copy.
+//
+// Each value is kept in this tab's account space (src/os/accountSpace.ts): another account's tab
+// never reads it, and this tab writes and sends nothing once the browser is signed in as someone
+// else (accountGuard). An answer from the server that arrives after that is dropped.
 
 type Meta<T> = { value: T; /** server version this value is based on */ base: number; /** changed since */ dirty: boolean }
 type Remote = { value: unknown; updatedAt: number }
@@ -35,18 +40,20 @@ const stores = new Map<string, Internal>()
  * Set while an account's state is being cleared from this browser (src/os/account.ts), right
  * before the page starts again: nothing may write it back, or the next account would get it.
  */
-let frozen = false
-if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', () => (frozen = true))
+let forgetting = false
+if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', () => (forgetting = true))
+const frozen = () => forgetting || accountFrozen()
+/** The store's key as written before account spaces (accountStorage puts it in this tab's space). */
 const storageKey = (key: string) => `mvlos.sync.${key}`
 
 function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (v: unknown) => T): Meta<T> {
   try {
-    const raw = localStorage.getItem(storageKey(key))
+    const raw = accountStorage.get(storageKey(key))
     if (raw) {
       const m = JSON.parse(raw) as Meta<unknown>
       return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty }
     }
-    const legacy = legacyKey && localStorage.getItem(legacyKey)
+    const legacy = legacyKey && accountStorage.get(legacyKey)
     if (legacy) return { value: normalize ? normalize(JSON.parse(legacy)) : (JSON.parse(legacy) as T), base: 0, dirty: true }
   } catch {
     /* fall back */
@@ -60,12 +67,8 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
   const remoteListeners = new Set<(v: T) => void>()
   const emit = () => listeners.forEach((l) => l())
   const save = () => {
-    if (frozen) return
-    try {
-      localStorage.setItem(storageKey(key), JSON.stringify(meta))
-    } catch {
-      /* not persisted */
-    }
+    if (frozen()) return
+    accountStorage.set(storageKey(key), JSON.stringify(meta))
   }
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
 
@@ -108,11 +111,7 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
     },
     reset() {
       meta = { value: fallback, base: 0, dirty: false }
-      try {
-        localStorage.removeItem(storageKey(key))
-      } catch {
-        /* nothing stored */
-      }
+      accountStorage.remove(storageKey(key))
       emit()
     },
     merge: opts.merge as Internal['merge'],
@@ -123,7 +122,7 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
   // window manager moves its windows to match), or this tab's next save would undo that one.
   if (typeof window !== 'undefined')
     window.addEventListener('storage', (e) => {
-      if (e.key !== storageKey(key)) return
+      if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
       emit()
@@ -163,7 +162,7 @@ export const useSyncStatus = () =>
   )
 
 function schedulePush(key: string) {
-  if (getAccount().status !== 'user') return
+  if (getAccount().status !== 'user' || frozen()) return
   clearTimeout(timers.get(key))
   timers.set(key, setTimeout(() => push(key), PUSH_DELAY))
 }
@@ -171,11 +170,13 @@ function schedulePush(key: string) {
 async function push(key: string) {
   timers.delete(key)
   const s = stores.get(key)
-  if (!s || getAccount().status !== 'user') return
+  if (!s || getAccount().status !== 'user' || frozen()) return
   const { value, base } = s.meta()
   setStatus({ state: 'syncing', at: status.at })
   try {
     const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
+    // The browser was signed in as someone else while the request was out: not this tab's answer.
+    if (frozen() || !accountGuard()) return
     if (r.conflict) reconcile(s, r)
     else s.pushed(r.updatedAt, value)
     setStatus({ state: 'synced', at: Date.now() })
@@ -204,12 +205,13 @@ function reconcile(s: Internal, remote: Remote | undefined) {
 
 /** Loads every synced key from the server and reconciles it with the local copy. */
 export function pullAll(): Promise<void> {
-  if (getAccount().status !== 'user') return Promise.resolve()
+  if (getAccount().status !== 'user' || frozen()) return Promise.resolve()
   if (pulling) return pulling
   lastPull = Date.now()
   setStatus({ state: 'syncing', at: status.at })
   pulling = api<Record<string, Remote>>('/api/state')
     .then((remote) => {
+      if (frozen() || !accountGuard()) return
       for (const s of stores.values()) reconcile(s, remote[s.key])
       setStatus({ state: 'synced', at: Date.now() })
     })
@@ -241,13 +243,13 @@ export function startSync() {
   }, 30_000)
   // Leaving: send pending saves right away.
   window.addEventListener('pagehide', () => {
-    if (getAccount().status !== 'user') return
+    if (getAccount().status !== 'user' || frozen() || !accountGuard()) return
     for (const [key, t] of timers) {
       clearTimeout(t)
       const s = stores.get(key)
       if (!s) continue
       const { value, base } = s.meta()
-      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
     }
   })
 }

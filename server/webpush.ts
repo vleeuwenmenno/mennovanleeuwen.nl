@@ -116,16 +116,21 @@ function checkSubscription(body: PushSubscriptionJson) {
   return { endpoint, p256dh: b64u(p256dh), auth: b64u(auth) }
 }
 
-/** Saves this browser's subscription for the user (again, when it is already known). */
-export function subscribe(user: User, body: { subscription?: PushSubscriptionJson; device?: unknown }) {
+/**
+ * Saves this browser's subscription for the user (again, when it is already known), tied to the
+ * session that sent it: it gets messages only while that session is valid (liveSubscriptions), and
+ * signing out removes it (server/auth.ts). A browser has one subscription: another account signing
+ * in there and sending it takes it over.
+ */
+export function subscribe(user: User, session: string, body: { subscription?: PushSubscriptionJson; device?: unknown }) {
   const sub = checkSubscription(body.subscription ?? {})
   const device = typeof body.device === 'string' ? body.device.slice(0, 120) : null
   database()
     .prepare(
-      `INSERT INTO push_subscriptions (user_id, endpoint, keys, device, created_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys, device = excluded.device`,
+      `INSERT INTO push_subscriptions (user_id, endpoint, keys, device, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys, device = excluded.device, session_id = excluded.session_id`,
     )
-    .run(user.id, sub.endpoint, encrypt(JSON.stringify({ p256dh: sub.p256dh, auth: sub.auth })), device, Date.now())
+    .run(user.id, sub.endpoint, encrypt(JSON.stringify({ p256dh: sub.p256dh, auth: sub.auth })), device, Date.now(), session)
   return { ok: true, devices: devices(user) }
 }
 
@@ -134,8 +139,18 @@ export function unsubscribe(user: User, body: { endpoint?: unknown }) {
   return { ok: true, devices: devices(user) }
 }
 
+/**
+ * The user's subscriptions that may get messages: made by a session that is still valid. Those of
+ * sessions that ended (ran out, signed out elsewhere, from before subscriptions were tied to one)
+ * are removed on the way; a device signed in again sends its subscription on its next visit.
+ */
+export function liveSubscriptions(userId: number): Row[] {
+  database().prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND (session_id IS NULL OR session_id NOT IN (SELECT id FROM sessions WHERE expires_at > ?))').run(userId, Date.now())
+  return database().prepare('SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ?').all(userId) as Row[]
+}
+
 /** How many devices get the user's push messages. */
-export const devices = (user: User) => (database().prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(user.id) as { n: number }).n
+export const devices = (user: User) => liveSubscriptions(user.id).length
 
 // --- sending -----------------------------------------------------------------------------------
 
@@ -172,7 +187,7 @@ async function sendOne(row: Row, message: PushMessage): Promise<'sent' | 'gone' 
 
 /** Sends a message to every device the user turned push on for; forgets the ones that are gone. */
 export async function pushToUser(user: User, message: PushMessage): Promise<{ sent: number; failed: number }> {
-  const rows = database().prepare('SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ?').all(user.id) as Row[]
+  const rows = liveSubscriptions(user.id)
   const results = await Promise.all(rows.map((r) => sendOne(r, message).catch(() => 'failed' as const)))
   results.forEach((r, i) => r === 'gone' && database().prepare('DELETE FROM push_subscriptions WHERE id = ?').run(rows[i].id))
   return { sent: results.filter((r) => r === 'sent').length, failed: results.filter((r) => r === 'failed').length }

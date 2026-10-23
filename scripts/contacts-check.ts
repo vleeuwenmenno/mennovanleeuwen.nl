@@ -23,6 +23,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { Server, check, finish } from './empires-harness.ts'
+import { asPage } from './as-page.ts'
 
 // --- The stand-in CardDAV server ------------------------------------------------------------------
 
@@ -176,7 +177,7 @@ type Contact = Record<string, any> & { id: string; book: string; uid: string; et
 const call = async (path: string, init: { method?: string; body?: unknown; as?: 0 | 1 } = {}) => {
   const res = await fetch(`${server.origin}${path}`, {
     method: init.method ?? 'GET',
-    headers: { Cookie: `mvlos_sid=${sids[init.as ?? 0]}`, Origin: server.origin, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Cookie: `mvlos_sid=${sids[init.as ?? 0]}`, ...(await asPage(sids[init.as ?? 0])), Origin: server.origin, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   })
   const text = await res.text()

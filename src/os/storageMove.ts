@@ -5,6 +5,7 @@ import { lookup } from '../terminal/fs'
 import { HOME, formatSize } from '../terminal/vfs'
 import { choose } from './Dialogs'
 import { notify } from './notify'
+import { accountStorage } from './accountSpace'
 
 // Once Seafile is home, what was made in this browser before is still at /mnt/browser (see
 // data/mounts.ts). This offers to copy it into Seafile: the usual folders into their namesakes in
@@ -14,7 +15,7 @@ import { notify } from './notify'
 const SKIPPED = 'mvlos.browser.moveSkipped'
 const skipped = () => {
   try {
-    return localStorage.getItem(SKIPPED) === '1'
+    return accountStorage.get(SKIPPED) === '1'
   } catch {
     return false
   }
@@ -49,7 +50,7 @@ async function offer() {
   })
   if (pick !== 'copy') {
     try {
-      localStorage.setItem(SKIPPED, '1')
+      accountStorage.set(SKIPPED, '1')
     } catch {
       /* asked again next visit */
     }

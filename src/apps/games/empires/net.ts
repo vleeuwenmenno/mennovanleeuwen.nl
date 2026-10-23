@@ -3,6 +3,7 @@ import { pullAll, synced } from '../../../os/synced'
 import type { MatchInfo, Turn } from './match'
 import type { BattleSnap } from './snapshot'
 import { MP_PATH, OUTDATED_CODE, PROTOCOL, REJOIN_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
+import { accountKey } from '../../../os/accountSpace'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
 // multiplayer screens are up: it reconnects by itself after a drop (resuming the same player with
@@ -83,8 +84,10 @@ async function recallName(): Promise<string | null> {
 /** Per tab, so two tabs are two players (handy for trying it alone) and a reload is the same one.
  * The browser also keeps the last one, for a tab opened after the one playing was closed: with it,
  * the server puts the player back in their battle (unless that tab is still connected with it). */
-const TOKEN_KEY = 'mvlos.empires.mp.token'
-const LAST_KEY = 'mvlos.empires.mp.last'
+// Both under this tab's account (src/os/accountSpace.ts): another account in this browser starts
+// as a player of its own (and the server only takes a token back from the same account).
+const TOKEN_KEY = accountKey('mvlos.empires.mp.token')
+const LAST_KEY = accountKey('mvlos.empires.mp.last')
 const readToken = (): { token?: string; stored?: true } => {
   try {
     const own = sessionStorage.getItem(TOKEN_KEY)
@@ -106,7 +109,7 @@ const writeToken = (t: string) => {
 
 /** The battle this browser was last in, and when it last heard of it: a player who closed the tab
  * (or the game) has REJOIN_MS (protocol.ts) to come back to it, so the menus offer that. */
-const BATTLE_KEY = 'mvlos.empires.mp.battle'
+const BATTLE_KEY = accountKey('mvlos.empires.mp.battle')
 /** How long a battle waits for a player who stepped away, in words: "3 minutes". */
 export const REJOIN_WAIT = `${REJOIN_MS / 60_000} minutes`
 function keepBattle(id: string | null) {

@@ -18,6 +18,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { Server, check, finish, sleep } from './empires-harness.ts'
+import { asPage } from './as-page.ts'
 
 type Message = { role: string; content: string; thinking?: string; tool_calls?: unknown[]; tool_name?: string }
 type ChatBody = { model: string; messages: Message[]; stream?: boolean; tools?: { function: { name: string } }[] }
@@ -115,7 +116,7 @@ database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) V
 await server.start()
 
 const api = async (method: string, path: string, body?: unknown) => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)
   return res
 }

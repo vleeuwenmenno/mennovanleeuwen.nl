@@ -15,6 +15,7 @@ import { writeFile } from '../terminal/fs'
 import { SharesSettings } from './AgentsShare'
 import { HOME } from '../terminal/vfs'
 import { SecretInput } from '../os/SecretInput'
+import { accountStorage } from '../os/accountSpace'
 
 // The Agents app's settings, laid out like the rest of Settings: Ollama Cloud, the models, the web
 // search provider, what a new thread starts with, the system prompt in ~/AGENTS.md and the links
@@ -59,7 +60,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
 const SECTION_KEY = 'mvlos.agents.settings'
 const storedSection = (): SectionId => {
   try {
-    const v = localStorage.getItem(SECTION_KEY)
+    const v = accountStorage.get(SECTION_KEY)
     return SECTIONS.some((x) => x.id === v) ? (v as SectionId) : 'general'
   } catch {
     return 'general'
@@ -70,7 +71,7 @@ const SECTION_EVENT = 'mvlos:agents-settings-section'
 /** Remembers `id` as the section to show, and shows it in any agents settings already open. */
 export function showAgentsSection(id: SectionId) {
   try {
-    localStorage.setItem(SECTION_KEY, id)
+    accountStorage.set(SECTION_KEY, id)
   } catch {
     /* not remembered */
   }
@@ -91,7 +92,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
   const pick = (id: SectionId) => {
     setSection(id)
     try {
-      localStorage.setItem(SECTION_KEY, id)
+      accountStorage.set(SECTION_KEY, id)
     } catch {
       /* not remembered */
     }

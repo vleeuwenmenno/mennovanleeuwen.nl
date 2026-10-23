@@ -27,6 +27,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Server, check, finish, sleep } from './empires-harness.ts'
 import { startMockJmap } from './mail-mock.ts'
+import { asPage } from './as-page.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -138,7 +139,7 @@ database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) V
 await server.start()
 
 const call = async <T = J>(who: string, method: string, path: string, body?: unknown): Promise<T> => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
   const text = await res.text()
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${text.slice(0, 400)}`)
   return (text ? JSON.parse(text) : {}) as T
@@ -153,7 +154,7 @@ const newThread = (permission: string, extra: J = {}) => api('POST', '/api/agent
 async function turn(id: string, text: string, allow: boolean | J | ((e: J) => boolean | J), who = sid) {
   const asked: J[] = []
   let granted = false
-  const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify({ text, zone: 'Europe/Amsterdam' }) })
+  const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify({ text, zone: 'Europe/Amsterdam' }) })
   if (!res.ok) throw new Error(`turn: ${res.status} ${await res.text()}`)
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()

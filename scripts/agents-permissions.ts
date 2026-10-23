@@ -14,6 +14,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Server, check, finish } from './empires-harness.ts'
+import { asPage } from './as-page.ts'
 
 type Message = { role: string; content: string; tool_calls?: unknown[] }
 type ChatBody = { model: string; messages: Message[]; stream?: boolean; format?: { properties?: Record<string, unknown> }; tools?: { function: { name: string } }[] }
@@ -128,7 +129,7 @@ const { decide, clearedByRules } = await import('../server/agents.ts')
 await server.start()
 
 const api = async (method: string, path: string, body?: unknown) => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)
   return res
 }
@@ -313,7 +314,7 @@ try {
   check('Allow site: after removing it, the read asks again', (await turn(s3.id, 'SCENARIO site2')).asked.length === 1)
   await api('POST', '/api/agents/sites', { host: 'https://WWW.Example.COM/some/path' })
   check('Allow site by hand: a pasted address is stored as its site', (await getJson<{ host: string }[]>('GET', '/api/agents/sites')).some((s) => s.host === 'example.com'))
-  const bad = await fetch(`${server.origin}/api/agents/sites`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ host: 'not a site' }) })
+  const bad = await fetch(`${server.origin}/api/agents/sites`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)), 'Content-Type': 'application/json' }, body: JSON.stringify({ host: 'not a site' }) })
   check(`Allow site by hand: nonsense is refused (got ${bad.status})`, bad.status === 400)
 
   // 12. The rules, case by case.

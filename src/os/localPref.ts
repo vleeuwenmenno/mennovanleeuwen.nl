@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { accountGuard, accountKey } from './accountSpace'
 
 // A preference an app keeps in this browser only, under its own localStorage key. Reading and
 // writing it through one of these, rather than straight from localStorage, keeps every window of
@@ -16,10 +17,14 @@ export type LocalPref<T> = {
  * One value under `key`. `parse` gets the stored text (null when there is none, or when it could
  * not be read) and must always return a usable value; `format` turns a value back into text.
  */
-export function localPref<T>(key: string, parse: (raw: string | null) => T, format: (v: T) => string = (v) => JSON.stringify(v)): LocalPref<T> {
+export function localPref<T>(key: string, parse: (raw: string | null) => T, format: (v: T) => string = (v) => JSON.stringify(v), opts: { account?: boolean } = {}): LocalPref<T> {
+  // `account`: the preference belongs to the account, not the browser: it is kept in this tab's
+  // account space (src/os/accountSpace.ts), and only written while the browser is still signed in
+  // as that account.
+  const stored = opts.account ? accountKey(key) : key
   const read = () => {
     try {
-      return parse(localStorage.getItem(key))
+      return parse(localStorage.getItem(stored))
     } catch {
       return parse(null)
     }
@@ -29,7 +34,7 @@ export function localPref<T>(key: string, parse: (raw: string | null) => T, form
   const emit = () => listeners.forEach((l) => l())
   if (typeof window !== 'undefined')
     window.addEventListener('storage', (e) => {
-      if (e.key !== key && e.key !== null) return
+      if (e.key !== stored && e.key !== null) return
       value = read()
       emit()
     })
@@ -38,9 +43,10 @@ export function localPref<T>(key: string, parse: (raw: string | null) => T, form
     set(next) {
       const v = typeof next === 'function' ? (next as (v: T) => T)(value) : next
       if (Object.is(v, value)) return
+      if (opts.account && !accountGuard()) return
       value = v
       try {
-        localStorage.setItem(key, format(v))
+        localStorage.setItem(stored, format(v))
       } catch {
         // Private mode: the change still applies until the page closes.
       }
@@ -60,11 +66,16 @@ export function localPref<T>(key: string, parse: (raw: string | null) => T, form
  * theirs. What is missing takes its default; `normalize` may tidy the rest. Keys this code does
  * not know about are kept as they were, in case something else still reads them.
  */
-export function jsonPref<T extends object>(key: string, defaults: T, normalize: (v: T) => T = (v) => v): LocalPref<T> & { patch: (p: Partial<T>) => void } {
-  const pref = localPref<T>(key, (raw) => {
-    const v = raw ? (JSON.parse(raw) as unknown) : null
-    return normalize({ ...defaults, ...(v && typeof v === 'object' && !Array.isArray(v) ? v : {}) })
-  })
+export function jsonPref<T extends object>(key: string, defaults: T, normalize: (v: T) => T = (v) => v, opts: { account?: boolean } = {}): LocalPref<T> & { patch: (p: Partial<T>) => void } {
+  const pref = localPref<T>(
+    key,
+    (raw) => {
+      const v = raw ? (JSON.parse(raw) as unknown) : null
+      return normalize({ ...defaults, ...(v && typeof v === 'object' && !Array.isArray(v) ? v : {}) })
+    },
+    undefined,
+    opts,
+  )
   return { ...pref, patch: (p) => pref.set((v) => ({ ...v, ...p })) }
 }
 

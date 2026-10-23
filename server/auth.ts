@@ -17,6 +17,11 @@ const STATE_COOKIE = 'mvlos_oauth'
 const REPO_COOKIE = 'mvlos_gh_repo'
 /** The signed-in login, readable by the page, so the desktop boots as that user before /api/me answers. */
 const LOGIN_COOKIE = 'mvlos_login'
+/**
+ * The signed-in account's id, readable by the page: the same cookie jar as the session, so every tab
+ * knows at once which account the browser is signed in as now (src/os/accountSpace.ts).
+ */
+const UID_COOKIE = 'mvlos_uid'
 const SESSION_DAYS = 30
 // Sign-in only needs the profile. `repo` (asked for when someone allows it in Settings → Code hosts)
 // lets Spotlight find private repositories, issues and branches; GitHub has no read-only variant
@@ -49,6 +54,12 @@ export const onSignIn = (fn: (userId: number) => void) => void signInHandlers.pu
 export type User = { id: number; login: string; name: string | null; avatar: string | null; githubToken: string; githubScopes: string[]; admin: boolean }
 
 type UserRow = { id: number; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
+
+/** The stored key of this request's session (what sessions.id holds), or null without one. */
+export function sessionKey(req: IncomingMessage): string | null {
+  const sid = cookies(req)[SESSION_COOKIE]
+  return sid ? sha256(sid) : null
+}
 
 /** The signed-in user for this request, or null. */
 export function currentUser(req: IncomingMessage): User | null {
@@ -184,12 +195,46 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
   const sid = randomBytes(32).toString('base64url')
   db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + SESSION_DAYS * 864e5)
   redirect(res, `${home}?auth=ok`, {
-    'Set-Cookie': [clearState, setCookie(req, SESSION_COOKIE, sid, { maxAge: SESSION_DAYS * 86400 }), setCookie(req, LOGIN_COOKIE, me.login, { maxAge: SESSION_DAYS * 86400, readable: true })],
+    'Set-Cookie': [clearState, setCookie(req, SESSION_COOKIE, sid, { maxAge: SESSION_DAYS * 86400 }), setCookie(req, LOGIN_COOKIE, me.login, { maxAge: SESSION_DAYS * 86400, readable: true }), setCookie(req, UID_COOKIE, String(id), { maxAge: SESSION_DAYS * 86400, readable: true })],
   })
 }
 
 export function logout(req: IncomingMessage, res: ServerResponse) {
   const sid = cookies(req)[SESSION_COOKIE]
-  if (sid && authEnabled()) database().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid))
-  json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SESSION_COOKIE, '', { maxAge: 0 }), setCookie(req, LOGIN_COOKIE, '', { maxAge: 0, readable: true })] })
+  if (sid && authEnabled()) {
+    // Its push subscriptions go with it: this device no longer gets the account's messages.
+    database().prepare('DELETE FROM push_subscriptions WHERE session_id = ?').run(sha256(sid))
+    database().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid))
+  }
+  json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SESSION_COOKIE, '', { maxAge: 0 }), setCookie(req, LOGIN_COOKIE, '', { maxAge: 0, readable: true }), setCookie(req, UID_COOKIE, '', { maxAge: 0, readable: true })] })
+}
+
+/**
+ * The account id cookie put right for this request's session, if it isn't: set to the session's
+ * account (a session from before the cookie existed), or cleared when there is no valid session
+ * (it ran out, was signed out elsewhere, or the account is gone).
+ */
+export function uidCookieFix(req: IncomingMessage, user: User | null): string[] {
+  const has = cookies(req)[UID_COOKIE]
+  if (user && has !== String(user.id)) {
+    const sid = cookies(req)[SESSION_COOKIE]
+    const row = sid ? (database().prepare('SELECT expires_at FROM sessions WHERE id = ?').get(sha256(sid)) as { expires_at: number } | undefined) : undefined
+    const maxAge = row ? Math.max(60, Math.floor((row.expires_at - Date.now()) / 1000)) : SESSION_DAYS * 86400
+    return [setCookie(req, UID_COOKIE, String(user.id), { maxAge, readable: true })]
+  }
+  if (!user && has) return [setCookie(req, UID_COOKIE, '', { maxAge: 0, readable: true })]
+  return []
+}
+
+/**
+ * Whether a request from a page is for the account the page holds: the page says which in
+ * X-MvL-Account (an account id, or `visitor`; the notification stream says it in ?holds=). A page of another
+ * account than the session's now (another tab signed in as someone else) is refused, so its state
+ * never reaches this account; where state is written, a page that doesn't say is refused too (a
+ * tab from before this check: it has to reload).
+ */
+export function accountMismatch(req: IncomingMessage, held: string | null, required: boolean): string | null {
+  if (held === null) return required ? 'Reload the page: it is from an older version' : null
+  const user = currentUser(req)
+  return held === (user ? String(user.id) : 'visitor') ? null : 'Signed in as another account'
 }

@@ -1,11 +1,12 @@
 // The agents TUI's prompt: a small multi-line editor with readline's keys, history and pastes that
 // fold into a placeholder ([Pasted text #1 +12 lines]) until the message goes out.
+import { accountStorage } from '../../os/accountSpace'
 
 const HISTORY_KEY = 'mvlos.agents.history'
 
 function loadHistory(): string[] {
   try {
-    const v = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]') as unknown
+    const v = JSON.parse(accountStorage.get(HISTORY_KEY) ?? '[]') as unknown
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-200) : []
   } catch {
     return []
@@ -153,7 +154,7 @@ export class Editor {
     if (!text.trim() || this.history[this.history.length - 1] === text) return
     this.history = [...this.history, text].slice(-200)
     try {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(this.history))
+      accountStorage.set(HISTORY_KEY, JSON.stringify(this.history))
     } catch {
       /* history just won't last */
     }

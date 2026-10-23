@@ -20,6 +20,7 @@
 import { randomBytes } from 'node:crypto'
 import { Server, check, finish } from './empires-harness.ts'
 import { PASSWORD, startMock, USER } from './tasks-mock.ts'
+import { asPage } from './as-page.ts'
 
 const mock = await startMock()
 const LOGIN = 'tasks-check'
@@ -38,7 +39,7 @@ type Task = { id: string; list: string; uid: string; ref: string; title: string;
 type List = { id: string; name: string; source: string; writable: boolean; local: boolean; calendar?: boolean }
 
 const api = async <T = any>(method: string, path: string, body?: unknown, expect = 200): Promise<T> => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)), 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
   const text = await res.text()
   if (res.status !== expect) throw new Error(`${method} ${path}: ${res.status} ${text}`)
   return JSON.parse(text) as T

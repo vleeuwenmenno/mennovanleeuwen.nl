@@ -26,6 +26,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { Server, check, finish, sleep, waitFor } from './empires-harness.ts'
+import { asPage } from './as-page.ts'
 
 // --- The files ------------------------------------------------------------------------------------
 
@@ -159,7 +160,7 @@ database().prepare('INSERT INTO users (id, github_id, login, github_token, creat
 database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 2, ?, ?)').run(sha256(otherSid), now, now + 86400_000)
 await server.start()
 
-const cookie = { Cookie: `mvlos_sid=${sid}` }
+const cookie = { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)) }
 const post = (path: string, body: unknown) => fetch(`${server.origin}${path}`, { method: 'POST', headers: { ...cookie, 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify(body) })
 const stream = (repo: string, file: string, init: { range?: string; method?: string; signal?: AbortSignal } = {}) =>
   fetch(`${server.origin}/api/seafile/stream?repo=${repo}&p=${encodeURIComponent(`/${file}`)}`, { method: init.method ?? 'GET', signal: init.signal, headers: { ...cookie, ...(init.range ? { Range: init.range } : {}) } })
@@ -271,7 +272,7 @@ try {
   const asked = { downloads: downloads.length, thumbs: thumbsAsked }
   for (const [who, headers, status] of [
     ['no session', {}, 401],
-    ['another account without Seafile', { Cookie: `mvlos_sid=${otherSid}` }, 409],
+    ['another account without Seafile', { Cookie: `mvlos_sid=${otherSid}`, ...(await asPage(otherSid)) }, 409],
   ] as const) {
     const s = await fetch(`${server.origin}/api/seafile/stream?repo=${PLAIN}&p=${encodeURIComponent('/small.mp4')}`, { headers: { ...headers, Range: 'bytes=0-99' } })
     await s.arrayBuffer()

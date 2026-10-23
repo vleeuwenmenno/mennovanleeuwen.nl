@@ -25,6 +25,10 @@ pnpm build        # static site in dist/
 pnpm check:perf   # performance budgets and pixel snapshots (see Performance guardrails)
 ```
 
+Dev servers reached through `pnpm dev:proxy` in its cookie mode (the Tailscale name) share one
+origin, so their browser storage is shared too: the same account id on two scratch `DATA_DIR`s
+uses the same `mvlos.u.<id>.` space (src/os/accountSpace.ts). That only matters in development.
+
 ## Look and themes
 
 The design follows Omarchy: square windows with a 2px accent border on the active one, a solid
@@ -602,6 +606,44 @@ them. The terminal's `visited` lists the same history (`visited <text>`, `visite
 Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order, the top bar and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
+That state never crosses accounts, even with several tabs open while one of them signs out or in
+as someone else (tabs share the browser's storage and its sign-in cookie)
+([`src/os/accountSpace.ts`](src/os/accountSpace.ts)):
+
+- **Which account.** Next to the sign-in cookie the server sets a readable one, `mvlos_uid` (the
+  account's id), and clears it on signing out or when the session is no longer valid. A page knows
+  at once, before `/api/me` answers, which account the browser is signed in as, and each tab takes
+  that as its account when it loads.
+- **A space per account.** Everything that belongs to an account is kept under its own prefix in
+  localStorage, `mvlos.u.<id>.…` (a visitor's under `mvlos.visitor.…`): the synced state, terminal
+  and agent history, the notification history, Agents' drafts and layout, Files' settings and
+  places, push, the git app's last repository and drafts, what game windows keep (Empires'
+  campaign and battle), Empires' multiplayer player, and high scores and Gladiator careers (synced:
+  a visitor's are this browser's, a signed-in player's follow the account). A page only reads its
+  own account's space, so nothing of another account shows, even from a cache. What belongs to the
+  browser stays in plain keys: the theme, motion, sounds, the dock's look, the workspace on screen,
+  window-drag keys, the photo viewer's panel, the media player's volume, the browser's own location
+  for Weather, and games' settings.
+- **The guard.** Before writing to its space and before every request to the site's API, a page
+  checks the cookie still names its account; if not, it writes and sends nothing more and reloads
+  at once, as the account the browser has now. Requests say whose page they are from
+  (`X-MvL-Account`); the server refuses one from a page of another account than the session's, and
+  every change, synced state and the notification stream need it (a tab from before this asks for
+  a reload). Only signing out and the service worker renewing its push subscription go without.
+- **Push** subscriptions belong to the session that made them: signing out removes them, and one
+  whose session ran out gets nothing. A page whose account hasn't turned push on in this browser
+  (a visitor, or someone else) unsubscribes one still there. Empires only gives a multiplayer seat
+  back for a kept token to the same account.
+- **Signing out** clears that account's space. A session that just ran out doesn't: the page
+  starts again as a visitor and the account's unsynced changes come back when it signs in again.
+- **Moving in.** The first time a space is used, what the release before spaces kept in plain keys
+  moves into it, if the old marker says it was that account's; later writes to those keys (by a
+  tab still running the old release) are never read. A visitor signing in brings their synced
+  state along into a new account's space, once. (A browser where the old release had already put
+  one account's state under another's marker moves it as the marker says: that mix-up predates
+  spaces, and nothing new can cause it.)
+
+`pnpm check:sync-accounts` checks this against the real server and with tabs in memory.
 
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).

@@ -24,6 +24,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { Server, check, finish } from './empires-harness.ts'
 import { startMockGoogle } from './google-mock.ts'
 import { PASSWORD, startMock, USER } from './tasks-mock.ts'
+import { asPage } from './as-page.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -119,18 +120,18 @@ database()
 await server.start()
 
 const call = async <T = J>(who: string, method: string, path: string, body?: unknown, expect = 200): Promise<T> => {
-  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const res = await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })
   const text = await res.text()
   if (res.status !== expect) throw new Error(`${method} ${path}: ${res.status} ${text.slice(0, 400)}`)
   return (text ? JSON.parse(text) : {}) as T
 }
 const api = <T = J>(method: string, path: string, body?: unknown, expect = 200) => call<T>(sid, method, path, body, expect)
-const status = async (who: string, method: string, path: string, body?: unknown) => (await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })).status
+const status = async (who: string, method: string, path: string, body?: unknown) => (await fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${who}`, ...(await asPage(who)), 'Content-Type': 'application/json', Origin: server.origin }, body: body === undefined ? undefined : JSON.stringify(body) })).status
 
 /** One Agents turn, read as it streams; approvals answered by `allow`. Answers the approvals asked and the turn's tool results. */
 async function turn(id: string, text: string, allow: boolean) {
   const asked: J[] = []
-  const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify({ text, zone: 'Europe/Amsterdam' }) })
+  const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)), 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify({ text, zone: 'Europe/Amsterdam' }) })
   if (!res.ok) throw new Error(`turn: ${res.status} ${await res.text()}`)
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
@@ -332,7 +333,7 @@ try {
   const theirs = await call(otherSid, 'POST', '/api/calendar/find', { uid: 'planning@google.test', calendarId: plan.calendarId, start: plan.start })
   check('nor find the event by its UID', theirs.event === null)
   check('and sees none of the notes', !((await call(otherSid, 'GET', '/api/state')).notes?.value ?? []).length)
-  check('signed out, nothing at all', (await (await fetch(`${server.origin}/api/calendar/find`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: server.origin }, body: '{"uid":"x"}' })).status) === 401)
+  check('signed out, nothing at all', (await (await fetch(`${server.origin}/api/calendar/find`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: server.origin, 'X-MvL-Account': 'visitor' }, body: '{"uid":"x"}' })).status) === 401)
 } catch (e) {
   check(`no errors (${(e as Error).message})`, false)
   console.error(server.log?.slice?.(-3000))

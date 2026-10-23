@@ -792,7 +792,9 @@ function hello(ws: WsConnection, conn: { p: Player | null; login: string | null;
   // Coming back within the grace period: the same player, name, lobby and seat, on this connection.
   // The browser's last token (from a closed tab) doesn't take over a tab still playing with it.
   // Signed in, the account finds its player too, from a browser that never had its token.
-  const known = typeof token === 'string' ? byToken.get(token) : undefined
+  // A token only brings back a player of the same account (or a guest's, for a guest): a browser
+  // signed in as someone else since can't take over that seat with the token it kept.
+  const known = ownToken(token, conn.login)
   const back = (known && !(stored && known.ws) ? known : undefined) ?? (conn.login ? awayByLogin(conn.login) : undefined)
   if (back) {
     back.ws?.close(4000, 'replaced')
@@ -984,8 +986,14 @@ setInterval(() => {
 
 /** Whether a battle is waiting for this browser's player (its last token) or this signed-in
  * account's, which stepped away from it: the menus offer to rejoin it. */
+/** The player with this token, if it is the same account's (both guests, or the same login). */
+function ownToken(token: unknown, login: string | null): Player | undefined {
+  const p = typeof token === 'string' ? byToken.get(token) : undefined
+  return p && (p.login ?? null) === login ? p : undefined
+}
+
 export function empiresAway(token: unknown, login: string | null): { battle: boolean } {
-  const known = typeof token === 'string' ? byToken.get(token) : undefined
+  const known = ownToken(token, login)
   const mine = (p: Player | undefined) => !!p && !p.ws && battling(p)
   return { battle: mine(known) || (!!login && mine(awayByLogin(login))) }
 }

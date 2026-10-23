@@ -5,7 +5,7 @@ import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
-import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
+import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
@@ -91,6 +91,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (read && path === '/api/auth/github/callback') return await finishLogin(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)
+      const fix = uidCookieFix(req, user)
       json(res, 200, {
         authEnabled: authEnabled(),
         // Whether a new account could sign up now (the sign-in button says so before GitHub does).
@@ -102,7 +103,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         caldav: user ? listCaldav(user) : [],
         integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
         seafile: user ? seafileInfo(user) : null,
-      })
+      }, fix.length ? { 'Set-Cookie': fix } : {})
       return true
     }
 
@@ -119,6 +120,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
 
     // Everything below changes something or reads private data.
     if (!read && !sameOrigin(req)) throw new HttpError(403, 'Cross-site request')
+    // A page of another account than the session's is refused (server/auth.ts accountMismatch).
+    // Every change, synced state and the notification stream must say whose page they are from,
+    // except: signing out, and the service worker renewing its push subscription (it has no page
+    // and sends no header). Sign-in, /api/me, Google's and OnlyOffice's callbacks are answered above.
+    {
+      const header = req.headers['x-mvl-account']
+      const stream = path === '/api/notifications/stream'
+      const held = typeof header === 'string' ? header : stream ? url.searchParams.get('holds') : null
+      const exempt = path === '/api/auth/logout' || (path === '/api/push/subscription' && method === 'POST')
+      const required = !exempt && (!read || stream || path === '/api/state')
+      const refused = accountMismatch(req, held, required)
+      if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
+    }
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
     // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
     if (method === 'DELETE' && path === '/api/me') {
@@ -402,7 +416,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/notifications/presence' && method === 'POST') return json(res, 200, presence(requireUser(req), await readJson(req, 1024))), true
     // Web Push (server/webpush.ts): the server's public key, this browser's subscription, a test.
     if (path === '/api/push/key' && read) return requireUser(req), json(res, 200, pushPublicKey()), true
-    if (path === '/api/push/subscription' && method === 'POST') return json(res, 200, subscribe(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/push/subscription' && method === 'POST') return json(res, 200, subscribe(requireUser(req), sessionKey(req)!, await readJson(req, 8 * 1024))), true
     if (path === '/api/push/subscription' && method === 'DELETE') return json(res, 200, unsubscribe(requireUser(req), await readJson(req, 8 * 1024))), true
     if (path === '/api/push/test' && method === 'POST') return json(res, 200, await pushToUser(requireUser(req), { title: 'MvL OS', body: 'Push notifications work on this device.', tag: 'push-test', url: '/' })), true
     if (path === '/api/preview' && read) {
@@ -426,7 +440,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     throw new HttpError(404, 'Not found')
   } catch (e) {
     if (res.headersSent) return true
-    if (e instanceof HttpError) json(res, e.status, { error: e.message })
+    // No valid session: the page's account cookie goes too (src/os/accountSpace.ts).
+    if (e instanceof HttpError) json(res, e.status, { error: e.message }, e.status === 401 && !currentUser(req) ? { 'Set-Cookie': uidCookieFix(req, null) } : {})
     else {
       console.error(e)
       json(res, 500, { error: 'Something went wrong' })

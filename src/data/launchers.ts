@@ -12,6 +12,7 @@ import { virtualLaunchers, type StoredLauncher } from './launcherStore'
 import { posixOf, subscribeMounts, whereIs } from './mounts'
 import { cachedDir, isSf, listDir, readText, refreshDirs, subscribeDirs, type Entry } from './seafile'
 import { idForPath, idInText, isLauncherName, launcherFileName, launcherFromText, launcherText, migrateLaunchers, type Launcher, type LauncherPort } from './launcherFiles'
+import { accountStorage } from '../os/accountSpace'
 
 // Launchers of your own: a web address (or an MvL OS app), a name and an optional emoji or
 // picture. They are .desktop files (src/data/launcherFiles.ts) in your home: those in ~/Desktop
@@ -195,7 +196,7 @@ const CACHE = 'mvlos.launchers.files'
 
 function readCache(): Launcher[] | null {
   try {
-    const raw = localStorage.getItem(CACHE)
+    const raw = accountStorage.get(CACHE)
     const c = raw ? (JSON.parse(raw) as { user: number; list: Launcher[] }) : null
     const user = getAccount().user?.id
     return c && (user === undefined || c.user === user) && Array.isArray(c.list) ? c.list : null
@@ -255,7 +256,7 @@ function schedule() {
     const h = home()
     if (h.kind === 'files')
       try {
-        localStorage.setItem(CACHE, JSON.stringify({ user: getAccount().user?.id, list: next }))
+        accountStorage.set(CACHE, JSON.stringify({ user: getAccount().user?.id, list: next }))
       } catch {
         /* not kept */
       }
