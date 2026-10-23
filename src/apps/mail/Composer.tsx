@@ -9,6 +9,7 @@ import { Select } from '../../os/Select'
 import { readBytes } from '../../data/fileOps'
 import { fileLink, parseSf } from '../../data/seafile'
 import { discardDraft, saveDraft, sendMail, uploadBlob, useMailPrefs, type Address, type Boot, type ComposeAttachment, type DraftBody } from '../../data/mail'
+import { Icon } from './icons'
 import { formatSize, RecipientField } from './parts'
 
 // Writing a message: a new one, a reply, a forward or a draft picked up again. Plain text, with
@@ -322,12 +323,12 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
           {sending ? 'Sending…' : 'Send'}
         </button>
         <button className="btn btn-small" onClick={(e) => attachMenu(e.currentTarget)} title="Attach files">
-          📎 Attach
+          <Icon name="paperclip" size={14} /> Attach
         </button>
         <span className="ml-saved muted">{status}</span>
         <span className="nb-spacer" />
         <button className="ml-icon" onClick={() => void discard()} title="Discard" aria-label="Discard">
-          🗑
+          <Icon name="trash" />
         </button>
       </footer>
       <input

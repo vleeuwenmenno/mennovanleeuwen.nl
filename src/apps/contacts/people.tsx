@@ -40,20 +40,48 @@ function hue(key: string): number {
   return h
 }
 
-/** A round picture of a person: the contact's photo, or their initials on a colour of their own. */
-export function Avatar({ contact, email, name, size = 32 }: { contact?: Contact | null; email?: string; name?: string; size?: number }) {
+/** Logos that loaded or failed this session: a row scrolled back into view shows its logo at once, and a missing one is not asked for again. */
+const logoLoaded = new Set<string>()
+const logoFailed = new Set<string>()
+
+/**
+ * A round picture of a person: the contact's photo, else `logo` (a sender's brand icon, Mail's),
+ * else their initials on a colour of their own. The initials stay underneath until the logo has
+ * loaded, so nothing shifts, and stay for good when it fails.
+ */
+export function Avatar({ contact, email, name, size = 32, logo }: { contact?: Contact | null; email?: string; name?: string; size?: number; logo?: string | null }) {
   const found = useContactByEmail(contact ? null : email)
   const c = contact ?? found
   const label = c ? displayName(c) : name || email || '?'
   const [broken, setBroken] = useState(false)
+  const [, setLogoState] = useState(0)
   useEffect(() => {
     setBroken(false)
   }, [c?.photo])
   const style = { width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.4)) }
   if (c?.photo && !broken) return <img className="pp-avatar" src={c.photo} alt="" style={style} onError={() => setBroken(true)} draggable={false} />
+  const showLogo = !!logo && !logoFailed.has(logo)
   return (
-    <span className="pp-avatar is-initials" style={{ ...style, ['--pp-hue' as string]: hue(c?.uid ?? email ?? label) }} aria-hidden>
+    <span className={`pp-avatar is-initials ${showLogo ? 'has-logo' : ''}`} style={{ ...style, ['--pp-hue' as string]: hue(c?.uid ?? email ?? label) }} aria-hidden>
       {initials(label)}
+      {showLogo && (
+        <img
+          className={`pp-avatar-logo ${logoLoaded.has(logo) ? 'is-loaded' : ''}`}
+          src={logo}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onLoad={(e) => {
+            logoLoaded.add(logo)
+            e.currentTarget.classList.add('is-loaded')
+          }}
+          onError={() => {
+            logoFailed.add(logo)
+            setLogoState((n) => n + 1)
+          }}
+        />
+      )}
     </span>
   )
 }

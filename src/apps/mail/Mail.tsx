@@ -29,6 +29,7 @@ import {
 } from '../../data/mail'
 import { findMail } from '../../data/pim'
 import { Composer, type ComposeInit } from './Composer'
+import { Icon, mailboxIcon, type IconName } from './icons'
 import { Avatar, htmlToText, shortDate } from './parts'
 import { Reader, type ReplyMode } from './Reader'
 import './mail.css'
@@ -57,7 +58,6 @@ const PAGE = 50
 const REFRESH_MAX = 200
 type View = 'boxes' | 'list' | 'thread' | 'compose'
 
-const ROLE_GLYPH: Record<string, string> = { inbox: '📥', drafts: '📝', sent: '📤', archive: '🗄', junk: '⚠', trash: '🗑' }
 const DRAG_TYPE = 'application/x-mvlos-mail'
 const LONG_PRESS_MS = 500
 const NONE: ReadonlySet<string> = new Set()
@@ -655,7 +655,9 @@ export function Mail({ win }: { win: WinState }) {
     return (
       <div className="ml ml-empty">
         <div className="ml-empty-box">
-          <span className="ml-empty-glyph">✉</span>
+          <span className="ml-empty-glyph">
+            <Icon name="mail" size={40} />
+          </span>
           <h3>Mail</h3>
           {me.status !== 'user' ? (
             <>
@@ -688,7 +690,7 @@ export function Mail({ win }: { win: WinState }) {
       <header className="ml-toolbar">
         {narrow && (
           <button className={`ml-icon ${view === 'boxes' ? 'is-on' : ''}`} onClick={() => setView(view === 'boxes' ? 'list' : 'boxes')} aria-label="Mailboxes" title="Mailboxes">
-            ☰
+            <Icon name="menu" />
           </button>
         )}
         <form
@@ -735,10 +737,13 @@ export function Mail({ win }: { win: WinState }) {
           aria-busy={refreshing}
           title="Refresh"
         >
-          <span aria-hidden="true">↻</span>
+          <span aria-hidden="true">
+            <Icon name="refresh" />
+          </span>
         </button>
-        <button className="btn btn-small btn-primary" onClick={() => startCompose({ title: 'New message' })} title="New message (C)" disabled={!boot}>
-          ✎ {narrow ? '' : 'New'}
+        <button className="btn btn-small btn-primary ml-compose-btn" onClick={() => startCompose({ title: 'New message' })} title="New message (C)" aria-label="New message" disabled={!boot}>
+          <Icon name="compose" size={14} />
+          {!narrow && <span>New</span>}
         </button>
       </header>
       {error && (
@@ -765,7 +770,7 @@ export function Mail({ win }: { win: WinState }) {
               {orderMailboxes(boot?.mailboxes ?? []).map(({ box, depth }) => (
                 <button key={box.id} className={`ml-box ${box.id === mailbox && !search ? 'is-on' : ''} ${dropOn === box.id ? 'is-drop' : ''}`} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => pickMailbox(box.id)} {...dropProps(box)}>
                   <span className="ml-box-glyph" aria-hidden>
-                    {ROLE_GLYPH[box.role ?? ''] ?? '📁'}
+                    <Icon name={mailboxIcon(box.role, box.name)} />
                   </span>
                   <span className="ml-box-name">{box.name}</span>
                   {box.role === 'drafts' ? box.total > 0 && <span className="ml-box-count is-quiet">{box.total}</span> : box.unread > 0 && box.role !== 'trash' && box.role !== 'sent' && <span className={`ml-box-count ${box.role === 'junk' ? 'is-quiet' : ''}`}>{box.unread}</span>}
@@ -863,15 +868,15 @@ function Selection(props: {
   const unread = rows.filter((r) => !r.seen).length
   const flagged = rows.filter((r) => r.flagged).length
   const messages = rows.reduce((n, r) => n + r.count, 0)
-  const actions: { label: string; glyph: string; title: string; run: (e: MouseEvent<HTMLButtonElement>) => void; danger?: boolean; off?: boolean }[] = [
-    ...(props.canArchive ? [{ label: 'Archive', glyph: '⤓', title: 'Archive (E)', run: () => void change('archive', ids) }] : []),
-    { label: props.inTrash ? 'Delete for good…' : 'Delete', glyph: '🗑', title: props.inTrash ? 'Delete for good' : 'Delete (#)', danger: true, run: () => void change(props.inTrash ? 'destroy' : 'trash', ids) },
-    { label: props.inJunk ? 'Not junk' : 'Mark as junk', glyph: '⚠', title: props.inJunk ? 'Not junk (!)' : 'Mark as junk (!)', run: () => void change(props.inJunk ? 'notjunk' : 'junk', ids) },
-    { label: 'Mark as read', glyph: '○', title: 'Mark as read (U)', off: !unread, run: () => void change('seen', ids) },
-    { label: 'Mark as unread', glyph: '●', title: 'Mark as unread (U)', off: unread === rows.length, run: () => void change('unseen', ids) },
-    { label: 'Flag', glyph: '★', title: 'Flag (S)', off: flagged === rows.length, run: () => props.flagRows(rows, true) },
-    { label: 'Unflag', glyph: '☆', title: 'Unflag (S)', off: !flagged, run: () => props.flagRows(rows, false) },
-    { label: 'Move to…', glyph: '📁', title: 'Move to a mailbox', run: (e) => openMenuAt(e.currentTarget, props.moveItems(ids)) },
+  const actions: { label: string; glyph: IconName; title: string; run: (e: MouseEvent<HTMLButtonElement>) => void; danger?: boolean; off?: boolean }[] = [
+    ...(props.canArchive ? [{ label: 'Archive', glyph: 'archive' as const, title: 'Archive (E)', run: () => void change('archive', ids) }] : []),
+    { label: props.inTrash ? 'Delete for good…' : 'Delete', glyph: 'trash', title: props.inTrash ? 'Delete for good' : 'Delete (#)', danger: true, run: () => void change(props.inTrash ? 'destroy' : 'trash', ids) },
+    { label: props.inJunk ? 'Not junk' : 'Mark as junk', glyph: props.inJunk ? 'notJunk' : 'junk', title: props.inJunk ? 'Not junk (!)' : 'Mark as junk (!)', run: () => void change(props.inJunk ? 'notjunk' : 'junk', ids) },
+    { label: 'Mark as read', glyph: 'read', title: 'Mark as read (U)', off: !unread, run: () => void change('seen', ids) },
+    { label: 'Mark as unread', glyph: 'unread', title: 'Mark as unread (U)', off: unread === rows.length, run: () => void change('unseen', ids) },
+    { label: 'Flag', glyph: 'starFilled', title: 'Flag (S)', off: flagged === rows.length, run: () => props.flagRows(rows, true) },
+    { label: 'Unflag', glyph: 'star', title: 'Unflag (S)', off: !flagged, run: () => props.flagRows(rows, false) },
+    { label: 'Move to…', glyph: 'move', title: 'Move to a mailbox', run: (e) => openMenuAt(e.currentTarget, props.moveItems(ids)) },
   ]
   if (props.compact) {
     // A phone's width: read and flagged as one button each (all of them, or none when all are).
@@ -881,13 +886,13 @@ function Selection(props: {
     return (
       <div className="ml-sel-bar" role="toolbar" aria-label="Selected conversations">
         <button className="ml-icon" onClick={props.onClear} aria-label="Clear selection" title="Clear selection (Esc)">
-          ×
+          <Icon name="close" />
         </button>
         <strong className="ml-sel-count">{count} selected</strong>
         <span className="nb-spacer" />
         {few.map((a) => (
           <button key={a.label} className="ml-icon" onClick={a.run} disabled={a.off} aria-label={a.label} title={a.title}>
-            {a.glyph}
+            <Icon name={a.glyph} />
           </button>
         ))}
       </div>
@@ -896,9 +901,15 @@ function Selection(props: {
   return (
     <div className="ml-sel" aria-live="polite">
       <div className="ml-sel-stack" aria-hidden>
-        <span>✉</span>
-        <span>✉</span>
-        <span>✉</span>
+        <span>
+          <Icon name="mail" size={22} />
+        </span>
+        <span>
+          <Icon name="mail" size={22} />
+        </span>
+        <span>
+          <Icon name="mail" size={22} />
+        </span>
       </div>
       <h3 className="ml-sel-title">{plural(count)} selected</h3>
       <p className="muted ml-sel-facts">
@@ -907,7 +918,7 @@ function Selection(props: {
       <div className="ml-sel-actions">
         {actions.map((a) => (
           <button key={a.label} className={`btn btn-small ${a.danger ? 'btn-danger' : ''}`} onClick={a.run} disabled={a.off} title={a.title}>
-            <span aria-hidden>{a.glyph}</span> {a.label}
+            <Icon name={a.glyph} size={14} /> {a.label}
           </button>
         ))}
       </div>
@@ -1009,9 +1020,21 @@ function ThreadList(props: {
                   <span className="ml-row-from">{who}</span>
                   {r.count > 1 && <span className="ml-row-count">{r.count}</span>}
                   <span className="nb-spacer" />
-                  {r.hasAttachment && <span className="ml-row-mark" title="Attachments">📎</span>}
-                  {r.answered && <span className="ml-row-mark" title="Answered">↩</span>}
-                  {r.flagged && <span className="ml-row-mark ml-flag" title="Flagged">★</span>}
+                  {r.hasAttachment && (
+                    <span className="ml-row-mark" title="Attachments">
+                      <Icon name="paperclip" size={12} />
+                    </span>
+                  )}
+                  {r.answered && (
+                    <span className="ml-row-mark" title="Answered">
+                      <Icon name="reply" size={12} />
+                    </span>
+                  )}
+                  {r.flagged && (
+                    <span className="ml-row-mark ml-flag" title="Flagged">
+                      <Icon name="starFilled" size={12} />
+                    </span>
+                  )}
                   <time className="ml-row-date">{shortDate(r.receivedAt)}</time>
                 </div>
                 <div className="ml-row-subject">{r.subject || '(No subject)'}</div>
@@ -1020,17 +1043,17 @@ function ThreadList(props: {
               <div className="ml-row-actions" onClick={(e) => e.stopPropagation()}>
                 {props.onArchive && (
                   <button className="ml-icon" title="Archive (E)" aria-label="Archive" onClick={() => props.onArchive!(r)}>
-                    ⤓
+                    <Icon name="archive" size={15} />
                   </button>
                 )}
-                <button className="ml-icon" title={props.trash ? 'Delete for good' : 'Delete (#)'} aria-label="Delete" onClick={() => props.onDelete(r)}>
-                  🗑
+                <button className="ml-icon" title={props.trash ? 'Delete for good' : 'Delete (#)'} aria-label={props.trash ? 'Delete for good' : 'Delete'} onClick={() => props.onDelete(r)}>
+                  <Icon name="trash" size={15} />
                 </button>
                 <button className="ml-icon" title={r.seen ? 'Mark as unread (U)' : 'Mark as read (U)'} aria-label={r.seen ? 'Mark as unread' : 'Mark as read'} onClick={() => props.onSeen(r)}>
-                  {r.seen ? '●' : '○'}
+                  <Icon name={r.seen ? 'unread' : 'read'} size={15} />
                 </button>
-                <button className="ml-icon" title="Flag (S)" aria-label="Flag" onClick={() => props.onFlag(r)}>
-                  {r.flagged ? '★' : '☆'}
+                <button className={`ml-icon ${r.flagged ? 'is-flagged' : ''}`} title={r.flagged ? 'Unflag (S)' : 'Flag (S)'} aria-label={r.flagged ? 'Unflag' : 'Flag'} onClick={() => props.onFlag(r)}>
+                  <Icon name={r.flagged ? 'starFilled' : 'star'} size={15} />
                 </button>
               </div>
             </div>

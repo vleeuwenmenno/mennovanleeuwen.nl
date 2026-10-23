@@ -14,7 +14,7 @@ const FAIL_TTL = 10 * 60_000
 const cache = new Map<string, { at: number; ttl: number; value: Promise<LinkPreview> }>()
 
 /** Public addresses only (server/egress.ts), on the usual web ports: the ones to connect to. */
-async function websiteAddresses(url: URL) {
+export async function websiteAddresses(url: URL) {
   if (url.port && !['80', '443', '8080', '8443'].includes(url.port)) throw new HttpError(400, 'Unusual port')
   return publicAddresses(url)
 }
@@ -59,7 +59,35 @@ function iconHref(head: string): string | null {
   return best?.href ?? null
 }
 
-async function fetchHead(start: URL): Promise<{ url: URL; html: string }> {
+/**
+ * Every icon a page's <head> lists, as absolute web addresses with the size each promises (its
+ * `sizes`, else a guess: 180 for an apple-touch-icon, 150 for SVG (after a raster apple-touch-icon: SVG favicons often turn white for dark tabs), small otherwise). Mail's sender
+ * icons (server/mailicons.ts) pick from these.
+ */
+export function iconLinks(html: string, base: URL): { href: string; size: number }[] {
+  const head = /<head\b[\s\S]*?<\/head>/i.exec(html)?.[0] ?? html.slice(0, 100_000)
+  const out: { href: string; size: number }[] = []
+  for (const m of head.matchAll(/<link\b[^>]*>/gi)) {
+    const tag = m[0]
+    const rel = /\brel\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase() ?? ''
+    if (!/\bicon\b/.test(rel) || rel.includes('mask')) continue
+    const raw = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]
+    if (!raw) continue
+    let href: URL
+    try {
+      href = new URL(decode(raw), base)
+    } catch {
+      continue
+    }
+    if (href.protocol !== 'https:' && href.protocol !== 'http:') continue
+    const sizes = [.../\bsizes\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.matchAll(/(\d+)x(\d+)/gi) ?? []].map((s) => Math.min(Number(s[1]), Number(s[2])))
+    const size = sizes.length ? Math.max(...sizes) : /\.svg(\?|$)/i.test(href.pathname) || /image\/svg/i.test(tag) ? 150 : rel.includes('apple') ? 180 : 32
+    out.push({ href: href.href, size })
+  }
+  return out
+}
+
+export async function fetchHead(start: URL): Promise<{ url: URL; html: string }> {
   let url = start
   for (let hop = 0; hop < 4; hop++) {
     const addresses = await websiteAddresses(url)

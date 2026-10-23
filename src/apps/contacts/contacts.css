@@ -583,6 +583,31 @@
   letter-spacing: 0.02em;
   line-height: 1;
 }
+/* A sender's logo (Mail) over the initials, shown once it has loaded. A plain white plate behind
+   it, in every theme, as behind HTML mail: logos are drawn for a light page, and a transparent or
+   dark one would vanish on a dark theme. */
+.pp-avatar.has-logo {
+  position: relative;
+  overflow: hidden;
+}
+.pp-avatar-logo {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 9%;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--line);
+  object-fit: contain;
+  /* An SVG logo drawn for the light plate, not its dark-mode (often white) variant. */
+  color-scheme: light;
+  visibility: hidden;
+}
+.pp-avatar-logo.is-loaded {
+  visibility: visible;
+}
 .pp-avatar.is-group {
   width: 26px;
   height: 26px;

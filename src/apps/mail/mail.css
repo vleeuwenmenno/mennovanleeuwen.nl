@@ -23,6 +23,10 @@
   font-size: 15px;
   line-height: 1;
 }
+.ml-svg {
+  display: block;
+  flex: none;
+}
 .ml-refresh > span {
   display: inline-block;
 }
@@ -149,9 +153,15 @@
   outline-offset: -3px;
 }
 .ml-box-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
   width: 18px;
-  font-size: 13px;
-  text-align: center;
+  color: var(--muted);
+}
+.ml-box:hover .ml-box-glyph,
+.ml-box.is-on .ml-box-glyph {
+  color: var(--fg-bright);
 }
 .ml-box-name {
   flex: 1;
@@ -283,10 +293,30 @@
   font-size: 10px;
 }
 .ml-row-mark {
-  font-size: 11px;
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
 }
-.ml-flag {
+.ml-flag,
+.ml-row-mark.ml-flag,
+.ml-icon.is-flagged {
   color: var(--yellow);
+}
+.ml-msg-head .ml-flag {
+  display: inline-flex;
+  align-self: center;
+}
+/* Buttons with an icon before their words. */
+.ml-compose-btn,
+.ml-answer .btn,
+.ml-sel-actions .btn,
+.ml-compose-foot .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ml-sel-stack span .ml-svg {
+  stroke-width: 1.5;
 }
 .ml-row-date {
   flex: none;
@@ -311,9 +341,8 @@
   background: linear-gradient(90deg, transparent, var(--panel-solid) 12px);
 }
 .ml-row-actions .ml-icon {
-  width: 24px;
-  height: 24px;
-  font-size: 13px;
+  width: 26px;
+  height: 26px;
 }
 @media (hover: hover) {
   .ml-row:hover .ml-row-actions {
@@ -475,6 +504,54 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  container: ml-reader / inline-size;
+}
+/* The conversation's actions: an icon, with its name beside it on hover or keyboard focus (as
+   Fastmail does), or always when the pane has the room. On a touch screen, without hover, the
+   names are in More. */
+.ml-tool {
+  display: inline-flex;
+  gap: 0;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 28px;
+  padding: 0 6px;
+}
+.ml-tool-label {
+  max-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    max-width 0.16s ease,
+    margin 0.16s ease,
+    opacity 0.12s ease;
+}
+.ml-tool:focus-visible .ml-tool-label {
+  max-width: 12em;
+  margin-left: 6px;
+  opacity: 1;
+}
+@media (hover: hover) {
+  .ml-tool:hover:not(:disabled) .ml-tool-label {
+    max-width: 12em;
+    margin-left: 6px;
+    opacity: 1;
+  }
+}
+@container ml-reader (min-width: 780px) {
+  .ml-tool .ml-tool-label {
+    max-width: none;
+    margin-left: 6px;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ml-tool-label {
+    transition: none;
+  }
 }
 .ml-reader-bar {
   display: flex;
@@ -927,7 +1004,7 @@
   text-align: center;
 }
 .ml-empty-glyph {
-  font-size: 40px;
+  color: var(--muted);
 }
 .ml-empty-box h3 {
   margin: 0;
@@ -965,8 +1042,12 @@
 }
 @media (pointer: coarse) {
   .ml-icon {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
+  }
+  .ml-tool {
+    width: auto;
+    min-width: 40px;
   }
   .ml-box {
     padding: 10px 12px;

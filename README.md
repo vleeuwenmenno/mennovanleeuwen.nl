@@ -868,12 +868,42 @@ opens at a click in MvL OS's PDF window, a picture in Preview, and audio or vide
 through this site with the session (`/api/mail/<account>/blob/…`, only for the account's owner;
 PDF.js reads the bytes of the download, which is always `application/octet-stream`; pictures,
 audio and video of a few known types come inline, and audio and video with byte ranges for
-seeking; every answer has `nosniff` and a sandboxing CSP). The chip's ⤓ button, its right-click
+seeking; every answer has `nosniff` and a sandboxing CSP). The chip's download button, its right-click
 menu and *Download all* still download. Other attachments (Office files and the rest) download as
 before. Attachments save to Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
 Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.
+
+Mail draws its icons itself ([`src/apps/mail/icons.tsx`](src/apps/mail/icons.tsx)): thin line
+drawings in the text colour, so they follow the theme. Mailboxes get one by their role (Inbox,
+Drafts, Sent, Archive, Spam, Trash) or, for Fastmail's role-less Snoozed and Scheduled, by name;
+other folders get a folder. The reading pane's actions (Archive, Delete, Junk or Not junk, Move
+to, Mark unread, Flag, More) work the way Fastmail's do: an icon whose name slides out beside it on
+hover or keyboard focus, and every name shows when the pane is at least 780px wide (a container
+query in [`mail.css`](src/apps/mail/mail.css)). Every button also has a tooltip and an
+`aria-label`. Touch screens have no hover, so there More starts with the same actions by name, and
+it does the same in a narrow pane. Buttons are at least 40px on coarse pointers.
+
+Senders show as their contact's photo, if they have one. Otherwise they get their organisation's
+logo (as in Fastmail), and failing that their initials. The logo comes from this site,
+`/api/mail/icon/<domain>`, for signed-in users only
+([`server/mailicons.ts`](server/mailicons.ts)). The browser sends only the domain, never the
+address, and the sender's servers never see the reader. The server tries the domain's BIMI logo
+first (the `default._bimi` TXT record's SVG). After that it tries the site's own icons
+(apple-touch-icon, `<link rel=icon>` with their sizes, `/favicon.ico`) and keeps the largest
+square one, checking the real size from the bytes, not the Content-Type. It looks at the sender's
+own host first, then the organisation's domain, so `verzekeren.anwb.nl` is tried before `anwb.nl`.
+Mail-sending hosts such as `mail.`, `em123.` and `notifications.` go straight to the organisation.
+Every fetch goes through the egress checks: public addresses only, also after redirects, and web
+ports only. Each picture is limited to 256 KB and 5 seconds, the whole lookup to 15 seconds, and
+at most four lookups run at once. IP addresses and local names are refused. Found logos are cached
+in `DATA_DIR/mail-icons` for 30 days, missing ones for 3, and the browser keeps either for a
+day to a week. Logos are served with `nosniff` and a sandboxing CSP, so an SVG opened directly
+runs nothing. Addresses at personal mail services (Gmail, Outlook, iCloud, Proton, Ziggo and so
+on) keep their initials, since those logos say nothing about the person. In the avatar the logo
+sits on a white plate, so dark or transparent logos stay visible in a dark theme. The initials stay
+underneath until it has loaded, so the row doesn't shift, and they stay for good if it fails.
 
 Several conversations can be selected at once, as in Files and Photos: Ctrl or Cmd+click (or the
 circle over a sender's picture) takes one in or out, Shift+click or Shift+↑/↓ a range, Ctrl+A every
