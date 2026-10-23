@@ -69,7 +69,7 @@ export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim(
 export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
-  { id: 'images', name: 'Images', detail: 'Generate and tune pictures with ComfyUI; inspect past output with a vision-capable model' },
+  { id: 'images', name: 'Images', detail: 'Generate and tune pictures, inspect output, and learn style profiles from feedback' },
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
@@ -87,7 +87,7 @@ export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
 /** The groups there were before choices remembered which groups existed. */
 const LEGACY_TOOLS: ToolGroup[] = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory']
 /** About the user (projectId null) or one project, filed under a category path like "People/Friends". */
-export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null }
+export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null; imageLearning?: boolean; imageProfile?: boolean }
 export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null }
 
 /**
@@ -502,7 +502,11 @@ export function toolLabel(call: ToolCall, result?: string): string {
   const made = call.name.startsWith('calendar_') ? calendarOutcome(result) : null
   if (made) return `${made.done === 'created' ? 'Created' : made.done === 'updated' ? 'Changed' : 'Deleted'} event: ${made.title}${made.when ? `, ${made.when}` : ''}`
   switch (call.name) {
+    case 'read_image_learnings': return 'Read image learning evidence'
+    case 'save_image_learning': return 'Save image observation'
+    case 'save_image_profile': return 'Save suggested style profile'
     case 'generate_image':
+      if (result?.includes('\"learning_review_required\":true')) return 'Review image learnings before generation'
       return result ? 'Generated image' : `Generate image: ${s('prompt').slice(0, 120)}`
     case 'view_generated_image':
       return 'Inspect generated image with vision'

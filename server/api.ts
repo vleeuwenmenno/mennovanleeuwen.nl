@@ -1,3 +1,4 @@
+import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
@@ -397,6 +398,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (projectId && method === 'PATCH') return json(res, 200, renameProject(requireUser(req), projectId, await readJson(req, 4096))), true
     if (projectId && method === 'DELETE') return deleteProject(requireUser(req), projectId), json(res, 200, { ok: true }), true
     if (path === '/api/agents/memories' && method === 'POST') return json(res, 200, addMemory(requireUser(req), await readJson(req, 8192))), true
+    if (path.startsWith('/api/agents/image-profiles') && await handleImageProfileApi(req, res, requireUser(req), path)) return true
     if (path === '/api/agents/memories' && read) return json(res, 200, listMemories(requireUser(req))), true
     const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
     if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true

@@ -5254,3 +5254,11 @@ button.cal-day.is-picked:not(.is-today) {
 .agt-image-status small { display: block; margin-top: 5px; color: var(--muted); }
 @keyframes agt-cube-wave { 0%, 100% { transform: translateY(8%) scale(.85); opacity: .5; } 50% { transform: translateY(-18%) scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .agt-image-cube { animation: none; } }
+
+.image-profile-settings { border-bottom: 1px solid var(--line-strong); padding-bottom: 18px; margin-bottom: 18px; min-width: 0; }
+.image-profile-settings select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; font: inherit; color: var(--fg); background: var(--bg-light); border: 1px solid var(--line-strong); }
+.image-profile-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.image-profile-editor { display: grid; gap: 12px; margin-top: 14px; }
+.image-profile-editor label { display: grid; gap: 6px; min-width: 0; }
+.image-profile-editor input, .image-profile-editor textarea { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; font: inherit; color: var(--fg); background: var(--bg-light); border: 1px solid var(--line-strong); }
+.image-profile-actions .btn { min-height: 40px; white-space: normal; }

@@ -758,10 +758,11 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
       tidyMenu([
         ...textItems(e.currentTarget, e.target as Element),
         { separator: true },
-        { label: 'Edit…', onSelect: () => setEditing(m.id) },
+        { label: 'Edit…', disabled: m.imageLearning || m.imageProfile, onSelect: () => setEditing(m.id) },
         { label: 'Copy', onSelect: () => copy(m.text) },
         {
           label: 'Move to',
+          disabled: m.imageLearning || m.imageProfile,
           submenu: [
             { label: 'You (user memory)', checked: m.projectId === null, onSelect: () => void save(m, { text: m.text, category: m.category, projectId: null }) },
             ...projects.map((p) => ({ label: p.name, checked: m.projectId === p.id, onSelect: () => void save(m, { text: m.text, category: m.category, projectId: p.id }) })),
@@ -778,10 +779,10 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         editing === m.id ? (
           <MemoryForm key={m.id} memory={m} scope={m.projectId} projects={projects} categories={categories} onSave={(input) => void save(m, input)} onCancel={() => setEditing(null)} />
         ) : (
-          <div key={m.id} className="agt-mem" onContextMenu={(e) => itemMenu(e, m)} onDoubleClick={() => setEditing(m.id)}>
+          <div key={m.id} className="agt-mem" onContextMenu={(e) => itemMenu(e, m)} onDoubleClick={() => { if (!m.imageLearning && !m.imageProfile) setEditing(m.id) }}>
             <span className="agt-mem-text">{m.text}</span>
             <span className="agt-mem-actions">
-              <button className="agt-icon agt-mini" onClick={() => setEditing(m.id)} title="Edit" aria-label="Edit">
+              <button className="agt-icon agt-mini" disabled={m.imageLearning || m.imageProfile} onClick={() => setEditing(m.id)} title={m.imageLearning || m.imageProfile ? 'Structured image memory: edit profiles in Images; revise observations with image learning tools' : 'Edit'} aria-label="Edit">
                 <Icon name="edit" size={13} />
               </button>
               <button className="agt-icon agt-mini" onClick={() => forget(m)} title="Forget" aria-label="Forget">
@@ -827,7 +828,7 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         <p className="muted agt-mem-help">
           {project
             ? `Facts that only matter to ${project.name}. Threads in this project read them, next to what the agent knows about you.`
-            : 'What the agent knows about you, in every thread. It files new things under categories itself (People/Friends, Work/Tools…) and keeps them up to date; you can too.'}
+            : 'What the agent knows about you. Image profiles and observations are retrieved only for image tasks; edit profiles in Images, or forget them here. Other memories follow every thread.'}
         </p>
         <label className="agt-search agt-mem-search">
           <Icon name="search" />

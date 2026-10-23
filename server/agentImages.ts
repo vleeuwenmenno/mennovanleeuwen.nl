@@ -1,9 +1,10 @@
+import { selectedImageProfile } from './agentImageProfiles.ts'
 import { imagePresetSpec, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, privateDigest } from './db.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { checkRoom } from './quota.ts'
@@ -19,6 +20,7 @@ export function imageSettings(user: User): ImageSettings {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) as { secret: string } | undefined
   return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
 }
+export const imageBackendScope = (user: User, settings = imageSettings(user)) => privateDigest(JSON.stringify(['image-backend', user.id, settings.url, settings.token]))
 const view = (s: ImageSettings) => ({ ...s, token: !!s.token })
 export function saveImageSettings(user: User, input: Record<string, unknown>) {
   const s = imageSettings(user)
@@ -206,7 +208,7 @@ async function imageModelHints(user: User, settings: ImageSettings, signal: Abor
     return hints.filter((h) => !duplicates.has(`${h.category}:${h.name}`))
   } catch { return [] } // Plain ComfyUI/offline optional extension does not block node discovery.
 }
-export type ImageInput = { prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+export type ImageInput = { profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export function imageWorkflow(s: ImageSettings, input: ImageInput) {
   if (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 6000) throw new HttpError(400, 'Supply an image prompt of 1–6000 characters')
@@ -254,8 +256,10 @@ export function generatedImageForVision(user: User, thread: string, id?: unknown
 
 type ImagePlan = { settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
 async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
-  const allowed = new Set(['prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler'])
+  const allowed = new Set(['profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
+  const profile = selectedImageProfile(user, thread, input.profile_id)
+  if (input.profile_reason !== undefined && (typeof input.profile_reason !== 'string' || input.profile_reason.length > 200)) throw new HttpError(400, 'Profile reason must be up to 200 characters')
   const { effective, overrides: sessionOverrides } = threadImageSettings(user, thread)
   const overrides = validateImageOverrides(Object.fromEntries(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed'].filter((key) => input[key as keyof ImageInput] !== undefined).map((key) => [key, input[key as keyof ImageInput]])))
   // The entire plan, including credentials, is captured before approval. Per-call overrides never persist.
@@ -271,14 +275,14 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   if (!spec.clipType && (input.clip !== undefined && input.clip !== '' || input.vae !== undefined && input.vae !== '')) throw new HttpError(400, 'Checkpoint workflows use embedded encoder and VAE; separate component overrides are not supported')
   if (spec.clipType && !catalog.clipTypes.includes(spec.clipType)) throw new HttpError(409, 'ComfyUI does not support the required text encoder type')
   if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes(workflow.sampling.sampler) || !catalog.schedulers.includes(workflow.sampling.scheduler)) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
-  const parameters: ImageGenerationSettings = { preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
+  const parameters: ImageGenerationSettings = { profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
   return { settings, workflow, parameters }
 }
 export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
   const plan = await planImageGeneration(user, thread, input, signal)
   const p = plan.parameters
-  const rows: [string, string][] = [['Workflow', p.preset], ['Model', p.model], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
-  return { dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async () => JSON.stringify(await executeImagePlan(user, thread, plan, signal)) }
+  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
+  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async () => JSON.stringify(await executeImagePlan(user, thread, plan, signal)) }
 }
 export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
   return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal)
@@ -313,7 +317,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         limit.throwIfAborted()
         const id = randomUUID(), name = `generated-${id}.png`
         checkRoom(user, bytes.length + Buffer.byteLength(JSON.stringify(parameters)))
-        database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now(), JSON.stringify(parameters))
+        database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata, backend_scope) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now(), JSON.stringify(parameters), imageBackendScope(user, s))
         return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, seed: workflow.seed, preset: s.preset, settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without an image')

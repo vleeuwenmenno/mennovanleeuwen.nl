@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -340,6 +340,10 @@ export function database(): DatabaseSync {
   // Added later: a compaction (server/agents.ts), saved as a message with role 'compact' whose
   // content is the summary; this says how it came about (JSON {auto, reason?, instructions?, …}).
   if (!cols('agent_messages').includes('compact')) db.exec('ALTER TABLE agent_messages ADD COLUMN compact TEXT')
+  if (!cols('agent_memories').includes('image_profile')) db.exec('ALTER TABLE agent_memories ADD COLUMN image_profile TEXT')
+  if (!cols('agent_threads').includes('image_profile_id')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_profile_id INTEGER')
+  if (!cols('agent_memories').includes('image_learning')) db.exec('ALTER TABLE agent_memories ADD COLUMN image_learning TEXT')
+  if (!cols('agent_images').includes('backend_scope')) db.exec('ALTER TABLE agent_images ADD COLUMN backend_scope TEXT')
   if (!cols('agent_images').includes('metadata')) db.exec('ALTER TABLE agent_images ADD COLUMN metadata TEXT')
   if (!cols('agent_threads').includes('image_config')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_config TEXT')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
@@ -394,3 +398,6 @@ export function nextUserId(): number {
   setAppSetting('last_user_id', String(id))
   return id
 }
+
+/** Opaque private identities; raw backend addresses/credentials never enter model context. */
+export function privateDigest(value: string): string { database(); return createHmac('sha256', key!).update(value).digest('hex') }

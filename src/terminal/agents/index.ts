@@ -41,6 +41,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        settings, /images reset follows account defaults, /images set {"seed":42} updates them.
        Empty model/clip/vae values mean automatic recommendations: /images set {"vae":""}.
        /images show explains automatic/manual choices and missing or ambiguous assets.
+       /images profile lists style profiles; select <id|none>, save {"name":"…","description":"…"},
+       reset <id> or delete <id> manages them. /memory reset-images forgets image observations.
        Krea2 presets are krea2_raw and krea2_turbo; both need installed model, clip and vae.
        Generated images show a private download URL; /open previews them in the app.
 

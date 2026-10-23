@@ -69,6 +69,8 @@ let submitted: Record<string, any> = {}
 let requestedTool = 'generate_image'
 let extraToolCalls: { name: string; arguments: Record<string, unknown> }[] = []
 let providerChats = 0
+let retryLearning = true
+const providerInputs: any[] = []
 const visionRequests: any[] = []
 let holdVision = false
 let cancelledVision = 0
@@ -135,6 +137,7 @@ const ollama = createServer((req, res) => {
     const body = JSON.parse(raw)
     if (!body.stream) return send(res, { message: { content: '{"title":"Image test"}' } })
     providerChats++
+    providerInputs.push(body)
     if (body.messages.some((m: any) => m.images?.length)) {
       visionRequests.push(body)
       if (holdVision) { res.on('close', () => cancelledVision++); return }
@@ -142,7 +145,8 @@ const ollama = createServer((req, res) => {
       return res.end(JSON.stringify({ message: { role: 'assistant', content: 'The image shows a small fixture. Quality observations are uncertain at this size.' }, done: true }) + '\n')
     }
     const after = body.messages.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1)
-    const message = after.some((m: any) => m.role === 'tool') ? { content: 'Image request handled.' } : { content: '', tool_calls: [{ function: { name: requestedTool, arguments: generationArgs } }, ...extraToolCalls.map((call) => ({ function: call }))] }
+    const needsLearning = retryLearning && after.some((m: any) => m.role === 'tool' && m.content.includes('\"learning_review_required\":true')) && !after.some((m: any) => m.role === 'tool' && (m.content.startsWith('{\"image\":') || m.content.startsWith('{\"error\":')))
+    const message = after.some((m: any) => m.role === 'tool') && !needsLearning ? { content: 'Image request handled.' } : { content: '', tool_calls: [{ function: { name: needsLearning ? 'generate_image' : requestedTool, arguments: generationArgs } }, ...extraToolCalls.map((call) => ({ function: call }))] }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
     res.write(JSON.stringify({ message: { role: 'assistant', ...message }, done: false }) + '\n')
     res.end(JSON.stringify({ message: { role: 'assistant', content: '' }, done: true }) + '\n')
@@ -262,7 +266,7 @@ try {
   const eventsBeforeImage = streamEvents.length
   const completedImageTurn = await turn(t.id, true)
   const made = result(completedImageTurn)
-  assert.equal(providerChats - chatsBeforeImage, 1)
+  assert.equal(providerChats - chatsBeforeImage, 2)
   assert.equal(completedImageTurn.messages.at(-1).role, 'tool')
   assert.equal(completedImageTurn.thread.running, false)
   const generationEvents = streamEvents.slice(eventsBeforeImage)
@@ -548,21 +552,148 @@ try {
   const beforeBatch = submissions, chatsBeforeBatch = providerChats, visionBeforeBatch = visionRequests.length
   database().prepare('UPDATE agent_threads SET todos = ? WHERE id = ?').run(JSON.stringify([{ text: 'Future work', status: 'pending' }]), batchThread.id)
   const batch = await turn(batchThread.id)
-  const batchResults = batch.messages.filter((m: any) => m.role === 'tool').map((m: any) => JSON.parse(m.content))
+  const batchResults = batch.messages.filter((m: any) => m.role === 'tool').slice(-3).map((m: any) => JSON.parse(m.content))
   assert.equal(batchResults.length, 3)
   assert.ok(batchResults[0].image)
   assert.ok(batchResults[1].skipped && batchResults[2].skipped)
   assert.equal(submissions, beforeBatch + 1)
-  assert.equal(providerChats, chatsBeforeBatch + 1)
+  assert.equal(providerChats, chatsBeforeBatch + 2)
   assert.equal(visionRequests.length, visionBeforeBatch)
   assert.equal(batch.thread.todos[0].status, 'pending')
   extraToolCalls = []
   behavior = 'error'
   const errorChats = providerChats
   await turn((await thread()).id)
-  assert.equal(providerChats, errorChats + 2)
+  assert.equal(providerChats, errorChats + 3)
   behavior = 'ok'
   console.log('PASS silent generation, complete tool batches and todos, exact pending dimensions, actual vision bytes, latest/current-thread ownership, unsupported models and payload limit')
+  // Durable learning uses actual artifacts and evidence, not agent-supplied settings.
+  const { imageLearnings, saveImageLearning } = await import('../server/agentImageLearning.ts')
+  const { imageBackendScope } = await import('../server/agentImages.ts')
+  const { saveImageProfile, selectedImageProfile } = await import('../server/agentImageProfiles.ts')
+  const owner = { id: 1, admin: true } as any, stranger = { id: 2 } as any
+  const profile = await json('POST', '/api/agents/image-profiles', { name: 'Studio preference', description: 'Quiet composition and restrained contrast.' })
+  const otherProfile = await json('POST', '/api/agents/image-profiles', { name: 'Graphic preference', description: 'Simple shapes.' })
+  assert.equal(profile.origin, 'user')
+  for (const invalid of [null, [], { name: 'x', description: '', backend: 'forbidden' }]) assert.equal((await api('POST', '/api/agents/image-profiles', invalid)).status, 400)
+  assert.equal((await api('PUT', `/api/agents/image-profiles/threads/${visionThread.id}`, null)).status, 400)
+  assert.equal((await json('GET', '/api/agents/image-profiles', undefined, 1)).length, 0)
+  assert.equal((await api('POST', '/api/agents/image-profiles', { id: profile.id, name: 'stolen', description: '' }, 1)).status, 404)
+  assert.throws(() => saveImageProfile(owner, { id: profile.id, description: 'Agent overwrite' }, true), /cannot be overwritten/)
+  await json('PUT', `/api/agents/image-profiles/threads/${visionThread.id}`, { id: profile.id })
+  assert.equal(selectedImageProfile(owner, visionThread.id)?.id, profile.id)
+  assert.equal((await api('PUT', `/api/agents/image-profiles/threads/${visionThread.id}`, { id: null }, 1)).status, 404)
+  const feedbackId = Number(database().prepare('INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(visionThread.id, 'user', 'I prefer this softer result, but the hands need work.', Date.now()).lastInsertRowid)
+  const baseLearning = { image_id: lastVisionImage.id, profile_id: profile.id, task: 'Studio portrait', note: 'User prefers softer contrast; hands remain an issue.', source: 'user_feedback', evidence_message_id: feedbackId, evidence_quote: 'I prefer this softer result, but the hands need work.' }
+  const storageBeforeLearning = usedBytes(1)
+  const learned = saveImageLearning(owner, visionThread.id, baseLearning)
+  assert.ok(usedBytes(1) > storageBeforeLearning)
+  assert.deepEqual(learned.settings, lastVisionImage.settings)
+  assert.equal(learned.source.kind, 'user_feedback')
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, settings: { steps: 80 } }), /settings come from the artifact/)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, evidence_quote: 'Perfect, no flaws.' }), /match the saved message/)
+  assert.throws(() => saveImageLearning(stranger, visionThread.id, baseLearning), /No such thread/)
+  assert.throws(() => saveImageLearning(owner, batchThread.id, baseLearning), /Choose an image generated in this thread/)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, image_id: 'not-an-artifact' }), /Choose an image/)
+  const oldScope = database().prepare('SELECT backend_scope FROM agent_images WHERE id = ?').get(lastVisionImage.id) as any
+  database().prepare('UPDATE agent_images SET backend_scope = NULL WHERE id = ?').run(lastVisionImage.id)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, baseLearning), /older images/)
+  database().prepare('UPDATE agent_images SET backend_scope = ? WHERE id = ?').run(oldScope.backend_scope, lastVisionImage.id)
+  const visionMessage = inspectedThread.messages.findLast((m: any) => m.toolName === 'view_generated_image')
+  const visionNote = saveImageLearning(owner, visionThread.id, { image_id: lastVisionImage.id, profile_id: profile.id, task: 'Pixel inspection', note: 'Small fixture only; quality uncertain.', source: 'vision', evidence_message_id: visionMessage.id, evidence_quote: inspected.analysis })
+  assert.equal(visionNote.source.kind, 'vision')
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, source: 'vision' }), /completed image inspection/)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, source: 'suggestion' }), /cannot claim evidence/)
+  const updated = saveImageLearning(owner, visionThread.id, { id: learned.id, note: 'Keep the user preference provisional for other compositions.' })
+  assert.deepEqual(updated.source, learned.source)
+  assert.deepEqual(updated.settings, learned.settings)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { id: learned.id, source: 'suggestion' }), /preserve artifact and evidence/)
+  assert.throws(() => saveImageLearning(stranger, visionThread.id, { id: learned.id, note: 'wrong owner' }), /No such thread/)
+  const relevant = imageLearnings(owner, visionThread.id, lastVisionImage.settings, 'Studio portrait')
+  assert.equal(relevant.evidence.notes[0].id, learned.id)
+  assert.deepEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings, 'Studio portrait'), relevant)
+  assert.equal(imageLearnings(owner, visionThread.id, { ...lastVisionImage.settings, model: 'other/model' }).evidence.notes.length, 0)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings, '', undefined, otherProfile.id).evidence.notes.length, 0)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings, '', undefined, null).evidence.notes.length, 0)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings, '', 'different-backend').evidence.notes.length, 0)
+  assert.ok(!JSON.stringify(relevant.evidence).includes(comfyUrl) && !JSON.stringify(relevant.evidence).includes('test-secret'))
+  await json('PUT', '/api/agents/images/settings', { token: 'different-namespace' })
+  assert.notEqual(imageBackendScope(owner), oldScope.backend_scope)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings).evidence.notes.length, 0)
+  await json('PUT', '/api/agents/images/settings', settings)
+  const memories = await json('GET', '/api/agents/memories')
+  assert.ok(memories.find((m: any) => m.id === learned.id).imageLearning)
+  assert.ok(memories.find((m: any) => m.id === profile.id).imageProfile)
+  assert.equal((await api('PATCH', `/api/agents/memories/${learned.id}`, { text: 'Contradictory settings' })).status, 400)
+  assert.equal((await api('PATCH', `/api/agents/memories/${profile.id}`, { text: 'untyped overwrite' })).status, 400)
+  // Every new turn/resume re-reads evidence before a job, including in Bypass.
+  requestedTool = 'generate_image'; generationArgs = { prompt: 'Studio portrait', profile_id: profile.id, profile_reason: 'User-selected studio style', seed: 91, steps: 23 }
+  retryLearning = false
+  const submissionsBeforeGate = submissions
+  const gated = await turn(visionThread.id)
+  assert.equal(submissions, submissionsBeforeGate)
+  assert.equal(result(gated).learning_review_required, true)
+  assert.equal(result(gated).selectedProfile.id, profile.id)
+  assert.equal(result(gated).notes[0].id, learned.id)
+  assert.ok(providerInputs.at(-1).messages.filter((m: any) => m.role === 'system').every((m: any) => !m.content.includes('Keep the user preference provisional')))
+  retryLearning = true
+  const learnedGeneration = await turn(visionThread.id)
+  assert.equal(result(learnedGeneration).image.settings.steps, 23)
+  assert.equal(result(learnedGeneration).image.settings.seed, 91)
+  assert.equal(result(learnedGeneration).image.settings.profile_id, profile.id)
+  assert.equal(learnedGeneration.messages.at(-1).role, 'tool')
+  // Discovery and generation in one batch cannot count as evidence already read by the model.
+  requestedTool = 'list_image_models'; generationArgs = { prompt: 'Studio portrait', profile_id: profile.id }
+  extraToolCalls = [{ name: 'generate_image', arguments: generationArgs }]
+  const batchedRead = await turn(visionThread.id)
+  assert.ok(batchedRead.messages.some((m: any) => m.toolName === 'generate_image' && m.content.includes('learning_review_required')))
+  assert.equal(batchedRead.messages.at(-1).role, 'tool')
+  extraToolCalls = []; requestedTool = 'read_image_learnings'; generationArgs = { profile_id: profile.id, all_models: true, task: 'Studio' }
+  const readTurn = await turn(visionThread.id)
+  assert.ok(JSON.parse(readTurn.messages.findLast((m: any) => m.toolName === 'read_image_learnings').content).notes.length >= 2)
+  requestedTool = 'save_image_learning'; generationArgs = { image_id: lastVisionImage.id, profile_id: profile.id, task: 'Experiment', note: 'Try another framing only if requested.', source: 'suggestion' }
+  const saveTurn = await turn(visionThread.id)
+  assert.equal(JSON.parse(saveTurn.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).source.kind, 'suggestion')
+  assert.equal(decide('test', 'default', { name: 'save_image_learning', arguments: {} }), 'ask')
+  assert.equal(decide('test', 'plan', { name: 'save_image_profile', arguments: {} }), 'refuse')
+  await server.stop(); await server.start()
+  assert.equal((await json('GET', `/api/agents/image-profiles/threads/${visionThread.id}`)).profile.id, profile.id)
+  assert.ok((await json('GET', '/api/agents/memories')).some((m: any) => m.id === learned.id))
+  const renamed = await json('POST', '/api/agents/image-profiles', { id: profile.id, name: 'Studio revised', description: 'User correction: less contrast.' })
+  assert.equal(renamed.name, 'Studio revised')
+  assert.notEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings).receipt, relevant.receipt)
+  const receiptBeforeModelSwitch = imageLearnings(owner, visionThread.id, lastVisionImage.settings).receipt
+  database().prepare('UPDATE agent_threads SET model = ? WHERE id = ?').run('text-model', visionThread.id)
+  assert.notEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings).receipt, receiptBeforeModelSwitch)
+  database().prepare('UPDATE agent_threads SET model = ? WHERE id = ?').run('test-model', visionThread.id)
+  const extraProfiles: number[] = []
+  for (let i = 0; i < 18; i++) extraProfiles.push(saveImageProfile(owner, { name: `Bounded profile ${i}`, description: '' }).id)
+  assert.throws(() => saveImageProfile(owner, { name: 'Overflow profile', description: '' }), /20 profiles/)
+  for (const id of extraProfiles) await json('DELETE', `/api/agents/image-profiles/${id}`)
+  const imageCount = (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = 1 AND image_learning IS NOT NULL').get() as any).n
+  const extraLearningIds: number[] = []
+  for (let i = imageCount; i < 100; i++) extraLearningIds.push(Number(database().prepare('INSERT INTO agent_memories (user_id, text, category, created_at, image_learning) SELECT user_id, text, category, created_at, image_learning FROM agent_memories WHERE id = ?').run(visionNote.id).lastInsertRowid))
+  assert.throws(() => saveImageLearning(owner, visionThread.id, generationArgs), /100 image notes/)
+  for (const id of extraLearningIds) await json('DELETE', `/api/agents/memories/${id}`)
+  const oldQuota = process.env.USER_STORAGE_MB
+  process.env.USER_STORAGE_MB = '1'
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...generationArgs, note: 'Quota test' }), /storage is full/)
+  if (oldQuota === undefined) delete process.env.USER_STORAGE_MB; else process.env.USER_STORAGE_MB = oldQuota
+  for (let i = 0; i < 6; i++) saveImageLearning(owner, visionThread.id, { ...generationArgs, note: `Suggestion ${i}` })
+  const capped = imageLearnings(owner, visionThread.id, lastVisionImage.settings)
+  assert.equal(capped.evidence.notes.length, 5)
+  assert.equal(capped.evidence.truncated, true)
+  assert.ok(Buffer.byteLength(JSON.stringify(capped.evidence)) < 40_000)
+  await json('DELETE', `/api/agents/memories/${learned.id}`)
+  assert.ok(!(await json('GET', '/api/agents/memories')).some((m: any) => m.id === learned.id))
+  await json('DELETE', `/api/agents/image-profiles/${profile.id}/reset`)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings).evidence.notes.length, 0)
+  assert.equal((await json('GET', '/api/agents/image-profiles')).find((p: any) => p.id === profile.id).description, 'User correction: less contrast.')
+  await json('DELETE', `/api/agents/memories/${profile.id}`)
+  assert.equal((await json('GET', `/api/agents/image-profiles/threads/${visionThread.id}`)).profile, null)
+  await json('DELETE', `/api/agents/image-profiles/${otherProfile.id}`)
+  requestedTool = 'generate_image'; generationArgs = { prompt: 'Normal generation' }
+  console.log('PASS durable image evidence, exact provenance/settings, profile and backend isolation, first-attempt and batch review guard, per-call precedence, protected preferences, quota, bounded relevance, deletion/reset and restart')
   const metadataPath = '/api/agents/images/model-metadata?category=checkpoints&name=test.safetensors'
   const metadata = await json('GET', metadataPath)
   assert.equal(metadata.source, 'LoRA Manager')

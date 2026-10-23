@@ -1,4 +1,4 @@
-import { getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
+import { getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
 import {
   addMemory,
   agentModels,
@@ -1673,7 +1673,26 @@ export class Session {
         if (busy()) return true
         try {
           const thread = await this.ensureThread()
-          if (!arg.trim()) {
+          if (arg.startsWith('profile')) {
+            const command = arg.slice(7).trim()
+            if (command.startsWith('save ')) {
+              const value = JSON.parse(command.slice(5))
+              const profile = await saveImageProfile(value)
+              this.say(`Saved profile #${profile.id}: ${profile.name}`)
+            } else if (command.startsWith('select ')) {
+              const value = command.slice(7).trim()
+              const pin = await pinImageProfile(thread.id, value === 'none' ? null : Number(value))
+              this.say(`Profile: ${pin.profile?.name ?? 'none'}`)
+            } else if (/^(delete|reset) /.test(command)) {
+              const [action, id] = command.split(/\s+/)
+              await deleteImageProfile(Number(id), action === 'reset')
+              this.say(action === 'reset' ? 'Profile observations reset.' : 'Profile and observations deleted.')
+            } else {
+              const pin = await getImageProfilePin(thread.id)
+              for (const p of await getImageProfiles()) this.say(`#${p.id} ${p.name}${pin.profile?.id === p.id ? ' (selected)' : ''} [${p.origin}]: ${p.description}`)
+              this.say('/images profile select <id|none> | save {"name":"…","description":"…"} (optional id edits) | reset <id> | delete <id>')
+            }
+          } else if (!arg.trim()) {
             const { openSessionImages } = await import('../../apps/AgentsSessionImages')
             await openSessionImages(thread.id)
           } else {
@@ -1924,6 +1943,12 @@ export class Session {
       case '/memory':
       case '/memories': {
         const [sub, ...rest] = arg.split(/\s+/)
+        if (sub === 'reset-images') {
+          const notes = (await listMemories()).filter((m) => m.imageLearning)
+          for (const note of notes) await deleteMemory(note.id)
+          this.say(`Forgot ${notes.length} image learnings. Other memories and image settings remain.`)
+          return true
+        }
         if (sub === 'add' && rest.length) return await this.remember(rest.join(' ')), true
         if ((sub === 'rm' || sub === 'delete') && rest[0]) {
           await deleteMemory(Number(rest[0].replace('#', ''))).catch((e: Error) => this.say(e.message, 'red'))

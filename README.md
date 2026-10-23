@@ -1401,7 +1401,7 @@ backend or persist session settings. Explicit supported model/components, sampli
 width/height/seed on `generate_image` override the session only for that call. Use `/images` to change the saved model or workflow.
 
 Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
-The **Images** tool group controls `list_image_models`, `generate_image` and `view_generated_image`. Generation asks for
+The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. Generation asks for
 approval in Ask first, Auto and Edits allowed; Plan cannot generate, and Bypass runs without a
 prompt. Non-interactive `agents -p` declines approvals as usual; use an interactive session to
 approve generation, or explicitly choose `--permission-mode bypass` when unattended generation
@@ -1443,6 +1443,71 @@ Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
 LoRAs, image editing and model downloads are not included in these initial presets.
+
+**Image learning and named style profiles:** profiles organize preferences and observations in the
+existing account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
+single global “best settings” ranking. Create a profile with your own name and concise preferences
+in the session **Images → Style profile** panel; select it to pin it to that thread. The panel also
+renames/edits profiles, resets their observations while retaining preferences, or deletes a profile
+and its observations. Changes in this panel save immediately. Deleting a profile clears its thread
+pins. Ordinary image defaults and other memories are unchanged. The Memory view can inspect and
+forget individual observations or profiles; structured evidence cannot be overwritten by its generic
+text editor. Use the profile panel or image learning tools for typed edits.
+
+CLI equivalents: `/images profile` lists profiles; `/images profile select <id|none>` pins one;
+`/images profile save {"name":"My style","description":"My preferences"}` creates a user profile
+(add `"id":123` to edit/rename). `/images profile reset <id>` forgets that profile’s observations;
+`/images profile delete <id>` deletes it and its observations. `/memory` lists the full recorded
+settings and evidence, `/memory rm <id>` forgets one record, and `/memory reset-images` forgets
+all image observations while retaining profiles, preferences and image defaults.
+
+The Images tools include `read_image_learnings`, `save_image_learning` and `save_image_profile`.
+Reading returns at most 20 profile summaries and five relevant observations (24 KB of observation
+JSON), plus bounded current-thread image/evidence IDs. The user can pin a profile, or the agent can
+choose `profile_id` for one generation and explain why in `profile_reason`. There is no automatic
+keyword classifier assigning styles. Profiles guide the agent’s validated per-call choices; they do
+not silently replace saved account/session manual model selections. Explicit user requests take
+priority. `read_image_learnings` can browse recipes across models within a chosen profile using
+`all_models`; each recipe keeps its exact workflow, model, encoder and VAE identity. Task/style words
+only rank relevance of observations, never quality. No thumbnail, successful render or agent opinion
+establishes which recipe the user likes best.
+
+Before the first valid image submission **on every user turn**, the server requires a learning read
+for the current backend, selected profile, exact components and session/model settings. Discovery
+includes that evidence. If the agent calls generation directly, the tool returns
+`learning_review_required` with relevant observations and submits nothing; the agent reviews it and
+retries. Even a discovery+generation batch cannot skip this review: receipts count only after the
+batch’s results are available for the next model call. Switching components/profile/settings or
+changing notes invalidates the receipt. Restart/resume needs no persistent receipt migration and
+refreshes evidence naturally. Failed validation can still be explained without submitting a job.
+
+Learning is deliberate and evidence-based. On a later turn, user feedback or `view_generated_image`
+can support `save_image_learning`. A new record references a current-thread generated artifact;
+its actual parameters and image ID are copied by the server, never supplied as invented settings.
+Sources distinguish **unverified suggestion**, **vision observation**, and **quoted user feedback**.
+Feedback/vision quotes must match an actual later message in that thread; vision must refer to the
+same image. The agent’s note is explicitly an interpretation, including when feedback is negative
+or mixed. The server verifies provenance, not whether an interpretation accurately understands
+human taste. Updates change only note/task and preserve the original artifact/evidence; new feedback
+gets a new record, so a successful job cannot overwrite confirmed evidence. Agent-created profile
+preferences remain suggestions; user-edited preferences are protected against agent overwrites.
+Memory writes ask in Ask first/Auto/Edits allowed, are refused in Plan, and run in Bypass.
+
+Records are owner-scoped and segregated by a private backend identity derived from the configured
+endpoint and credentials, plus profile and exact model/component identifiers. Neither credentials,
+hostnames nor that private identity are included in learning context or Memory text. Changing endpoint
+or credentials isolates earlier recipes; restoring them restores that namespace. Replacing weights
+behind the same identifiers cannot be detected: reset affected observations when doing so. Profiles
+can retain separate recipes for several backends/models without mixing them. Older artifacts without
+backend provenance cannot be retroactively assigned a guessed namespace. Existing notes retain
+parameter/evidence snapshots if their source thread is later removed, until the user forgets them.
+
+Limits: 20 profiles, 100 image observations and 1000 total memories per account; names 60 characters,
+preferences 400, task/style 160 and notes/evidence quotes 500. Storage quota includes structured
+records. Image memories are excluded from general system prompts and retrieved only through image
+tools. No automatic quality scoring, background experiments or extra generation occurs. Technical
+failures remain in tool history; durable quality-failure observations require an artifact. Successful
+generation still ends silently, so learning happens on a later user turn, never as hidden follow-up.
 
 **Per-generation tuning:** the agent can now select `preset`, `model`, `clip`, `vae`, `steps`,
 `cfg`, `sampler` and `scheduler`, as well as size and seed. Before this change, sampling was fixed

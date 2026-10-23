@@ -46,6 +46,9 @@ export function compactLines(m: AgentMessage, w: number, full: boolean): Line[] 
 /** A tool call's name and argument, as its header line shows it. */
 export function toolTitle(call: ToolCall): [string, string] {
   switch (call.name) {
+    case 'read_image_learnings': return ['Image learnings', s(call, 'task')]
+    case 'save_image_learning': return ['Save image observation', s(call, 'task')]
+    case 'save_image_profile': return ['Save style profile', s(call, 'name')]
     case 'generate_image':
       return ['Generate image', s(call, 'prompt')]
     case 'view_generated_image':

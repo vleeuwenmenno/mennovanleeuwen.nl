@@ -1,3 +1,4 @@
+import { ImageProfiles } from './AgentsImageProfiles'
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { getImageCatalog, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings, type ImageCatalog, type ImageConfig, type ImageOverrides, type ThreadImageSettings } from '../data/agentImages'
@@ -46,6 +47,7 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
   const effective = view ? { ...view.defaults, ...draft, width: draft.width ?? (preset === 'sd15' ? 512 : 1024), height: draft.height ?? (preset === 'sd15' ? 512 : 1024) } : null
   return <ImageDialog title="Session image settings" onClose={onClose} wide>
     <div className="image-session-body">
+      <ImageProfiles threadId={threadId} />
       <p className="muted">Only this thread changes. Unchanged fields follow account defaults; size follows the chosen preset. Generation still uses this thread’s permission mode. Explicit size/seed in a generation request applies to that image only.</p>
       {!view && !error && <p role="status">Loading session settings…</p>}
       {view && effective && <>
