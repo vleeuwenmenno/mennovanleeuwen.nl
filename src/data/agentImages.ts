@@ -1,6 +1,7 @@
 import { api } from '../os/account'
 
-export type ImagePreset = 'sd15' | 'sdxl' | 'z_image' | 'z_image_turbo'
+import type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
+export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
 export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string }
 export type ImageCatalog = { checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[] }
 export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset }
@@ -16,3 +17,8 @@ export function generatedImage(result?: string): GeneratedImage | null {
     return image && typeof image.id === 'string' && /^[0-9a-f-]{36}$/.test(image.id) && image.url === `/api/agents/images/${image.id}` && typeof image.name === 'string' && typeof image.size === 'number' ? image : null
   } catch { return null }
 }
+
+export type ThreadImageSettings = { overrides: ImageOverrides; defaults: ImageConfig; effective: ImageConfig }
+export const getThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`)
+export const saveThreadImageSettings = (id: string, overrides: ImageOverrides) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'PUT', json: overrides })
+export const resetThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'DELETE' })

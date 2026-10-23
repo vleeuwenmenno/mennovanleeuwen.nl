@@ -1,3 +1,4 @@
+import { openSessionImages } from './AgentsSessionImages'
 import { generatedImage } from '../data/agentImages'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
@@ -1006,6 +1007,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  const [openingImages, setOpeningImages] = useState(false)
   // A compaction under way (asked for, or by itself in the middle of a turn): shown in place of the reply.
   const [compacting, setCompacting] = useState<{ auto: boolean } | null>(null)
   // A queued message being edited in the message box, and what was in the box before (back after).
@@ -1780,6 +1782,20 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       { label: 'From this computer…', onSelect: () => pcFiles.current?.click() },
     ], 'above')
 
+  const sessionImages = async () => {
+    setOpeningImages(true)
+    try {
+      let target = thread
+      if (!target) {
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, ...(draftModel ? { model: draftModel } : {}) })
+        streamed.current = target.id
+        setThread(target)
+        onCreated(target)
+      }
+      await openSessionImages(target.id)
+    } catch (e) { setError((e as Error).message) } finally { setOpeningImages(false) }
+  }
+
   return (
     <>
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
@@ -1800,6 +1816,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
           </button>
         )}
+        <button type="button" className="agt-chip" disabled={answering || openingImages} onClick={() => void sessionImages()} title="Image models and generation defaults for this session">Images</button>
         {thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}

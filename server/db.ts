@@ -340,6 +340,7 @@ export function database(): DatabaseSync {
   // Added later: a compaction (server/agents.ts), saved as a message with role 'compact' whose
   // content is the summary; this says how it came about (JSON {auto, reason?, instructions?, …}).
   if (!cols('agent_messages').includes('compact')) db.exec('ALTER TABLE agent_messages ADD COLUMN compact TEXT')
+  if (!cols('agent_threads').includes('image_config')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_config TEXT')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   return db

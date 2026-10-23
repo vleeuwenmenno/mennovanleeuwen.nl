@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
+import { modelAssets, modelFolders, visibleModelAssets } from '../src/data/imageModels.ts'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
 const send = (res: ServerResponse, data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
@@ -23,6 +24,7 @@ let historyReads = 0
 let interrupts = 0
 const deletions: string[] = []
 let submitted: Record<string, any> = {}
+let generationArgs: Record<string, unknown> = { prompt: 'A small blue bird', seed: 42 }
 const comfy = createServer((req, res) => {
   let raw = ''
   req.on('data', (b) => raw += b)
@@ -73,7 +75,7 @@ const ollama = createServer((req, res) => {
     const body = JSON.parse(raw)
     if (!body.stream) return send(res, { message: { content: '{"title":"Image test"}' } })
     const after = body.messages.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1)
-    const message = after.some((m: any) => m.role === 'tool') ? { content: 'Image request handled.' } : { content: '', tool_calls: [{ function: { name: 'generate_image', arguments: { prompt: 'A small blue bird', seed: 42 } } }] }
+    const message = after.some((m: any) => m.role === 'tool') ? { content: 'Image request handled.' } : { content: '', tool_calls: [{ function: { name: 'generate_image', arguments: generationArgs } }] }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
     res.write(JSON.stringify({ message: { role: 'assistant', ...message }, done: false }) + '\n')
     res.end(JSON.stringify({ message: { role: 'assistant', content: '' }, done: true }) + '\n')
@@ -114,12 +116,22 @@ const turn = async (id: string, approve?: boolean) => {
   }
   return json('GET', `/api/agents/threads/${id}`)
 }
-const result = (t: any) => JSON.parse(t.messages.find((m: any) => m.role === 'tool' && m.toolName === 'generate_image').content)
+const result = (t: any) => JSON.parse(t.messages.findLast((m: any) => m.role === 'tool' && m.toolName === 'generate_image').content)
 const until = async (test: () => boolean) => {
   const end = Date.now() + 5000
   while (!test()) { if (Date.now() > end) throw new Error('Timed out waiting for mock request'); await new Promise((r) => setTimeout(r, 20)) }
 }
 try {
+  const paths = ['studio/portraits/same.safetensors', 'other\\same.safetensors', 'root.safetensors', 'studio/portraits/same.safetensors', 'studio/more/deep/Long Model Name.gguf']
+  const assets = modelAssets(paths)
+  assert.equal(assets.length, 4)
+  assert.equal(assets.find((a) => a.folder === 'other')!.value, 'other\\same.safetensors')
+  assert.equal(modelFolders(assets).children.find((f) => f.path === 'studio')!.count, 2)
+  assert.deepEqual(visibleModelAssets(assets, 'studio/portraits', '').map((a) => a.value), [paths[0]])
+  assert.deepEqual(visibleModelAssets(assets, '', 'STUDIO long').map((a) => a.value), [paths[4]])
+  assert.equal(visibleModelAssets(assets, '', 'same').length, 2)
+  assert.equal(visibleModelAssets(assets, '', 'absent').length, 0)
+  console.log('PASS model browser paths, folder counts, duplicate basenames, exact backslash identifiers and global search')
   await server.start()
   const { imageWorkflow, saveImageSettings, generateImage } = await import('../server/agentImages.ts')
   const { decide } = await import('../server/agents.ts')
@@ -237,6 +249,55 @@ try {
   await json('DELETE', `/api/agents/threads/${t.id}`)
   assert.equal((await api('GET', made.image.url)).status, 404)
   console.log('PASS private-network egress denied for non-admin, cross-account generation denied, URL validation, missing-model refusal and cascade deletion')
+  await json('PUT', '/api/agents/images/settings', settings)
+  const first = await thread(), second = await thread()
+  const endpoint = (id: string) => `/api/agents/images/threads/${id}`
+  const initial = await json('GET', endpoint(first.id))
+  assert.deepEqual(initial.overrides, {})
+  assert.equal(initial.effective.model, settings.model)
+  assert.equal(initial.effective.width, 1024)
+  for (const bad of [{ url: 'https://example.com' }, { token: 'secret' }, { preset: 'anima' }, { width: 513 }, { seed: -1 }, { seed: 1.5 }, { model: 'unknown.safetensors' }, { width: 1536, height: 1536 }]) {
+    assert.equal((await api('PUT', endpoint(first.id), bad)).status, 400)
+  }
+  assert.equal((await api('GET', endpoint(first.id), undefined, 1)).status, 404)
+  assert.equal((await api('PUT', endpoint(first.id), { width: 768 }, 1)).status, 404)
+  assert.equal((await api('DELETE', endpoint(first.id), undefined, 1)).status, 404)
+  const exactModel = 'studio\\portraits\\test.safetensors'
+  info.CheckpointLoaderSimple.input.required.ckpt_name[0].push(exactModel)
+  const overrides = { preset: 'sd15', model: exactModel, width: 768, height: 512, seed: 123 }
+  const custom = await json('PUT', endpoint(first.id), overrides)
+  assert.deepEqual(custom.overrides, overrides)
+  assert.equal((await json('GET', endpoint(second.id))).effective.model, settings.model)
+  assert.equal((await json('GET', '/api/agents/images/settings')).model, settings.model)
+  assert.ok(!JSON.stringify(custom).includes('test-secret'))
+  assert.ok(!JSON.stringify(custom).includes(comfyUrl))
+  const rawThread = await json('GET', `/api/agents/threads/${first.id}`)
+  assert.equal(rawThread.thread.image_config, undefined)
+  await server.stop(); await server.start()
+  assert.deepEqual((await json('GET', endpoint(first.id))).overrides, overrides)
+  generationArgs = { prompt: 'Use session settings' }
+  const fromSession = result(await turn(first.id)).image
+  assert.equal(fromSession.seed, 123)
+  assert.equal(fromSession.width, 768)
+  assert.equal(fromSession.height, 512)
+  assert.equal(submitted['1'].inputs.ckpt_name, exactModel)
+  generationArgs = { prompt: 'Use per-call settings', seed: 77, width: 512 }
+  const once = result(await turn(first.id)).image
+  assert.equal(once.seed, 77)
+  assert.equal(once.width, 512)
+  assert.deepEqual((await json('GET', endpoint(first.id))).overrides, overrides)
+  await json('PUT', '/api/agents/images/settings', { preset: 'sd15' })
+  assert.equal((await json('GET', endpoint(second.id))).effective.width, 512)
+  await json('PUT', '/api/agents/images/settings', { url: '' })
+  assert.deepEqual((await json('DELETE', endpoint(first.id))).overrides, {})
+  await json('PUT', '/api/agents/images/settings', settings)
+  const z = await json('PUT', endpoint(second.id), { preset: 'z_image_turbo', model: 'z-test.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors', seed: null })
+  assert.equal(z.effective.seed, null)
+  generationArgs = { prompt: 'Turbo session' }
+  assert.equal(result(await turn(second.id)).image.preset, 'z_image_turbo')
+  assert.equal(submitted['1'].class_type, 'UNETLoader')
+  assert.equal(submitted['2'].inputs.type, 'lumina2')
+  console.log('PASS session ownership, strict field validation, exact model identifiers, default fallback, restart persistence, per-call precedence, secret exclusion and offline reset')
   assert.equal(fullCatalogRequests, 0)
   console.log('All image generation checks passed')
 } finally {

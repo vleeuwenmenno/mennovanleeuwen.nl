@@ -1341,6 +1341,36 @@ stored encrypted and are never returned to the browser or model. Internal/LAN Co
 are allowed only for admins, using the same DNS-pinned network guard as other integrations for
 non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
 
+Every image model field opens the same **model browser**, in account settings and session
+settings: checkpoints/diffusion models, text encoders and VAEs. It shows the installed catalog as
+folders, with breadcrumbs and a folder sidebar, search across all paths, full wrapping filenames,
+a current-selection marker and details for the selected file. Slash and backslash separators both
+form folders, but the original identifier is sent unchanged to ComfyUI. Folder/name/extension are
+shown; sizes, compatibility claims and thumbnails are not invented. Arrow keys move through rows,
+Right opens a folder, Left goes to its parent, Enter selects a row, and **Use selected model** or
+a double-click confirms. Escape cancels and returns focus to the picker. On phones, folder rows
+and breadcrumbs replace the sidebar. The workflow picker has descriptive cards for the four
+supported families; selecting a card does not imply that an arbitrary installed model supports it.
+
+**Session image settings** are available from **Images** in the conversation toolbar (including a
+new thread), or `/images` in the Agents terminal. Both open the same browser and settings dialog.
+A thread may override its preset, model, text encoder, VAE, width, height and seed. Fields marked
+*Account default* follow later changes to the account; dimensions without an override follow the
+chosen preset's size. **Use default** removes one override; **Use all account defaults** clears the
+thread's overrides, even when ComfyUI is offline. Empty seed means a fresh random seed each time.
+These settings persist with the thread across restarts, affect only that thread, and never include
+backend URLs or credentials. Generation still follows the thread's existing permission mode.
+Changing settings affects subsequent tool calls; an already submitted job keeps its captured settings.
+
+The CLI also supports `/images show`, `/images reset`, and
+`/images set {"width":768,"height":1024,"seed":42}` to merge explicit overrides into this thread.
+A workflow/model change can be supplied together in that JSON; separate diffusion workflows also
+need a compatible installed `clip` and `vae`. Unknown fields, unsupported presets and absent models
+are rejected by the shared server. Opening `/images` before the first message creates the session.
+The model can discover effective settings through `list_image_models`; it cannot reconfigure the
+backend or persist session settings. Explicit width/height/seed on `generate_image` override the
+session only for that call. Use `/images` to change the saved model or workflow.
+
 Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
 The **Images** tool group controls `list_image_models` and `generate_image`. Generation asks for
 approval in Ask first, Auto and Edits allowed; Plan cannot generate, and Bypass runs without a

@@ -37,6 +37,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        message), # remembers something. Esc stops the agent; Shift+Tab cycles between asking
        for each change, accepting edits, and plan mode (read only until you approve a plan).
        Ask for an image after configuring ComfyUI in Settings → Apps → Agents → Images.
+       /images opens the model browser and session overrides; /images show prints effective
+       settings, /images reset follows account defaults, /images set {"seed":42} updates them.
        Generated images show a private download URL; /open previews them in the app.
 
        /help lists the commands: /resume, /model, /tools, /skills, /context, /export, ….

@@ -1,3 +1,4 @@
+import { getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
 import {
   addMemory,
   agentModels,
@@ -115,6 +116,7 @@ const SLASH: [string, string][] = [
   ['/clear', 'start a new thread (also /new)'],
   ['/resume', 'continue an earlier thread'],
   ['/model', 'pick the model'],
+  ['/images', 'browse image models and session settings (show, set JSON, reset)'],
   ['/mode', 'quick answers or deep research'],
   ['/permissions', 'how changes are allowed (also shift+tab)'],
   ['/tools', 'switch tool groups on and off'],
@@ -1665,6 +1667,27 @@ export class Session {
         if (!items.length) return this.say('No threads to resume'), true
         const picked = await this.choose('Resume a thread', items)
         if (picked) await this.open(picked[0])
+        return true
+      }
+      case '/images': {
+        if (busy()) return true
+        try {
+          const thread = await this.ensureThread()
+          if (!arg.trim()) {
+            const { openSessionImages } = await import('../../apps/AgentsSessionImages')
+            await openSessionImages(thread.id)
+          } else {
+            const patch = arg.startsWith('set ') ? JSON.parse(arg.slice(4)) : undefined
+            if (arg.startsWith('set ') && (!patch || typeof patch !== 'object' || Array.isArray(patch))) throw new Error('Use a JSON object of image settings')
+            const settings = arg === 'reset' ? await resetThreadImageSettings(thread.id)
+              : arg === 'show' ? await getThreadImageSettings(thread.id)
+              : arg.startsWith('set ') ? await saveThreadImageSettings(thread.id, { ...(await getThreadImageSettings(thread.id)).overrides, ...patch })
+              : null
+            if (!settings) { this.say('Usage: /images | /images show | /images reset | /images set {"width":768,"height":1024,"seed":42}', 'yellow'); return true }
+            this.out([[seg('Session image settings', 'bold')], ...Object.entries(settings.effective).flatMap(([key, value]) => wrap([seg(`${key}: ${value === null ? 'random' : value === '' ? '(not configured)' : value} (${key in settings.overrides ? 'session override' : 'account default / preset'})`)], w)), []])
+          }
+        } catch (e) { this.say(`Image settings: ${(e as Error).message}`, 'red') }
+        this.draw()
         return true
       }
       case '/model': {

@@ -42,6 +42,70 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
   return view(s)
 }
 
+export type ImageOverrides = Partial<Pick<ImageSettings, 'preset' | 'model' | 'clip' | 'vae'>> & { width?: number; height?: number; seed?: number | null }
+const CONFIG_KEYS = new Set(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed'])
+export function validateImageOverrides(value: unknown): ImageOverrides {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'Image overrides must be an object')
+  const input = value as Record<string, unknown>
+  if (Object.keys(input).some((key) => !CONFIG_KEYS.has(key))) throw new HttpError(400, 'Only preset, model, clip, vae, width, height and seed can be overridden')
+  const out: ImageOverrides = {}
+  if ('preset' in input) {
+    if (!PRESETS.includes(input.preset as Preset)) throw new HttpError(400, 'Choose a supported image preset')
+    out.preset = input.preset as Preset
+  }
+  for (const key of ['model', 'clip', 'vae'] as const) {
+    if (!(key in input)) continue
+    if (typeof input[key] !== 'string' || !input[key].trim() || input[key].length > 2048 || /[\x00-\x1f]/.test(input[key])) throw new HttpError(400, `Choose an installed ${key}`)
+    out[key] = input[key] // Preserve the exact catalog identifier, including separators and spaces.
+  }
+  for (const key of ['width', 'height'] as const) {
+    if (!(key in input)) continue
+    const v = input[key]
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 256 || v > 1536 || v % 64) throw new HttpError(400, 'Image dimensions must be multiples of 64 between 256 and 1536')
+    out[key] = v
+  }
+  if ('seed' in input) {
+    const v = input.seed
+    if (v !== null && (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0)) throw new HttpError(400, 'Seed must be random (null) or a non-negative safe integer')
+    out.seed = v as number | null
+  }
+  return out
+}
+function ownImageThread(user: User, thread: string) {
+  const row = database().prepare('SELECT image_config FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id) as { image_config: string | null } | undefined
+  if (!row) throw new HttpError(404, 'No such thread')
+  return row
+}
+function effectiveConfig(s: ImageSettings, overrides: ImageOverrides) {
+  const preset = overrides.preset ?? s.preset
+  return { preset, model: overrides.model ?? s.model, clip: overrides.clip ?? s.clip, vae: overrides.vae ?? s.vae, width: overrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? (preset === 'sd15' ? 512 : 1024), seed: overrides.seed ?? null }
+}
+export function threadImageSettings(user: User, thread: string) {
+  const row = ownImageThread(user, thread)
+  const overrides = row.image_config ? validateImageOverrides(JSON.parse(row.image_config)) : {}
+  const s = imageSettings(user)
+  // No URL, token or auth flags enter thread data, tool results, or shared exports.
+  return { overrides, defaults: effectiveConfig(s, {}), effective: effectiveConfig(s, overrides) }
+}
+export async function saveThreadImageSettings(user: User, thread: string, value: unknown) {
+  ownImageThread(user, thread)
+  const overrides = validateImageOverrides(value)
+  const s = imageSettings(user)
+  const effective = effectiveConfig(s, overrides)
+  if (effective.width * effective.height > 1536 * 1024) throw new HttpError(400, 'Image area must not exceed 1536 × 1024 pixels')
+  // Resetting to defaults must also work with an offline or disconnected backend.
+  if (['preset', 'model', 'clip', 'vae'].some((key) => key in overrides)) {
+    const catalog = await imageCatalog(user)
+    const models = effective.preset.startsWith('z_image') ? catalog.diffusionModels : catalog.checkpoints
+    if (!models.includes(effective.model)) throw new HttpError(400, 'Choose an installed model for the selected preset')
+    if (effective.preset.startsWith('z_image') && (!catalog.clips.includes(effective.clip) || !catalog.vaes.includes(effective.vae) || !catalog.clipTypes.includes('lumina2'))) throw new HttpError(400, 'Z-Image requires an installed lumina2 text encoder and VAE')
+    // Explicit inactive encoder/VAE overrides must still refer to real catalog assets.
+    if (overrides.clip && !catalog.clips.includes(overrides.clip) || overrides.vae && !catalog.vaes.includes(overrides.vae)) throw new HttpError(400, 'Choose an installed text encoder and VAE')
+  }
+  database().prepare('UPDATE agent_threads SET image_config = ? WHERE id = ? AND user_id = ?').run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, thread, user.id)
+  return threadImageSettings(user, thread)
+}
+
 async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown) {
   if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Agents → Images first')
   // Egress checks every request, pinning DNS for non-admins; LAN endpoints are admin-only.
@@ -141,7 +205,9 @@ export async function generateImage(user: User, thread: string, input: ImageInpu
   // Check ownership here too: callers cannot write an artifact into another account's thread.
   if (!database().prepare('SELECT 1 FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id)) throw new HttpError(404, 'No such thread')
   if (active.has(user.id)) throw new HttpError(409, 'An image is already generating for this account')
-  const s = imageSettings(user), workflow = imageWorkflow(s, input)
+  const { effective } = threadImageSettings(user, thread)
+  const s = { ...imageSettings(user), preset: effective.preset, model: effective.model, clip: effective.clip, vae: effective.vae }
+  const workflow = imageWorkflow(s, { ...effective, seed: effective.seed ?? undefined, ...input })
   checkRoom(user, 1024 * 1024)
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
   active.add(user.id)
@@ -184,6 +250,12 @@ export async function generateImage(user: User, thread: string, input: ImageInpu
 }
 
 export async function handleImageApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string, user: User): Promise<boolean> {
+  const session = /^\/api\/agents\/images\/threads\/([0-9a-f-]{36})$/.exec(url.pathname)
+  if (session) {
+    if (method === 'GET') return json(res, 200, threadImageSettings(user, session[1])), true
+    if (method === 'PUT') return json(res, 200, await saveThreadImageSettings(user, session[1], await readJson(req, 16 * 1024))), true
+    if (method === 'DELETE') return json(res, 200, await saveThreadImageSettings(user, session[1], {})), true
+  }
   if (url.pathname === '/api/agents/images/settings') {
     if (method === 'GET') return json(res, 200, view(imageSettings(user))), true
     if (method === 'PUT') return json(res, 200, saveImageSettings(user, await readJson(req, 16 * 1024))), true

@@ -5122,3 +5122,84 @@ button.cal-day.is-picked:not(.is-today) {
     min-height: 44px;
   }
 }
+
+/* Image catalogs and session settings: full paths stay readable on desktop and touch screens. */
+.image-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  overflow: auto;
+}
+.image-dialog.is-wide { width: min(1080px, calc(100vw - 32px)); }
+.image-dialog::backdrop { background: color-mix(in srgb, var(--bg-darker) 80%, transparent); }
+.image-dialog-head, .image-dialog-foot { display: flex; align-items: center; gap: 12px; padding: 18px 22px; }
+.image-dialog-head { justify-content: space-between; border-bottom: 1px solid var(--line); }
+.image-dialog-head h2 { margin: 4px 0 0; font-size: 20px; color: var(--fg-bright); }
+.image-eyebrow { font-size: 10px; letter-spacing: .12em; }
+.image-dialog-intro { padding: 0 22px; }
+.image-dialog-foot { border-top: 1px solid var(--line); flex-wrap: wrap; }
+.image-dialog-foot > .muted { flex: 1; font-size: 11px; }
+.image-grow { flex: 1; }
+.image-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 20px 22px; }
+.image-preset { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--line-strong); padding: 20px; text-align: left; background: var(--bg-dark); }
+.image-preset strong { font-size: 18px; color: var(--fg-bright); }
+.image-preset p { margin: 0; }
+.image-preset-use { color: var(--accent); margin-top: auto; }
+.image-preset:hover, .image-picker:hover { border-color: var(--accent); }
+.image-preset.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.image-config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.image-config-field { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.image-config-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.image-config-label > .muted, .image-inherit { font-size: 11px; }
+.image-inherit { color: var(--accent); text-decoration: underline; min-height: 30px; }
+.image-picker { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line-strong); text-align: left; background: var(--bg-dark); }
+.image-picker strong, .image-path { overflow-wrap: anywhere; }
+.image-picker > span:last-child { color: var(--accent); font-size: 11px; }
+.image-picker:disabled { opacity: .6; }
+.image-browser-tools { display: flex; gap: 12px; padding: 16px 22px; border-bottom: 1px solid var(--line); }
+.image-browser-tools input { flex: 1; min-width: 0; }
+.image-browser-tools input, .image-numbers input { font: inherit; color: var(--fg-bright); background: var(--bg-dark); border: 1px solid var(--line-strong); padding: 10px; min-width: 0; }
+.image-browser-body { display: grid; grid-template-columns: 190px minmax(0, 1fr) 240px; grid-template-rows: minmax(0, 1fr); height: min(440px, 55dvh); min-height: 0; }
+.image-folders { border-right: 1px solid var(--line); overflow: auto; padding: 12px 0; }
+.image-folders ul, .image-model-list { list-style: none; margin: 0; padding: 0; }
+.image-folders button { display: flex; align-items: baseline; gap: 7px; padding: 9px 12px; text-align: left; width: 100%; overflow-wrap: anywhere; }
+.image-folders button small { margin-left: auto; color: var(--muted); }
+.image-folders button[aria-current], .image-folders button:hover { color: var(--accent); background: var(--bg-light); }
+.image-browser-main { padding: 14px 18px; overflow: auto; min-width: 0; }
+.image-breadcrumbs { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; overflow-wrap: anywhere; }
+.image-breadcrumbs button { color: var(--accent); text-align: left; min-height: 28px; overflow-wrap: anywhere; }
+.image-browser-count { font-size: 11px; }
+.image-model-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; border: 1px solid transparent; border-bottom-color: var(--line); padding: 12px 8px; min-height: 48px; }
+.image-model-row > span:nth-child(2) { flex: 1; min-width: 0; }
+.image-model-row strong, .image-model-row small { display: block; overflow-wrap: anywhere; }
+.image-model-row small { margin-top: 4px; color: var(--muted); }
+.image-model-row:hover { background: var(--bg-light); }
+.image-model-row.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.image-file-icon { color: var(--accent); font-size: 20px; }
+.image-current { color: var(--accent); font-size: 10px; }
+.image-model-details { padding: 18px; min-width: 0; overflow: auto; border-left: 1px solid var(--line); background: var(--bg-dark); }
+.image-model-details h3, .image-model-details dd { overflow-wrap: anywhere; }
+.image-model-details h3 { color: var(--fg-bright); margin-top: 8px; }
+.image-model-details dt { color: var(--muted); font-size: 11px; margin-top: 14px; }
+.image-model-details dd { margin: 3px 0 0; }
+.image-model-details p { font-size: 11px; margin-top: 22px; }
+.image-session-body { padding: 6px 22px 18px; overflow: auto; }
+.image-numbers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 22px; }
+.image-dialog :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.image-dialog.is-mobile { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); }
+.image-dialog.is-mobile .image-browser-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; height: auto; }
+.image-dialog.is-mobile .image-folders { display: none; }
+.image-dialog.is-mobile .image-browser-main { max-height: 42dvh; }
+.image-dialog.is-mobile .image-model-details { border-left: 0; border-top: 1px solid var(--line); }
+.image-dialog.is-mobile .image-dialog-head, .image-dialog.is-mobile .image-dialog-foot { padding: 12px; }
+.image-dialog.is-mobile .image-browser-tools { padding: 12px; }
+.image-dialog.is-mobile .image-presets, .image-dialog.is-mobile .image-numbers { grid-template-columns: minmax(0, 1fr); }
+.image-dialog.is-mobile .image-dialog-foot > .muted { flex-basis: 100%; }
+@media (max-width: 719px) {
+  .image-config-fields { grid-template-columns: minmax(0, 1fr); }
+}

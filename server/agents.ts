@@ -1,4 +1,4 @@
-import { generateImage, imageCatalog, imageSettings } from './agentImages.ts'
+import { generateImage, imageCatalog, imageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
@@ -1506,10 +1506,10 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   )
   if (imageSettings(user).url) tools.push(
     tool('list_image_models', 'Discover the installed ComfyUI image models and selected preset. Backend connection and model defaults are configured by the user in Agents Images settings.', {}, []),
-    tool('generate_image', 'Generate one image from a text prompt using the user-configured ComfyUI model. Returns a durable private image URL: show it to the user. Can take several minutes. Only generate when the user requests an image. Never configure a backend or claim success before this tool succeeds.', {
+    tool('generate_image', 'Generate one image from a text prompt using the session image settings (falling back to account defaults). list_image_models shows effective model, size and seed; explicit width/height/seed arguments override them for this call only. Returns a durable private image URL: show it to the user. Can take several minutes. Only generate when the user requests an image. Never configure a backend or claim success before this tool succeeds.', {
       prompt: str('Describe the requested image, including any exact text'),
       negative_prompt: str('Optional unwanted content; not supported by Z-Image Turbo'),
-      width: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; defaults to preset size' },
+      width: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; defaults to session size, otherwise preset size' },
       height: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; maximum area 1536 × 1024' },
       seed: { type: 'integer', description: 'Optional non-negative seed for reproducibility' },
     }, ['prompt']),
@@ -1932,8 +1932,8 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
       case 'generate_image':
         return JSON.stringify(await generateImage(user, thread, args, signal))
       case 'list_image_models': {
-        const { preset, model, clip, vae } = imageSettings(user)
-        return JSON.stringify({ selected: { preset, model, clip, vae }, ...await imageCatalog(user, limit) })
+        const { effective, overrides } = threadImageSettings(user, thread)
+        return JSON.stringify({ selected: effective, overrides, ...await imageCatalog(user, limit) })
       }
       case 'web_search': {
         const query = argString(args, 'query')
