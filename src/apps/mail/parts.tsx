@@ -379,7 +379,23 @@ export const longDate = (iso: string) => {
   return isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-/** A person's picture: their contact's photo, or their initials on a colour of their own. */
+/**
+ * Mail services where anyone has an address: their logo would say nothing about the person, so
+ * people writing from them keep their initials.
+ */
+const PERSONAL = /^(gmail|googlemail|outlook|hotmail|live|msn|passport|yahoo|ymail|rocketmail|aol|icloud|me|mac|proton|protonmail|pm|tutanota|tuta|tutamail|gmx|web|mail|email|inbox|yandex|zoho|fastmail|hey|posteo|mailbox|ziggo|kpnmail|kpnplanet|planet|hetnet|home|xs4all|chello|quicknet|telfort|online|freenet|t-online|orange|free|laposte|sfr|libero|virgilio|qq|163|126|naver|seznam|wp|o2|interia|onet)\.(com|net|org|nl|be|de|at|ch|fr|it|es|eu|fm|me|io|ru|cn|pl|cz|kr|co\.uk|com\.au)$/i
+
+/**
+ * The address of a sender's brand icon (server/mailicons.ts finds it: BIMI, else the site's own
+ * icons), by their domain only; never for personal mail services.
+ */
+export function logoFor(email: string | undefined): string | null {
+  const domain = email?.split('@')[1]?.trim().toLowerCase().replace(/\.$/, '')
+  if (!domain || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain) || PERSONAL.test(domain)) return null
+  return `/api/mail/icon/${domain}`
+}
+
+/** A person's picture: their contact's photo, else their organisation's logo, else their initials on a colour of their own. */
 export function Avatar({ person, size = 32 }: { person: Address | undefined; size?: number }) {
-  return <PersonAvatar email={person?.email} name={person?.name || person?.email || '?'} size={size} />
+  return <PersonAvatar email={person?.email} name={person?.name || person?.email || '?'} size={size} logo={logoFor(person?.email)} />
 }

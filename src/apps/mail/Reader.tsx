@@ -25,6 +25,7 @@ import {
   type Op,
 } from '../../data/mail'
 import { PersonChip } from '../contacts/people'
+import { Icon, type IconName } from './icons'
 import { Avatar, formatSize, htmlToText, InviteCard, longDate, MessageFrame, PlainText, showPerson } from './parts'
 
 // The reading pane: one conversation, oldest message first. Read and unread-but-old messages are
@@ -32,6 +33,9 @@ import { Avatar, formatSize, htmlToText, InviteCard, longDate, MessageFrame, Pla
 // (parts.tsx) with remote images held back until asked for.
 
 export type ReplyMode = 'reply' | 'replyAll' | 'forward' | 'draft'
+
+/** The toolbar's actions that give way in a narrow reading pane (mail.css) and so are always in More too. */
+const MINOR = new Set(['junk', 'move', 'unread'])
 
 type Props = {
   account: number
@@ -170,34 +174,55 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
     ]
   }
 
+  const flag = () => last && void act(account, flagged ? 'unflag' : 'flag', { emailIds: flagged ? messages!.filter((m) => m.flagged).map((m) => m.id) : [last.id] }).catch((e: Error) => setError(e.message))
+  /**
+   * The conversation's actions, Fastmail-style: an icon whose name shows beside it on hover or
+   * keyboard focus, or always once the pane is wide enough (mail.css). Without hover (a finger),
+   * More lists them again by name.
+   */
+  const tools: { id: string; icon: IconName; label: string; title: string; run: (e: MouseEvent<HTMLButtonElement>) => void; disabled?: boolean; on?: boolean; menu?: boolean }[] = [
+    { id: 'archive', icon: 'archive', label: 'Archive', title: 'Archive (E)', run: () => onAction('archive'), disabled: !role('archive') || mailbox === role('archive') },
+    { id: 'delete', icon: 'trash', label: inTrash ? 'Delete for good' : 'Delete', title: inTrash ? 'Delete for good (#)' : 'Delete (#)', run: () => onAction(inTrash ? 'destroy' : 'trash') },
+    { id: 'junk', icon: inJunk ? 'notJunk' : 'junk', label: inJunk ? 'Not junk' : 'Junk', title: inJunk ? 'Not junk (!)' : 'Mark as junk (!)', run: () => onAction(inJunk ? 'notjunk' : 'junk') },
+    { id: 'move', icon: 'move', label: 'Move to', title: 'Move to a mailbox', run: (e) => openMenuAt(e.currentTarget, moveItems()), menu: true },
+    { id: 'unread', icon: 'unread', label: 'Mark unread', title: 'Mark as unread (U)', run: () => onAction('unseen') },
+    { id: 'flag', icon: flagged ? 'starFilled' : 'star', label: flagged ? 'Unflag' : 'Flag', title: flagged ? 'Unflag (S)' : 'Flag (S)', run: () => flag(), on: flagged },
+  ]
+  /** More: the message's menu, led on touch screens and in a narrow pane by the toolbar's actions, by name. */
+  const moreMenu = (): MenuItem[] => {
+    if (!last) return []
+    const own = messageMenu(last)
+    // Junk, Move to and Mark unread always (a narrow pane hides their buttons, whatever the window); every action on a touch screen or in a narrow window.
+    const all = narrow || matchMedia('(hover: none)').matches
+    const named: MenuItem[] = tools.filter((t) => all || MINOR.has(t.id)).map((t) =>
+      t.menu ? { label: t.label, submenu: moveItems() } : { label: t.title.replace(/ \(.*\)$/, ''), disabled: t.disabled, danger: t.id === 'delete', onSelect: () => t.run(undefined as unknown as MouseEvent<HTMLButtonElement>) },
+    )
+    // The message's own read and flag items would repeat the ones just listed (each message's own More still has them).
+    const rest = own.filter((i) => !('label' in i) || !/^(Mark as (un)?read|Flag|Unflag)$/.test(i.label))
+    return [...named, { separator: true }, ...rest.filter((i, k) => !('separator' in i && i.separator && rest[k - 1] && 'separator' in rest[k - 1]))]
+  }
+
   const toolbar = (
     <header className="ml-reader-bar">
       {narrow && (
         <button className="ml-icon" onClick={onBack} aria-label="Back to the list" title="Back (Esc)">
-          ‹
+          <Icon name="back" size={18} />
         </button>
       )}
       <span className="nb-spacer" />
-      <button className="ml-icon" onClick={() => onAction('archive')} title="Archive (E)" aria-label="Archive" disabled={!role('archive') || mailbox === role('archive')}>
-        ⤓
-      </button>
-      <button className="ml-icon" onClick={() => onAction(inTrash ? 'destroy' : 'trash')} title={inTrash ? 'Delete for good (#)' : 'Delete (#)'} aria-label="Delete">
-        🗑
-      </button>
-      <button className="ml-icon" onClick={() => onAction(inJunk ? 'notjunk' : 'junk')} title={inJunk ? 'Not junk' : 'Junk'} aria-label={inJunk ? 'Not junk' : 'Mark as junk'}>
-        {inJunk ? '✓' : '⚠'}
-      </button>
-      <button className="ml-icon" onClick={(e) => openMenuAt(e.currentTarget, moveItems())} title="Move to" aria-label="Move to">
-        ⇢
-      </button>
-      <button className="ml-icon" onClick={() => onAction('unseen')} title="Mark as unread" aria-label="Mark as unread">
-        ●
-      </button>
-      <button className={`ml-icon ${flagged ? 'is-on' : ''}`} onClick={() => last && void act(account, flagged ? 'unflag' : 'flag', { emailIds: flagged ? messages!.filter((m) => m.flagged).map((m) => m.id) : [last.id] }).catch((e: Error) => setError(e.message))} title="Flag (S)" aria-label="Flag">
-        {flagged ? '★' : '☆'}
-      </button>
-      <button className="ml-icon" onClick={(e) => last && openMenuAt(e.currentTarget, messageMenu(last))} title="More" aria-label="More">
-        ⋯
+      {tools.map((t) => (
+        <button key={t.id} data-minor={MINOR.has(t.id) ? '' : undefined} className={`ml-icon ml-tool ${t.on ? 'is-on is-flagged' : ''}`} onClick={t.run} title={t.title} aria-label={t.label} aria-haspopup={t.menu ? 'menu' : undefined} disabled={t.disabled}>
+          <Icon name={t.icon} />
+          <span className="ml-tool-label" aria-hidden>
+            {t.label}
+          </span>
+        </button>
+      ))}
+      <button className="ml-icon ml-tool" onClick={(e) => last && openMenuAt(e.currentTarget, moreMenu())} title="More actions" aria-label="More" aria-haspopup="menu">
+        <Icon name="more" />
+        <span className="ml-tool-label" aria-hidden>
+          More
+        </span>
       </button>
     </header>
   )
@@ -235,13 +260,13 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
             {last && !last.draft && (
               <div className="ml-answer">
                 <button className="btn btn-small" onClick={() => onReply(last, 'reply')}>
-                  ↩ Reply
+                  <Icon name="reply" size={14} /> Reply
                 </button>
                 <button className="btn btn-small" onClick={() => onReply(last, 'replyAll')}>
-                  ↩↩ Reply all
+                  <Icon name="replyAll" size={14} /> Reply all
                 </button>
                 <button className="btn btn-small" onClick={() => onReply(last, 'forward')}>
-                  ↪ Forward
+                  <Icon name="forward" size={14} /> Forward
                 </button>
               </div>
             )}
@@ -326,12 +351,16 @@ function MessageCard({
         <time className="ml-msg-date" title={longDate(m.receivedAt)}>
           {longDate(m.receivedAt)}
         </time>
-        {m.flagged && <span className="ml-flag" title="Flagged">★</span>}
+        {m.flagged && (
+          <span className="ml-flag" title="Flagged">
+            <Icon name="starFilled" size={14} />
+          </span>
+        )}
         <button className="ml-icon" onClick={(e) => (e.stopPropagation(), onReply(m.draft ? 'draft' : 'reply'))} title={m.draft ? 'Edit draft' : 'Reply'} aria-label={m.draft ? 'Edit draft' : 'Reply'}>
-          {m.draft ? '✎' : '↩'}
+          <Icon name={m.draft ? 'compose' : 'reply'} />
         </button>
         <button className="ml-icon" onClick={(e) => (e.stopPropagation(), onMore(e))} title="More" aria-label="More">
-          ⋯
+          <Icon name="more" />
         </button>
       </header>
       {m.blocked > 0 && !m.images && (
@@ -446,7 +475,7 @@ function Attachments({ account, list }: { account: number; list: Attachment[] })
             </button>
             {v && (
               <button className="ml-att-dl ml-icon" onClick={() => download(blobUrl(account, a), a.name)} aria-label={`Download ${a.name}`} title="Download">
-                ⤓
+                <Icon name="download" size={15} />
               </button>
             )}
           </div>

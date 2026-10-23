@@ -40,20 +40,74 @@ function hue(key: string): number {
   return h
 }
 
-/** A round picture of a person: the contact's photo, or their initials on a colour of their own. */
-export function Avatar({ contact, email, name, size = 32 }: { contact?: Contact | null; email?: string; name?: string; size?: number }) {
+/**
+ * Logos that loaded (with how they fit) or failed this session: a row scrolled back into view
+ * shows its logo at once, and a missing one is not asked for again.
+ */
+const logoLoaded = new Map<string, 'cover' | 'contain'>()
+const logoFailed = new Set<string>()
+
+/**
+ * How a logo fills the circle: edge to edge (cover) when it is square and opaque at its corners,
+ * like an app icon; otherwise whole, a little inset, on the theme's backing (a transparent or
+ * wide one). Read from four corner pixels (the logo comes from this site, so the canvas may).
+ */
+function logoFit(img: HTMLImageElement): 'cover' | 'contain' {
+  const w = img.naturalWidth
+  const h = img.naturalHeight
+  if (!w || !h || Math.max(w, h) > Math.min(w, h) * 1.1) return 'contain'
+  try {
+    const c = document.createElement('canvas')
+    c.width = c.height = 16
+    const g = c.getContext('2d', { willReadFrequently: true })
+    if (!g) return 'contain'
+    g.drawImage(img, 0, 0, 16, 16)
+    const alpha = [g.getImageData(1, 1, 1, 1), g.getImageData(14, 1, 1, 1), g.getImageData(1, 14, 1, 1), g.getImageData(14, 14, 1, 1)].map((d) => d.data[3])
+    return alpha.every((a) => a > 250) ? 'cover' : 'contain'
+  } catch {
+    return 'contain'
+  }
+}
+
+/**
+ * A round picture of a person: the contact's photo, else `logo` (a sender's brand icon, Mail's),
+ * else their initials on a colour of their own. The initials stay underneath until the logo has
+ * loaded, so nothing shifts, and stay for good when it fails.
+ */
+export function Avatar({ contact, email, name, size = 32, logo }: { contact?: Contact | null; email?: string; name?: string; size?: number; logo?: string | null }) {
   const found = useContactByEmail(contact ? null : email)
   const c = contact ?? found
   const label = c ? displayName(c) : name || email || '?'
   const [broken, setBroken] = useState(false)
+  const [, setLogoState] = useState(0)
   useEffect(() => {
     setBroken(false)
   }, [c?.photo])
   const style = { width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.4)) }
   if (c?.photo && !broken) return <img className="pp-avatar" src={c.photo} alt="" style={style} onError={() => setBroken(true)} draggable={false} />
+  const showLogo = !!logo && !logoFailed.has(logo)
   return (
-    <span className="pp-avatar is-initials" style={{ ...style, ['--pp-hue' as string]: hue(c?.uid ?? email ?? label) }} aria-hidden>
+    <span className={`pp-avatar is-initials ${showLogo ? 'has-logo' : ''}`} style={{ ...style, ['--pp-hue' as string]: hue(c?.uid ?? email ?? label) }} aria-hidden>
       {initials(label)}
+      {showLogo && (
+        <img
+          className={`pp-avatar-logo ${logoLoaded.has(logo) ? `is-loaded is-${logoLoaded.get(logo)}` : ''}`}
+          src={logo}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onLoad={(e) => {
+            const fit = logoLoaded.get(logo) ?? logoFit(e.currentTarget)
+            logoLoaded.set(logo, fit)
+            e.currentTarget.classList.add('is-loaded', `is-${fit}`)
+          }}
+          onError={() => {
+            logoFailed.add(logo)
+            setLogoState((n) => n + 1)
+          }}
+        />
+      )}
     </span>
   )
 }

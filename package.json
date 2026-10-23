@@ -52,6 +52,8 @@
     "check:seafile-stream": "node scripts/seafile-stream.ts",
     "check:ics": "node scripts/ics-check.ts",
     "check:mail": "node scripts/mail-check.ts",
+    "check:mail-icons": "node scripts/mail-icons-check.ts",
+    "check:egress": "node scripts/egress-check.ts",
     "mail:mock": "node scripts/mail-mock.ts",
     "check:photos": "node scripts/photos-check.ts",
     "check:terminal-vt": "node scripts/terminal-vt.ts",
@@ -73,7 +75,8 @@
     "figlet": "^1.12.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "tldts": "^7.4.19"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

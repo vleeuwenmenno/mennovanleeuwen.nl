@@ -13,7 +13,7 @@ apps added. The desktop's user is the signed-in GitHub login (`alice@mvlos`, hom
 or `guest` ([`src/os/identity.ts`](src/os/identity.ts)).
 
 Built with Vite, React and TypeScript. The desktop runs entirely in the browser; a small
-dependency-free Node server adds live status, GitHub sign-in and synced notes (see below).
+Node server (no npm packages but `tldts`, the Public Suffix List) adds live status, GitHub sign-in and synced notes (see below).
 
 ## Develop
 
@@ -868,22 +868,99 @@ opens at a click in MvL OS's PDF window, a picture in Preview, and audio or vide
 through this site with the session (`/api/mail/<account>/blob/…`, only for the account's owner;
 PDF.js reads the bytes of the download, which is always `application/octet-stream`; pictures,
 audio and video of a few known types come inline, and audio and video with byte ranges for
-seeking; every answer has `nosniff` and a sandboxing CSP). The chip's ⤓ button, its right-click
+seeking; every answer has `nosniff` and a sandboxing CSP). The chip's download button, its right-click
 menu and *Download all* still download. Other attachments (Office files and the rest) download as
 before. Attachments save to Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
 Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.
 
-Several conversations can be selected at once, as in Files and Photos: Ctrl or Cmd+click (or the
-circle over a sender's picture) takes one in or out, Shift+click or Shift+↑/↓ a range, Ctrl+A every
-conversation loaded, Esc none; on a touch screen a long press starts selecting and taps then add
-and take away. With two or more, the reading pane says how many (a bar over the list on a phone)
-with Archive, Delete, Mark as junk or Not junk, Mark as read or unread, Flag or Unflag, and Move to…;
-the keys above, the right-click menu on a selected row and dragging a selected row onto a mailbox
-(the drag shows how many) act on all of them. A selected conversation is all its messages, and each
-action is one request, one `Email/set` on the server. The selection stays when new mail comes in and
-goes with a change of mailbox or a search.
+Mail draws its icons itself ([`src/apps/mail/icons.tsx`](src/apps/mail/icons.tsx)): thin line
+drawings in the text colour, so they follow the theme. Mailboxes get one by their role (Inbox,
+Drafts, Sent, Archive, Spam, Trash) or, for Fastmail's role-less Snoozed and Scheduled, by name;
+other folders get a folder. The reading pane's actions (Archive, Delete, Junk or Not junk, Move
+to, Mark unread, Flag, More) work the way Fastmail's do: an icon whose name slides out beside it on
+hover or keyboard focus, and every name shows when the pane is at least 780px wide (a container
+query in [`mail.css`](src/apps/mail/mail.css)). Every button also has a tooltip and an
+`aria-label`. Touch screens have no hover, so there More starts with the same actions by name, and
+it does the same in a narrow pane. Junk, Move to and Mark unread are always in More too: below
+360px (a small phone, or a reading pane squeezed by a small window) their buttons give way, so
+More always fits. Buttons are at least 40px on coarse pointers.
+
+Senders show as their contact's photo, if they have one. Otherwise they get their organisation's
+logo (as in Fastmail), and failing that their initials. The logo comes from this site,
+`/api/mail/icon/<domain>`, for signed-in users only
+([`server/mailicons.ts`](server/mailicons.ts)). Logos are looked up per organisation domain, its
+registrable domain (`anwb.nl` for `service@verzekeren.anwb.nl`, `example.co.uk` for
+`a.b.example.co.uk`), never the sender's full host and never their address. That domain comes
+from the Public Suffix List (the `tldts` package, the server's only npm dependency), ICANN
+suffixes only, so `x.github.io` counts as `github.io` and `victim-1.info.nl` as `info.nl`. So a
+sender who gives every recipient a host of their own can't learn from the lookup who opened the
+mail or when, and the sender's servers never see the reader. The server tries the domain's BIMI
+logo first (the `default._bimi` TXT record's SVG). After that it tries the site's own icons
+(apple-touch-icon, `<link rel=icon>` with their sizes, `/favicon.ico`) and keeps the largest
+square one, checking the real size from the bytes, not the Content-Type. The site's HTML and the
+SVG check are read with `indexOf` and short, anchored patterns, and tags over 4 KB are skipped,
+so a hostile page can't stall the server ([`server/preview.ts`](server/preview.ts), shared with
+Spotlight's link previews).
+
+The server limits these lookups:
+
+- Every fetch goes through the egress checks: public addresses only, also after redirects, and
+  web ports only.
+- DNS (addresses and the BIMI record) is asked of a resolver with its own deadline (2 to 2.5
+  seconds a try, two tries), and is cancelled for real when the lookup ends. This also holds for
+  every other egress check ([`resolveHost`](server/egress.ts), in place of the system's
+  `getaddrinfo`; `localhost` is still 127.0.0.1).
+- Every answer that isn't read (a redirect, an error, a page that isn't HTML) is cancelled at once.
+- Each picture is limited to 256 KB and 5 seconds. The whole lookup is limited to 15 seconds,
+  after which everything it is still fetching is cancelled. Its turn stays taken until that has
+  happened.
+- At most four lookups run at once and 50 wait. More than that, or a wait over 20 seconds, gets a
+  503, and the avatar keeps its initials.
+- Each user gets 60 new lookups a minute (cached answers don't count). After that they get a 429.
+- IP addresses and local names are refused.
+
+Found logos are cached in `DATA_DIR/mail-icons` for 30 days, missing ones for 3 days, and lookups
+that ran out of time for an hour. The cache keeps at most 2000 domains and 100 MB, and the oldest
+go first. It is tidied at startup, hourly and every 50 new entries, which also removes expired
+entries, files without their other half and leftover temporary files (never while a logo is being
+written: writes and tidying take turns). The browser keeps a logo
+for a week, and a missing one for a day. Logos are served with `nosniff` and a sandboxing CSP,
+so an SVG opened directly runs nothing. Addresses at personal mail services (Gmail, Outlook,
+iCloud, Proton, Ziggo and so on) keep their initials, since those logos say nothing about the
+person.
+
+In the avatar the logo is clipped to the same circle as the initials. A square, opaque logo (an
+app icon) fills it edge to edge. Any other logo sits whole and slightly inset on the theme's
+raised surface (`--bg-light`). The app works out which kind it is from the logo's shape and the
+transparency of its corners. A thin ring in the theme's border colour keeps a dark logo visible on
+a dark theme. The initials stay underneath until the logo has loaded, so the row doesn't shift,
+and they stay for good if it fails. `pnpm check:mail-icons` checks the SVG check, the domain rules,
+the allowance, the queue, the time limit and the cache's tidying; add `--network` for a live
+lookup. `pnpm check:egress` checks which addresses count as private, IPv6 forms that carry an
+IPv4 address included (mapped as `::ffff:7f00:1` or `::ffff:127.0.0.1`, compatible, NAT64, 6to4).
+
+Several conversations can be selected at once, as in Files and Photos, and as in Fastmail's list:
+
+- **Checkboxes:** a sender's picture turns into a checkbox on hover or keyboard focus. Ticking it
+  selects that conversation without opening it (Shift for the range from the last one), and
+  clicking anywhere else on the row opens it as before. While anything is ticked, every row shows
+  its checkbox, and selected rows are tinted with the accent bar on the left.
+- **Selection bar:** the list header becomes a bar with a select-all checkbox (indeterminate while
+  only some are selected), how many, the actions as icons with their names on hover, and ×. Next
+  to the list, the header's checkbox selects every conversation loaded.
+- **Keys and clicks:** Ctrl or Cmd+click takes one in or out, Shift+click or Shift+↑/↓ a range,
+  Ctrl+A every conversation loaded, and Esc none.
+- **Touch screens:** a long press starts selecting, taps then add and take away, and the checkbox
+  spot is a 40px target.
+
+With two or more, the reading pane also says how many, with Archive, Delete, Mark as junk or Not
+junk, Mark as read or unread, Flag or Unflag, and Move to…. The keys above, the right-click menu on
+a selected row and dragging a selected row onto a mailbox (the drag shows how many) act on all of
+them. A selected conversation is all its messages, and each action is one request, one
+`Email/set` on the server. The selection stays when new mail comes in and goes with a change of
+mailbox or a search.
 
 HTML mail is made safe on the server by an allow-list sanitiser of its own
 ([`server/mailhtml.ts`](server/mailhtml.ts): no scripts, event handlers, forms, frames, SVG,
@@ -3542,7 +3619,7 @@ use `pnpm dev`: it reloads instantly and serves the live `/api` endpoints too. P
 limit; a fine-grained token with read-only access to public repositories is enough. `PORT=...` in the
 same file changes the host port (default 8080).
 
-The container runs [`server/index.ts`](server/index.ts), a dependency-free Node server, as a
+The container runs [`server/index.ts`](server/index.ts), a Node server whose only npm packages are `tldts` and `tldts-core` (copied into the image as plain folders), as a
 non-root user on port 8080 (`PORT` changes it). Its API routes live in
 [`server/api.ts`](server/api.ts), shared with `pnpm dev`. It serves the built site, answers `/healthz`, serves
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
