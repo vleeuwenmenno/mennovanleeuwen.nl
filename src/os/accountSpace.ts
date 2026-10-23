@@ -129,6 +129,12 @@ const LEGACY = [
   /^mvlos\.browser\./,
   /^mvlos\.git\.lastRepo$/,
   /^mvlos\.launchers\.files$/,
+  // Games: what a game window keeps (by session), Empires' multiplayer player and battle, and the
+  // high scores and Gladiator careers (synced, so the account's when signed in).
+  /^mvlos\.gamewin\./,
+  /^mvlos\.empires\.mp\.(last|battle)$/,
+  /^mvlos\.highscores\.v1$/,
+  /^mvlos\.gladiator\.v1$/,
 ]
 /** The old marker of whose state the plain keys were, and the one from before sign-up was open. */
 const OLD_MARKER = 'mvlos.account'

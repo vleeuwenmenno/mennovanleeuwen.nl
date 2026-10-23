@@ -33,6 +33,7 @@ import { DesktopEntryError, formatDesktopFile, getLocalized, getValue, parseDesk
 import { MIGRATED, idInText, launcherFileName, launcherFromText, launcherText, migrateLaunchers, readLaunchers, type Launcher, type LauncherPort } from '../src/data/launcherFiles.ts'
 import { transferInto, undoMove, type Clash, type TransferPort } from '../src/data/transferPlan.ts'
 import { virtualLaunchers, type StoredLauncher } from '../src/data/launcherStore.ts'
+import { asPage } from './as-page.ts'
 
 const throwsAt = (text: string, line: RegExp) => {
   try {
@@ -190,8 +191,7 @@ database()
   .run('seafile', encrypt(JSON.stringify({ url: mock.base, username: 'check@example.com', token: 'mock-token', name: 'Check', version: '12.0.0' })), now)
 await server.start()
 
-// As a page does: it says whose state it holds (src/os/accountSpace.ts).
-const headers = { Cookie: `mvlos_sid=${sid}`, Origin: server.origin, 'X-MvL-Account': '1' }
+const headers = { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)), Origin: server.origin }
 async function api<T>(path: string, init: { method?: string; json?: unknown } = {}): Promise<T> {
   const res = await fetch(`${server.origin}${path}`, { method: init.method ?? 'GET', headers: { ...headers, ...(init.json ? { 'Content-Type': 'application/json' } : {}) }, body: init.json ? JSON.stringify(init.json) : undefined })
   const body = await res.json().catch(() => null)

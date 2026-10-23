@@ -13,7 +13,8 @@ import { accountKey } from '../../os/accountSpace'
 // window. Its session is kept for the tab (sessionStorage), and so is everything stored under it,
 // so a reload carries on and closing the tab ends the game, with no window layout to sweep against.
 
-const PREFIX = 'mvlos.gamewin.'
+// Under this tab's account (src/os/accountSpace.ts): another account's page never sweeps these.
+const PREFIX = accountKey('mvlos.gamewin.')
 const keyOf = (session: string, name: string) => `${PREFIX}${session}.${name}`
 /** Where os/synced.ts keeps the saved window layouts (windows:desktop and windows:mobile). */
 // The window layouts of this tab's account (src/os/accountSpace.ts).

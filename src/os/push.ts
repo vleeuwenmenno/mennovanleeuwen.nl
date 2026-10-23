@@ -1,4 +1,4 @@
-import { api, signedIn, subscribeAccount } from './account'
+import { api, getAccount, signedIn, subscribeAccount } from './account'
 import { accountStorage } from './accountSpace'
 
 // Web Push on this device (server/webpush.ts): Agents answers and questions arrive as system
@@ -99,15 +99,23 @@ export function startPush() {
   if (started) return
   started = true
   const refresh = async () => {
-    if (!signedIn() || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    const status = getAccount().status
+    if (status !== 'user' && status !== 'anon') return
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     let on = false
     try {
-      on = accountStorage.get(FLAG) === 'on'
+      on = signedIn() && accountStorage.get(FLAG) === 'on'
     } catch {
       /* treated as off */
     }
-    const reg = on ? await registration() : null
-    if (reg && 'PushManager' in window) await register(reg).catch(() => {})
+    const reg = await registration()
+    if (!reg || !('PushManager' in window)) return
+    if (on) return void (await register(reg).catch(() => {}))
+    // A browser has one subscription. Push is off for whoever is here now (a visitor, or an account
+    // that didn't turn it on in this browser): one still here is another account's (signed out, or
+    // another tab signed in as someone else), and its messages must stop arriving here.
+    const sub = await reg.pushManager.getSubscription().catch(() => null)
+    await sub?.unsubscribe().catch(() => {})
   }
   void refresh()
   subscribeAccount(() => void refresh())

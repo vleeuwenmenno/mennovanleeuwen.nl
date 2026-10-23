@@ -92,6 +92,86 @@ const realFetch = globalThis.fetch
   check('server: so does any request that finds no session (401)', r.status === 401 && /mvlos_uid=;.*Max-Age=0/.test(setCookies(r)))
   r = await req('/api/auth/logout', { sid: sids[1], uid: '1', held: '1', method: 'POST' })
   check('server: signing out clears it', /mvlos_uid=;.*Max-Age=0/.test(setCookies(r)))
+  // Every change needs the header (a few exceptions), and so does the notification stream.
+  check('server: any change without the header is refused (adding a code host)', (await req('/api/forges', { sid: sids[2], method: 'POST', json: {} })).status === 409)
+  check('server: the notification stream without it is refused', (await req('/api/notifications/stream?page=x', { sid: sids[2] })).status === 409)
+  check('server: reading the notification list without it is not', (await req('/api/notifications', { sid: sids[2] })).status === 200)
+  check('server: the service worker renewing its push subscription (no header) is let through', (await req('/api/push/subscription', { sid: sids[2], method: 'POST', json: {} })).status === 400)
+
+  // Push: a subscription belongs to the session that sent it.
+  const { liveSubscriptions } = await import('../server/webpush.ts')
+  const subscription = (n: number) => ({
+    subscription: { endpoint: `https://fcm.googleapis.com/fcm/send/check-${n}`, keys: { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') } },
+    device: 'check',
+  })
+  const subscribe = (sid: string, held: string, n: number) => req('/api/push/subscription', { sid, held, method: 'POST', json: subscription(n) })
+  const live = (id: number) => liveSubscriptions(id).map((r: { endpoint: string }) => r.endpoint.split('-').pop())
+  const s1b = randomBytes(24).toString('hex')
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(s1b), now, now + 86400_000)
+  const s1c = randomBytes(24).toString('hex')
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(s1c), now, now + 86400_000)
+  check('push: two devices of account 1 subscribe', (await subscribe(s1b, '1', 1)).status === 200 && (await subscribe(s1c, '1', 2)).status === 200 && live(1).sort().join() === '1,2')
+  check('push: each is tied to its session', (database().prepare('SELECT session_id FROM push_subscriptions WHERE endpoint LIKE ?').get('%check-1') as { session_id: string }).session_id === sha256(s1b))
+  await req('/api/auth/logout', { sid: s1b, held: '1', method: 'POST' })
+  check('push: signing out removes that device’s subscription', live(1).join() === '2' && !database().prepare('SELECT 1 FROM push_subscriptions WHERE endpoint LIKE ?').get('%check-1'))
+  database().prepare('UPDATE sessions SET expires_at = ? WHERE id = ?').run(now - 1, sha256(s1c))
+  check('push: a session that ran out gets nothing, and its subscription goes', live(1).length === 0 && !database().prepare('SELECT 1 FROM push_subscriptions WHERE endpoint LIKE ?').get('%check-2'))
+  // Account 2 signs in on a device account 1 subscribed: the subscription is account 2's now.
+  const s1d = randomBytes(24).toString('hex')
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(s1d), now, now + 86400_000)
+  await subscribe(s1d, '1', 3)
+  await subscribe(sids[2], '2', 3)
+  check('push: another account sending the same subscription takes it over', live(1).length === 0 && live(2).join() === '3')
+  database().prepare('INSERT INTO push_subscriptions (user_id, endpoint, keys, device, created_at) VALUES (1, ?, ?, NULL, ?)').run('https://fcm.googleapis.com/fcm/send/check-4', 'x', now)
+  check('push: a subscription from before sessions (none tied) gets nothing', !live(1).includes('4'))
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(sids[1]), now, now + 86400_000)
+
+  // Empires: a kept token only brings back a player of the same account.
+  const ws = (sid: string | null) =>
+    new Promise<{ send: (m: unknown) => void; next: (t: string[]) => Promise<Record<string, unknown>>; close: () => void }>((resolve) => {
+      const sock = new WebSocket(server.url, { headers: { Origin: server.origin, ...(sid ? { Cookie: `mvlos_sid=${sid}` } : {}) } } as never)
+      const inbox: Record<string, unknown>[] = []
+      const waiting: (() => void)[] = []
+      sock.onmessage = (e) => (inbox.push(JSON.parse(String(e.data))), waiting.splice(0).forEach((f) => f()))
+      sock.onopen = () =>
+        resolve({
+          send: (m) => sock.send(JSON.stringify(m)),
+          next: async (types) => {
+            for (let i = 0; i < 100; i++) {
+              const at = inbox.findIndex((m) => types.includes(m.t as string))
+              if (at >= 0) return inbox.splice(at, 1)[0]
+              await new Promise<void>((r) => (waiting.push(r), setTimeout(r, 50)))
+            }
+            throw new Error(`no ${types.join('/')}`)
+          },
+          close: () => sock.close(),
+        })
+    })
+  const { PROTOCOL } = await import('../src/apps/games/empires/protocol.ts')
+  const a1 = await ws(sids[1])
+  a1.send({ t: 'hello', v: PROTOCOL })
+  await a1.next(['ready'])
+  a1.send({ t: 'claim', name: 'Acctone' })
+  const token = (await a1.next(['welcome'])).token as string
+  a1.close()
+  await sleep(300)
+  const b2 = await ws(sids[2])
+  b2.send({ t: 'hello', v: PROTOCOL, token, stored: true })
+  const asB = await b2.next(['ready', 'welcome'])
+  check('empires: account 2 can’t take account 1’s player with the token this browser kept', asB.t === 'ready')
+  b2.close()
+  const guest = await ws(null)
+  guest.send({ t: 'hello', v: PROTOCOL, token, stored: true })
+  check('empires: nor can a guest', (await guest.next(['ready', 'welcome'])).t === 'ready')
+  guest.close()
+  const away = async (sid: string, held: string) => ((await (await req('/api/empires/away', { sid, held, method: 'POST', json: { token } })).json()) as { battle: boolean }).battle
+  check('empires: "a battle waits" isn’t answered for another account’s token', (await away(sids[2], '2')) === false)
+  const a1again = await ws(sids[1])
+  a1again.send({ t: 'hello', v: PROTOCOL, token, stored: true })
+  const back = await a1again.next(['ready', 'welcome'])
+  check('empires: account 1 gets its player back with it', back.t === 'welcome' && back.resumed === true)
+  a1again.close()
+
   const auth = readFileSync(new URL('../server/auth.ts', import.meta.url), 'utf8')
   check('server: signing in sets it, readable, like the login cookie', /setCookie\(req, UID_COOKIE, String\(id\), \{ maxAge: SESSION_DAYS \* 86400, readable: true \}\)/.test(auth))
   await server.dispose()
@@ -181,6 +261,17 @@ g.localStorage = new Proxy(g.localStorage as object, {
   ownKeys: (t) => (guard(), [...storage.keys(), ...Reflect.ownKeys(t)]),
   getOwnPropertyDescriptor: (t, k) => (typeof k === 'string' && storage.has(k) ? { value: storage.get(k), enumerable: true, configurable: true } : Reflect.getOwnPropertyDescriptor(t, k)),
 })
+
+const tabStore = new Map<string, string>()
+g.sessionStorage = {
+  getItem: (k: string) => tabStore.get(k) ?? null,
+  setItem: (k: string, v: string) => void tabStore.set(k, String(v)),
+  removeItem: (k: string) => void tabStore.delete(k),
+  key: (i: number) => [...tabStore.keys()][i] ?? null,
+  get length() {
+    return tabStore.size
+  },
+}
 
 /** The browser's cookies: who it is signed in as (the session) and the readable account id. */
 const jar = { session: 0 as number, uid: '' as string, valid: true }
@@ -469,6 +560,35 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   check('visitor: the account’s new space starts with the visitor’s notes', A.notes.get().join() === 'as-a-visitor')
   await sleep(1200)
   check('visitor: and they reach the account', JSON.stringify([...stateOf(1)]).includes('as-a-visitor'))
+}
+
+// --- 13. game saves: another account's page doesn't sweep them; a direct link's game keeps its own ---
+{
+  reset()
+  tabStore.clear()
+  const A = await openTab()
+  const gameA = await within(A.win, async () => (await import(`../src/apps/games/session.ts?tab=${tabCount}`)) as typeof import('../src/apps/games/session.ts'))
+  // Account 1's Empires window keeps its campaign under the window's session (in its layout).
+  as(A.win, () => gameA.sessionPut('s-a', 'empires.campaign', ['A-campaign', true]))
+  storage.set('mvlos.u.1.sync.windows:desktop', JSON.stringify({ value: [{ app: 'games', props: { game: 'empires', session: 's-a' } }], base: 0, dirty: false }))
+  signIn(2)
+  const B = await openTab()
+  await within(B.win, async () => await import(`../src/apps/games/session.ts?tab=${tabCount}`)) // B's page sweeps its own windows' games
+  check('games: account 2’s page doesn’t sweep account 1’s game saves', JSON.stringify(storage.get('mvlos.u.1.gamewin.s-a.empires.campaign')) === JSON.stringify(JSON.stringify(['A-campaign', true])))
+  check('games: and can’t read them', as(B.win, () => B.space.accountStorage.get('mvlos.gamewin.s-a.empires.campaign')) === null)
+  // A direct link's game (/play/<id>) keeps its own for the tab.
+  const play = as(B.win, () => gameA.playSession('empires'))
+  as(B.win, () => gameA.sessionPut(play, 'empires.battle', { n: 1 }))
+  check('games: a direct link’s game finds what it kept', JSON.stringify(as(B.win, () => gameA.sessionGet(play, 'empires.battle'))) === '{"n":1}')
+  // The release before kept them in plain keys: they move into the account's space.
+  reset()
+  storage.set('mvlos.account', '1')
+  storage.set('mvlos.gamewin.s-old.empires.campaign', '["old"]')
+  storage.set('mvlos.highscores.v1', '{"snake":[1]}')
+  storage.set('mvlos.gladiator.v1', '{"careers":[]}')
+  storage.set('mvlos.empires.mp.last', 'tok')
+  await openTab()
+  check('games: old game saves, high scores, Gladiator careers and the Empires player move in', ['gamewin.s-old.empires.campaign', 'highscores.v1', 'gladiator.v1', 'empires.mp.last'].every((k) => storage.has(`mvlos.u.1.${k}`) && !storage.has(`mvlos.${k}`)))
 }
 
 finish()

@@ -55,6 +55,12 @@ export type User = { id: number; login: string; name: string | null; avatar: str
 
 type UserRow = { id: number; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
 
+/** The stored key of this request's session (what sessions.id holds), or null without one. */
+export function sessionKey(req: IncomingMessage): string | null {
+  const sid = cookies(req)[SESSION_COOKIE]
+  return sid ? sha256(sid) : null
+}
+
 /** The signed-in user for this request, or null. */
 export function currentUser(req: IncomingMessage): User | null {
   if (!authEnabled()) return null
@@ -195,7 +201,11 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
 
 export function logout(req: IncomingMessage, res: ServerResponse) {
   const sid = cookies(req)[SESSION_COOKIE]
-  if (sid && authEnabled()) database().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid))
+  if (sid && authEnabled()) {
+    // Its push subscriptions go with it: this device no longer gets the account's messages.
+    database().prepare('DELETE FROM push_subscriptions WHERE session_id = ?').run(sha256(sid))
+    database().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid))
+  }
   json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SESSION_COOKIE, '', { maxAge: 0 }), setCookie(req, LOGIN_COOKIE, '', { maxAge: 0, readable: true }), setCookie(req, UID_COOKIE, '', { maxAge: 0, readable: true })] })
 }
 

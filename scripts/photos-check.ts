@@ -37,6 +37,7 @@ import { Server, check, finish, sleep } from './empires-harness.ts'
 import { fixture, immichMock, jpegTaken, seafileMock, type ImAsset, type SfLib } from './photos-mock.ts'
 import { HEAD, readMeta, readMore, type Meta } from '../server/exif.ts'
 import { readEntry, readZip } from '../src/data/zip.ts'
+import { asPage } from './as-page.ts'
 
 // --- The EXIF reader --------------------------------------------------------------------------------
 
@@ -213,7 +214,7 @@ async function call(path: string, init: { method?: string; body?: unknown; heade
   const res = await fetch(`${server.origin}${path}`, {
     method: init.method ?? 'GET',
     redirect: 'manual',
-    headers: { Cookie: `mvlos_sid=${sids[(init.as ?? 1) - 1]}`, Origin: server.origin, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+    headers: { Cookie: `mvlos_sid=${sids[(init.as ?? 1) - 1]}`, ...(await asPage(sids[(init.as ?? 1) - 1])), Origin: server.origin, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   })
   const bytes = Buffer.from(await res.arrayBuffer())

@@ -192,6 +192,9 @@ export function database(): DatabaseSync {
     device TEXT,
     created_at INTEGER NOT NULL
   )`)
+  // Added later: the session that made the subscription (sessions.id). Messages only go to
+  // subscriptions whose session is still valid, and signing out removes them (server/webpush.ts).
+  if (!cols('push_subscriptions').includes('session_id')) db.exec('ALTER TABLE push_subscriptions ADD COLUMN session_id TEXT')
   // A quick answer asked from Spotlight: kept out of the Agents app until it is continued there.
   if (!cols('agent_threads').includes('quick')) db.exec('ALTER TABLE agent_threads ADD COLUMN quick INTEGER NOT NULL DEFAULT 0')
   // Added later: open sign-up. When someone was last seen, whether (and why) they were banned, and
