@@ -1330,6 +1330,44 @@ request that would still end there gets a short "Continue." after it.
 pnpm check:agents-roles   # The nudge, the todo wrap-up and a restart mid-reply, against a stand-in Ollama that refuses a trailing assistant message
 ```
 
+**Image generation.** In Settings → Apps → Agents → Images (also the app's settings),
+enter your ComfyUI URL and optional bearer token, then **Save & discover models**. Select a preset
+and installed model, and save again. Connections belong to the signed-in account; secrets are
+stored encrypted and are never returned to the browser or model. Internal/LAN ComfyUI addresses
+are allowed only for admins, using the same DNS-pinned network guard as other integrations for
+non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
+
+Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
+The **Images** tool group controls `list_image_models` and `generate_image`. Generation asks for
+approval in Ask first, Auto and Edits allowed; Plan cannot generate, and Bypass runs without a
+prompt. Non-interactive `agents -p` declines approvals as usual; use an interactive session to
+approve generation, or explicitly choose `--permission-mode bypass` when unattended generation
+is intended. Both interactive and print output include a private image URL. `/open` opens the
+thread in the app, where the image has a thumbnail, full-size view, **Open in Preview** and
+**Download**. The link requires the owner's signed-in session; sharing a thread does not publish
+its generated images.
+
+The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 px) and SDXL
+(1024 px) use a complete checkpoint with its text encoder and VAE; Z-Image and Z-Image Turbo use
+an installed diffusion model, a compatible `lumina2` text encoder and a separately selected VAE.
+Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Image uses 20 steps and CFG 4;
+checkpoint presets use 25 steps and CFG 7. Choose the family that matches the actual model:
+filenames alone do not establish compatibility. Discovery reads ComfyUI's `/object_info`, and
+required models, nodes and sampler options are checked before submission. Flux, custom workflows,
+LoRAs, image editing and model downloads are not included in these initial presets.
+
+Each call makes one PNG. Width/height can be requested in multiples of 64 from 256 to 1536,
+with at most 1536 × 1024 pixels; the result includes a reproducible seed. One generation runs per
+account at a time, with a ten-minute deadline and a 20 MB output limit. Stop/Esc stops waiting and
+removes that prompt from ComfyUI's pending queue. An already running GPU job may finish there;
+Agents never sends a global interrupt that could stop someone else's job, and cancelled output is
+not stored. Errors appear in the existing tool card and CLI output. Successful PNGs live in the
+server database, survive restarts and backend cleanup, count toward the account's storage quota,
+and are deleted with their thread. Rewinding a conversation does not reclaim its generated images;
+delete the thread to reclaim that storage. `pnpm check:agents-images` exercises generation with
+mock ComfyUI/Ollama, permissions, owner-only downloads, cancellation, quota accounting and failures
+without running a GPU job.
+
 **Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
 title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;
 4 by default, sooner when a thread grows by more than about 24,000 characters over at least two

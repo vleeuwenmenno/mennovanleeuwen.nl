@@ -1,3 +1,4 @@
+import { generatedImage } from '../../data/agentImages'
 import { calendarTime, compactionText, toolLabel, type AgentMessage, type Todo, type ToolCall } from '../../data/agents'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
@@ -45,6 +46,10 @@ export function compactLines(m: AgentMessage, w: number, full: boolean): Line[] 
 /** A tool call's name and argument, as its header line shows it. */
 export function toolTitle(call: ToolCall): [string, string] {
   switch (call.name) {
+    case 'generate_image':
+      return ['Generate image', s(call, 'prompt')]
+    case 'list_image_models':
+      return ['Image models', 'ComfyUI']
     case 'read_file':
       return ['Read', s(call, 'path')]
     case 'write_file':
@@ -181,6 +186,14 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
   const ok = (body: Line[]) => [header(call, 'green', w), ...body]
   const max = verbose ? 200 : 6
   switch (call.name) {
+    case 'generate_image': {
+      const image = generatedImage(result)
+      if (image) {
+        const url = new URL(image.url, location.origin).href
+        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+      }
+      return ok([under(oneLine(result))])
+    }
     case 'read_file': {
       const n = result.split('\n').filter((l) => /^\s+\d+\t/.test(l)).length
       return ok([under(n ? `Read ${n} line${n === 1 ? '' : 's'}` : oneLine(result))])

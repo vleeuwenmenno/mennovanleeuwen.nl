@@ -66,9 +66,10 @@ export const compactionText = (c: Compaction | undefined) =>
 export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim())
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
+export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
+  { id: 'images', name: 'Images', detail: 'Generate pictures with ComfyUI; configure the connection and installed models in Images settings' },
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
@@ -499,6 +500,10 @@ export function toolLabel(call: ToolCall, result?: string): string {
   const made = call.name.startsWith('calendar_') ? calendarOutcome(result) : null
   if (made) return `${made.done === 'created' ? 'Created' : made.done === 'updated' ? 'Changed' : 'Deleted'} event: ${made.title}${made.when ? `, ${made.when}` : ''}`
   switch (call.name) {
+    case 'generate_image':
+      return result ? 'Generated image' : `Generate image: ${s('prompt').slice(0, 120)}`
+    case 'list_image_models':
+      return 'Discover image models'
     case 'web_search':
       return `Searched the web for “${s('query')}”`
     case 'web_fetch':

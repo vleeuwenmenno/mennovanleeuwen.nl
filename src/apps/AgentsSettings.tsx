@@ -1,3 +1,4 @@
+import { AgentsImageSettings } from './AgentsImageSettings'
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_READS_EVENT, removeSite, removeSkill, setMailReads, setSkillEnabled, type AllowedSite, type MailReadsMode, type Skill } from '../data/agents'
@@ -41,7 +42,7 @@ export function usePromptLocation() {
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-export type SectionId = 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'skills' | 'prompt' | 'shares'
+export type SectionId = 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'images' | 'skills' | 'prompt' | 'shares'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
@@ -52,6 +53,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
+  { id: 'images', label: 'Images', blurb: 'Generate images with your ComfyUI server, using installed models and workflow presets.', icon: icon(<><rect x="3" y="3" width="18" height="18" /><path d="M3 17l6-6 4 4 3-3 5 5" /></>) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
@@ -334,6 +336,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
     ),
     permissions: <PermissionSettings />,
     search: <WebSearchSettings />,
+    images: <AgentsImageSettings />,
     shares: <SharesSettings />,
     skills: <SkillsSettings />,
     prompt: (

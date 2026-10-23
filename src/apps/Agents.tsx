@@ -1,3 +1,4 @@
+import { generatedImage } from '../data/agentImages'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
@@ -99,7 +100,7 @@ import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
-import { AttachedFiles, memoryPicture, sentPicture } from './AgentsImages'
+import { AttachedFiles, memoryPicture, sentPicture, Thumbnails } from './AgentsImages'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
@@ -2120,6 +2121,8 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
+          const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
+          if (image) return <div key={j} data-tool={`${m.id}:${j}`}><p className="muted">Generated image · {image.width} × {image.height} · seed {image.seed}</p><Thumbnails pictures={[{ name: image.name, src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true }]} /></div>
           return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
         })}
       </Fragment>,
@@ -2259,6 +2262,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
         {call.name.startsWith('mail_') && (
           <p className="muted agt-ask-why">{MAIL_READ_TOOLS.has(call.name) ? 'Mail asks you first, in every mode: what it reads is private. You can let it search and read mail in this thread for 15 minutes, or always; sending and changes still ask.' : 'Mail always asks you first, in every mode: what it reads and sends is private.'}</p>
         )}
+        {call.name === 'generate_image' && <pre className="agt-tool-body">{JSON.stringify(call.arguments, null, 2)}</pre>}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (

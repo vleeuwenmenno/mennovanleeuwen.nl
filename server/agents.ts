@@ -1,3 +1,4 @@
+import { generateImage, imageCatalog, imageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
@@ -151,9 +152,11 @@ export async function automaticModels(): Promise<{ quick: string; deep: string; 
 // --- tool groups -----------------------------------------------------------------------------
 
 /** What a thread may use, switched in the window: each group is one or more tools. */
-export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'mail', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
+export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'mail', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills', 'images'] as const
 export type ToolGroup = (typeof TOOL_GROUPS)[number]
 const GROUP_OF: Record<string, ToolGroup> = {
+  generate_image: 'images',
+  list_image_models: 'images',
   web_search: 'web',
   web_fetch: 'web',
   search_notes: 'notes',
@@ -186,7 +189,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
 }
 const toolGroups = (v: unknown): ToolGroup[] | null => (Array.isArray(v) ? TOOL_GROUPS.filter((g) => v.includes(g)) : null)
 /** Groups added after threads first stored their choice as a bare list: a list from then doesn't know them, so they are on. */
-const LATER_GROUPS: ToolGroup[] = ['mail']
+const LATER_GROUPS: ToolGroup[] = ['mail', 'images']
 /**
  * A thread's stored groups: `{ on, seen }`, `seen` being the groups there were when it was saved,
  * so any group added since starts switched on, like it does for a new thread. A bare list is from
@@ -1501,6 +1504,16 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
     tool('use_skill', 'Read a skill (instructions for a kind of task, listed in the system prompt) in full, before you start a task it covers. Answers its instructions and the files in its folder.', { name: str('The skill name') }, ['name']),
     tool('read_skill_file', "Read a file from a skill's folder, by its path relative to the folder (as use_skill lists them).", { name: str('The skill name'), path: str('The file, like templates/notes.md') }, ['name', 'path']),
   )
+  if (imageSettings(user).url) tools.push(
+    tool('list_image_models', 'Discover the installed ComfyUI image models and selected preset. Backend connection and model defaults are configured by the user in Agents Images settings.', {}, []),
+    tool('generate_image', 'Generate one image from a text prompt using the user-configured ComfyUI model. Returns a durable private image URL: show it to the user. Can take several minutes. Only generate when the user requests an image. Never configure a backend or claim success before this tool succeeds.', {
+      prompt: str('Describe the requested image, including any exact text'),
+      negative_prompt: str('Optional unwanted content; not supported by Z-Image Turbo'),
+      width: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; defaults to preset size' },
+      height: { type: 'integer', description: 'Pixels, multiple of 64, 256–1536; maximum area 1536 × 1024' },
+      seed: { type: 'integer', description: 'Optional non-negative seed for reproducibility' },
+    }, ['prompt']),
+  )
   if (opts.workdir) tools.push(...workdirTools())
   if (opts.terminal) tools.push(terminalTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
@@ -1761,7 +1774,7 @@ async function webReadGate(user: User, key: string, thread: string, permission: 
  * event lands in a calendar others may share, and can mail its guests. (Mail asks for every call,
  * reads too: see decide.)
  */
-const NEEDS_APPROVAL = new Set(['seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
+const NEEDS_APPROVAL = new Set(['generate_image', 'seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
 const changes = (name: string) => NEEDS_APPROVAL.has(name) || NOTE_LINK_WRITES.has(name) || MAIL_WRITES.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
 const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
 
@@ -1916,6 +1929,12 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
   const limit = AbortSignal.any([signal, AbortSignal.timeout(45_000)])
   try {
     switch (call.name) {
+      case 'generate_image':
+        return JSON.stringify(await generateImage(user, thread, args, signal))
+      case 'list_image_models': {
+        const { preset, model, clip, vae } = imageSettings(user)
+        return JSON.stringify({ selected: { preset, model, clip, vae }, ...await imageCatalog(user, limit) })
+      }
       case 'web_search': {
         const query = argString(args, 'query')
         if (!query) throw new Error('A query is required')

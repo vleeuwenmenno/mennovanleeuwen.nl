@@ -133,6 +133,14 @@ export function database(): DatabaseSync {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS agent_messages_thread ON agent_messages (thread_id, id);
+    CREATE TABLE IF NOT EXISTS agent_images (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      body BLOB NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_images_thread ON agent_images (thread_id);
     CREATE TABLE IF NOT EXISTS agent_memories (
       id INTEGER PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

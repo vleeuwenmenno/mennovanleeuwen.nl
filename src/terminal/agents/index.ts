@@ -1,3 +1,4 @@
+import { generatedImage } from '../../data/agentImages'
 import { agentSettings, answerApproval, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
 import { seafileAt, syncAgentPlaces } from '../../data/agentPlaces'
 import { getAccount } from '../../os/account'
@@ -35,6 +36,9 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        new line. @path adds a file, ! runs a command (its output goes along with your next
        message), # remembers something. Esc stops the agent; Shift+Tab cycles between asking
        for each change, accepting edits, and plan mode (read only until you approve a plan).
+       Ask for an image after configuring ComfyUI in Settings → Apps → Agents → Images.
+       Generated images show a private download URL; /open previews them in the app.
+
        /help lists the commands: /resume, /model, /tools, /skills, /context, /export, ….
 
 {c:bold}OPTIONS{/}
@@ -150,6 +154,7 @@ async function listing(ctx: Ctx): Promise<string> {
 /** agents -p: one answer, printed; nobody is there to allow changes, so those are declined. */
 async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null; mode: 'quick' | 'deep'; model: string | null; projectId: number | null; permission: Permission; tools: ReturnType<typeof agentSettings>['tools'] }): Promise<string> {
   const thread = await createThread({ mode: o.mode, model: o.model ?? undefined, tools: o.tools, projectId: o.projectId, workdir: o.workdir, permission: o.permission })
+  const imageLinks = new Set<string>()
   let answer = ''
   let failure: string | null = null
   const dir = o.workdir ? workdirPath(o.workdir) : ctx.cwd
@@ -158,6 +163,10 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     prompt,
     [],
     (e) => {
+      if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
+        const image = generatedImage(e.message.content)
+        if (image) imageLinks.add(new URL(image.url, location.origin).href)
+      }
       if (e.type === 'message' && e.message.role === 'assistant') {
         if (e.message.content.trim()) answer = e.message.content.trim()
         if (ctx.tty) for (const c of e.message.toolCalls ?? []) ctx.print(toMarkup([[seg('● ', 'muted'), seg(toolTitle(c).filter(Boolean).join(' '), 'muted')]]))
@@ -172,6 +181,7 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     { terminal: true },
   )
   if (failure) throw new CmdError(`agents: ${failure}`)
+  for (const link of imageLinks) if (!answer.includes(link)) answer += `\n\nGenerated image: ${link}`
   if (!ctx.tty) return answer
   return toMarkup(markdown(answer, Math.max(30, ctx.size.cols - 1)))
 }
