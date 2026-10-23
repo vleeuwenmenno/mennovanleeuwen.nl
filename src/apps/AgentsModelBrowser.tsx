@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { IMAGE_PRESETS, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
+import { IMAGE_PRESETS, imagePresetSpec, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
 import { useIsMobile } from '../os/useIsMobile'
 
 /** A themed OS dialog. Native modality traps focus and makes the underlying window inert. */
@@ -27,7 +27,7 @@ export function PresetPicker({ value, onChange, disabled }: { value: ImagePreset
   return <>
     <button type="button" className="image-picker" disabled={disabled} aria-haspopup="dialog" aria-label={`Choose workflow preset: ${preset.title}`} onClick={() => setOpen(true)}><strong>{preset.title}</strong><span className="muted">{preset.detail}</span><span>Browse workflows →</span></button>
     {open && <ImageDialog title="Choose workflow" onClose={() => setOpen(false)} wide>
-      <p className="image-dialog-intro muted">Choose the family your installed model supports. Names and folders do not establish compatibility. Only these four workflows are supported.</p>
+      <p className="image-dialog-intro muted">Choose the family your installed model supports. Names and folders do not establish compatibility. Only these six workflows are supported.</p>
       <div className="image-presets">{IMAGE_PRESETS.map((p) => <button key={p.id} type="button" className={`image-preset ${value === p.id ? 'is-selected' : ''}`} aria-pressed={value === p.id} onClick={() => { onChange(p.id); setOpen(false) }}><strong>{p.title}{p.id === value ? ' · Selected' : ''}</strong><span>{p.detail}</span><p className="muted">{p.requirements}</p><span className="image-preset-use">Use {p.title} →</span></button>)}</div>
     </ImageDialog>}
   </>
@@ -104,11 +104,11 @@ export function ImageModelFields({ value, catalog, onChange, disabled, loading, 
   disabled?: boolean; loading?: boolean; error?: string; onRefresh: () => void
   extra?: (field: 'preset' | 'model' | 'clip' | 'vae') => ReactNode
 }) {
-  const diffusion = value.preset.startsWith('z_image')
+  const diffusion = Boolean(imagePresetSpec(value.preset).clipType)
   const picker = (field: 'model' | 'clip' | 'vae', label: string, values: string[]) => <div className="image-config-field"><div className="image-config-label"><strong>{label}</strong>{extra?.(field)}</div><ModelPicker label={label} values={values} value={value[field]} onChange={(v) => onChange({ [field]: v })} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} /></div>
   return <div className="image-config-fields">
     <div className="image-config-field"><div className="image-config-label"><strong>Workflow preset</strong>{extra?.('preset')}</div><PresetPicker value={value.preset} onChange={(preset) => onChange({ preset, model: '' })} disabled={disabled} /></div>
     {picker('model', diffusion ? 'Diffusion model' : 'Checkpoint', (diffusion ? catalog?.diffusionModels : catalog?.checkpoints) ?? [])}
-    {diffusion && <>{picker('clip', 'Text encoder (lumina2)', catalog?.clips ?? [])}{picker('vae', 'VAE', catalog?.vaes ?? [])}</>}
+    {diffusion && <>{picker('clip', `Text encoder (${imagePresetSpec(value.preset).clipType})`, catalog?.clips ?? [])}{picker('vae', 'VAE', catalog?.vaes ?? [])}</>}
   </div>
 }

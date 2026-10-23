@@ -27,7 +27,7 @@ ENV NODE_ENV=production PORT=8080 APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMI
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY --from=build /server-modules ./node_modules
-COPY src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts src/data/notifySources.ts src/data/gitTypes.ts ./src/data/
+COPY src/data/imageModels.ts src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts src/data/notifySources.ts src/data/gitTypes.ts ./src/data/
 # Empires At War multiplayer: names and messages now, the battle itself for refereeing matches.
 COPY src/apps/games/empires ./src/apps/games/empires
 # Games by their direct link (/play/<game>): the game list, for each page's title and link preview.

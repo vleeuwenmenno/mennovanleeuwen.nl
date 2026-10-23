@@ -8,12 +8,12 @@ import { modelAssets, modelFolders, visibleModelAssets } from '../src/data/image
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
 const send = (res: ServerResponse, data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
-const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
+const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
 info.CheckpointLoaderSimple.input.required.ckpt_name = [['test.safetensors']]
 info.UNETLoader.input.required.unet_name = [['z-test.safetensors']]
-info.CLIPLoader.input.required = { clip_name: [['encoder.safetensors']], type: [['lumina2']] }
+info.CLIPLoader.input.required = { clip_name: [['encoder.safetensors']], type: [['lumina2', 'krea2']] }
 info.VAELoader.input.required.vae_name = [['vae.safetensors']]
-info.KSampler.input.required = { sampler_name: [['euler']], scheduler: [['simple']] }
+info.KSampler.input.required = { sampler_name: [['euler', 'euler_ancestral']], scheduler: [['simple', 'beta']] }
 let catalogBehavior: 'ok' | 'oversize' | 'aggregate' | 'invalid' | 'missing' = 'ok'
 const discoveryRequests: string[] = []
 const irrelevantCatalog = JSON.stringify({ ...info, IrrelevantCustomNode: { description: 'x'.repeat(9 * 1024 * 1024) } })
@@ -147,9 +147,9 @@ try {
   assert.deepEqual(catalog.diffusionModels, ['z-test.safetensors'])
   assert.deepEqual(catalog.clips, ['encoder.safetensors'])
   assert.deepEqual(catalog.vaes, ['vae.safetensors'])
-  assert.deepEqual(catalog.clipTypes, ['lumina2'])
-  assert.deepEqual(catalog.samplers, ['euler'])
-  assert.deepEqual(catalog.schedulers, ['simple'])
+  assert.deepEqual(catalog.clipTypes, ['lumina2', 'krea2'])
+  assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral'])
+  assert.deepEqual(catalog.schedulers, ['simple', 'beta'])
   assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
   assert.deepEqual(discoveryRequests, Object.keys(info))
   assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)
@@ -168,10 +168,10 @@ try {
   assert.equal(submissions, 0)
   catalogBehavior = 'ok'
   console.log('PASS targeted discovery ignores a >8 MiB catalog; per-node streaming and aggregate limits, invalid JSON and missing required nodes are handled')
-  for (const preset of ['sd15', 'sdxl', 'z_image', 'z_image_turbo'] as const) {
+  for (const preset of ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const) {
     const graph = imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'test', seed: 0 })
     assert.equal(graph.graph['7'].inputs.seed, 0)
-    assert.equal(graph.graph['1'].class_type, preset.startsWith('z_image') ? 'UNETLoader' : 'CheckpointLoaderSimple')
+    assert.equal(graph.graph['1'].class_type, !['sd15', 'sdxl'].includes(preset) ? 'UNETLoader' : 'CheckpointLoaderSimple')
     assert.equal(graph.graph['9'].class_type, 'SaveImage')
     if (preset === 'z_image_turbo') assert.equal(graph.graph['7'].inputs.cfg, 1)
   }
@@ -297,6 +297,24 @@ try {
   assert.equal(result(await turn(second.id)).image.preset, 'z_image_turbo')
   assert.equal(submitted['1'].class_type, 'UNETLoader')
   assert.equal(submitted['2'].inputs.type, 'lumina2')
+  for (const preset of ['krea2_raw', 'krea2_turbo'] as const) {
+    const selection = { preset, model: 'z-test.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors' }
+    info.CLIPLoader.input.required.type = [['lumina2']]
+    assert.equal((await api('PUT', endpoint(second.id), selection)).status, 400)
+    info.CLIPLoader.input.required.type = [['lumina2', 'krea2']]
+    await json('PUT', endpoint(second.id), selection)
+    generationArgs = { prompt: 'Krea session', ...(preset === 'krea2_raw' ? { negative_prompt: 'blurry' } : {}) }
+    assert.equal(result(await turn(second.id)).image.preset, preset)
+    assert.equal(submitted['2'].inputs.type, 'krea2')
+    assert.equal(submitted['3'].class_type, 'VAELoader')
+    assert.equal(submitted['5'].class_type, preset === 'krea2_raw' ? 'CLIPTextEncode' : 'ConditioningZeroOut')
+    assert.equal(submitted['7'].inputs.steps, preset === 'krea2_raw' ? 52 : 8)
+    assert.equal(submitted['7'].inputs.cfg, preset === 'krea2_raw' ? 3.5 : 1)
+    assert.equal(submitted['7'].inputs.sampler_name, preset === 'krea2_raw' ? 'euler' : 'euler_ancestral')
+    assert.equal(submitted['7'].inputs.scheduler, preset === 'krea2_raw' ? 'simple' : 'beta')
+    if (preset === 'krea2_raw') assert.equal(submitted['5'].inputs.text, 'blurry')
+    else assert.deepEqual(submitted['5'].inputs.conditioning, ['4', 0])
+  }
   console.log('PASS session ownership, strict field validation, exact model identifiers, default fallback, restart persistence, per-call precedence, secret exclusion and offline reset')
   assert.equal(fullCatalogRequests, 0)
   console.log('All image generation checks passed')

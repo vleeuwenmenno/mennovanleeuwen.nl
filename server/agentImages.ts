@@ -1,3 +1,4 @@
+import { imagePresetSpec } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -10,7 +11,7 @@ import { checkRoom } from './quota.ts'
 // Small, server-owned ComfyUI graphs, following Diffu's checkpoint / diffusion loader approach.
 // No arbitrary graphs, remote URLs, or backend credentials are accepted from a model tool call.
 const NAME = 'agents-comfyui'
-export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo'] as const
+export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const
 export type Preset = (typeof PRESETS)[number]
 export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string }
 const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '' })
@@ -96,9 +97,9 @@ export async function saveThreadImageSettings(user: User, thread: string, value:
   // Resetting to defaults must also work with an offline or disconnected backend.
   if (['preset', 'model', 'clip', 'vae'].some((key) => key in overrides)) {
     const catalog = await imageCatalog(user)
-    const models = effective.preset.startsWith('z_image') ? catalog.diffusionModels : catalog.checkpoints
+    const models = Boolean(imagePresetSpec(effective.preset).clipType) ? catalog.diffusionModels : catalog.checkpoints
     if (!models.includes(effective.model)) throw new HttpError(400, 'Choose an installed model for the selected preset')
-    if (effective.preset.startsWith('z_image') && (!catalog.clips.includes(effective.clip) || !catalog.vaes.includes(effective.vae) || !catalog.clipTypes.includes('lumina2'))) throw new HttpError(400, 'Z-Image requires an installed lumina2 text encoder and VAE')
+    if (Boolean(imagePresetSpec(effective.preset).clipType) && (!catalog.clips.includes(effective.clip) || !catalog.vaes.includes(effective.vae) || !catalog.clipTypes.includes(imagePresetSpec(effective.preset).clipType))) throw new HttpError(400, 'This diffusion preset requires its supported text encoder type and an installed encoder and VAE')
     // Explicit inactive encoder/VAE overrides must still refer to real catalog assets.
     if (overrides.clip && !catalog.clips.includes(overrides.clip) || overrides.vae && !catalog.vaes.includes(overrides.vae)) throw new HttpError(400, 'Choose an installed text encoder and VAE')
   }
@@ -136,7 +137,7 @@ const options = (info: NodeInfo, node: string, field: string): string[] => {
 }
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user)) {
@@ -183,18 +184,18 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput) {
   if (width * height > 1536 * 1024) throw new HttpError(400, 'Image area must not exceed 1536 × 1024 pixels')
   const seed = input.seed === undefined ? randomInt(2 ** 48 - 1) : input.seed
   if (typeof seed !== 'number' || !Number.isSafeInteger(seed) || seed < 0) throw new HttpError(400, 'Seed must be a non-negative safe integer')
-  const diffusion = s.preset.startsWith('z_image'), turbo = s.preset === 'z_image_turbo'
+  const spec = imagePresetSpec(s.preset), diffusion = Boolean(spec.clipType)
   if (!s.model || (diffusion && (!s.clip || !s.vae))) throw new HttpError(409, 'Select the model and required text encoder/VAE in Agents → Images settings')
-  if (turbo && input.negative_prompt) throw new HttpError(400, 'Z-Image Turbo uses a positive prompt only')
+  if (!spec.negative && input.negative_prompt) throw new HttpError(400, 'This Turbo preset uses a positive prompt only')
   const graph: Graph = {}
   const node = (id: string, class_type: string, inputs: Record<string, unknown>) => (graph[id] = { class_type, inputs }, [id, 0])
   const model = diffusion ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
-  const clip = diffusion ? node('2', 'CLIPLoader', { clip_name: s.clip, type: 'lumina2' }) : ['1', 1]
+  const clip = diffusion ? node('2', 'CLIPLoader', { clip_name: s.clip, type: spec.clipType, device: 'default' }) : ['1', 1]
   const vae = diffusion ? node('3', 'VAELoader', { vae_name: s.vae }) : ['1', 2]
   const positive = node('4', 'CLIPTextEncode', { clip, text: input.prompt.trim() })
-  const negative = node('5', 'CLIPTextEncode', { clip, text: input.negative_prompt ?? '' })
+  const negative = spec.zeroNegative ? node('5', 'ConditioningZeroOut', { conditioning: positive }) : node('5', 'CLIPTextEncode', { clip, text: input.negative_prompt ?? '' })
   const latent = node('6', 'EmptyLatentImage', { width, height, batch_size: 1 })
-  const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: turbo ? 8 : diffusion ? 20 : 25, cfg: turbo ? 1 : diffusion ? 4 : 7, sampler_name: 'euler', scheduler: 'simple', denoise: 1 })
+  const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: spec.steps, cfg: spec.cfg, sampler_name: spec.sampler, scheduler: spec.scheduler, denoise: 1 })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
   return { graph, width, height, seed }
@@ -214,9 +215,9 @@ export async function generateImage(user: User, thread: string, input: ImageInpu
   let promptId: string | null = null
   try {
     const catalog = await imageCatalog(user, limit, s)
-    const diffusion = s.preset.startsWith('z_image')
-    if (!(diffusion ? catalog.diffusionModels : catalog.checkpoints).includes(s.model) || (diffusion && (!catalog.clips.includes(s.clip) || !catalog.vaes.includes(s.vae) || !catalog.clipTypes.includes('lumina2')))) throw new HttpError(409, 'Selected models are not installed in ComfyUI; refresh Images settings')
-    if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes('euler') || !catalog.schedulers.includes('simple')) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
+    const spec = imagePresetSpec(s.preset), diffusion = Boolean(spec.clipType)
+    if (!(diffusion ? catalog.diffusionModels : catalog.checkpoints).includes(s.model) || (diffusion && (!catalog.clips.includes(s.clip) || !catalog.vaes.includes(s.vae) || !catalog.clipTypes.includes(spec.clipType)))) throw new HttpError(409, 'Selected models are not installed in ComfyUI; refresh Images settings')
+    if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes(spec.sampler) || !catalog.schedulers.includes(spec.scheduler)) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
     const submitted = await readJSON(user, s, '/prompt', limit, { prompt: workflow.graph, client_id: randomUUID() })
     if (typeof submitted.prompt_id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(submitted.prompt_id)) throw new HttpError(502, 'ComfyUI did not return a prompt ID')
     promptId = submitted.prompt_id
