@@ -13,8 +13,11 @@ ARG APP_VERSION=""
 ARG APP_COMMIT=""
 ENV APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 RUN pnpm build
+# The server's only npm packages: tldts and tldts-core (the Public Suffix List, for Mail's sender
+# logos), copied as plain folders, since pnpm's node_modules is links into its store.
+RUN mkdir -p /server-modules && cp -rL node_modules/tldts node_modules/.pnpm/node_modules/tldts-core /server-modules/
 
-# Serve it with the small dependency-free Node server, which also pings the Minecraft server
+# Serve it with the small Node server (no npm packages but tldts), which also pings the Minecraft server
 # live for /api/minecraft.
 FROM node:24-alpine
 ARG APP_VERSION=""
@@ -23,6 +26,7 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=8080 APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 COPY --from=build /app/dist ./dist
 COPY server ./server
+COPY --from=build /server-modules ./node_modules
 COPY src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts src/data/notifySources.ts src/data/gitTypes.ts ./src/data/
 # Empires At War multiplayer: names and messages now, the battle itself for refereeing matches.
 COPY src/apps/games/empires ./src/apps/games/empires

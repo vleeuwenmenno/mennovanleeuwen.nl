@@ -840,7 +840,11 @@ export function Mail({ win }: { win: WinState }) {
                 if (suppressClick.current) return void (suppressClick.current = false)
                 clickRow(r, e)
               }}
-              onCheck={checkRow}
+              onCheck={(r, e) => {
+                // The click a long press ends with (it already selected the row) is not also a tick.
+                if (suppressClick.current) return void (suppressClick.current = false)
+                checkRow(r, e)
+              }}
               onPress={pressRow}
               onDrag={dragRow}
               onMenu={rowMenu}
@@ -981,7 +985,18 @@ type PickMode = 'finger' | 'box' | null
  */
 function PickBox({ state, label, onToggle }: { state: 'all' | 'some' | 'none'; label: string; onToggle: () => void }) {
   return (
-    <button type="button" className={`ml-check ml-check-all is-${state}`} role="checkbox" aria-checked={state === 'all' ? true : state === 'some' ? 'mixed' : false} aria-label={label} title={label} onClick={onToggle}>
+    <button type="button" className={`ml-check ml-check-all is-${state}`} role="checkbox" aria-checked={state === 'all' ? true : state === 'some' ? 'mixed' : false} aria-label={label}
+      title={label}
+      onClick={onToggle}
+      onKeyDown={(e) => {
+        // Space and Enter tick it (as a button does), not the list's Enter (open).
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault()
+          e.stopPropagation()
+          onToggle()
+        }
+      }}
+    >
       <span className="ml-check-box">
         <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
           {state === 'some' ? <path d="M6 12h12" /> : CHECK}

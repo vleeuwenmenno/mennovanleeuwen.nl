@@ -1,12 +1,13 @@
 import { mkdirSync } from 'node:fs'
 import { readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { resolveTxt } from 'node:dns/promises'
+import { Resolver } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
 import type { ServerResponse } from 'node:http'
 import { fetchPinned } from './egress.ts'
 import { HttpError, SECURITY, UNTRUSTED } from './http.ts'
 import { fetchHead, iconLinks, websiteAddresses } from './preview.ts'
+import { getDomain } from 'tldts'
 
 // Senders' brand icons for Mail's avatars (src/apps/mail/parts.tsx): the logo a domain publishes
 // for mail (BIMI, a DNS record pointing at an SVG), else the best of its web site's own icons
@@ -50,31 +51,15 @@ type Entry = { at: number; type: string | null; ttl?: number }
 // Domains
 
 /**
- * Public suffixes two labels deep (example.co.uk, example.com.au): the common generic second
- * levels under a two-letter country code, and a few others. Not the whole Public Suffix List, but
- * the usual senders' domains.
- */
-const GENERIC_SECOND = new Set(['co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'go', 'gob', 'gv', 'mil', 'nic', 'ltd', 'plc', 'sch', 'nom', 'info', 'biz', 'lg', 'ad', 'gr', 'ed', 'in', 'web'])
-const EXTRA_SUFFIXES = new Set(['me.uk', 'nhs.uk', 'police.uk', 'id.au', 'asn.au', 'gen.nz', 'kiwi.nz', 'school.nz', 'govt.nz', 'blogspot.com', 'github.io', 'gitlab.io', 'herokuapp.com', 'netlify.app', 'vercel.app', 'pages.dev', 'workers.dev', 'azurewebsites.net', 'cloudfront.net', 'appspot.com', 'firebaseapp.com', 'web.app', 'myshopify.com', 'wordpress.com', 'substack.com', 'mailchimpapp.com', 'sendgrid.net', 'amazonses.com', 'mcsv.net', 'rsgsv.net', 'mcdlv.net'])
-
-/** Whether two labels (`co.uk`) are a public suffix rather than an organisation's domain. */
-function twoLabelSuffix(last2: string): boolean {
-  if (EXTRA_SUFFIXES.has(last2)) return true
-  const [second, tld] = last2.split('.')
-  return tld.length === 2 && GENERIC_SECOND.has(second)
-}
-
-/**
- * The organisation's registrable domain (eTLD+1): anwb.nl for verzekeren.anwb.nl, example.co.uk
- * for a.b.example.co.uk; null for a bare public suffix (co.uk).
+ * The organisation's registrable domain (eTLD+1) by the Public Suffix List (tldts): anwb.nl for
+ * verzekeren.anwb.nl, example.co.uk for a.b.example.co.uk, info.nl for victim-1.info.nl; null for
+ * a bare public suffix (co.uk). Only ICANN suffixes count, not the list's private ones (github.io,
+ * blogspot.com): x.github.io is github.io, so a sender can't mint a lookup per recipient there either.
  */
 export function orgDomain(host: string): string | null {
-  const parts = host.split('.')
-  if (parts.length < 2) return null
-  const deep = twoLabelSuffix(parts.slice(-2).join('.'))
-  if (deep && parts.length < 3) return null
-  return parts.slice(deep ? -3 : -2).join('.')
+  return getDomain(host, { allowPrivateDomains: false, validHosts: [] }) || null
 }
+
 
 /** A domain as asked for, or null when it isn't one (an address, a port, an IP, nonsense). */
 export function cleanDomain(raw: string): string | null {
@@ -174,7 +159,7 @@ async function fetchPicture(start: URL, signal: AbortSignal): Promise<Sized | nu
   let url = start
   for (let hop = 0; hop < 4; hop++) {
     if (signal.aborted || (url.protocol !== 'https:' && url.protocol !== 'http:')) return null
-    const addresses = await websiteAddresses(url).catch(() => null)
+    const addresses = await websiteAddresses(url, signal).catch(() => null)
     if (!addresses || signal.aborted) return null
     const res = await fetchPinned(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mvlos mail icons)', Accept: 'image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8' }, signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_MS)]) }, addresses).catch(() => null)
     if (!res) return null
@@ -203,6 +188,7 @@ async function fetchPicture(start: URL, signal: AbortSignal): Promise<Sized | nu
         chunks.push(value)
       }
     } catch {
+      await reader?.cancel().catch(() => {})
       return null
     }
     const bytes = Buffer.concat(chunks)
@@ -212,21 +198,26 @@ async function fetchPicture(start: URL, signal: AbortSignal): Promise<Sized | nu
   return null
 }
 
-/** Resolves with `work`, or with `fallback` once `signal` aborts (DNS lookups can't be cancelled). */
-function orAbort<T>(work: Promise<T>, signal: AbortSignal, fallback: T): Promise<T> {
-  return new Promise<T>((done) => {
-    if (signal.aborted) return done(fallback)
-    const stop = () => done(fallback)
-    signal.addEventListener('abort', stop, { once: true })
-    work.then(done, () => done(fallback)).finally(() => signal.removeEventListener('abort', stop))
-  })
+/** A TXT record's strings, from DNS with its own deadline (2 s, one retry), cancelled for real when `signal` aborts. */
+async function txtRecords(name: string, signal: AbortSignal): Promise<string[][]> {
+  if (signal.aborted) return []
+  const resolver = new Resolver({ timeout: 2000, tries: 2 })
+  const stop = () => resolver.cancel()
+  signal.addEventListener('abort', stop, { once: true })
+  try {
+    return await resolver.resolveTxt(name)
+  } catch {
+    return []
+  } finally {
+    signal.removeEventListener('abort', stop)
+  }
 }
 
 /** The BIMI logo a domain publishes for its mail (default._bimi TXT, "l=" an https SVG), if any. */
 async function bimi(host: string, signal: AbortSignal): Promise<Found | null> {
-  const records = await orAbort(resolveTxt(`default._bimi.${host}`), AbortSignal.any([signal, AbortSignal.timeout(3000)]), [] as string[][])
-  for (const parts of records) {
-    const txt = parts.join('')
+  const records = await txtRecords(`default._bimi.${host}`, signal)
+  for (const parts of records.slice(0, 10)) {
+    const txt = parts.join('').slice(0, 2048)
     if (!/^\s*v\s*=\s*BIMI1\b/i.test(txt)) continue
     const l = /(?:^|;)\s*l\s*=\s*([^;\s]+)/i.exec(txt)?.[1]
     if (!l) continue
@@ -355,7 +346,26 @@ async function cached(domain: string): Promise<Found | null | undefined> {
   }
 }
 
-async function store(domain: string, found: Found | null, ttl?: number) {
+/**
+ * One thing at a time touches the cache's files: a write (picture, then its entry by rename) and
+ * a tidy-up never overlap, so the tidy-up can't take a fresh picture for an orphan or remove an
+ * entry's temporary file before it is renamed.
+ */
+let cacheLock: Promise<unknown> = Promise.resolve()
+function locked<T>(work: () => Promise<T>): Promise<T> {
+  const run = cacheLock.then(work, work)
+  cacheLock = run.catch(() => {})
+  return run
+}
+
+export function store(domain: string, found: Found | null, ttl?: number) {
+  return locked(() => storeNow(domain, found, ttl)).then(() => {
+    // Every 50 new entries (and at startup, and hourly), the cache is tidied.
+    if (writes >= 50) void sweep()
+  })
+}
+
+async function storeNow(domain: string, found: Found | null, ttl?: number) {
   try {
     if (!dirMade) mkdirSync(DIR, { recursive: true })
     dirMade = true
@@ -368,8 +378,6 @@ async function store(domain: string, found: Found | null, ttl?: number) {
   } catch (e) {
     console.error('mail icons: could not cache', (e as Error).message)
   }
-  // Every 50 new entries (and at startup, and hourly), the cache is tidied.
-  if (writes >= 50) void sweep()
 }
 
 let writes = 0
@@ -382,7 +390,7 @@ let sweeping: Promise<void> | null = null
 export function sweep(): Promise<void> {
   if (sweeping) return sweeping
   writes = 0
-  sweeping = (async () => {
+  sweeping = locked(async () => {
     let names: string[]
     try {
       names = await readdir(DIR)
@@ -410,7 +418,8 @@ export function sweep(): Promise<void> {
       const bytes = entry.type ? await stat(join(DIR, `${domain}.img`)).then((s) => s.size, () => 0) : 0
       live.push({ domain, at: entry.at, bytes })
     }
-    for (const domain of imgs) if (!jsons.has(domain) || !live.some((l) => l.domain === domain)) await drop(`${domain}.img`)
+    const kept = new Set(live.map((l) => l.domain))
+    for (const domain of imgs) if (!kept.has(domain)) await drop(`${domain}.img`)
     live.sort((a, b) => a.at - b.at)
     let total = live.reduce((n, l) => n + l.bytes, 0)
     let count = live.length
@@ -421,7 +430,7 @@ export function sweep(): Promise<void> {
       count--
       total -= l.bytes
     }
-  })().finally(() => (sweeping = null))
+  }).finally(() => (sweeping = null))
   return sweeping
 }
 

@@ -34,6 +34,9 @@ import { Avatar, formatSize, htmlToText, InviteCard, longDate, MessageFrame, Pla
 
 export type ReplyMode = 'reply' | 'replyAll' | 'forward' | 'draft'
 
+/** The toolbar's actions that give way in a narrow reading pane (mail.css) and so are always in More too. */
+const MINOR = new Set(['junk', 'move', 'unread'])
+
 type Props = {
   account: number
   threadId: string
@@ -189,8 +192,9 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
   const moreMenu = (): MenuItem[] => {
     if (!last) return []
     const own = messageMenu(last)
-    if (!narrow && !matchMedia('(hover: none)').matches) return own
-    const named: MenuItem[] = tools.map((t) =>
+    // Junk, Move to and Mark unread always (a narrow pane hides their buttons, whatever the window); every action on a touch screen or in a narrow window.
+    const all = narrow || matchMedia('(hover: none)').matches
+    const named: MenuItem[] = tools.filter((t) => all || MINOR.has(t.id)).map((t) =>
       t.menu ? { label: t.label, submenu: moveItems() } : { label: t.title.replace(/ \(.*\)$/, ''), disabled: t.disabled, danger: t.id === 'delete', onSelect: () => t.run(undefined as unknown as MouseEvent<HTMLButtonElement>) },
     )
     // The message's own read and flag items would repeat the ones just listed (each message's own More still has them).
@@ -207,7 +211,7 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
       )}
       <span className="nb-spacer" />
       {tools.map((t) => (
-        <button key={t.id} data-minor={t.id === 'junk' || t.id === 'move' || t.id === 'unread' ? '' : undefined} className={`ml-icon ml-tool ${t.on ? 'is-on is-flagged' : ''}`} onClick={t.run} title={t.title} aria-label={t.label} aria-haspopup={t.menu ? 'menu' : undefined} disabled={t.disabled}>
+        <button key={t.id} data-minor={MINOR.has(t.id) ? '' : undefined} className={`ml-icon ml-tool ${t.on ? 'is-on is-flagged' : ''}`} onClick={t.run} title={t.title} aria-label={t.label} aria-haspopup={t.menu ? 'menu' : undefined} disabled={t.disabled}>
           <Icon name={t.icon} />
           <span className="ml-tool-label" aria-hidden>
             {t.label}

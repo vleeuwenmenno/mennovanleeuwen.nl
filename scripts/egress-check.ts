@@ -6,7 +6,7 @@
 //
 // No network: only literal addresses. Exits 1 on any failure.
 
-import { isPrivate, publicAddresses, v6Groups } from '../server/egress.ts'
+import { isPrivate, publicAddresses, resolveHost, v6Groups } from '../server/egress.ts'
 
 let failed = false
 const check = (what: string, test: boolean, detail?: unknown) => {
@@ -40,7 +40,7 @@ check('v6Groups expands ::', JSON.stringify(v6Groups('::ffff:127.0.0.1')) === JS
 check('v6Groups reads hex and dotted alike', JSON.stringify(v6Groups('::ffff:7f00:1')) === JSON.stringify(v6Groups('::ffff:127.0.0.1')))
 
 // Through the URL parser, as the server sees an address someone typed.
-for (const raw of ['http://[::ffff:127.0.0.1]/', 'http://[::ffff:7f00:1]/', 'http://[::ffff:169.254.169.254]/latest/meta-data/', 'http://[64:ff9b::a9fe:a9fe]/', 'http://[2002:7f00:1::1]/', 'http://[::1]/', 'http://127.0.0.1/', 'http://2130706433/', 'http://0x7f.1/']) {
+for (const raw of ['http://[::ffff:127.0.0.1]/', 'http://[::ffff:7f00:1]/', 'http://[::ffff:169.254.169.254]/latest/meta-data/', 'http://[64:ff9b::a9fe:a9fe]/', 'http://[2002:7f00:1::1]/', 'http://[::1]/', 'http://127.0.0.1/', 'http://2130706433/', 'http://0x7f.1/', 'http://localhost/', 'http://app.localhost/']) {
   const url = new URL(raw)
   const refused = await publicAddresses(url).then(
     () => false,
@@ -48,6 +48,11 @@ for (const raw of ['http://[::ffff:127.0.0.1]/', 'http://[::ffff:7f00:1]/', 'htt
   )
   check(`refused before fetching: ${raw} (${url.hostname})`, refused)
 }
+
+const local = await resolveHost('localhost')
+check('localhost resolves to 127.0.0.1 without DNS', local.length === 1 && local[0].address === '127.0.0.1')
+const aborted = await resolveHost('example.com', AbortSignal.abort())
+check('an aborted lookup answers nothing', aborted.length === 0)
 
 console.log(failed ? 'some checks failed' : 'all passed')
 process.exit(failed ? 1 : 0)

@@ -1,5 +1,5 @@
 import type { LookupAddress } from 'node:dns'
-import { lookup } from 'node:dns/promises'
+import { Resolver } from 'node:dns/promises'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
@@ -103,11 +103,32 @@ export function isPrivate(ip: string): boolean {
   return v6 ? privateV6(v6) : true
 }
 
+/**
+ * A host name's addresses (IPv4 and IPv6) from DNS, with a deadline of its own (2.5 s a try, two
+ * tries) and cancelled for real when `signal` aborts, so a stalled resolver can't hold anything up.
+ * Not the system's getaddrinfo, which can be neither cancelled nor timed and ties up one of the
+ * few threads Node has for it. localhost (and *.localhost) is 127.0.0.1, as the system says.
+ */
+export async function resolveHost(host: string, signal?: AbortSignal): Promise<LookupAddress[]> {
+  const name = host.toLowerCase().replace(/\.$/, '')
+  if (name === 'localhost' || name.endsWith('.localhost')) return [{ address: '127.0.0.1', family: 4 }]
+  if (signal?.aborted) return []
+  const resolver = new Resolver({ timeout: 2500, tries: 2 })
+  const stop = () => resolver.cancel()
+  signal?.addEventListener('abort', stop, { once: true })
+  try {
+    const [v4, v6] = await Promise.allSettled([resolver.resolve4(name), resolver.resolve6(name)])
+    return [...(v4.status === 'fulfilled' ? v4.value.map((address) => ({ address, family: 4 })) : []), ...(v6.status === 'fulfilled' ? v6.value.map((address) => ({ address, family: 6 })) : [])]
+  } finally {
+    signal?.removeEventListener('abort', stop)
+  }
+}
+
 /** A host's addresses, for http(s) only and when every one of them is public; refuses otherwise. */
-export async function publicAddresses(url: URL): Promise<LookupAddress[]> {
+export async function publicAddresses(url: URL, signal?: AbortSignal): Promise<LookupAddress[]> {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EgressError(400, 'Only web addresses')
   const host = url.hostname.replace(/^\[|\]$/g, '')
-  const addresses: LookupAddress[] = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host, { all: true }).catch(() => [])
+  const addresses: LookupAddress[] = isIP(host) ? [{ address: host, family: isIP(host) }] : await resolveHost(host, signal).catch(() => [])
   if (!addresses.length) throw new EgressError(404, `${url.host} does not exist`)
   if (addresses.some((a) => isPrivate(a.address))) throw new EgressError(400, `${url.host} is not a public address`)
   return addresses
