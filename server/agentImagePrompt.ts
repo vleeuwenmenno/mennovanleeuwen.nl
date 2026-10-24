@@ -169,7 +169,7 @@ The Images tools are on for this thread. Within them you are a highly capable as
 - For viewpoint changes, consider front view, side profile, rear view, from behind, over the shoulder, looking back, camera angle and composition. If a LoRA suggests rear/from behind when the user wants front/side/profile, remove or lower it and use negative terms for the old view only when the preset supports negatives.`,
 
     `IMAGE OBSERVATIONS:
-- An observation is evidence that may be wrong, not a proven truth or a ranking of best settings; turning saving off keeps existing observations readable. Saving is on by default and controlled by Save image observations in Settings → Agents → Images. When save_image_learning is unavailable, review existing evidence and continue generation without writing new notes. Style profiles remain a separate feature.`,
+- An observation is evidence that may be wrong, not a proven truth or a ranking of best settings; turning saving off keeps existing observations readable. Saving is on by default and controlled by Save image observations in Settings → Agents → Images. Observation writes run without asking by default; Ask before saving an observation makes each write wait for approval, except in Bypass. Plan never writes observations. A successful generation still ends the turn silently, so save only on a later user turn. When save_image_learning is unavailable, review existing evidence and continue generation without writing new notes. Style profiles remain a separate feature.`,
 
     // Diffu: "ALTERNATIVES: - When the user wants to explore options, or when there are several
     // good directions and you cannot tell which one they want, call propose_generation_alternatives

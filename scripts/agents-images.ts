@@ -395,6 +395,8 @@ try {
   const saved = await json('PUT', '/api/agents/images/settings', settings)
   assert.equal(saved.token, true)
   assert.equal(saved.saveImageLearnings, true)
+  assert.equal(saved.askBeforeSavingObservations, false)
+  assert.equal((await api('PUT', '/api/agents/images/settings', { askBeforeSavingObservations: 'yes' })).status, 400)
   assert.equal((await api('PUT', '/api/agents/images/settings', { saveImageLearnings: 'false' })).status, 400)
   assert.ok(!JSON.stringify(saved).includes('test-secret'))
   assert.ok(!String((database().prepare("SELECT secret FROM integrations WHERE name = 'agents-comfyui'").get() as any).secret).includes('test-secret'))
@@ -950,9 +952,28 @@ try {
   const readTurn = await turn(visionThread.id)
   assert.ok(JSON.parse(readTurn.messages.findLast((m: any) => m.toolName === 'read_image_learnings').content).notes.length >= 2)
   requestedTool = 'save_image_learning'; generationArgs = { image_id: lastVisionImage.id, profile_id: profile.id, task: 'Experiment', note: 'Try another framing only if requested.', source: 'suggestion' }
+  await json('PATCH', `/api/agents/threads/${visionThread.id}`, { permission: 'default' })
+  const beforeDefaultSave = (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = 1 AND image_learning IS NOT NULL').get() as any).n
+  const approvalsBeforeDefault = approvalSummaries.length
   const saveTurn = await turn(visionThread.id)
+  assert.equal(approvalSummaries.length, approvalsBeforeDefault)
+  assert.equal((database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = 1 AND image_learning IS NOT NULL').get() as any).n, beforeDefaultSave + 1)
   assert.equal(JSON.parse(saveTurn.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).source.kind, 'suggestion')
   const savedCount = () => (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = 1 AND image_learning IS NOT NULL').get() as any).n
+  const beforeDecline = savedCount()
+  assert.equal((await json('PUT', '/api/agents/images/settings', { askBeforeSavingObservations: true })).askBeforeSavingObservations, true)
+  assert.equal((await json('GET', '/api/agents/images/settings', undefined, 1)).askBeforeSavingObservations, false)
+  const beforeAsked = approvalSummaries.length
+  const declinedSave = await turn(visionThread.id, false)
+  assert.equal(approvalSummaries.length, beforeAsked + 1)
+  assert.match(JSON.parse(declinedSave.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).error, /declined/i)
+  assert.equal(savedCount(), beforeDecline)
+  const allowedSave = await turn(visionThread.id, true)
+  assert.equal(approvalSummaries.length, beforeAsked + 2)
+  assert.equal(JSON.parse(allowedSave.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).source.kind, 'suggestion')
+  assert.equal(savedCount(), beforeDecline + 1)
+  await json('PUT', '/api/agents/images/settings', { askBeforeSavingObservations: false })
+  console.log('PASS observations save without approval by default; opt-in asks, decline writes nothing and approval saves')
   const countBeforeOff = savedCount()
   await json('PUT', '/api/agents/images/settings', { saveImageLearnings: false })
   const offSave = await turn(visionThread.id)

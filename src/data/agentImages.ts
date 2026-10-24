@@ -2,7 +2,7 @@ import { api } from '../os/account'
 
 import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
-export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; saveImageLearnings: boolean }
+export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean }
 export type ImageCatalog = ImageAssetCatalog
 export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
@@ -39,3 +39,5 @@ export const getModelMetadata = (category: ModelCategory, name: string, signal: 
 
 export const getImageLoras = () => api<{ loras: ImageLoraHint[]; total: number; truncated: boolean }>('/api/agents/images/loras')
 export const saveImageLearningPreference = (saveImageLearnings: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { saveImageLearnings } })
+
+export const saveImageObservationApproval = (askBeforeSavingObservations: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeSavingObservations } })

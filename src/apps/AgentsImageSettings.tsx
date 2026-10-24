@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
+import { useEffect, useId, useState, type FormEvent } from 'react'
+import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageObservationApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
 import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
 
 export function AgentsImageSettings() {
+  const observationApprovalHint = useId()
   const [settings, setSettings] = useState<ImageSettings | null>(null)
   const [token, setToken] = useState('')
   const [clearToken, setClearToken] = useState(false)
@@ -62,6 +63,13 @@ export function AgentsImageSettings() {
               <span className="muted set-row-wrap">An observation is a short, cautious note after an image or your feedback: what you asked for, what the model and sampling produced, what you said was wrong, and sometimes what a vision model saw. Notes stay with your account on this server under Memory → Images/Learnings; they are not published or sent to another service for storage, but your configured agent can read them for later generations with the same backend and components. They may be wrong, are never a ranking or a “best settings” list, and switching saving off keeps existing notes readable.</span>
             </span>
             <button type="button" role="switch" aria-checked={settings.saveImageLearnings} aria-label="Save image observations" className={`set-toggle ${settings.saveImageLearnings ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, saveImageLearnings: (await saveImageLearningPreference(!settings.saveImageLearnings)).saveImageLearnings }); setNotice('Saved') })} />
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Ask before saving an observation</strong>
+              <span className="muted set-row-wrap" id={observationApprovalHint}>Off: observations save without asking. On: each write waits for approval, except in Bypass; Plan never writes observations.{!settings.saveImageLearnings && ' Saving is off, so this setting has no effect until Save image observations is on.'}</span>
+            </span>
+            <button type="button" role="switch" aria-checked={settings.askBeforeSavingObservations} aria-label="Ask before saving an observation" aria-describedby={observationApprovalHint} className={`set-toggle ${settings.askBeforeSavingObservations ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, askBeforeSavingObservations: (await saveImageObservationApproval(!settings.askBeforeSavingObservations)).askBeforeSavingObservations }); setNotice('Saved') })} />
           </li>
         </ul>
         <ImageModelFields value={settings} catalog={catalog} onChange={(patch) => setSettings({ ...settings, ...patch })} disabled={busy} loading={discovering} error={catalogError} onRefresh={() => void discover()} />

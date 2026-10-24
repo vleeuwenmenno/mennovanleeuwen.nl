@@ -16,8 +16,8 @@ const NAME = 'agents-comfyui'
 export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const
 export type Preset = (typeof PRESETS)[number]
 /** askBeforeGenerate: off by default, so generations run without an approval card in every mode except Plan. */
-export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; saveImageLearnings: boolean }
-const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, saveImageLearnings: true })
+export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean }
+const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true })
 function settingsFor(userId: number): ImageSettings {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(userId, NAME) as { secret: string } | undefined
   return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
@@ -25,6 +25,8 @@ function settingsFor(userId: number): ImageSettings {
 export const imageSettings = (user: User): ImageSettings => settingsFor(user.id)
 /** Whether generate_image waits for the owner's approval (Settings → Agents → Images). */
 export const imageGenerationAsks = (userId: number) => settingsFor(userId).askBeforeGenerate
+/** Whether observation writes wait for approval outside Plan and Bypass. */
+export const imageObservationAsks = (userId: number) => settingsFor(userId).askBeforeSavingObservations
 export const imageBackendScope = (user: User, settings = imageSettings(user)) => privateDigest(JSON.stringify(['image-backend', user.id, settings.url, settings.token]))
 const view = (s: ImageSettings) => ({ ...s, token: !!s.token })
 export function saveImageSettings(user: User, input: Record<string, unknown>) {
@@ -35,7 +37,7 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
     s[key] = input[key].trim()
   }
   if (input.clearToken === true) s.token = ''
-  for (const key of ['askBeforeGenerate', 'saveImageLearnings'] as const) {
+  for (const key of ['askBeforeGenerate', 'askBeforeSavingObservations', 'saveImageLearnings'] as const) {
     if (input[key] === undefined) continue
     if (typeof input[key] !== 'boolean') throw new HttpError(400, `Invalid ${key}`)
     s[key] = input[key]

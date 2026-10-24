@@ -284,6 +284,19 @@ try {
   const img = { name: 'generate_image', arguments: { prompt: 'a lighthouse' } }
   check('Images: generate_image runs without asking by default', decide(t, 'default', img, 1) === 'run' && decide(t, 'auto', img, 1) === 'run')
   check('Images: Plan refuses generate_image', decide(t, 'plan', img, 1) === 'refuse')
+  const observation = { name: 'save_image_learning', arguments: {} }
+  const imageSetting = await getJson<{ askBeforeSavingObservations: boolean }>('GET', '/api/agents/images/settings')
+  check('Observations: approval is off by default', imageSetting.askBeforeSavingObservations === false)
+  for (const askBeforeSavingObservations of [false, true]) {
+    await api('PUT', '/api/agents/images/settings', { askBeforeSavingObservations })
+    for (const mode of ['default', 'auto', 'acceptEdits', 'plan', 'bypass'] as const) {
+      const expected = mode === 'plan' ? 'refuse' : mode === 'bypass' || !askBeforeSavingObservations ? 'run' : 'ask'
+      check(`Observations: approval ${askBeforeSavingObservations ? 'on' : 'off'}, ${mode}: ${expected}`, decide(t, mode, observation, 1) === expected)
+      check(`Profiles: ${mode} unchanged`, decide(t, mode, { name: 'save_image_profile', arguments: {} }, 1) === (mode === 'plan' ? 'refuse' : mode === 'bypass' ? 'run' : 'ask'))
+    }
+  }
+  await api('PUT', '/api/agents/images/settings', { askBeforeSavingObservations: false })
+  check('Observations: missing account still asks', decide(t, 'default', observation) === 'ask')
   const cal = { name: 'calendar_create_event', arguments: { title: 'x', start: '2026-10-14T10:00' } }
   check('Bypass: a calendar write still asks', decide(t, 'bypass', cal) === 'ask')
   check('Bypass: a calendar delete still asks', decide(t, 'bypass', { name: 'calendar_delete_event', arguments: { id: 'x' } }) === 'ask')

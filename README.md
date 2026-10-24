@@ -1561,8 +1561,11 @@ image editing and model downloads are not included in these presets.
 **Image observations** are short, cautious notes an agent records after an image or your feedback:
 what you asked for, what the model and sampling produced, what you said was wrong, and sometimes
 what a vision model saw. They may be wrong; they are evidence, never a ranking or a “best settings”
-list. Saving is on by default. Turn off **Save image observations** in **Settings → Apps → Agents
-→ Images** to stop new notes and updates. This removes `save_image_learning` from the available
+list. Saving is on by default, and writes do not ask for approval by default. Turn on **Ask before
+saving an observation** in **Settings → Apps → Agents → Images** to make each write ask first,
+except in Bypass; Plan never writes observations. Declining leaves the observation unsaved and
+existing notes unchanged. This approval setting has no effect while saving is off. Turn off
+**Save image observations** in **Settings → Apps → Agents → Images** to stop new notes and updates. This removes `save_image_learning` from the available
 tools and rejects stale calls; it does not delete existing notes, stop their review before generation,
 or change style profiles. Turn it back on to resume saving. Notes stay with your account on this
 server under **Memory → Images/Learnings**, scoped to the backend and components (including the
@@ -1617,7 +1620,8 @@ or mixed. The server verifies provenance, not whether an interpretation accurate
 human taste. Updates change only note/task and preserve the original artifact/evidence; new feedback
 gets a new record, so a successful job cannot overwrite confirmed evidence. Agent-created profile
 preferences remain suggestions; user-edited preferences are protected against agent overwrites.
-Memory writes ask in Ask first/Auto/Edits allowed, are refused in Plan, and run in Bypass.
+Observation writes use the account approval setting described above. Style-profile writes still
+ask in Ask first/Auto/Edits allowed, are refused in Plan, and run in Bypass.
 
 Records are owner-scoped and segregated by a private backend identity derived from the configured
 endpoint and credentials, plus profile and exact model/component identifiers. Neither credentials,
