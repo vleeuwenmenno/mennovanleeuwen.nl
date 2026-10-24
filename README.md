@@ -1404,7 +1404,7 @@ backend or persist session settings. Explicit supported model/components, sampli
 width/height/seed on `generate_image` override the session only for that call. Use `/images` to change the saved model or workflow.
 
 Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
-The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. Generation runs
+The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. When it is on, the agent's system prompt also gets Diffu's image-generation guidance (model families, prompting style, negatives, sampling and size); when it is off, that section is left out. Generation runs
 without an approval card in every mode except Plan, which cannot generate. To approve each image
 first, turn on **Ask before generating images** in Settings → Agents → Images (off by default);
 then Ask first, Auto and Edits allowed show the resolved settings for approval, Bypass still runs

@@ -324,6 +324,7 @@ try {
   await server.start()
   const { imageWorkflow, saveImageSettings, generateImage } = await import('../server/agentImages.ts')
   const { decide } = await import('../server/agents.ts')
+  const { imagePromptSection, DIFFU_IMAGE_PROMPT_MARKER } = await import('../server/agentImagePrompt.ts')
   const { usedBytes } = await import('../server/quota.ts')
   const settings = { url: comfyUrl, token: 'test-secret', preset: 'sdxl' as const, model: 'test.safetensors', clip: '', vae: '' }
   const saved = await json('PUT', '/api/agents/images/settings', settings)
@@ -408,6 +409,11 @@ try {
   database().prepare('UPDATE agent_images SET metadata = NULL WHERE id = ?').run(made.image.id)
   assert.equal((await json('GET', made.image.url + '/metadata')).settings, null)
   assert.equal(result(await json('GET', `/api/agents/threads/${t.id}`)).image.url, made.image.url)
+  // The Diffu image guidance is part of the system prompt only while Images is on.
+  const imageGuidance = imagePromptSection()
+  assert.ok(imageGuidance.includes('MODEL FAMILY GUIDANCE'))
+  assert.ok(providerInputs.at(-1).messages[0].content.includes(DIFFU_IMAGE_PROMPT_MARKER))
+  assert.ok(providerInputs.at(-1).messages[0].content.includes(imageGuidance.trim()))
   console.log('PASS streamed tool generation, approved prompt, PNG retrieval, ownership, quota and restart durability')
 
   // Off by default: a default-mode thread generates without asking. With the switch on, a decline submits nothing.
@@ -423,6 +429,7 @@ try {
   const disabled = await thread()
   await json('PATCH', `/api/agents/threads/${disabled.id}`, { tools: ['web'] })
   assert.ok(result(await turn(disabled.id)).error)
+  assert.equal(providerInputs.at(-1).messages[0].content.includes(DIFFU_IMAGE_PROMPT_MARKER), false)
   assert.equal(submissions, 2)
   for (const state of ['error', 'invalid', 'oversize'] as const) {
     behavior = state
