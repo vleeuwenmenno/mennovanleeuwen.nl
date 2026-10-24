@@ -2,9 +2,9 @@
 // the same every time for the same picture, never a bare id, and never one that is already taken.
 
 /** "A lone lighthouse at dusk, ink wash" + id 0a1b2c3d-… → "a-lone-lighthouse-at-dusk-ink-0a1b2c3d.png". */
-export function imageFileName(image: { id: string; settings?: { prompt?: string } | null }): string {
+export function imageFileName(image: { id: string; settings?: { prompt?: string; operation?: 'generate' | 'upscale'; source?: { name: string } } | null }): string {
   const short = image.id.replace(/[^0-9a-f]/gi, '').slice(0, 8).toLowerCase() || 'picture'
-  const words = (image.settings?.prompt ?? '')
+  const words = (image.settings?.operation === 'upscale' ? `upscaled ${image.settings.source?.name?.replace(/\.[^.]+$/, '') ?? 'image'}` : image.settings?.prompt ?? '')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()

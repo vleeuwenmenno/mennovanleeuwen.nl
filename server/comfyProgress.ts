@@ -1,3 +1,4 @@
+import type { ImageGraphProgress } from './agentImageUpscale.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
@@ -25,7 +26,7 @@ const count = (v: unknown, max = 100_000) => typeof v === 'number' && Number.isI
  * One message from ComfyUI's socket, applied to a job's state. Messages that name another prompt
  * are ignored (`promptId` is ours, once /prompt has answered). True when the progress changed.
  */
-export function applyComfyMessage(state: ProgressState, message: unknown, promptId: string | null, steps: number): boolean {
+export function applyComfyMessage(state: ProgressState, message: unknown, promptId: string | null, steps: number, graph?: ImageGraphProgress): boolean {
   if (!message || typeof message !== 'object') return false
   const { type, data } = message as { type?: unknown; data?: Record<string, unknown> }
   if (typeof type !== 'string' || !data || typeof data !== 'object') return false
@@ -47,16 +48,17 @@ export function applyComfyMessage(state: ProgressState, message: unknown, prompt
       return false
     }
     state.started = true
-    const phase = typeof data.node === 'string' ? NODE_PHASE[data.node] : undefined
+    const phase = typeof data.node === 'string' ? (graph?.phases ?? NODE_PHASE)[data.node] : undefined
     if (!phase) return false
     return set(phase === 'sampling' ? { phase, value: 0, max: steps } : { phase })
   }
   if (type === 'progress') {
     if (!count(data.value) || !count(data.max) || !(data.max as number) || (data.value as number) > (data.max as number)) return false
     // A step count from another node (a tiled VAE decode, say) is not the picture's progress.
-    if (data.node !== undefined && data.node !== null && data.node !== '7') return false
+    const counter = graph ? (typeof data.node === 'string' ? graph.counters[data.node] : undefined) : 'sampling'
+    if (graph ? !counter : data.node !== undefined && data.node !== null && data.node !== '7') return false
     state.started = true
-    return set({ phase: 'sampling', value: data.value as number, max: data.max as number })
+    return set({ phase: counter!, value: data.value as number, max: data.max as number })
   }
   if (type === 'execution_success' || type === 'execution_error' || type === 'execution_interrupted') {
     state.finished = true

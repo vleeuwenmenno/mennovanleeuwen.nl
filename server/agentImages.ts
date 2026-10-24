@@ -1,3 +1,4 @@
+import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition, throttleProgress } from './comfyProgress.ts'
@@ -173,14 +174,10 @@ async function readJSON(user: User, s: ImageSettings, path: string, signal: Abor
   const bytes = await readCapped(await request(user, s, path, signal, body), 8 * 1024 * 1024)
   try { return JSON.parse(bytes.toString()) } catch { throw new HttpError(502, 'ComfyUI returned invalid JSON') }
 }
-type NodeInfo = Record<string, { input?: { required?: Record<string, unknown[]>; optional?: Record<string, unknown[]> } }>
-const options = (info: NodeInfo, node: string, field: string): string[] => {
-  const list = (info[node]?.input?.required?.[field] ?? info[node]?.input?.optional?.[field])?.[0]
-  return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string').slice(0, 2000) : []
-}
+const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user)) {
@@ -190,7 +187,7 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   for (const node of IMAGE_NODES) {
     const cap = Math.min(NODE_INFO_LIMIT, remaining)
     try {
-      const response = await request(user, s, `/object_info/${node}`, limit, undefined, ['LoadImage', 'ImageScale', 'VAEEncode'].includes(node))
+      const response = await request(user, s, `/object_info/${node}`, limit, undefined, true)
       if (response.status === 404) { await response.body?.cancel(); continue }
       const bytes = await readCapped(response, cap)
       remaining -= bytes.length
@@ -216,7 +213,13 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   const modelHints = await imageModelHints(user, s, limit)
   const loras = [...new Set([...options(info, 'LoraLoader', 'lora_name'), ...options(info, 'LoraLoaderModelOnly', 'lora_name')])].sort()
   const loraHints = await imageLoraHints(user, s, limit, loras)
-  return { img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  const upscalers = options(info, 'UpscaleModelLoader', 'model_name')
+  let upscaleError = ''
+  try {
+    if (!upscalers.length) throw new Error('Install an upscale model in ComfyUI/models/upscale_models')
+    validateUpscaleGraph(upscaleWorkflow({ width: 512, height: 512 }, { upscale_model: upscalers[0] }, 'source.png').graph, info)
+  } catch (e) { upscaleError = (e as Error).message }
+  return { upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
 /** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
 async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
@@ -259,7 +262,7 @@ async function imageLoraHints(user: User, settings: ImageSettings, signal: Abort
     return hints.filter((h) => !duplicates.has(h.name))
   } catch { return [] }
 }
-export type ImageInput = { source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+export type ImageInput = { operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }, sourceName?: string) {
   if (!PRESETS.includes(s.preset)) throw new HttpError(400, 'Unsupported image workflow')
@@ -309,7 +312,7 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
-  return { graph, width, height, seed, sampling, loras, denoise }
+  return { graph, width, height, seed, sampling, loras, denoise, outputNode: '9' }
 }
 
 // Branches retain the artifact ID in the copied generate_image result, never a second PNG.
@@ -374,15 +377,20 @@ export function generatedImageForVision(user: User, thread: string, id?: unknown
 export function imageAgainInput(user: User, thread: string, id: string): ImageInput {
   const image = imageInThread(user, thread, id)
   if (!image.metadata) throw new HttpError(409, 'This image has no recorded generation settings')
-  const { source, denoise, ...settings } = JSON.parse(image.metadata) as ImageGenerationSettings
+  const stored = JSON.parse(image.metadata) as ImageGenerationSettings
+  if (stored.operation === 'upscale') return { operation: 'upscale', source_image_id: stored.source.id, upscale_model: stored.upscale_model, width: stored.width, height: stored.height }
+  const { source, denoise, ...settings } = stored
   let seed: number
   do { seed = randomInt(2 ** 48 - 1) } while (seed === settings.seed)
   return { ...settings, loras: settings.loras ?? [], seed, ...(source ? { source_image_id: source.id, denoise } : {}) }
 }
 
-type ImagePlan = { source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
+type ImagePlan = { source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: { graph: ImageGraph; width: number; height: number; outputNode: string; progress?: ImageGraphProgress; sampling?: { steps: number } }; parameters: ImageGenerationSettings }
 async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false): Promise<ImagePlan> {
-  const allowed = new Set(['source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
+  ownImageThread(user, thread)
+  if (input?.operation === 'upscale') return planUpscale(user, input, signal)
+  if (input?.operation !== undefined && input.operation !== 'generate') throw new HttpError(400, 'Choose operation generate or upscale')
+  const allowed = new Set(['operation', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const source = input.source_image_id === undefined ? undefined : imageSource(user, input.source_image_id)
   const profile = selectedImageProfile(user, thread, input.profile_id)
@@ -420,9 +428,36 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   const parameters: ImageGenerationSettings = { loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
   return { settings, workflow, parameters, source, uploadName }
 }
+async function planUpscale(user: User, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
+  signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+  const allowed = new Set(['operation', 'source_image_id', 'upscale_model', 'scale', 'width', 'height'])
+  if (Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Upscale accepts only operation, source_image_id, upscale_model, scale or dimensions; no diffusion settings')
+  const source = imageSource(user, input.source_image_id)
+  const settings = imageSettings(user)
+  const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
+  const workflow = upscaleWorkflow(source, input, uploadName)
+  // Use the small upscale-only catalog: missing diffusion loaders must not block image upscaling.
+  const schemas: NodeInfo = {}
+  let remaining = CATALOG_LIMIT
+  for (const name of UPSCALE_NODES) {
+    const response = await request(user, settings, `/object_info/${name}`, signal, undefined, true)
+    if (response.status === 404) { await response.body?.cancel(); continue }
+    const bytes = await readCapped(response, Math.min(NODE_INFO_LIMIT, remaining)); remaining -= bytes.length
+    let data: NodeInfo
+    try { data = JSON.parse(bytes.toString()) } catch { throw new HttpError(502, `Invalid ComfyUI metadata for ${name}`) }
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data[name] && (typeof data[name] !== 'object' || Array.isArray(data[name]))) throw new HttpError(502, `Invalid ComfyUI metadata for ${name}`)
+    if (data[name]) schemas[name] = data[name]
+  }
+  if (!options(schemas, 'UpscaleModelLoader', 'model_name').includes(input.upscale_model as string)) throw new HttpError(409, 'The selected upscale model is not installed; refresh the catalog')
+  validateUpscaleGraph(workflow.graph, schemas)
+  return { settings, source, uploadName, workflow, parameters: { operation: 'upscale', upscale_model: input.upscale_model as string, width: workflow.width, height: workflow.height, input_width: workflow.input_width, input_height: workflow.input_height, source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos' } } }
+}
 export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false) {
   const plan = await planImageGeneration(user, thread, input, signal, exact)
   const p = plan.parameters
+  if (p.operation === 'upscale') return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Upscale image · review resolved settings', rows: [
+    ['Source', `${p.source.name} · ${p.source.width} × ${p.source.height}`], ['Upscale model', p.upscale_model], ['Model input', `${p.input_width} × ${p.input_height}`], ['Output', `${p.width} × ${p.height} · Lanczos final resize`], ['Resources', UPSCALE_RESOURCE_NOTE],
+  ] as [string, string][], body: '', image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
   const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
   return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: p.source ? 'Edit image · review resolved settings' : 'Generate image · review resolved settings', rows: [...(p.source ? [['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Resize', 'Lanczos resize with center crop; no stretching. Whole-image edit, no mask.']] as [string, string][] : []), ...rows], body: p.prompt, ...(p.source ? { image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } } : {}) }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
 }
@@ -468,7 +503,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
     if (plan.source && plan.uploadName) await uploadSource(user, s, plan.source, plan.uploadName, limit)
     limit.throwIfAborted()
     if (progress) socket = await openComfySocket(user, s.url, s.token, clientId, limit, (message) => {
-      if (applyComfyMessage(state, message, promptId, workflow.sampling.steps) && state.progress) progress.push(state.progress)
+      if (applyComfyMessage(state, message, promptId, workflow.sampling?.steps ?? 0, workflow.progress) && state.progress) progress.push(state.progress)
       if (state.finished) wake?.()
     })
     const submitted = await readJSON(user, s, '/prompt', limit, { prompt: workflow.graph, client_id: clientId })
@@ -486,7 +521,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
       const history = await readJSON(user, s, `/history/${encodeURIComponent(promptId)}`, limit)
       const job = history[promptId]
       if (job?.status?.status_str === 'error') throw new HttpError(502, 'ComfyUI generation failed; check its model compatibility and available memory')
-      const output = job?.outputs?.['9']?.images?.[0]
+      const output = job?.outputs?.[workflow.outputNode]?.images?.[0]
       if (output) {
         if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
         progress?.push({ phase: 'saving' })
@@ -494,11 +529,12 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         const bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
         // SaveImage writes PNG. Reject arbitrary content from an incorrectly configured server.
         if (!bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new HttpError(502, 'ComfyUI did not return a PNG image')
+        if (parameters.operation === 'upscale' && (bytes.length < 33 || bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== workflow.width || bytes.readUInt32BE(20) !== workflow.height)) throw new HttpError(502, 'ComfyUI upscale output dimensions do not match the requested size')
         limit.throwIfAborted()
         const id = randomUUID(), name = `generated-${id}.png`
         checkRoom(user, bytes.length + Buffer.byteLength(JSON.stringify(parameters)))
         database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata, backend_scope) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now(), JSON.stringify(parameters), imageBackendScope(user, s))
-        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, seed: workflow.seed, preset: s.preset, settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
+        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, ...(parameters.operation === 'upscale' ? {} : { seed: parameters.seed, preset: parameters.preset }), settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without an image')
       // The socket saying the prompt is done ends the wait early; the next /history read has it.
@@ -526,7 +562,7 @@ const modelPreviews = new Map<string, { owner: number; settings: ImageSettings; 
 const normalizedPath = (value: string) => value.replaceAll('\\', '/')
 const safeModelName = (value: string) => value.length > 0 && value.length <= 2048 && !/[\x00-\x1f?#:]/.test(value) && !normalizedPath(value).startsWith('/') && normalizedPath(value).split('/').every((part) => part && part !== '.' && part !== '..')
 async function modelMetadata(user: User, category: string, name: string) {
-  const categories = { checkpoints: ['CheckpointLoaderSimple', 'ckpt_name'], diffusion_models: ['UNETLoader', 'unet_name'], text_encoders: ['CLIPLoader', 'clip_name'], vae: ['VAELoader', 'vae_name'] } as const
+  const categories = { checkpoints: ['CheckpointLoaderSimple', 'ckpt_name'], diffusion_models: ['UNETLoader', 'unet_name'], text_encoders: ['CLIPLoader', 'clip_name'], vae: ['VAELoader', 'vae_name'], upscale_models: ['UpscaleModelLoader', 'model_name'] } as const
   if (!Object.hasOwn(categories, category) || !safeModelName(name)) throw new HttpError(400, 'Choose a valid catalog category and model identifier')
   const [node, field] = categories[category as keyof typeof categories]
   const settings = imageSettings(user), signal = AbortSignal.timeout(10_000)

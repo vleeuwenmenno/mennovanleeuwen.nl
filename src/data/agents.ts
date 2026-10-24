@@ -455,7 +455,7 @@ export async function followThread(id: string, onEvent: (e: TurnEvent) => void, 
   await readEvents(await fetch(`/api/agents/threads/${id}/follow${opts.terminal ? '?client=terminal' : ''}`, { credentials: 'same-origin', signal }), onEvent)
 }
 
-async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
+export async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => null)
     throw new Error(body?.error ?? `Request failed (${res.status})`)
@@ -541,6 +541,7 @@ export function toolLabel(call: ToolCall, result?: string): string {
     case 'save_image_learning': return 'Save image observation'
     case 'save_image_profile': return 'Save suggested style profile'
     case 'generate_image':
+      if (call.arguments?.operation === 'upscale') return result ? 'Upscaled image' : `Upscale image: ${s('upscale_model')}`
       if (result?.includes('\"learning_review_required\":true')) return 'Review image learnings before generation'
       return result ? call.arguments?.source_image_id ? 'Edited image' : 'Generated image' : `${call.arguments?.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`
     case 'view_generated_image':
