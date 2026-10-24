@@ -20,6 +20,7 @@ import { readNotes as readNoteRows, writeNotes as writeNoteRows } from './noteLi
 import { notify } from './notifier.ts'
 import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
+import { imagePromptSection } from './agentImagePrompt.ts'
 import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
 import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
 
@@ -2207,7 +2208,7 @@ function dateLine(zone: string): string {
 const zoneFor = (v: unknown) => zoneOf(v) ?? Intl.DateTimeFormat().resolvedOptions().timeZone
 
 /** AGENTS.md, then today's date, the mode, how to work, the project and the memories. */
-async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = [], more: { zone?: string; calendar?: string; mail?: string } = {}): Promise<string> {
+async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = [], more: { zone?: string; calendar?: string; mail?: string; images?: boolean } = {}): Promise<string> {
   const all = listMemories(user).filter((m) => !m.imageLearning && !m.imageProfile)
   const name = user.name || user.login
   // {{owner}}: what older AGENTS.md files say, from before anyone could sign up.
@@ -2220,6 +2221,9 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     dateLine(more.zone ?? zoneFor(null)),
     modeLine(mode),
     furiganaLine(user),
+    // The Images group adds Diffu's image-generation guidance. It is static text, placed before
+    // memory and todos, so it stays in the prompt prefix across the rounds of a turn.
+    more.images ? imagePromptSection() : '',
     'When you need a decision, a choice or details from the user, ask with ask_user (a small form: choices, multiple choice, yes or no, text, numbers, ratings, dates) rather than asking in prose, and use the answers. Keep forms short. Ask before creating, renaming or moving projects unless the user already asked for it.',
     'Long jobs (many items or many steps, such as importing a long list, research in many parts or a batch of file changes): write a todo list with update_todos first, then work through it, keeping it up to date; while items are open you can keep going for many rounds. Batch where tools allow it (remember takes up to 50 facts per call), and report briefly at the end.',
     project
@@ -2912,6 +2916,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           zone,
           calendar: now.tools.includes('calendar') ? `${calendarLines(user, zone)}${now.tools.includes('notes') && calendarConnected(user) ? `\n${NOTE_LINK_LINES}` : ''}` : '',
           mail: now.tools.includes('mail') ? mailLines(user, mailReadsOf(now), zone) : '',
+          images: now.tools.includes('images'),
         })) +
         (last && !nudged ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '')

@@ -209,6 +209,7 @@ try {
   await server.start()
   const { imageWorkflow, saveImageSettings, generateImage } = await import('../server/agentImages.ts')
   const { decide } = await import('../server/agents.ts')
+  const { imagePromptSection, DIFFU_IMAGE_PROMPT_MARKER } = await import('../server/agentImagePrompt.ts')
   const { usedBytes } = await import('../server/quota.ts')
   const settings = { url: comfyUrl, token: 'test-secret', preset: 'sdxl' as const, model: 'test.safetensors', clip: '', vae: '' }
   const saved = await json('PUT', '/api/agents/images/settings', settings)
@@ -293,15 +294,28 @@ try {
   database().prepare('UPDATE agent_images SET metadata = NULL WHERE id = ?').run(made.image.id)
   assert.equal((await json('GET', made.image.url + '/metadata')).settings, null)
   assert.equal(result(await json('GET', `/api/agents/threads/${t.id}`)).image.url, made.image.url)
+  // The Diffu image guidance is part of the system prompt only while Images is on.
+  const imageGuidance = imagePromptSection()
+  assert.ok(imageGuidance.includes('MODEL FAMILY GUIDANCE'))
+  assert.ok(providerInputs.at(-1).messages[0].content.includes(DIFFU_IMAGE_PROMPT_MARKER))
+  assert.ok(providerInputs.at(-1).messages[0].content.includes(imageGuidance.trim()))
   console.log('PASS streamed tool generation, approved prompt, PNG retrieval, ownership, quota and restart durability')
 
+  // Off by default: a default-mode thread generates without asking. With the switch on, a decline submits nothing.
+  const unasked = await thread('default')
+  await turn(unasked.id, false)
+  assert.equal(submissions, 2)
+  assert.equal((await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: true })).askBeforeGenerate, true)
   const declined = await thread('default')
   await turn(declined.id, false)
-  assert.equal(submissions, 1)
+  assert.equal(submissions, 2)
+  await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: false })
+  console.log('PASS generation runs without approval by default; Ask before generating images makes a decline submit nothing')
   const disabled = await thread()
   await json('PATCH', `/api/agents/threads/${disabled.id}`, { tools: ['web'] })
   assert.ok(result(await turn(disabled.id)).error)
-  assert.equal(submissions, 1)
+  assert.equal(providerInputs.at(-1).messages[0].content.includes(DIFFU_IMAGE_PROMPT_MARKER), false)
+  assert.equal(submissions, 2)
   for (const state of ['error', 'invalid', 'oversize'] as const) {
     behavior = state
     const bad = await thread()
@@ -447,6 +461,8 @@ try {
   assert.ok(!JSON.stringify(discovered).includes('test-secret') && !JSON.stringify(discovered).includes(comfyUrl))
   requestedTool = 'generate_image'
   // Per-call controls resolve before approval, and never write account or session settings.
+  // The approval card is what shows the resolved settings, so this part asks first.
+  await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: true })
   const tuningThread = await thread('default')
   const beforeAccount = await json('GET', '/api/agents/images/settings')
   const beforeSession = (await json('GET', endpoint(tuningThread.id))).overrides
@@ -494,6 +510,7 @@ try {
   approvalHook = undefined
   await json('PUT', '/api/agents/images/settings', settings)
   generationArgs = { prompt: 'Original Krea session' }
+  await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: false })
   console.log('PASS per-call tuning, complete frozen approval summary, strict bounds and backend-field refusal, no persistence and private reproducibility metadata')
   const zeroNode = info.ConditioningZeroOut
   delete info.ConditioningZeroOut
