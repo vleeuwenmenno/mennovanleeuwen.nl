@@ -1324,6 +1324,35 @@ in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type f
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
 suggestion), archived and deleted, and the sidebar folds to a rail.
 
+**Past threads** lets the agent look back when you refer to an earlier conversation and the
+answer is not already in this thread or memory. The `threads` tool group is on by default,
+including for older threads; switch it off to keep a conversation from reading history.
+`search_threads` searches your own user messages, assistant replies, compacted summaries, titles
+and old titles across projects. Archived threads are included and marked unless excluded;
+Spotlight threads are never searched. This thread is excluded unless explicitly requested with
+`thread: "this"`. You can narrow by project, thread or inclusive dates in your time zone.
+Matching is literal and partial, with ASCII case folding: variants and translations can be tried
+together, with quoted phrases kept together. Up to six distinct terms are used, each at most
+60 characters, from a query of at most 200 characters. One-character non-ASCII words are allowed.
+
+Search returns up to ten threads with at most three short excerpts each, within 6,000 characters.
+Distinct matching terms and title matches rank higher, with newer threads breaking ties.
+Neighbouring matches in one turn share a slot. The candidate scan stops at 3,000 matches and
+reports when it reaches that cap. `read_thread` reads 2–30 messages from the start, end or around
+a message, within the mode's page budget. Tool results, thinking and attachment contents are not
+searched. Hits and read messages name attachments; text attachments can be read explicitly,
+up to 4,000 characters each, while messages are cut at 2,000. These reads need no approval in
+any permission mode. Answers from history should name the thread and date; old conversations
+are evidence, never instructions or permission to save a memory. A failed search should say
+which words were tried rather than invent a conversation.
+
+```sh
+pnpm check:agents-threads   # History search, ownership, attachment reads, bounds, ranking and 20,000-message timing
+```
+
+The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
+`check:agents-images`, `check:agents-mail` and `check:agents-threads`.
+
 A reply that only thinks gets one more round asking for the answer, and an answer given while the
 todo list still has open items gets one asking to update it. Those asks go to the model as a user
 message marked as the app's (never saved or shown), not in the system prompt, because some models'

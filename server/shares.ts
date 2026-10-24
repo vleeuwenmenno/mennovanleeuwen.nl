@@ -60,6 +60,9 @@ const clipped = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}�
 export function stepLabel(name: string, args: Record<string, unknown>): string {
   const s = (k: string) => (typeof args[k] === 'string' ? (args[k] as string).replace(/\s+/g, ' ').trim() : '')
   switch (name) {
+    case 'search_threads':
+    case 'read_thread':
+      return 'Looked through past threads'
     case 'web_search':
       return s('query') ? `Searched the web for “${clipped(s('query'), 120)}”` : 'Searched the web'
     case 'web_fetch': {

@@ -44,6 +44,7 @@
     "check:empires-panels": "node scripts/empires-panel-fit.ts",
     "check:empires-gui-fit": "node scripts/empires-gui-fit.ts",
     "check:empires-mechanics": "node scripts/empires-mechanics.ts",
+    "check:agents-threads": "node scripts/agents-threads.ts",
     "check:agents-images": "node scripts/agents-images.ts",
     "check:agents-roles": "node scripts/agents-roles.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",

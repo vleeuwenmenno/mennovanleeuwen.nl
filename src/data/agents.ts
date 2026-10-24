@@ -67,9 +67,10 @@ export const compactionText = (c: Compaction | undefined) =>
 export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim())
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images'
+export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images' | 'threads'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
+  { id: 'threads', name: 'Past threads', detail: 'Look back through your earlier conversations, in every project' },
   { id: 'images', name: 'Images', detail: 'Generate and tune pictures, inspect output, and learn style profiles from feedback' },
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
@@ -505,6 +506,11 @@ export function toolLabel(call: ToolCall, result?: string): string {
   const made = call.name.startsWith('calendar_') ? calendarOutcome(result) : null
   if (made) return `${made.done === 'created' ? 'Created' : made.done === 'updated' ? 'Changed' : 'Deleted'} event: ${made.title}${made.when ? `, ${made.when}` : ''}`
   switch (call.name) {
+    case 'search_threads': return `Searched past threads for “${s('query')}”`
+    case 'read_thread': {
+      try { const title = JSON.parse(result ?? '{}').title; if (typeof title === 'string' && title) return `Read “${title}”` } catch { /* The result may not have arrived yet. */ }
+      return 'Read an earlier thread'
+    }
     case 'read_image_learnings': return 'Read image learning evidence'
     case 'save_image_learning': return 'Save image observation'
     case 'save_image_profile': return 'Save suggested style profile'
