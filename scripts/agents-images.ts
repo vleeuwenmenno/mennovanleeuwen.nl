@@ -523,6 +523,10 @@ try {
   assert.ok(imageGuidance.includes('LORAS AND ASSET CONFLICTS'))
   assert.ok(imageGuidance.includes('selected.loras'))
   assert.ok(imageGuidance.includes('IMAGE OBSERVATIONS'))
+  assert.ok(imageGuidance.includes('Prefer one evolving profile over a pile of per-image notes'))
+  assert.ok(imageGuidance.includes('do not save it unless the user explicitly asks'))
+  assert.ok(imageGuidance.includes('Profiles are global to the account across threads and projects'))
+  assert.ok(imageGuidance.includes('prompting style and vocabulary'))
   assert.ok(!imageGuidance.includes('cannot see or change active LoRAs'))
   // The adult-content stance, without which models refuse an explicit request (Diffu never
   // filters a generation, so it never needed the wording).
@@ -874,6 +878,12 @@ try {
   const profile = await json('POST', '/api/agents/image-profiles', { name: 'Studio preference', description: 'Quiet composition and restrained contrast.' })
   const otherProfile = await json('POST', '/api/agents/image-profiles', { name: 'Graphic preference', description: 'Simple shapes.' })
   assert.equal(profile.origin, 'user')
+  const deepDescription = '光'.repeat(1200)
+  assert.equal((await json('POST', '/api/agents/image-profiles', { id: otherProfile.id, description: deepDescription })).description, deepDescription)
+  assert.equal((await api('POST', '/api/agents/image-profiles', { id: otherProfile.id, description: 'x'.repeat(1201) })).status, 400)
+  const suggestedProfile = saveImageProfile(owner, { name: 'Evolving look', description: deepDescription }, true)
+  assert.equal(saveImageProfile(owner, { id: suggestedProfile.id, description: 'A general look, revised after feedback.' }, true).description, 'A general look, revised after feedback.')
+  await json('DELETE', `/api/agents/image-profiles/${suggestedProfile.id}`)
   for (const invalid of [null, [], { name: 'x', description: '', backend: 'forbidden' }]) assert.equal((await api('POST', '/api/agents/image-profiles', invalid)).status, 400)
   assert.equal((await api('PUT', `/api/agents/image-profiles/threads/${visionThread.id}`, null)).status, 400)
   assert.equal((await json('GET', '/api/agents/image-profiles', undefined, 1)).length, 0)
@@ -911,6 +921,25 @@ try {
   assert.throws(() => saveImageLearning(stranger, visionThread.id, { id: learned.id, note: 'wrong owner' }), /No such thread/)
   const relevant = imageLearnings(owner, visionThread.id, lastVisionImage.settings, 'Studio portrait')
   assert.equal(relevant.evidence.notes[0].id, learned.id)
+  const compactNote = relevant.evidence.notes[0]
+  assert.equal(compactNote.artifactId, lastVisionImage.id)
+  assert.equal(compactNote.source.messageId, feedbackId)
+  assert.ok(baseLearning.evidence_quote.includes(compactNote.source.quote))
+  assert.match(compactNote.settingsLine, new RegExp(`${lastVisionImage.settings.preset} .* ${lastVisionImage.settings.steps} steps .* CFG ${lastVisionImage.settings.cfg}`))
+  assert.ok(compactNote.settingsLine.includes(`${lastVisionImage.settings.sampler}/${lastVisionImage.settings.scheduler}`))
+  assert.ok(compactNote.settingsLine.includes(lastVisionImage.settings.model))
+  assert.ok(compactNote.settingsLine.includes('LoRAs (none)'))
+  assert.ok(!('settings' in compactNote))
+  assert.ok(!JSON.stringify(relevant.evidence).includes('"prompt":'))
+  assert.ok(!JSON.stringify(relevant.evidence).includes('"negative_prompt":'))
+  const overview = relevant.evidence.profiles.find((p) => p.id === profile.id)!
+  assert.match(overview.summary, /Studio preference: Quiet composition.*2 notes · last touched/)
+  assert.ok(!overview.summary.includes('\n'))
+  const storedLearning = database().prepare('SELECT text, image_learning FROM agent_memories WHERE id = ?').get(learned.id) as any
+  assert.ok(storedLearning.text.startsWith(`Image learning · profile ${profile.id} · user_feedback · Studio portrait\nInterpretation (not verified): `))
+  assert.ok(storedLearning.text.includes(`\nEvidence #${feedbackId}: ${baseLearning.evidence_quote}\nImage: ${lastVisionImage.id}\nRecorded settings: `))
+  assert.deepEqual(JSON.parse(storedLearning.text.split('\nRecorded settings: ')[1]), lastVisionImage.settings)
+  assert.deepEqual(JSON.parse(storedLearning.image_learning).settings, lastVisionImage.settings)
   assert.deepEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings, 'Studio portrait'), relevant)
   assert.equal(imageLearnings(owner, visionThread.id, { ...lastVisionImage.settings, model: 'other/model' }).evidence.notes.length, 0)
   assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings, '', undefined, otherProfile.id).evidence.notes.length, 0)
@@ -972,6 +1001,12 @@ try {
   assert.equal(approvalSummaries.length, beforeAsked + 2)
   assert.equal(JSON.parse(allowedSave.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).source.kind, 'suggestion')
   assert.equal(savedCount(), beforeDecline + 1)
+  for (const name of ['save_image_profile', 'save_image_learning', 'read_image_learnings']) {
+    const definition = providerInputs.at(-1).tools.find((t: any) => t.function.name === name).function
+    assert.match(definition.description, /do not save your own guess unless the user explicitly asks/i)
+    assert.match(definition.description, /profile/i)
+  }
+  assert.equal(providerInputs.at(-1).tools.find((t: any) => t.function.name === 'save_image_profile').function.parameters.properties.description.maxLength, 1200)
   await json('PUT', '/api/agents/images/settings', { askBeforeSavingObservations: false })
   console.log('PASS observations save without approval by default; opt-in asks, decline writes nothing and approval saves')
   const countBeforeOff = savedCount()
@@ -1025,7 +1060,27 @@ try {
   const capped = imageLearnings(owner, visionThread.id, lastVisionImage.settings)
   assert.equal(capped.evidence.notes.length, 5)
   assert.equal(capped.evidence.truncated, true)
-  assert.ok(Buffer.byteLength(JSON.stringify(capped.evidence)) < 40_000)
+  assert.ok(Buffer.byteLength(JSON.stringify(capped.evidence)) < 20_000)
+  assert.ok(capped.evidence.notes.slice(0, 2).every((n) => n.source.kind !== 'suggestion'))
+  assert.ok(capped.evidence.notes.some((n) => n.source.kind === 'suggestion')) // Explicitly requested guesses remain readable.
+  const longEvidence = 'Concrete defect: '.repeat(28)
+  const longEvidenceId = Number(database().prepare('INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(visionThread.id, 'user', longEvidence, Date.now()).lastInsertRowid)
+  const longNote = saveImageLearning(owner, visionThread.id, { ...baseLearning, note: 'n'.repeat(500), evidence_message_id: longEvidenceId, evidence_quote: longEvidence })
+  const clippedNotes = imageLearnings(owner, visionThread.id, lastVisionImage.settings).evidence
+  const clippedNote = clippedNotes.notes.find((n) => n.id === longNote.id)!
+  assert.equal(clippedNote.note.length, 240)
+  assert.equal(clippedNote.source.quote.length, 160)
+  assert.ok(longEvidence.includes(clippedNote.source.quote))
+  assert.ok(clippedNotes.feedbackSources.every((source) => source.quote.length <= 200))
+  // Retrieval must retain exact LoRA-set matching and show weights without returning prompt JSON.
+  const loraSettings = { ...lastVisionImage.settings, loras: [{ name: 'style/example.safetensors', weight: 0.7 }] }
+  const withLora = JSON.parse(storedLearning.image_learning)
+  withLora.settings = loraSettings
+  database().prepare('UPDATE agent_memories SET image_learning = ? WHERE id = ?').run(JSON.stringify(withLora), learned.id)
+  assert.ok(!imageLearnings(owner, visionThread.id, lastVisionImage.settings).evidence.notes.some((n) => n.id === learned.id))
+  assert.ok(imageLearnings(owner, visionThread.id, loraSettings).evidence.notes.find((n) => n.id === learned.id)!.settingsLine.includes('LoRAs style/example.safetensors (0.7)'))
+  database().prepare('UPDATE agent_memories SET image_learning = ? WHERE id = ?').run(storedLearning.image_learning, learned.id)
+  console.log('PASS profile-first guidance, 1200-character profiles, protected preferences, compact evidence/settings, evidence-first ranking, exact LoRA matching and unchanged stored format')
   await json('DELETE', `/api/agents/memories/${learned.id}`)
   assert.ok(!(await json('GET', '/api/agents/memories')).some((m: any) => m.id === learned.id))
   await json('DELETE', `/api/agents/image-profiles/${profile.id}/reset`)

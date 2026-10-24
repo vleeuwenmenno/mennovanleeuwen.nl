@@ -1558,10 +1558,11 @@ Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
 image editing and model downloads are not included in these presets.
 
-**Image observations** are short, cautious notes an agent records after an image or your feedback:
-what you asked for, what the model and sampling produced, what you said was wrong, and sometimes
-what a vision model saw. They may be wrong; they are evidence, never a ranking or a “best settings”
-list. Saving is on by default, and writes do not ask for approval by default. Turn on **Ask before
+**Image observations** are short, cautious interpretations of evidence: your words about an image
+or a vision model’s concrete defect report. The agent is told not to save its own guesses about
+an image unless you explicitly ask. Notes may be wrong; they are never a ranking or a “best settings”
+list. A profile holds the lasting preferences; observations supply evidence for it. Saving is on by
+default, and writes do not ask for approval by default. Turn on **Ask before
 saving an observation** in **Settings → Apps → Agents → Images** to make each write ask first,
 except in Bypass; Plan never writes observations. Declining leaves the observation unsaved and
 existing notes unchanged. This approval setting has no effect while saving is off. Turn off
@@ -1572,8 +1573,13 @@ server under **Memory → Images/Learnings**, scoped to the backend and componen
 LoRA list and weights). They are not published or sent elsewhere for storage; relevant notes are
 read by your configured agent during later image tasks.
 
-**Image learning and named style profiles:** profiles organize preferences and observations in the
-existing account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
+**Image learning and named style profiles:** a profile is the durable description of a look, shared
+across your threads and projects. The agent is told to create one when a look to keep first appears
+and update it as the look or feedback evolves, rather than accumulate per-image notes. Its description
+should cover the look, prompting style and vocabulary, settings it tends to want, and traps, not a
+list of images. A project-scoped memory note is for preferences specific to that project, with the
+usual permission to remember them. Profiles organise preferences and evidence in the existing
+account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
 single global “best settings” ranking. Style profiles live in **Settings → Agents → Images → Style profiles** (every profile, whether you
 confirmed it or the agent suggested it, its observation count, and New / Edit / Reset / Delete) and
 in each thread's **Images** dialog, which pins one profile to that thread with a dropdown and offers
@@ -1591,13 +1597,21 @@ settings and evidence, `/memory rm <id>` forgets one record, and `/memory reset-
 all image observations while retaining profiles, preferences and image defaults.
 
 The Images tools include `read_image_learnings`, `save_image_learning` and `save_image_profile`.
-Reading returns at most 20 profile summaries and five relevant observations (24 KB of observation
-JSON), plus bounded current-thread image/evidence IDs. The user can pin a profile, or the agent can
+Reading returns at most 20 one-line profile summaries (name, up to 360 characters of description,
+note count across backends and last touched time), the selected profile’s full description, and five
+relevant observations (at most 12 KB of observation JSON). Each observation has a human-readable
+settings line with preset, steps, CFG, sampler/scheduler, model, encoder/VAE and LoRAs with weights;
+it does not repeat the stored prompt JSON. Notes are clipped to 240 characters and quotes to 160,
+with their evidence message IDs and image IDs retained. Current-thread evidence quotes are limited
+to 200 characters. User/vision evidence ranks ahead of unverified suggestions; old suggestions stay
+readable. Full settings, prompts, notes and quotes remain unchanged in Memory storage. The user can
+pin a profile, or the agent can
 choose `profile_id` for one generation and explain why in `profile_reason`. There is no automatic
 keyword classifier assigning styles. Profiles guide the agent’s validated per-call choices; they do
 not silently replace saved account/session manual model selections. Explicit user requests take
 priority. `read_image_learnings` can browse recipes across models within a chosen profile using
-`all_models`; each recipe keeps its exact workflow, model, encoder and VAE identity. Task/style words
+`all_models`; each recipe keeps its workflow and model/component settings, with long filenames
+clipped to 160 characters in the settings line. Within each source tier, task/style words
 only rank relevance of observations, never quality. No thumbnail, successful render or agent opinion
 establishes which recipe the user likes best.
 
@@ -1610,8 +1624,12 @@ batch’s results are available for the next model call. Switching components/pr
 changing notes invalidates the receipt. Restart/resume needs no persistent receipt migration and
 refreshes evidence naturally. Failed validation can still be explained without submitting a job.
 
-Learning is deliberate and evidence-based. On a later turn, user feedback or `view_generated_image`
-can support `save_image_learning`. A new record references a current-thread generated artifact;
+Learning is deliberate and evidence-based. On a later turn, user feedback or a concrete defect report
+from `view_generated_image` can support `save_image_learning`, filed under the relevant profile.
+Repeated feedback belongs in the profile description rather than another per-image note. The tool
+still accepts an unverified suggestion for an explicit user request; this is guidance, not a server
+claim that it can determine whether every interpretation is worth keeping. A new record references
+a current-thread generated artifact;
 its actual parameters and image ID are copied by the server, never supplied as invented settings.
 Sources distinguish **unverified suggestion**, **vision observation**, and **quoted user feedback**.
 Feedback/vision quotes must match an actual later message in that thread; vision must refer to the
@@ -1633,7 +1651,9 @@ backend provenance cannot be retroactively assigned a guessed namespace. Existin
 parameter/evidence snapshots if their source thread is later removed, until the user forgets them.
 
 Limits: 20 profiles, 100 image observations and 1000 total memories per account; names 60 characters,
-preferences 400, task/style 160 and notes/evidence quotes 500. Storage quota includes structured
+profile descriptions 1200 through the tools/API and CLI, task/style 160 and stored notes/evidence
+quotes 500. The existing profile panel’s text entry remains limited to 400 characters. Storage quota
+includes structured
 records. Image memories are excluded from general system prompts and retrieved only through image
 tools. No automatic quality scoring, background experiments or extra generation occurs. Technical
 failures remain in tool history; durable quality-failure observations require an artifact. Successful

@@ -13,6 +13,16 @@ export function imageProfilesWithCounts(user: User): (ImageProfile & { observati
   const counts = new Map((database().prepare("SELECT json_extract(image_learning, '$.profileId') AS profile, COUNT(*) AS n FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL GROUP BY profile").all(user.id) as { profile: number | null; n: number }[]).map((r) => [r.profile, r.n]))
   return imageProfiles(user).map((p) => ({ ...p, observations: counts.get(p.id) ?? 0 }))
 }
+/** Compact context overview; counts include all stored notes, across backends and projects. */
+export function imageProfileOverview(user: User) {
+  const touches = new Map((database().prepare('SELECT id, COALESCE(updated_at, created_at) AS touched FROM agent_memories WHERE user_id = ? AND image_profile IS NOT NULL').all(user.id) as { id: number; touched: number }[]).map((r) => [r.id, r.touched]))
+  const notes = new Map((database().prepare("SELECT json_extract(image_learning, '$.profileId') AS profile, COUNT(*) AS n, MAX(COALESCE(updated_at, created_at)) AS touched FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL GROUP BY profile").all(user.id) as { profile: number | null; n: number; touched: number }[]).map((r) => [r.profile, r]))
+  return imageProfiles(user).map((p) => {
+    const note = notes.get(p.id), touched = Math.max(touches.get(p.id) ?? 0, note?.touched ?? 0)
+    const description = p.description.replace(/\s+/g, ' ')
+    return { id: p.id, summary: `${p.name.replace(/\s+/g, ' ')}: ${description.length > 360 ? description.slice(0, 359) + '…' : description} · ${note?.n ?? 0} notes · last touched ${new Date(touched).toISOString()}` }
+  })
+}
 export function ownImageProfile(user: User, id: unknown) {
   const profile = imageProfiles(user).find((p) => p.id === id)
   if (!profile) throw new HttpError(404, 'No such image profile')
@@ -34,9 +44,9 @@ export function saveImageProfile(user: User, input: Record<string, unknown>, age
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'Supply a profile object')
   if (Object.keys(input).some((k) => !['id', 'name', 'description'].includes(k))) throw new HttpError(400, 'Only profile id, name and description are supported')
   const old = input.id === undefined ? undefined : ownImageProfile(user, input.id)
-  if (agent && old?.origin === 'user') throw new HttpError(409, 'User-confirmed profile preferences cannot be overwritten by the agent. Record a separate suggestion or ask the user to edit the profile.')
+  if (agent && old?.origin === 'user') throw new HttpError(409, 'User-confirmed profile preferences cannot be overwritten by the agent. Ask the user to edit the profile; do not create a duplicate profile or an unevidenced note.')
   const name = input.name ?? old?.name, description = input.description ?? old?.description
-  if (typeof name !== 'string' || !name.trim() || name.length > 60 || typeof description !== 'string' || description.length > 400) throw new HttpError(400, 'Use a profile name of 1–60 characters and preferences up to 400 characters')
+  if (typeof name !== 'string' || !name.trim() || name.length > 60 || typeof description !== 'string' || description.length > 1200) throw new HttpError(400, 'Use a profile name of 1–60 characters and preferences up to 1200 characters')
   const profiles = imageProfiles(user)
   if (profiles.some((p) => p.id !== old?.id && p.name.toLowerCase() === name.trim().toLowerCase())) throw new HttpError(409, 'An image profile already has that name')
   const count = (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = ?').get(user.id) as { n: number }).n
@@ -65,7 +75,7 @@ export function forgetImageProfile(user: User, id: unknown, reset = false) {
 export async function handleImageProfileApi(req: IncomingMessage, res: ServerResponse, user: User, path: string) {
   if (path === '/api/agents/image-profiles') {
     if (req.method === 'GET') return json(res, 200, imageProfilesWithCounts(user)), true
-    if (req.method === 'POST') return json(res, 200, saveImageProfile(user, await readJson(req, 4096))), true
+    if (req.method === 'POST') return json(res, 200, saveImageProfile(user, await readJson(req, 8192))), true
   }
   const thread = /^\/api\/agents\/image-profiles\/threads\/([0-9a-f-]{36})$/.exec(path)
   if (thread) {
