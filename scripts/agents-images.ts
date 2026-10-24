@@ -927,7 +927,7 @@ try {
   behavior = 'ok'
   console.log('PASS silent generation, complete tool batches and todos, exact pending dimensions, actual vision bytes, current-thread default and explicit owner-wide inspection, unsupported models and payload limit')
   // Durable learning uses actual artifacts and evidence, not agent-supplied settings.
-  const { imageLearnings, saveImageLearning, imageReviewGate, imageLearningsShown } = await import('../server/agentImageLearning.ts')
+  const { imageLearnings, saveImageLearning, imageReviewGate } = await import('../server/agentImageLearning.ts')
   const { imageBackendScope } = await import('../server/agentImages.ts')
   const { saveImageProfile, selectedImageProfile } = await import('../server/agentImageProfiles.ts')
   const owner = { id: 1, admin: true } as any, stranger = { id: 2 } as any
@@ -1035,20 +1035,26 @@ try {
   assert.equal(result(learnedGeneration).image.settings.seed, 91)
   assert.equal(result(learnedGeneration).image.settings.profile_id, profile.id)
   assert.equal(learnedGeneration.messages.at(-1).role, 'tool')
-  // A new turn with unchanged observations and profile does not show the evidence again.
+  const reviewCount = (t: any) => t.messages.slice(t.messages.findLastIndex((m: any) => m.role === 'user')).filter((m: any) => m.toolName === 'generate_image' && m.content.includes('"status":"review_once"')).length
+  // Nothing carries over between turns: a new turn with nothing changed shows the evidence once again,
+  // and that evidence is in what the model is sent next, not just recorded.
   const quietSubmissions = submissions
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }]]
   const quiet = await turn(visionThread.id)
+  assert.equal(reviewCount(quiet), 1)
   assert.ok(result(quiet).image)
   assert.equal(submissions, quietSubmissions + 1)
-  assert.ok(!quiet.messages.slice(-3).some((m: any) => m.content.includes('review_once')))
+  const sentAfterGate = providerInputs.at(-1).messages
+  const sentReview = sentAfterGate.slice(sentAfterGate.findLastIndex((m: any) => m.role === 'user')).find((m: any) => m.role === 'tool' && m.content.includes('"status":"review_once"'))
+  assert.ok(sentReview, 'the review payload reaches the model in the same turn')
+  assert.ok(JSON.parse(sentReview.content).notes.some((n: any) => n.id === learned.id))
   // Discovery and generation in one batch cannot count as evidence already read by the model.
   const batchThread2 = await thread()
   sequence = [[{ name: 'list_image_models', arguments: {} }, { name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }]]
   const batchedRead = await turn(batchThread2.id)
-  assert.equal(batchedRead.messages.filter((m: any) => m.toolName === 'generate_image' && m.content.includes('"status":"review_once"')).length, 1)
+  assert.equal(reviewCount(batchedRead), 1)
   assert.ok(result(batchedRead).image)
   // The review shows at most once per turn, whatever the next call changes (another profile here).
-  const reviewCount = (t: any) => t.messages.slice(t.messages.findLastIndex((m: any) => m.role === 'user')).filter((m: any) => m.toolName === 'generate_image' && m.content.includes('"status":"review_once"')).length
   const changed = await thread()
   const beforeChanged = submissions
   sequence = [[{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: otherProfile.id, seed: 7 } }]]
@@ -1071,37 +1077,64 @@ try {
   assert.match(JSON.parse(pairTurn.messages.filter((m: any) => m.toolName === 'generate_image').at(-2).content).skipped, /Not run/)
   assert.ok(result(pairTurn).image)
   assert.equal(submissions, beforePair + 1)
-  // A new turn: unchanged, no review; after a new observation, one review and then it submits.
-  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Again', profile_id: profile.id } }]]
+  // Rewind after a gate removes the evidence from the thread, so the next turn shows it again.
+  const rewound = await thread()
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Rewound', profile_id: profile.id } }]]
+  const gatedOnly = await turn(rewound.id)
+  assert.equal(reviewCount(gatedOnly), 1)
+  assert.equal((await api('POST', `/api/agents/threads/${rewound.id}/rewind`, { messageId: gatedOnly.messages.find((m: any) => m.role === 'user').id })).status, 200)
+  assert.ok(!(await json('GET', `/api/agents/threads/${rewound.id}`)).messages.some((m: any) => m.content?.includes('review_once')))
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Rewound', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Rewound', profile_id: profile.id } }]]
+  const afterRewind = await turn(rewound.id)
+  assert.equal(reviewCount(afterRewind), 1)
+  assert.ok(result(afterRewind).image)
+  // Feedback context: replies to a generated image and messages naming one, never plain requests.
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Again', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Again', profile_id: profile.id } }]]
   const again = await turn(changed.id, undefined, 'The last bird looks too dark')
-  assert.equal(reviewCount(again), 0)
   assert.ok(result(again).image)
-  const fresh = saveImageLearning(owner, changed.id, { image_id: result(again).image.id, profile_id: profile.id, task: 'Gate check', note: 'Temporary', source: 'suggestion' })
-  sequence = [[{ name: 'generate_image', arguments: { prompt: 'After a note', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'After a note', profile_id: profile.id } }]]
-  const afterNote = await turn(changed.id)
-  assert.equal(reviewCount(afterNote), 1)
-  assert.ok(result(afterNote).image)
-  database().prepare('DELETE FROM agent_memories WHERE id = ?').run(fresh.id)
-  // Feedback context: only replies to a generated image, never plain requests.
   const feedback = imageLearnings(owner, changed.id, lastVisionImage.settings).evidence.feedbackSources
-  assert.ok(feedback.length <= 5)
   assert.ok(feedback.every((f) => f.imageId))
-  assert.ok(feedback.some((f) => f.source === 'user_feedback' && f.quote === 'The last bird looks too dark'))
-  assert.ok(!feedback.some((f) => f.quote === 'Generate a bird image' && f.messageId === changedTurn.messages.find((m: any) => m.role === 'user').id))
+  assert.ok(feedback.some((f) => f.source === 'user_feedback' && f.quote === 'The last bird looks too dark' && f.imageId === result(changedTurn).image.id))
+  assert.ok(!feedback.some((f) => f.messageId === changedTurn.messages.find((m: any) => m.role === 'user').id))
   assert.deepEqual(imageLearnings(owner, pair.id, lastVisionImage.settings).evidence.feedbackSources, [])
+  // A named image older than the latest five still resolves to itself, and the list stays at five.
+  const seven = await thread()
+  const sevenIds: string[] = []
+  for (let i = 0; i < 7; i++) {
+    sequence = [[{ name: 'generate_image', arguments: { prompt: `Bird ${i}`, profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: `Bird ${i}`, profile_id: profile.id } }]]
+    sevenIds.push(result(await turn(seven.id, undefined, `Bird ${i}`)).image.id)
+  }
   sequence = []
+  const now = Date.now()
+  for (const [i, text] of [`The first one, ${sevenIds[0]}, had the best light`, 'Unrelated: what time is it?', `Also ${sevenIds[1]} was nice`, `And ${sevenIds[2]}`, `And ${sevenIds[3]}`, `And ${sevenIds[4]}`].entries()) database().prepare('INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(seven.id, 'user', text, now + i)
+  const named = imageLearnings(owner, seven.id, lastVisionImage.settings).evidence
+  assert.equal(named.currentThreadImages.length, 5)
+  assert.ok(!named.currentThreadImages.some((i) => i.id === sevenIds[0]))
+  assert.equal(named.feedbackSources.length, 5)
+  assert.ok(!named.feedbackSources.some((f) => f.quote.startsWith('Unrelated')))
+  // With the newer mentions gone, the oldest named image is back in the five and keeps its own ID.
+  database().prepare("DELETE FROM agent_messages WHERE thread_id = ? AND role = 'user' AND content LIKE 'And %'").run(seven.id)
+  const resolved = imageLearnings(owner, seven.id, lastVisionImage.settings).evidence.feedbackSources.find((f) => f.quote.startsWith('The first one'))
+  assert.equal(resolved?.imageId, sevenIds[0])
+  // Labels: a review reply submitted nothing, whatever the operation.
+  const { generateImageLabel } = await import('../src/data/imageToolLabel.ts')
+  const reviewReply = JSON.stringify({ status: 'review_once', submitted: false })
+  for (const args of [{ operation: 'refine' }, { operation: 'inpaint', prompt: 'x' }, { hires: { width: 1024 } }, {}]) {
+    assert.equal(generateImageLabel(args, reviewReply), 'Showed image learnings before generating')
+    assert.equal(generateImageLabel(args, JSON.stringify({ learning_review_required: true, submitted: false })), 'Showed image learnings before generating')
+  }
+  assert.equal(generateImageLabel({ operation: 'refine' }, JSON.stringify({ image: { id: 'x' } })), 'Refined image')
   // The backstop: a second gate in one turn never happens, and if it did, the call submits.
   const backstop: ImageReviewTurn = { shown: false, gates: 0 }
   const warn = console.warn, warned: string[] = []
   console.warn = (...a: unknown[]) => { warned.push(a.join(' ')) }
   try {
-    assert.equal(imageReviewGate('backstop-thread', 'digest-a', backstop), true)
-    assert.equal(imageReviewGate('backstop-thread', 'digest-b', backstop), false)
+    assert.equal(imageReviewGate('backstop-thread', backstop), true)
+    assert.equal(imageReviewGate('backstop-thread', backstop), false)
   } finally { console.warn = warn }
   assert.ok(warned.some((w) => w.includes('backstop-thread')))
-  imageLearningsShown('backstop-thread', 'digest-b', backstop)
-  assert.equal(imageReviewGate('backstop-thread', 'digest-b', { shown: false, gates: 0 }), false)
-  console.log('PASS image learnings show at most once per turn: changed arguments, reading first, batches, new turns, new notes, backstop and quiet feedback context')
+  assert.equal(imageReviewGate('backstop-thread', { shown: true, gates: 0 }), false)
+  console.log('PASS image learnings show once per turn and reach the model: every new turn, changed arguments, reading first, batches, Rewind, old named images, labels, backstop and quiet feedback context')
   extraToolCalls = []; requestedTool = 'read_image_learnings'; generationArgs = { profile_id: profile.id, all_models: true, task: 'Studio' }
   const readTurn = await turn(visionThread.id)
   assert.ok(JSON.parse(readTurn.messages.findLast((m: any) => m.toolName === 'read_image_learnings').content).notes.length >= 2)
@@ -1163,12 +1196,7 @@ try {
   assert.ok((await json('GET', '/api/agents/memories')).some((m: any) => m.id === learned.id))
   const renamed = await json('POST', '/api/agents/image-profiles', { id: profile.id, name: 'Studio revised', description: 'User correction: less contrast.' })
   assert.equal(renamed.name, 'Studio revised')
-  assert.notEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings).digest, relevant.digest)
-  // The review digest leaves out per-call and thread settings: switching them never asks for another review.
-  const digestBeforeModelSwitch = imageLearnings(owner, visionThread.id, lastVisionImage.settings).digest
-  database().prepare('UPDATE agent_threads SET model = ? WHERE id = ?').run('text-model', visionThread.id)
-  assert.equal(imageLearnings(owner, visionThread.id, { ...lastVisionImage.settings, steps: 5 }).digest, digestBeforeModelSwitch)
-  database().prepare('UPDATE agent_threads SET model = ? WHERE id = ?').run('test-model', visionThread.id)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings).evidence.selectedProfile!.name, 'Studio revised')
   const extraProfiles: number[] = []
   for (let i = 0; i < 18; i++) extraProfiles.push(saveImageProfile(owner, { name: `Bounded profile ${i}`, description: '' }).id)
   assert.throws(() => saveImageProfile(owner, { name: 'Overflow profile', description: '' }), /20 profiles/)

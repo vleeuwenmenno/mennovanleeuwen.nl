@@ -4,7 +4,7 @@ import { imageFileSaveBlockers, prepareImageFileSave } from './agentImageFiles.t
 import { searchThreads, readThread } from './agentThreadSearch.ts'
 import { messageMentions } from '../src/data/agentMentions.ts'
 import { saveImageProfile, forgetImageProfile, PROFILE_NAME_MAX, PROFILE_DESCRIPTION_MAX } from './agentImageProfiles.ts'
-import { imageLearnings, imageLearningsShown, imageReviewGate, saveImageLearning, type ImageReviewTurn } from './agentImageLearning.ts'
+import { imageLearnings, imageReviewGate, saveImageLearning, type ImageReviewTurn } from './agentImageLearning.ts'
 import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageProgress } from '../src/data/imageModels.ts'
 import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, prepareImageGeneration, generatedImageForVision, imageAgainInput, retainBranchedImages, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
@@ -2004,7 +2004,7 @@ const writeNotes = (user: User, change: (all: NoteRow[]) => NoteRow[]) => writeN
 const calendarError = (e: unknown) => (e instanceof HttpError && e.status === 409 && /not connected/i.test(e.message) ? NOT_CONNECTED : (e as Error).message)
 
 /** Runs one tool call. Answers what the model reads back; failures are told to it, not thrown. */
-async function runTool(user: User, key: string, thread: string, mode: Mode, call: ToolCall, signal: AbortSignal, learningRead: (digest: string) => void, zone: string): Promise<string> {
+async function runTool(user: User, key: string, thread: string, mode: Mode, call: ToolCall, signal: AbortSignal, learningRead: () => void, zone: string): Promise<string> {
   const args = call.arguments ?? {}
   const limit = AbortSignal.any([signal, AbortSignal.timeout(45_000)])
   try {
@@ -2020,7 +2020,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         if (args.operation !== undefined && !['generate', 'refine', 'hires', 'upscale', 'inpaint', 'remove'].includes(String(args.operation)) || args.upscale_model !== undefined && (args.operation !== 'upscale' || typeof args.upscale_model !== 'string' || !args.upscale_model || args.upscale_model.length > 2048)) throw new HttpError(400, 'Choose a supported operation; upscale_model requires operation upscale')
         const { effective } = threadImageSettings(user, thread)
         const findings = imageLearnings(user, thread, effective, String(args.task ?? ''), undefined, args.profile_id, args.all_models === true, args.operation as string | undefined, args.upscale_model as string | undefined)
-        learningRead(findings.digest)
+        learningRead()
         return JSON.stringify(findings.evidence)
       }
       case 'save_image_profile': return JSON.stringify(saveImageProfile(user, args, true))
@@ -2071,7 +2071,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         const resolved = resolveImageAssets(current.effective, catalog)
         const sampling = recommendedImageSampling(resolved.effective.preset, resolved.effective.model, catalog)
         const findings = imageLearnings(user, thread, resolved.effective)
-        learningRead(findings.digest)
+        learningRead()
         const query = String(args.query ?? '').toLowerCase()
         const bounded = Object.fromEntries(['checkpoints', 'diffusionModels', 'clips', 'vaes', 'loras', 'upscalers'].map((key) => { const matches = catalog[key as 'checkpoints'].filter((name) => name.toLowerCase().includes(query)); return [key, { values: matches.slice(0, limitCount), total: matches.length, truncated: matches.length > limitCount }] }))
         const recommendations = PRESETS.filter((preset) => !args.preset || preset === args.preset).map((preset) => {
@@ -3062,7 +3062,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     // own messages may still be over the threshold; then it goes on and the model says if it is too much).
     let compactedAt = -2
     let imageCompleted = false
-    // Image learnings show once per turn at most, and only when they changed since this thread saw them.
+    // Image learnings show at most once per turn, before its first generation.
     const imageReview: ImageReviewTurn = { shown: false, gates: 0 }
     for (let round = 0; ; round++) {
       const now = current()
@@ -3158,7 +3158,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       // Image jobs share one ComfyUI slot per account: run them in order (a mask, then the edit that uses it).
       const hasImageGeneration = calls.some((c) => c.name === 'generate_image' || c.name === 'make_image_mask')
       const generationPending: string[] = []
-      const imageLearningRead = new Set<string>()
+      let imageLearningRead = false
       let imageLearningReviewNeeded = false
       const runCall = async (c: ToolCall, index: number) => {
           if (imageLearningReviewNeeded) return JSON.stringify({ skipped: 'Not run: generate_image above returned image learnings to read first. Call this again in your next reply if still needed; generate_image will submit then.' })
@@ -3210,9 +3210,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             try {
               const image = await prepareImageGeneration(user, row.id, c.arguments ?? {}, ctl.signal)
               if (image.parameters.operation !== 'upscale' && image.parameters.operation !== 'remove') {
-                const findings = imageLearnings(user, row.id, image.parameters, image.parameters.prompt, image.backendScope, image.parameters.profile_id, false, image.parameters.operation === 'inpaint' ? 'inpaint' : image.parameters.operation === 'refine' ? 'refine' : image.parameters.hires ? 'hires' : 'generate')
-                if (imageReviewGate(row.id, findings.digest, imageReview)) {
-                  imageLearningRead.add(findings.digest)
+                if (imageReviewGate(row.id, imageReview)) {
+                  const findings = imageLearnings(user, row.id, image.parameters, image.parameters.prompt, image.backendScope, image.parameters.profile_id, false, image.parameters.operation === 'inpaint' ? 'inpaint' : image.parameters.operation === 'refine' ? 'refine' : image.parameters.hires ? 'hires' : 'generate')
+                  imageLearningRead = true
                   imageLearningReviewNeeded = true
                   return JSON.stringify({ status: 'review_once', submitted: false, ...findings.evidence, next: 'This is not an error. Read the evidence, then call generate_image again; the next call submits, with the same or adjusted arguments.' })
                 }
@@ -3309,7 +3309,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             }
             return answerText(form, await askForm(row.id, assistant, index, form, ctl.signal, send))
           }
-          return runTool(user, key, row.id, mode, c, ctl.signal, (digest) => imageLearningRead.add(digest), zone)
+          return runTool(user, key, row.id, mode, c, ctl.signal, () => { imageLearningRead = true }, zone)
       }
       const outputs: string[] = []
       try {
@@ -3326,7 +3326,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         send({ type: 'imageGenerationDone', callId })
       }
       // Evidence counts as shown only once the batch is persisted and the model can read it.
-      for (const digest of imageLearningRead) imageLearningsShown(row.id, digest, imageReview)
+      if (imageLearningRead) imageReview.shown = true
       // Todo lists and titles show in the window as they change.
       send({ type: 'thread', thread: toThread(ownThread(user, row.id)) })
       if (wrapUp || imageCompleted) break

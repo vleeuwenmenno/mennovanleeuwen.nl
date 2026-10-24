@@ -1917,10 +1917,11 @@ changed arguments. A review happens at most once per turn: after it, no change o
 model or operation asks again, and a second gate in one turn would be logged as a server warning and
 submitted anyway. Evidence read in a batch counts only once that batch's results are back with the
 model, so a discovery+generation batch still shows it, and further calls in a gated batch are skipped
-with a note to call them again. A new turn skips the review when the backend, the profile and the
-observations are unchanged since the thread last saw them (kept in server memory, so a restart shows
-them once more). The evidence lists earlier vision reports and only those user messages that reply to
-or name a generated image, as context, not as items to resolve. Upscale and removal skip the review.
+with a note to call them again. Nothing carries over between turns, so every turn shows the
+evidence once (Retry and Rewind remove earlier reviews, and old tool results are clipped in later
+turns). The evidence lists earlier vision reports and only those user messages that reply to or name
+an image of the thread (any of its images, not only the latest five), as context, not as items to
+resolve. Upscale and removal skip the review.
 Failed validation can still be explained without submitting a job.
 
 Learning is deliberate and evidence-based. On a later turn, user feedback or a concrete defect report

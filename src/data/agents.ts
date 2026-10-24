@@ -2,6 +2,7 @@ import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { getNote } from './notes'
 import type { ImageProgress } from './imageModels'
+import { generateImageLabel } from './imageToolLabel'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -543,13 +544,7 @@ export function toolLabel(call: ToolCall, result?: string): string {
     case 'make_image_mask': return `${result ? 'Made a mask' : 'Making a mask'}: “${s('target').slice(0, 80)}”${s('exclude') ? `, keeping “${s('exclude').slice(0, 80)}”` : ''}`
     case 'list_image_masks': return 'Listed image masks'
     case 'generate_image':
-      if (call.arguments?.operation === 'refine') return result ? 'Refined image' : 'Refine image'
-      if (call.arguments?.hires) return result ? 'Generated image with hires' : 'Generate image with hires'
-      if (call.arguments?.operation === 'inpaint') return result ? 'Inpainted image' : `Inpaint image: ${s('prompt')}`
-      if (call.arguments?.operation === 'remove') return result ? 'Removed the masked area' : 'Remove the masked area'
-      if (call.arguments?.operation === 'upscale') return result ? 'Upscaled image' : `Upscale image: ${s('upscale_model')}`
-      if (result?.includes('"status":"review_once"') || result?.includes('"learning_review_required":true')) return 'Showed image learnings before generating'
-      return result ? call.arguments?.source_image_id ? 'Edited image' : 'Generated image' : `${call.arguments?.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`
+      return generateImageLabel(a, result)
     case 'view_generated_image':
       return 'Inspect generated image with vision'
     case 'list_image_models':
