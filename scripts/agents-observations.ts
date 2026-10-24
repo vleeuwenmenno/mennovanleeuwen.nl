@@ -86,6 +86,12 @@ try {
   assert.notEqual(modelKey(hiresObservation), modelKey(refined))
   const hiresText = observationFromText(row, text(3, 'vision', 'Hires', 'Sharper', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(hiresSettings)}`))!
   assert.deepEqual(hiresText.settings, hiresObservation.settings)
+  const inpaintSettings = { ...settings, operation: 'inpaint', denoise: 0.65, mask: { id: image, width: 1024, height: 1024 } }
+  const inpaintObservation = observationFromText(row, text(3, 'vision', 'Masked edit', 'Matches', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(inpaintSettings)}`))!
+  assert.equal(inpaintObservation.settings?.operation, 'inpaint')
+  assert.deepEqual(inpaintObservation.settings?.mask, inpaintSettings.mask)
+  assert.match(settingsLine(inpaintObservation.settings), /Inpaint · strength 0.65/)
+  assert.notEqual(modelKey(inpaintObservation), modelKey(refined))
   console.log('PASS upscale/refine observation identity, text/JSON parity, summary and model filters')
 
   // Save to Files names: a prompt slug and the short id, stable, never a bare id, never a taken name.
