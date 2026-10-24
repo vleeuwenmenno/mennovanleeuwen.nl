@@ -253,7 +253,7 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
  * row every message has (AgentsActions.tsx): Save to Files, Generate another, Options. Options and the
  * picture's right-click menu hold View, Open in Preview, Download, and `more` (Branch off).
  */
-export function ImageCard({ image, width, height, pending, progress, again, more }: { image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
+export function ImageCard({ image, width, height, pending, progress, again, more, retry }: { /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
   const frame = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const wm = useWM()
@@ -278,6 +278,7 @@ export function ImageCard({ image, width, height, pending, progress, again, more
     {image && <ActionRow label="Image actions">
       {save && <button key="save" type="button" className={ACTION} aria-label={save.label} title={save.label} onClick={save.onSelect}>Save to Files…</button>}
       {again && <button key="again" type="button" className={ACTION} disabled={again.disabled} title={again.hint} onClick={again.onClick}>Generate another</button>}
+      {retry}
       <MoreButton key="more" label="Image" items={tidy([...own, { separator: true }, ...more])} />
     </ActionRow>}
     {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} actions={save ? [save] : []} />}

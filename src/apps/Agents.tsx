@@ -1466,6 +1466,17 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       abort.current = null; sending.current = false; setBusy(false); setLive(null); setApprovals([]); onChanged()
     }
   }
+  // Where Retry sits when the last turn ended well: in the row of its last answer, or of its last
+  // image when it drew one after (or instead of) writing. Null: nothing to put it under.
+  const retryAt = (() => {
+    if (messages.at(-1)?.role === 'compact') return null
+    let at: number | null = null
+    for (let i = messages.length - 1; i >= 0 && messages[i].role !== 'user'; i--) {
+      const m = messages[i]
+      if ((m.role === 'assistant' && m.content.trim()) || (m.role === 'tool' && m.toolName === 'generate_image' && generatedImage(m.content))) { at = m.id; break }
+    }
+    return at
+  })()
   /** A message's own actions (Branch off; Generate another for an image unless its row has it). */
   const messageActions = (message: AgentMessage, inRow = false): MenuItem[] => {
     const image = !inRow && message.toolName === 'generate_image' ? generatedImage(message.content) : null
@@ -1975,7 +1986,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <MoneyThread currencies={threadCurrencies}>
-          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} actions={messageActions} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} />
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} />
         </MoneyThread>
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
@@ -1988,14 +1999,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         ) : (
           answering && <p className="agt-wait muted">Working…</p>
         )}
-        {/* Not under a compaction that went well: Retry would answer the message before it again. */}
-        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (dropped || !!thread.interrupted || messages.at(-1)?.role !== 'compact') && (
+        {/* Not under a compaction that went well: Retry would answer the message before it again. A
+            turn that ended well has Retry in its last answer's (or image's) row; this line is for
+            a dropped or interrupted turn, or one that left nothing to put it under. */}
+        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (dropped || !!thread.interrupted || (messages.at(-1)?.role !== 'compact' && retryAt === null)) && (
           <div className={`agt-cut ${dropped || thread.interrupted ? 'is-error' : ''}`}>
             {dropped ? <span>The connection dropped</span> : thread.interrupted && <span>{interruptionText(thread.interrupted)}</span>}
             <button type="button" className={dropped || thread.interrupted ? 'btn btn-small' : 'agt-retry'} onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">
               ↻ Retry
             </button>
-            {messages.at(-1) && <button type="button" className="agt-retry" onClick={() => void branchFrom(messages.at(-1)!)} title="Continue in a new thread; keep the original">Branch off from here</button>}
             {dropped && (
               <button type="button" className="btn btn-small" onClick={() => (lose(), setRejoin((n) => n + 1))} title="Look for the turn again">
                 Look again
@@ -2168,11 +2180,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, imagesOn }: { actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, imagesOn, retry }: { /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
     <ActionRow label={`${label} actions`}>{[...buttons, <MoreButton key="more" label={label} items={tidy([...own, { separator: true }, ...actions(m, true)])} />]}</ActionRow>
   )
+  const retryButton = (id: number) => retry?.at === id ? <button key="retry" type="button" className={ACTION} onClick={retry.onRetry} title="Run your last message again; what the agent wrote for it goes">Retry</button> : null
   const out: ReactNode[] = []
   // A turn's answer is its last message with text: Share sits under it, once the turn is done.
   const answers = new Set<number>()
@@ -2225,7 +2238,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
             <article className="zed-preview agt-answer">
               <MarkdownPreview text={m.content} money />
             </article>
-            {row(m, 'Answer', [{ label: 'Copy answer', onSelect: () => copy(m.content) }], answers.has(m.id) ? [<button key="share" type="button" className={ACTION} onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">Share</button>] : [])}
+            {row(m, 'Answer', [{ label: 'Copy answer', onSelect: () => copy(m.content) }], [...(answers.has(m.id) ? [<button key="share" type="button" className={ACTION} onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">Share</button>] : []), retryButton(m.id)])}
           </div>
         )}
         {!m.content.trim() && !calls.length && <div className="agt-act-host" data-msg={m.id}>{row(m, 'Message')}</div>}
@@ -2236,7 +2249,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
           if (image || wait?.kind === 'image' && wait.width && wait.height) return (
             <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}>
-              <ImageCard image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} more={actions(results[j] ?? m, true)}
+              <ImageCard retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} more={actions(results[j] ?? m, true)}
                 again={image ? { disabled: answering || !imagesOn || !image.settings, hint: !image.settings ? 'This image has no recorded generation settings' : !imagesOn ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : 'Draw this image again with the same prompt and settings', onClick: () => onAgain(image.id) } : undefined} />
             </div>
           )

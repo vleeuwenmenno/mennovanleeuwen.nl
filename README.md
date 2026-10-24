@@ -1885,7 +1885,9 @@ shutdown hook (Agents turns, Empires battles) from one signal handler. When a tu
 the window first looks for the turn again, a little slower each time, for a minute (*Reconnecting…*),
 picking it up where it is if it still runs; only then does it say *The connection dropped*, with
 Retry and Look again. A message that never got there goes back into the box. Retry (`POST
-…/retry`, streamed like a message) also sits under the last answer to have it written again: the
+…/retry`, streamed like a message) is also in the last answer's action row, between Share and
+Options (in the image's row when the turn ended with an image and no text), to have it written
+again; a turn that left nothing to put it under keeps a quiet Retry line below it: the
 last turn's output (a partial or failed reply, its tool calls and results, or the answer) goes and
 the same message, with its files, is answered again with the thread's model, mode and tools; queued
 messages run after it. Every message and card has the same quiet action row on its own side (right
@@ -1900,8 +1902,7 @@ stopped first, the queue stays) and it comes back into the message box with its 
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
 
-**Branch off from here** is in each message’s More menu and right-click menu, and beside Retry
-for the last message. It opens a new thread containing every message through that point, including
+**Branch off from here** is in each message’s Options menu and right-click menu. It opens a new thread containing every message through that point, including
 files, thoughts, tool results and compaction summaries. The original stays unchanged. Mode, model,
 tools, project, work folder, permission and image settings/profile carry over; queues and pending
 approvals do not. Account/project memories remain shared. The title is `<original title> — from
