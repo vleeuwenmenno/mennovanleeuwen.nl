@@ -1,7 +1,7 @@
 // Text for the agents TUI: runs of styled text ("segments") wrapped to the terminal's width and
 // turned into the terminal's flat markup ({c:green}…{/}, which does not nest).
 
-export type Seg = { t: string; c?: string; link?: string }
+export type Seg = { t: string; c?: string; link?: string; fg?: string; bg?: string }
 export type Line = Seg[]
 
 /** Text from the model or the network can hold the terminal's own markup: a zero-width space defuses it. */
@@ -14,7 +14,9 @@ export function markup(line: Line): string {
       if (!s.t) return ''
       const t = esc(s.t)
       if (s.link && /^https?:\/\/[^\s}]+$/.test(s.link)) return `{link:${s.link}}${t}{/}`
-      return s.c ? `{c:${s.c}}${t}{/}` : t
+      let styled = s.c ? `{c:${s.c}}${t}{/}` : t
+      for (const key of ['fg', 'bg'] as const) if (/^#[0-9a-f]{6}$/i.test(s[key] ?? '')) styled = `{${key}:${s[key]}}${styled}{/}`
+      return styled
     })
     .join('')
 }

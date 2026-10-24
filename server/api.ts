@@ -1,9 +1,14 @@
+import { searchPastThreads } from './agents.ts'
+import { handleImageProfileApi } from './agentImageProfiles.ts'
+import { handleImageApi } from './agentImages.ts'
+import { handleImageObservationsApi } from './agentImageObservations.ts'
+import { handleLoraPreviewApi } from './agentLoraPreview.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, branchThread, generateAnother, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -322,6 +327,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/ollama' && method === 'DELETE') return removeOllamaKey(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
     if (path === '/api/agents/models' && read) return requireUser(req), json(res, 200, await agentModels()), true
+    if (path === '/api/agents/threads/search' && method === 'POST') return json(res, 200, searchPastThreads(requireUser(req), await readJson(req, 2048))), true
     if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
     if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
@@ -334,7 +340,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
     }
-    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
+    const againImage = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/images\/([0-9a-f-]{36})\/again$/.exec(path)
+    if (againImage && method === 'POST') return await generateAnother(res, requireUser(req), againImage[1], againImage[2]), true
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread
       if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
@@ -359,6 +367,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const user = requireUser(req)
         return await retryTurn(res, user, tid, await readJson(req, 4096)), true
       }
+      if (sub === '/branch' && method === 'POST') return json(res, 200, branchThread(requireUser(req), tid, await readJson(req, 1024))), true
       if (sub === '/rewind' && method === 'POST') return json(res, 200, await rewind(requireUser(req), tid, await readJson(req, 1024))), true
       // A shared link: a snapshot of the thread, or of one answer, readable by anyone with the link.
       if (sub === '/share' && method === 'POST') return json(res, 200, createShare(req, requireUser(req), tid, await readJson(req, 1024))), true
@@ -382,11 +391,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return deleteShare(requireUser(req), shareToken), json(res, 200, { ok: true }), true
     }
     if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
+    if (path === '/api/agents/mention-tools' && read) { requireUser(req); return json(res, 200, mentionTools()), true }
     if (path === '/api/agents/skills' && read) return json(res, 200, await skillsList(requireUser(req), url.searchParams)), true
     if (path === '/api/agents/skills/install' && method === 'POST') return json(res, 200, await skillsInstall(requireUser(req), await readJson(req, 8192))), true
     if (path === '/api/agents/skills/remove' && method === 'POST') return await skillsRemove(requireUser(req), await readJson(req, 8192)), json(res, 200, { ok: true }), true
     const skillName = /^\/api\/agents\/skills\/([\w.-]{1,64})$/.exec(path)?.[1]
     if (skillName && read) return json(res, 200, await skillInfo(requireUser(req), skillName, url.searchParams)), true
+    if (path === '/api/agents/images/observations' && handleImageObservationsApi(req, res, requireUser(req), path)) return true
+    if ((path === '/api/agents/images/lora-details' || path === '/api/agents/images/lora-preview') && (await handleLoraPreviewApi(req, res, url, requireUser(req)))) return true
+    if (path.startsWith('/api/agents/images') && (await handleImageApi(req, res, url, method, requireUser(req)))) return true
     if (path.startsWith('/api/agents/websearch') && (await handleWebSearchApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/agents/projects' && read) return json(res, 200, listProjects(requireUser(req))), true
     if (path === '/api/agents/projects' && method === 'POST') return json(res, 200, createProject(requireUser(req), await readJson(req, 4096))), true
@@ -395,6 +408,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (projectId && method === 'PATCH') return json(res, 200, renameProject(requireUser(req), projectId, await readJson(req, 4096))), true
     if (projectId && method === 'DELETE') return deleteProject(requireUser(req), projectId), json(res, 200, { ok: true }), true
     if (path === '/api/agents/memories' && method === 'POST') return json(res, 200, addMemory(requireUser(req), await readJson(req, 8192))), true
+    if (path.startsWith('/api/agents/image-profiles') && await handleImageProfileApi(req, res, requireUser(req), path)) return true
     if (path === '/api/agents/memories' && read) return json(res, 200, listMemories(requireUser(req))), true
     const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
     if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true

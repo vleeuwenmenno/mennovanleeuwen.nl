@@ -1,3 +1,10 @@
+import { localPref } from '../../os/localPref'
+import { accountGuard, TAB_ACCOUNT } from '../../os/accountSpace'
+import { artMode, artBytes, decodeArt, ART_BYTES } from './imageArt'
+import { threadsCommand, threadSearchLines } from './threads'
+import { mentionAt, mentionText } from '../../data/agentMentions'
+import type { ImageLoraHint } from '../../data/imageModels'
+import { generatedImage, getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
 import {
   addMemory,
   agentModels,
@@ -15,6 +22,7 @@ import {
   interruptionText,
   isDropped,
   retryTurn,
+  branchThread,
   rewindThread,
   getContext,
   getThread,
@@ -22,7 +30,10 @@ import {
   listProjects,
   listShares,
   listSkills,
+  listMentionTools,
+  type MentionTool,
   listThreads,
+  searchPastThreads,
   overrideTurn,
   queueMessage,
   releaseQueued,
@@ -42,6 +53,7 @@ import {
   agentSettings,
   toAttachment,
   TOOL_GROUPS,
+  toolState,
   toolLabel,
   updateThread,
   type AgentMessage,
@@ -64,6 +76,7 @@ import {
   MAIL_READ_TOOLS,
 } from '../../data/agents'
 import { seafileAt } from '../../data/agentPlaces'
+import { imageProgressLabel, type ImageProgress } from '../../data/imageModels'
 import { getAccount, hasCalendar } from '../../os/account'
 import { loadMailAccounts, mailAccountsNow } from '../../data/mail'
 import { lookup, prepareFolder, readFileText, writeFile } from '../fs'
@@ -78,6 +91,8 @@ import { ago, box, clipLine, count, lines as toMarkup, seg, width, wrap, type Li
 // The agents command's session: a coding-agent CLI in the MvL OS terminal. Finished messages go to
 // the terminal's scrollback; the reply being written, tool calls under way, the prompt box, menus
 // and the status line are one live block at the bottom, redrawn as things change.
+
+const imageArtPreference = localPref<boolean>('mvlos.agents.cli.imageArt', (raw) => raw !== 'false', undefined, { account: true })
 
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 const VERBS = ['Thinking', 'Pondering', 'Brewing', 'Tinkering', 'Mulling', 'Working', 'Noodling', 'Percolating', 'Computing', 'Considering']
@@ -98,7 +113,7 @@ export type SessionOptions = {
   first: string | null
 }
 
-type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client' }
+type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client'; /** An image job's status line: "Step 12 of 30 · 40%" */ detail?: string }
 /** `summary`: what the change does, from the server, where the call alone doesn't say (a calendar change). */
 type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary; check?: string }
 type Asked = { callId: string; messageId: number; index: number; form: Form }
@@ -114,7 +129,9 @@ const SLASH: [string, string][] = [
   ['/help', 'keys and commands'],
   ['/clear', 'start a new thread (also /new)'],
   ['/resume', 'continue an earlier thread'],
+  ['/threads', 'search past threads: <words>, this [words], open <id>'],
   ['/model', 'pick the model'],
+  ['/images', 'image settings (show, set JSON, reset); inline preview: art on|off'],
   ['/mode', 'quick answers or deep research'],
   ['/permissions', 'how changes are allowed (also shift+tab)'],
   ['/tools', 'switch tool groups on and off'],
@@ -136,6 +153,7 @@ const SLASH: [string, string][] = [
   ['/export', 'save the thread as Markdown'],
   ['/copy', 'copy the last reply'],
   ['/retry', 'run your last message again (also ctrl+r)'],
+  ['/branch', 'continue in a new thread from the last message, or /branch <message id>'],
   ['/rewind', 'go back to one of your messages and edit it'],
   ['/share', 'share the thread as a link (last: the last answer; 1h, 1d, 7d, 30d)'],
   ['/shares', "this thread's shared links"],
@@ -156,10 +174,19 @@ export class Session {
   private tools: ToolGroup[]
   private first: string | null
 
+  private lastThreadQuery = ''
+  private threadHits: string[] = []
+  private outputEpoch = 0
+  private outputQueue: { lines: Line[]; art?: () => Promise<Line[]> }[] = []
+  private outputting = false
+  private artController = new AbortController()
+
   private editor = new Editor()
   private turn: { ctl: AbortController; started: number; content: string; thinking: string; chars: number; verb: string } | null = null
   private follow: AbortController | null = null
   private liveCalls: LiveCall[] = []
+  /** Image jobs under way: which call each one is, for its progress events */
+  private imageJobs = new Map<string, { messageId: number; index: number }>()
   private approvals: Approval[] = []
   private asked: Asked[] = []
   private modal: Modal | null = null
@@ -179,6 +206,11 @@ export class Session {
   private timer: ReturnType<typeof setInterval> | null = null
   private models: ModelInfo[] = []
   private skills: Skill[] = []
+  private mentionTools: MentionTool[] = []
+  private loras: ImageLoraHint[] | null = null
+  private loraLoading = false
+  private loraError = ''
+  private dismissedCompletion = ''
   private done: (() => void) | null = null
   private closed = false
 
@@ -230,6 +262,7 @@ export class Session {
   private exit() {
     if (this.closed) return
     this.closed = true
+    this.resetOutput()
     this.follow?.abort()
     if (this.timer) clearInterval(this.timer)
     if (this.editingQ && this.thread) void releaseQueued(this.thread.id, this.editingQ.id).catch(() => {})
@@ -247,12 +280,49 @@ export class Session {
     return Math.max(30, this.ctx.size.cols - 1)
   }
 
-  /** Prints finished lines above the live block. */
-  private out(ls: Line[]) {
-    if (!ls.length || this.closed) return
-    this.ctx.live(null)
-    this.ctx.print(toMarkup(ls))
-    this.draw()
+  /** Keep asynchronous image art below its links, ahead of the next finished message. */
+  private out(lines: Line[], art?: () => Promise<Line[]>) {
+    if ((!lines.length && !art) || this.closed) return
+    this.outputQueue.push({ lines, art })
+    if (!this.outputting) void this.drainOutput()
+  }
+
+  private resetOutput() {
+    this.outputEpoch++
+    this.outputQueue = []
+    this.outputting = false
+    this.artController.abort()
+    this.artController = new AbortController()
+  }
+
+  private async drainOutput() {
+    this.outputting = true
+    const epoch = this.outputEpoch
+    const print = (lines: Line[]) => {
+      if (!lines.length || this.closed || epoch !== this.outputEpoch) return
+      this.ctx.live(null); this.ctx.print(toMarkup(lines)); this.draw()
+    }
+    try {
+      while (this.outputQueue.length && !this.closed && epoch === this.outputEpoch) {
+        const next = this.outputQueue.shift()!
+        print(next.lines)
+        if (next.art) { const art = await next.art().catch(() => []); print([...art, []]) }
+      }
+    } finally { if (epoch === this.outputEpoch) this.outputting = false }
+  }
+
+  private imageArt(result: string): (() => Promise<Line[]>) | undefined {
+    const image = generatedImage(result)
+    if (!image || image.size > ART_BYTES) return undefined
+    return async () => {
+      const cols = this.ctx.size.cols, mode = artMode(this.ctx.tty, imageArtPreference.get(), cols, this.ctx.env)
+      if (!mode || !accountGuard()) return []
+      const signal = AbortSignal.any([this.ctx.signal, this.artController.signal, AbortSignal.timeout(5000)])
+      const bytes = await artBytes(image.url, { 'X-MvL-Account': TAB_ACCOUNT }, signal)
+      if (!bytes || signal.aborted || !accountGuard()) return []
+      const lines = await decodeArt(bytes, cols, mode)
+      return signal.aborted || !accountGuard() || !imageArtPreference.get() || this.ctx.size.cols < cols ? [] : lines
+    }
   }
 
   private say(text: string, color = 'muted') {
@@ -274,7 +344,7 @@ export class Session {
       this.out([
         [seg(' Tips for getting started:', 'muted')],
         [seg(' 1. Ask about your files, or ask for changes: edits wait for your yes', 'muted')],
-        [seg(' 2. @ adds a file, ! runs a command, # remembers something', 'muted')],
+        [seg(' 2. #LoRA, $skill, @tool; @./path attaches a file; ! runs a command', 'muted')],
         [seg(' 3. shift+tab: auto, accept edits, or plan first', 'muted')],
         [],
       ])
@@ -292,7 +362,10 @@ export class Session {
         if (m.content.trim()) out.push(...assistantLines(m.content, w), [])
         ;(m.toolCalls ?? []).forEach((c, k) => {
           const result = msgs.slice(i + 1).filter((x) => x.role === 'tool')[k]
-          if (result) out.push(...toolLines(c, result.content, w, false), [])
+          if (result) {
+            out.push(...toolLines(c, result.content, w, false), [])
+            if (c.name === 'generate_image') { this.out(out.splice(0), this.imageArt(result.content)) }
+          }
         })
       }
     })
@@ -301,6 +374,7 @@ export class Session {
   }
 
   private loadSkills() {
+    listMentionTools().then((items) => { this.mentionTools = items; this.draw() }, () => {})
     listSkills(this.thread ? { thread: this.thread.id } : { folder: this.workdir })
       .then((s) => (this.skills = s))
       .catch(() => {})
@@ -317,7 +391,7 @@ export class Session {
       else if (this.turn.thinking && this.verbose) L.push(...thinkingLines(this.turn.thinking, true, w).slice(-8), [])
     }
     const blink = this.tick % 8 < 4
-    for (const c of this.liveCalls) L.push(...runningLines(c.call, c.state, w, blink), [])
+    for (const c of this.liveCalls) L.push(...runningLines(c.call, c.state, w, blink, c.detail), [])
     if (this.turn) {
       const t = this.turn
       const secs = Math.floor((Date.now() - t.started) / 1000)
@@ -379,16 +453,29 @@ export class Session {
     return [...framed, ...this.drawCompletions(w)]
   }
 
-  /** What Tab would put in: slash commands and skills, or files after @. */
+  /** Shared mentions, slash commands and explicit @./path file attachments. */
   private completions(): { start: number; items: PickItem[] } | null {
     const at = this.editor.wordAtCursor()
-    if (!at || this.modal) return null
+    if (this.modal || this.dismissedCompletion === `${this.editor.cursor}:${this.editor.text}`) return null
+    const mention = mentionAt(this.editor.text, this.editor.cursor)
+    if (mention) {
+      if (mention.sigil === '#' && this.loras === null && !this.loraLoading && !this.loraError) {
+        this.loraLoading = true
+        void getImageLoras().then((result) => { this.loras = result.loras }, () => { this.loraError = 'Connect ComfyUI in Settings → Agents → Images; reopen this CLI to retry.' }).finally(() => { this.loraLoading = false; this.draw() })
+      }
+      const choices = mention.sigil === '#' ? (this.loras ?? []).map((l) => ({ name: l.name, hint: l.baseModel || 'Base model unknown' }))
+        : mention.sigil === '$' ? this.skills.filter((s) => s.enabled).map((s) => ({ name: s.name, hint: s.description }))
+        : this.mentionTools.map((t) => ({ name: t.name, hint: `${t.group ?? 'Always available'} · ${!t.group || (this.thread?.tools ?? this.tools).includes(t.group) ? 'on' : 'off'}` }))
+      const items = choices.filter((c) => c.name.toLowerCase().includes(mention.query)).slice(0, 50).map((c) => ({ value: mentionText(mention.sigil, c.name), label: `${mention.sigil}${c.name}`, hint: c.hint }))
+      return items.length ? { start: mention.start, items } : null
+    }
+    if (!at) return null
     if (at.word.startsWith('/') && at.start === 0) {
       const all: PickItem[] = [...SLASH.map(([v, h]) => ({ value: v, label: v, hint: h })), ...this.skills.map((s) => ({ value: `/${s.name}`, label: `/${s.name}`, hint: `skill: ${s.description}` }))]
       const items = all.filter((x) => x.value.startsWith(at.word))
       return items.length && !(items.length === 1 && items[0].value === at.word) ? { start: 0, items } : null
     }
-    if (at.word.startsWith('@')) {
+    if (/^@(?:[.~]?\/|\\)/.test(at.word)) {
       const base = this.baseDir()
       const typed = at.word.slice(1)
       const slash = typed.lastIndexOf('/')
@@ -411,8 +498,9 @@ export class Session {
   }
 
   private drawCompletions(w: number): Line[] {
+    if (this.dismissedCompletion === `${this.editor.cursor}:${this.editor.text}`) return []
     const c = this.completions()
-    if (!c) return []
+    if (!c) return mentionAt(this.editor.text, this.editor.cursor)?.sigil === '#' ? [[seg(this.loraLoading ? ' Loading LoRAs…' : this.loraError || ' No installed LoRAs match.', 'muted')]] : []
     this.pick = Math.min(this.pick, c.items.length - 1)
     const from = Math.max(0, Math.min(this.pick - 3, c.items.length - 8))
     const nameW = Math.min(24, Math.max(...c.items.map((i) => i.label.length)) + 2)
@@ -462,7 +550,8 @@ export class Session {
         ['shift+tab', 'cycle: ask for changes, auto, accept edits, plan'],
         ['! ', 'run a command in msh; its output goes with your next message'],
         ['# ', 'remember something'],
-        ['@', 'add a file (tab completes)'],
+        ['#name[:weight], $name, @name', 'mention a LoRA, skill or tool (Tab completes)'],
+        ['@./path', 'add a file (Tab completes)'],
         ['ctrl+o', 'show thinking and full tool output'],
         ['ctrl+t', 'show or hide the plan'],
         ['ctrl+r', 'retry: run your last message again'],
@@ -838,7 +927,8 @@ export class Session {
     if (m?.kind === 'pick') return this.pickKey(m, k, text)
     const e = this.editor
     const comp = this.completions()
-    if (comp && (k === 'ArrowUp' || k === 'ArrowDown' || k === 'Tab' || (k === 'Enter' && comp.items[this.pick]?.value !== e.wordAtCursor()?.word))) {
+    if ((comp || mentionAt(e.text, e.cursor)) && k === 'Escape') { this.dismissedCompletion = `${e.cursor}:${e.text}`; this.draw(); return true }
+    if (comp && (k === 'ArrowUp' || k === 'ArrowDown' || k === 'Tab' || (k === 'Enter' && (mentionAt(e.text, e.cursor) || comp.items[this.pick]?.value !== e.wordAtCursor()?.word)))) {
       if (k === 'ArrowUp') this.pick = (this.pick - 1 + comp.items.length) % comp.items.length
       else if (k === 'ArrowDown') this.pick = (this.pick + 1) % comp.items.length
       else {
@@ -953,6 +1043,7 @@ export class Session {
         this.ctrlCKey()
         return true
       case '^L':
+        this.resetOutput()
         this.ctx.clear()
         this.welcome()
         break
@@ -1044,7 +1135,7 @@ export class Session {
 
   private async submitText(text: string) {
     if (text.startsWith('!')) return this.shell(text.slice(1).trim())
-    if (text.startsWith('#') && !text.startsWith('#!')) return this.remember(text.slice(1).trim())
+    if (/^#\s/.test(text)) return this.remember(text.slice(1).trim())
     if (text.startsWith('/')) {
       const [cmd, ...rest] = text.split(/\s+/)
       const handled = await this.slash(cmd.toLowerCase(), rest.join(' ').trim(), text)
@@ -1206,7 +1297,7 @@ export class Session {
   private async attachments(text: string): Promise<Attachment[]> {
     const out: Attachment[] = []
     const base = this.baseDir()
-    for (const m of text.matchAll(/(?:^|\s)@([^\s]+)/g)) {
+    for (const m of text.matchAll(/(?:^|\s)@((?:[.~]?\/|\\)[^\s]+)/g)) {
       const abs = resolvePath(base, m[1])
       const node = lookup(abs)
       if (node?.type !== 'file') continue
@@ -1377,6 +1468,7 @@ export class Session {
       this.thread = r.thread
       this.messages = this.messages.filter((m) => m.id < id)
       // The screen shows the thread as it is now.
+      this.resetOutput()
       this.ctx.clear()
       this.welcome()
       this.history()
@@ -1457,7 +1549,8 @@ export class Session {
           if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
           else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
-          this.setCallState(p.messageId, p.index, p.kind === 'question' ? 'question' : p.kind)
+          this.setCallState(p.messageId, p.index, p.kind === 'image' ? 'running' : p.kind === 'question' ? 'question' : p.kind)
+          if (p.kind === 'image') this.imageProgress(p.callId, p.messageId, p.index, p.progress)
         }
         this.next()
         break
@@ -1518,6 +1611,17 @@ export class Session {
         this.setCallState(e.messageId, e.index, 'client')
         void this.runClient(e.callId, e.messageId, e.index, e.call)
         break
+      case 'imageGeneration':
+        this.imageProgress(e.callId, e.messageId, e.index)
+        break
+      case 'imageProgress': {
+        const job = this.imageJobs.get(e.callId)
+        if (job) this.imageProgress(e.callId, job.messageId, job.index, e.progress)
+        break
+      }
+      case 'imageGenerationDone':
+        this.imageJobs.delete(e.callId)
+        break
       case 'error':
         this.out([...wrap([seg(`Error: ${e.error}`, 'red'), seg(' · ctrl+r or /retry runs it again', 'muted')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
         break
@@ -1532,6 +1636,15 @@ export class Session {
       case 'done':
         break
     }
+  }
+
+  /** An image job's progress on its call's status line (ComfyUI's step and percentage, or its place in the queue). */
+  private imageProgress(callId: string, messageId: number, index: number, progress?: ImageProgress) {
+    this.imageJobs.set(callId, { messageId, index })
+    const c = this.liveCalls.find((x) => x.messageId === messageId && x.index === index)
+    if (!c) return
+    c.detail = imageProgressLabel(progress)
+    this.draw()
   }
 
   private setCallState(messageId: number, index: number, state: LiveCall['state']) {
@@ -1568,7 +1681,7 @@ export class Session {
     const k = this.liveCalls.findIndex((c) => c.call.name === m.toolName)
     const live = this.liveCalls.splice(k >= 0 ? k : 0, 1)[0]
     const call = live?.call ?? { name: m.toolName ?? 'tool', arguments: {} }
-    this.out([...toolLines(call, m.content, w, this.verbose), []])
+    this.out([...toolLines(call, m.content, w, this.verbose), []], call.name === 'generate_image' ? this.imageArt(m.content) : undefined)
   }
 
   /** Runs a terminal tool call here and sends back what it printed. */
@@ -1653,6 +1766,7 @@ export class Session {
         if (busy()) return true
         this.thread = null
         this.messages = []
+        this.resetOutput()
         this.ctx.clear()
         this.welcome()
         this.loadSkills()
@@ -1665,6 +1779,76 @@ export class Session {
         if (!items.length) return this.say('No threads to resume'), true
         const picked = await this.choose('Resume a thread', items)
         if (picked) await this.open(picked[0])
+        return true
+      }
+      case '/threads': {
+        if (busy()) return true
+        const command = threadsCommand(arg, this.lastThreadQuery)
+        if (command.kind === 'error') { this.say(command.error); return true }
+        if (command.kind === 'open') {
+          const matches = this.threadHits.filter((id) => id.startsWith(command.id))
+          if (matches.length > 1 || command.id.length < 36 && matches.length !== 1) { this.say('Use a full thread id or a unique prefix from the last results.'); return true }
+          await this.open(matches[0] ?? command.id, true)
+          return true
+        }
+        if (command.current && !this.thread) { this.say('Open a thread before using /threads this.'); return true }
+        try {
+          const result = await searchPastThreads(command.query, this.thread?.id ?? null, command.current)
+          this.lastThreadQuery = command.query
+          this.threadHits = 'threads' in result ? result.threads.map((t) => t.thread_id) : []
+          this.out(threadSearchLines(result, Math.max(1, this.ctx.size.cols - 1)))
+        } catch (e) { this.say(`Thread search: ${(e as Error).message}`, 'red') }
+        return true
+      }
+      case '/images': {
+        if (/^art(?:\s|$)/.test(arg)) {
+          const choice = arg.slice(3).trim()
+          if (choice !== 'on' && choice !== 'off') { this.say('/images art on|off (inline image previews)'); return true }
+          imageArtPreference.set(choice === 'on')
+          if (choice === 'off') { this.artController.abort(); this.artController = new AbortController() }
+          this.say(`Inline image art ${choice}.`)
+          return true
+        }
+        if (busy()) return true
+        try {
+          const thread = await this.ensureThread()
+          if (arg.startsWith('profile')) {
+            const command = arg.slice(7).trim()
+            if (command.startsWith('save ')) {
+              const value = JSON.parse(command.slice(5))
+              const profile = await saveImageProfile(value)
+              this.say(`Saved profile #${profile.id}: ${profile.name}`)
+            } else if (command.startsWith('select ')) {
+              const value = command.slice(7).trim()
+              const pin = await pinImageProfile(thread.id, value === 'none' ? null : Number(value))
+              this.say(`Profile: ${pin.profile?.name ?? 'none'}`)
+            } else if (/^(delete|reset) /.test(command)) {
+              const [action, id] = command.split(/\s+/)
+              await deleteImageProfile(Number(id), action === 'reset')
+              this.say(action === 'reset' ? 'Profile observations reset.' : 'Profile and observations deleted.')
+            } else {
+              const pin = await getImageProfilePin(thread.id)
+              for (const p of await getImageProfiles()) this.say(`#${p.id} ${p.name}${pin.profile?.id === p.id ? ' (selected)' : ''} [${p.origin}, ${p.observations} ${p.observations === 1 ? 'observation' : 'observations'}]: ${p.description}`)
+              this.say('/images profile select <id|none> | save {"name":"…","description":"…"} (optional id edits) | reset <id> | delete <id>')
+            }
+          } else if (!arg.trim()) {
+            const { openSessionImages } = await import('../../apps/AgentsSessionImages')
+            await openSessionImages(thread.id)
+          } else {
+            const patch = arg.startsWith('set ') ? JSON.parse(arg.slice(4)) : undefined
+            if (arg.startsWith('set ') && (!patch || typeof patch !== 'object' || Array.isArray(patch))) throw new Error('Use a JSON object of image settings')
+            const settings = arg === 'reset' ? await resetThreadImageSettings(thread.id)
+              : arg === 'show' ? await getThreadImageSettings(thread.id)
+              : arg.startsWith('set ') ? await saveThreadImageSettings(thread.id, { ...(await getThreadImageSettings(thread.id)).overrides, ...patch })
+              : null
+            if (!settings) { this.say('Usage: /images | /images show | /images reset | /images set {"width":768,"height":1024,"seed":42}', 'yellow'); return true }
+            this.out([[seg('Session image settings', 'bold')], ...Object.entries(settings.effective).flatMap(([key, value]) => wrap([seg(`${key}: ${Array.isArray(value) ? value.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)' : value === null ? 'random' : value === '' ? '(not configured)' : value} (${key in settings.overrides ? 'session override' : 'account default / preset'})`)], w)), []])
+            for (const [field, selected] of Object.entries(settings.selection ?? {})) this.say(`${field}: ${selected.automatic ? 'automatic' : 'manual'} · ${selected.error ?? selected.reason}`, selected.error ? 'yellow' : 'gray')
+            if (settings.sampling) this.say(`Recommended sampling: ${settings.sampling.steps} steps · CFG ${settings.sampling.cfg} · ${settings.sampling.sampler}/${settings.sampling.scheduler}`, 'gray')
+            if (settings.discoveryError) this.say(settings.discoveryError, 'yellow')
+          }
+        } catch (e) { this.say(`Image settings: ${(e as Error).message}`, 'red') }
+        this.draw()
         return true
       }
       case '/model': {
@@ -1700,11 +1884,15 @@ export class Session {
         const calendar = hasCalendar(getAccount())
         if (mailAccountsNow() === null) await loadMailAccounts()
         const mail = !!mailAccountsNow()?.length
-        const picked = await this.choose('Tools', TOOL_GROUPS.filter((g) => (!g.seafile || seafile) && (!g.calendar || calendar) && (!g.mail || mail)).map((g) => ({ value: g.id, label: g.name, hint: g.detail, checked: current.includes(g.id) })), true)
+        const blocked = (g: (typeof TOOL_GROUPS)[number]) => !!((g.seafile && !seafile) || (g.calendar && !calendar) || (g.mail && !mail) || (g.id === 'files' && !(this.thread ? this.thread.workdir : this.workdir)))
+        const picked = await this.choose('Tools', TOOL_GROUPS.map((g) => ({ value: g.id, label: g.name, hint: toolState(g, current.includes(g.id), blocked(g)).hint, checked: current.includes(g.id) })), true)
         if (!picked) return true
-        this.tools = picked as ToolGroup[]
+        // A blocked group can be switched off, not on.
+        const refused = TOOL_GROUPS.filter((g) => blocked(g) && picked.includes(g.id) && !current.includes(g.id))
+        this.tools = picked.filter((id) => !refused.some((g) => g.id === id)) as ToolGroup[]
         await this.patch({ tools: this.tools })
         this.say(`Tools: ${this.tools.join(', ') || 'none'}`)
+        for (const g of refused) this.say(`${g.name} stays off. ${toolState(g, false, true).hint.replace(/^Off\. /, '')}`)
         return true
       }
       case '/skills': {
@@ -1898,6 +2086,12 @@ export class Session {
       case '/memory':
       case '/memories': {
         const [sub, ...rest] = arg.split(/\s+/)
+        if (sub === 'reset-images') {
+          const notes = (await listMemories()).filter((m) => m.imageLearning)
+          for (const note of notes) await deleteMemory(note.id)
+          this.say(`Forgot ${notes.length} image learnings. Other memories and image settings remain.`)
+          return true
+        }
         if (sub === 'add' && rest.length) return await this.remember(rest.join(' ')), true
         if ((sub === 'rm' || sub === 'delete') && rest[0]) {
           await deleteMemory(Number(rest[0].replace('#', ''))).catch((e: Error) => this.say(e.message, 'red'))
@@ -1950,6 +2144,17 @@ export class Session {
       case '/retry':
         await this.retry()
         return true
+      case '/branch': {
+        if (busy()) return true
+        const messageId = arg.trim() ? Number(arg.trim()) : this.messages.at(-1)?.id
+        if (!this.thread || !Number.isSafeInteger(messageId) || !messageId) { this.say('Use /branch [message id] in a thread with messages.'); return true }
+        try {
+          const result = await branchThread(this.thread.id, messageId)
+          await this.open(result.thread.id)
+          this.say('Branched here; the original thread is unchanged.')
+        } catch (e) { this.say((e as Error).message, 'red') }
+        return true
+      }
       case '/rewind':
         await this.rewindPick()
         return true
@@ -2030,15 +2235,17 @@ export class Session {
   }
 
   /** Switches to another thread. */
-  private async open(id: string) {
+  private async open(id: string, pastOnly = false) {
     try {
       const { thread, messages, pending } = await getThread(id)
+      if (pastOnly && thread.quick) throw new Error('No such past thread')
       this.thread = thread
       this.messages = messages
       this.workdir = thread.workdir
       this.permission = thread.permission
       this.mode = thread.mode
       this.model = thread.model
+      this.resetOutput()
       this.ctx.clear()
       this.welcome()
       this.history()

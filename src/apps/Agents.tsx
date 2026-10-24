@@ -1,7 +1,13 @@
+import { mentionAt, mentionText } from '../data/agentMentions'
+import { openSessionImages } from './AgentsSessionImages'
+import { generatedImage, getLoraDetails, type LoraDetail } from '../data/agentImages'
+import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
+import { useIsMobile } from '../os/useIsMobile'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
   TOOL_GROUPS,
+  toolState,
   addMemory,
   agentModels,
   answerForm,
@@ -48,6 +54,8 @@ import {
   type QueuedMessage,
   isDropped,
   retryTurn,
+  branchThread,
+  generateAnother,
   rewindThread,
   interruptionText,
   compactionText,
@@ -71,6 +79,8 @@ import {
   type Thread,
   type ToolCall,
   listSkills,
+  listMentionTools,
+  type MentionTool,
   canAlwaysAllow,
   PERMISSIONS,
   siteOf,
@@ -99,7 +109,10 @@ import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
-import { AttachedFiles, memoryPicture, sentPicture } from './AgentsImages'
+import { AttachedFiles, memoryPicture, sentPicture, ImageCard } from './AgentsImages'
+import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
+import { ObservationLine, ObservationsDialog } from './AgentsObservations'
+import { readObservation } from '../data/imageObservations'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
@@ -728,6 +741,7 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
   const [error, setError] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [observations, setObservations] = useState(false)
   const load = useCallback(() => listMemories().then(setItems, (e: Error) => setError(e.message)), [])
   useEffect(() => void load(), [load])
   const project = projects.find((p) => p.id === scope) ?? null
@@ -749,6 +763,10 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
     }
   }
   const forget = (m: Memory) => void deleteMemory(m.id).then(load, () => {})
+  // Image observations show as fields, not their stored text; profile memories name the profiles.
+  const profileNames = new Map((items ?? []).flatMap((m) => { const name = m.imageProfile && /^Image profile · (.+?) · (?:user|suggestion)\n/.exec(m.text)?.[1]; return name ? [[m.id, name] as const] : [] }))
+  const observation = (m: Memory) => readObservation({ id: m.id, threadId: m.threadId, createdAt: m.createdAt, updatedAt: m.updatedAt }, m.text)
+  const learnings = list.filter((m) => m.imageLearning).length
   const itemMenu = (e: React.MouseEvent, m: Memory) =>
     !e.shiftKey &&
     openContextMenu(
@@ -756,10 +774,11 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
       tidyMenu([
         ...textItems(e.currentTarget, e.target as Element),
         { separator: true },
-        { label: 'Edit…', onSelect: () => setEditing(m.id) },
+        { label: 'Edit…', disabled: m.imageLearning || m.imageProfile, onSelect: () => setEditing(m.id) },
         { label: 'Copy', onSelect: () => copy(m.text) },
         {
           label: 'Move to',
+          disabled: m.imageLearning || m.imageProfile,
           submenu: [
             { label: 'You (user memory)', checked: m.projectId === null, onSelect: () => void save(m, { text: m.text, category: m.category, projectId: null }) },
             ...projects.map((p) => ({ label: p.name, checked: m.projectId === p.id, onSelect: () => void save(m, { text: m.text, category: m.category, projectId: p.id }) })),
@@ -776,10 +795,19 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         editing === m.id ? (
           <MemoryForm key={m.id} memory={m} scope={m.projectId} projects={projects} categories={categories} onSave={(input) => void save(m, input)} onCancel={() => setEditing(null)} />
         ) : (
-          <div key={m.id} className="agt-mem" onContextMenu={(e) => itemMenu(e, m)} onDoubleClick={() => setEditing(m.id)}>
-            <span className="agt-mem-text">{m.text}</span>
+          <div key={m.id} className="agt-mem" onContextMenu={(e) => itemMenu(e, m)} onDoubleClick={() => { if (!m.imageLearning && !m.imageProfile) setEditing(m.id) }}>
+            {m.imageLearning ? (
+              <div className="agt-mem-text">
+                {(() => {
+                  const o = observation(m)
+                  return <ObservationLine o={o} profile={o.profileId === null ? 'No profile' : profileNames.get(o.profileId) ?? `Profile ${o.profileId}`} />
+                })()}
+              </div>
+            ) : (
+              <span className="agt-mem-text">{m.text}</span>
+            )}
             <span className="agt-mem-actions">
-              <button className="agt-icon agt-mini" onClick={() => setEditing(m.id)} title="Edit" aria-label="Edit">
+              <button className="agt-icon agt-mini" disabled={m.imageLearning || m.imageProfile} onClick={() => setEditing(m.id)} title={m.imageLearning || m.imageProfile ? 'Structured image memory: edit profiles in Images; revise observations with image learning tools' : 'Edit'} aria-label="Edit">
                 <Icon name="edit" size={13} />
               </button>
               <button className="agt-icon agt-mini" onClick={() => forget(m)} title="Forget" aria-label="Forget">
@@ -797,7 +825,14 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
             </span>
             {c.name} <span className="muted">{countIn(c)}</span>
           </summary>
-          <div className="agt-cat-body">{node(c, depth + 1)}</div>
+          <div className="agt-cat-body">
+            {c.path === 'Images/Learnings' && (
+              <button type="button" className="btn btn-small agt-mem-obs-open" onClick={() => setObservations(true)}>
+                Overview with filters and profiles…
+              </button>
+            )}
+            {node(c, depth + 1)}
+          </div>
         </details>
       ))}
     </Fragment>
@@ -825,7 +860,7 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         <p className="muted agt-mem-help">
           {project
             ? `Facts that only matter to ${project.name}. Threads in this project read them, next to what the agent knows about you.`
-            : 'What the agent knows about you, in every thread. It files new things under categories itself (People/Friends, Work/Tools…) and keeps them up to date; you can too.'}
+            : 'What the agent knows about you. Image profiles and observations are retrieved only for image tasks; edit profiles in Images, or forget them here. The Images/Learnings marker identifies cautious image observations, not proven facts or rankings. Other memories follow every thread.'}
         </p>
         <label className="agt-search agt-mem-search">
           <Icon name="search" />
@@ -834,9 +869,18 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         {editing === 'new' && <MemoryForm scope={scope} projects={projects} categories={categories} onSave={(input) => void save(null, input)} onCancel={() => setEditing(null)} />}
         {items && !mine.length && editing !== 'new' && <p className="muted">{project ? `Nothing remembered about ${project.name} yet.` : 'Nothing remembered yet. Ask the agent to remember something, or add it here.'}</p>}
         {items && mine.length > 0 && !list.length && <p className="muted">Nothing matches.</p>}
+        {query && learnings > 0 && (
+          <p className="muted agt-mem-obs-hint">
+            {learnings === list.length ? `All ${learnings} matches are image observations.` : `${learnings} of ${list.length} matches are image observations.`}{' '}
+            <button type="button" className="btn btn-small" onClick={() => setObservations(true)}>
+              Open the overview
+            </button>
+          </p>
+        )}
         <div className="agt-mem-tree">{node(tree, 0)}</div>
         {error && <p className="t-red copyable">{error}</p>}
       </div>
+      {observations && <ObservationsDialog onClose={() => setObservations(false)} onChanged={() => void load()} />}
     </>
   )
 }
@@ -999,12 +1043,23 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
   const [skills, setSkills] = useState<Skill[]>([])
+  const [mentionTools, setMentionTools] = useState<MentionTool[]>([])
+  const [loras, setLoras] = useState<LoraDetail[] | null>(null)
+  const [loraManager, setLoraManager] = useState(false)
+  const phone = useIsMobile()
+  const [loraError, setLoraError] = useState('')
+  const [loraLoading, setLoraLoading] = useState(false)
+  const [caret, setCaret] = useState(0)
+  const [suggestionIndex, setSuggestionIndex] = useState(0)
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false)
+  useEffect(() => { listMentionTools().then(setMentionTools, () => {}) }, [])
   const [text, setText] = useState(() => getDraft(id ?? 'new')?.text ?? '')
   const [live, setLive] = useState<Live | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  const [openingImages, setOpeningImages] = useState(false)
   // A compaction under way (asked for, or by itself in the middle of a turn): shown in place of the reply.
   const [compacting, setCompacting] = useState<{ auto: boolean } | null>(null)
   // A queued message being edited in the message box, and what was in the box before (back after).
@@ -1057,10 +1112,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setLive(e.live)
       found(e.messages)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
+    else if (e.type === 'imageGeneration') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'image', width: e.width, height: e.height }])
+    else if (e.type === 'imageProgress') setApprovals((a) => a.map((x) => (x.callId === e.callId ? { ...x, progress: e.progress } : x)))
     else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary, check: e.check }])
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
     else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
-    else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
+    else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone' || e.type === 'imageGenerationDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
     else if (e.type === 'compact') setCompacting(e.state === 'start' ? { auto: e.auto } : null)
     else if (e.type === 'message') {
       setMessages((ms) => [...ms, e.message])
@@ -1148,11 +1205,25 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, busy, thread?.running, rejoin])
 
-  // Follow the answer as it grows, unless scrolled up to read.
+  // Follow the answer as it grows, unless scrolled up to read; then offer a jump back down instead.
+  const [scrolledUp, setScrolledUp] = useState(false)
   useEffect(() => {
     const el = scroller.current
     if (el && pinned.current) el.scrollTop = el.scrollHeight
   }, [messages, live])
+  // Growth that is not a new message (an image frame, a tool card, progress text) follows too.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const follow = () => { if (pinned.current) el.scrollTop = el.scrollHeight }
+    const sizes = new ResizeObserver(follow)
+    const watch = () => { sizes.disconnect(); for (const child of Array.from(el.children)) sizes.observe(child) }
+    const children = new MutationObserver(() => { watch(); follow() })
+    watch()
+    children.observe(el, { childList: true })
+    return () => { sizes.disconnect(); children.disconnect() }
+  }, [id])
+  useEffect(() => { pinned.current = true; setScrolledUp(false) }, [id])
 
   const mode = thread?.mode ?? draftMode
   const model = thread?.model ?? draftModel ?? ''
@@ -1197,7 +1268,6 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const permissionMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, PERMISSIONS.map((p) => ({ label: PERMISSION_LABEL[p], hint: PERMISSION_HELP[p], checked: permission === p, onSelect: () => setPermission(p) })))
   useEffect(() => {
-    if (!account.seafile && !thread) return
     listSkills(thread ? { thread: thread.id } : { folder: workdir }).then(setSkills, () => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id, workdir?.repo, workdir?.path])
@@ -1370,6 +1440,50 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setApprovals([])
       onChanged()
     }
+  }
+
+  const branchFrom = async (message: AgentMessage) => {
+    if (!thread || answering || sending.current) return
+    sending.current = true
+    try {
+      const result = await branchThread(thread.id, message.id)
+      onCreated(result.thread)
+      onChanged()
+    } catch (e) { setError((e as Error).message) }
+    finally { sending.current = false }
+  }
+  const again = async (imageId: string) => {
+    if (!thread || answering || sending.current) return
+    sending.current = true
+    setError(null); setDropped(false); setBusy(true); pinned.current = true
+    const ctl = new AbortController()
+    abort.current = ctl
+    try { await generateAnother(thread.id, imageId, onEvent, ctl.signal) }
+    catch (e) {
+      if (isDropped(e) && !ctl.signal.aborted) lose()
+      else if ((e as Error).name !== 'AbortError') setError((e as Error).message)
+    } finally {
+      abort.current = null; sending.current = false; setBusy(false); setLive(null); setApprovals([]); onChanged()
+    }
+  }
+  // Where Retry sits when the last turn ended well: in the row of its last answer, or of its last
+  // image when it drew one after (or instead of) writing. Null: nothing to put it under.
+  const retryAt = (() => {
+    if (messages.at(-1)?.role === 'compact') return null
+    let at: number | null = null
+    for (let i = messages.length - 1; i >= 0 && messages[i].role !== 'user'; i--) {
+      const m = messages[i]
+      if ((m.role === 'assistant' && m.content.trim()) || (m.role === 'tool' && m.toolName === 'generate_image' && generatedImage(m.content))) { at = m.id; break }
+    }
+    return at
+  })()
+  /** A message's own actions (Branch off; Generate another for an image unless its row has it). */
+  const messageActions = (message: AgentMessage, inRow = false): MenuItem[] => {
+    const image = !inRow && message.toolName === 'generate_image' ? generatedImage(message.content) : null
+    return [
+      { label: 'Branch off from here', hint: answering ? 'Wait for this thread to finish' : 'Continue in a new thread; keep the original', disabled: answering, onSelect: () => void branchFrom(message) },
+      ...(image ? [{ label: 'Generate another', hint: !image.settings ? 'This image has no recorded generation settings' : !tools.includes('images') ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : 'Draw this image again with the same prompt and settings', disabled: answering || !tools.includes('images') || !image.settings, onSelect: () => void again(image.id) }] : []),
+    ]
   }
 
   // Rewind to one of your messages: it and everything after it go (asked first, saying what is not
@@ -1612,6 +1726,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         ...(msg.thinking ? [{ label: 'Copy thoughts', onSelect: () => copy(msg.thinking!) }] : []),
         { separator: true },
       )
+    if (msg) {
+      const target = tool ? messages.slice(messages.indexOf(msg) + 1).filter((m) => m.role === 'tool')[Number(tool[1])] ?? msg : msg
+      items.push(...messageActions(target), { separator: true })
+    }
     items.push({
       label: 'Select all',
       shortcut: 'Ctrl A',
@@ -1634,7 +1752,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       tidyMenu([
         ...fieldMenu(e.currentTarget),
         { separator: true },
-        { label: 'Attach from Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) },
+        ...(account.seafile ? [{ label: 'Attach from Files (Seafile)…', onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) }] : []),
         { label: 'Attach from this computer…', onSelect: () => pcFiles.current?.click() },
         { separator: true },
         { label: 'Quick', checked: mode === 'quick', disabled: answering, onSelect: () => setMode('quick') },
@@ -1663,14 +1781,34 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     const t = setInterval(() => void getThread(thread.id).then((r) => setThread((now) => (now?.id === r.thread.id ? r.thread : now)), () => {}), 4000)
     return () => clearInterval(t)
   }, [thread?.id, answering, thread?.queue.length])
-  // "/name" starts a skill: the skills that fit what is typed so far.
-  const slashAt = /^\/([\w.-]*)$/.exec(text)
-  const slashSkills = slashAt ? skills.filter((sk) => sk.enabled && sk.name.startsWith(slashAt[1])).slice(0, 8) : []
-  // The one built-in command: /compact, once there is something to compact.
-  const slashCompact = !!slashAt && hasConversation && 'compact'.startsWith(slashAt[1]) && slashAt[1] !== 'compact'
   const projectName = projects.find((p) => p.id === (thread ? thread.projectId : draftProject))?.name ?? null
   const modelOptions = models.length ? models : model ? [{ name: model, thinking: false, vision: false, contextLength: null }] : []
   const tools = thread?.tools ?? draftTools
+  const activeMention = mentionAt(text, caret)
+  const slashAt = /^\/([\w.-]*)$/.exec(text.slice(0, caret))
+  const completion = activeMention ?? (slashAt ? { start: 0, sigil: '/', query: slashAt[1].toLowerCase() } : null)
+  useEffect(() => {
+    if (activeMention?.sigil !== '#' || loras !== null || loraLoading || loraError) return
+    setLoraLoading(true)
+    getLoraDetails().then((result) => { setLoras(result.loras); setLoraManager(result.manager) }, () => setLoraError('Connect ComfyUI in Settings → Agents → Images.')).finally(() => setLoraLoading(false))
+  }, [activeMention?.sigil, loras, loraLoading, loraError])
+  useEffect(() => { setSuggestionIndex(0); setSuggestionsDismissed(false) }, [text, caret])
+  const suggestions: { name: string; hint: string; lora?: LoraDetail }[] = !completion ? [] : (completion.sigil === '#'
+    ? (loras ?? []).map((l) => ({ name: l.name, hint: l.title, lora: l }))
+    : completion.sigil === '@'
+      ? mentionTools.map((t) => ({ name: t.name, hint: `${TOOL_GROUPS.find((g) => g.id === t.group)?.name ?? 'Always available'} · ${!t.group || tools.includes(t.group) ? 'on' : 'off'}` }))
+      : [...(completion.sigil === '/' && hasConversation ? [{ name: 'compact', hint: 'Summarise the conversation to free context' }] : []), ...skills.filter((sk) => sk.enabled).map((sk) => ({ name: sk.name, hint: sk.description }))])
+    .filter((s: { name: string; hint: string; lora?: LoraDetail }) => (s.lora ? `${s.name} ${s.lora.title}` : s.name).toLowerCase().includes(completion!.query)).slice(0, 50)
+  const showSuggestions = !!completion && !suggestionsDismissed
+  const acceptSuggestion = (name: string) => {
+    if (!completion) return
+    const inserted = `${mentionText(completion.sigil, name)} `
+    const end = caret + (text.slice(caret).match(/^[^\s]*/)?.[0].length ?? 0)
+    const nextCaret = completion.start + inserted.length
+    setText(text.slice(0, completion.start) + inserted + text.slice(end)); setCaret(nextCaret)
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(nextCaret, nextCaret) })
+  }
+  useEffect(() => { composerBox.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [suggestionIndex])
   const visionless = files.some((f) => f.kind === 'image') && !models.find((m) => m.name === model)?.vision
 
   // Tools: one group at a time, for this thread (and new threads start with the last choice).
@@ -1682,22 +1820,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }
   const toolMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
-      ...TOOL_GROUPS.map((g) => ({
-        label: g.name,
-        checked: tools.includes(g.id),
-        disabled: (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal',
-        hint:
-          g.id === 'files' && !workdir
-            ? 'Choose a work folder first (the folder button above)'
-            : g.id === 'terminal'
-              ? 'Only from the agents command in the terminal'
-              : g.calendar && !hasCalendar(account)
-                ? 'Connect a calendar first (Settings → Integrations → Calendars)'
-                : g.mail && !mailAccounts?.length
-                  ? 'Link a mail account first (Settings → Integrations → Mail)'
-                  : g.detail,
-        onSelect: () => toggleTool(g.id),
-      })),
+      ...TOOL_GROUPS.map((g) => {
+        const on = tools.includes(g.id)
+        const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal'
+        const { hint, muted } = toolState(g, on, !!blocked)
+        // Greyed but clickable while it is on, so it can be switched off; off and blocked it cannot be switched on.
+        return { label: g.name, checked: on, muted: muted && on, disabled: muted && !on, hint, onSelect: () => toggleTool(g.id) }
+      }),
       { separator: true },
       { label: tools.length === ALL_TOOLS.length ? 'Turn all off (just the model)' : 'Turn all on', onSelect: () => (tools.length === ALL_TOOLS.length ? setTools([]) : setTools(ALL_TOOLS)) },
     ], 'above')
@@ -1775,9 +1904,23 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const fromComputer = (list: FileList | File[]) => addFiles(() => [...list].map((f) => toAttachment(f, f.name, 'This computer')))
   const attachMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
-      { label: 'From Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) },
+      ...(account.seafile ? [{ label: 'From Files (Seafile)…', onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) }] : []),
       { label: 'From this computer…', onSelect: () => pcFiles.current?.click() },
     ], 'above')
+
+  const sessionImages = async () => {
+    setOpeningImages(true)
+    try {
+      let target = thread
+      if (!target) {
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, ...(draftModel ? { model: draftModel } : {}) })
+        streamed.current = target.id
+        setThread(target)
+        onCreated(target)
+      }
+      await openSessionImages(target.id)
+    } catch (e) { setError((e as Error).message) } finally { setOpeningImages(false) }
+  }
 
   return (
     <>
@@ -1799,6 +1942,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
           </button>
         )}
+        <button type="button" className="agt-chip" disabled={answering || openingImages} onClick={() => void sessionImages()} title="Image models and generation defaults for this session">Images</button>
         {thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}
@@ -1831,6 +1975,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         onScroll={(e) => {
           const el = e.currentTarget
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          setScrolledUp(!pinned.current)
         }}
       >
         {!messages.length && !live && (
@@ -1841,7 +1986,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <MoneyThread currencies={threadCurrencies}>
-          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} />
         </MoneyThread>
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
@@ -1854,8 +1999,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         ) : (
           answering && <p className="agt-wait muted">Working…</p>
         )}
-        {/* Not under a compaction that went well: Retry would answer the message before it again. */}
-        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (dropped || !!thread.interrupted || messages.at(-1)?.role !== 'compact') && (
+        {/* Not under a compaction that went well: Retry would answer the message before it again. A
+            turn that ended well has Retry in its last answer's (or image's) row; this line is for
+            a dropped or interrupted turn, or one that left nothing to put it under. */}
+        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (dropped || !!thread.interrupted || (messages.at(-1)?.role !== 'compact' && retryAt === null)) && (
           <div className={`agt-cut ${dropped || thread.interrupted ? 'is-error' : ''}`}>
             {dropped ? <span>The connection dropped</span> : thread.interrupted && <span>{interruptionText(thread.interrupted)}</span>}
             <button type="button" className={dropped || thread.interrupted ? 'btn btn-small' : 'agt-retry'} onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">
@@ -1869,6 +2016,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         {error && <p className="agt-error t-red copyable">{error}</p>}
+        {scrolledUp && (
+          <button type="button" className="btn btn-small agt-jump-latest" onClick={() => { const el = scroller.current; if (el) { pinned.current = true; setScrolledUp(false); el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) } }}>
+            ↓ Jump to latest
+          </button>
+        )}
       </div>
 
       {!!thread?.todos.length && (
@@ -1892,38 +2044,19 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {(files.length > 0 || reading > 0) && (
             <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
-          {(slashSkills.length > 0 || slashCompact) && (
-            <ul className="agt-slash" aria-label="Commands and skills">
-              {slashCompact && (
-                <li>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setText('/compact ')
-                      input.current?.focus()
-                    }}
-                  >
-                    <b>/compact</b> <span className="muted">Summarise the conversation so far to free up the context window; add what the summary should keep</span>
-                  </button>
-                </li>
-              )}
-              {slashSkills.map((sk) => (
-                <li key={sk.name}>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setText(`/${sk.name} `)
-                      input.current?.focus()
-                    }}
-                  >
-                    <b>/{sk.name}</b> <span className="muted">{sk.description}</span>
-                  </button>
-                </li>
-              ))}
+          {showSuggestions && (() => {
+            // LoRAs get a detail pane for the highlighted one: beside the list, or on a phone under its row
+            // (a first tap there shows it, a second inserts it, or Use in the detail).
+            const highlighted = suggestions[Math.min(suggestionIndex, suggestions.length - 1)]?.lora
+            const list = <ul className="agt-slash" role="listbox" aria-label="Commands and mentions">
+              {suggestions.map((s, i) => <li key={s.name} role="option" aria-selected={i === suggestionIndex} onMouseEnter={s.lora && !phone ? () => setSuggestionIndex(i) : undefined}>
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => (s.lora && phone && i !== suggestionIndex ? setSuggestionIndex(i) : acceptSuggestion(s.name))}>{s.lora ? <LoraRow lora={s.lora} /> : <><b>{completion.sigil}{s.name}</b> <span className="muted">{s.hint}</span></>}</button>
+                {s.lora && phone && i === suggestionIndex && <LoraDetailPane lora={s.lora} manager={loraManager} onUse={() => acceptSuggestion(s.name)} />}
+              </li>)}
+              {!suggestions.length && <li className="muted">{completion.sigil === '#' ? loraLoading ? 'Loading LoRAs…' : loraError || 'No installed LoRAs match.' : 'No matches.'}{loraError && completion.sigil === '#' && <button type="button" onClick={() => setLoraError('')}>Retry</button>}</li>}
             </ul>
-          )}
+            return highlighted && !phone ? <div className="agt-slash-split">{list}<LoraDetailPane lora={highlighted} manager={loraManager} /></div> : list
+          })()}
           {editingQ && (
             <div className="agt-editing">
               <span>
@@ -1937,12 +2070,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           <textarea
             ref={input}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart) }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyDown={(e) => {
-              if (e.key === 'Tab' && (slashCompact || slashSkills.length)) {
-                e.preventDefault()
-                setText(slashCompact ? '/compact ' : `/${slashSkills[0].name} `)
-                return
+              if (showSuggestions && !e.nativeEvent.isComposing) {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSuggestionsDismissed(true); return }
+                if (suggestions.length && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); setSuggestionIndex((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return }
+                // Right accepts too, like Tab and Enter: only with a list open (this branch), no modifier, and the
+                // caret at the end of the word, so moving through a word already written still moves the caret.
+                if (suggestions.length && (e.key === 'Tab' || e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey || e.key === 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !/^\S/.test(text.slice(caret)))) { e.preventDefault(); acceptSuggestion(suggestions[Math.min(suggestionIndex, suggestions.length - 1)].name); return }
               }
               // Up in an empty box edits the last queued message, Esc puts an edit back.
               if (e.key === 'ArrowUp' && !text && !files.length && !editingQ && queue.length && !e.shiftKey) {
@@ -1982,7 +2118,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             aria-label="Message"
           />
           <div className="agt-box-bar">
-            <button type="button" className="agt-icon" onClick={attachMenu} aria-label="Attach files" title="Attach files">
+            <button type="button" className="agt-icon" onClick={attachMenu} disabled={answering} aria-label="Attach files" title="Attach files">
               <Icon name="clip" />
             </button>
             <button type="button" className="agt-pill" onClick={modeMenu} disabled={answering} title={MODE_HELP[mode]}>
@@ -2000,7 +2136,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               <span className="agt-model-name">{model || usualModel || 'Automatic'}</span>
               <Icon name="chevron" size={12} />
             </button>
-            {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
+            {thread && <ContextMeter thread={thread} models={models} disabled={answering} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
             {answering && (
               <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
                 <Icon name="stop" size={14} />
@@ -2044,7 +2180,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways }: { /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, imagesOn, retry }: { /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+  // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
+  const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
+    <ActionRow label={`${label} actions`}>{[...buttons, <MoreButton key="more" label={label} items={tidy([...own, { separator: true }, ...actions(m, true)])} />]}</ActionRow>
+  )
+  const retryButton = (id: number) => retry?.at === id ? <button key="retry" type="button" className={ACTION} onClick={retry.onRetry} title="Run your last message again; what the agent wrote for it goes">Retry</button> : null
   const out: ReactNode[] = []
   // A turn's answer is its last message with text: Share sits under it, once the turn is done.
   const answers = new Set<number>()
@@ -2060,7 +2201,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
     const m = messages[i]
     if (m.role === 'user') {
       out.push(
-        <div key={m.id} className="agt-user-wrap" data-msg={m.id}>
+        <div key={m.id} className="agt-user-wrap agt-act-host" data-msg={m.id}>
           <div className="agt-user">
             {m.content && (
               <div className="zed-preview agt-user-text">
@@ -2069,27 +2210,18 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
             )}
             {!!m.attachments?.length && <AttachedFiles files={m.attachments} pictureOf={threadId ? sentPicture(threadId, m) : () => null} sent />}
           </div>
-          {/* Under each of your messages on hover (always on touch): copy it, or go back to it. */}
-          <div className="agt-user-actions">
-            {m.content && (
-              <button type="button" onClick={() => copy(m.content)} title="Copy the message">
-                Copy
-              </button>
-            )}
-            <button type="button" onClick={() => onRewind(m, true)} title="Take the thread back to this message and edit it to send again">
-              Edit & resend
-            </button>
-            <button type="button" onClick={() => onRewind(m, false)} title="Remove this message and everything after it; it goes back into the message box">
-              Rewind to here
-            </button>
-          </div>
+          {row(m, 'Your message', [
+            ...(m.content ? [{ label: 'Copy', hint: 'Copy the message', onSelect: () => copy(m.content) }] : []),
+            { label: 'Edit & resend…', hint: 'Take the thread back to this message and edit it to send again', onSelect: () => onRewind(m, true) },
+            { label: 'Rewind to here…', hint: 'Remove this message and everything after it; it goes back into the message box', onSelect: () => onRewind(m, false) },
+          ])}
         </div>,
       )
       continue
     }
     if (m.role === 'tool') continue // drawn with the call that asked for it
     if (m.role === 'compact') {
-      out.push(<CompactDivider key={m.id} m={m} />)
+      out.push(<div key={m.id} className="agt-act-host" data-msg={m.id}><CompactDivider m={m} />{row(m, 'Summary', [{ label: 'Copy summary', onSelect: () => copy(m.content) }])}</div>)
       continue
     }
     const calls = m.toolCalls ?? []
@@ -2102,25 +2234,26 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           </div>
         )}
         {m.content.trim() && (
-          <div className="agt-answer-wrap" data-msg={m.id}>
+          <div className="agt-answer-wrap agt-act-host" data-msg={m.id}>
             <article className="zed-preview agt-answer">
               <MarkdownPreview text={m.content} money />
             </article>
-            {/* Under each answer on hover (always on touch): share it as a link. */}
-            {answers.has(m.id) && (
-              <div className="agt-msg-actions">
-                <button type="button" onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">
-                  Share
-                </button>
-              </div>
-            )}
+            {row(m, 'Answer', [{ label: 'Copy answer', onSelect: () => copy(m.content) }], [...(answers.has(m.id) ? [<button key="share" type="button" className={ACTION} onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">Share</button>] : []), retryButton(m.id)])}
           </div>
         )}
+        {!m.content.trim() && !calls.length && <div className="agt-act-host" data-msg={m.id}>{row(m, 'Message')}</div>}
         {calls.map((c, j) => {
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
-          if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
-          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
+          if (c.name === 'ask_user' && results[j]) return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><AnsweredForm tag={`${m.id}:${j}`} call={c} result={results[j].content} />{row(results[j], 'Answered question')}</div>
+          const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
+          if (image || wait?.kind === 'image' && wait.width && wait.height) return (
+            <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}>
+              <ImageCard retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} more={actions(results[j] ?? m, true)}
+                again={image ? { disabled: answering || !imagesOn || !image.settings, hint: !image.settings ? 'This image has no recorded generation settings' : !imagesOn ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : 'Draw this image again with the same prompt and settings', onClick: () => onAgain(image.id) } : undefined} />
+            </div>
+          )
+          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
         })}
       </Fragment>,
     )
@@ -2259,6 +2392,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
         {call.name.startsWith('mail_') && (
           <p className="muted agt-ask-why">{MAIL_READ_TOOLS.has(call.name) ? 'Mail asks you first, in every mode: what it reads is private. You can let it search and read mail in this thread for 15 minutes, or always; sending and changes still ask.' : 'Mail always asks you first, in every mode: what it reads and sends is private.'}</p>
         )}
+        {call.name === 'generate_image' && !summary && <pre className="agt-tool-body">{JSON.stringify(call.arguments, null, 2)}</pre>}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (
@@ -2739,14 +2873,14 @@ function RenameBox({ thread, onSave, onCancel }: { thread: Thread; onSave: (titl
 const PART_COLORS = ['var(--magenta)', 'var(--muted)', 'var(--yellow)', 'var(--orange)', 'var(--blue)', 'var(--green)', 'var(--fg)', 'var(--cyan)']
 
 /** How full the model's context was after the last reply, as a small ring; opens the breakdown. */
-function ContextMeter({ thread, models, open, onToggle }: { thread: Thread; models: ModelInfo[]; open: boolean; onToggle: () => void }) {
+function ContextMeter({ thread, models, open, onToggle, disabled }: { thread: Thread; models: ModelInfo[]; disabled: boolean; open: boolean; onToggle: () => void }) {
   const size = models.find((m) => m.name === thread.model)?.contextLength ?? null
   const used = thread.contextTokens
   const share = used !== null && size ? Math.min(1, used / size) : 0
   const C = 2 * Math.PI * 7
   const label = used !== null ? `${used.toLocaleString()}${size ? ` of ${size.toLocaleString()}` : ''} tokens in context (${share < 0.01 && used ? '<1' : Math.round(share * 100)}%)` : 'Context window'
   return (
-    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} aria-expanded={open} title={label} aria-label={label}>
+    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} disabled={disabled} aria-expanded={open} title={label} aria-label={label}>
       <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden>
         <circle cx="9" cy="9" r="7" className="agt-ring-track" />
         <circle cx="9" cy="9" r="7" className="agt-ring-fill" strokeDasharray={`${Math.max(share, used ? 0.03 : 0) * C} ${C}`} transform="rotate(-90 9 9)" />

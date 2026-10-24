@@ -4,7 +4,7 @@ import { notify } from './notify'
 
 export type MenuItem =
   | { separator: true }
-  | { label: string; onSelect?: () => void; disabled?: boolean; shortcut?: string; danger?: boolean; submenu?: MenuItem[]; swatch?: string; checked?: boolean; /** A second, smaller line under the label */ hint?: string }
+  | { label: string; onSelect?: () => void; disabled?: boolean; /** Looks disabled but still takes a click (a checked item that can only be turned off) */ muted?: boolean; shortcut?: string; danger?: boolean; submenu?: MenuItem[]; swatch?: string; checked?: boolean; /** A second, smaller line under the label */ hint?: string }
 
 /** `up`: the menu's bottom sits at y (a dropdown above its button); `altY`: where to flip up to when it doesn't fit below. */
 type OpenMenu = { x: number; y: number; items: MenuItem[]; up?: boolean; altY?: number } | null
@@ -409,7 +409,7 @@ function MenuList({ items, x, y, altX, up, altY, onClose }: { items: MenuItem[];
             <button
               key={i}
               role="menuitem"
-              className={`ctx-item ${item.danger ? 'is-danger' : ''} ${openSub === i ? 'is-open' : ''}`}
+              className={`ctx-item ${item.danger ? 'is-danger' : ''} ${item.muted ? 'is-muted' : ''} ${openSub === i ? 'is-open' : ''}`}
               disabled={item.disabled}
               onPointerEnter={(e) => {
                 if (item.submenu) {

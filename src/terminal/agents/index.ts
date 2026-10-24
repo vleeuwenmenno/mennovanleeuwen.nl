@@ -1,3 +1,4 @@
+import { generatedImage } from '../../data/agentImages'
 import { agentSettings, answerApproval, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
 import { seafileAt, syncAgentPlaces } from '../../data/agentPlaces'
 import { getAccount } from '../../os/account'
@@ -32,10 +33,30 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        follows the folder's AGENTS.md. Threads are the Agents app's: /open shows one there.
 
        Type a message and press Enter. Shift+Enter (or Alt+Enter, or \\ at the end) starts a
-       new line. @path adds a file, ! runs a command (its output goes along with your next
-       message), # remembers something. Esc stops the agent; Shift+Tab cycles between asking
+       new line. #name[:weight] selects a LoRA, $name invokes a skill anywhere, and @name
+       points at a tool; Tab completes all three. /name still invokes a skill at the start.
+       @./path adds a file, ! runs a command (its output goes along with your next message),
+       and # followed by a space remembers something. Esc stops the agent; Shift+Tab cycles between asking
        for each change, accepting edits, and plan mode (read only until you approve a plan).
-       /help lists the commands: /resume, /model, /tools, /skills, /context, /export, ….
+       Ask for an image after configuring ComfyUI in Settings → Apps → Agents → Images.
+       /images opens the model browser and session overrides; /images show prints effective
+       settings, /images reset follows account defaults, /images set {"seed":42} updates them.
+       Empty model/clip/vae values mean automatic recommendations: /images set {"vae":""}.
+       /images set {"loras":[{"name":"style.safetensors","weight":0.8}]} saves LoRAs.
+       /images show explains automatic/manual choices and missing or ambiguous assets.
+       /images profile lists style profiles; select <id|none>, save {"name":"…","description":"…"},
+       reset <id> or delete <id> manages them. /memory reset-images forgets image observations.
+       Krea2 presets are krea2_raw and krea2_turbo; both need installed model, clip and vae.
+       Generated images keep their private download URL, settings and metadata link, with an inline
+       preview below in interactive sessions. /images art on|off controls it (on by default,
+       remembered for this account in this browser). Previews use at most 48 columns and 24 rows;
+       large downloads, narrow terminals, TERM=dumb and print mode skip them. /open shows the image in the app.
+       /threads <words> searches past threads, including archives, across projects.
+       /threads open <id> resumes a result (a unique prefix from the last results also works).
+       /threads this [words] searches this thread; without words it repeats the last search.
+
+       /branch [message id] continues in a new thread; the original stays unchanged.
+       /help lists the commands: /resume, /threads, /branch, /images, /model, /tools, /skills, /context, /export, ….
 
 {c:bold}OPTIONS{/}
        -c, --continue          continue the latest thread in this folder
@@ -150,6 +171,8 @@ async function listing(ctx: Ctx): Promise<string> {
 /** agents -p: one answer, printed; nobody is there to allow changes, so those are declined. */
 async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null; mode: 'quick' | 'deep'; model: string | null; projectId: number | null; permission: Permission; tools: ReturnType<typeof agentSettings>['tools'] }): Promise<string> {
   const thread = await createThread({ mode: o.mode, model: o.model ?? undefined, tools: o.tools, projectId: o.projectId, workdir: o.workdir, permission: o.permission })
+  const imageLinks = new Set<string>()
+  const imageSettingsLinks = new Set<string>()
   let answer = ''
   let failure: string | null = null
   const dir = o.workdir ? workdirPath(o.workdir) : ctx.cwd
@@ -158,6 +181,10 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     prompt,
     [],
     (e) => {
+      if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
+        const image = generatedImage(e.message.content)
+        if (image) { imageLinks.add(new URL(image.url, location.origin).href); if (image.settings) imageSettingsLinks.add(new URL(image.url + '/metadata', location.origin).href) }
+      }
       if (e.type === 'message' && e.message.role === 'assistant') {
         if (e.message.content.trim()) answer = e.message.content.trim()
         if (ctx.tty) for (const c of e.message.toolCalls ?? []) ctx.print(toMarkup([[seg('● ', 'muted'), seg(toolTitle(c).filter(Boolean).join(' '), 'muted')]]))
@@ -172,6 +199,8 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     { terminal: true },
   )
   if (failure) throw new CmdError(`agents: ${failure}`)
+  for (const link of imageLinks) if (!answer.includes(link)) answer += `\n\nGenerated image: ${link}`
+  for (const link of imageSettingsLinks) if (!answer.includes(link)) answer += `\nGeneration settings: ${link}`
   if (!ctx.tty) return answer
   return toMarkup(markdown(answer, Math.max(30, ctx.size.cols - 1)))
 }

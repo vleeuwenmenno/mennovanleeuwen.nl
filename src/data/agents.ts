@@ -1,6 +1,7 @@
 import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { getNote } from './notes'
+import type { ImageProgress } from './imageModels'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -66,9 +67,11 @@ export const compactionText = (c: Compaction | undefined) =>
 export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim())
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
+export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images' | 'threads'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
+  { id: 'threads', name: 'Past threads', detail: 'Look back through your earlier conversations, in every project' },
+  { id: 'images', name: 'Images', detail: 'Generate and tune pictures, inspect output, and learn style profiles from feedback' },
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
@@ -83,10 +86,29 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'skills', name: 'Skills', detail: 'Read the skills in ~/.agents/skills and the work folder when a task calls for one' },
 ]
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
+/** Why a group does nothing yet, as the hint reads when it is on (`on`, after "On, but") and when it is off (`off`, after "Turning it on needs"). */
+const TOOL_BLOCKED: Partial<Record<ToolGroup, { on: string; off: string }>> = {
+  calendar: { on: 'no calendar connected (Settings → Integrations → Calendars)', off: 'a connected calendar (Settings → Integrations → Calendars)' },
+  mail: { on: 'nothing to use: link a mail account first (Settings → Integrations → Mail)', off: 'a linked mail account (Settings → Integrations → Mail)' },
+  seafile: { on: 'nothing to use: link Seafile first (Settings → Integrations → Seafile)', off: 'Seafile linked (Settings → Integrations → Seafile)' },
+  seafile_write: { on: 'nothing to use: link Seafile first (Settings → Integrations → Seafile)', off: 'Seafile linked (Settings → Integrations → Seafile)' },
+  files: { on: 'no work folder chosen (the folder button above)', off: 'a work folder (the folder button above)' },
+  terminal: { on: 'only from the agents command in the terminal, not in this app', off: 'the agents command in the terminal; it does not work in this app' },
+}
+/**
+ * What a group's row says. Three states: on and usable (its own detail), on but unable to do anything
+ * here (the cause first), off (what turning it on needs; only said when it is blocked, else its detail).
+ * `muted` greys the row; a blocked group may still be switched off, only switching it on is refused.
+ */
+export function toolState(g: (typeof TOOL_GROUPS)[number], on: boolean, blocked: boolean): { hint: string; muted: boolean } {
+  const why = blocked ? TOOL_BLOCKED[g.id] : undefined
+  if (!why) return { hint: g.detail, muted: false }
+  return { hint: on ? `On, but ${why.on}` : `Off. Turning it on needs ${why.off}`, muted: true }
+}
 /** The groups there were before choices remembered which groups existed. */
 const LEGACY_TOOLS: ToolGroup[] = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory']
 /** About the user (projectId null) or one project, filed under a category path like "People/Friends". */
-export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null }
+export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null; imageLearning?: boolean; imageProfile?: boolean }
 export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null }
 
 /**
@@ -118,9 +140,13 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 
 export type TurnEvent =
+  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  /** Where an image job is (at most 4 a second) */
+  | { type: 'imageProgress'; callId: string; progress: ImageProgress }
+  | { type: 'imageGenerationDone'; callId: string }
   | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
   /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
   | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
@@ -376,6 +402,13 @@ export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, sig
   await readEvents(res, onEvent)
 }
 
+/** Start an idle branch through this message, leaving the original untouched. */
+export const branchThread = (id: string, messageId: number) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}/branch`, { method: 'POST', json: { messageId } })
+export async function generateAnother(id: string, imageId: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  const res = await fetch(`/api/agents/threads/${id}/images/${imageId}/again`, { method: 'POST', credentials: 'same-origin', signal })
+  await readEvents(res, onEvent)
+}
+
 /**
  * Rewind to one of your messages: it and everything after it leave the thread (a running turn is
  * stopped first), and it comes back, files and all, to edit and send again. What tools changed is
@@ -499,6 +532,21 @@ export function toolLabel(call: ToolCall, result?: string): string {
   const made = call.name.startsWith('calendar_') ? calendarOutcome(result) : null
   if (made) return `${made.done === 'created' ? 'Created' : made.done === 'updated' ? 'Changed' : 'Deleted'} event: ${made.title}${made.when ? `, ${made.when}` : ''}`
   switch (call.name) {
+    case 'search_threads': return `Searched past threads for “${s('query')}”`
+    case 'read_thread': {
+      try { const title = JSON.parse(result ?? '{}').title; if (typeof title === 'string' && title) return `Read “${title}”` } catch { /* The result may not have arrived yet. */ }
+      return 'Read an earlier thread'
+    }
+    case 'read_image_learnings': return 'Read image learning evidence'
+    case 'save_image_learning': return 'Save image observation'
+    case 'save_image_profile': return 'Save suggested style profile'
+    case 'generate_image':
+      if (result?.includes('\"learning_review_required\":true')) return 'Review image learnings before generation'
+      return result ? 'Generated image' : `Generate image: ${s('prompt').slice(0, 120)}`
+    case 'view_generated_image':
+      return 'Inspect generated image with vision'
+    case 'list_image_models':
+      return 'Discover image models'
     case 'web_search':
       return `Searched the web for “${s('query')}”`
     case 'web_fetch':
@@ -578,6 +626,10 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return `Searched ${s('library') || 'Seafile'} for “${s('query')}”`
     case 'seafile_mkdir':
       return `Make folder ${s('path')} in ${s('library')}`
+    case 'list_generated_images':
+      return 'Listed generated images in this thread'
+    case 'save_generated_image':
+      return `${a.overwrite === true ? 'Save/replace' : 'Save'} generated PNG ${s('path')} in ${s('library')}`
     case 'seafile_write':
       return `${a.overwrite === true ? 'Replace' : 'Write'} ${s('path')} in ${s('library')} (${size(new TextEncoder().encode(s('content')).length)})`
     case 'seafile_rename':
@@ -675,3 +727,15 @@ export function textAttachment(text: string, name: string): Attachment {
 export const pictureUrl = (thread: string, message: number, index: number) => `/api/agents/threads/${thread}/messages/${message}/attachments/${index}`
 
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
+
+export type MentionTool = { name: string; group: ToolGroup | null }
+export const listMentionTools = () => api<MentionTool[]>('/api/agents/mention-tools')
+
+/** Explicit user history searches use the same bounded result as the agent tool. */
+export type ThreadSearchResult = { error: string } | { found: 0; searched: string; note: string } | {
+  note: string; more_threads: boolean; capped: boolean; truncated: boolean;
+  threads: { thread_id: string; title: string; project: { id: number | null; name: string } | null; archived: boolean; started: string; last_active: string; also_known_as: string[]; matched: string[]; hits: { message_id: number; from: string; date: string; excerpt: string; attachments?: { name: string; kind: string }[] }[] }[];
+}
+export const searchPastThreads = (query: string, currentThread: string | null, current = false) => api<ThreadSearchResult>('/api/agents/threads/search', {
+  method: 'POST', json: { query, ...(currentThread ? { current_thread: currentThread } : {}), ...(current ? { thread: 'this' } : {}), client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } },
+})

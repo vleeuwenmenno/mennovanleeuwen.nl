@@ -1,8 +1,9 @@
+import { AgentsImageSettings } from './AgentsImageSettings'
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_READS_EVENT, removeSite, removeSkill, setMailReads, setSkillEnabled, type AllowedSite, type MailReadsMode, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
-import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
@@ -15,7 +16,9 @@ import { writeFile } from '../terminal/fs'
 import { SharesSettings } from './AgentsShare'
 import { HOME } from '../terminal/vfs'
 import { SecretInput } from '../os/SecretInput'
-import { accountStorage } from '../os/accountSpace'
+import { getImageSettings, getImageProfiles } from '../data/agentImages'
+import { IMAGE_PRESETS } from '../data/imageModels'
+import { listShares } from '../data/agents'
 
 // The Agents app's settings, laid out like the rest of Settings: Ollama Cloud, the models, the web
 // search provider, what a new thread starts with, the system prompt in ~/AGENTS.md and the links
@@ -41,40 +44,45 @@ export function usePromptLocation() {
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-export type SectionId = 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'skills' | 'prompt' | 'shares'
+export type SectionId = 'overview' | 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'images' | 'skills' | 'prompt' | 'shares'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
   </svg>
 )
 const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }[] = [
+  { id: 'overview', label: 'Overview', blurb: 'What is set up, at a glance. Pick a card to change it.', icon: icon(<><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></>) },
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, and what it remembers.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
+  { id: 'images', label: 'Images', blurb: 'Generate images with your own ComfyUI server.', icon: icon(<><rect x="3" y="3" width="18" height="18" /><path d="M3 17l6-6 4 4 3-3 5 5" /></>) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
   { id: 'shares', label: 'Shared links', blurb: 'Threads and answers you shared: anyone with a link can read it, on a plain page, until it expires or you stop sharing.', icon: icon(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>) },
 ]
-const SECTION_KEY = 'mvlos.agents.settings'
-const storedSection = (): SectionId => {
-  try {
-    const v = accountStorage.get(SECTION_KEY)
-    return SECTIONS.some((x) => x.id === v) ? (v as SectionId) : 'general'
-  } catch {
-    return 'general'
-  }
+/** The sections in groups, for the navigation. Overview stands alone, first. */
+const GROUPS: { label: string; ids: SectionId[] }[] = [
+  { label: '', ids: ['overview'] },
+  { label: 'Models & threads', ids: ['general', 'models', 'threads', 'prompt'] },
+  { label: 'Safety', ids: ['permissions'] },
+  { label: 'Tools', ids: ['images', 'search', 'skills'] },
+  { label: 'Sharing', ids: ['shares'] },
+]
+const groupOf = (id: SectionId) => GROUPS.find((g) => g.ids.includes(id))?.label || undefined
+/** A section asked for by showAgentsSection, for settings that open right after: Overview otherwise. */
+let pendingSection: { id: SectionId; at: number } | null = null
+const takePending = (): SectionId | null => {
+  const p = pendingSection
+  pendingSection = null
+  return p && Date.now() - p.at < 2000 ? p.id : null
 }
 /** Said on window to show a section in the settings already open (openAgentsSettings). */
 const SECTION_EVENT = 'mvlos:agents-settings-section'
-/** Remembers `id` as the section to show, and shows it in any agents settings already open. */
+/** Shows `id` in any agents settings already open, or in the next one to open. */
 export function showAgentsSection(id: SectionId) {
-  try {
-    accountStorage.set(SECTION_KEY, id)
-  } catch {
-    /* not remembered */
-  }
+  pendingSection = { id, at: Date.now() }
   window.dispatchEvent(new CustomEvent(SECTION_EVENT, { detail: id }))
 }
 
@@ -83,20 +91,14 @@ export function showAgentsSection(id: SectionId) {
  * (which has its sidebar already). A narrow window shows the sidebar as tabs too.
  */
 export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs' }) {
-  const [section, setSection] = useState<SectionId>(storedSection)
+  // Overview first, unless something asked for a section (showAgentsSection).
+  const [section, setSection] = useState<SectionId>(() => takePending() ?? 'overview')
   useEffect(() => {
     const on = (e: Event) => setSection((e as CustomEvent<SectionId>).detail)
     window.addEventListener(SECTION_EVENT, on)
     return () => window.removeEventListener(SECTION_EVENT, on)
   }, [])
-  const pick = (id: SectionId) => {
-    setSection(id)
-    try {
-      accountStorage.set(SECTION_KEY, id)
-    } catch {
-      /* not remembered */
-    }
-  }
+  const pick = (id: SectionId) => setSection(id)
   const wm = useWM()
   const account = useAccount()
   const { accounts: mailAccounts } = useMailAccounts()
@@ -164,6 +166,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           : 'Built in, read-only'
 
   const pages: Record<SectionId, ReactNode> = {
+    overview: <AgentsOverview pick={pick} models={models} auto={auto} prompt={prompt} memories={memories} />,
     general: (
       <>
       <h4 className="set-subhead">Ollama Cloud</h4>
@@ -285,16 +288,18 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           />
         </li>
         {TOOL_GROUPS.map((g) => {
-          const off = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length)
+          const blocked = !!((g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length))
+          const on = settings.tools.includes(g.id)
+          const { hint, muted } = toolState(g, on, blocked)
           return (
-            <li key={g.id} className={`set-row ${off ? 'is-off' : ''}`}>
+            <li key={g.id} className={`set-row ${muted ? 'is-off' : ''}`}>
               <span className="set-row-text">
                 <strong>{g.name}</strong>
-                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Integrations → Calendars` : g.mail && !mailAccounts?.length ? `${g.detail}. Link a mail account first, in Settings → Integrations → Mail` : g.detail}</span>
+                <span className="muted">{hint}</span>
               </span>
               <Toggle
-                on={settings.tools.includes(g.id)}
-                disabled={off}
+                on={on}
+                disabled={muted && !on}
                 onChange={(on) => setAgentSettings({ tools: on ? [...settings.tools, g.id] : settings.tools.filter((t) => t !== g.id) })}
                 label={g.name}
               />
@@ -334,6 +339,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
     ),
     permissions: <PermissionSettings />,
     search: <WebSearchSettings />,
+    images: <AgentsImageSettings />,
     shares: <SharesSettings />,
     skills: <SkillsSettings />,
     prompt: (
@@ -377,21 +383,114 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
 
   return (
     <div className={`agt-set is-${layout}`}>
-      <nav className="agt-set-nav" role="tablist" aria-label="Agents settings">
-        {SECTIONS.map((x) => (
-          <button key={x.id} role="tab" aria-selected={x.id === section} className={x.id === section ? 'is-on' : ''} onClick={() => pick(x.id)}>
-            {x.icon}
-            <span>{x.label}</span>
-          </button>
-        ))}
-      </nav>
-      <div className="agt-set-body" role="tabpanel">
-        <h3 className="agt-set-title">{current.label}</h3>
-        <p className="muted set-help">{current.blurb}</p>
-        {pages[section]}
-        {error && <p className="t-red copyable">{error}</p>}
+      {/* Wide: the sections as a grouped list on the left. Narrow (a phone, a small window): one dropdown. */}
+      <div className="agt-set-frame">
+        <nav className="agt-set-nav" aria-label="Agents settings">
+          {GROUPS.map((g) => (
+            <div key={g.label || 'top'} className="agt-set-group" role="group" aria-label={g.label || 'Overview'}>
+              {g.label && <span className="agt-set-group-label">{g.label}</span>}
+              {g.ids.map((id) => {
+                const x = SECTIONS.find((s) => s.id === id)!
+                return (
+                  <button key={id} aria-current={id === section ? 'page' : undefined} className={id === section ? 'is-on' : ''} onClick={() => pick(id)}>
+                    {x.icon}
+                    <span>{x.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </nav>
+        <div className="agt-set-picker">
+          <Select className="set-select" aria-label="Agents settings section" value={section} onChange={pick} options={GROUPS.flatMap((g) => g.ids).map((id) => ({ value: id, label: SECTIONS.find((s) => s.id === id)!.label, note: groupOf(id) }))} />
+        </div>
+        <div className="agt-set-body">
+          <h3 className="agt-set-title">{current.label}</h3>
+          <p className="muted set-help">{current.blurb}</p>
+          {pages[section]}
+          {error && <p className="t-red copyable">{error}</p>}
+        </div>
       </div>
     </div>
+  )
+}
+
+// --- overview --------------------------------------------------------------------------------------
+
+/** A value read for the overview: still loading, read, or failed (with why). */
+type Read<T> = { value: T } | { error: string } | undefined
+/** Reads once, when the overview opens. */
+function useRead<T>(load: () => Promise<T>): Read<T> {
+  const [read, setRead] = useState<Read<T>>()
+  useEffect(() => {
+    let alive = true
+    load().then((value) => alive && setRead({ value }), (e: Error) => alive && setRead({ error: e.message }))
+    return () => {
+      alive = false
+    }
+  }, [])
+  return read
+}
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+
+type Card = { id: SectionId; summary: string; fix?: string; tone?: 'warn' | 'error' }
+
+/**
+ * One card per section, each with a line on how it is set up now, read from what the settings
+ * already loaded or one cheap request each. A card that needs something done says so in colour.
+ */
+function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: SectionId) => void; models: ModelInfo[]; auto: { quick: string; deep: string } | null; prompt: PromptInfo | null; memories: number | null }) {
+  const account = useAccount()
+  const settings = useAgentSettings()
+  const ollama = !!account.integrations.ollama
+  const images = useRead(getImageSettings)
+  const profiles = useRead(getImageProfiles)
+  const search = useRead(getWebSearch)
+  const skills = useRead(() => listSkills())
+  const shares = useRead(() => listShares())
+  const mail = useRead(getMailReads)
+  const sites = useRead(listSites)
+  const loading = 'Checking…'
+  const failed = (id: SectionId, ...reads: Read<unknown>[]): Card | null => {
+    const bad = reads.find((r) => r && 'error' in r) as { error: string } | undefined
+    return bad ? { id, summary: `Couldn't check: ${bad.error}`, tone: 'error' } : null
+  }
+  const model = (chosen: string | null, fallback?: string) => chosen ?? (fallback ? `Automatic (${fallback})` : 'Automatic')
+  const preset = images && 'value' in images ? IMAGE_PRESETS.find((p) => p.id === images.value.preset)?.title : undefined
+  const provider = search && 'value' in search ? PROVIDERS.find((p) => p.value === search.value.provider)?.label ?? search.value.provider : undefined
+  const enabledSkills = skills && 'value' in skills ? skills.value.filter((s) => s.enabled).length : null
+  const cards: Card[] = [
+    { id: 'general', summary: ollama ? `Ollama Cloud connected${memories === null ? '' : ` · ${plural(memories, 'thing')} remembered`}` : 'Ollama Cloud not connected: Agents needs an API key', ...(ollama ? {} : { fix: 'Add a key', tone: 'error' as const }) },
+    { id: 'models', summary: ollama && !models.length && !auto ? loading : `Quick: ${model(settings.quickModel, auto?.quick)} · Deep: ${model(settings.deepModel, auto?.deep)}` },
+    { id: 'threads', summary: `${MODE_LABEL[settings.mode]} · ${settings.tools.length} of ${plural(TOOL_GROUPS.length, 'tool group')} on${settings.autoCompact ? ' · compacts long threads' : ''}` },
+    { id: 'prompt', summary: !prompt ? loading : prompt.source === 'seafile' ? 'Your own ~/AGENTS.md' : prompt.error ? `Built in: ~/AGENTS.md could not be read` : 'Built in', ...(prompt?.error ? { tone: 'warn' as const } : {}) },
+    failed('permissions', mail, sites) ?? { id: 'permissions', summary: !mail || !sites ? loading : `Mail reads: ${mail && 'value' in mail && mail.value.mode === 'always' ? 'always allowed' : 'ask first'} · ${plural(sites && 'value' in sites ? sites.value.length : 0, 'web site')} allowed` },
+    failed('images', images) ?? (images && 'value' in images && !images.value.url
+      ? { id: 'images', summary: 'ComfyUI not connected', fix: 'Set up', tone: 'warn' }
+      : { id: 'images', summary: !images ? loading : `ComfyUI connected${preset ? ` · ${preset}` : ''}${profiles && 'value' in profiles ? ` · ${plural(profiles.value.length, 'style profile')}` : ''}` }),
+    failed('search', search) ?? { id: 'search', summary: !provider ? loading : search && 'value' in search && search.value.provider === 'ollama' ? 'Ollama web search (built in)' : provider },
+    failed('skills', skills) ?? { id: 'skills', summary: enabledSkills === null ? loading : `${enabledSkills} of ${plural(skills && 'value' in skills ? skills.value.length : 0, 'skill')} on` },
+    failed('shares', shares) ?? { id: 'shares', summary: !shares ? loading : shares && 'value' in shares && shares.value.length ? `${plural(shares.value.length, 'link')} shared` : 'Nothing shared' },
+  ]
+  return (
+    <ul className="agt-ov">
+      {cards.map((c) => {
+        const x = SECTIONS.find((s) => s.id === c.id)!
+        return (
+          <li key={c.id}>
+            <button className={`agt-ov-card ${c.tone ? `is-${c.tone}` : ''}`} onClick={() => pick(c.id)} aria-label={`${x.label}: ${c.summary}${c.fix ? `. ${c.fix}` : ''}`}>
+              <span className="agt-ov-icon">{x.icon}</span>
+              <span className="agt-ov-text">
+                <strong>{x.label}</strong>
+                <span className="muted">{c.summary}</span>
+              </span>
+              {c.fix && <span className="agt-ov-fix">{c.fix}</span>}
+              <span className="agt-ov-chev" aria-hidden>›</span>
+            </button>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 

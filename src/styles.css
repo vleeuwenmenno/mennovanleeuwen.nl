@@ -133,6 +133,16 @@ html[data-selecting] body {
   -webkit-user-select: text;
   user-select: text;
 }
+/* Editable text must show each typed character separately, including //, .. and ... in URLs
+   and paths. Disable contextual alternates as well as ligatures (JetBrains Mono uses them).
+   Important prevents app-specific `font` shorthands from resetting ligatures to normal. */
+input,
+textarea,
+[contenteditable]:not([contenteditable='false']),
+[contenteditable]:not([contenteditable='false']) * {
+  font-variant-ligatures: none !important;
+}
+
 input,
 textarea,
 select,
@@ -1525,6 +1535,10 @@ body.is-resizing iframe {
 .ctx-item:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* Greyed but still clickable: a checked item that can only be switched off. */
+.ctx-item.is-muted {
+  opacity: 0.4;
 }
 .ctx-item.is-danger:not(:hover) {
   color: var(--red);

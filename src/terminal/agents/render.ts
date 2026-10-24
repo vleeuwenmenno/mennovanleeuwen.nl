@@ -1,3 +1,4 @@
+import { generatedImage } from '../../data/agentImages'
 import { calendarTime, compactionText, toolLabel, type AgentMessage, type Todo, type ToolCall } from '../../data/agents'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
@@ -45,6 +46,15 @@ export function compactLines(m: AgentMessage, w: number, full: boolean): Line[] 
 /** A tool call's name and argument, as its header line shows it. */
 export function toolTitle(call: ToolCall): [string, string] {
   switch (call.name) {
+    case 'read_image_learnings': return ['Image learnings', s(call, 'task')]
+    case 'save_image_learning': return ['Save image observation', s(call, 'task')]
+    case 'save_image_profile': return ['Save style profile', s(call, 'name')]
+    case 'generate_image':
+      return ['Generate image', s(call, 'prompt')]
+    case 'view_generated_image':
+      return ['Inspect image', String(call.arguments?.image_id ?? 'latest in this thread')]
+    case 'list_image_models':
+      return ['Image models', 'ComfyUI']
     case 'read_file':
       return ['Read', s(call, 'path')]
     case 'write_file':
@@ -181,6 +191,14 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
   const ok = (body: Line[]) => [header(call, 'green', w), ...body]
   const max = verbose ? 200 : 6
   switch (call.name) {
+    case 'generate_image': {
+      const image = generatedImage(result)
+      if (image) {
+        const url = new URL(image.url, location.origin).href
+        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+      }
+      return ok([under(oneLine(result))])
+    }
     case 'read_file': {
       const n = result.split('\n').filter((l) => /^\s+\d+\t/.test(l)).length
       return ok([under(n ? `Read ${n} line${n === 1 ? '' : 's'}` : oneLine(result))])
@@ -281,7 +299,8 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
 }
 
 /** A tool call still under way. */
-export function runningLines(call: ToolCall, state: 'running' | 'approval' | 'question' | 'client', w: number, blink: boolean): Line[] {
-  const text = state === 'approval' ? 'Waiting for you to allow it…' : state === 'question' ? 'Waiting for your answers…' : state === 'client' ? 'Running in this terminal…' : 'Running…'
+/** `detail`: what a running call reports about itself (an image job's step and percentage), instead of "Running…". */
+export function runningLines(call: ToolCall, state: 'running' | 'approval' | 'question' | 'client', w: number, blink: boolean, detail?: string): Line[] {
+  const text = state === 'approval' ? 'Waiting for you to allow it…' : state === 'question' ? 'Waiting for your answers…' : state === 'client' ? 'Running in this terminal…' : detail ?? 'Running…'
   return [header(call, blink ? 'muted' : 'bold', w), under(text)]
 }

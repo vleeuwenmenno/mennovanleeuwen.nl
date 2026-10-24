@@ -51,6 +51,10 @@ area you clicked in (or a field's text), never the whole page, and apps that sel
 items with it (Files, Photos, Archive) still do. Pictures and links on the chrome don't drag out
 of the page; rows meant to be dragged still do.
 
+Editable fields (inputs, text areas and rich-text editors) disable font ligatures and contextual
+alternates so punctuation such as `http://host/path`, `//`, `..` and `...` remains visually
+separate. This changes only font rendering: text values, selection and caret positions stay intact.
+
 For developers it is one rule, under *Text selection* at the top of
 [`src/styles.css`](src/styles.css): `body` is `user-select: none`, and fields, `code` and anything
 with the `selectable` class (or `data-selectable`; `copyable` for an error or notice) opt back in.
@@ -387,7 +391,22 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - A `terminal` tool runs msh command lines in the user's own terminal.
 - Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
   asking first, accepting edits, and plan mode (read only until a plan is approved).
-- Prompt modes: `!cmd` runs a command, `# text` remembers something, `@path` attaches a file.
+- `/threads <words>` searches earlier conversations across projects, including marked archives.
+  Results show the title, project, date, first excerpt and thread id as plain text fitted to the
+  terminal width. `/threads open <id>` resumes one; a unique id prefix from the last results also
+  works. `/threads this <words>` searches the current thread, while `/threads this` repeats the
+  last query there. These are deliberate user searches, independent of the model's tool groups;
+  the same ownership, Spotlight exclusion and bounded search rules apply.
+- Generated PNGs get an inline preview below their unchanged private URL, size/seed and metadata
+  link. The interactive terminal samples two vertical pixels per `▀` cell using foreground and
+  background RGB colours, at most 48 columns and 24 rows, shrinking tall pictures to fit.
+  Terminals without truecolour use coarse grayscale density blocks. `/images art off` hides
+  future previews; `/images art on` restores them. This CLI preference starts on and is kept for
+  the account in this browser. Print mode, pipes, `TERM=dumb`, terminals below 24 columns,
+  downloads over 3 MiB and invalid or oversized PNG dimensions skip art. Fetches use only the
+  signed-in account's private image route, with a five-second deadline; a failed preview leaves
+  the links and settings available. Resumed threads use the same preview rules.
+- Prompt modes: `!cmd` runs a command, `# text` remembers something, `@./path` attaches a file. `#name[:weight]`, `$name` and `@name` mention a LoRA, skill and tool.
 - While the agent works, Enter queues a message (shown over the prompt; the server sends it when
   the turn is done). ↑ in an empty prompt edits the last queued one, Ctrl+X removes it (or the last
   one), Ctrl+Enter sends it, or the next one, now (stopping the agent). While it asks for an
@@ -395,6 +414,7 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   with that message, or answers the form with it.
 - A dropped stream reconnects by itself (for a minute) and an interrupted turn says so; Ctrl+R or
   `/retry` runs the last message again, and `/rewind` picks one of your messages to go back to.
+  `/branch [message id]` continues in a new thread up to that message, or the last message when omitted; the original stays unchanged.
 - `/share` shares the thread as a link and `/share last` its last answer, never expiring unless
   given `1h`, `1d`, `7d` or `30d` (`/share last 7d`); `/shares` lists the thread's links and
   `/unshare <id>` (or `/unshare` and a pick) stops one. See *Shared links* under Agents below.
@@ -429,7 +449,7 @@ descriptions and system prompt are untuned. Known limits:
 - **Not in the TUI yet:**
   - Claude Code's undo/rewind, custom slash commands, hooks, MCP servers, subagents,
     background tasks and usage display
-  - image paste (`@path` attaches text files only)
+  - image paste (`@./path` attaches text files only)
 - **Tried in the browser:** messages, approvals, forms, plan mode, `!`, `#`, `@`, `/status`,
   `/context`, `/model`, `/resume`, `-c`, `-p`, `ls`. **Not tried:** Esc interrupting a turn,
   messages queued while it works, `/export`, `/copy`, `/open`, `/delete`, `/archive`,
@@ -1319,7 +1339,10 @@ Add an API key from ollama.com in Settings → Integrations (stored encrypted), 
 `OLLAMA_API_KEY` on the server (admins only). Each thread is *Quick* (a search or two, a short answer) or *Deep*
 (searches from several angles, reads the sources with web fetch, and writes a structured answer
 with citations), on any of Ollama's cloud models that can call tools. Turns run on the server and
-stream to the window, with the model's thinking folded under each reply; Stop ends one. The
+stream to the window, with the model's thinking folded under each reply; Stop ends one. Answers stay
+plain by default: a thread's model, workflow, sampling and file names are named only when the user
+asks about them or is changing them, so swapping the model or the LoRA is one short paragraph rather
+than a tour of the settings, and nothing ends with an offer of further work. The
 composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
 for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, this computer, a drop (from the computer, Files or the desktop) or a paste. Its tools: web search
@@ -1329,7 +1352,9 @@ stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
-Stop) and `remember`/`update_memory`. Memory is yours (every thread) or a project's (that
+Stop) and `remember`/`update_memory`. A group with nothing behind it yet is greyed in that menu and
+says why (Mail before an account is linked, Calendar before one is connected, Work folder before one
+is chosen, Terminal outside the `agents` command); it can be switched off but not on. Memory is yours (every thread) or a project's (that
 project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
 the Memory view shows it as a tree to search, add to, edit, move and forget. Projects group threads
 in the sidebar: drag them into order, drag threads into or out of them, fold them; threads in and
@@ -1339,7 +1364,44 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted, and the sidebar folds to a rail.
+suggestion), archived and deleted, and the sidebar folds to a rail. While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+
+**Past threads** lets the agent look back when you refer to an earlier conversation and the
+answer is not already in this thread or memory. The `threads` tool group is on by default,
+including for older threads; switch it off to keep a conversation from reading history.
+`search_threads` searches your own user messages, assistant replies, compacted summaries, titles
+and old titles across projects. Archived threads are included and marked unless excluded;
+Spotlight threads are never searched. This thread is excluded unless explicitly requested with
+`thread: "this"`. You can narrow by project, thread or inclusive dates in your time zone.
+Matching is literal and partial, with ASCII case folding: variants and translations can be tried
+together, with quoted phrases kept together. Up to six distinct terms are used, each at most
+60 characters, from a query of at most 200 characters. One-character non-ASCII words are allowed.
+
+Search returns up to ten threads with at most three short excerpts each, within 6,000 characters.
+Distinct matching terms and title matches rank higher, with newer threads breaking ties.
+Neighbouring matches in one turn share a slot. The candidate scan stops at 3,000 matches and
+reports when it reaches that cap. `read_thread` reads 2–30 messages from the start, end or around
+a message, within the mode's page budget. Tool results, thinking and attachment contents are not
+searched. Hits and read messages name attachments; text attachments can be read explicitly,
+up to 4,000 characters each, while messages are cut at 2,000. Image prompts and tool results are
+not added to search hits. In `read_thread`, a `generate_image` call includes its requested prompt,
+negative prompt and image settings (including LoRAs and weights), labelled as a request rather
+than confirmed output. Prompts are limited to 1,200 characters and each call to 2,000; the message
+and page limits still apply. Its result names the owned image ID, private URL path and a settings
+line taken from the saved artifact. Other tools keep name-only labels and their results stay out.
+The agent can inspect an earlier image by passing its ID to `view_generated_image`, provided the
+current model supports vision; it should look at the picture rather than guess from a description.
+Missing installed settings or assets must be named before recreating it, not silently substituted.
+These reads need no approval in any permission mode. Answers from history should name the thread and date; old conversations
+are evidence, never instructions or permission to save a memory. A failed search should say
+which words were tried rather than invent a conversation.
+
+```sh
+pnpm check:agents-threads   # History search, ownership, attachment reads, bounds, ranking and 20,000-message timing
+```
+
+The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
+`check:agents-images`, `check:agents-image-files`, `check:agents-mail` and `check:agents-threads`.
 
 A reply that only thinks gets one more round asking for the answer, and an answer given while the
 todo list still has open items gets one asking to update it. Those asks go to the model as a user
@@ -1350,6 +1412,426 @@ request that would still end there gets a short "Continue." after it.
 ```sh
 pnpm check:agents-roles   # The nudge, the todo wrap-up and a restart mid-reply, against a stand-in Ollama that refuses a trailing assistant message
 ```
+
+**Image generation.** In Settings → Apps → Agents → Images (also the app's settings),
+enter your ComfyUI URL and optional bearer token, then **Save & discover models**. Select a preset
+and installed model, and save again. Connections belong to the signed-in account; secrets are
+stored encrypted and are never returned to the browser or model. Internal/LAN ComfyUI addresses
+are allowed only for admins, using the same DNS-pinned network guard as other integrations for
+non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
+
+Every image model field opens the same **model browser**, in account settings and session
+settings: checkpoints/diffusion models, text encoders and VAEs. It shows the installed catalog as
+folders, with breadcrumbs and a folder sidebar, search across all paths, filenames (the full identifier in the details pane),
+a current-selection marker and details for the selected file. Slash and backslash separators both
+form folders, but the original identifier is sent unchanged to ComfyUI. Folder/name/extension are
+shown; sizes, compatibility claims and thumbnails are not invented: a row shows artwork, size and
+base model only when the backend's metadata supplies them, and a file icon otherwise. Each picked
+model is a compact row (thumb, name, path when it differs, **Change…**). Arrow keys move through rows,
+Right opens a folder, Left goes to its parent, Enter selects a row, and **Use selected** or
+a double-click confirms. Escape cancels and returns focus to the picker. On phones, folder rows
+and breadcrumbs replace the sidebar. The workflow picker lists the six supported presets as
+compact cards; selecting one does not imply that an arbitrary installed model supports it.
+These dialogs sit in the desktop's layer, so the OS dropdowns and confirm dialogs open above them.
+
+**Automatic asset recommendations** are shared by account settings, session settings, the CLI
+and generation. New empty model, encoder and VAE selections mean automatic; existing nonempty
+selections remain manual, so an upgrade or workflow/backend change never silently replaces them.
+**Use recommended assets** explicitly opts all three fields into automatic mode; each field also
+has its own **Auto | Manual** switch (Auto clears the manual choice, Manual opens the browser). Automatic encoder/VAE choices
+follow the selected workflow. Known incompatible manual choices are flagged and refused before
+generation; unknown custom names remain manual with an unverified-compatibility warning.
+
+Recommendations follow Diffu's family/style detection and asset rules: Krea2 requires an explicit
+Raw/Turbo family hint, Qwen3-VL 4B, and a Qwen Image/Krea2 VAE. Z-Image uses Qwen 3 4B and a
+Z-Image VAE or the documented Flux 1 `ae.safetensors` fallback; that fallback is never recommended
+for Krea2. See the [ComfyUI Z-Image example](https://comfyanonymous.github.io/ComfyUI_examples/z_image/).
+SD 1.5/SDXL use complete checkpoints. Video, Flux, Anima and other recognized unsupported
+families are excluded. Exact canonical encoder/VAE names rank ahead of variant names; model
+weights are not ranked by supposed quality, precision, filename order or hardware assumptions.
+One clear family match is selected automatically. Equally plausible matches show choices instead
+of picking arbitrarily; a manual current choice is preserved. Missing or unknown assets show
+installation/selection guidance. Catalog/name hints do not verify the tensors in custom weights.
+
+**A preset is the recipe; the checkpoint only runs it.** Steps, CFG, sampler, scheduler, size,
+whether a negative prompt exists and which text encoder family is needed all come from the preset
+together with the thread's and account's settings, so one file serves more than one recipe: Krea2
+Raw (52 steps, CFG 3.5, euler / simple) and Krea2 Turbo (8 steps, CFG 1, euler_ancestral / beta) run
+the same Krea2 diffusion model, and Z-Image and Z-Image Turbo likewise. A Krea2 file whose name and
+metadata say neither raw nor turbo matches neither preset on its own; discovery says the variant is
+unknown and that the preset decides, rather than guessing. Diffu keeps exactly that as a user
+choice (`inferKrea2Variant`), so a file can be registered as turbo there. The agent's guidance
+follows the same line: what will actually run is the thread's `selected` settings from
+`list_image_models`, a file name is a hint, and a checkpoint is never called a turbo build or not
+one, nor credited with detail or handling that came from its name.
+
+Optional LoRA Manager family labels enrich at most one 50-item page (1 MiB, three seconds),
+matched by exact category and relative path. Plain ComfyUI falls back to conservative filename/
+folder hints. This does not download or scan an entire model library. Automatic intent is stored
+as an empty string, while resolved filenames are computed from the current installed catalog
+on discovery and again before generation. Backend changes cannot reuse stale automatic choices;
+manual files missing from the new backend remain visible and require user action.
+
+**Session image settings** are available from **Images** in the conversation toolbar (including a
+new thread), or `/images` in the Agents terminal. Both open the same browser and settings dialog.
+A thread may override its preset, model, text encoder, VAE, LoRAs, width, height and seed. Fields marked
+*Account default* follow later changes to the account; dimensions without an override follow the
+chosen preset's size. **Use default** removes one override; **Use all account defaults** clears the
+thread's overrides, even when ComfyUI is offline. Empty seed means a fresh random seed each time.
+These settings persist with the thread across restarts, affect only that thread, and never include
+backend URLs or credentials. Generation still follows the thread's existing permission mode.
+Changing settings affects subsequent tool calls; an already submitted job keeps its captured settings.
+
+The CLI also supports `/images show`, `/images reset`, and
+`/images set {"width":768,"height":1024,"seed":42}` to merge explicit overrides into this thread.
+`/images set {"model":"","clip":"","vae":""}` enables automatic session recommendations;
+`/images show` reports resolved values, automatic/manual state and guidance. Removing overrides
+with `/images reset` restores account inheritance, including its automatic intent.
+A workflow/model change can be supplied together in that JSON; separate diffusion workflows also
+need a compatible installed `clip` and `vae`. Krea2 preset IDs are `krea2_raw` and `krea2_turbo`. Unknown fields, unsupported presets and absent models
+are rejected by the shared server. Opening `/images` before the first message creates the session.
+The model can discover effective settings through `list_image_models`; it cannot reconfigure the
+backend or persist session settings. Explicit supported model/components, sampling and
+width/height/seed on `generate_image` override the session only for that call. Use `/images` to change the saved model or workflow.
+
+**LoRAs** are discovered from ComfyUI's `LoraLoader` and `LoraLoaderModelOnly` nodes.
+The optional LoRA Manager adds base-model hints and trigger words from one bounded page, joined
+by exact folder and filename. Discovery never guesses a trigger word or downloads a model.
+`list_image_models` includes query-filtered `options.loras`, matching `loraHints` and the thread's
+current list in `selected.loras`. Match the LoRA's family to the preset, for example SDXL with
+`sdxl` or Krea2 with a Krea2 preset; unknown base models mean compatibility is unverified.
+
+Save a list with `/images set {"loras":[{"name":"style.safetensors","weight":0.8}]}` using an
+exact installed identifier. The thread’s Images dialog shows the saved list and lets you change
+weights or remove entries before saving. Up to five LoRAs run in list order; weights are finite numbers from
+0 to 2 and default to 1. `generate_image` accepts the same `loras` list for one image without
+saving it; an empty list disables LoRAs for that call. `/images reset` clears the saved list along
+with the other thread overrides. Each image uses this app's own graph, so LoRAs in a separate
+ComfyUI workflow never run here. Diffusion presets prefer the model-only loader and leave the
+text encoder untouched; checkpoint presets patch both model and text encoder. If only the other
+loader exists, the graph uses it instead. Approval cards show a **LoRAs** row, and saved generation
+metadata records each identifier and weight; older images without that field still open normally.
+
+**Mentions in a message** work in the app and the CLI:
+
+- `#name` or `#name:0.8` selects an installed LoRA for this thread. Exact identifiers win;
+  otherwise a unique, case-insensitive filename or filename without its extension is accepted.
+  Repeating a LoRA updates its weight rather than adding it twice. Unknown or ambiguous names
+  produce an application context note with nearby installed names and leave the list unchanged.
+- `$name` attaches a skill's instructions anywhere in a message. `/name` still works at the start.
+- `@name` points at a tool for this turn. Its group and on/off state appear in the context note;
+  a mention does not enable a group or bypass permissions. Use the Tools menu or CLI `/tools`.
+
+Typing a sigil at the start of a token opens suggestions. Type to filter, use Up/Down to select,
+and Enter or Tab to accept; in the app, Right accepts too when the caret is at the end of the word
+(further in, it moves the caret as usual), the same for `#`, `$`, `@` and `/`. Escape closes the
+list. App suggestions also accept mouse or touch. LoRAs load lazily from the signed-in account's
+backend, only those ComfyUI reports as installed. Each row shows the LoRA's own title, its folder
+dimmed and its base model; a pane beside the list shows the highlighted one's preview, base model,
+trigger words, tags, folder and size when LoRA Manager supplies them (its first 50 LoRAs), and
+otherwise what the file name says, with a plain placeholder for the picture. On a phone the first
+tap on a row opens that detail under it and a second tap (or **Use**) inserts it. The preview
+comes through this server from the account's own ComfyUI, never straight from the browser: owner
+only, PNG, JPEG or WebP checked by its bytes, at most 384 KB, cached in memory for 10 minutes
+(8 MB in all). A disconnected backend shows where to connect it. Names with spaces use quotes, such as
+`#"styles/Soft light.safetensors":0.8`, which suggestions insert automatically. Message text stays
+as written; one clearly labelled application context attachment records what resolved, with skill
+instructions in their own attachments. Resolution handles at most 20 distinct mentions and five
+skills per message. The CLI keeps `# ` followed by text for remembering a fact and `@./path`,
+`@/path` or `@~/path` for attaching a file; bare `@name` now refers to a tool.
+
+Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
+The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. When it is on, the agent's system prompt also gets Diffu's image-generation guidance (model families, prompting style, negatives, sampling and size); when it is off, that section is left out. Generation runs
+without an approval card in every mode except Plan, which cannot generate. To approve each image
+first, turn on **Ask before generating images** in Settings → Agents → Images (off by default);
+then Ask first, Auto and Edits allowed show the resolved settings for approval, Bypass still runs
+without a prompt, and non-interactive `agents -p` declines as usual. Both interactive and print output include a private image URL. `/open` opens the
+thread in the app, where the image has a thumbnail, full-size view, **Open in Preview**,
+**Download** and **Save to Files…** (on the card, in its right-click menu, and in the
+full view). The link requires the owner's signed-in session; sharing a thread does not publish
+its generated images.
+
+**Save to Files…** saves the PNG itself into your Files, through the same folder picker and upload
+path as Mail's Save to Files. The entry names where it saves: **(Seafile)** when Seafile is linked
+(the picker then also offers **This browser**), **(this browser)** when only the browser's own
+files can be written; with neither, it is not shown. The name comes from the prompt and the image's
+short id (`a-lone-lighthouse-at-dusk-8f3a2c1d.png`, or `image-8f3a2c1d.png` without a prompt), the
+same each time; when that name is taken, it offers a numbered one (`… 2.png`) and never replaces the
+file that is there. A failure says what it was: a read-only, locked or encrypted library, Seafile's
+quota, this browser being full, Seafile no longer linked, or the picture deleted with its thread.
+The recorded settings are not saved next to it; **Download settings** under *Generation settings*
+still gives them as JSON.
+
+On a later explicit request, the agent can save an existing image with `save_generated_image`,
+in the app or the `agents` terminal. Images and Seafile changes must both be on, and Seafile must
+be linked; ComfyUI need not be connected. The tool takes an image ID from any of your own threads,
+an exact library ID or unambiguous library name, and a full `.png` file path such as
+`/Desktop/18+/picture.png`. It copies the original PNG bytes internally, without sending them
+through the model, and keeps the generated artifact. The approval card identifies the image,
+Seafile account, library, path, byte count and replacement choice. Ask first, Auto and Accept edits
+ask before saving; Plan refuses and Bypass runs without a card.
+
+`list_generated_images` gives the agent exact image IDs and filenames from the current thread,
+including after compaction and in branches, without needing a thread ID. It returns up to ten
+images per page, newest first, with short prompt excerpts and a cursor for older images, within
+6,000 characters. “Save these pictures” should use that list, rather than guess an earlier thread
+ID. The agent also receives the current thread ID and the specific reason if saving is unavailable:
+Images off, Seafile changes off, Seafile not linked, or Plan mode. These choices are not changed
+for the user. Older stored tool lists keep their normal group migration; no new group is needed.
+If a turn runs out of tool rounds, the agent is told that saving remains enabled and can continue
+in the same thread on the next user message.
+
+The parent folder must exist. The agent can discover it with `seafile_list`, or use
+`seafile_mkdir` to create a folder you explicitly requested. It must ask when “Desktop” could
+mean different libraries, this browser or the host computer. Once the Desktop destination is clear,
+it should stay there, without probing unrelated locked libraries or asking for the same decision
+again. A request to save under a named folder also requests its creation if absent; the normal
+write approvals still apply. Separate saves can be batched in one tool round. Server tools cannot write browser-local
+Files or the host Desktop; the manual Save to Files action remains available for browser storage.
+An existing filename is refused unless you requested replacement and the tool sets `overwrite`.
+The destination and linked account are checked again after approval. Seafile can rename a new
+upload if another writer takes its name during transfer; the result reports the actual path and
+a warning, rather than claiming the requested path was written. Nothing is automatically deleted
+or retried. Results include the library, filename, byte count, PNG type and a private file link.
+Transfers are limited to 20 MiB and 45 seconds, honour Stop, and report Seafile permission, lock,
+authentication and storage errors. Cancellation cannot undo a file already accepted by Seafile;
+check the destination before retrying an interrupted or unconfirmed upload. Saving does not change
+the rule that a successful generation ends its turn silently.
+
+After approval, the app reserves the resolved output aspect ratio in a larger responsive image
+frame (up to 640 px wide). A themed 7×7 matrix of cubes animates while generation is active and
+visible. Hidden windows/tabs and offscreen frames pause it; reduced-motion users get a static
+matrix. The finished image uses exactly the same frame dimensions. Stop retains the existing
+cancellation behavior; errors replace the pending status rather than leaving a fake progress image.
+
+**What the agent will write.** Agents never filters a prompt, but the model reading it can still
+refuse: Diffu gets away without saying so because its catalog is the only place adult material is
+optional, while Agents talks to cloud models that decline an explicit request on their own. So the
+system prompt states it: a prompt here goes to the user's own ComfyUI and nowhere else, adult
+content is written when asked for (exact words and tags kept, no softening, euphemisms, warnings or
+moralizing), and a refusal by the model is reported as the model's, never as a rule of the app. The
+one limit, stated there too, is sexual content involving minors. Every thread gets that stance,
+not only image ones; the **CONTENT AND REFUSALS** section carries the image-specific detail while
+Images is on. A model or provider that filters on its side is out of the app's hands: switch the
+thread's model in Settings → Agents. Agents itself talks only to Ollama Cloud, so the local
+uncensored models Diffu can point at through its own providers are not reachable from Agents yet.
+
+Successful image generation ends the turn without any assistant follow-up text or automatic vision
+call. The app displays the image and settings; the CLI displays its private link. Tool batches that
+include generation execute in order: after the first successful image, later calls receive explicit
+skipped results, preserving the conversation protocol without running hidden work. Existing todos
+remain for later turns; failed generation still follows the normal error/explanation flow.
+
+On a later user turn, `view_generated_image` can inspect the latest image in the current thread,
+or an explicit image ID from any of your own threads. It sends actual PNG bytes through Ollama's
+`images` message field to the thread's selected vision-capable model in a dedicated bounded inspection
+call, then returns that model's visual analysis. A text-only model is told to switch to a vision-capable
+model; a URL alone is never presented as visual inspection. Input is limited to 8 MiB, instructions
+to 2000 characters, and the call to 45 seconds with bounded output. Account ownership is checked
+before reading bytes; omitting the ID still selects the latest image in the current thread. Existing
+images remain inspectable after disconnecting ComfyUI. An empty or reasoning-only answer gets one
+retry with thinking off and a larger answer allowance, within the same 45-second deadline. If that
+also returns no text, the result names the model and says inspection failed; it does not blame the
+image or contradict the model's vision capability. Inspection never silently generates, downloads models, changes settings, or guarantees an accurate diagnosis.
+
+The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 px) and SDXL
+(1024 px) use a complete checkpoint with its text encoder and VAE; Z-Image and Z-Image Turbo use
+an installed diffusion model, a compatible `lumina2` text encoder and a separately selected VAE.
+Z-Image Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Image uses 20 steps and CFG 4;
+SD 1.5 uses 20 steps/CFG 7 and SDXL uses 25 steps/CFG 7, preferring DPM++ 2M/Karras.
+A recognized Pony checkpoint follows Diffu’s 12 steps/CFG 5.5 recommendation. Sampler/scheduler
+preferences fall back only to supported installed options. Choose the family that matches the actual model:
+Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
+`/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
+1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
+oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
+image editing and model downloads are not included in these presets.
+
+**Image observations** are short, cautious interpretations of evidence: your words about an image
+or a vision model’s concrete defect report. The agent is told not to save its own guesses about
+an image unless you explicitly ask. Notes may be wrong; they are never a ranking or a “best settings”
+list. A profile holds the lasting preferences; observations supply evidence for it. Saving is on by
+default, and writes do not ask for approval by default. Turn on **Ask before
+saving an observation** in **Settings → Apps → Agents → Images** to make each write ask first,
+except in Bypass; Plan never writes observations. Declining leaves the observation unsaved and
+existing notes unchanged. This approval setting has no effect while saving is off. Turn off
+**Save image observations** in **Settings → Apps → Agents → Images** to stop new notes and updates. This removes `save_image_learning` from the available
+tools and rejects stale calls; it does not delete existing notes, stop their review before generation,
+or change style profiles. Turn it back on to resume saving. Notes stay with your account on this
+server under **Memory → Images/Learnings**, scoped to the backend and components (including the
+LoRA list and weights). They are not published or sent elsewhere for storage; relevant notes are
+read by your configured agent during later image tasks.
+
+**The Observations overview** (**Settings → Apps → Agents → Images → Observations → Open…**, or
+**Overview with filters and profiles…** under Memory's **Images/Learnings**) shows them readably.
+Style profiles sit beside the list (above it, folded, on a phone): each with its name, full
+description, observation count, when it last changed and the threads that pin it; pick one to see
+only its observations. Each observation is a card: the picture as a thumbnail (tap for the full view;
+“Gone” when its thread was deleted), the task, a source badge (**Yours** for your feedback,
+**Vision** for a vision model's, **Agent’s own guess** for an unverified suggestion), its profile,
+the date and the note in two lines. Opening a card shows the evidence quote, a settings line
+(workflow · steps · CFG · sampler/scheduler · model file · LoRAs and weights), size and seed, and the
+prompt behind **Show prompt**. Filter by profile, source and model, search task and note; the count
+says how many the filter hides. Delete one card, or select several and delete them; the OS dialog
+asks first and says it removes the observation only, never the picture. With a keyboard: arrows,
+Home and End move between cards, Enter opens one, Delete deletes it. Memory's own list shows each
+observation as the same compact card instead of its stored text. A note in neither the structured
+form nor the stored text format (an old or hand-edited one) shows as stored, marked **Unreadable**.
+The overview reads `GET /api/agents/images/observations`: the newest 200 of the account's
+observations, parsed, and every profile; it is read-only, and deletes use the memory route.
+
+**Image learning and named style profiles:** a profile is the durable description of a look, shared
+across your threads and projects. The agent is told to create one when a look to keep first appears
+and update it as the look or feedback evolves, rather than accumulate per-image notes. Its description
+should cover the look, prompting style and vocabulary, settings it tends to want, and traps, not a
+list of images. A project-scoped memory note is for preferences specific to that project, with the
+usual permission to remember them. Profiles organise preferences and evidence in the existing
+account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a single
+global “best settings” ranking. A profile's preferences have room for depth (up to 1,200 characters,
+with a live count in the editor), so one the agent wrote can be edited by hand without being cut
+short. Style profiles live in **Settings → Agents → Images → Style profiles** (every profile, whether you
+
+confirmed it or the agent suggested it, its observation count, and New / Edit / Reset / Delete) and
+in each thread's **Images** dialog, which pins one profile to that thread with a dropdown and offers
+the same quick edits. Reset keeps the preferences and forgets the observations; delete removes the
+profile and its observations. Both ask first. Changes save immediately. Deleting a profile clears its thread
+pins. Ordinary image defaults and other memories are unchanged. The Memory view can inspect and
+forget individual observations or profiles; structured evidence cannot be overwritten by its generic
+text editor. Use the profile panel or image learning tools for typed edits.
+
+CLI equivalents: `/images profile` lists profiles; `/images profile select <id|none>` pins one;
+`/images profile save {"name":"My style","description":"My preferences"}` creates a user profile
+(add `"id":123` to edit/rename). `/images profile reset <id>` forgets that profile’s observations;
+`/images profile delete <id>` deletes it and its observations. `/memory` lists the full recorded
+settings and evidence, `/memory rm <id>` forgets one record, and `/memory reset-images` forgets
+all image observations while retaining profiles, preferences and image defaults.
+
+The Images tools include `read_image_learnings`, `save_image_learning` and `save_image_profile`.
+Reading returns at most 20 one-line profile summaries (name, up to 360 characters of description,
+note count across backends and last touched time), the selected profile’s full description, and five
+relevant observations (at most 12 KB of observation JSON). Each observation has a human-readable
+settings line with preset, steps, CFG, sampler/scheduler, model, encoder/VAE and LoRAs with weights;
+it does not repeat the stored prompt JSON. Notes are clipped to 240 characters and quotes to 160,
+with their evidence message IDs and image IDs retained. Current-thread evidence quotes are limited
+to 200 characters. User/vision evidence ranks ahead of unverified suggestions; old suggestions stay
+readable. Full settings, prompts, notes and quotes remain unchanged in Memory storage. The user can
+pin a profile, or the agent can
+choose `profile_id` for one generation and explain why in `profile_reason`. There is no automatic
+keyword classifier assigning styles. Profiles guide the agent’s validated per-call choices; they do
+not silently replace saved account/session manual model selections. Explicit user requests take
+priority. `read_image_learnings` can browse recipes across models within a chosen profile using
+`all_models`; each recipe keeps its workflow and model/component settings, with long filenames
+clipped to 160 characters in the settings line. Within each source tier, task/style words
+only rank relevance of observations, never quality. No thumbnail, successful render or agent opinion
+establishes which recipe the user likes best.
+
+Before the first valid image submission **on every user turn**, the server requires a learning read
+for the current backend, selected profile, exact components and session/model settings. Discovery
+includes that evidence. If the agent calls generation directly, the tool returns
+`learning_review_required` with relevant observations and submits nothing; the agent reviews it and
+retries. Even a discovery+generation batch cannot skip this review: receipts count only after the
+batch’s results are available for the next model call. Switching components/profile/settings or
+changing notes invalidates the receipt. Restart/resume needs no persistent receipt migration and
+refreshes evidence naturally. Failed validation can still be explained without submitting a job.
+
+Learning is deliberate and evidence-based. On a later turn, user feedback or a concrete defect report
+from `view_generated_image` can support `save_image_learning`, filed under the relevant profile.
+Repeated feedback belongs in the profile description rather than another per-image note. The tool
+still accepts an unverified suggestion for an explicit user request; this is guidance, not a server
+claim that it can determine whether every interpretation is worth keeping. A new record references
+a current-thread generated artifact;
+its actual parameters and image ID are copied by the server, never supplied as invented settings.
+Sources distinguish **unverified suggestion**, **vision observation**, and **quoted user feedback**.
+Feedback/vision quotes must match an actual later message in that thread; vision must refer to the
+same image. The agent’s note is explicitly an interpretation, including when feedback is negative
+or mixed. The server verifies provenance, not whether an interpretation accurately understands
+human taste. Updates change only note/task and preserve the original artifact/evidence; new feedback
+gets a new record, so a successful job cannot overwrite confirmed evidence. Agent-created profile
+preferences remain suggestions; user-edited preferences are protected against agent overwrites.
+Observation writes use the account approval setting described above. Style-profile writes still
+ask in Ask first/Auto/Edits allowed, are refused in Plan, and run in Bypass.
+
+Records are owner-scoped and segregated by a private backend identity derived from the configured
+endpoint and credentials, plus profile and exact model/component identifiers. Neither credentials,
+hostnames nor that private identity are included in learning context or Memory text. Changing endpoint
+or credentials isolates earlier recipes; restoring them restores that namespace. Replacing weights
+behind the same identifiers cannot be detected: reset affected observations when doing so. Profiles
+can retain separate recipes for several backends/models without mixing them. Older artifacts without
+backend provenance cannot be retroactively assigned a guessed namespace. Existing notes retain
+parameter/evidence snapshots if their source thread is later removed, until the user forgets them.
+
+Limits: 20 profiles, 100 image observations and 1000 total memories per account; names 60 characters,
+preferences 1,200 (tools, API, CLI and the profile editor, with a live count), task/style 160 and
+notes/evidence quotes 500. Storage quota includes structured
+
+records. Image memories are excluded from general system prompts and retrieved only through image
+tools. No automatic quality scoring, background experiments or extra generation occurs. Technical
+failures remain in tool history; durable quality-failure observations require an artifact. Successful
+generation still ends silently, so learning happens on a later user turn, never as hidden follow-up.
+
+**Per-generation tuning:** the agent can now select `preset`, `model`, `clip`, `vae`, `loras`, `steps`,
+`cfg`, `sampler` and `scheduler`, as well as size and seed. Before this change, sampling was fixed
+and the agent could only adjust prompt, size and seed. Precedence is explicit per-call value,
+then session asset/size/seed override, then account assets and Diffu-grounded sampling/preset
+size defaults. Sampling changes apply only to the current image; there is no silent save or import
+of personal Diffu tuning presets. Empty asset strings opt that call into automatic selection.
+For checkpoint workflows encoder/VAE are embedded, so separate component overrides do not
+replace them. Changing the workflow does not erase explicit manual asset choices: supply matching
+components or empty strings if moving to another family.
+
+`list_image_models` reports effective settings, family recommendations, supported installed sampler/
+scheduler options and up to 40 filenames per category (queryable, maximum 100). The agent is told
+to discover once, prefer recommended defaults, preserve explicit user choices and tune only when
+requested or clearly needed. Steps are integers from 1 to 80; CFG is finite from 0 to 20, with CFG
+fixed at 1 for both Turbo workflows. Only the listed KSampler options are accepted. Denoise stays
+1 for text-to-image; arbitrary graphs, backend settings, model downloads, batch generation,
+prompt enhancement, LoRAs and upscaling are not tool options.
+
+Approvals show the complete resolved model/components, prompt, negative prompt, dimensions,
+steps, CFG, sampler/scheduler and seed. Those settings are frozen before approval; changing saved
+settings while waiting cannot widen the approved cost. Changing backend credentials invalidates
+the plan and requires a new call. Bypass retains its explicit no-approval behavior.
+The tool result, app’s **Generation settings** details, CLI output and private downloadable JSON
+record the actual settings, including prompts. Metadata survives restarts with the image; older
+images may have no metadata. Reproducing a result also requires the same backend/model weights.
+
+Poor output is not always a sampling problem. A wrong VAE/encoder or Raw/Turbo mismatch can
+break output; a compatible VAE swap is not a guaranteed quality improvement. Start with the
+recommended workflow, a known compatible model and a fixed seed. Ask for one controlled change
+(e.g. “keep this model and seed; use 32 steps and CFG 4.5”) and compare its recorded settings.
+Higher steps cost more and are not automatically better, especially with distilled Turbo models.
+These defaults are supported starting points, not GPU-tested quality guarantees for custom models.
+
+Model browsers and account/session selectors use the available window width, with aligned controls
+and horizontally readable long filenames. Visible model rows lazily request artwork. If the optional
+ComfyUI LoRA Manager extension is installed, Agents searches one bounded page for an exact
+catalog category, folder and filename match, showing its real title, base-model label, file size,
+tags and sidecar PNG/JPEG/WebP preview. It never guesses compatibility from those labels.
+Plain ComfyUI, missing artwork, ambiguous matches, encoders and VAEs show a neutral fallback.
+No extension installation is required. Metadata requests are capped at 1 MiB and ten seconds;
+artwork is capped at 5 MiB and ten seconds. Preview handles expire after five minutes, are private
+to the account and bound to its current backend credentials. The server checks the installed
+catalog identity and sidecar path, applies the same egress protections as generation, and proxies
+image bytes without exposing backend paths, URLs or tokens. Remote preview URLs and video
+artwork are not supported; refresh the browser if a preview handle expires.
+
+Each call makes one PNG. Width/height can be requested in multiples of 64 from 256 to 1536,
+with at most 1536 × 1024 pixels; the result includes a reproducible seed. One generation runs per
+account at a time, with a ten-minute deadline and a 20 MB output limit. While it runs, a flat grid of blocks fills in with live progress (queue position, model loading, step and percentage, also on the CLI's status line), read from ComfyUI's `/ws` socket for that prompt only ([`server/comfyProgress.ts`](server/comfyProgress.ts)), sent at most 4 times a second to the owner's thread, falling back to `/queue` polling without the socket. Stop/Esc stops waiting and
+removes that prompt from ComfyUI's pending queue. An already running GPU job may finish there;
+Agents never sends a global interrupt that could stop someone else's job, and cancelled output is
+not stored. Errors appear in the existing tool card and CLI output. Successful PNGs live in the
+server database, survive restarts and backend cleanup, count toward the account's storage quota,
+and are deleted with their thread unless a branch still references them. Branches share the same
+private image ID and stored bytes; deleting the original transfers retained images to a surviving
+branch. The last referencing thread’s deletion reclaims that storage. Rewinding a conversation does
+not reclaim its generated images. `pnpm check:agents-images` exercises generation with
+mock ComfyUI/Ollama, permissions, owner-only downloads, cancellation, quota accounting and failures
+without running a GPU job. `pnpm check:agents-image-files` checks exact PNG transfers to a mock
+Seafile, destination validation, ownership, approval, replacement, quota failures and cancellation
+with scratch accounts only. It also runs a plain save request through current-image discovery,
+folder discovery, requested folder creation and four binary saves in an older eligible thread,
+with the same tool definitions, approval events and round limit used by the app and CLI.
 
 **Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
 title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;
@@ -1403,15 +1885,37 @@ shutdown hook (Agents turns, Empires battles) from one signal handler. When a tu
 the window first looks for the turn again, a little slower each time, for a minute (*Reconnecting…*),
 picking it up where it is if it still runs; only then does it say *The connection dropped*, with
 Retry and Look again. A message that never got there goes back into the box. Retry (`POST
-…/retry`, streamed like a message) also sits under the last answer to have it written again: the
+…/retry`, streamed like a message) is also in the last answer's action row, between Share and
+Options (in the image's row when the turn ended with an image and no text), to have it written
+again; a turn that left nothing to put it under keeps a quiet Retry line below it: the
 last turn's output (a partial or failed reply, its tool calls and results, or the answer) goes and
 the same message, with its files, is answered again with the thread's model, mode and tools; queued
-messages run after it. Each of your messages has **Copy**, **Edit & resend** and **Rewind to here**
-(on hover, always on touch, and in its right-click menu): after a desktop dialog that says how many
+messages run after it. Every message and card has the same quiet action row on its own side (right
+under your messages, left under answers, tool cards, images and summaries), in the same order: its
+own actions where it has them (**Share** on an answer; **Save to Files…** and **Generate another**
+on an image), then **Options** last, a menu with hints for the rest. On a desktop a row shows only
+while the pointer is over its own message or something in it has keyboard focus; it keeps its
+space, so nothing moves. On touch it is always shown. Your messages' **Options** has **Copy**, **Edit & resend** and **Rewind to
+here** (also in their right-click menu): after a desktop dialog that says how many
 messages go, it and everything after it leave the thread (`POST …/rewind`; a running turn is
 stopped first, the queue stays) and it comes back into the message box with its files. What the
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
+
+**Branch off from here** is in each message’s Options menu and right-click menu. It opens a new thread containing every message through that point, including
+files, thoughts, tool results and compaction summaries. The original stays unchanged. Mode, model,
+tools, project, work folder, permission and image settings/profile carry over; queues and pending
+approvals do not. Account/project memories remain shared. The title is `<original title> — from
+YYYY-MM-DD`, using the selected message’s UTC date, with the original title kept in its history.
+It is treated as a manual title. Wait for a running thread to finish before branching. The terminal
+has `/branch [message id]`; omitting the id branches from its last message.
+
+**Generate another** sits in an image’s action row, before **Options**, and in its right-click menu.
+It draws another image in the same thread with the same prompt, components, LoRAs, sampling and
+size, without asking the model or showing an approval card. It uses the usual progress and Stop
+controls, account job limit and storage quota. Images must be on in Tools, ComfyUI must be connected,
+and the recorded components must still be installed; a missing component is named in the error.
+Retry after this action repeats it directly. Both actions work with keyboard controls and touch.
 
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the
@@ -1462,7 +1966,7 @@ or as plain bytes otherwise, never rendered as a page. Preview opens such an add
 
 **Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
 *Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and
-**Share** under each answer (on hover, always on touch) make a link to the whole thread or to one
+**Share** in the action row under each final answer (on hover or focus, always on touch) make a link to the whole thread or to one
 answer with the message it answers. A link is a snapshot taken then: later messages, a rewind or a
 retry don't change it. It can expire after 1 hour, 1 day, 7 days or 30 days, or never (the
 default). The dialog shows the links the thread or answer has already (Copy, Open, *Stop
@@ -1486,6 +1990,7 @@ thread's) and `DELETE /api/agents/shares/:token`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, whether titles
 keep up to date (and how often they are checked), what a new thread starts with, whether and when long threads compact by themselves, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
+It opens on an *Overview*: one card per section with a line on how it is set up (ComfyUI not connected, Ollama Cloud missing a key and failed checks are marked), and a card opens its section; the sections are grouped (Models & threads, Safety, Tools, Sharing) in a list on the left when there is room, and in one dropdown on a phone.
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
 
