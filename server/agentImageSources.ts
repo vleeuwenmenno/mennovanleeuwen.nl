@@ -30,8 +30,8 @@ function exifOrientation(data: Buffer): number {
 }
 
 /** Read raster dimensions before ComfyUI decodes anything. No SVG, GIF or animated inputs. */
-export function sourceRaster(bytes: Buffer): { width: number; height: number; mime: string } {
-  if (!bytes.length || bytes.length > MAX_BYTES) throw new HttpError(413, 'Source image must be at most 8 MiB')
+export function sourceRaster(bytes: Buffer, maxBytes = MAX_BYTES): { width: number; height: number; mime: string } {
+  if (!bytes.length || bytes.length > maxBytes) throw new HttpError(413, `Source image must be at most ${maxBytes / 1024 / 1024} MiB`)
   let width = 0, height = 0, mime = '', orientation = 1
   if (bytes.length >= 33 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.toString('ascii', 12, 16) === 'IHDR') {
     mime = 'image/png'; width = bytes.readUInt32BE(16); height = bytes.readUInt32BE(20)
@@ -40,48 +40,74 @@ export function sourceRaster(bytes: Buffer): { width: number; height: number; mi
     for (let at = 8; at + 12 <= bytes.length;) {
       const size = bytes.readUInt32BE(at), kind = bytes.toString('ascii', at + 4, at + 8)
       if (size > bytes.length - at - 12) throw new HttpError(400, 'Truncated PNG source')
+      if (kind === 'IHDR' && at !== 8) throw new HttpError(400, 'Duplicate PNG IHDR is not supported')
       if (kind === 'acTL') throw new HttpError(400, 'Use a still image as the source')
       if (kind === 'eXIf') orientation = exifOrientation(bytes.subarray(at + 8, at + 8 + size))
-      if (kind === 'IDAT') pixels = true
+      if (kind === 'IDAT' && size > 0) pixels = true
       if (kind === 'IEND') { ended = size === 0 && at + 12 === bytes.length; break }
       at += size + 12
     }
     if (!ended || !pixels) throw new HttpError(400, 'Truncated PNG source')
   } else if (bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216) {
     mime = 'image/jpeg'
-    for (let at = 2; at + 4 <= bytes.length;) {
-      if (bytes[at++] !== 255) break
+    let at = 2, scans = 0, payload = 0, ended = false
+    while (at < bytes.length) {
+      if (bytes[at++] !== 255) throw new HttpError(400, 'Invalid JPEG marker')
       while (bytes[at] === 255) at++
       const marker = bytes[at++]
-      if (marker === 218 || marker === 217) break
+      if (marker === 217) { ended = at === bytes.length; break }
       if (marker === 1 || marker >= 208 && marker <= 215) continue
       if (at + 2 > bytes.length) break
       const size = bytes.readUInt16BE(at)
       if (size < 2 || at + size > bytes.length) break
       if (marker === 226 && bytes.toString('ascii', at + 2, at + 6) === 'MPF\0') throw new HttpError(400, 'Use a single still image as the source')
-      if ([192, 193, 194].includes(marker) && size >= 8) { height = bytes.readUInt16BE(at + 3); width = bytes.readUInt16BE(at + 5) }
+      if ([192, 193, 194].includes(marker)) {
+        if (width || size < 11 || size !== 8 + bytes[at + 7] * 3) throw new HttpError(400, 'Invalid or duplicate JPEG frame')
+        height = bytes.readUInt16BE(at + 3); width = bytes.readUInt16BE(at + 5)
+      }
       if (marker === 225 && bytes.toString('ascii', at + 2, at + 8) === 'Exif\0\0') orientation = exifOrientation(bytes.subarray(at + 2, at + size))
-      at += size
+      if (marker === 218) {
+        if (!width || size < 8 || size !== 6 + bytes[at + 2] * 2) throw new HttpError(400, 'Invalid JPEG scan')
+        scans++
+        at += size
+        while (at < bytes.length) {
+          if (bytes[at] !== 255) { payload++; at++; continue }
+          if (bytes[at + 1] === 0) { payload++; at += 2; continue }
+          if (bytes[at + 1] >= 208 && bytes[at + 1] <= 215) { at += 2; continue }
+          break
+        }
+      } else at += size
     }
-  } else if (bytes.length >= 30 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
+    if (!ended || !scans || !payload) throw new HttpError(400, 'JPEG source has no complete image payload')
+  } else if (bytes.length >= 20 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
     mime = 'image/webp'
     if (bytes.readUInt32LE(4) + 8 !== bytes.length) throw new HttpError(400, 'Truncated WebP source')
-    const kind = bytes.toString('ascii', 12, 16)
-    if (kind === 'VP8X') {
-      if (bytes[20] & 2) throw new HttpError(400, 'Use a still image as the source')
-      width = bytes.readUIntLE(24, 3) + 1; height = bytes.readUIntLE(27, 3) + 1
-    } else if (kind === 'VP8 ' && bytes[23] === 157 && bytes[24] === 1 && bytes[25] === 42) {
-      width = bytes.readUInt16LE(26) & 16383; height = bytes.readUInt16LE(28) & 16383
-    } else if (kind === 'VP8L' && bytes[20] === 47) {
-      const bits = bytes.readUInt32LE(21); width = (bits & 16383) + 1; height = ((bits >>> 14) & 16383) + 1
-    }
-    for (let at = 12; at + 8 <= bytes.length;) {
-      const kind = bytes.toString('ascii', at, at + 4), size = bytes.readUInt32LE(at + 4)
-      if (size > bytes.length - at - 8) throw new HttpError(400, 'Truncated WebP source')
+    let at = 12, pixels = false, canvasWidth = 0, canvasHeight = 0
+    while (at + 8 <= bytes.length) {
+      const kind = bytes.toString('ascii', at, at + 4), size = bytes.readUInt32LE(at + 4), data = at + 8
+      if (size + (size % 2) > bytes.length - data) throw new HttpError(400, 'Truncated WebP source')
       if (kind === 'ANIM' || kind === 'ANMF') throw new HttpError(400, 'Use a still image as the source')
-      if (kind === 'EXIF') orientation = exifOrientation(bytes.subarray(at + 8, at + 8 + size))
-      at += 8 + size + (size % 2)
+      if (kind === 'VP8X') {
+        if (at !== 12 || size !== 10) throw new HttpError(400, 'Invalid WebP canvas')
+        if (bytes[data] & 2) throw new HttpError(400, 'Use a still image as the source')
+        canvasWidth = bytes.readUIntLE(data + 4, 3) + 1; canvasHeight = bytes.readUIntLE(data + 7, 3) + 1
+      }
+      if (kind === 'VP8 ' || kind === 'VP8L') {
+        if (pixels) throw new HttpError(400, 'Duplicate WebP image payload')
+        if (kind === 'VP8 ') {
+          if (size <= 10 || bytes[data] & 1 || bytes[data + 3] !== 157 || bytes[data + 4] !== 1 || bytes[data + 5] !== 42) throw new HttpError(400, 'Invalid WebP image payload')
+          width = bytes.readUInt16LE(data + 6) & 16383; height = bytes.readUInt16LE(data + 8) & 16383
+        } else {
+          if (size <= 5 || bytes[data] !== 47) throw new HttpError(400, 'Invalid WebP image payload')
+          const bits = bytes.readUInt32LE(data + 1); width = (bits & 16383) + 1; height = ((bits >>> 14) & 16383) + 1
+        }
+        pixels = true
+      }
+      if (kind === 'EXIF') orientation = exifOrientation(bytes.subarray(data, data + size))
+      at = data + size + (size % 2)
     }
+    if (at !== bytes.length || !pixels) throw new HttpError(400, 'WebP source has no complete image payload')
+    if (canvasWidth && (canvasWidth !== width || canvasHeight !== height)) throw new HttpError(400, 'WebP canvas and image dimensions do not match')
   }
   if (!width || !height || !mime) throw new HttpError(400, 'Source must be a valid still PNG, JPEG or WebP image')
   if (width > 8192 || height > 8192 || width * height > 16_777_216) throw new HttpError(413, 'Source dimensions exceed 8192 per side or 16 megapixels')
@@ -106,7 +132,7 @@ export function imageSource(user: User, id: unknown): ImageSource {
     bytes = Buffer.from(attachment.data, 'base64'); name = String(attachment.name).slice(0, 200)
     url = `/api/agents/threads/${row!.thread_id}/messages/${match[1]}/attachments/${match[2]}`
   }
-  return { id, name, url, bytes, ...sourceRaster(bytes) }
+  return { id, name, url, bytes, ...sourceRaster(bytes, UUID.test(id) ? 20 * 1024 * 1024 : MAX_BYTES) }
 }
 
 /** Bounded source discovery; earlier threads remain accessible by explicit owned thread ID. */
