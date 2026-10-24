@@ -25,8 +25,9 @@ export type Preset = (typeof PRESETS)[number]
 /** civitaiLookup: model_details may ask civitai.com about a model by its Civitai ID or file hash (never prompts).
  *  civitaiKey: optional Civitai API key, sent only to civitai.com as a Bearer header.
  *  qualityCheck: check each generated picture and allow one automatic retry when it is clearly broken. */
-export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: string; qualityCheck: boolean }
-const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true, civitaiLookup: true, civitaiKey: '', qualityCheck: true })
+/** prediction: the owner's own word on a model file's prediction type (exact installed name → v-pred or eps); absent means Auto. Set only in Settings, never by the agent. */
+export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: string; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
+const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true, civitaiLookup: true, civitaiKey: '', qualityCheck: true, prediction: {} })
 function settingsFor(userId: number): ImageSettings {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(userId, NAME) as { secret: string } | undefined
   return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
@@ -48,6 +49,16 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
   }
   if (input.clearToken === true) s.token = ''
   if (input.clearCivitaiKey === true) s.civitaiKey = ''
+  // One model file's prediction type: { model, value: 'auto' | 'vpred' | 'eps' }.
+  if (input.prediction !== undefined) {
+    const p = input.prediction as { model?: unknown; value?: unknown } | null
+    if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).some((k) => k !== 'model' && k !== 'value') || typeof p.model !== 'string' || !p.model || p.model.length > 2048 || /[\x00-\x1f]/.test(p.model) || !['auto', 'vpred', 'eps'].includes(p.value as string)) throw new HttpError(400, 'Prediction is { model, value: auto, vpred or eps }')
+    const next = { ...s.prediction }
+    if (p.value === 'auto') delete next[p.model]
+    else next[p.model] = p.value as 'vpred' | 'eps'
+    if (Object.keys(next).length > 500) throw new HttpError(400, 'At most 500 prediction overrides')
+    s.prediction = next
+  }
   for (const key of ['askBeforeGenerate', 'askBeforeSavingObservations', 'saveImageLearnings', 'civitaiLookup', 'qualityCheck'] as const) {
     if (input[key] === undefined) continue
     if (typeof input[key] !== 'boolean') throw new HttpError(400, `Invalid ${key}`)

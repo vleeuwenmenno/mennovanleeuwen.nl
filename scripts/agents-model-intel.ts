@@ -35,7 +35,7 @@ const tiny = png(1, 1, () => [0, 0, 0])
 const send = (res: ServerResponse, v: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(v))
 const nodes = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'CLIPSetLastLayer', 'ModelSamplingDiscrete']
 const info: Record<string, any> = Object.fromEntries(nodes.map((n) => [n, { input: { required: {} } }]))
-info.CheckpointLoaderSimple.input.required.ckpt_name = [['NoobAI/noob_vpred.safetensors', 'Illustrious/prefect.safetensors', 'NoobAI/hashed.safetensors', 'NoobAI/described.safetensors']]
+info.CheckpointLoaderSimple.input.required.ckpt_name = [['NoobAI/noob_vpred.safetensors', 'Illustrious/prefect.safetensors', 'NoobAI/hashed.safetensors', 'NoobAI/described.safetensors', 'NoobAI/noob_eps_vpred-merge.safetensors', 'vpred/model.safetensors', 'NoobAI/noobVpred10.safetensors']]
 info.KSampler.input.required = { sampler_name: [['euler', 'euler_ancestral', 'dpmpp_2m']], scheduler: [['simple', 'karras', 'normal']] }
 let outputs: Buffer[] = []
 const graphs: Record<string, any>[] = []
@@ -72,7 +72,7 @@ const ollama = createServer((req, res) => {
     const step = plan[after.filter((m: any) => m.role === 'assistant').length]
     modelReplies++
     toolsOffered.push(body.tools?.length ?? 0)
-    const message = step ? { content: 'Retrying with other settings.', tool_calls: step.map((call) => ({ function: call })) } : { content: 'Both tries came out broken.' }
+    const message = step ? { content: body.tools?.length ? 'Retrying with other settings.' : 'Both tries came out broken.', tool_calls: step.map((call) => ({ function: call })) } : { content: 'Both tries came out broken.' }
     res.end(JSON.stringify({ message: { role: 'assistant', ...message }, done: true }) + '\n')
   })
 })
@@ -261,6 +261,14 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   assert.equal(vpredDecision(plainFile, version('An eps checkpoint.', 'v-pred 1.0')).vpred, false, 'eps in the version description wins')
   assert.equal(vpredDecision({ ...plainFile, title: 'NoobAI-XL V-Pred', tags: ['vpred'] }, null).vpred, false, "LoRA Manager's model title and tags are model level")
   assert.equal(vpredDecision({ ...plainFile, name: 'preview.safetensors' }, null).advisory, undefined)
+  assert.equal(vpredDecision({ ...plainFile, name: 'vpred/model.safetensors' }, null).vpred, false, 'folders never count, only the file stem')
+  assert.equal(vpredDecision({ ...plainFile, name: 'NoobAI/noobVpred10.safetensors' }, null).vpred, true)
+  // Mixed sentences: an explicit eps or not-v-pred statement wins over a v-pred mention beside it.
+  for (const text of ['This version uses eps, not v-pred.', 'Unlike the v-pred release, this one is epsilon.', 'Trained with v-prediction loss but released as an eps checkpoint.', 'It is non-vpred, despite the v-pred tag.', 'This is v-pred? No, not v-pred.']) assert.equal(vpredDecision(plainFile, version(text, 'v-pred 1.0')).vpred, false, text)
+  // The owner's Prediction setting comes first, both ways.
+  assert.deepEqual(vpredDecision({ ...plainFile, name: 'NoobAI/noob_eps.safetensors' }, null, 'vpred'), { vpred: true, source: 'user_override' })
+  assert.deepEqual(vpredDecision({ ...plainFile, name: 'NoobAI/noobVpred10.safetensors' }, null, 'eps'), { vpred: false, source: 'user_override' })
+  assert.match(prose.advisory ?? '', /set Prediction to v-pred in the model browser/)
   console.log('PASS v-pred, conservative: version found via hash, file stem, version name and description, base model label; eps wins; model-level prose only advises')
 
   // Transient failures are never cached; only a confirmed 404 is a negative entry.
@@ -397,7 +405,12 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   assert.deepEqual(fineFirst.after(good), { complete: true, extra: {}, retryFixed: false }, 'a fine picture stays silent')
   assert.deepEqual(new QualityRetry().after(null), { complete: true, extra: {}, retryFixed: false }, 'no check, no change')
   assert.equal(qualityNote(JSON.stringify({ image: {}, quality: { very_bad: true, defects: ['noise'] } })), ' · clearly broken: noise'); assert.equal(qualityNote('{}'), '')
-  assert.equal(generateImageLabel({ prompt: 'a fox' }, JSON.stringify(after.extra)), "Generated image · Retried once; couldn't confirm the new image is fixed: melted face", 'the chat card says it')
+  const unconfirmed = JSON.stringify(after.extra), note = " · Retried once; couldn't confirm the new image is fixed: melted face"
+  assert.equal(generateImageLabel({ prompt: 'a fox' }, unconfirmed), `Generated image${note}`, 'the chat card says it')
+  assert.equal(generateImageLabel({ operation: 'refine', source_image_id: 'x' }, unconfirmed), `Refined image${note}`)
+  assert.equal(generateImageLabel({ prompt: 'a fox', hires: { scale: 1.5 } }, unconfirmed), `Generated image with hires${note}`)
+  assert.equal(generateImageLabel({ operation: 'inpaint', prompt: 'a hat' }, unconfirmed), `Inpainted image${note}`)
+  assert.equal(generateImageLabel({ operation: 'inpaint', prompt: 'a hat' }, JSON.stringify({ quality: { very_bad: true, defects: ['noise'] } })), 'Inpainted image · clearly broken: noise')
   assert.equal(modelDetailsLabel({ name: 'Illustrious/Prefect/prefect.safetensors' }, JSON.stringify({ family: { label: 'Illustrious' }, recommended: { sampler: 'dpmpp_2m', scheduler: 'karras', steps: 20, cfg: 5, clip_skip: 2, source: 'civitai_examples', agree: '9 of 9' } })), 'Model details: prefect.safetensors · Illustrious · dpmpp_2m/karras · 20 steps · CFG 5 · clip skip 2 · Civitai examples (9 of 9 agree)')
   console.log('PASS quality check: black, white, flat and noise caught without vision, fine pictures pass, tiny ones skipped, vision rubric parsed and bounded, one retry then stop, labels')
 }
@@ -442,13 +455,16 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   assert.ok(observations.some((o) => /retry fixed/.test(o.note) && /sampler "dpmpp_2m" → "euler_ancestral"/.test(o.note)), JSON.stringify(observations.map((o) => o.note)))
 
   // 2. Black twice: the second is the retry; a third call is refused; the agent explains.
-  outputs = [black, black, black]; graphs.length = 0; plan = reviewed([gen], [retry], [retry]); visionCalls = 0
+  // In the text-only reply the fake model still returns calls (a retry and a listing): none of them runs.
+  outputs = [black, black, black]; graphs.length = 0; plan = reviewed([gen], [retry], [retry, { name: 'list_generated_images', arguments: {} }], [gen]); visionCalls = 0; modelReplies = 0
   m = await turn()
   r = results(m)
   assert.equal(graphs.length, 2, 'never more than one retry')
   assert.equal(r.filter((x) => x.image)[1].retry.allowed, false)
-  assert.match(r.at(-1).skipped ?? '', /already used/)
-  assert.equal(m.at(-1).role, 'assistant'); assert.match(m.at(-1).content, /broken/)
+  assert.ok(!m.some((x) => x.role === 'tool' && x.toolName === 'list_generated_images'), 'no call from the text-only reply runs')
+  assert.equal(results(m).length, 3, 'review, broken, broken retry: no fourth generate_image result')
+  assert.equal(m.at(-1).role, 'assistant'); assert.match(m.at(-1).content, /broken/); assert.deepEqual(m.at(-1).toolCalls ?? [], [])
+  assert.equal(modelReplies, 4, 'the turn ends after the text-only reply')
 
   // 3. Vision says broken: same retry path.
   outputs = [fine, fine]; graphs.length = 0; plan = reviewed([gen], [retry]); visionVerdict = '{"score": 2, "very_bad": true, "defects": ["melted face"]}'; visionCalls = 0
@@ -507,6 +523,26 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
 
   // model_details over HTTP: family defaults when Civitai is off; no backend secrets in the answer.
   await call('PUT', '/api/agents/images/settings', { civitaiLookup: false })
+  // Generation and model_details make the same v-pred call: eps in the stem wins, folders never count.
+  const prediction = async (model: string) => {
+    outputs = [fine]; graphs.length = 0; plan = reviewed([{ name: 'generate_image', arguments: { prompt: 'a fox', model } }])
+    await turn()
+    const d = await call('GET', `/api/agents/images/model-details?${new URLSearchParams({ name: model, kind: 'checkpoint' })}`)
+    return { graph: graphs[0].vpred?.inputs.sampling === 'v_prediction', details: d.prediction.v_prediction, source: d.prediction.source }
+  }
+  assert.deepEqual(await prediction('NoobAI/noob_eps_vpred-merge.safetensors'), { graph: false, details: false, source: 'auto' })
+  assert.deepEqual(await prediction('vpred/model.safetensors'), { graph: false, details: false, source: 'auto' })
+  assert.deepEqual(await prediction('NoobAI/noobVpred10.safetensors'), { graph: true, details: true, source: 'auto' })
+  // The owner's Prediction setting, per model file, wins in both places; Auto removes it.
+  assert.equal((await fetch(server.origin + '/api/agents/images/settings', { method: 'PUT', headers, body: JSON.stringify({ prediction: { model: 'x', value: 'maybe' } }) })).status, 400)
+  await call('PUT', '/api/agents/images/settings', { prediction: { model: 'Illustrious/prefect.safetensors', value: 'vpred' } })
+  await call('PUT', '/api/agents/images/settings', { prediction: { model: 'NoobAI/noobVpred10.safetensors', value: 'eps' } })
+  assert.deepEqual(await prediction('Illustrious/prefect.safetensors'), { graph: true, details: true, source: 'user_override' })
+  assert.deepEqual(await prediction('NoobAI/noobVpred10.safetensors'), { graph: false, details: false, source: 'user_override' })
+  const saved = await call('PUT', '/api/agents/images/settings', { prediction: { model: 'Illustrious/prefect.safetensors', value: 'auto' } })
+  assert.deepEqual(saved.prediction, { 'NoobAI/noobVpred10.safetensors': 'eps' })
+  await call('PUT', '/api/agents/images/settings', { prediction: { model: 'NoobAI/noobVpred10.safetensors', value: 'auto' } })
+  assert.deepEqual(await prediction('Illustrious/prefect.safetensors'), { graph: false, details: false, source: 'auto' })
   const details = await call('GET', `/api/agents/images/model-details?${new URLSearchParams({ name: 'NoobAI/noob_vpred.safetensors', kind: 'checkpoint' })}`)
   assert.deepEqual([details.family.id, details.supported, details.recommended.source, details.recommended.v_prediction, details.recommended.sampler], ['noobai_vpred', true, 'family_default', true, 'euler'])
   assert.ok(details.notes.some((n: string) => /lookups are off/.test(n)))

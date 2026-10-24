@@ -3146,7 +3146,10 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           ? `You have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.`
           : null
       // After a broken or unconfirmed automatic retry: one reply without tools, to tell the user.
-      const offer = last || quality.textOnly ? [] : wrapUp ? todoTool : tools
+      const textOnly = quality.textOnly
+      const offer = last || textOnly ? [] : wrapUp ? todoTool : tools
+      // Calls are checked against what this round offered, not the thread's whole tool set.
+      const offeredNow = new Set(offer.map((t) => t.function.name))
       const build = () => [{ role: 'system', content: system }, ...chatHistory(row.id, info?.vision ?? false), ...(note ? [{ role: 'user', content: `${APP_NOTE} ${note}` }] : [])]
       let messages = build()
       // Past the threshold: compacted first, this turn's work so far included (the message it
@@ -3183,12 +3186,15 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       // The last batch's image evidence reached the model whole, unless a compaction folded it away first.
       if (compactedAt !== round) for (const k of imageReview.unsent) imageReview.shown.add(k)
       imageReview.unsent.clear()
-      const calls = last ? [] : wrapUp ? reply.calls.filter((c) => c.name === 'update_todos') : reply.calls
+      // A text-only round (after a broken or unconfirmed automatic retry) keeps the words and drops every call.
+      const calls = last || textOnly ? [] : wrapUp ? reply.calls.filter((c) => c.name === 'update_todos') : reply.calls
       if (reply.used !== null) database().prepare('UPDATE agent_threads SET context_tokens = ? WHERE id = ?').run(reply.used, row.id)
       // A wrap-up round that only says something again adds nothing: it is not kept.
       if (wrapUp && !calls.length) break
       const saved = addMessage(row.id, { role: 'assistant', content: wrapUp ? '' : reply.content, thinking: reply.thinking, toolCalls: calls })
       send({ type: 'message', message: saved })
+      // That reply is the turn's last word: no todo wrap-up, no further round.
+      if (textOnly) break
       if (!calls.length && !wrapUp && !reply.content.trim()) {
         // Thinking but no answer: once more, asking for the answer itself; then it's a failure the
         // user can retry, rather than a turn that silently ends with nothing.
@@ -3221,7 +3227,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           if (c.name === 'generate_image' && quality.blocked()) return JSON.stringify({ skipped: quality.blocked() })
           // Only what this thread offered: a model can still name a tool that is switched off.
           if (c.name === 'save_image_learning' && !imageSettings(user).saveImageLearnings) return JSON.stringify({ error: 'Image observations are turned off. Turn on Save image observations in Settings → Agents → Images to save new notes.' })
-          if (!offered.has(c.name)) return JSON.stringify({ error: c.name === 'save_generated_image' ? imageFileSaveBlockers(user, current().tools, current().permission).join(' ') || 'Image saving is not available in this round; continue in this same thread on the next user message.' : `${c.name} is switched off for this thread` })
+          if (!offeredNow.has(c.name)) return JSON.stringify({ error: c.name === 'save_generated_image' ? imageFileSaveBlockers(user, current().tools, current().permission).join(' ') || 'Image saving is not available in this round; continue in this same thread on the next user message.' : `${c.name} is switched off for this thread` })
           const decision = decide(row.id, current().permission, c, user.id)
           if (decision === 'refuse')
             return JSON.stringify({ error: c.name === 'exit_plan_mode' ? 'You are not in plan mode.' : 'Plan mode: you can only look around for now. When you know what to change, call exit_plan_mode with your plan.' })

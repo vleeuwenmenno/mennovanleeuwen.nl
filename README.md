@@ -2026,12 +2026,15 @@ one line per call: model, family, recommended settings and source.
 `generate_image` takes `clip_skip` (1 to 4, checkpoints only; `CLIPSetLastLayer`). A
 **v-prediction** checkpoint (NoobAI v-pred and its merges) gets `ModelSamplingDiscrete` with
 `v_prediction` and `zsnr` automatically, but only on affirmative evidence about that file or
-version: "vpred"/"v-pred" in the file name, the Civitai version name, a plain statement in the
+version: "vpred"/"v-pred" in the file name (its stem, never its folders), the Civitai version name, a plain statement in the
 version's own description, or LoRA Manager's base model label. Eps evidence there ("eps",
-"epsilon", "not v-pred") always prevents it, since running an eps model as v-pred ruins every
+"epsilon", "not v-pred", even in a sentence that also mentions v-pred) always prevents it, since running an eps model as v-pred ruins every
 picture. The model page, model title and model tags never apply it; when they mention v-pred,
 `model_details` only adds a note. The server decides this, never the tool call, with the same
-detector and cached Civitai facts as `model_details`. Without that node the model is
+detector and cached Civitai facts as `model_details`. When detection is wrong, the model browser's
+details pane has **Prediction: Auto / v-pred / eps** for each checkpoint: your setting, saved per
+account and per model file in the image settings, wins over detection, and `model_details` reports
+it as `source: user_override`. The agent cannot change it. Without that node the model is
 reported as unsupported and generation is refused, as it would render garbage.
 
 **Quality check** (**Check images and retry once if clearly broken**, on by default). After each
@@ -2050,7 +2053,7 @@ third generation; if the retry is broken too, the agent explains instead. A retr
 only when the same kind of check that flagged the first picture passes it; a vision check that
 fails or times out is inconclusive, and the retry's result keeps the first attempt's defects. After
 a retry that is broken too or could not be confirmed, the agent gets one more reply without tools
-to tell the user, and the chat card and terminal say "Retried once; couldn't confirm the new image
+to tell the user (any tool call in it is dropped and the turn ends there), and the chat card and terminal say "Retried once; couldn't confirm the new image
 is fixed" with the first picture's defects. Very bad results and
 retries that fixed one are saved as image observations with the source **Automatic check** (while
 saving is on and observations do not ask first). Upscales and LaMa removals are not checked.

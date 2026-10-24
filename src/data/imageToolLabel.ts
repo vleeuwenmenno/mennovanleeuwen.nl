@@ -3,16 +3,18 @@ export const IMAGE_REVIEW_LABEL = 'Showed image learnings; nothing submitted yet
 export const isImageReview = (result?: string) => !!result && (result.includes('"status":"review_once"') || result.includes('"learning_review_required":true'))
 /** The generate_image row label. No imports, so the image checks can load it under plain Node. */
 export function generateImageLabel(a: Record<string, unknown>, result?: string): string {
-  const s = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : '')
   // A review reply submitted nothing: say so before any operation's success label.
   if (isImageReview(result)) return IMAGE_REVIEW_LABEL
+  return operationLabel(a, result) + qualityNote(result)
+}
+function operationLabel(a: Record<string, unknown>, result?: string): string {
+  const s = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : '')
   if (a.operation === 'refine') return result ? 'Refined image' : 'Refine image'
   if (a.hires) return result ? 'Generated image with hires' : 'Generate image with hires'
   if (a.operation === 'inpaint') return result ? 'Inpainted image' : `Inpaint image: ${s('prompt')}`
   if (a.operation === 'remove') return result ? 'Removed the masked area' : 'Remove the masked area'
   if (a.operation === 'upscale') return result ? 'Upscaled image' : `Upscale image: ${s('upscale_model')}`
-  const label = result ? a.source_image_id ? 'Edited image' : 'Generated image' : `${a.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`
-  return label + qualityNote(result)
+  return result ? a.source_image_id ? 'Edited image' : 'Generated image' : `${a.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`
 }
 
 const defectList = (v: unknown) => Array.isArray(v) ? v.filter((d): d is string => typeof d === 'string').slice(0, 2).join(', ').slice(0, 120) : ''

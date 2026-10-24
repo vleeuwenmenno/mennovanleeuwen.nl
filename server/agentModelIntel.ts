@@ -209,23 +209,28 @@ const sentences = (text: string) => text.split(/(?<=[.!?])\s+|\n+/).map((t) => t
 /** A version description that says this version is v-pred: a v-pred sentence with no negation or hedge. */
 const affirms = (text: string) => sentences(text).some((t) => VPRED_TERM.test(t) && !NOT_THIS.test(t))
 
-export type VpredDecision = { vpred: boolean; advisory?: string }
+export type VpredDecision = { vpred: boolean; source: 'user_override' | 'auto'; advisory?: string }
+const OVERRIDE_HINT = ' If this file is v-pred, set Prediction to v-pred in the model browser (Settings → Agents → Images).'
 /**
- * The one v-prediction decision, for model_details and generate_image alike. Affirmative evidence:
- * the file name, the Civitai version name, the version's own description, or LoRA Manager's base
- * model label. Eps evidence on any of those prevents it. Model-level prose only gives an advisory.
+ * The one v-prediction decision, for model_details and generate_image alike. The owner's own
+ * Prediction setting for the file comes first. Otherwise, affirmative evidence: the file's stem
+ * (never its folders), the Civitai version name, the version's own description, or LoRA Manager's
+ * base model label. An explicit eps or not-v-pred statement in any of those wins, even in a sentence
+ * that also mentions v-pred. Model-level prose only gives an advisory.
  */
-export function vpredDecision(f: Pick<ManagerFacts, 'name' | 'title' | 'versionName' | 'tags' | 'autoTags' | 'baseModel'>, civitai?: Pick<CivitaiFacts, 'versionName' | 'description' | 'modelDescription' | 'baseModel'> | null): VpredDecision {
+export function vpredDecision(f: Pick<ManagerFacts, 'name' | 'title' | 'versionName' | 'tags' | 'autoTags' | 'baseModel'>, civitai?: Pick<CivitaiFacts, 'versionName' | 'description' | 'modelDescription' | 'baseModel'> | null, override?: 'vpred' | 'eps'): VpredDecision {
+  if (override) return { vpred: override === 'vpred', source: 'user_override' }
   const labels = [stemOf(f.name), f.versionName, civitai?.versionName, f.baseModel].filter((v): v is string => !!v)
   const versionText = civitai?.description ?? ''
-  const eps = labels.some((v) => EPS.test(v)) || sentences(versionText).some((t) => EPS.test(t) && !VPRED_TERM.test(t.replace(EPS, '')))
+  const eps = labels.some((v) => EPS.test(v)) || sentences(versionText).some((t) => EPS.test(t))
   const affirmative = isVpred(...labels) || affirms(versionText)
   const modelLevel = [civitai?.modelDescription ?? '', f.title, ...f.tags].some((t) => VPRED_TERM.test(t) || isVpred(t)) || (!affirmative && VPRED_TERM.test(versionText))
-  if (eps) return { vpred: false, ...(affirmative || modelLevel ? { advisory: 'This file or version says eps, so v-prediction is not applied, though v-pred is mentioned for this model.' } : {}) }
-  if (affirmative) return { vpred: true }
-  return modelLevel ? { vpred: false, advisory: 'The model page mentions a v-pred variant, but this file and version do not say they are v-pred, so v-prediction is not applied. If pictures come out black or garbled, it may be the v-pred build.' } : { vpred: false }
+  if (eps) return { vpred: false, source: 'auto', ...(affirmative || modelLevel ? { advisory: `This file or version says eps, so v-prediction is not applied, though v-pred is mentioned for this model.${OVERRIDE_HINT}` } : {}) }
+  if (affirmative) return { vpred: true, source: 'auto' }
+  return modelLevel ? { vpred: false, source: 'auto', advisory: `The model page mentions a v-pred variant, but this file and version do not say they are v-pred, so v-prediction is not applied. If pictures come out black or garbled, it may be the v-pred build.${OVERRIDE_HINT}` } : { vpred: false, source: 'auto' }
 }
 export const assetIsVpred = (...args: Parameters<typeof vpredDecision>) => vpredDecision(...args).vpred
+const noFacts = (name: string, baseModel = '') => ({ name, title: '', versionName: '', tags: [] as string[], autoTags: [] as string[], baseModel })
 
 // --- Civitai ------------------------------------------------------------------------------------
 
@@ -522,7 +527,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
   const c = civitai.facts
   const baseModel = manager?.baseModel || c?.baseModel || ''
   const familyHints = { name: `${name} ${manager?.versionName ?? ''} ${c?.versionName ?? ''}`, tags: [...(manager?.tags ?? []), ...(manager?.autoTags ?? [])] }
-  const decision = vpredDecision(manager ?? { name, title: '', versionName: '', tags: [], autoTags: [], baseModel }, c)
+  const decision = vpredDecision(manager ?? noFacts(name, baseModel), c, kind === 'checkpoint' ? s.prediction?.[name] : undefined)
   const vpred = decision.vpred
   const family = familyOf(baseModel, { ...familyHints, vpred })
   const notes: string[] = []
@@ -543,7 +548,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
     if (vpred && supported) notes.push('V-prediction: generate_image adds ModelSamplingDiscrete (v_prediction, zsnr) for this model automatically.')
     if (family === 'pony') notes.push('Start the prompt with score_9, score_8_up, score_7_up.')
     if (!family) notes.push(baseModel ? `No family defaults for base model “${baseModel}”; preset recipe only.` : 'Base model unknown; preset recipe only.')
-    Object.assign(out, { supported, ...(reason ? { unsupported_reason: reason } : {}), recommended, recommended_sources: sources })
+    Object.assign(out, { supported, ...(reason ? { unsupported_reason: reason } : {}), prediction: { v_prediction: vpred, source: decision.source, setting: s.prediction?.[name] ?? 'auto' }, recommended, recommended_sources: sources })
   } else if (kind === 'lora') {
     const tip = typeof manager?.usageTips.strength === 'number' ? manager.usageTips.strength : null
     const strength = tip !== null && tip > 0 && tip <= 2 ? { value: tip, source: 'lora_manager_usage_tips' } : c?.loraWeight ? { value: c.loraWeight, source: 'civitai_examples' } : { value: 1, source: 'default' }
@@ -576,11 +581,12 @@ function clipResult(out: Record<string, any>) {
  * the name itself and any cached Civitai facts; never a new Civitai request while planning.
  */
 export async function modelNeedsVpred(user: User, s: ImageSettings, catalog: Catalog, model: string) {
-  if (isVpred(model)) return true
+  const override = s.prediction?.[model]
+  if (override) return override === 'vpred'
   const { facts } = await quickFacts(user, catalog, s).catch(() => ({ facts: [] as ManagerFacts[] }))
   const f = facts.find((x) => (x.category === 'checkpoints' || x.category === 'diffusionModels') && x.name === model)
-  // The same decision model_details makes, from the same cached Civitai facts (version by ID or hash, model page).
-  return f ? assetIsVpred(f, cachedCivitai(civitaiScope(user.id, s.civitaiKey), f)) : false
+  // Exactly the decision model_details makes: file stem only, eps wins, the same cached Civitai facts.
+  return vpredDecision(f ?? noFacts(model), f ? cachedCivitai(civitaiScope(user.id, s.civitaiKey), f) : null).vpred
 }
 
 /** GET /api/agents/images/model-details?name=&kind=: the same facts for the model browser, the account's own backend only. */

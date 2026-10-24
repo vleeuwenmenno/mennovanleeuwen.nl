@@ -1,4 +1,4 @@
-import { getModelDetails, getModelMetadata, type ModelCategory, type ModelDetails, type ModelMetadata } from '../data/agentImages'
+import { getModelDetails, getModelMetadata, saveImageIntelSettings, type ModelCategory, type ModelDetails, type ModelMetadata, type PredictionSetting } from '../data/agentImages'
 import { recommendedLine, recommendedSourceLabel, type Recommended } from '../data/modelFamilies'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
@@ -118,13 +118,20 @@ function ModelDetails({ category, name, revision }: { category?: ModelCategory; 
 function ModelIntel({ name }: { name: string }) {
   const [details, setDetails] = useState<ModelDetails | null>(null)
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [revision, setRevision] = useState(0)
   useEffect(() => {
     setDetails(null); setError('')
     const abort = new AbortController()
     // A short pause, so arrowing through the list does not ask about every file.
     const timer = setTimeout(() => void getModelDetails(name, 'checkpoint', abort.signal).then((d) => { if (!abort.signal.aborted) setDetails(d) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) }), 350)
     return () => { clearTimeout(timer); abort.abort() }
-  }, [name])
+  }, [name, revision])
+  // The owner's own word on the file's prediction type, for when automatic detection is wrong.
+  const setPrediction = (value: PredictionSetting) => {
+    setSaving(true)
+    void saveImageIntelSettings({ prediction: { model: name, value } }).then(() => setRevision((n) => n + 1), (e: Error) => setError(e.message)).finally(() => setSaving(false))
+  }
   if (error) return <p className="muted image-intel">Model details unavailable: {error}</p>
   if (!details) return <p className="muted image-intel" role="status">Reading model details…</p>
   const r = details.recommended
@@ -132,6 +139,12 @@ function ModelIntel({ name }: { name: string }) {
   const words = [...new Set([...(details.lora_manager?.trained_words ?? []), ...(details.civitai?.trained_words ?? [])])].slice(0, 8)
   return <dl className="image-intel">
     <dt>Base model</dt><dd>{details.lora_manager?.base_model || details.civitai?.base_model || 'Unknown'}{details.family ? ` · ${details.family.label}` : ''}</dd>
+    {details.prediction && <><dt>Prediction</dt><dd>
+      <span className="image-prediction" role="group" aria-label="Prediction type">
+        {(['auto', 'vpred', 'eps'] as const).map((v) => <button key={v} type="button" className={`btn btn-small ${details.prediction!.setting === v ? 'btn-primary' : ''}`} aria-pressed={details.prediction!.setting === v} disabled={saving} onClick={() => setPrediction(v)}>{v === 'auto' ? 'Auto' : v === 'vpred' ? 'v-pred' : 'eps'}</button>)}
+      </span>
+      <span className="muted">{details.prediction.setting === 'auto' ? `Detected: ${details.prediction.v_prediction ? 'v-pred' : 'eps'}` : 'Your setting'}</span>
+    </dd></>}
     {details.supported === false && <><dt>Supported</dt><dd className="t-yellow">No: {details.unsupported_reason}</dd></>}
     {!!tags.length && <><dt>Tags</dt><dd>{tags.join(' · ')}</dd></>}
     {!!words.length && <><dt>Trained words</dt><dd className="copyable">{words.join(', ')}</dd></>}
