@@ -1,5 +1,6 @@
 import { agentMasks, generatedImage } from '../../data/agentImages'
 import { calendarTime, compactionText, toolLabel, type AgentMessage, type Todo, type ToolCall } from '../../data/agents'
+import { IMAGE_REVIEW_LABEL, isImageReview } from '../../data/imageToolLabel'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
 import { clipLine, count, seg, width, wrap, type Line } from './text'
@@ -195,6 +196,8 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
   const max = verbose ? 200 : 6
   switch (call.name) {
     case 'generate_image': {
+      // Learning evidence shown instead of a job: one plain line, not the raw evidence.
+      if (isImageReview(result)) return [header(call, 'yellow', w), under(IMAGE_REVIEW_LABEL)]
       const image = generatedImage(result)
       if (image) {
         const url = new URL(image.url, location.origin).href

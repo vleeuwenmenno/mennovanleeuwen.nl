@@ -1,8 +1,11 @@
+export const IMAGE_REVIEW_LABEL = 'Showed image learnings; nothing submitted yet'
+/** A generate_image reply that showed learning evidence instead of submitting (and its older format). */
+export const isImageReview = (result?: string) => !!result && (result.includes('"status":"review_once"') || result.includes('"learning_review_required":true'))
 /** The generate_image row label. No imports, so the image checks can load it under plain Node. */
 export function generateImageLabel(a: Record<string, unknown>, result?: string): string {
   const s = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : '')
   // A review reply submitted nothing: say so before any operation's success label.
-  if (result?.includes('"status":"review_once"') || result?.includes('"learning_review_required":true')) return 'Showed image learnings before generating'
+  if (isImageReview(result)) return IMAGE_REVIEW_LABEL
   if (a.operation === 'refine') return result ? 'Refined image' : 'Refine image'
   if (a.hires) return result ? 'Generated image with hires' : 'Generate image with hires'
   if (a.operation === 'inpaint') return result ? 'Inpainted image' : `Inpaint image: ${s('prompt')}`
