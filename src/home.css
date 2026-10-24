@@ -303,8 +303,13 @@
 .agt-toolbar {
   flex-wrap: nowrap;
 }
+/* The thread's chips (folder, images, mail, permission). On a desktop the wrapper adds no box of
+   its own; on a phone it is the toolbar's second row. */
+.agt-bar-chips {
+  display: contents;
+}
 .agt-title {
-  min-width: 0;
+  min-width: 6ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -920,13 +925,29 @@
   color: var(--fg-bright);
 }
 .agt-ctx-panel {
+  flex: none;
+  max-height: min(40%, 340px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 10px 14px 12px;
-  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--panel-2);
   font-size: 12px;
 }
+/* The title, and a close button that stays within reach however far the breakdown scrolls. */
 .agt-ctx-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 8px;
+}
+.agt-ctx-title {
+  flex: 1;
+  min-width: 0;
+}
+.agt-ctx-close {
+  flex: none;
+  margin: -4px -6px -4px 0;
 }
 .agt-ctx-bar {
   display: flex;
@@ -1505,13 +1526,26 @@ textarea.agt-q-input {
     flex-wrap: wrap;
     gap: 6px 8px;
   }
-  /* The back button and title on the first row, the mode, model and menu on the second. */
+  /* The back button, title, context ring and menu on the first row, the chips on the second. */
   .agt-title,
   .agt-title-input {
-    flex: 1 1 70%;
+    flex: 1 1 0;
+    min-width: 0;
   }
   .agt-toolbar .nb-spacer {
     display: none;
+  }
+  .agt-bar-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    order: 1;
+    flex: 1 0 100%;
+    min-width: 0;
+  }
+  .agt-bar-chips .agt-chip {
+    max-width: 100%;
   }
   .agt-model {
     max-width: 140px;
@@ -1530,6 +1564,13 @@ textarea.agt-q-input {
   .agt-tool summary,
   .agt-think summary {
     padding: 4px 0;
+  }
+  /* Context ring, menu and the panel's close button: a thumb-sized target. */
+  .agt-toolbar .agt-ring,
+  .agt-toolbar .agt-more,
+  .agt-ctx-close {
+    width: 40px;
+    height: 40px;
   }
 }
 
@@ -1826,6 +1867,9 @@ textarea.agt-q-input {
 .agt-ring-fill {
   stroke: var(--accent);
 }
+.agt-toolbar .agt-ring {
+  color: var(--muted);
+}
 .agt-ring.is-full .agt-ring-fill {
   stroke: var(--red);
 }
@@ -1988,7 +2032,7 @@ textarea.agt-q-input {
 }
 /* The work folder and the permission mode, as chips in the thread's toolbar. */
 .agt-chip {
-  flex: 0 1 auto;
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -2011,6 +2055,11 @@ textarea.agt-q-input {
 .agt-chip-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The folder chip gives way first: its label shortens before the title or the other chips do. */
+.agt-chip:has(.agt-chip-label) {
+  flex: 0 1 auto;
+  min-width: 72px;
 }
 .agt-chip.is-on {
   color: var(--text);
