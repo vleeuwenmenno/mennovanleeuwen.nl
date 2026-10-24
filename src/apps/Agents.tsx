@@ -6,6 +6,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import {
   ALL_TOOLS,
   TOOL_GROUPS,
+  toolState,
   addMemory,
   agentModels,
   answerForm,
@@ -1733,22 +1734,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }
   const toolMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
-      ...TOOL_GROUPS.map((g) => ({
-        label: g.name,
-        checked: tools.includes(g.id),
-        disabled: (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal',
-        hint:
-          g.id === 'files' && !workdir
-            ? 'Choose a work folder first (the folder button above)'
-            : g.id === 'terminal'
-              ? 'Only from the agents command in the terminal'
-              : g.calendar && !hasCalendar(account)
-                ? 'Connect a calendar first (Settings → Integrations → Calendars)'
-                : g.mail && !mailAccounts?.length
-                  ? 'Link a mail account first (Settings → Integrations → Mail)'
-                  : g.detail,
-        onSelect: () => toggleTool(g.id),
-      })),
+      ...TOOL_GROUPS.map((g) => {
+        const on = tools.includes(g.id)
+        const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal'
+        const { hint, muted } = toolState(g, on, !!blocked)
+        // Greyed but clickable while it is on, so it can be switched off; off and blocked it cannot be switched on.
+        return { label: g.name, checked: on, muted: muted && on, disabled: muted && !on, hint, onSelect: () => toggleTool(g.id) }
+      }),
       { separator: true },
       { label: tools.length === ALL_TOOLS.length ? 'Turn all off (just the model)' : 'Turn all on', onSelect: () => (tools.length === ALL_TOOLS.length ? setTools([]) : setTools(ALL_TOOLS)) },
     ], 'above')

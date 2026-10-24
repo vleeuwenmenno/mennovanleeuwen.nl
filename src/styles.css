@@ -1536,6 +1536,10 @@ body.is-resizing iframe {
   opacity: 0.4;
   cursor: default;
 }
+/* Greyed but still clickable: a checked item that can only be switched off. */
+.ctx-item.is-muted {
+  opacity: 0.4;
+}
 .ctx-item.is-danger:not(:hover) {
   color: var(--red);
 }

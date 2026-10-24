@@ -86,6 +86,25 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'skills', name: 'Skills', detail: 'Read the skills in ~/.agents/skills and the work folder when a task calls for one' },
 ]
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
+/** Why a group does nothing yet, as the hint reads when it is on (`on`, after "On, but") and when it is off (`off`, after "Turning it on needs"). */
+const TOOL_BLOCKED: Partial<Record<ToolGroup, { on: string; off: string }>> = {
+  calendar: { on: 'no calendar connected (Settings → Integrations → Calendars)', off: 'a connected calendar (Settings → Integrations → Calendars)' },
+  mail: { on: 'nothing to use: link a mail account first (Settings → Integrations → Mail)', off: 'a linked mail account (Settings → Integrations → Mail)' },
+  seafile: { on: 'nothing to use: link Seafile first (Settings → Integrations → Seafile)', off: 'Seafile linked (Settings → Integrations → Seafile)' },
+  seafile_write: { on: 'nothing to use: link Seafile first (Settings → Integrations → Seafile)', off: 'Seafile linked (Settings → Integrations → Seafile)' },
+  files: { on: 'no work folder chosen (the folder button above)', off: 'a work folder (the folder button above)' },
+  terminal: { on: 'only from the agents command in the terminal, not in this app', off: 'the agents command in the terminal; it does not work in this app' },
+}
+/**
+ * What a group's row says. Three states: on and usable (its own detail), on but unable to do anything
+ * here (the cause first), off (what turning it on needs; only said when it is blocked, else its detail).
+ * `muted` greys the row; a blocked group may still be switched off, only switching it on is refused.
+ */
+export function toolState(g: (typeof TOOL_GROUPS)[number], on: boolean, blocked: boolean): { hint: string; muted: boolean } {
+  const why = blocked ? TOOL_BLOCKED[g.id] : undefined
+  if (!why) return { hint: g.detail, muted: false }
+  return { hint: on ? `On, but ${why.on}` : `Off. Turning it on needs ${why.off}`, muted: true }
+}
 /** The groups there were before choices remembered which groups existed. */
 const LEGACY_TOOLS: ToolGroup[] = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory']
 /** About the user (projectId null) or one project, filed under a category path like "People/Friends". */

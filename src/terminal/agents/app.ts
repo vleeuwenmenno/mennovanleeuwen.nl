@@ -47,6 +47,7 @@ import {
   agentSettings,
   toAttachment,
   TOOL_GROUPS,
+  toolState,
   toolLabel,
   updateThread,
   type AgentMessage,
@@ -1795,11 +1796,15 @@ export class Session {
         const calendar = hasCalendar(getAccount())
         if (mailAccountsNow() === null) await loadMailAccounts()
         const mail = !!mailAccountsNow()?.length
-        const picked = await this.choose('Tools', TOOL_GROUPS.filter((g) => (!g.seafile || seafile) && (!g.calendar || calendar) && (!g.mail || mail)).map((g) => ({ value: g.id, label: g.name, hint: g.detail, checked: current.includes(g.id) })), true)
+        const blocked = (g: (typeof TOOL_GROUPS)[number]) => !!((g.seafile && !seafile) || (g.calendar && !calendar) || (g.mail && !mail) || (g.id === 'files' && !(this.thread ? this.thread.workdir : this.workdir)))
+        const picked = await this.choose('Tools', TOOL_GROUPS.map((g) => ({ value: g.id, label: g.name, hint: toolState(g, current.includes(g.id), blocked(g)).hint, checked: current.includes(g.id) })), true)
         if (!picked) return true
-        this.tools = picked as ToolGroup[]
+        // A blocked group can be switched off, not on.
+        const refused = TOOL_GROUPS.filter((g) => blocked(g) && picked.includes(g.id) && !current.includes(g.id))
+        this.tools = picked.filter((id) => !refused.some((g) => g.id === id)) as ToolGroup[]
         await this.patch({ tools: this.tools })
         this.say(`Tools: ${this.tools.join(', ') || 'none'}`)
+        for (const g of refused) this.say(`${g.name} stays off. ${toolState(g, false, true).hint.replace(/^Off\. /, '')}`)
         return true
       }
       case '/skills': {

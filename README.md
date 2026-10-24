@@ -1312,7 +1312,9 @@ stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
-Stop) and `remember`/`update_memory`. Memory is yours (every thread) or a project's (that
+Stop) and `remember`/`update_memory`. A group with nothing behind it yet is greyed in that menu and
+says why (Mail before an account is linked, Calendar before one is connected, Work folder before one
+is chosen, Terminal outside the `agents` command); it can be switched off but not on. Memory is yours (every thread) or a project's (that
 project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
 the Memory view shows it as a tree to search, add to, edit, move and forget. Projects group threads
 in the sidebar: drag them into order, drag threads into or out of them, fold them; threads in and

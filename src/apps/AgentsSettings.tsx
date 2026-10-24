@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_READS_EVENT, removeSite, removeSkill, setMailReads, setSkillEnabled, type AllowedSite, type MailReadsMode, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
-import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
@@ -288,16 +288,18 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           />
         </li>
         {TOOL_GROUPS.map((g) => {
-          const off = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length)
+          const blocked = !!((g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length))
+          const on = settings.tools.includes(g.id)
+          const { hint, muted } = toolState(g, on, blocked)
           return (
-            <li key={g.id} className={`set-row ${off ? 'is-off' : ''}`}>
+            <li key={g.id} className={`set-row ${muted ? 'is-off' : ''}`}>
               <span className="set-row-text">
                 <strong>{g.name}</strong>
-                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Integrations → Calendars` : g.mail && !mailAccounts?.length ? `${g.detail}. Link a mail account first, in Settings → Integrations → Mail` : g.detail}</span>
+                <span className="muted">{hint}</span>
               </span>
               <Toggle
-                on={settings.tools.includes(g.id)}
-                disabled={off}
+                on={on}
+                disabled={muted && !on}
                 onChange={(on) => setAgentSettings({ tools: on ? [...settings.tools, g.id] : settings.tools.filter((t) => t !== g.id) })}
                 label={g.name}
               />
