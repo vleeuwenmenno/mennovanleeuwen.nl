@@ -18,17 +18,18 @@ host.mountMask()
 
 // Isolated integration fixture: only mask/catalog requests are intercepted; no real account data.
 const scenario = window as unknown as {
-  mountInpaint: () => Promise<void>; inpaintResult?: unknown; maskUploads: number; maskDiscards: number;
+  mountInpaint: (attachment?: boolean) => Promise<void>; inpaintResult?: unknown; maskUploads: number; maskDiscards: number;
   holdMaskUpload: boolean; finishMaskUpload?: () => void
 }
 const originalFetch = window.fetch.bind(window)
-scenario.mountInpaint = async () => {
+scenario.mountInpaint = async (attachment = false) => {
   const { InpaintDialog } = await import('../../src/apps/AgentsInpaint')
   scenario.inpaintResult = undefined; scenario.maskUploads = 0; scenario.maskDiscards = 0; scenario.holdMaskUpload = false
   window.fetch = async (input, init) => {
     const path = typeof input === 'string' ? input : input instanceof Request ? input.url : input.href
     if (path === '/api/agents/images/catalog') return Response.json({ inpaint: true })
     if (path === '/api/agents/threads/fixture/image-masks') {
+      if (attachment && JSON.parse(String(init?.body)).source_image_id !== 'attachment:42:0') throw new Error('Wrong attachment source binding')
       scenario.maskUploads++
       const result = () => Response.json({ id: '00000000-0000-4000-8000-000000000001', width: 640, height: 400 })
       return scenario.holdMaskUpload ? new Promise<Response>(resolve => { scenario.finishMaskUpload = () => resolve(result()) }) : result()
@@ -36,5 +37,5 @@ scenario.mountInpaint = async () => {
     if (path === '/api/agents/image-masks/00000000-0000-4000-8000-000000000001' && init?.method === 'DELETE') { scenario.maskDiscards++; return Response.json({ deleted: true }) }
     return originalFetch(input, init)
   }
-  root.render(<InpaintDialog key={++serial} threadId="fixture" disabled={false} image={{ id: '00000000-0000-4000-8000-000000000002', name: 'Synthetic checker', url: '/scripts/fixtures/agents-mask.svg', size: 1, width: 640, height: 400 }} onClose={() => root.render(<button>Editor closed</button>)} onInpaint={input => { scenario.inpaintResult = input; root.render(<button>Submitted</button>) }} />)
+  root.render(<InpaintDialog key={++serial} threadId="fixture" disabled={false} image={{ id: attachment ? 'attachment:42:0' : '00000000-0000-4000-8000-000000000002', name: 'Synthetic checker', url: '/scripts/fixtures/agents-mask.svg', ...(attachment ? {} : { width: 640, height: 400 }) }} onClose={() => root.render(<button>Editor closed</button>)} onInpaint={input => { scenario.inpaintResult = input; root.render(<button>Submitted</button>) }} />)
 }
