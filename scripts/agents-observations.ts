@@ -71,7 +71,22 @@ try {
   assert.ok(matchesObservation(upscale, { ...NO_FILTER, model: modelKey(upscale) }))
   assert.ok(!matchesObservation(otherUpscale, { ...NO_FILTER, model: modelKey(upscale) }))
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, model: modelKey(upscale) }))
-  console.log('PASS upscale observation identity, text/JSON parity, summary and model filters')
+  const refined = readObservation(row, '', JSON.stringify({ ...learning, settings: { ...settings, operation: 'refine', denoise: 0.2 } }))
+  assert.equal(refined.settings?.operation, 'refine')
+  assert.ok(settingsLine(refined.settings).startsWith('Refine · strength 0.2 · Krea2 Turbo'))
+  assert.notEqual(modelKey(refined), modelKey(feedback))
+  const hires = { base_width: 1024, base_height: 768, width: 1536, height: 1152, denoise: 0.25, seed: 43, steps: 12, cfg: 5, sampler: 'euler', scheduler: 'simple', upscale_model: 'detail/4x-detail.pth' }
+  const hiresSettings = { ...settings, operation: 'generate', width: 1536, height: 1152, hires }
+  const hiresObservation = readObservation(row, '', JSON.stringify({ ...learning, settings: hiresSettings }))
+  assert.equal(hiresObservation.settings?.operation, 'generate', 'hires preserves its recorded operation')
+  assert.deepEqual(hiresObservation.settings?.hires, hires, 'all stage settings survive')
+  assert.equal(refined.settings?.denoise, 0.2)
+  assert.ok(settingsLine(hiresObservation.settings).includes('Hires · 1024 × 768 · to 1536 × 1152 · strength 0.25 · 12 steps · CFG 5 · euler/simple · 4x-detail'))
+  assert.notEqual(modelKey(hiresObservation), modelKey(feedback))
+  assert.notEqual(modelKey(hiresObservation), modelKey(refined))
+  const hiresText = observationFromText(row, text(3, 'vision', 'Hires', 'Sharper', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(hiresSettings)}`))!
+  assert.deepEqual(hiresText.settings, hiresObservation.settings)
+  console.log('PASS upscale/refine observation identity, text/JSON parity, summary and model filters')
 
   // Save to Files names: a prompt slug and the short id, stable, never a bare id, never a taken name.
   assert.equal(imageFileName({ id: image, settings }), 'a-lighthouse-at-dusk-ink-wash-0a1b2c3d.png')

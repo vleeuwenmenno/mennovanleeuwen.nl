@@ -61,3 +61,12 @@ export async function upscaleImage(id: string, input: UpscaleImageInput, onEvent
   })
   await readEvents(res, onEvent)
 }
+
+/** A diffusion refinement with optional overrides of the source's recorded settings. */
+export type RefineImageInput = { operation: 'refine'; source_image_id: string; denoise: number; upscale_model?: string; prompt?: string; negative_prompt?: string } & Partial<Pick<ImageConfig, 'preset' | 'model' | 'clip' | 'vae'>> & Partial<ImageSampling> & ({ scale: number } | { width: number; height: number })
+export async function refineImage(id: string, input: RefineImageInput, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  const res = await fetch(`/api/agents/threads/${id}/refine`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
+  })
+  await readEvents(res, onEvent)
+}

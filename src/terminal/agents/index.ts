@@ -183,7 +183,7 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     (e) => {
       if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
         const image = generatedImage(e.message.content)
-        if (image) { imageLinks.set(new URL(image.url, location.origin).href, image.settings?.operation === 'upscale' ? 'Upscaled image' : 'Generated image'); if (image.settings) imageSettingsLinks.set(new URL(image.url + '/metadata', location.origin).href, image.settings.operation === 'upscale' ? 'Upscale settings' : 'Generation settings') }
+        if (image) { imageLinks.set(new URL(image.url, location.origin).href, image.settings?.operation === 'upscale' ? 'Upscaled image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings?.hires ? 'Generated image with hires refinement' : 'Generated image'); if (image.settings) imageSettingsLinks.set(new URL(image.url + '/metadata', location.origin).href, image.settings.operation === 'upscale' ? 'Upscale settings' : image.settings.operation === 'refine' ? 'Refinement settings' : image.settings.hires ? 'Generation and hires settings' : 'Generation settings') }
       }
       if (e.type === 'message' && e.message.role === 'assistant') {
         if (e.message.content.trim()) answer = e.message.content.trim()

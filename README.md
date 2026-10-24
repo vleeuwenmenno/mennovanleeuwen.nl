@@ -2012,6 +2012,26 @@ The existing optional generation approval, Stop, quota, private storage and sile
 apply. Refinement and hires observations retain their operation, separate from ordinary generation
 and model-upscale evidence. These workflows do not implement masked inpainting.
 
+**Refine an image.** Choose **Options → Refine…** for a diffusion pass over an existing image.
+Choose 1×, 1.5× (default), 2×, or custom dimensions, and strength from 0.1 to 1 (default 0.2).
+Higher strength can change details and composition. Scale rounds each side to the nearest 64 px,
+so the aspect ratio is approximate; custom dimensions can crop. Outputs must be multiples of 64,
+256–2048 px per side, at most 4,194,304 pixels. An optional upscale model runs before diffusion;
+its intermediate size and memory needs can exceed the requested output.
+The nearest owned diffusion source supplies the prompt, components and sampling. The dialog can
+override the prompt and, under **Advanced components and sampling**, the workflow, model,
+encoder, VAE, steps, CFG, sampler and scheduler. Images without recorded diffusion settings need
+an explicit prompt and configured components; the backend never invents a missing prompt.
+**Refinement settings** records the operation. Observations retain refinement strength and the
+full hires stage settings, with separate workflow labels and model filters. **Refine again** starts from the original source
+with a fresh seed. Progress and Stop work as for other image operations.
+
+For a new image with a second hires pass, ask the agent in the composer or terminal, for example:
+“Generate a lighthouse, then apply a 1.5× hires pass at strength 0.2.” The `generate_image` tool
+accepts `hires: {scale: 1.5, denoise: 0.2}` with optional upscaler and sampling overrides.
+**Generation and hires settings** records both stages and the final image dimensions;
+**Generate another** repeats both stages. This does not change the session's saved defaults.
+
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the
 conversation so far (the user's goals and requests, decisions, files and paths, the current state,
