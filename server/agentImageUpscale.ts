@@ -2,7 +2,7 @@ import { HttpError } from './http.ts'
 import type { ImageProgress } from '../src/data/imageModels.ts'
 
 export type ImageGraph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
-export type ImageGraphProgress = { phases: Record<string, ImageProgress['phase']>; counters: Record<string, 'sampling' | 'upscaling'> }
+export type ImageGraphProgress = { phases: Record<string, ImageProgress['phase']>; counters: Record<string, 'sampling' | 'upscaling' | 'refining'> }
 export type NodeInfo = Record<string, { input?: { required?: Record<string, unknown[]>; optional?: Record<string, unknown[]> } }>
 export const UPSCALE_NODES = ['LoadImage', 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'ImageScale', 'SaveImage'] as const
 export const UPSCALE_RESOURCE_NOTE = 'The model runs at its native scale before the final resize. Its intermediate image can be larger than the requested output; these limits do not guarantee available GPU or system memory. Sources above 2048 pixels per side are rejected; resize a copy explicitly before using this operation.'

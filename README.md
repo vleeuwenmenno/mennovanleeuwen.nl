@@ -1449,7 +1449,7 @@ The synthetic browser check is `node scripts/agents-mask-check.ts http://127.0.0
 
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
 preserve more source structure; higher values allow larger changes. This changes the **whole image**:
-there are no masks, localized inpainting or hires diffusion refinement yet, and unchanged regions
+there are no masks or localized inpainting yet, and unchanged regions
 are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
 VAEEncode → KSampler path, with the same encoder/VAE, LoRA and sampling validation as text-to-image.
 The live catalog must support LoadImage, VAEEncode and ImageScale's lanczos/center options; otherwise
@@ -1986,6 +1986,31 @@ work like Generate another, and the terminal labels upscale results and settings
 Upscale observations retain their operation and exact upscale model. `read_image_learnings` with
 `operation: "upscale"` retrieves those notes (optionally filtered by `upscale_model`);
 `all_models: true` can include all operations. Default diffusion evidence excludes upscale notes.
+
+**Refine an existing image or generate with hires.** Refinement uses diffusion to add or change
+fine detail. `generate_image` with `operation: "refine"` starts from an owned source, inherits its
+recorded diffusion components, prompts, LoRAs, sampling and seed, then applies explicit overrides.
+If the source was model-upscaled, the server follows owned provenance to its diffusion ancestor
+(up to eight images, rejecting cycles and foreign or missing ancestors). A source without saved
+diffusion settings requires an explicit prompt and compatible configured components; no prompt
+is invented. The original image is never changed.
+
+Refinement defaults to 1.5× and denoise 0.2; scale 1–2 or explicit dimensions are accepted. Sizes
+round to a 64-pixel grid from 256 to 2048 per side, with at most 4,194,304 pixels. Lanczos resize
+with center crop fits the requested shape, so grid rounding can trim edges. An optional installed
+`upscale_model` enlarges pixels before encoding; that model stage accepts sources up to 2048 per
+side and retains the native-intermediate memory caveat above. Refinement does not require an
+upscale model. Turbo CFG remains 1; Krea2 always requires model-only LoRAs.
+
+For new generation, `hires: { scale: 1.5, denoise: 0.2 }` adds a second image-space diffusion pass.
+The first pass uses ordinary generation limits; the second uses refinement limits, the same
+components, conditioning and seed, and its own optional steps/CFG/sampler/scheduler/upscale model.
+Only the final image is saved. Approval shows both stages; metadata records base and final sizes
+and resolved stage settings. Generate another reconstructs both stages with a fresh shared seed,
+without applying the scale twice. Refine again starts from the original source with a fresh seed.
+The existing optional generation approval, Stop, quota, private storage and silent-success rules
+apply. Refinement and hires observations retain their operation, separate from ordinary generation
+and model-upscale evidence. These workflows do not implement masked inpainting.
 
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the

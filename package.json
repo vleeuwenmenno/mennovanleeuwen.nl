@@ -47,6 +47,7 @@
     "check:agents-threads": "node scripts/agents-threads.ts",
     "check:agents-image-files": "node scripts/agents-image-files.ts",
     "check:agents-image-sources": "node scripts/agents-image-sources.ts",
+    "check:agents-refine": "node scripts/agents-refine.ts",
     "check:agents-upscale": "node scripts/agents-upscale.ts",
     "check:agents-images": "node scripts/agents-images.ts",
     "check:agents-observations": "node scripts/agents-observations.ts",

@@ -478,7 +478,8 @@ try {
     } else assert.equal(graph['10'].inputs.clip, undefined)
     assert.equal(graph['9'].class_type, 'SaveImage')
     const fallback = preset === 'sdxl' ? 'LoraLoaderModelOnly' : 'LoraLoader'
-    assert.equal(imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }).graph['10'].class_type, fallback)
+    if (preset.startsWith('krea2')) assert.throws(() => imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }), /model-only LoRA loader/)
+    else assert.equal(imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }).graph['10'].class_type, fallback)
   }
   assert.throws(() => imageWorkflow(settings, { prompt: 'missing loader', loras: chain }, { nodes: [] }), /no LoRA loader/)
   assert.equal(imageWorkflow(settings, { prompt: 'default weight', loras: [{ name: loraNames[0] }] }).graph['10'].inputs.strength_model, 1)

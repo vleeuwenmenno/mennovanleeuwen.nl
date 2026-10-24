@@ -340,8 +340,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
     }
-    const upscale = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/upscale$/.exec(path)
-    if (upscale && method === 'POST') return await upscaleImage(res, requireUser(req), upscale[1], await readJson(req, 4096)), true
+    const upscale = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/(upscale|refine)$/.exec(path)
+    if (upscale && method === 'POST') {
+      const input = await readJson<Record<string, unknown>>(req, 4096)
+      if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== upscale[2]) throw new HttpError(400, 'Image operation does not match the requested route')
+      return await upscaleImage(res, requireUser(req), upscale[1], input), true
+    }
     const againImage = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/images\/([0-9a-f-]{36})\/again$/.exec(path)
     if (againImage && method === 'POST') return await generateAnother(res, requireUser(req), againImage[1], againImage[2]), true
     const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)

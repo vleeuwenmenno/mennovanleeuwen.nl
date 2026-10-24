@@ -27,11 +27,11 @@ function settingsLine(settings: ImageGenerationSettings) {
   const file = (value: string) => clipped(value.replace(/\s+/g, ' '), 160)
   if (settings.operation === 'upscale') return `Model upscale · ${file(settings.upscale_model)} · ${settings.width} × ${settings.height} · source ${settings.source.id}`
   const loras = (settings.loras ?? []).map((l) => `${file(l.name)} (${l.weight})`).join(', ') || '(none)'
-  return `${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}${settings.source ? ` · img2img ${settings.source.id} · denoise ${settings.denoise}` : ''}`
+  return `${settings.operation === 'refine' ? 'Refinement · ' : settings.hires ? 'Hires · ' : ''}${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}${settings.source ? ` · ${settings.operation === 'refine' ? 'refine' : 'img2img'} ${settings.source.id} · denoise ${settings.denoise}` : ''}`
 }
 const evidenceRecord = (row: Row, learning: Learning) => ({
   id: row.id, profileId: learning.profileId ?? null, artifactId: learning.artifactId,
-  operation: learning.settings.operation ?? 'generate',
+  operation: learning.settings.operation === 'upscale' ? 'upscale' : learning.settings.hires ? 'hires' : learning.settings.operation ?? 'generate',
   ...(learning.settings.operation === 'upscale' ? { upscale_model: learning.settings.upscale_model } : {}),
   settingsLine: settingsLine(learning.settings), task: clipped(learning.task, 100), note: clipped(learning.note, 240),
   // Do not add an ellipsis to a quote: it must remain an exact saved-message substring.
@@ -48,7 +48,7 @@ export function imageLearnings(user: User, thread: string, assets: ImageAssets, 
   const relevant = all.map((row) => ({ row, value: JSON.parse(row.image_learning) as Learning }))
     .filter(({ value: l }) => {
       if (l.scope !== scope || (l.profileId ?? null) !== (profile?.id ?? null)) return false
-      const recordedOperation = l.settings.operation ?? 'generate'
+      const recordedOperation = l.settings.operation === 'upscale' ? 'upscale' : l.settings.hires ? 'hires' : l.settings.operation ?? 'generate'
       if (operation && recordedOperation !== operation) return false
       if (upscaleModel && (l.settings.operation !== 'upscale' || l.settings.upscale_model !== upscaleModel)) return false
       if (allModels) return true
