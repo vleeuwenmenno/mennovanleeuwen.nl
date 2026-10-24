@@ -1,3 +1,5 @@
+import { PhotoPicker } from './photos/PhotoPicker'
+import { checkPhotoAttachmentBudget } from '../data/photoAttachments'
 import { mentionAt, mentionText } from '../data/agentMentions'
 import { openSessionImages } from './AgentsSessionImages'
 import { generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type InpaintImageInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
@@ -1031,7 +1033,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [draftMode, setDraftMode] = useState<Mode>(() => ask?.mode ?? agentSettings().mode)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
   // The message box starts from what was left there last time (src/data/agentDrafts.ts).
+  const [photoPicker, setPhotoPicker] = useState(false)
   const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? [])
+  const latestFiles = useRef(files)
+  latestFiles.current = files
   const [reading, setReading] = useState(0)
   const settingsNow = useAgentSettings()
   const [draftTools, setDraftTools] = useState<ToolGroup[]>(settingsNow.tools)
@@ -1753,6 +1758,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         ...fieldMenu(e.currentTarget),
         { separator: true },
         ...(account.seafile ? [{ label: 'Attach from Files (Seafile)…', onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) }] : []),
+        { label: 'Attach from Photos…', onSelect: () => setPhotoPicker(true) },
         { label: 'Attach from this computer…', onSelect: () => pcFiles.current?.click() },
         { separator: true },
         { label: 'Quick', checked: mode === 'quick', disabled: answering, onSelect: () => setMode('quick') },
@@ -1905,6 +1911,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const attachMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
       ...(account.seafile ? [{ label: 'From Files (Seafile)…', onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) }] : []),
+      { label: 'From Photos…', onSelect: () => setPhotoPicker(true) },
       { label: 'From this computer…', onSelect: () => pcFiles.current?.click() },
     ], 'above')
 
@@ -1924,6 +1931,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 
   return (
     <>
+      {photoPicker && <PhotoPicker limit={Math.max(0, 10 - files.length)} onClose={() => setPhotoPicker(false)} onAttach={(added) => {
+        const combined = [...latestFiles.current, ...added]
+        checkPhotoAttachmentBudget(combined)
+        latestFiles.current = combined
+        setFiles(combined)
+        setError(null)
+      }} />}
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
         <button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
           ‹
