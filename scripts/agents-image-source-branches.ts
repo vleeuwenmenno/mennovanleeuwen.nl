@@ -17,7 +17,7 @@ try {
   const thread = randomUUID()
   db.prepare('INSERT INTO agent_threads(id,user_id,title,mode,model,created_at,updated_at) VALUES(?,1,?, ?, ?,0,0)').run(thread,'Source fixture','quick','test')
   const bytes = readFileSync(new URL('./fixtures/agent-image-sources/source.png',import.meta.url))
-  const attachments = JSON.stringify([{kind:'image',name:'source.png',type:'image/png',data:bytes.toString('base64'),size:bytes.length}])
+  const attachments = JSON.stringify([{kind:'image',name:'source.png',mime:'image/png',data:bytes.toString('base64'),size:bytes.length}])
   const message = Number(db.prepare('INSERT INTO agent_messages(thread_id,role,content,attachments,created_at) VALUES(?,?,?,?,0)').run(thread,'user','Edit this source',attachments).lastInsertRowid)
   const sourceId = `attachment:${message}:0`
   const source = imageSource(owner,sourceId)
@@ -43,6 +43,10 @@ try {
   for (const image of images) {
     const again=imageAgainInput(owner,first.thread.id,image.id)
     assert.equal(again.operation,image.operation)
+    if (image.operation !== 'upscale') {
+      assert.equal(again.denoise,image.operation === 'refine' ? 0.2 : 0.65)
+      assert.equal(again.prompt,'Edit shape')
+    }
     assert.equal(again.source_image_id,sourceId)
     const restored=imageSource(owner,again.source_image_id)
     assert.deepEqual(restored.bytes,bytes)

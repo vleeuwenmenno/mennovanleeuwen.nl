@@ -244,7 +244,7 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
         <div className="agt-block-grid" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))` }}>
           {grid.rank.map((r, i) => <span key={i} className={`agt-block ${r < lit ? 'is-lit' : ''}`} style={{ animationDelay: `${-((i % grid.cols) + Math.floor(i / grid.cols)) * 0.12}s` }} />)}
         </div>
-        <span className="agt-image-status">{pending ? operation !== 'generate' && (!progress || progress.phase === 'running') ? operation === 'upscale' ? 'Upscaling image…' : 'Refining image…' : imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
+        <span className="agt-image-status">{pending ? operation !== 'generate' && (!progress || progress.phase === 'running') ? operation === 'inpaint' ? 'Inpainting image…' : operation === 'upscale' ? 'Upscaling image…' : 'Refining image…' : imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
       </div>}
       {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt={operation === 'inpaint' ? 'Inpainted image' : operation === 'upscale' ? 'Upscaled image' : operation === 'refine' ? 'Refined image' : 'Generated image'} width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>
