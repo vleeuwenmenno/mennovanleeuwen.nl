@@ -1302,7 +1302,10 @@ Add an API key from ollama.com in Settings → Integrations (stored encrypted), 
 `OLLAMA_API_KEY` on the server (admins only). Each thread is *Quick* (a search or two, a short answer) or *Deep*
 (searches from several angles, reads the sources with web fetch, and writes a structured answer
 with citations), on any of Ollama's cloud models that can call tools. Turns run on the server and
-stream to the window, with the model's thinking folded under each reply; Stop ends one. The
+stream to the window, with the model's thinking folded under each reply; Stop ends one. Answers stay
+plain by default: a thread's model, workflow, sampling and file names are named only when the user
+asks about them or is changing them, so swapping the model or the LoRA is one short paragraph rather
+than a tour of the settings, and nothing ends with an offer of further work. The
 composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
 for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, this computer, a drop (from the computer, Files or the desktop) or a paste. Its tools: web search

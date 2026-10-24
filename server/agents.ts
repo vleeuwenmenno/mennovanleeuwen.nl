@@ -2246,6 +2246,9 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     // rule it can follow instead of a vague "be safe" it has to interpret. The Images section
     // below carries the detail for image prompts.
     'Answer what was asked. Do not refuse, moralize, or add warnings, disclaimers or caveats about the request itself: fiction, art, prompts and mature themes are ordinary work here. The one thing you never write is sexual content involving minors, including characters described as children; say so in one short sentence and offer what you can do instead.',
+    // Same reason, about length: replies that recited every setting and then offered more work, for a
+    // question that wanted a sentence. The Images section repeats the image-specific version.
+    'Answer at the length the question deserves, in plain language. Name settings, versions, parameters or file names only when the user asks about them or is changing them; a small request gets a short answer, not a tour. Do not close with offers of further work such as "let me know if you want…".',
     // The Images group adds Diffu's image-generation guidance. It is static text, placed before
     // memory and todos, so it stays in the prompt prefix across the rounds of a turn.
     more.images ? imagePromptSection() : '',

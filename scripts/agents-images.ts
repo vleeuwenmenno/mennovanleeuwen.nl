@@ -489,6 +489,9 @@ try {
   assert.ok(imageGuidance.includes('Adult content is allowed when the user asks for it'))
   // The preset/checkpoint basics: the thread's `selected` recipe is the truth, a file name is a hint.
   assert.ok(imageGuidance.includes('PRESET, CHECKPOINT AND RECIPE'))
+  // Plain answers by default: the image guidance and the base prompt both say when detail is wanted.
+  assert.ok(imageGuidance.includes('HOW MUCH TO SAY'))
+  assert.ok(providerInputs.at(-1).messages[0].content.includes('Answer at the length the question deserves'))
   assert.ok(imageGuidance.includes('Never say a checkpoint'))
   // The base prompt carries the same stance for threads without Images: no refusals of fiction,
   // art or mature themes, and one stated limit.
@@ -849,7 +852,8 @@ try {
   assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, evidence_quote: 'Perfect, no flaws.' }), /match the saved message/)
   assert.throws(() => saveImageLearning(stranger, visionThread.id, baseLearning), /No such thread/)
   assert.throws(() => saveImageLearning(owner, batchThread.id, baseLearning), /Choose an image generated in this thread/)
-  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, image_id: 'not-an-artifact' }), /Choose an image/)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, image_id: 'not-an-artifact' }), /Use the image UUID/)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, { ...baseLearning, image_id: 'https://comfy/view?filename=x.png' }), /Use the image UUID/)
   const oldScope = database().prepare('SELECT backend_scope FROM agent_images WHERE id = ?').get(lastVisionImage.id) as any
   database().prepare('UPDATE agent_images SET backend_scope = NULL WHERE id = ?').run(lastVisionImage.id)
   assert.throws(() => saveImageLearning(owner, visionThread.id, baseLearning), /older images/)

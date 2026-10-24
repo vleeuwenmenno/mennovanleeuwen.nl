@@ -66,7 +66,11 @@ export function saveImageLearning(user: User, thread: string, input: Record<stri
   let learning: Learning
   if (previous) learning = { ...previous, note, task }
   else {
-    const imageId = bounded(input.image_id, 'Image ID', 36)
+    // A UUID, said plainly: the old length check answered "Image ID must contain 1–36 characters",
+    // which reads like a contradiction to a model holding a URL or a shortened id.
+    const given = typeof input.image_id === 'string' ? input.image_id.trim() : ''
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(given)) throw new HttpError(400, 'Use the image UUID of a picture generated in this thread, as read_image_learnings lists it, not its URL or filename')
+    const imageId = given
     const image = database().prepare('SELECT i.metadata, i.backend_scope, i.created_at FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.id = ? AND t.user_id = ?').get(imageId, thread, user.id) as { metadata: string | null; backend_scope: string | null; created_at: number } | undefined
     if (!image?.metadata || !image.backend_scope) throw new HttpError(404, 'Choose an image generated in this thread with recorded settings and backend provenance; older images cannot be assigned a guessed backend')
     const kind = input.source
