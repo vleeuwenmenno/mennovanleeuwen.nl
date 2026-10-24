@@ -79,11 +79,18 @@ export async function saveImageMask(thread: string, source: string, mask: Blob) 
     reader.onerror = () => reject(new Error('Could not read the mask'))
     reader.readAsDataURL(mask)
   })
-  return api<{ id: string; url: string; width: number; height: number }>(`/api/agents/threads/${thread}/image-masks`, { method: 'POST', json: { source_image_id: source, data } })
+  return api<{ id: string; url: string; width: number; height: number; coverage?: number }>(`/api/agents/threads/${thread}/image-masks`, { method: 'POST', json: { source_image_id: source, data } })
 }
-export async function inpaintImage(id: string, input: InpaintImageInput, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+export async function inpaintImage(id: string, input: MaskedEditInput, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
   const res = await fetch(`/api/agents/threads/${id}/inpaint`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal })
   await readEvents(res, onEvent)
 }
 
 export const discardImageMask = (id: string) => api(`/api/agents/image-masks/${id}`, { method: 'DELETE' })
+
+/** LaMa removal of a mask's white area, from the editor or the agent; no prompt or diffusion settings. */
+export type RemoveImageInput = { operation: 'remove'; source_image_id: string; mask_id: string }
+/** Either edit of a masked area: redraw it from a prompt, or remove it. */
+export type MaskedEditInput = InpaintImageInput | RemoveImageInput
+
+export { agentMasks, type AgentMask } from './agentMasks'

@@ -24,6 +24,7 @@
 .agt-mask-image { position: relative; max-width: 100%; flex: none; line-height: 0; }
 .agt-mask-image img { display: block; width: 100%; height: 100%; image-orientation: from-image; user-select: none; }
 .agt-mask-image canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; color: var(--accent, Highlight); touch-action: none; cursor: crosshair; }
+.agt-mask-image canvas[data-hidden] { opacity: 0; cursor: default; }
 .agt-mask-cursor { display: none; position: absolute; pointer-events: none; border: 2px solid var(--fg-bright, CanvasText); outline: 1px solid var(--bg, Canvas); border-radius: 50%; transform: translate(-50%, -50%); box-sizing: border-box; }
 .agt-mask-image:focus-within .agt-mask-cursor { display: block; }
 .agt-mask-status { min-height: 1.5em; overflow-wrap: anywhere; }

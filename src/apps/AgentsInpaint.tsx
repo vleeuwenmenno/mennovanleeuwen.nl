@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { getImageCatalog, saveImageMask, discardImageMask, type GeneratedImage, type ImageCatalog, type InpaintImageInput } from '../data/agentImages'
+import { getImageCatalog, saveImageMask, discardImageMask, type GeneratedImage, type ImageCatalog, type MaskedEditInput } from '../data/agentImages'
 import { ImageDialog } from './AgentsModelBrowser'
 import { AgentsMaskEditor, maskDimensionsValid } from './AgentsMaskEditor'
 
 export type InpaintSource = Pick<GeneratedImage, 'id' | 'name' | 'url'> & Partial<Pick<GeneratedImage, 'width' | 'height' | 'settings'>>
 
 /** Describe the edit first; Apply in the mask editor is the explicit generation action. */
-export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }: { image: InpaintSource; threadId: string; disabled: boolean; onClose: () => void; onInpaint: (input: InpaintImageInput) => void }) {
+export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }: { image: InpaintSource; threadId: string; disabled: boolean; onClose: () => void; onInpaint: (input: MaskedEditInput) => void }) {
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null)
   const [sourceError, setSourceError] = useState('')
   const [catalog, setCatalog] = useState<ImageCatalog | null>(null)
@@ -14,7 +14,7 @@ export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }:
   const [revision, setRevision] = useState(0)
   const [prompt, setPrompt] = useState('')
   const [denoise, setDenoise] = useState(0.65)
-  const [painting, setPainting] = useState(false)
+  const [painting, setPainting] = useState<'inpaint' | 'remove' | null>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   useEffect(() => {
@@ -41,18 +41,19 @@ export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }:
     else source.src = url.href
     return () => { current = false; source.onload = null; source.onerror = null }
   }, [image.url, image.width, image.height])
-  if (painting && dimensions) return <AgentsMaskEditor sourceUrl={image.url} sourceName={image.name} width={dimensions.width} height={dimensions.height} onCancel={onClose} onApply={async ({ mask }) => {
+  if (painting && dimensions) return <AgentsMaskEditor sourceUrl={image.url} sourceName={image.name} width={dimensions.width} height={dimensions.height} applyLabel={painting === 'remove' ? 'Remove area' : 'Apply mask'} onCancel={onClose} onApply={async ({ mask }) => {
     if (disabled) throw new Error('Wait for the current turn to finish before applying a mask.')
     const saved = await saveImageMask(threadId, image.id, mask)
     if (!alive.current) { await discardImageMask(saved.id).catch(() => {}); return }
+    if (painting === 'remove') { onInpaint({ operation: 'remove', source_image_id: image.id, mask_id: saved.id }); return }
     const s = image.settings
-    const settings = s && s.operation !== 'upscale' ? { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler } : {}
+    const settings = s && s.operation !== 'upscale' && s.operation !== 'remove' ? { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler } : {}
     onInpaint({ ...settings, operation: 'inpaint', source_image_id: image.id, mask_id: saved.id, prompt: prompt.trim(), denoise })
   }} />
   const problem = sourceError || error || (catalog && !catalog.inpaint ? catalog.inpaintError || 'This backend does not support masked editing.' : '')
   return <ImageDialog title="Edit selected area" onClose={onClose}>
     <div className="image-session-body">
-      <p>Describe the replacement, then paint the area to change in {image.name}.</p>
+      <p>Describe the replacement, then paint the area to change in {image.name}.{catalog?.remove ? ' To erase something instead, leave the instructions empty and paint the area to remove.' : ''}</p>
       <label className="image-config-field">Edit instructions<textarea className="dlg-input" aria-label="Edit instructions" value={prompt} maxLength={6000} rows={4} onChange={e => setPrompt(e.target.value)} /></label>
       <label className="image-config-field">Denoise<input type="range" aria-label="Inpaint denoise" min="0.1" max="1" step="0.05" value={denoise} onChange={e => setDenoise(Number(e.target.value))} /><output>{denoise}</output></label>
       <p className="muted">Lower denoise preserves more structure. Source and mask resize together to the generation working size (up to 1536 px per side, 1536 × 1024 area). Black areas preserve that resized source; the original stays unchanged. Applying the mask starts generation.</p>
@@ -61,6 +62,6 @@ export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }:
       {problem && <p className="t-red" role="alert">{problem}</p>}
       {problem && <button type="button" className="btn btn-small" onClick={() => setRevision(x => x + 1)}>Refresh capability</button>}
     </div>
-    <footer className="image-dialog-foot"><button type="button" className="btn btn-small" onClick={onClose}>Cancel</button><span className="image-grow" /><button type="button" className="btn btn-small btn-primary" disabled={disabled || !dimensions || !catalog?.inpaint || !!problem || !prompt.trim()} onClick={() => setPainting(true)}>Paint edit area</button></footer>
+    <footer className="image-dialog-foot"><button type="button" className="btn btn-small" onClick={onClose}>Cancel</button><span className="image-grow" />{catalog?.remove && <button type="button" className="btn btn-small" disabled={disabled || !dimensions || !!sourceError || !!error || !!prompt.trim()} title="Paint what to erase; it is filled in from its surroundings (LaMa), no instructions needed" onClick={() => setPainting('remove')}>Paint area to remove</button>}<button type="button" className="btn btn-small btn-primary" disabled={disabled || !dimensions || !catalog?.inpaint || !!problem || !prompt.trim()} onClick={() => setPainting('inpaint')}>Paint edit area</button></footer>
   </ImageDialog>
 }

@@ -361,6 +361,10 @@ export function database(): DatabaseSync {
   if (!cols('agent_memories').includes('image_learning')) db.exec('ALTER TABLE agent_memories ADD COLUMN image_learning TEXT')
   if (!cols('agent_images').includes('backend_scope')) db.exec('ALTER TABLE agent_images ADD COLUMN backend_scope TEXT')
   if (!cols('agent_images').includes('metadata')) db.exec('ALTER TABLE agent_images ADD COLUMN metadata TEXT')
+  // Added later: masks the agent made with make_image_mask (origin 'auto') keep what they selected
+  // (target, exclude, coverage, bounding box) so the thread can list and show every attempt.
+  if (!cols('agent_image_masks').includes('origin')) db.exec("ALTER TABLE agent_image_masks ADD COLUMN origin TEXT NOT NULL DEFAULT 'editor'")
+  if (!cols('agent_image_masks').includes('details')) db.exec('ALTER TABLE agent_image_masks ADD COLUMN details TEXT')
   if (!cols('agent_threads').includes('image_config')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_config TEXT')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())

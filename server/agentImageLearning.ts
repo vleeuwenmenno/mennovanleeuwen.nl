@@ -25,13 +25,14 @@ const clipped = (value: string, max: number) => value.length > max ? value.slice
 /** Keep the full snapshot in storage, but do not feed its prompts back as evidence. */
 function settingsLine(settings: ImageGenerationSettings) {
   const file = (value: string) => clipped(value.replace(/\s+/g, ' '), 160)
+  if (settings.operation === 'remove') return `LaMa removal · ${settings.width} × ${settings.height} · source ${settings.source.id} · mask ${settings.mask.id}`
   if (settings.operation === 'upscale') return `Model upscale · ${file(settings.upscale_model)} · ${settings.width} × ${settings.height} · source ${settings.source.id}`
   const loras = (settings.loras ?? []).map((l) => `${file(l.name)} (${l.weight})`).join(', ') || '(none)'
   return `${settings.operation === 'inpaint' ? 'Inpaint · ' : settings.operation === 'refine' ? 'Refinement · ' : settings.hires ? 'Hires · ' : ''}${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}${settings.source ? ` · ${settings.operation === 'inpaint' ? 'inpaint' : settings.operation === 'refine' ? 'refine' : 'img2img'} ${settings.source.id} · denoise ${settings.denoise}` : ''}`
 }
 const evidenceRecord = (row: Row, learning: Learning) => ({
   id: row.id, profileId: learning.profileId ?? null, artifactId: learning.artifactId,
-  operation: learning.settings.operation === 'upscale' ? 'upscale' : learning.settings.hires ? 'hires' : learning.settings.operation ?? 'generate',
+  operation: learning.settings.operation === 'upscale' || learning.settings.operation === 'remove' ? learning.settings.operation : learning.settings.hires ? 'hires' : learning.settings.operation ?? 'generate',
   ...(learning.settings.operation === 'upscale' ? { upscale_model: learning.settings.upscale_model } : {}),
   settingsLine: settingsLine(learning.settings), task: clipped(learning.task, 100), note: clipped(learning.note, 240),
   // Do not add an ellipsis to a quote: it must remain an exact saved-message substring.
@@ -48,11 +49,11 @@ export function imageLearnings(user: User, thread: string, assets: ImageAssets, 
   const relevant = all.map((row) => ({ row, value: JSON.parse(row.image_learning) as Learning }))
     .filter(({ value: l }) => {
       if (l.scope !== scope || (l.profileId ?? null) !== (profile?.id ?? null)) return false
-      const recordedOperation = l.settings.operation === 'upscale' ? 'upscale' : l.settings.hires ? 'hires' : l.settings.operation ?? 'generate'
+      const recordedOperation = l.settings.operation === 'upscale' || l.settings.operation === 'remove' ? l.settings.operation : l.settings.hires ? 'hires' : l.settings.operation ?? 'generate'
       if (operation && recordedOperation !== operation) return false
       if (upscaleModel && (l.settings.operation !== 'upscale' || l.settings.upscale_model !== upscaleModel)) return false
       if (allModels) return true
-      if (l.settings.operation === 'upscale') return operation === 'upscale'
+      if (l.settings.operation === 'upscale' || l.settings.operation === 'remove') return operation === l.settings.operation
       if (recordedOperation !== (operation ?? 'generate')) return false
       const settings = l.settings
       return JSON.stringify(settings.loras ?? []) === JSON.stringify(assets.loras ?? []) && settings.preset === assets.preset && (['model', 'clip', 'vae'] as const).every((field) => !assets[field] || settings[field] === assets[field])
@@ -120,7 +121,7 @@ export function saveImageLearning(user: User, thread: string, input: Record<stri
       source = { kind, messageId: Number(input.evidence_message_id), quote }
     } else if (input.evidence_message_id !== undefined || input.evidence_quote !== undefined) throw new HttpError(400, 'Suggestions cannot claim evidence')
     const parameters = JSON.parse(image.metadata) as ImageGenerationSettings
-    const profileId = input.profile_id === undefined ? (parameters.operation === 'upscale' ? null : parameters.profile_id ?? null) : input.profile_id
+    const profileId = input.profile_id === undefined ? (parameters.operation === 'upscale' || parameters.operation === 'remove' ? null : parameters.profile_id ?? null) : input.profile_id
     if (profileId !== null) ownImageProfile(user, profileId)
     learning = { version: 1, profileId: profileId as number | null, scope: image.backend_scope, artifactId: imageId, settings: parameters, task, note, source }
   }

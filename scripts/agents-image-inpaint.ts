@@ -130,7 +130,7 @@ try {
     assert.throws(() => inpaintGraph(altered, info))
   }
   const png = encodePng({ width: 2, height: 2, data: Uint8Array.from([0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255]) })
-  assert.deepEqual(validateInpaintMask(png, { width: 2, height: 2 }), { width: 2, height: 2, mime: 'image/png' })
+  assert.deepEqual(validateInpaintMask(png, { width: 2, height: 2 }), { width: 2, height: 2, mime: 'image/png', coverage: 0.5, bbox: { x: 1, y: 0, width: 1, height: 2 } })
   assert.throws(() => validateInpaintMask(png, { width: 2, height: 3 }), /dimensions must match/)
   // Independent RGBA encoder exercises browser-portable opaque alpha, not a forged IHDR.
   const rgbaPng = (alpha: number, white = true) => {
@@ -151,7 +151,7 @@ try {
       chunk('IDAT', deflateSync(Buffer.from([0, 0, 0, 0, 255, ...Array(3).fill(white ? 255 : 0), alpha]))),
       chunk('IEND', Buffer.alloc(0))])
   }
-  assert.deepEqual(validateInpaintMask(rgbaPng(255), { width: 2, height: 1 }), { width: 2, height: 1, mime: 'image/png' })
+  assert.deepEqual(validateInpaintMask(rgbaPng(255), { width: 2, height: 1 }), { width: 2, height: 1, mime: 'image/png', coverage: 0.5, bbox: { x: 1, y: 0, width: 1, height: 1 } })
   for (const alpha of [0, 254]) assert.throws(() => validateInpaintMask(rgbaPng(alpha), { width: 2, height: 1 }), /fully opaque/)
   assert.throws(() => validateInpaintMask(rgbaPng(255, false), { width: 2, height: 1 }), /empty/)
   assert.throws(() => validateInpaintMask(Buffer.alloc(8 * 1024 * 1024 + 1), { width: 2, height: 2 }), /8 MiB/)

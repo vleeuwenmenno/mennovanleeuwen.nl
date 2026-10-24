@@ -540,10 +540,13 @@ export function toolLabel(call: ToolCall, result?: string): string {
     case 'read_image_learnings': return 'Read image learning evidence'
     case 'save_image_learning': return 'Save image observation'
     case 'save_image_profile': return 'Save suggested style profile'
+    case 'make_image_mask': return `${result ? 'Made a mask' : 'Making a mask'}: “${s('target').slice(0, 80)}”${s('exclude') ? `, keeping “${s('exclude').slice(0, 80)}”` : ''}`
+    case 'list_image_masks': return 'Listed image masks'
     case 'generate_image':
       if (call.arguments?.operation === 'refine') return result ? 'Refined image' : 'Refine image'
       if (call.arguments?.hires) return result ? 'Generated image with hires' : 'Generate image with hires'
       if (call.arguments?.operation === 'inpaint') return result ? 'Inpainted image' : `Inpaint image: ${s('prompt')}`
+      if (call.arguments?.operation === 'remove') return result ? 'Removed the masked area' : 'Remove the masked area'
       if (call.arguments?.operation === 'upscale') return result ? 'Upscaled image' : `Upscale image: ${s('upscale_model')}`
       if (result?.includes('\"learning_review_required\":true')) return 'Review image learnings before generation'
       return result ? call.arguments?.source_image_id ? 'Edited image' : 'Generated image' : `${call.arguments?.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`

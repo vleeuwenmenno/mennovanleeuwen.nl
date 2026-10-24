@@ -71,6 +71,15 @@ try {
   assert.ok(matchesObservation(upscale, { ...NO_FILTER, model: modelKey(upscale) }))
   assert.ok(!matchesObservation(otherUpscale, { ...NO_FILTER, model: modelKey(upscale) }))
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, model: modelKey(upscale) }))
+  // A LaMa removal has no model or sampler: it reads as remove, with its own summary and filter key.
+  const removalSettings = { operation: 'remove', width: 1152, height: 768, mask: { id: '00000000-0000-4000-8000-000000000001', url: '/api/agents/image-masks/00000000-0000-4000-8000-000000000001', width: 1152, height: 768, semantics: 'white-edits-black-preserves' }, source: { id: 'attachment:1:0', name: 'street.png', url: '/x', width: 1152, height: 768, resize: 'none' } }
+  const removal = readObservation(row, '', JSON.stringify({ ...learning, settings: removalSettings }))
+  const removalText = observationFromText(row, text(3, 'vision', 'Remove', 'Clean fill', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(removalSettings)}`))!
+  assert.equal(removal.settings?.operation, 'remove'); assert.equal(removalText.settings?.operation, 'remove')
+  assert.equal(settingsLine(removal.settings), 'Remove (LaMa) · 1152 × 768')
+  assert.equal(modelKey(removal), 'remove|lama')
+  assert.ok(matchesObservation(removal, { ...NO_FILTER, model: 'remove|lama' }))
+  assert.ok(!matchesObservation(upscale, { ...NO_FILTER, model: 'remove|lama' }))
   const refined = readObservation(row, '', JSON.stringify({ ...learning, settings: { ...settings, operation: 'refine', denoise: 0.2 } }))
   assert.equal(refined.settings?.operation, 'refine')
   assert.ok(settingsLine(refined.settings).startsWith('Refine · strength 0.2 · Krea2 Turbo'))

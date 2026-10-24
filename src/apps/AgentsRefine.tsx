@@ -7,7 +7,7 @@ import { ImageDialog, ImageModelFields, ModelPicker } from './AgentsModelBrowser
 type Components = Pick<ImageConfig, 'preset' | 'model' | 'clip' | 'vae'>
 /** Explicit diffusion refinement: inherited settings stay absent from the request unless overridden. */
 export function RefineDialog({ image, threadId, disabled, onClose, onRefine }: { image: GeneratedImage; threadId: string; disabled: boolean; onClose: () => void; onRefine: (input: RefineImageInput) => void }) {
-  const recorded = image.settings?.operation !== 'upscale' ? image.settings : undefined
+  const recorded = image.settings?.operation !== 'upscale' && image.settings?.operation !== 'remove' ? image.settings : undefined
   const needsPrompt = !image.settings
   const [catalog, setCatalog] = useState<ImageCatalog | null>(null)
   const [revision, setRevision] = useState(0)
