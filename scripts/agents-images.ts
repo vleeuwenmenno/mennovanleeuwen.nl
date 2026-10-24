@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { createServer, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Server } from './empires-harness.ts'
+import type { ImageReviewTurn } from '../server/agentImageLearning.ts'
 import { asPage } from './as-page.ts'
 import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, imageProgressFraction, imageProgressLabel, type ImageAssetCatalog } from '../src/data/imageModels.ts'
 import { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } from '../server/comfyProgress.ts'
@@ -219,6 +220,8 @@ let requestedTool = 'generate_image'
 let extraToolCalls: { name: string; arguments: Record<string, unknown> }[] = []
 let providerChats = 0
 let retryLearning = true
+// When set, the fake model plays these tool calls, one list per reply in a turn, then answers.
+let sequence: { name: string; arguments: Record<string, unknown> }[][] = []
 const providerInputs: any[] = []
 const visionRequests: any[] = []
 let visionReply: 'normal' | 'thinking' | 'empty' | 'long-thinking' = 'normal'
@@ -341,8 +344,9 @@ const ollama = createServer((req, res) => {
       return res.end(JSON.stringify({ message: { role: 'assistant', content: 'The image shows a small fixture. Quality observations are uncertain at this size.' }, done: true }) + '\n')
     }
     const after = body.messages.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1)
-    const needsLearning = retryLearning && after.some((m: any) => m.role === 'tool' && m.content.includes('\"learning_review_required\":true')) && !after.some((m: any) => m.role === 'tool' && (m.content.startsWith('{\"image\":') || m.content.startsWith('{\"error\":')))
-    const message = after.some((m: any) => m.role === 'tool') && !needsLearning ? { content: 'Image request handled.' } : { content: '', tool_calls: [{ function: { name: needsLearning ? 'generate_image' : requestedTool, arguments: generationArgs } }, ...extraToolCalls.map((call) => ({ function: call }))] }
+    const needsLearning = retryLearning && after.some((m: any) => m.role === 'tool' && m.content.includes('"status":"review_once"')) && !after.some((m: any) => m.role === 'tool' && (m.content.startsWith('{\"image\":') || m.content.startsWith('{\"error\":')))
+    const scripted = sequence.length ? sequence[after.filter((m: any) => m.role === 'assistant').length] : undefined
+    const message = sequence.length ? scripted ? { content: '', tool_calls: scripted.map((call) => ({ function: call })) } : { content: 'Image request handled.' } : after.some((m: any) => m.role === 'tool') && !needsLearning ? { content: 'Image request handled.' } : { content: '', tool_calls: [{ function: { name: needsLearning ? 'generate_image' : requestedTool, arguments: generationArgs } }, ...extraToolCalls.map((call) => ({ function: call }))] }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
     res.write(JSON.stringify({ message: { role: 'assistant', ...message }, done: false }) + '\n')
     res.end(JSON.stringify({ message: { role: 'assistant', content: '' }, done: true }) + '\n')
@@ -923,7 +927,7 @@ try {
   behavior = 'ok'
   console.log('PASS silent generation, complete tool batches and todos, exact pending dimensions, actual vision bytes, current-thread default and explicit owner-wide inspection, unsupported models and payload limit')
   // Durable learning uses actual artifacts and evidence, not agent-supplied settings.
-  const { imageLearnings, saveImageLearning } = await import('../server/agentImageLearning.ts')
+  const { imageLearnings, saveImageLearning, imageReviewGate, imageReviewTurn } = await import('../server/agentImageLearning.ts')
   const { imageBackendScope } = await import('../server/agentImages.ts')
   const { saveImageProfile, selectedImageProfile } = await import('../server/agentImageProfiles.ts')
   const owner = { id: 1, admin: true } as any, stranger = { id: 2 } as any
@@ -1019,7 +1023,9 @@ try {
   const submissionsBeforeGate = submissions
   const gated = await turn(visionThread.id)
   assert.equal(submissions, submissionsBeforeGate)
-  assert.equal(result(gated).learning_review_required, true)
+  assert.equal(result(gated).status, 'review_once')
+  assert.equal(result(gated).submitted, false)
+  assert.match(result(gated).next, /not an error/)
   assert.equal(result(gated).selectedProfile.id, profile.id)
   assert.equal(result(gated).notes[0].id, learned.id)
   assert.ok(providerInputs.at(-1).messages.filter((m: any) => m.role === 'system').every((m: any) => !m.content.includes('Keep the user preference provisional')))
@@ -1029,12 +1035,152 @@ try {
   assert.equal(result(learnedGeneration).image.settings.seed, 91)
   assert.equal(result(learnedGeneration).image.settings.profile_id, profile.id)
   assert.equal(learnedGeneration.messages.at(-1).role, 'tool')
+  const reviewCount = (t: any) => t.messages.slice(t.messages.findLastIndex((m: any) => m.role === 'user')).filter((m: any) => m.toolName === 'generate_image' && m.content.includes('"status":"review_once"')).length
+  // Nothing carries over between turns: a new turn with nothing changed shows the evidence once again,
+  // and that evidence is in what the model is sent next, not just recorded.
+  const quietSubmissions = submissions
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }]]
+  const quiet = await turn(visionThread.id)
+  assert.equal(reviewCount(quiet), 1)
+  assert.ok(result(quiet).image)
+  assert.equal(submissions, quietSubmissions + 1)
+  const sentAfterGate = providerInputs.at(-1).messages
+  const sentReview = sentAfterGate.slice(sentAfterGate.findLastIndex((m: any) => m.role === 'user')).find((m: any) => m.role === 'tool' && m.content.includes('"status":"review_once"'))
+  assert.ok(sentReview, 'the review payload reaches the model in the same turn')
+  assert.ok(JSON.parse(sentReview.content).notes.some((n: any) => n.id === learned.id))
   // Discovery and generation in one batch cannot count as evidence already read by the model.
-  requestedTool = 'list_image_models'; generationArgs = { prompt: 'Studio portrait', profile_id: profile.id }
-  extraToolCalls = [{ name: 'generate_image', arguments: generationArgs }]
-  const batchedRead = await turn(visionThread.id)
-  assert.ok(batchedRead.messages.some((m: any) => m.toolName === 'generate_image' && m.content.includes('learning_review_required')))
-  assert.equal(batchedRead.messages.at(-1).role, 'tool')
+  const batchThread2 = await thread()
+  sequence = [[{ name: 'list_image_models', arguments: {} }, { name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }]]
+  const batchedRead = await turn(batchThread2.id)
+  assert.equal(reviewCount(batchedRead), 1)
+  assert.ok(result(batchedRead).image)
+  // Discovery covers the thread's profile for plain generation: the same submits straight away,
+  // another profile shows its own evidence once, then submits.
+  const coverThread = await thread()
+  sequence = [[{ name: 'list_image_models', arguments: {} }], [{ name: 'generate_image', arguments: { prompt: 'Covered' } }]]
+  const coveredTurn = await turn(coverThread.id)
+  assert.equal(reviewCount(coveredTurn), 0)
+  assert.ok(result(coveredTurn).image)
+  sequence = [[{ name: 'list_image_models', arguments: {} }], [{ name: 'generate_image', arguments: { prompt: 'Profile B', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Profile B', profile_id: profile.id } }]]
+  const otherProfileTurn = await turn(coverThread.id)
+  assert.equal(reviewCount(otherProfileTurn), 1)
+  assert.equal(JSON.parse(otherProfileTurn.messages.find((m: any) => m.content.includes('"status":"review_once"')).content).selectedProfile.id, profile.id)
+  assert.equal(result(otherProfileTurn).image.settings.profile_id, profile.id)
+  // Changing components, seed or LoRAs within a profile asks nothing more; another profile asks once
+  // more, and two reviews a turn is the most there ever are.
+  const changed = await thread()
+  const beforeChanged = submissions
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id, seed: 7 } }]]
+  const sameProfile = await turn(changed.id)
+  assert.equal(reviewCount(sameProfile), 1)
+  assert.ok(result(sameProfile).image)
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: otherProfile.id, seed: 7 } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: otherProfile.id, seed: 7 } }]]
+  const changedTurn = await turn(changed.id)
+  assert.equal(reviewCount(changedTurn), 2)
+  assert.equal(result(changedTurn).image.settings.profile_id, otherProfile.id)
+  assert.equal(submissions, beforeChanged + 2)
+  // Reading the learnings first counts as the review for what it covered: all operations of a profile here.
+  const readFirst = await thread()
+  sequence = [[{ name: 'read_image_learnings', arguments: { profile_id: profile.id, all_models: true } }], [{ name: 'generate_image', arguments: { prompt: 'Studio portrait', profile_id: profile.id } }]]
+  const readFirstTurn = await turn(readFirst.id)
+  assert.equal(reviewCount(readFirstTurn), 0)
+  assert.ok(result(readFirstTurn).image)
+  // A gated result stays whole on its way to the model, even behind 16 more results in its batch.
+  const wide = await thread()
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Wide batch', profile_id: profile.id } }, ...Array.from({ length: 16 }, () => ({ name: 'list_generated_images', arguments: {} }))], [{ name: 'generate_image', arguments: { prompt: 'Wide batch', profile_id: profile.id } }]]
+  const wideTurn = await turn(wide.id)
+  const storedReview = wideTurn.messages.find((m: any) => m.content.includes('"status":"review_once"')).content
+  assert.equal(wideTurn.messages.slice(wideTurn.messages.findLastIndex((m: any) => m.role === 'user')).filter((m: any) => m.role === 'tool').length, 18)
+  assert.ok(storedReview.length > 1500, `review payload is only ${storedReview.length} characters`)
+  const wideSent = providerInputs.at(-1).messages.find((m: any) => m.role === 'tool' && m.content.includes('"status":"review_once"'))
+  assert.equal(wideSent.content, storedReview)
+  assert.ok(result(wideTurn).image)
+  // Discovery or a read behind 16 more results reaches the model whole too, so its coverage holds.
+  for (const [name, args] of [['list_image_models', {}], ['read_image_learnings', { profile_id: profile.id, all_models: true }]] as const) {
+    const t = await thread()
+    if (name === 'list_image_models') await json('PUT', `/api/agents/image-profiles/threads/${t.id}`, { id: profile.id })
+    sequence = [[{ name, arguments: args }, ...Array.from({ length: 16 }, () => ({ name: 'list_generated_images', arguments: {} }))], [{ name: 'generate_image', arguments: { prompt: 'Wide evidence', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Wide evidence', profile_id: profile.id } }]]
+    const wideEvidence = await turn(t.id)
+    const stored = wideEvidence.messages.find((m: any) => m.toolName === name).content
+    assert.ok(stored.length > 1500, `${name} payload is only ${stored.length} characters`)
+    const sent = providerInputs.at(-1).messages.find((m: any) => m.role === 'tool' && m.tool_name === name)
+    assert.equal(sent.content, stored, `${name} reaches the model whole`)
+    assert.equal(reviewCount(wideEvidence), 0)
+    assert.ok(result(wideEvidence).image)
+  }
+  // The essentials lead the payload, so even a clipped copy keeps them.
+  assert.deepEqual(Object.keys(JSON.parse(storedReview)).slice(0, 4), ['status', 'submitted', 'next', 'notes'])
+  // Two generations in one reply: the first shows evidence, the second waits, the next reply submits.
+  const pair = await thread()
+  const beforePair = submissions
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'One', profile_id: profile.id } }, { name: 'generate_image', arguments: { prompt: 'Two', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Two', profile_id: profile.id } }]]
+  const pairTurn = await turn(pair.id)
+  assert.equal(reviewCount(pairTurn), 1)
+  assert.match(JSON.parse(pairTurn.messages.filter((m: any) => m.toolName === 'generate_image').at(-2).content).skipped, /Not run/)
+  assert.ok(result(pairTurn).image)
+  assert.equal(submissions, beforePair + 1)
+  // Rewind after a gate removes the evidence from the thread, so the next turn shows it again.
+  const rewound = await thread()
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Rewound', profile_id: profile.id } }]]
+  const gatedOnly = await turn(rewound.id)
+  assert.equal(reviewCount(gatedOnly), 1)
+  assert.equal((await api('POST', `/api/agents/threads/${rewound.id}/rewind`, { messageId: gatedOnly.messages.find((m: any) => m.role === 'user').id })).status, 200)
+  assert.ok(!(await json('GET', `/api/agents/threads/${rewound.id}`)).messages.some((m: any) => m.content?.includes('review_once')))
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Rewound', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Rewound', profile_id: profile.id } }]]
+  const afterRewind = await turn(rewound.id)
+  assert.equal(reviewCount(afterRewind), 1)
+  assert.ok(result(afterRewind).image)
+  // Feedback context: replies to a generated image and messages naming one, never plain requests.
+  sequence = [[{ name: 'generate_image', arguments: { prompt: 'Again', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Again', profile_id: profile.id } }]]
+  const again = await turn(changed.id, undefined, 'The last bird looks too dark')
+  assert.ok(result(again).image)
+  const feedback = imageLearnings(owner, changed.id, lastVisionImage.settings).evidence.feedbackSources
+  assert.ok(feedback.every((f) => f.imageId))
+  assert.ok(feedback.some((f) => f.source === 'user_feedback' && f.quote === 'The last bird looks too dark' && f.imageId === result(changedTurn).image.id))
+  assert.ok(!feedback.some((f) => f.messageId === changedTurn.messages.find((m: any) => m.role === 'user').id))
+  assert.deepEqual(imageLearnings(owner, pair.id, lastVisionImage.settings).evidence.feedbackSources, [])
+  // A named image older than the latest five still resolves to itself, and the list stays at five.
+  const seven = await thread()
+  const sevenIds: string[] = []
+  for (let i = 0; i < 7; i++) {
+    sequence = [[{ name: 'generate_image', arguments: { prompt: `Bird ${i}`, profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: `Bird ${i}`, profile_id: profile.id } }]]
+    sevenIds.push(result(await turn(seven.id, undefined, `Bird ${i}`)).image.id)
+  }
+  sequence = []
+  const now = Date.now()
+  for (const [i, text] of [`The first one, ${sevenIds[0]}, had the best light`, 'Unrelated: what time is it?', `Also ${sevenIds[1]} was nice`, `And ${sevenIds[2]}`, `And ${sevenIds[3]}`, `And ${sevenIds[4]}`].entries()) database().prepare('INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(seven.id, 'user', text, now + i)
+  const named = imageLearnings(owner, seven.id, lastVisionImage.settings).evidence
+  assert.equal(named.currentThreadImages.length, 5)
+  assert.ok(!named.currentThreadImages.some((i) => i.id === sevenIds[0]))
+  assert.equal(named.feedbackSources.length, 5)
+  assert.ok(!named.feedbackSources.some((f) => f.quote.startsWith('Unrelated')))
+  // With the newer mentions gone, the oldest named image is back in the five and keeps its own ID.
+  database().prepare("DELETE FROM agent_messages WHERE thread_id = ? AND role = 'user' AND content LIKE 'And %'").run(seven.id)
+  const resolved = imageLearnings(owner, seven.id, lastVisionImage.settings).evidence.feedbackSources.find((f) => f.quote.startsWith('The first one'))
+  assert.equal(resolved?.imageId, sevenIds[0])
+  // Labels: a review reply submitted nothing, whatever the operation.
+  const { generateImageLabel, isImageReview } = await import('../src/data/imageToolLabel.ts')
+  const reviewReply = JSON.stringify({ status: 'review_once', submitted: false })
+  for (const args of [{ operation: 'refine' }, { operation: 'inpaint', prompt: 'x' }, { hires: { width: 1024 } }, {}]) {
+    assert.equal(generateImageLabel(args, reviewReply), 'Showed image learnings; nothing submitted yet')
+    assert.equal(generateImageLabel(args, JSON.stringify({ learning_review_required: true, submitted: false })), 'Showed image learnings; nothing submitted yet')
+  }
+  assert.ok(isImageReview(reviewReply) && !isImageReview(JSON.stringify({ image: { id: 'x' } })))
+  assert.equal(generateImageLabel({ operation: 'refine' }, JSON.stringify({ image: { id: 'x' } })), 'Refined image')
+  // The backstop: at most two gates a turn, then every call submits with a warning; shown keys never gate.
+  const backstop: ImageReviewTurn = imageReviewTurn()
+  const warn = console.warn, warned: string[] = []
+  console.warn = (...a: unknown[]) => { warned.push(a.join(' ')) }
+  try {
+    assert.equal(imageReviewGate('backstop-thread', '1|generate', backstop), true)
+    assert.equal(imageReviewGate('backstop-thread', '2|generate', backstop), true)
+    assert.equal(imageReviewGate('backstop-thread', '3|generate', backstop), false)
+  } finally { console.warn = warn }
+  assert.ok(warned.some((w) => w.includes('backstop-thread')))
+  const shownTurn = imageReviewTurn(); shownTurn.shown.add('1|refine')
+  assert.equal(imageReviewGate('backstop-thread', '1|refine', shownTurn), false)
+  assert.equal(imageReviewGate('backstop-thread', '1|inpaint', shownTurn), true)
+  console.log('PASS image learnings show once per profile and operation per turn (two at most) and reach the model whole: every new turn, discovery coverage, changed arguments, 17-result batches, reading first, batches, Rewind, old named images, labels, backstop and quiet feedback context')
   extraToolCalls = []; requestedTool = 'read_image_learnings'; generationArgs = { profile_id: profile.id, all_models: true, task: 'Studio' }
   const readTurn = await turn(visionThread.id)
   assert.ok(JSON.parse(readTurn.messages.findLast((m: any) => m.toolName === 'read_image_learnings').content).notes.length >= 2)
@@ -1096,11 +1242,7 @@ try {
   assert.ok((await json('GET', '/api/agents/memories')).some((m: any) => m.id === learned.id))
   const renamed = await json('POST', '/api/agents/image-profiles', { id: profile.id, name: 'Studio revised', description: 'User correction: less contrast.' })
   assert.equal(renamed.name, 'Studio revised')
-  assert.notEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings).receipt, relevant.receipt)
-  const receiptBeforeModelSwitch = imageLearnings(owner, visionThread.id, lastVisionImage.settings).receipt
-  database().prepare('UPDATE agent_threads SET model = ? WHERE id = ?').run('text-model', visionThread.id)
-  assert.notEqual(imageLearnings(owner, visionThread.id, lastVisionImage.settings).receipt, receiptBeforeModelSwitch)
-  database().prepare('UPDATE agent_threads SET model = ? WHERE id = ?').run('test-model', visionThread.id)
+  assert.equal(imageLearnings(owner, visionThread.id, lastVisionImage.settings).evidence.selectedProfile!.name, 'Studio revised')
   const extraProfiles: number[] = []
   for (let i = 0; i < 18; i++) extraProfiles.push(saveImageProfile(owner, { name: `Bounded profile ${i}`, description: '' }).id)
   assert.throws(() => saveImageProfile(owner, { name: 'Overflow profile', description: '' }), /20 profiles/)

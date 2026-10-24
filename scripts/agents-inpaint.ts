@@ -73,7 +73,7 @@ const ollama = createServer(async (req, res) => {
   if (!body.stream) return send(res, { message: { content: '{"title":"Upscale test"}' } })
   chats++
   const after = body.messages?.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1) ?? []
-  const complete = after.some((m: any) => m.role === 'tool' && !m.content.includes('learning_review_required'))
+  const complete = after.some((m: any) => m.role === 'tool' && !m.content.includes('"status":"review_once"'))
   const message = complete ? { content: 'Handled.' } : { content: '', tool_calls: [{ function: { name: requestedTool, arguments: args } }] }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }).end(JSON.stringify({ message: { role: 'assistant', ...message }, done: true }) + '\n')
 })
