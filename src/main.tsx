@@ -12,7 +12,7 @@ import { startNoteEventLinks } from './os/noteEventLinks'
 import { startPimLinks } from './os/pimLinks'
 import { registerServiceWorker } from './os/pwa'
 import { installSelectionRules } from './os/selection'
-import { trackVisualViewport } from './os/viewport'
+import { stopIosFocusZoom, trackVisualViewport } from './os/viewport'
 import { startSync } from './os/synced'
 import { startBrowserFiles } from './data/browserfs'
 import { initTheme } from './os/theme'
@@ -35,6 +35,7 @@ initFurigana()
 initHomeCurrency()
 if (!play) applyDockReserve()
 registerServiceWorker()
+stopIosFocusZoom()
 trackVisualViewport()
 startSync()
 if (!play) startBrowserFiles()

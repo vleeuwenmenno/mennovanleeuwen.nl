@@ -48,3 +48,15 @@ export function trackVisualViewport() {
   document.addEventListener('focusout', apply)
   apply()
 }
+
+/**
+ * iOS zooms the page in when a field gets focus and leaves it zoomed, which pans the whole OS
+ * sideways. maximum-scale=1 stops only that on iOS: Safari ignores it for pinching, so people can
+ * still zoom by hand. Elsewhere (Android) it would block pinch zoom, so it is iOS only.
+ */
+export function stopIosFocusZoom() {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
+  if (!ios || !meta || /maximum-scale/.test(meta.content)) return
+  meta.content += ', maximum-scale=1'
+}
