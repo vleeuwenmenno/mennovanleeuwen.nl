@@ -1,7 +1,7 @@
 import { addHiresStage, refinementSize, refinementSampling } from './agentImageRefine.ts'
 import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentImageInpaint.ts'
 import { imageMask, saveAutoMask, type ImageMask } from './agentImageMasks.ts'
-import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskGraph, autoMaskOptions, binaryMaskPng, missingNodes, pngFirstChannel, removeGraph, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
+import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskGraph, autoMaskOptions, binaryMaskPng, missingNodes, pngFirstChannel, removeGraph, segmenters, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
 import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
@@ -181,7 +181,7 @@ async function readJSON(user: User, s: ImageSettings, path: string, signal: Abor
 const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user), forPlanning = false) {
@@ -227,7 +227,7 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   try { assertInpaintNodes(info) } catch (e) { inpaintError = (e as Error).message }
   // Automatic masks and LaMa removal need optional custom nodes; their absence only switches these off.
   let autoMaskError = '', removeError = ''
-  try { autoMaskGraph({ target: 'object', exclude: 'other', grow: 12, threshold: 0.3, handOff: false }, 'source.png', info as SegmentNodeInfo) } catch (e) { autoMaskError = (e as Error).message }
+  try { autoMaskGraph({ target: 'object', exclude: 'other', grow: 12, threshold: null, handOff: false }, 'source.png', info as SegmentNodeInfo) } catch (e) { autoMaskError = (e as Error).message }
   try { removeGraph('source.png', 'mask.png', info as SegmentNodeInfo) } catch (e) { removeError = (e as Error).message }
   return { inpaint: !inpaintError, inpaintError, autoMask: !autoMaskError, autoMaskError, remove: !removeError, removeError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
@@ -777,7 +777,12 @@ async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, ou
     for (;;) {
       limit.throwIfAborted()
       const job = (await readJSON(user, s, `/history/${encodeURIComponent(promptId)}`, limit))[promptId]
-      if (job?.status?.status_str === 'error') throw new HttpError(502, 'ComfyUI could not run the segmentation; check that the SAM2 and GroundingDINO models can load (the first run downloads them)')
+      if (job?.status?.status_str === 'error') {
+        // The owner's own backend says why; keep it short and printable.
+        const failure = Array.isArray(job.status.messages) ? job.status.messages.find((m: unknown) => Array.isArray(m) && m[0] === 'execution_error')?.[1] : undefined
+        const what = (v: unknown, n: number) => typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, n) : ''
+        throw new HttpError(502, `ComfyUI failed${what(failure?.node_type, 80) ? ` in ${what(failure?.node_type, 80)}` : ''}${what(failure?.exception_message, 240) ? `: ${what(failure?.exception_message, 240)}` : ''}`)
+      }
       const output = job?.outputs?.[outputNode]?.images?.[0]
       if (output) {
         if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
@@ -811,18 +816,28 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   const missing = missingNodes(schemas as SegmentNodeInfo, AUTO_MASK_NODES)
   if (missing) throw new HttpError(409, `Automatic masks are unavailable: ${missing}. Ask the user to paint the area with Edit selected area instead.`)
   const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
-  const { graph, outputNode } = autoMaskGraph(options, uploadName, schemas as SegmentNodeInfo)
+  // Built (and validated) for every available segmenter before anything is uploaded.
+  const graphs = segmenters(schemas as SegmentNodeInfo).map((segmenter) => autoMaskGraph(options, uploadName, schemas as SegmentNodeInfo, segmenter))
   if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
   checkRoom(user, 256 * 1024)
   active.add(user.id)
-  let bytes: Buffer
+  let bytes: Buffer | undefined
+  const failures: string[] = []
   try {
     await uploadSource(user, s, source, uploadName, limit)
-    bytes = await runComfyGraph(user, s, graph, outputNode, limit)
+    // A segmenter that fails on this backend (a broken model or package) hands over to the next.
+    for (const { graph, outputNode, segmenter } of graphs) {
+      try { bytes = await runComfyGraph(user, s, graph, outputNode, limit); break }
+      catch (error) {
+        if (limit.aborted || !(error instanceof HttpError) || error.status !== 502) throw error
+        failures.push(`${segmenter}: ${error.message}`)
+      }
+    }
   } catch (error) {
     if (limit.aborted) throw new HttpError(signal.aborted ? 499 : 504, signal.aborted ? 'Mask making cancelled' : 'Mask making timed out after 10 minutes')
     throw error
   } finally { active.delete(user.id) }
+  if (!bytes) throw new HttpError(502, `Automatic masking failed on this ComfyUI (${failures.join('; ')}). Ask the user to paint the area with Edit selected area, or to fix the segmentation nodes.`)
   const decoded = pngFirstChannel(bytes)
   if (decoded.width !== source.width || decoded.height !== source.height) throw new HttpError(502, `ComfyUI returned a ${decoded.width} × ${decoded.height} mask for a ${source.width} × ${source.height} picture`)
   let white = 0

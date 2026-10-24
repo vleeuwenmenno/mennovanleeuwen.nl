@@ -1,4 +1,4 @@
-import { generatedImage } from '../../data/agentImages'
+import { agentMasks, generatedImage } from '../../data/agentImages'
 import { calendarTime, compactionText, toolLabel, type AgentMessage, type Todo, type ToolCall } from '../../data/agents'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
@@ -212,6 +212,17 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
         return ok([under(`${label} · ${image.width} × ${image.height}${image.seed === undefined ? '' : ` · seed ${image.seed}`}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}${image.settings.mask ? `\n  Mask: ${image.settings.mask.id} · white edits, black preserves working source` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}${image.settings.upscale_model ? `\n  Upscaler: ${image.settings.upscale_model}` : ''}${stages}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
       }
       return ok([under(oneLine(result))])
+    }
+    case 'make_image_mask':
+    case 'list_image_masks': {
+      // One line a mask: what it selected, how much, how it ended, and its private link.
+      const masks = agentMasks(result)
+      if (!masks.length) return ok([under(call.name === 'list_image_masks' ? 'No masks in this thread' : oneLine(result))])
+      return ok(masks.slice(0, verbose ? 20 : 6).flatMap((m) => {
+        const link = new URL(m.mask_url, location.origin).href
+        const facts = [m.target ? `“${m.target}”` : m.made_by === 'user' ? 'painted by you' : 'mask', m.exclude ? `keeping “${m.exclude}”` : '', m.coverage_percent !== undefined ? `${m.coverage_percent}%` : '', m.status ?? '', m.warning ?? ''].filter(Boolean).join(' · ')
+        return [...wrap([seg(`  ${facts}  `), { t: link, link }], w)]
+      }))
     }
     case 'read_file': {
       const n = result.split('\n').filter((l) => /^\s+\d+\t/.test(l)).length

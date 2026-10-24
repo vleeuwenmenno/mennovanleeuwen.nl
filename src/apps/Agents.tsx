@@ -1,9 +1,10 @@
 import { InpaintDialog, type InpaintSource } from './AgentsInpaint'
+import { MaskCards, type SavedMask } from './AgentsMaskCard'
 import { PhotoPicker } from './photos/PhotoPicker'
 import { checkPhotoAttachmentBudget } from '../data/photoAttachments'
 import { mentionAt, mentionText } from '../data/agentMentions'
 import { openSessionImages } from './AgentsSessionImages'
-import { generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type InpaintImageInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
+import { agentMasks, generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type MaskedEditInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
 import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
 import { useIsMobile } from '../os/useIsMobile'
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -1460,13 +1461,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     } catch (e) { setError((e as Error).message) }
     finally { sending.current = false }
   }
-  const again = async (imageId: string, operation?: UpscaleImageInput | RefineImageInput | InpaintImageInput) => {
+  const again = async (imageId: string, operation?: UpscaleImageInput | RefineImageInput | MaskedEditInput) => {
     if (!thread || answering || sending.current) return
     sending.current = true
     setError(null); setDropped(false); setBusy(true); pinned.current = true
     const ctl = new AbortController()
     abort.current = ctl
-    try { await (operation ? operation.operation === 'inpaint' ? inpaintImage(thread.id, operation, onEvent, ctl.signal) : operation.operation === 'refine' ? refineImage(thread.id, operation, onEvent, ctl.signal) : upscaleImage(thread.id, operation, onEvent, ctl.signal) : generateAnother(thread.id, imageId, onEvent, ctl.signal)) }
+    try { await (operation ? operation.operation === 'inpaint' || operation.operation === 'remove' ? inpaintImage(thread.id, operation, onEvent, ctl.signal) : operation.operation === 'refine' ? refineImage(thread.id, operation, onEvent, ctl.signal) : upscaleImage(thread.id, operation, onEvent, ctl.signal) : generateAnother(thread.id, imageId, onEvent, ctl.signal)) }
     catch (e) {
       if (isDropped(e) && !ctl.signal.aborted) lose()
       else if ((e as Error).name !== 'AbortError') setError((e as Error).message)
@@ -2016,6 +2017,14 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             setFiles((current) => [...current.filter((f) => f.source !== 'Image-to-image source'), { name: `${name} (image source)`, source: 'Image-to-image source', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
             setText((t) => t.startsWith('Edit this image: ') ? t : `Edit this image: ${t}`)
             input.current?.focus()
+          }} onMaskSaved={(saved) => {
+            // The hand-off back: the saved mask rides along with the next message, which the user sends when ready.
+            if (files.filter((f) => f.source !== 'Edited mask').length >= 10) { setError('Remove an attachment before handing back the mask (10 attachments maximum).'); return }
+            const what = saved.from.target ? ` for “${saved.from.target}”` : ''
+            const reference = `The user edited the mask${what} in the mask editor and saved it. mask_id: ${saved.mask_id}, source_image_id: ${saved.source_image_id}${saved.coverage !== undefined ? `, coverage ${Math.round(saved.coverage * 1000) / 10}%` : ''}. Continue the requested edit with this exact mask_id and source_image_id (generate_image operation remove, or inpaint for a replacement). Do not make a new mask.`
+            setFiles((current) => [...current.filter((f) => f.source !== 'Edited mask'), { name: 'Edited mask', source: 'Edited mask', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
+            setText((t) => t.trim() ? t : 'Continue with my edited mask.')
+            input.current?.focus()
           }} />
         </MoneyThread>
         {reconnecting ? (
@@ -2208,7 +2217,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage }: { onEditImage: (name: string, sourceId: string) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: InpaintImageInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onMaskSaved }: { onEditImage: (name: string, sourceId: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const [maskSource, setMaskSource] = useState<InpaintSource | null>(null)
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
@@ -2280,11 +2289,13 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
           if (image || wait?.kind === 'image' && wait.width && wait.height) return (
             <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}>
-              <ImageCard inpaint={image && imagesOn && threadId ? { threadId, disabled: answering, onSubmit: onInpaint } : undefined} refine={image && imagesOn && threadId ? { threadId, disabled: answering, onSubmit: onRefine } : undefined} operation={c.arguments?.operation === 'inpaint' ? 'inpaint' : c.arguments?.operation === 'upscale' ? 'upscale' : c.arguments?.operation === 'refine' ? 'refine' : 'generate'} upscale={image && imagesOn ? { disabled: answering, onSubmit: onUpscale } : undefined} retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} edit={image && imagesOn ? { disabled: answering, onClick: () => onEditImage(image.name, image.id) } : undefined} more={actions(results[j] ?? m, true)}
+              <ImageCard inpaint={image && imagesOn && threadId ? { threadId, disabled: answering, onSubmit: onInpaint } : undefined} refine={image && imagesOn && threadId ? { threadId, disabled: answering, onSubmit: onRefine } : undefined} operation={c.arguments?.operation === 'remove' ? 'remove' : c.arguments?.operation === 'inpaint' ? 'inpaint' : c.arguments?.operation === 'upscale' ? 'upscale' : c.arguments?.operation === 'refine' ? 'refine' : 'generate'} upscale={image && imagesOn ? { disabled: answering, onSubmit: onUpscale } : undefined} retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} edit={image && imagesOn ? { disabled: answering, onClick: () => onEditImage(image.name, image.id) } : undefined} more={actions(results[j] ?? m, true)}
                 again={image ? { disabled: answering || !imagesOn || !image.settings, hint: !image.settings ? 'This image has no recorded generation settings' : !imagesOn ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : image.settings?.operation === 'upscale' ? 'Repeat the upscale from its original source and recorded settings' : image.settings?.operation === 'refine' ? 'Refine the original source again with a fresh seed' : 'Draw this image again with the same prompt and settings', onClick: () => onAgain(image.id) } : undefined} />
             </div>
           )
-          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
+          // Masks the agent made or listed show as tinted pictures, each with Edit mask.
+          const masks = (c.name === 'make_image_mask' || c.name === 'list_image_masks') && results[j] ? agentMasks(results[j].content) : []
+          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
         })}
       </Fragment>,
     )

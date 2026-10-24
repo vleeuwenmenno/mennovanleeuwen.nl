@@ -29,7 +29,7 @@ export function discardImageMask(user: User, id: string) {
 }
 export type ImageMask = ImageSource & { source_id: string; origin: string }
 /** What make_image_mask selected; stored with the mask so every attempt can be listed later. */
-export type AutoMaskDetails = { target: string; exclude: string; grow: number; threshold: number; coverage: number; bbox: MaskStats['bbox']; verdict: 'ok' | 'empty' | 'too_large'; source_url: string }
+export type AutoMaskDetails = { target: string; exclude: string; grow: number; threshold: number | null; coverage: number; bbox: MaskStats['bbox']; verdict: 'ok' | 'empty' | 'too_large'; source_url: string }
 function ownThread(user: User, thread: string) {
   if (!database().prepare('SELECT 1 FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id)) throw new HttpError(404, 'No such thread')
 }

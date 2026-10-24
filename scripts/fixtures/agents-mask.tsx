@@ -16,6 +16,21 @@ host.mountMask = (overrides = {}) => {
 }
 host.mountMask()
 
+// Mask cards as the chat shows make_image_mask results: synthetic picture and mask, mocked save.
+const cards = window as unknown as { mountCards: () => Promise<void>; cardSaved?: unknown }
+cards.mountCards = async () => {
+  const { MaskCards } = await import('../../src/apps/AgentsMaskCard')
+  cards.cardSaved = undefined
+  const original = window.fetch.bind(window)
+  window.fetch = async (input, init) => {
+    const path = typeof input === 'string' ? input : input instanceof Request ? input.url : input.href
+    if (path === '/api/agents/threads/fixture/image-masks') return Response.json({ id: '00000000-0000-4000-8000-000000000009', width: 640, height: 400, coverage: 0.25 })
+    return original(input, init)
+  }
+  const mask = { mask_id: '00000000-0000-4000-8000-000000000008', mask_url: '/scripts/fixtures/agents-mask-start.png', source_image_id: 'attachment:42:0', source_url: '/scripts/fixtures/agents-mask.svg', width: 640, height: 400, target: 'cyclist', exclude: 'woman on the wall', coverage_percent: 50, status: 'used', made_by: 'agent' }
+  root.render(<MaskCards key={++serial} threadId="fixture" disabled={false} masks={[mask, { ...mask, mask_id: '00000000-0000-4000-8000-000000000007', status: 'ready', hand_off: true, warning: 'The mask covers 50%.' }]} onSaved={(saved) => { cards.cardSaved = saved }} />)
+}
+
 // Isolated integration fixture: only mask/catalog requests are intercepted; no real account data.
 const scenario = window as unknown as {
   mountInpaint: (attachment?: boolean) => Promise<void>; inpaintResult?: unknown; maskUploads: number; maskDiscards: number;

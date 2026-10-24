@@ -1453,12 +1453,14 @@ For a sent upload or Photos attachment, use its message’s **More → Edit sele
 the original owned attachment is used directly, with EXIF-oriented dimensions read when it loads. Describe
 the replacement and denoise (default 0.65), then **Paint edit area**. **Apply mask** saves an owned
 mask and starts inpainting; cancel before applying discards the selection without starting a job.
+To erase something instead, leave the instructions empty and choose **Paint area to remove** (when
+the backend has LaMa, see below): **Remove area** saves the mask and removes it.
 The backend capability is checked first. The app uses the source image's recorded diffusion
 components/sampling when available; otherwise it uses current image settings. For a saved mask,
 the CLI/model can call `generate_image` with `operation: "inpaint"`, `source_image_id`, `mask_id`,
 and a prompt. Select an uploaded source with `list_image_attachments` and reuse its exact
-`attachment:message:index` ID; select a mask whose `source_image_id` matches that ID. Paint new masks
-in the app; CLI tools reuse saved masks. `list_image_masks` discovers up to 20 masks in this or an explicitly owned thread.
+`attachment:message:index` ID; select a mask whose `source_image_id` matches that ID. The agent makes
+masks itself with `make_image_mask` (below); `list_image_masks` lists up to 20 masks in this or an explicitly owned thread.
 Masks are bound to one source, remain private, count toward account storage, and are retained
 with surviving branch artifacts. Attachment source IDs keep resolving through owned copies
 in surviving branches, including branches of branches, after the original thread is deleted. At most eight unused mask uploads are kept per thread;
@@ -1466,20 +1468,63 @@ new uploads prune older unused masks. Canceling during upload discards an unused
 when its response arrives. Referenced masks cannot be deleted separately. Again reuses the recorded source and mask with a fresh seed;
 Retry replays the direct action. Approval cards identify the mask and working-size preservation.
 
+**Automatic masks and object removal.** Asked to "remove the cyclists on the left, keep Marisa", the
+agent does the whole edit without questions: `make_image_mask` selects the object by words, then
+`generate_image` erases it. `make_image_mask` takes `source_image_id`, `target` (what to select,
+1–120 characters), optional `exclude` (what must stay; it is subtracted), `grow` (pixels, 0–64,
+default 12), `threshold` (0.05–0.95) and `hand_off`. It runs one fixed graph on the owner's ComfyUI:
+LoadImage → a text-prompted segmenter for the target → GrowMask, and for `exclude` the same segmenter
+→ GrowMask (4 pixels past the target's growth, so no ring is left around what stays) →
+MaskComposite subtract, then MaskToImage → SaveImage. The segmenter is ComfyUI-RMBG's `SAM3Segment`
+(SAM3 reads the words itself), or `SAM2Segment` (SAM2 with GroundingDINO) when SAM3 is absent or
+fails at run time, for example when GroundingDINO breaks on a newer transformers release. The
+server reads the result back, makes it a clean binary mask at the source's size and keeps it as an
+owned mask, so its `mask_id` works with inpaint and remove unchanged. The result carries the
+`mask_id`, `coverage_percent`, a `bbox` in pixels and the mask and source links. Nothing found
+(0%) is an error that suggests another word; over 60% comes with a warning to use `exclude` or a
+tighter target. It uses the same egress, credentials, storage quota, one-job-per-account lock and
+cancellation as generation, accepts no graphs or model names, and validates its text before any
+upload. It runs without an approval card in every mode except Plan, which refuses it like other
+image writes. When the nodes are missing it says so and the agent asks for a painted mask instead.
+
+`generate_image` with `operation: "remove"`, `source_image_id` and `mask_id` erases the mask's white
+area with LaMa (ComfyUI-RMBG's `AILab_LamaRemover`: LoadImage + LoadImageMask (red) →
+AILab_LamaRemover → SaveImage), at the source's full size (at most 4096 pixels per side), with no
+prompt, model or sampler. Diffusion inpaint stays for "replace X with Y". `list_image_models`
+reports `automatic_masks` and `lama_remove`, and the catalog `autoMask` and `remove`, with the reason
+when either is unavailable. `view_generated_image` also takes a `mask_id` to check a mask next to its
+source with vision before an edit, when the agent is unsure.
+
+Every `make_image_mask` attempt is kept, including empty and oversized ones, with its target,
+exclude, coverage and box, for as long as the thread (or a branch that shows it) exists; up to 40
+unused agent masks a thread, which count toward storage like painted ones. `list_image_masks` lists
+them with `made_by` (agent or user) and a status: used (a saved picture was made with it), ready
+(the newest for its source), rejected (empty, or oversized and replaced) or superseded. In the
+chat each mask shows as its picture with the selection tinted in the theme accent, what it
+selected, and **Edit mask**, which opens the mask editor preloaded with it. Saving there keeps a new
+mask and puts it in the message box ("Continue with my edited mask"), so the agent carries on with
+it when you send. When automatic masking fails twice, or you ask to fix the mask yourself, the
+agent calls `make_image_mask` with `hand_off`, the card offers **Open mask editor**, and the agent
+waits for your message. In the Agents terminal each mask is a line with its target, coverage,
+status and link.
+
 Opaque 8-bit RGB and RGBA PNG masks are accepted; RGBA alpha must be 255 for every pixel.
 RGB channels must be equal and either black (0) or white (255); transparency is rejected.
 
 **Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` is a reusable standalone modal.
 Pass `sourceUrl` (authenticated same-origin HTTP(S)), `sourceName`, EXIF-oriented `width` and
-`height`, `onCancel`, and `onApply({ mask, width, height })`. The caller closes the editor after
+`height`, `onCancel`, and `onApply({ mask, width, height })`; optionally `initialMaskUrl` (a saved
+same-origin mask of the same size to start from) and `applyLabel`. The caller closes the editor after
 applying. Cancel never calls `onApply`; changing the source or dimensions starts a fresh mask.
 The editor checks the loaded dimensions and accepts at most 8192 pixels per side and 16,777,216
 pixels total. The exported PNG is opaque and binary: white edits, black preserves; the preview
 uses the current theme accent. Empty masks and exports above 8 MiB report an error.
 
 Brush/erase work with mouse, pen and touch, at fitted display sizes. Focus the canvas to move its
-cursor with arrows (Shift moves farther) and paint a dot with Space. Ctrl/Command+Z undoes;
-Reset clears all strokes and Escape cancels. Undo stores at most 512 strokes / 32,768 points,
+cursor with arrows (Shift moves farther) and paint a dot with Space. Ctrl/Command+Z undoes and
+Ctrl/Command+Shift+Z (or Y) redoes, also as buttons. **Invert** swaps selected and kept, **Grow** and
+**Shrink** move the edge by 4 pixels, **Hide mask** shows the picture underneath (painting pauses), and
+Reset clears everything, the starting mask too. Escape cancels. Undo stores at most 512 steps / 32,768 points,
 with a clear limit message instead of unbounded snapshots. Preview resolution is capped at
 1600 pixels per side; export retains source dimensions. The component itself performs no uploads.
 Its caller persists the mask only on Apply. The server validates opaque binary RGB PNG pixels,
@@ -1495,8 +1540,11 @@ source. `node scripts/agents-image-inpaint.ts` checks all six preset graphs with
 Run them as `pnpm check:agents-image-inpaint` and `pnpm check:agents-inpaint`.
 `pnpm check:agents-image-source-branches` (`node scripts/agents-image-source-branches.ts`)
 checks attachment identity retention and Again inputs across img2img, refine and upscale branches.
-For keyboard/touch, attachment editor, EXIF export and cancellation browser checks, start a scratch
-Vite server and run `node scripts/agents-mask-check.ts http://127.0.0.1:<port>`.
+For keyboard/touch, attachment editor, EXIF export, cancellation, preloaded-mask tools and mask
+card browser checks, start a scratch Vite server and run `node scripts/agents-mask-check.ts http://127.0.0.1:<port>`.
+`pnpm check:agents-images` also runs `scripts/agents-auto-mask.ts`: `make_image_mask` and LaMa removal
+against a mocked ComfyUI (graphs, SAM2 fallback, exclude, coverage limits, mask history and status,
+ownership, missing nodes and Plan mode).
 
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
 preserve more source structure; higher values allow larger changes. Without `operation: "inpaint"`

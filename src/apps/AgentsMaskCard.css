@@ -1,0 +1,11 @@
+.agt-maskcards { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 10px; }
+.agt-maskcard { display: flex; flex-direction: column; gap: 6px; width: min(260px, 100%); margin: 0; padding: 8px; border: 1px solid var(--line); background: var(--bg-light); }
+.agt-maskcard-picture { position: relative; width: 100%; overflow: hidden; background: var(--bg-dark); line-height: 0; }
+.agt-maskcard-picture img, .agt-maskcard-tint { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.agt-maskcard-picture img { image-orientation: from-image; user-select: none; }
+.agt-maskcard-tint { color: var(--accent); opacity: .55; pointer-events: none; }
+.agt-maskcard-gone { position: absolute; inset: auto 0 0; padding: 4px 6px; background: var(--bg); color: var(--muted); font-size: 12px; line-height: 1.4; }
+.agt-maskcard figcaption { display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.agt-maskcard-title { color: var(--fg-bright); }
+.agt-maskcard button { min-height: 36px; }
+@media (pointer: coarse) { .agt-maskcard button { min-height: 44px; } }

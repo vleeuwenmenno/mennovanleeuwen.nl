@@ -3,13 +3,22 @@ import { HttpError } from './http.ts'
 
 // Server-owned graphs for automatic masks (make_image_mask) and LaMa object removal
 // (generate_image operation "remove"). The agent supplies words and numbers only, never nodes.
-// Both rely on optional custom nodes from ComfyUI-RMBG (SAM2Segment, AILab_LamaRemover), so
-// they are discovered from /object_info and switched off cleanly when a backend lacks them.
+// Both rely on optional custom nodes from ComfyUI-RMBG (SAM3Segment or SAM2Segment,
+// AILab_LamaRemover), so they are discovered from /object_info and switched off cleanly when a
+// backend lacks them.
 
 export type SegmentGraph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export type SegmentNodeInfo = Record<string, { input?: { required?: Record<string, unknown[]>; optional?: Record<string, unknown[]> } }>
 
-export const AUTO_MASK_NODES = ['LoadImage', 'SAM2Segment', 'GrowMask', 'MaskComposite', 'MaskToImage', 'SaveImage'] as const
+/**
+ * Text-prompted segmenters, best first. SAM3 understands the words itself; SAM2 needs
+ * GroundingDINO, whose Python package breaks with newer transformers releases, so it is the
+ * fallback (also at run time, when the first one fails).
+ */
+export const SEGMENTERS = ['SAM3Segment', 'SAM2Segment'] as const
+export type Segmenter = (typeof SEGMENTERS)[number]
+const MASK_NODES = ['LoadImage', 'GrowMask', 'MaskComposite', 'MaskToImage', 'SaveImage'] as const
+export const AUTO_MASK_NODES = [...MASK_NODES, ...SEGMENTERS] as const
 export const REMOVE_NODES = ['LoadImage', 'LoadImageMask', 'AILab_LamaRemover', 'SaveImage'] as const
 /** Coverage above this is reported as a probable over-selection. */
 export const MASK_TOO_LARGE = 0.6
@@ -24,10 +33,15 @@ export function comboOptions(info: SegmentNodeInfo, node: string, field: string)
   return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
 }
 
+/** The segmenters this backend has, best first. */
+export const segmenters = (info: SegmentNodeInfo): Segmenter[] => SEGMENTERS.filter((n) => info[n])
+
 /** Why this backend cannot run a capability, or '' when it can. */
 export function missingNodes(info: SegmentNodeInfo, nodes: readonly string[]) {
-  const absent = nodes.filter((n) => !info[n])
-  return absent.length ? `ComfyUI is missing ${absent.join(', ')}${absent.some((n) => n === 'SAM2Segment' || n === 'AILab_LamaRemover') ? ' (install the ComfyUI-RMBG custom nodes)' : ''}` : ''
+  const segmenting = nodes.some((n) => (SEGMENTERS as readonly string[]).includes(n))
+  const absent = nodes.filter((n) => !info[n] && !(SEGMENTERS as readonly string[]).includes(n))
+  if (segmenting && !segmenters(info).length) absent.push('SAM3Segment or SAM2Segment')
+  return absent.length ? `ComfyUI is missing ${absent.join(', ')}${absent.some((n) => /SAM|Lama/.test(n)) ? ' (install the ComfyUI-RMBG custom nodes)' : ''}` : ''
 }
 
 /** Every node's inputs must match its live schema: no missing required input, no unknown one. */
@@ -46,56 +60,70 @@ const text = (value: unknown, name: string, required: boolean) => {
   return value.trim()
 }
 export type AutoMaskInput = { source_image_id?: unknown; target?: unknown; exclude?: unknown; grow?: unknown; threshold?: unknown; hand_off?: unknown }
-export type AutoMaskOptions = { target: string; exclude: string; grow: number; threshold: number; handOff: boolean }
+/** `threshold` null: each segmenter's own sensible default. */
+export type AutoMaskOptions = { target: string; exclude: string; grow: number; threshold: number | null; handOff: boolean }
 export function autoMaskOptions(input: AutoMaskInput): AutoMaskOptions {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((k) => !['source_image_id', 'target', 'exclude', 'grow', 'threshold', 'hand_off'].includes(k))) throw new HttpError(400, 'Supply source_image_id, target and optional exclude, grow, threshold and hand_off; graphs and models are not tool options')
   const target = text(input.target, 'target', true), exclude = text(input.exclude, 'exclude', false)
-  const grow = input.grow ?? 12, threshold = input.threshold ?? 0.3
+  const grow = input.grow ?? 12, threshold = input.threshold ?? null
   if (typeof grow !== 'number' || !Number.isInteger(grow) || grow < 0 || grow > 64) throw new HttpError(400, 'grow must be a whole number of pixels from 0 to 64')
-  if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0.05 || threshold > 0.95) throw new HttpError(400, 'threshold must be from 0.05 to 0.95; lower finds more')
+  if (threshold !== null && (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0.05 || threshold > 0.95)) throw new HttpError(400, 'threshold must be from 0.05 to 0.95; lower finds more')
   if (input.hand_off !== undefined && typeof input.hand_off !== 'boolean') throw new HttpError(400, 'hand_off must be true or false')
-  return { target, exclude, grow, threshold, handOff: input.hand_off === true }
+  return { target, exclude, grow, threshold: threshold as number | null, handOff: input.hand_off === true }
 }
 
-/** SAM2 picks a model this backend offers: small balances speed and edges, then whatever exists. */
-function sam2Choices(info: SegmentNodeInfo) {
+/** One segmenter's inputs for `prompt`. Optional inputs get explicit neutral values: these nodes read them all. */
+function segmentInputs(node: Segmenter, info: SegmentNodeInfo, prompt: string, threshold: number | null) {
   const pick = (field: string, preferred: string[]) => {
-    const options = comboOptions(info, 'SAM2Segment', field)
+    const options = comboOptions(info, node, field)
     const chosen = preferred.find((p) => options.includes(p)) ?? options[0]
-    if (!chosen) throw new HttpError(409, `SAM2Segment offers no ${field}`)
+    if (!chosen) throw new HttpError(409, `${node} offers no ${field}`)
     return chosen
   }
-  return { sam2_model: pick('sam2_model', ['sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_tiny']), dino_model: pick('dino_model', ['GroundingDINO_SwinT_OGC (694MB)']), device: pick('device', ['Auto']) }
+  const schema = { ...info[node].input?.required, ...info[node].input?.optional }
+  const neutral: Record<string, unknown> = { mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: false }
+  const inputs: Record<string, unknown> = { image: ['1', 0], prompt, ...Object.fromEntries(Object.entries(neutral).filter(([k]) => k in schema)) }
+  if ('device' in schema) inputs.device = pick('device', ['Auto'])
+  if (node === 'SAM3Segment') {
+    inputs.output_mode = pick('output_mode', ['Merged'])
+    inputs.confidence_threshold = threshold ?? 0.4
+  } else {
+    // Small balances speed and edges; then whatever this backend offers.
+    inputs.sam2_model = pick('sam2_model', ['sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_tiny'])
+    inputs.dino_model = pick('dino_model', ['GroundingDINO_SwinT_OGC (694MB)'])
+    if ('threshold' in schema) inputs.threshold = threshold ?? 0.3
+  }
+  return inputs
 }
 
 /**
- * LoadImage, SAM2Segment for the target (and the exclusion), grow the target, subtract the
- * exclusion (grown a little so its edges stay safe), then save the mask as a picture.
+ * LoadImage, the segmenter for the target (and the exclusion), grow the target, subtract the
+ * exclusion (grown further than the target, so its edges stay safe), then save the mask as a picture.
  */
-export function autoMaskGraph(options: AutoMaskOptions, uploadName: string, info: SegmentNodeInfo) {
+export function autoMaskGraph(options: AutoMaskOptions, uploadName: string, info: SegmentNodeInfo, segmenter = segmenters(info)[0]) {
   const missing = missingNodes(info, AUTO_MASK_NODES)
   if (missing) throw new HttpError(409, missing)
+  if (!segmenter || !info[segmenter]) throw new HttpError(409, `ComfyUI is missing ${segmenter ?? 'a segmenter'}`)
   if (!comboOptions(info, 'MaskComposite', 'operation').includes('subtract')) throw new HttpError(409, 'MaskComposite does not offer subtract')
-  const models = sam2Choices(info)
-  const optional = info.SAM2Segment.input?.optional ?? {}
-  const segment = (prompt: string) => ({ image: ['1', 0], prompt, ...models, ...('threshold' in optional ? { threshold: options.threshold } : {}), ...('mask_blur' in optional ? { mask_blur: 0 } : {}), ...('mask_offset' in optional ? { mask_offset: 0 } : {}), ...('invert_output' in optional ? { invert_output: false } : {}) })
+  const growSchema = { ...info.GrowMask.input?.required, ...info.GrowMask.input?.optional }
+  const grow = (mask: [string, number], expand: number) => ({ mask, expand, ...('tapered_corners' in growSchema ? { tapered_corners: true } : {}) })
   const graph: SegmentGraph = {
     1: { class_type: 'LoadImage', inputs: { image: uploadName } },
-    2: { class_type: 'SAM2Segment', inputs: segment(options.target) },
-    3: { class_type: 'GrowMask', inputs: { mask: ['2', 1], expand: options.grow, tapered_corners: true } },
+    2: { class_type: segmenter, inputs: segmentInputs(segmenter, info, options.target, options.threshold) },
+    3: { class_type: 'GrowMask', inputs: grow(['2', 1], options.grow) },
   }
   let mask: [string, number] = ['3', 0]
   if (options.exclude) {
-    graph[4] = { class_type: 'SAM2Segment', inputs: segment(options.exclude) }
-    graph[5] = { class_type: 'GrowMask', inputs: { mask: ['4', 1], expand: 4, tapered_corners: true } }
+    graph[4] = { class_type: segmenter, inputs: segmentInputs(segmenter, info, options.exclude, options.threshold) }
+    // Grown past the target's own growth, so no ring of the grown target is left around what stays.
+    graph[5] = { class_type: 'GrowMask', inputs: grow(['4', 1], options.grow + 4) }
     graph[6] = { class_type: 'MaskComposite', inputs: { destination: mask, source: ['5', 0], x: 0, y: 0, operation: 'subtract' } }
     mask = ['6', 0]
   }
   graph[7] = { class_type: 'MaskToImage', inputs: { mask } }
   graph[8] = { class_type: 'SaveImage', inputs: { images: ['7', 0], filename_prefix: 'agents/mask' } }
-  for (const [id, node] of Object.entries(graph)) if (!('tapered_corners' in (info.GrowMask.input?.required ?? {}) || 'tapered_corners' in (info.GrowMask.input?.optional ?? {})) && node.class_type === 'GrowMask') delete graph[id].inputs.tapered_corners
   assertGraph(graph, info)
-  return { graph, outputNode: '8', models }
+  return { graph, outputNode: '8', segmenter }
 }
 
 /** LaMa fills the white mask area from its surroundings at the source's full size; no prompt, no sampler. */

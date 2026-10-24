@@ -31,6 +31,7 @@ function png(width: number, height: number, fill: (x: number, y: number) => numb
 const schemas: Record<string, any> = {
   LoadImage: { input: { required: { image: [['source.png']] } } },
   LoadImageMask: { input: { required: { image: [['mask.png']], channel: [['red', 'green', 'blue', 'alpha']] } } },
+  SAM3Segment: { input: { required: { image: ['IMAGE'], prompt: ['STRING'], output_mode: [['Merged', 'Separate']], confidence_threshold: ['FLOAT'] }, optional: { max_segments: ['INT'], segment_pick: ['INT'], mask_blur: ['INT'], mask_offset: ['INT'], device: [['Auto', 'CPU', 'GPU']], invert_output: ['BOOLEAN'], unload_model: ['BOOLEAN'], background: [['Alpha', 'Color']], background_color: ['COLORCODE'] } } },
   SAM2Segment: { input: { required: { image: ['IMAGE'], prompt: ['STRING'], sam2_model: [['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_large']], dino_model: [['GroundingDINO_SwinT_OGC (694MB)', 'GroundingDINO_SwinB (938MB)']], device: [['Auto', 'CPU', 'GPU']] }, optional: { threshold: ['FLOAT'], mask_blur: ['INT'], mask_offset: ['INT'], invert_output: ['BOOLEAN'], background: [['Alpha', 'Color']], background_color: ['COLORCODE'] } } },
   GrowMask: { input: { required: { mask: ['MASK'], expand: ['INT'], tapered_corners: ['BOOLEAN'] } } },
   MaskComposite: { input: { required: { destination: ['MASK'], source: ['MASK'], x: ['INT'], y: ['INT'], operation: ['COMBO', { options: ['multiply', 'add', 'subtract', 'and', 'or', 'xor'] }] } } },
@@ -42,14 +43,14 @@ const schemas: Record<string, any> = {
 let found: 'left' | 'nothing' | 'most' = 'left'
 const maskPng = () => png(W, H, (x) => found === 'nothing' ? 40 : found === 'most' ? (x < 13 ? 200 : 40) : (x < 4 ? 200 : 40))
 const send = (res: ServerResponse, value: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
-let uploads: string[] = [], missing = '', chats = 0
+let uploads: string[] = [], missing: string[] = [], chats = 0, failing = ''
 const graphs: any[] = []
 let args: Record<string, unknown> = {}, requestedTool = 'make_image_mask'
 const comfy = createServer(async (req, res) => {
   const chunks = []; for await (const chunk of req) chunks.push(chunk)
   const raw = Buffer.concat(chunks).toString(), path = new URL(req.url!, 'http://fixture').pathname
   assert.equal(req.headers.authorization, 'Bearer synthetic-token')
-  if (path.startsWith('/object_info/')) { const node = path.slice(13); return send(res, node === missing || !schemas[node] ? {} : { [node]: schemas[node] }) }
+  if (path.startsWith('/object_info/')) { const node = path.slice(13); return send(res, missing.includes(node) || !schemas[node] ? {} : { [node]: schemas[node] }) }
   if (path.startsWith('/api/lm/')) return res.writeHead(404).end()
   if (path === '/upload/image') {
     const filename = /filename="([^"]+)"/.exec(raw)?.[1]
@@ -60,6 +61,8 @@ const comfy = createServer(async (req, res) => {
   if (path === '/prompt') { graphs.push(JSON.parse(raw).prompt); return send(res, { prompt_id: `job-${graphs.length}` }) }
   if (path.startsWith('/history/')) {
     const id = path.split('/').at(-1)!, graph = graphs.at(-1)
+    // A segmenter that is installed but broken, like GroundingDINO on a newer transformers.
+    if (failing && graph['2']?.class_type === failing) return send(res, { [id]: { status: { status_str: 'error', completed: false, messages: [['execution_error', { node_type: failing, exception_message: "'BertModel' object has no attribute\n 'get_extended_attention_mask'" }]] } } })
     return send(res, { [id]: { status: { completed: true }, outputs: { [graph['8'] ? '8' : '9']: { images: [{ filename: 'fixture.png', subfolder: '', type: 'output' }] } } } })
   }
   if (path === '/view') return res.end(graphs.at(-1)['8'] ? maskPng() : png(W, H, () => 120))
@@ -116,8 +119,7 @@ try {
   const g = graphs.at(-1)
   assert.deepEqual(Object.keys(g).sort(), ['1', '2', '3', '7', '8'])
   assert.equal(g['1'].class_type, 'LoadImage'); assert.match(g['1'].inputs.image, /^agents-source-/)
-  assert.equal(g['2'].class_type, 'SAM2Segment'); assert.equal(g['2'].inputs.prompt, 'cyclist')
-  assert.equal(g['2'].inputs.sam2_model, 'sam2.1_hiera_small'); assert.equal(g['2'].inputs.dino_model, 'GroundingDINO_SwinT_OGC (694MB)'); assert.equal(g['2'].inputs.threshold, 0.3)
+  assert.deepEqual(g['2'], { class_type: 'SAM3Segment', inputs: { image: ['1', 0], prompt: 'cyclist', mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: false, device: 'Auto', output_mode: 'Merged', confidence_threshold: 0.4 } })
   assert.deepEqual(g['3'].inputs, { mask: ['2', 1], expand: 12, tapered_corners: true })
   assert.deepEqual(g['7'].inputs, { mask: ['3', 0] }); assert.equal(g['8'].class_type, 'SaveImage')
   assert.equal(uploads.length, 1)
@@ -125,14 +127,27 @@ try {
   const stored = Buffer.from(await (await api('GET', made.mask.mask_url)).arrayBuffer())
   assert.equal(stored[25], 2); assert.ok(!stored.includes(Buffer.from('tEXt')))
   assert.equal((await api('GET', made.mask.mask_url, undefined, 1)).status, 404)
-  console.log('PASS make_image_mask: discovery, fixed SAM2/grow graph, coverage and bbox, binary owned mask, owner-only view')
+  // A broken SAM3 hands over to SAM2 within the same call, with one upload; the reason reaches the agent if both fail.
+  const uploadsBefore = uploads.length, graphsBefore = graphs.length
+  failing = 'SAM3Segment'
+  const fallback = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist', threshold: 0.25 })
+  assert.ok(fallback.mask, JSON.stringify(fallback))
+  assert.equal(graphs.length - graphsBefore, 2); assert.equal(uploads.length - uploadsBefore, 1)
+  const g2 = graphs.at(-1)['2']
+  assert.equal(g2.class_type, 'SAM2Segment'); assert.equal(g2.inputs.sam2_model, 'sam2.1_hiera_small'); assert.equal(g2.inputs.dino_model, 'GroundingDINO_SwinT_OGC (694MB)'); assert.equal(g2.inputs.threshold, 0.25)
+  missing = ['SAM2Segment']
+  const broken = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })
+  assert.match(broken.error, /Automatic masking failed.*SAM3Segment.*get_extended_attention_mask.*Edit selected area/)
+  assert.ok(!/\n/.test(broken.error))
+  failing = ''; missing = []
+  console.log('PASS make_image_mask: discovery, fixed SAM3/grow graph, SAM2 fallback at run time, coverage and bbox, binary owned mask, owner-only view')
 
   // exclude is subtracted; arbitrary graphs, long text and foreign sources are refused before any upload.
   const before = uploads.length
   const kept = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist', exclude: 'woman sitting on the wall', grow: 8 })
   assert.ok(kept.mask, JSON.stringify(kept)); assert.equal(kept.mask.exclude, 'woman sitting on the wall')
   const ge = graphs.at(-1)
-  assert.equal(ge['4'].inputs.prompt, 'woman sitting on the wall'); assert.equal(ge['3'].inputs.expand, 8)
+  assert.equal(ge['4'].inputs.prompt, 'woman sitting on the wall'); assert.equal(ge['3'].inputs.expand, 8); assert.equal(ge['5'].inputs.expand, 12)
   assert.deepEqual(ge['6'].inputs, { destination: ['3', 0], source: ['5', 0], x: 0, y: 0, operation: 'subtract' })
   assert.deepEqual(ge['7'].inputs, { mask: ['6', 0] })
   const sent = uploads.length
@@ -198,17 +213,19 @@ try {
 
   // Missing nodes: the tool falls back with a clear message and uploads nothing; LaMa likewise.
   const u0 = uploads.length
-  missing = 'SAM2Segment'
+  missing = ['SAM3Segment']
+  assert.equal((await json('GET', '/api/agents/images/catalog')).autoMask, true)
+  missing = ['SAM3Segment', 'SAM2Segment']
   assert.equal((await json('GET', '/api/agents/images/catalog')).autoMask, false)
   assert.match((await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })).error, /Automatic masks are unavailable.*paint/)
-  missing = 'AILab_LamaRemover'
+  missing = ['AILab_LamaRemover']
   assert.equal((await json('GET', '/api/agents/images/catalog')).remove, false)
   assert.match((await call(t.id, 'generate_image', { operation: 'remove', source_image_id: source, mask_id: made.mask.mask_id })).error, /AILab_LamaRemover/)
-  missing = ''
+  missing = []
   assert.equal(uploads.length, u0)
-  assert.throws(() => autoMaskGraph({ target: 'a', exclude: '', grow: 1, threshold: 0.3, handOff: false }, 'x.png', { ...schemas, MaskComposite: { input: { required: { ...schemas.MaskComposite.input.required, operation: [['add']] } } } }), /subtract/)
+  assert.throws(() => autoMaskGraph({ target: 'a', exclude: '', grow: 1, threshold: null, handOff: false }, 'x.png', { ...schemas, MaskComposite: { input: { required: { ...schemas.MaskComposite.input.required, operation: [['add']] } } } }), /subtract/)
   assert.throws(() => removeGraph('a.png', 'b.png', { ...schemas, AILab_LamaRemover: { input: { required: { ...schemas.AILab_LamaRemover.input.required, new_required: ['INT'] } } } }), /new_required/)
-  console.log('PASS missing SAM2/LaMa nodes: catalog flags, fallback message, nothing uploaded; schema drift refused')
+  console.log('PASS missing SAM3/SAM2/LaMa nodes: catalog flags, fallback message, nothing uploaded; schema drift refused')
 
   // Plan mode refuses it like other image writes; every other mode runs it without a card.
   const callOf = { name: 'make_image_mask', arguments: { source_image_id: source, target: 'cyclist' } }
