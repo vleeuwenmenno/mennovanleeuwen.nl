@@ -1482,6 +1482,11 @@ chain, and adds matched mask resizing, latent noise masking and a final pixel co
 Only the working-size image is preserved outside the resized mask, not the original-resolution
 source. `node scripts/agents-image-inpaint.ts` checks all six preset graphs without a GPU;
 `node scripts/agents-inpaint.ts` checks the real HTTP/approval lifecycle against mocked services.
+Run them as `pnpm check:agents-image-inpaint` and `pnpm check:agents-inpaint`.
+`pnpm check:agents-image-source-branches` (`node scripts/agents-image-source-branches.ts`)
+checks attachment identity retention and Again inputs across img2img, refine and upscale branches.
+For keyboard/touch, attachment editor, EXIF export and cancellation browser checks, start a scratch
+Vite server and run `node scripts/agents-mask-check.ts http://127.0.0.1:<port>`.
 
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
 preserve more source structure; higher values allow larger changes. Without `operation: "inpaint"`
