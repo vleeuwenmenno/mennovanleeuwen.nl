@@ -156,7 +156,7 @@ export async function prepareNoteLinkCall(user: User, name: string, args: Record
         const now = Date.now()
         const id = randomUUID()
         const tilt = Math.round((Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 2.7) * 10) / 10
-        writeNotes(user, (notes) => [...notes, { id, text, color: 'blue', tilt, created: now, updated: now, events: [], eventsAt: now }])
+        writeNotes(user, (notes) => [...notes, { id, text, color: 'blue', tilt, created: now, updated: now, edited: now, events: [], eventsAt: now }])
         const { mirror } = await link(user, id, e, all)
         return JSON.stringify({ note: { id, title: textTitle(text) }, linked_to: { title: e.title, when: whenText(e, zone), ...(e.recurring ? { applies_to: all ? 'the whole series' : 'this occurrence' } : {}) }, ...(mirror.mirrored ? {} : { event_backlink: `not written: ${mirror.why}` }) })
       },

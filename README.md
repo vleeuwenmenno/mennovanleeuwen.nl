@@ -665,6 +665,27 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
 
 `pnpm check:sync-accounts` checks this against the real server and with tabs in memory.
 
+A browser signing in for the first time takes the account's window layout
+instead of saving its own opening windows over it. Desktop widgets are not part of the window
+layout: they have a set of their own that follows the account (see *Widgets*).
+Notes merge by note id, between devices and between tabs of one browser alike
+([`src/data/notes.ts`](src/data/notes.ts)), each part on its own: the later edit of the text wins,
+whether a note is in the trash goes by the later of its last trashing and its last restore from
+either side (so trashing a note never throws away an edit made meanwhile elsewhere), notes added
+on either side are kept once each, and a note deleted for good stays deleted (its tombstone is
+kept for 90 days). Every change counts on past the note's own counters, in the browser and in
+the agents' note tools on the server alike ([`src/data/noteClock.ts`](src/data/noteClock.ts)),
+so a device whose clock runs behind doesn't lose its later edit.
+Tabs merge independent note and widget changes: a tab merges what another
+tab saved into its own value right before it saves, and only ever reads when it hears of another
+tab's save. This is not an atomic transaction: near-simultaneous tab saves can still lose one
+change if both read before either writes. Agent `update_note` uses last-writer-wins text updates
+and can replace typing that the browser has not pushed yet. Older notes without edit/restore
+counters use their live copy's `updated` time as evidence of a restore, so a stale trash copy
+cannot undo an old-version restore. Old-version edits and restores cannot be distinguished.
+The first-layout exception ends when this browser receives or successfully pushes an account
+layout; later remote layouts do not replace window changes that have not been saved locally.
+
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).
 Those on the desktop are in `~/Desktop`; the ones for the dock, All apps and Spotlight only are in
@@ -2432,7 +2453,35 @@ for its frame colours and tilt (`useFrame`), its own menu items (`useMenu`) and 
 made (`create`). List it in [`registry.tsx`](src/widgets/registry.tsx) and it gets the frame,
 dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go through
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
-notes; where a widget sits is part of the synced window layout.
+notes. Which widgets are on the desktop, and where, is a set of its own
+([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), synced as `widgets:placed`), not part of the
+window layout: signed in, another browser or device shows the same widgets (same ids, so their
+settings apply too), and adding, moving, minimizing or removing one shows up elsewhere on the next
+pull (a refresh, or coming back to the tab). The set merges by widget id, the latest change to
+each widget winning, so two browsers (or two tabs of one) adding widgets at the same time both
+keep theirs. A change counts on from the one it changes, so a device whose clock runs behind still
+wins with a later change. Taking one off is final: its entry's key goes into a list of removed
+keys, kept for good, so a browser or an old saved layout that still has the widget can't bring it
+back (a key is about 9 bytes, so 20,000 removals are under 200 KB). Putting a sticky back after
+taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync` checks
+these rules in memory. `PORT=5273 node scripts/widgets-sync-e2e.ts` checks migration,
+cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
+accounts and data; it starts and stops its own server.
+A big screen puts a widget where it was put, moved along when its own screen is another size (a
+widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
+added on a phone gets the usual spot for a new widget there. Phones and big screens share the
+set; a phone only changes a widget's place in its column. Widgets stay through *Start over* and
+a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
+layout by an earlier release move into the set when that layout is loaded or arrives from the
+server or another tab (before a merge of the layouts could drop it) (unless the set already
+has newer entries, or had them and they were removed since). Migrated coordinates have an
+unknown-screen marker: they are shown as stored and clamped to fit, without scaling or assigning
+a default spot. Equal change counters prefer a desktop-width source (at least 720 px), then the
+larger width, then a deterministic tie-break. The width of the importing browser is only a
+migration preference, not the original screen size. A missing sticky note stays hidden locally
+while its contents sync; arriving contents reveal it again. Only a user close or a known trash
+or purge removes its widget entry. Visitors keep their widgets in this browser;
+ones placed before signing in join the account's.
 
 ## Touch screens
 
@@ -2451,8 +2500,8 @@ On phones the notes and widgets go one under the other down a desktop that scrol
 its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
 desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
 *Move up*, *Move down* and *Move to top*. The order is part of the
-phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay
-wherever they were put.
+phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)), and for widgets part of their
+synced set; on a big screen notes stay wherever they were put.
 
 The MvL OS menu (top left) has *Hide notes and widgets* to put them all away and see the desktop
 itself (per browser; adding a note brings them back). On a phone, where the icons otherwise sit
