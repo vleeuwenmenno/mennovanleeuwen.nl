@@ -1154,11 +1154,25 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, busy, thread?.running, rejoin])
 
-  // Follow the answer as it grows, unless scrolled up to read.
+  // Follow the answer as it grows, unless scrolled up to read; then offer a jump back down instead.
+  const [scrolledUp, setScrolledUp] = useState(false)
   useEffect(() => {
     const el = scroller.current
     if (el && pinned.current) el.scrollTop = el.scrollHeight
   }, [messages, live])
+  // Growth that is not a new message (an image frame, a tool card, progress text) follows too.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const follow = () => { if (pinned.current) el.scrollTop = el.scrollHeight }
+    const sizes = new ResizeObserver(follow)
+    const watch = () => { sizes.disconnect(); for (const child of Array.from(el.children)) sizes.observe(child) }
+    const children = new MutationObserver(() => { watch(); follow() })
+    watch()
+    children.observe(el, { childList: true })
+    return () => { sizes.disconnect(); children.disconnect() }
+  }, [id])
+  useEffect(() => { pinned.current = true; setScrolledUp(false) }, [id])
 
   const mode = thread?.mode ?? draftMode
   const model = thread?.model ?? draftModel ?? ''
@@ -1852,6 +1866,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         onScroll={(e) => {
           const el = e.currentTarget
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          setScrolledUp(!pinned.current)
         }}
       >
         {!messages.length && !live && (
@@ -1890,6 +1905,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         {error && <p className="agt-error t-red copyable">{error}</p>}
+        {scrolledUp && (
+          <button type="button" className="btn btn-small agt-jump-latest" onClick={() => { const el = scroller.current; if (el) { pinned.current = true; setScrolledUp(false); el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) } }}>
+            ↓ Jump to latest
+          </button>
+        )}
       </div>
 
       {!!thread?.todos.length && (

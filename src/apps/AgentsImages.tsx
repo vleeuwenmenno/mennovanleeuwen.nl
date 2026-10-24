@@ -184,14 +184,14 @@ function Lightbox({ pictures, start, anchor, onClose }: { pictures: Picture[]; s
 }
 
 /**
- * The waiting grid: about 80 square blocks (never more than 100) in columns and rows that follow the
+ * The waiting grid: about 220 small square blocks (never more than 400) in columns and rows that follow the
  * picture's shape. Each block gets a place in a scattered diagonal order, top left to bottom right,
  * so a job 40% done lights the first 40% of them.
  */
 function blockGrid(width: number, height: number) {
   const ratio = width / height
-  const cols = Math.max(4, Math.min(12, Math.round(Math.sqrt(80 * ratio))))
-  const rows = Math.max(4, Math.min(12, Math.round(cols / ratio)))
+  const cols = Math.max(6, Math.min(20, Math.round(Math.sqrt(220 * ratio))))
+  const rows = Math.max(6, Math.min(20, Math.round(cols / ratio)))
   const n = cols * rows
   // A fixed scatter per block (no Math.random), so the order is the same on every render and in every window.
   const jitter = (i: number) => (((i * 2654435761) >>> 0) % 1000) / 1000
