@@ -6,7 +6,7 @@ import { openSessionImages } from './AgentsSessionImages'
 import { generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type InpaintImageInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
 import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
 import { useIsMobile } from '../os/useIsMobile'
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
   TOOL_GROUPS,
@@ -1065,6 +1065,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  const ctxId = useId()
+  useEffect(() => setCtxOpen(false), [thread?.id])
   const [openingImages, setOpeningImages] = useState(false)
   // A compaction under way (asked for, or by itself in the middle of a turn): shown in place of the reply.
   const [compacting, setCompacting] = useState<{ auto: boolean } | null>(null)
@@ -1939,6 +1941,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         setFiles(combined)
         setError(null)
       }} />}
+      <div className="agt-bar">
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
         <button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
           ‹
@@ -1952,6 +1955,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </button>
         )}
         <span className="nb-spacer" />
+        <div className="agt-bar-chips">
         {(account.seafile || workdir) && (
           <button className={`agt-chip ${workdir ? 'is-on' : ''}`} onClick={folderMenu} disabled={answering} title={workdir ? `Work folder: ${workdir.label}` : 'Give it a folder to work in'}>
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
@@ -1962,9 +1966,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}
         </button>
+        </div>
+        {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} panelId={ctxId} onToggle={() => setCtxOpen((o) => !o)} />}
         {thread && (
           <button
-            className="agt-icon"
+            className="agt-icon agt-more"
             aria-label="More"
             onClick={(e) =>
               openContextMenu(e, [
@@ -1982,6 +1988,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </button>
         )}
       </div>
+      </div>
+
+      {thread && ctxOpen && <ContextPanel panelId={ctxId} id={thread.id} version={messages.length} onClose={() => setCtxOpen(false)} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
 
       <div
         className="agt-scroll selectable"
@@ -2052,7 +2061,6 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         />
       )}
       {thread && queue.length > 0 && <QueueList queue={queue} answering={answering} editing={editingQ?.id ?? null} onEdit={(q) => void startEdit(q)} onSend={(q) => void sendNow(q)} onRemove={removeQueue} />}
-      {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
       <form
         ref={composerBox}
         className="agt-composer"
@@ -2157,7 +2165,6 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               <span className="agt-model-name">{model || usualModel || 'Automatic'}</span>
               <Icon name="chevron" size={12} />
             </button>
-            {thread && <ContextMeter thread={thread} models={models} disabled={answering} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
             {answering && (
               <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
                 <Icon name="stop" size={14} />
@@ -2897,15 +2904,15 @@ function RenameBox({ thread, onSave, onCancel }: { thread: Thread; onSave: (titl
 
 const PART_COLORS = ['var(--magenta)', 'var(--muted)', 'var(--yellow)', 'var(--orange)', 'var(--blue)', 'var(--green)', 'var(--fg)', 'var(--cyan)']
 
-/** How full the model's context was after the last reply, as a small ring; opens the breakdown. */
-function ContextMeter({ thread, models, open, onToggle, disabled }: { thread: Thread; models: ModelInfo[]; disabled: boolean; open: boolean; onToggle: () => void }) {
+/** How full the model's context was after the last reply, as a small ring in the thread's top bar; opens and closes the breakdown. */
+function ContextMeter({ thread, models, open, panelId, onToggle }: { thread: Thread; models: ModelInfo[]; open: boolean; panelId: string; onToggle: () => void }) {
   const size = models.find((m) => m.name === thread.model)?.contextLength ?? null
   const used = thread.contextTokens
   const share = used !== null && size ? Math.min(1, used / size) : 0
   const C = 2 * Math.PI * 7
   const label = used !== null ? `${used.toLocaleString()}${size ? ` of ${size.toLocaleString()}` : ''} tokens in context (${share < 0.01 && used ? '<1' : Math.round(share * 100)}%)` : 'Context window'
   return (
-    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} disabled={disabled} aria-expanded={open} title={label} aria-label={label}>
+    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} aria-expanded={open} aria-controls={open ? panelId : undefined} title={label} aria-label={label}>
       <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden>
         <circle cx="9" cy="9" r="7" className="agt-ring-track" />
         <circle cx="9" cy="9" r="7" className="agt-ring-fill" strokeDasharray={`${Math.max(share, used ? 0.03 : 0) * C} ${C}`} transform="rotate(-90 9 9)" />
@@ -2918,58 +2925,90 @@ function ContextMeter({ thread, models, open, onToggle, disabled }: { thread: Th
  * What the next message sends the model, part by part, against the window's size, with where it
  * compacts by itself (a mark on the bar) and the last compaction, if any. `onCompact`: Compact now.
  */
-function ContextPanel({ id, version, onCompact }: { id: string; version: number; onCompact?: () => void }) {
+function ContextPanel({ panelId, id, version, onCompact, onClose }: { panelId: string; id: string; version: number; onCompact?: () => void; onClose: () => void }) {
+  const phone = useIsMobile()
   const [info, setInfo] = useState<ContextInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     getContext(id).then(setInfo, (e: Error) => setError(e.message))
   }, [id, version])
-  if (error) return <div className="agt-ctx-panel t-red copyable">{error}</div>
-  if (!info) return <div className="agt-ctx-panel muted">Adding it up…</div>
-  const scale = info.contextLength ?? Math.max(info.estimate, info.measured ?? 0)
+  // Esc closes it (when focus is in this window, or nowhere); on a phone or touch screen a tap anywhere
+  // else does too (the ring toggles it itself). Several Agents windows each have their own panel.
+  useEffect(() => {
+    const panel = () => document.getElementById(panelId)
+    const key = (e: KeyboardEvent) => {
+      const focus = document.activeElement
+      const mine = !focus || focus === document.body || !!panel()?.closest('.agt')?.contains(focus)
+      if (e.key === 'Escape' && !e.defaultPrevented && mine && !document.querySelector('.dlg-modal, .ctx-menu')) onClose()
+    }
+    const touch = phone || window.matchMedia('(pointer: coarse)').matches
+    const away = (e: PointerEvent) => {
+      const el = e.target as Element | null
+      if (!panel()?.contains(el) && el?.closest?.('.agt-ring')?.getAttribute('aria-controls') !== panelId && !el?.closest?.('.dlg-modal, .ctx-menu')) onClose()
+    }
+    window.addEventListener('keydown', key)
+    if (touch) document.addEventListener('pointerdown', away)
+    return () => (window.removeEventListener('keydown', key), document.removeEventListener('pointerdown', away))
+  }, [phone, onClose, panelId])
+  const scale = info ? info.contextLength ?? Math.max(info.estimate, info.measured ?? 0) : 1
   return (
-    <div className="agt-ctx-panel">
+    <div className="agt-ctx-panel" id={panelId} role="region" aria-label="Context window">
       <p className="agt-ctx-head">
-        <strong>Context window</strong>
-        <span className="muted">
-          {' '}
-          · {info.model}
-          {info.contextLength ? ` · ${tokenCount(info.contextLength)} tokens` : ''}
+        <span className="agt-ctx-title">
+          <strong>Context window</strong>
+          {info && (
+            <span className="muted">
+              {' '}
+              · {info.model}
+              {info.contextLength ? ` · ${tokenCount(info.contextLength)} tokens` : ''}
+            </span>
+          )}
         </span>
+        <button type="button" className="agt-icon agt-ctx-close" onClick={onClose} aria-label="Close context window" title="Close (Esc)">
+          <Icon name="close" size={14} />
+        </button>
       </p>
-      <div className="agt-ctx-bar" aria-hidden>
-        {info.parts.map((p, i) => (
-          <span key={p.label} style={{ width: `${(p.tokens / scale) * 100}%`, background: p.label.startsWith('Summary') ? 'var(--accent)' : PART_COLORS[i % PART_COLORS.length] }} />
-        ))}
-        {info.autoCompact !== null && info.contextLength && <i className="agt-ctx-mark" style={{ left: `${info.autoCompact}%` }} />}
-      </div>
-      <ul className="agt-ctx-parts">
-        {info.parts.map((p, i) => (
-          <li key={p.label}>
-            <span className="agt-ctx-swatch" style={{ background: p.label.startsWith('Summary') ? 'var(--accent)' : PART_COLORS[i % PART_COLORS.length] }} />
-            <span>{p.label}</span>
-            <span className="muted">≈ {tokenCount(p.tokens)}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="muted agt-ctx-note">
-        {info.measured !== null ? `Ollama counted ${info.measured.toLocaleString()} tokens after the last reply. ` : ''}
-        The parts are estimates (about 4 characters a token) of what the next message sends: ≈ {tokenCount(info.estimate)} in all. Older tool results go in shortened.
-      </p>
-      <p className="muted agt-ctx-note agt-ctx-compact">
-        {info.compaction
-          ? `Compacted ${info.compaction.times === 1 ? 'once' : `${info.compaction.times} times`}, last ${info.compaction.auto ? 'by itself' : 'on request'} at ${new Date(info.compaction.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: the summary stands in for the ${info.compaction.hidden} messages before it. `
-          : ''}
-        {info.autoCompact !== null ? `It compacts by itself at ${info.autoCompact}% of the window (the mark on the bar).` : 'Compacting by itself is off (Settings → Agents → New threads).'}
-        {onCompact && (
-          <>
-            {' '}
-            <button type="button" className="btn btn-small" onClick={onCompact}>
-              Compact now…
-            </button>
-          </>
-        )}
-      </p>
+      {error ? (
+        <p className="t-red copyable agt-ctx-note">{error}</p>
+      ) : !info ? (
+        <p className="muted agt-ctx-note">Adding it up…</p>
+      ) : (
+        <>
+          <div className="agt-ctx-bar" aria-hidden>
+            {info.parts.map((p, i) => (
+              <span key={p.label} style={{ width: `${(p.tokens / scale) * 100}%`, background: p.label.startsWith('Summary') ? 'var(--accent)' : PART_COLORS[i % PART_COLORS.length] }} />
+            ))}
+            {info.autoCompact !== null && info.contextLength && <i className="agt-ctx-mark" style={{ left: `${info.autoCompact}%` }} />}
+          </div>
+          <ul className="agt-ctx-parts">
+            {info.parts.map((p, i) => (
+              <li key={p.label}>
+                <span className="agt-ctx-swatch" style={{ background: p.label.startsWith('Summary') ? 'var(--accent)' : PART_COLORS[i % PART_COLORS.length] }} />
+                <span>{p.label}</span>
+                <span className="muted">≈ {tokenCount(p.tokens)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="muted agt-ctx-note">
+            {info.measured !== null ? `Ollama counted ${info.measured.toLocaleString()} tokens after the last reply. ` : ''}
+            The parts are estimates (about 4 characters a token) of what the next message sends: ≈ {tokenCount(info.estimate)} in all. Older tool results go in shortened.
+          </p>
+          <p className="muted agt-ctx-note agt-ctx-compact">
+            {info.compaction
+              ? `Compacted ${info.compaction.times === 1 ? 'once' : `${info.compaction.times} times`}, last ${info.compaction.auto ? 'by itself' : 'on request'} at ${new Date(info.compaction.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: the summary stands in for the ${info.compaction.hidden} messages before it. `
+              : ''}
+            {info.autoCompact !== null ? `It compacts by itself at ${info.autoCompact}% of the window (the mark on the bar).` : 'Compacting by itself is off (Settings → Agents → New threads).'}
+            {onCompact && (
+              <>
+                {' '}
+                <button type="button" className="btn btn-small" onClick={onCompact}>
+                  Compact now…
+                </button>
+              </>
+            )}
+          </p>
+        </>
+      )}
     </div>
   )
 }

@@ -1343,8 +1343,7 @@ stream to the window, with the model's thinking folded under each reply; Stop en
 plain by default: a thread's model, workflow, sampling and file names are named only when the user
 asks about them or is changing them, so swapping the model or the LoRA is one short paragraph rather
 than a tour of the settings, and nothing ends with an offer of further work. The
-composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
-for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
+composer holds the mode, the model, which tools the thread may use and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
 and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP
@@ -1352,6 +1351,17 @@ or GIF through the authenticated Photos proxy, not the thumbnail. Images keep th
 10-attachment and combined payload limits; unsupported originals (including HEIC and RAW) show an error.
 Cancel leaves the draft and attachments unchanged; a failed download adds nothing. These are normal
 image attachments for vision and, after sending, supported still-image sources for image-to-image.
+The **context-window ring** is in the thread's top bar, by the ⋯ menu, not next to Send, so a thumb
+aiming for Send cannot hit it. It stays usable while a reply is being written. It opens the
+breakdown of what fills the window (with *Compact now…*) under the top bar; the ring again, the ✕
+in the panel's corner (which stays at the top while the breakdown scrolls), or Esc closes it, also
+while it loads or shows an error, and on a phone or touch screen a tap anywhere outside it does too.
+The panel takes about a third of the window's height at most and scrolls within itself. The top bar
+follows the width of its own pane, not the screen: wide enough for the title to keep room it is one
+row, otherwise (a phone, or a narrow window with the sidebar open) the back button, title, ring and
+⋯ are the first row and the chips (folder, Images, mail, permission) the second, wrapping further
+for a long folder name or every chip on. `pnpm check:agents-context-bar` covers this in a browser
+(scratch Vite server, mocked API).
 Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
