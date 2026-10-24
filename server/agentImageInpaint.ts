@@ -49,7 +49,7 @@ function matching(source: Dimensions, mask: Dimensions) {
 /** Raster structure/orientation validation stays in sourceRaster; these are mask-specific rules. */
 export function validateInpaintMask(bytes: Buffer, source: Dimensions) {
   const mask = sourceRaster(bytes, 8 * 1024 * 1024)
-  if (mask.mime !== 'image/png' || bytes[24] !== 8 || bytes[25] !== 2 || bytes[26] !== 0 || bytes[27] !== 0 || bytes[28] !== 0) throw new HttpError(400, 'Use an opaque 8-bit RGB PNG mask: white edits, black preserves')
+  if (mask.mime !== 'image/png' || bytes[24] !== 8 || ![2, 6].includes(bytes[25]) || bytes[26] !== 0 || bytes[27] !== 0 || bytes[28] !== 0) throw new HttpError(400, 'Use an opaque 8-bit RGB PNG mask: white edits, black preserves')
   for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) {
     const kind = bytes.toString('ascii', at + 4, at + 8)
     if (kind === 'tRNS' || kind === 'eXIf') throw new HttpError(400, 'Mask PNG must not contain transparency or EXIF orientation')
@@ -60,7 +60,8 @@ export function validateInpaintMask(bytes: Buffer, source: Dimensions) {
   for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) {
     if (bytes.toString('ascii', at + 4, at + 8) === 'IDAT') parts.push(bytes.subarray(at + 8, at + 8 + bytes.readUInt32BE(at)))
   }
-  const stride = mask.width * 3, length = (stride + 1) * mask.height
+  const channels = bytes[25] === 6 ? 4 : 3
+  const stride = mask.width * channels, length = (stride + 1) * mask.height
   let raw: Buffer
   try { raw = inflateSync(Buffer.concat(parts), { maxOutputLength: length }) } catch { throw new HttpError(400, 'Invalid PNG mask pixel data') }
   if (raw.length !== length) throw new HttpError(400, 'Invalid PNG mask pixel length')
@@ -69,12 +70,17 @@ export function validateInpaintMask(bytes: Buffer, source: Dimensions) {
     const offset = y * (stride + 1), filter = raw[offset]
     if (filter > 4) throw new HttpError(400, 'Invalid PNG mask filter')
     for (let x = 0; x < stride; x++) {
-      const a = x >= 3 ? current[x - 3] : 0, b = previous[x], c = x >= 3 ? previous[x - 3] : 0
+      const a = x >= channels ? current[x - channels] : 0, b = previous[x], c = x >= channels ? previous[x - channels] : 0
       const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c)
       const prediction = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? Math.floor((a + b) / 2) : pa <= pb && pa <= pc ? a : pb <= pc ? b : c
       current[x] = (raw[offset + 1 + x] + prediction) & 255
-      if (current[x] !== 0 && current[x] !== 255 || x % 3 && current[x] !== current[x - 1]) throw new HttpError(400, 'Mask pixels must be black or white RGB')
-      nonempty ||= current[x] === 255
+      const channel = x % channels
+      if (channel === 3) {
+        if (current[x] !== 255) throw new HttpError(400, 'Mask pixels must be fully opaque')
+      } else {
+        if (current[x] !== 0 && current[x] !== 255 || channel && current[x] !== current[x - 1]) throw new HttpError(400, 'Mask pixels must be black or white RGB')
+        nonempty ||= current[x] === 255
+      }
     }
     ;[previous, current] = [current, previous]
   }
