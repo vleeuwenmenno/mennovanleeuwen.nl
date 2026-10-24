@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { GeneratedImage } from '../data/agentImages'
+import { imageProgressFraction, imageProgressLabel, type ImageProgress } from '../data/imageModels'
 import { createPortal } from 'react-dom'
 import { fileSize, pictureUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
 import { useWM } from '../os/wm'
@@ -182,8 +183,26 @@ function Lightbox({ pictures, start, anchor, onClose }: { pictures: Picture[]; s
   )
 }
 
+/**
+ * The waiting grid: about 80 square blocks (never more than 100) in columns and rows that follow the
+ * picture's shape. Each block gets a place in a scattered diagonal order, top left to bottom right,
+ * so a job 40% done lights the first 40% of them.
+ */
+function blockGrid(width: number, height: number) {
+  const ratio = width / height
+  const cols = Math.max(4, Math.min(12, Math.round(Math.sqrt(80 * ratio))))
+  const rows = Math.max(4, Math.min(12, Math.round(cols / ratio)))
+  const n = cols * rows
+  // A fixed scatter per block (no Math.random), so the order is the same on every render and in every window.
+  const jitter = (i: number) => (((i * 2654435761) >>> 0) % 1000) / 1000
+  const order = Array.from({ length: n }, (_, i) => ({ i, key: ((i % cols) / Math.max(1, cols - 1) + Math.floor(i / cols) / Math.max(1, rows - 1)) / 2 * 0.65 + jitter(i) * 0.35 })).sort((a, b) => a.key - b.key)
+  const rank = new Array<number>(n)
+  order.forEach((o, r) => (rank[o.i] = r))
+  return { cols, rows, rank }
+}
+
 /** Same frame before and after generation: only its contents change, never its aspect ratio. */
-export function GeneratedPicture({ image, width, height, pending }: { image?: GeneratedImage; width: number; height: number; pending: boolean }) {
+export function GeneratedPicture({ image, width, height, pending, progress }: { image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress }) {
   const frame = useRef<HTMLDivElement>(null)
   const displayedImage = useRef<HTMLImageElement>(null)
   const [animate, setAnimate] = useState(false)
@@ -206,12 +225,17 @@ export function GeneratedPicture({ image, width, height, pending }: { image?: Ge
     reduced.addEventListener('change', update)
     return () => { observer.disconnect(); attributes.disconnect(); document.removeEventListener('visibilitychange', update); reduced.removeEventListener('change', update) }
   }, [pending])
+  const grid = useMemo(() => blockGrid(width, height), [width, height])
+  const fraction = pending ? imageProgressFraction(progress) : null
+  const lit = fraction === null ? 0 : Math.round(fraction * grid.rank.length)
   const picture = image ? { name: image.name, src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
   return <>
     <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }}>
-      {(!image || !loaded) && !failed && <div className="agt-image-wait" role="status" aria-live="polite">
-        <div className="agt-cube-matrix" aria-hidden="true">{Array.from({ length: 49 }, (_, i) => <span className="agt-image-cube" key={i} style={{ animationDelay: `${-(Math.floor(i / 7) + i % 7) * .19}s` }}><i /><i /><i /></span>)}</div>
-        <span className="agt-image-status">{pending ? 'Generating image…' : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
+      {(!image || !loaded) && !failed && <div className={`agt-image-wait ${fraction === null ? 'is-idle' : ''}`} role="status" aria-live="polite" aria-busy={progress?.phase === 'sampling'}>
+        <div className="agt-block-grid" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))` }}>
+          {grid.rank.map((r, i) => <span key={i} className={`agt-block ${r < lit ? 'is-lit' : ''}`} style={{ animationDelay: `${-((i % grid.cols) + Math.floor(i / grid.cols)) * 0.12}s` }} />)}
+        </div>
+        <span className="agt-image-status">{pending ? imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
       </div>}
       {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={() => setOpen(true)}><img ref={displayedImage} src={image.url} alt="Generated image" width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>

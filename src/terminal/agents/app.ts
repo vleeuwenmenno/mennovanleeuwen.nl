@@ -65,6 +65,7 @@ import {
   MAIL_READ_TOOLS,
 } from '../../data/agents'
 import { seafileAt } from '../../data/agentPlaces'
+import { imageProgressLabel, type ImageProgress } from '../../data/imageModels'
 import { getAccount, hasCalendar } from '../../os/account'
 import { loadMailAccounts, mailAccountsNow } from '../../data/mail'
 import { lookup, prepareFolder, readFileText, writeFile } from '../fs'
@@ -99,7 +100,7 @@ export type SessionOptions = {
   first: string | null
 }
 
-type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client' }
+type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client'; /** An image job's status line: "Step 12 of 30 · 40%" */ detail?: string }
 /** `summary`: what the change does, from the server, where the call alone doesn't say (a calendar change). */
 type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary; check?: string }
 type Asked = { callId: string; messageId: number; index: number; form: Form }
@@ -162,6 +163,8 @@ export class Session {
   private turn: { ctl: AbortController; started: number; content: string; thinking: string; chars: number; verb: string } | null = null
   private follow: AbortController | null = null
   private liveCalls: LiveCall[] = []
+  /** Image jobs under way: which call each one is, for its progress events */
+  private imageJobs = new Map<string, { messageId: number; index: number }>()
   private approvals: Approval[] = []
   private asked: Asked[] = []
   private modal: Modal | null = null
@@ -319,7 +322,7 @@ export class Session {
       else if (this.turn.thinking && this.verbose) L.push(...thinkingLines(this.turn.thinking, true, w).slice(-8), [])
     }
     const blink = this.tick % 8 < 4
-    for (const c of this.liveCalls) L.push(...runningLines(c.call, c.state, w, blink), [])
+    for (const c of this.liveCalls) L.push(...runningLines(c.call, c.state, w, blink, c.detail), [])
     if (this.turn) {
       const t = this.turn
       const secs = Math.floor((Date.now() - t.started) / 1000)
@@ -1460,6 +1463,7 @@ export class Session {
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
           else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
           this.setCallState(p.messageId, p.index, p.kind === 'image' ? 'running' : p.kind === 'question' ? 'question' : p.kind)
+          if (p.kind === 'image') this.imageProgress(p.callId, p.messageId, p.index, p.progress)
         }
         this.next()
         break
@@ -1520,6 +1524,17 @@ export class Session {
         this.setCallState(e.messageId, e.index, 'client')
         void this.runClient(e.callId, e.messageId, e.index, e.call)
         break
+      case 'imageGeneration':
+        this.imageProgress(e.callId, e.messageId, e.index)
+        break
+      case 'imageProgress': {
+        const job = this.imageJobs.get(e.callId)
+        if (job) this.imageProgress(e.callId, job.messageId, job.index, e.progress)
+        break
+      }
+      case 'imageGenerationDone':
+        this.imageJobs.delete(e.callId)
+        break
       case 'error':
         this.out([...wrap([seg(`Error: ${e.error}`, 'red'), seg(' · ctrl+r or /retry runs it again', 'muted')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
         break
@@ -1534,6 +1549,15 @@ export class Session {
       case 'done':
         break
     }
+  }
+
+  /** An image job's progress on its call's status line (ComfyUI's step and percentage, or its place in the queue). */
+  private imageProgress(callId: string, messageId: number, index: number, progress?: ImageProgress) {
+    this.imageJobs.set(callId, { messageId, index })
+    const c = this.liveCalls.find((x) => x.messageId === messageId && x.index === index)
+    if (!c) return
+    c.detail = imageProgressLabel(progress)
+    this.draw()
   }
 
   private setCallState(messageId: number, index: number, state: LiveCall['state']) {

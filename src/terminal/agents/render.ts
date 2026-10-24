@@ -299,7 +299,8 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
 }
 
 /** A tool call still under way. */
-export function runningLines(call: ToolCall, state: 'running' | 'approval' | 'question' | 'client', w: number, blink: boolean): Line[] {
-  const text = state === 'approval' ? 'Waiting for you to allow it…' : state === 'question' ? 'Waiting for your answers…' : state === 'client' ? 'Running in this terminal…' : 'Running…'
+/** `detail`: what a running call reports about itself (an image job's step and percentage), instead of "Running…". */
+export function runningLines(call: ToolCall, state: 'running' | 'approval' | 'question' | 'client', w: number, blink: boolean, detail?: string): Line[] {
+  const text = state === 'approval' ? 'Waiting for you to allow it…' : state === 'question' ? 'Waiting for your answers…' : state === 'client' ? 'Running in this terminal…' : detail ?? 'Running…'
   return [header(call, blink ? 'muted' : 'bold', w), under(text)]
 }

@@ -4,7 +4,10 @@ import { createServer, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
-import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, type ImageAssetCatalog } from '../src/data/imageModels.ts'
+import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, imageProgressFraction, imageProgressLabel, type ImageAssetCatalog } from '../src/data/imageModels.ts'
+import { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } from '../server/comfyProgress.ts'
+import { createHash } from 'node:crypto'
+import type { Duplex } from 'node:stream'
 
 // Deterministic recommendation fixtures: exact identifiers survive every decision.
 const automaticCatalog: ImageAssetCatalog = {
@@ -47,6 +50,66 @@ assert.deepEqual(recommendedImageSampling('sdxl', 'Pony/model.safetensors'), { s
 assert.equal(recommendedImageSampling('sdxl', '', { samplers: ['euler'], schedulers: ['simple'] }).sampler, 'euler')
 console.log('PASS automatic family/variant matching, nested exact paths, metadata identity, ambiguity, manual preservation, backend/family changes and missing assets')
 
+// Live progress: ComfyUI socket messages, queue position, throttling, frames and labels.
+{
+  const state = progressState()
+  assert.equal(applyComfyMessage(state, { type: 'status', data: { status: { exec_info: { queue_remaining: 3 } } } }, null, 20), false)
+  assert.equal(applyComfyMessage(state, { type: 'execution_start', data: { prompt_id: 'mine' } }, 'mine', 20), true)
+  assert.deepEqual(state.progress, { phase: 'loading' })
+  assert.equal(applyComfyMessage(state, { type: 'progress', data: { value: 19, max: 20, prompt_id: 'other' } }, 'mine', 20), false)
+  assert.equal(applyComfyMessage(state, { type: 'executing', data: { node: '7', prompt_id: 'mine' } }, 'mine', 20), true)
+  assert.deepEqual(state.progress, { phase: 'sampling', value: 0, max: 20 })
+  assert.equal(applyComfyMessage(state, { type: 'progress', data: { value: 8, max: 20, prompt_id: 'mine', node: '7' } }, 'mine', 20), true)
+  assert.equal(imageProgressFraction(state.progress), 0.4)
+  assert.equal(imageProgressLabel(state.progress), 'Step 8 of 20 · 40%')
+  for (const bad of [{ value: 21, max: 20 }, { value: -1, max: 20 }, { value: 1, max: 0 }, { value: 1.5, max: 20 }, { value: '3', max: 20 }, { value: 3, max: 20, node: '8' }]) assert.equal(applyComfyMessage(state, { type: 'progress', data: { ...bad, prompt_id: 'mine' } }, 'mine', 20), false)
+  assert.equal(applyComfyMessage(state, { type: 'executing', data: { node: '8', prompt_id: 'mine' } }, 'mine', 20), true)
+  assert.equal(imageProgressFraction(state.progress), 1)
+  assert.equal(state.finished, false)
+  applyComfyMessage(state, { type: 'executing', data: { node: null, prompt_id: 'mine' } }, 'mine', 20)
+  assert.equal(state.finished, true)
+  for (const junk of [null, 'x', 1, { type: 'progress' }, { type: 1, data: {} }, { type: 'progress', data: { prompt_id: 5 } }]) assert.equal(applyComfyMessage(progressState(), junk, null, 20), false)
+  assert.equal(imageProgressFraction({ phase: 'queued', position: 2 }), null)
+  assert.equal(imageProgressLabel({ phase: 'queued', position: 2 }), 'Queued (position 2)')
+  assert.equal(imageProgressLabel({ phase: 'loading' }), 'Loading model…')
+  assert.equal(imageProgressLabel(undefined), 'Generating image…')
+  assert.equal(queuePosition({ queue_running: [[1, 'a', {}]], queue_pending: [[7, 'mine'], [3, 'b'], [9, 'c']] }, 'mine'), 3)
+  assert.equal(queuePosition({ queue_running: [], queue_pending: [[7, 'mine']] }, 'mine'), 1)
+  assert.equal(queuePosition({ queue_running: [[1, 'mine']], queue_pending: [] }, 'mine'), 'running')
+  assert.equal(queuePosition({ queue_running: [], queue_pending: [] }, 'mine'), null)
+  assert.equal(queuePosition('nonsense', 'mine'), null)
+
+  const emitted: any[] = []
+  const throttle = throttleProgress((p) => emitted.push({ p, at: Date.now() }))
+  const started = Date.now()
+  for (let i = 1; i <= 60; i++) { throttle.push({ phase: 'sampling', value: i, max: 60 }); await new Promise((r) => setTimeout(r, 10)) }
+  await new Promise((r) => setTimeout(r, 300))
+  const took = Date.now() - started
+  assert.ok(emitted.length >= 2 && emitted.length <= Math.ceil(took / 250) + 1, `throttled to ${emitted.length} in ${took} ms`)
+  for (let i = 1; i < emitted.length; i++) assert.ok(emitted[i].at - emitted[i - 1].at >= 240, 'at most 4 updates a second')
+  assert.equal(emitted[0].p.value, 1)
+  assert.equal(emitted.at(-1).p.value, 60) // the latest one always arrives
+  const count = emitted.length
+  throttle.push({ phase: 'sampling', value: 60, max: 60 })
+  throttle.push({ phase: 'decoding' }); throttle.stop()
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(emitted.length, count) // a duplicate is never sent, and nothing after stop
+
+  const messages: unknown[] = [], pongs: Buffer[] = []
+  let closed = 0
+  const read = frameReader((m) => messages.push(m), (b) => pongs.push(b), () => closed++)
+  const text = (t: string, opcode = 1, fin = true) => { const b = Buffer.from(t); return Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode, b.length]), b]) }
+  const masked = (t: string) => { const b = Buffer.from(t), m = Buffer.from([1, 2, 3, 4]); return Buffer.concat([Buffer.from([0x81, 0x80 | b.length]), m, Buffer.from(b.map((x, i) => x ^ m[i % 4]))]) }
+  const all = Buffer.concat([text('{"type":"a"}'), Buffer.from([0x82, 3, 1, 2, 3]), text('{"type":', 1, false), text('"b"}', 0), text('ping', 9), masked('{"type":"c"}'), text('not json')])
+  for (let i = 0; i < all.length; i += 3) read(all.subarray(i, i + 3)) // split anywhere
+  assert.deepEqual(messages, [{ type: 'a' }, { type: 'b' }, { type: 'c' }])
+  assert.equal(pongs[0].toString(), 'ping')
+  const big = Buffer.alloc(10); big[0] = 0x81; big[1] = 127; big.writeBigUInt64BE(BigInt(64 * 1024 * 1024), 2)
+  read(big)
+  assert.equal(closed, 1)
+}
+console.log('PASS ComfyUI progress messages for this prompt only, step validation, queue position, labels, 4-per-second throttle, WebSocket frames')
+
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
 const send = (res: ServerResponse, data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
 const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
@@ -60,7 +123,36 @@ const discoveryRequests: string[] = []
 const irrelevantCatalog = JSON.stringify({ ...info, IrrelevantCustomNode: { description: 'x'.repeat(9 * 1024 * 1024) } })
 let fullCatalogRequests = 0
 let previewMode: 'ok' | 'missing' | 'wrong-category' | 'unsafe-path' | 'oversize' | 'mime' | 'invalid' | 'duplicate' | 'mislabeled' = 'ok'
-let behavior: 'ok' | 'wait' | 'error' | 'invalid' | 'oversize' = 'ok'
+let behavior: 'ok' | 'wait' | 'error' | 'invalid' | 'oversize' | 'progress' = 'ok'
+let wsMode = false
+let progressDone = false
+let progressReads = 0
+let queueState: (id: string) => unknown = () => ({ queue_running: [], queue_pending: [] })
+const sockets = new Map<string, Duplex>()
+let pongsSeen = 0
+const promptClients: string[] = []
+const wsFrame = (data: unknown, opcode = 1) => { const b = typeof data === 'string' || Buffer.isBuffer(data) ? Buffer.from(data as string) : Buffer.from(JSON.stringify(data)); return Buffer.concat([Buffer.from(b.length < 126 ? [0x80 | opcode, b.length] : [0x80 | opcode, 126, b.length >> 8, b.length & 255]), b]) }
+/** What a real ComfyUI tells the client that queued a prompt, quickly: start, nodes, 20 steps, done. */
+async function streamJob(socket: Duplex, id: string) {
+  const say = (type: string, data: unknown) => socket.write(wsFrame({ type, data }))
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  say('status', { status: { exec_info: { queue_remaining: 1 } } })
+  await wait(120)
+  say('execution_start', { prompt_id: id })
+  say('progress', { value: 98, max: 99, prompt_id: 'someone-else' })
+  say('executing', { node: '1', prompt_id: id })
+  await wait(60)
+  say('execution_cached', { nodes: ['2', '3'], prompt_id: id })
+  say('executing', { node: '4', prompt_id: id })
+  socket.write(wsFrame('ping', 9))
+  socket.write(wsFrame(Buffer.alloc(300, 7), 2)) // a latent preview
+  say('executing', { node: '7', prompt_id: id })
+  for (let i = 1; i <= 20; i++) { await wait(30); say('progress', { value: i, max: 20, prompt_id: id, node: '7' }) }
+  say('executing', { node: '8', prompt_id: id })
+  await wait(400) // VAE decode
+  progressDone = true
+  say('executing', { node: null, prompt_id: id })
+}
 let submissions = 0
 let historyReads = 0
 let interrupts = 0
@@ -75,6 +167,7 @@ const visionRequests: any[] = []
 let holdVision = false
 let cancelledVision = 0
 const streamEvents: any[] = []
+const eventTimes: number[] = []
 let generationArgs: Record<string, unknown> = { prompt: 'A small blue bird', seed: 42 }
 const comfy = createServer((req, res) => {
   let raw = ''
@@ -109,12 +202,20 @@ const comfy = createServer((req, res) => {
     if (path === '/prompt') {
       assert.equal(req.headers.authorization, 'Bearer test-secret')
       submitted = JSON.parse(raw).prompt
-      return send(res, { prompt_id: `job-${++submissions}` })
+      const clientId = JSON.parse(raw).client_id
+      promptClients.push(clientId)
+      const id = `job-${++submissions}`
+      progressDone = false; progressReads = 0
+      const socket = sockets.get(clientId)
+      if (socket) void streamJob(socket, id)
+      return send(res, { prompt_id: id })
     }
     if (path.startsWith('/history/')) {
       historyReads++
       const id = path.split('/').pop()!
       if (behavior === 'wait') return send(res, {})
+      // Without a socket the job is done after a few polls; with one, when the socket says so.
+      if (behavior === 'progress' && !(wsMode ? progressDone : ++progressReads > 2)) return send(res, {})
       if (behavior === 'error') return send(res, { [id]: { status: { status_str: 'error' } } })
       return send(res, { [id]: { status: { completed: true }, outputs: { '9': { images: [{ filename: 'test.png', subfolder: '', type: 'output' }] } } } })
     }
@@ -122,10 +223,23 @@ const comfy = createServer((req, res) => {
       if (behavior === 'oversize') return res.writeHead(200, { 'Content-Length': 21 * 1024 * 1024 }).end()
       return res.writeHead(200, { 'Content-Type': 'image/png' }).end(behavior === 'invalid' ? Buffer.from('<html>bad</html>') : png)
     }
+    if (path === '/queue' && req.method === 'GET') return send(res, queueState(`job-${submissions}`))
     if (path === '/queue') { deletions.push(...JSON.parse(raw).delete); return send(res, {}) }
     if (path === '/interrupt') interrupts++
     res.writeHead(404).end()
   })
+})
+comfy.on('upgrade', (req, socket: Duplex) => {
+  const url = new URL(req.url!, 'http://test')
+  if (!wsMode || url.pathname !== '/ws' || req.headers.authorization !== 'Bearer test-secret') return socket.end('HTTP/1.1 404 Not Found\r\n\r\n')
+  const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+  const clientId = url.searchParams.get('clientId')!
+  sockets.set(clientId, socket)
+  socket.on('data', () => pongsSeen++)
+  socket.on('error', () => {})
+  socket.on('end', () => { sockets.delete(clientId); socket.end() })
+  socket.on('close', () => sockets.delete(clientId))
 })
 const ollama = createServer((req, res) => {
   let raw = ''
@@ -185,6 +299,7 @@ const turn = async (id: string, approve?: boolean) => {
       if (!line) continue
       const event = JSON.parse(line)
       streamEvents.push(event)
+      eventTimes.push(Date.now())
       if (event.type === 'approval') { approvalSummaries.push(event.summary); await approvalHook?.(); await json('POST', `/api/agents/threads/${id}/approve`, { callId: event.callId, allow: approve ?? false }) }
     }
   }
@@ -326,6 +441,38 @@ try {
   behavior = 'ok'
   assert.ok(result(await turn((await thread()).id)).image)
   console.log('PASS cancellation removes only its prompt, no global interrupt, no artifact, concurrent account job blocked and slot released')
+
+  // Live progress over ComfyUI's socket reaches the job's own stream, at most 4 a second.
+  wsMode = true; behavior = 'progress'
+  let from = streamEvents.length
+  const live = await thread()
+  assert.ok(result(await turn(live.id)).image)
+  const progressEvents = streamEvents.slice(from).map((e, i) => ({ e, at: eventTimes[from + i] })).filter((x) => x.e.type === 'imageProgress')
+  const generation = streamEvents.slice(from).find((e) => e.type === 'imageGeneration')
+  assert.ok(progressEvents.length >= 3, JSON.stringify(progressEvents.map((x) => x.e.progress)))
+  assert.ok(progressEvents.every((x) => x.e.callId === generation.callId))
+  assert.ok(promptClients.at(-1))
+  await until(() => sockets.size === 0) // closed once the job ends
+  const phases = progressEvents.map((x) => x.e.progress)
+  assert.equal(phases[0].phase, 'queued')
+  const steps = phases.filter((p) => p.phase === 'sampling')
+  assert.ok(steps.length >= 1 && steps.every((p) => p.max === 20), JSON.stringify(phases))
+  assert.ok(steps.every((p, i) => i === 0 || p.value >= steps[i - 1].value))
+  assert.ok(phases.some((p) => p.phase === 'decoding' || p.phase === 'saving'))
+  for (let i = 1; i < progressEvents.length; i++) assert.ok(progressEvents[i].at - progressEvents[i - 1].at >= 200, 'throttled to about 4 a second')
+  assert.ok(pongsSeen >= 1, 'ping answered')
+  assert.ok(streamEvents.slice(from).findIndex((e) => e.type === 'imageGenerationDone') > streamEvents.slice(from).indexOf(progressEvents.at(-1)!.e), 'no progress after the job ends')
+  // Without the socket (an older or proxied ComfyUI): the queue position, then it finishes as before.
+  wsMode = false
+  queueState = (id) => ({ queue_running: [[1, 'someone-else', {}]], queue_pending: [[9, id, {}], [4, 'another', {}]] })
+  from = streamEvents.length
+  assert.ok(result(await turn((await thread()).id)).image)
+  const fallback = streamEvents.slice(from).filter((e) => e.type === 'imageProgress').map((e) => e.progress)
+  assert.ok(fallback.some((p) => p.phase === 'queued' && p.position === 3), JSON.stringify(fallback))
+  assert.ok(!fallback.some((p) => p.phase === 'sampling'))
+  queueState = () => ({ queue_running: [], queue_pending: [] })
+  behavior = 'ok'
+  console.log('PASS live progress over the ComfyUI socket (own prompt only, throttled, ping/pong, closed after), queue position and clean fallback without a socket')
 
   await json('PUT', '/api/agents/images/settings', settings, 1)
   const denied = await api('GET', '/api/agents/images/catalog', undefined, 1)
@@ -720,6 +867,7 @@ try {
   console.log('All image generation checks passed')
 } finally {
   await server.dispose()
+  for (const socket of sockets.values()) socket.destroy() // upgraded, so closeAllConnections no longer holds them
   comfy.closeAllConnections(); ollama.closeAllConnections()
   await Promise.all([new Promise<void>((r) => comfy.close(() => r())), new Promise<void>((r) => ollama.close(() => r()))])
 }

@@ -1,3 +1,28 @@
+/**
+ * Where one image job is, as the server reports it to its owner's thread (see server/comfyProgress.ts).
+ * `queued`: waiting in ComfyUI's queue, `position` 1 when it is next. `running`: started, with no step
+ * detail (no live connection to ComfyUI). `sampling`: step `value` of `max`.
+ */
+export type ImageProgress = { phase: 'queued' | 'running' | 'loading' | 'encoding' | 'sampling' | 'decoding' | 'saving'; position?: number; value?: number; max?: number }
+/** How much of the picture is done, 0–1, or null when that is not known yet (queued, loading). */
+export function imageProgressFraction(p: ImageProgress | null | undefined): number | null {
+  if (!p) return null
+  if (p.phase === 'sampling' && p.max) return Math.min(1, Math.max(0, (p.value ?? 0) / p.max))
+  return p.phase === 'decoding' || p.phase === 'saving' ? 1 : null
+}
+/** A short status line: "Queued (position 2)", "Loading model…", "Step 12 of 30 · 40%". */
+export function imageProgressLabel(p: ImageProgress | null | undefined): string {
+  switch (p?.phase) {
+    case 'queued': return p.position ? `Queued (position ${p.position})` : 'Queued…'
+    case 'loading': return 'Loading model…'
+    case 'encoding': return 'Reading the prompt…'
+    case 'sampling': return p.max ? `Step ${p.value ?? 0} of ${p.max} · ${Math.round(imageProgressFraction(p)! * 100)}%` : 'Generating image…'
+    case 'decoding': return 'Decoding image…'
+    case 'saving': return 'Saving image…'
+    default: return 'Generating image…'
+  }
+}
+
 /** Catalog identifiers are opaque to ComfyUI. Split paths for browsing, never rewrite the value sent back. */
 export type ModelAsset = { value: string; name: string; folders: string[]; folder: string; extension: string }
 export function modelAssets(values: readonly string[]): ModelAsset[] {
