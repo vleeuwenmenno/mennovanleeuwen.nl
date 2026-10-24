@@ -1438,18 +1438,26 @@ provides earlier owned image IDs, and `list_image_attachments` discovers persist
 this or an explicitly named owned thread. `view_generated_image` can inspect either source kind
 when the conversational model supports vision. Attaching a picture alone does not request a job.
 
-**Localized editing.** On a generated image, choose **Options → Edit selected area…**, describe
+**Localized editing.** On a generated image, choose **Options → Edit selected area…**.
+For a sent upload or Photos attachment, use its message’s **More → Edit selected area: filename**;
+the original owned attachment is used directly, with EXIF-oriented dimensions read when it loads. Describe
 the replacement and denoise (default 0.65), then **Paint edit area**. **Apply mask** saves an owned
 mask and starts inpainting; cancel before applying discards the selection without starting a job.
 The backend capability is checked first. The app uses the source image's recorded diffusion
 components/sampling when available; otherwise it uses current image settings. For a saved mask,
 the CLI/model can call `generate_image` with `operation: "inpaint"`, `source_image_id`, `mask_id`,
-and a prompt. `list_image_masks` discovers up to 20 masks in this or an explicitly owned thread.
+and a prompt. Select an uploaded source with `list_image_attachments` and reuse its exact
+`attachment:message:index` ID; select a mask whose `source_image_id` matches that ID. Paint new masks
+in the app; CLI tools reuse saved masks. `list_image_masks` discovers up to 20 masks in this or an explicitly owned thread.
 Masks are bound to one source, remain private, count toward account storage, and are retained
-with surviving branch artifacts. At most eight unused mask uploads are kept per thread;
+with surviving branch artifacts. Attachment source IDs keep resolving through owned copies
+in surviving branches, including branches of branches, after the original thread is deleted. At most eight unused mask uploads are kept per thread;
 new uploads prune older unused masks. Canceling during upload discards an unused completed upload
 when its response arrives. Referenced masks cannot be deleted separately. Again reuses the recorded source and mask with a fresh seed;
 Retry replays the direct action. Approval cards identify the mask and working-size preservation.
+
+Opaque 8-bit RGB and RGBA PNG masks are accepted; RGBA alpha must be 255 for every pixel.
+RGB channels must be equal and either black (0) or white (255); transparency is rejected.
 
 **Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` is a reusable standalone modal.
 Pass `sourceUrl` (authenticated same-origin HTTP(S)), `sourceName`, EXIF-oriented `width` and

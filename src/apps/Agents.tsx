@@ -1,3 +1,4 @@
+import { InpaintDialog, type InpaintSource } from './AgentsInpaint'
 import { PhotoPicker } from './photos/PhotoPicker'
 import { checkPhotoAttachmentBudget } from '../data/photoAttachments'
 import { mentionAt, mentionText } from '../data/agentMentions'
@@ -2201,6 +2202,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
 function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage }: { onEditImage: (name: string, sourceId: string) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: InpaintImageInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+  const [maskSource, setMaskSource] = useState<InpaintSource | null>(null)
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
     <ActionRow label={`${label} actions`}>{[...buttons, <MoreButton key="more" label={label} items={tidy([...own, { separator: true }, ...actions(m, true)])} />]}</ActionRow>
@@ -2231,7 +2233,8 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
             {!!m.attachments?.length && <AttachedFiles files={m.attachments} pictureOf={threadId ? sentPicture(threadId, m) : () => null} sent />}
           </div>
           {row(m, 'Your message', [
-            ...(imagesOn && threadId ? (m.attachments ?? []).flatMap((f, i) => f.kind === 'image' ? [{ label: `Edit image: ${f.name}`, disabled: answering, onSelect: () => onEditImage(f.name, `attachment:${m.id}:${i}`) }] : []) : []),
+            ...(imagesOn && threadId ? (m.attachments ?? []).flatMap((f, i) => f.kind === 'image' ? [{ label: `Edit image: ${f.name}`, disabled: answering, onSelect: () => onEditImage(f.name, `attachment:${m.id}:${i}`) },
+              { label: `Edit selected area: ${f.name}`, disabled: answering, onSelect: () => setMaskSource({ id: `attachment:${m.id}:${i}`, name: f.name, url: `/api/agents/threads/${threadId}/messages/${m.id}/attachments/${i}` }) }] : []) : []),
             ...(m.content ? [{ label: 'Copy', hint: 'Copy the message', onSelect: () => copy(m.content) }] : []),
             { label: 'Edit & resend…', hint: 'Take the thread back to this message and edit it to send again', onSelect: () => onRewind(m, true) },
             { label: 'Rewind to here…', hint: 'Remove this message and everything after it; it goes back into the message box', onSelect: () => onRewind(m, false) },
@@ -2279,7 +2282,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
       </Fragment>,
     )
   }
-  return <>{out}</>
+  return <>{out}{maskSource && threadId && <InpaintDialog image={maskSource} threadId={threadId} disabled={answering} onClose={() => setMaskSource(null)} onInpaint={input => { setMaskSource(null); onInpaint(input) }} />}</>
 }
 
 /**
