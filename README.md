@@ -4357,6 +4357,33 @@ release; clicking it restarts into the new version. Live data (`/api/*`, other s
 cached. The worker only registers in production builds; `.claude/launch.json` has a `prod`
 configuration that builds and serves one on port 4180.
 
+The worker precaches the page, the main script and CSS, the chunks loaded later (the terminal's
+editors, figlet fonts, Gladiator and Empires At War), the icons and the data snapshots; only pdf.js
+is left for when a PDF is opened. On a release, the new worker reuses every hashed `/assets/` file
+it already has in any of its caches (the names carry a hash of the content) and downloads only the
+ones that changed. The install is all or nothing: if any file fails, the running release stays as
+it was. A game whose code can't be loaded anyway (no worker, its cache not filled yet) says so in
+its window instead of taking the page down: offline with a Try again button, online with a Reload
+into the latest version (most likely a release replaced its files while the page was open).
+
+The build also writes a Brotli (`.br`, quality 11) and a gzip (`.gz`, level 9) copy next to every
+text file in `dist/` (the `mvlos-precompress` plugin), and `server/index.ts` sends the one the
+browser prefers by its `Accept-Encoding` q values (Brotli on a tie), with `Content-Encoding` and
+`Vary: Accept-Encoding`. Requests without `Accept-Encoding`, refusing both, and `Range` requests,
+get the raw file. A cold first visit (worker installed) downloads about 1.1 MB instead of 4.5 MB,
+and a release about 0.9 MB instead of 3.7 MB (the main chunk and the two game chunks, which import
+it, change with nearly every release).
+
+Run `pnpm build && pnpm check:sw` to check all of this: the precache list, the server's
+encodings and headers, and in headless Chromium a cold load, offline boot with a game, and a game
+failing cleanly when its code is missing. It runs the server on port 5283 (`SW_CHECK_PORT`; the
+byte-counting proxy uses the next port) with a scratch `DATA_DIR`. `SW_CHECK_FROM` takes older
+builds (directories with `server/`, `src/` and a built `dist/`, separated by `:`) and checks the
+upgrade from each: unchanged files reused, changed ones downloaded, and offline boot afterwards.
+Use an `origin/main` checkout for the upgrade from the live worker, and a copy of this build's
+`dist/` and `server/` taken before running `pnpm build` again (which changes only the build time)
+for an ordinary release.
+
 Install from the browser's **Install app** or **Add to Home Screen** menu, then launch the saved
 icon. The manifest requests fullscreen by default; browsers that do not support it fall back to
 standalone or a normal browser tab. On iPhone/iPad, use Safari's Share menu → **Add to Home Screen**;
