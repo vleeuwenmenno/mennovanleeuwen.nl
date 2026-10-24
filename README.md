@@ -1345,7 +1345,14 @@ asks about them or is changing them, so swapping the model or the LoRA is one sh
 than a tour of the settings, and nothing ends with an offer of further work. The
 composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
 for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
-pdf.js) and pictures, from Seafile, this computer, a drop (from the computer, Files or the desktop) or a paste. Its tools: web search
+pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
+**From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
+and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP
+or GIF through the authenticated Photos proxy, not the thumbnail. Images keep the normal 5 MB per-file,
+10-attachment and combined payload limits; unsupported originals (including HEIC and RAW) show an error.
+Cancel leaves the draft and attachments unchanged; a failed download adds nothing. These are normal
+image attachments for vision and, after sending, supported still-image sources for image-to-image.
+Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
 stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
@@ -1449,6 +1456,9 @@ permission modes, silent success, progress and cancellation apply. Results and i
 record source ID/name/original dimensions, resize policy and actual denoise/settings. Generate
 another reuses that source and settings with a fresh seed; it fails if the source was deleted.
 
+Source validation is a bounded structural and dimension preflight, not a full image decode. Corrupt
+compressed pixels may still be rejected by ComfyUI; upload, prompt and decoding failures are reported
+as errors, with no successful image result.
 Sources are read only from the owner's persisted artifacts/attachments, never model-provided
 paths, URLs or base64. Supported sources are still PNG, JPEG and WebP, at most 20 MiB for generated artifacts or 8 MiB for attachments, 8192 pixels
 per side and 16 megapixels (attachment upload limits still apply). EXIF orientation is honored when sizing the source, matching ComfyUI's loader. Malformed EXIF
