@@ -4,7 +4,7 @@ import { imageFileSaveBlockers, prepareImageFileSave } from './agentImageFiles.t
 import { searchThreads, readThread } from './agentThreadSearch.ts'
 import { messageMentions } from '../src/data/agentMentions.ts'
 import { saveImageProfile, forgetImageProfile, PROFILE_NAME_MAX, PROFILE_DESCRIPTION_MAX } from './agentImageProfiles.ts'
-import { imageLearnings, saveImageLearning } from './agentImageLearning.ts'
+import { imageLearnings, imageLearningsShown, imageReviewGate, saveImageLearning, type ImageReviewTurn } from './agentImageLearning.ts'
 import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageProgress } from '../src/data/imageModels.ts'
 import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, prepareImageGeneration, generatedImageForVision, imageAgainInput, retainBranchedImages, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
@@ -1562,7 +1562,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
       threshold: { type: 'number', minimum: 0.05, maximum: 0.95, default: 0.3, description: 'Detection threshold; lower finds more, higher is stricter' },
       hand_off: { type: 'boolean', description: 'Offer the mask to the user to refine in the mask editor instead of editing right away' },
     }, ['source_image_id', 'target']),
-    tool('generate_image', 'Generate or upscale one image only when the user requests it. For existing-image refinement use operation=refine with source_image_id, optional scale (default 1.5, range 1–2), denoise(default 0.2), optional upscale_model and explicit sampling/component/prompt overrides. Saved owned diffusion settings are inherited; sources without those need an explicit prompt and compatible configured components. Refinement dimensions use a 64-pixel grid, 256–2048 per side, 4 megapixels. For a second pass on new generation supply hires with its own size/denoise and optional sampling/upscaler. For model upscaling use operation=upscale, source_image_id, an installed upscale_model from list_image_models, and scale (default 2, greater than 1 up to 4) OR aspect-matched dimensions. Upscale requires no prompt, diffusion model, seed, or sampling options; omit those. Source must be at most 2048 pixels per side; final size at most 4096 per side and 16 megapixels. Native model intermediate size can exceed final size; memory is not guaranteed. Set source_image_id to edit a whole existing image with configurable denoise; for localized edits use operation=inpaint (replace with something described in prompt) or operation=remove (erase it: LaMa fills it from its surroundings at full size; only source_image_id and mask_id, no prompt or settings) with a mask_id from make_image_mask, the editor or list_image_masks. White edits, black preserves the resized working source through a final composite. Inpaint cannot include hires; refine its result separately. Source and mask dimensions must match. Use list_generated_images for current generated images, read_thread for earlier generated IDs, or list_image_attachments for user attachments. Source ratio sets default dimensions; explicit dimensions center-crop without stretching. First discover once with list_image_models, which retrieves relevant prior image learnings. If generation returns learning_review_required, review its evidence and retry with validated settings; it has not submitted a job. Prefer its recommended defaults and preserve explicit user model/sampling requests; tune when requested or clearly needed. Per-call preset/model/clip/vae/loras/steps/cfg/sampler/scheduler/size/seed override session then account defaults without persistence. Empty asset strings request automatic selection. A different preset may require all matching assets. Never promise VAE swapping improves quality; use compatible assets only. Turbo CFG stays 1. Runs without approval unless the owner turned on Ask before generating images; then the approval card shows the resolved settings. Backend URLs/tokens, downloads and arbitrary graphs are forbidden. Can take minutes. Success ends the turn immediately: the app/CLI displays the image, URL and settings. Do not add follow-up text or call vision after generation; inspect on a later user turn. Do not claim success before it succeeds.', {
+    tool('generate_image', 'Generate or upscale one image only when the user requests it. For existing-image refinement use operation=refine with source_image_id, optional scale (default 1.5, range 1–2), denoise(default 0.2), optional upscale_model and explicit sampling/component/prompt overrides. Saved owned diffusion settings are inherited; sources without those need an explicit prompt and compatible configured components. Refinement dimensions use a 64-pixel grid, 256–2048 per side, 4 megapixels. For a second pass on new generation supply hires with its own size/denoise and optional sampling/upscaler. For model upscaling use operation=upscale, source_image_id, an installed upscale_model from list_image_models, and scale (default 2, greater than 1 up to 4) OR aspect-matched dimensions. Upscale requires no prompt, diffusion model, seed, or sampling options; omit those. Source must be at most 2048 pixels per side; final size at most 4096 per side and 16 megapixels. Native model intermediate size can exceed final size; memory is not guaranteed. Set source_image_id to edit a whole existing image with configurable denoise; for localized edits use operation=inpaint (replace with something described in prompt) or operation=remove (erase it: LaMa fills it from its surroundings at full size; only source_image_id and mask_id, no prompt or settings) with a mask_id from make_image_mask, the editor or list_image_masks. White edits, black preserves the resized working source through a final composite. Inpaint cannot include hires; refine its result separately. Source and mask dimensions must match. Use list_generated_images for current generated images, read_thread for earlier generated IDs, or list_image_attachments for user attachments. Source ratio sets default dimensions; explicit dimensions center-crop without stretching. First discover once with list_image_models, which retrieves relevant prior image learnings. The first generate_image of a turn may return status review_once with image learnings instead of submitting; this is not an error: read them and call generate_image once more, which submits. Prefer its recommended defaults and preserve explicit user model/sampling requests; tune when requested or clearly needed. Per-call preset/model/clip/vae/loras/steps/cfg/sampler/scheduler/size/seed override session then account defaults without persistence. Empty asset strings request automatic selection. A different preset may require all matching assets. Never promise VAE swapping improves quality; use compatible assets only. Turbo CFG stays 1. Runs without approval unless the owner turned on Ask before generating images; then the approval card shows the resolved settings. Backend URLs/tokens, downloads and arbitrary graphs are forbidden. Can take minutes. Success ends the turn immediately: the app/CLI displays the image, URL and settings. Do not add follow-up text or call vision after generation; inspect on a later user turn. Do not claim success before it succeeds.', {
       operation: { type: 'string', enum: ['generate', 'refine', 'upscale', 'inpaint', 'remove'], description: 'Defaults to generate. Upscale enlarges existing pixels with an installed upscale model, without diffusion. Remove erases the masked area with LaMa (no prompt); inpaint redraws it from prompt.' },
       mask_id: str('Required for inpaint and remove: owned mask ID from make_image_mask, the editor or list_image_masks, matching source_image_id. Never a URL or arbitrary graph.'),
       upscale_model: str('Required for upscale: exact installed identifier from options.upscalers'),
@@ -2004,7 +2004,7 @@ const writeNotes = (user: User, change: (all: NoteRow[]) => NoteRow[]) => writeN
 const calendarError = (e: unknown) => (e instanceof HttpError && e.status === 409 && /not connected/i.test(e.message) ? NOT_CONNECTED : (e as Error).message)
 
 /** Runs one tool call. Answers what the model reads back; failures are told to it, not thrown. */
-async function runTool(user: User, key: string, thread: string, mode: Mode, call: ToolCall, signal: AbortSignal, learningRead: (receipt: string) => void, zone: string): Promise<string> {
+async function runTool(user: User, key: string, thread: string, mode: Mode, call: ToolCall, signal: AbortSignal, learningRead: (digest: string) => void, zone: string): Promise<string> {
   const args = call.arguments ?? {}
   const limit = AbortSignal.any([signal, AbortSignal.timeout(45_000)])
   try {
@@ -2020,7 +2020,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         if (args.operation !== undefined && !['generate', 'refine', 'hires', 'upscale', 'inpaint', 'remove'].includes(String(args.operation)) || args.upscale_model !== undefined && (args.operation !== 'upscale' || typeof args.upscale_model !== 'string' || !args.upscale_model || args.upscale_model.length > 2048)) throw new HttpError(400, 'Choose a supported operation; upscale_model requires operation upscale')
         const { effective } = threadImageSettings(user, thread)
         const findings = imageLearnings(user, thread, effective, String(args.task ?? ''), undefined, args.profile_id, args.all_models === true, args.operation as string | undefined, args.upscale_model as string | undefined)
-        learningRead(findings.receipt)
+        learningRead(findings.digest)
         return JSON.stringify(findings.evidence)
       }
       case 'save_image_profile': return JSON.stringify(saveImageProfile(user, args, true))
@@ -2071,7 +2071,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         const resolved = resolveImageAssets(current.effective, catalog)
         const sampling = recommendedImageSampling(resolved.effective.preset, resolved.effective.model, catalog)
         const findings = imageLearnings(user, thread, resolved.effective)
-        learningRead(findings.receipt)
+        learningRead(findings.digest)
         const query = String(args.query ?? '').toLowerCase()
         const bounded = Object.fromEntries(['checkpoints', 'diffusionModels', 'clips', 'vaes', 'loras', 'upscalers'].map((key) => { const matches = catalog[key as 'checkpoints'].filter((name) => name.toLowerCase().includes(query)); return [key, { values: matches.slice(0, limitCount), total: matches.length, truncated: matches.length > limitCount }] }))
         const recommendations = PRESETS.filter((preset) => !args.preset || preset === args.preset).map((preset) => {
@@ -3062,7 +3062,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     // own messages may still be over the threshold; then it goes on and the model says if it is too much).
     let compactedAt = -2
     let imageCompleted = false
-    const imageLearningSeen = new Set<string>()
+    // Image learnings show once per turn at most, and only when they changed since this thread saw them.
+    const imageReview: ImageReviewTurn = { shown: false, gates: 0 }
     for (let round = 0; ; round++) {
       const now = current()
       const tools = toolsNow(now)
@@ -3160,7 +3161,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       const imageLearningRead = new Set<string>()
       let imageLearningReviewNeeded = false
       const runCall = async (c: ToolCall, index: number) => {
-          if (imageLearningReviewNeeded) return JSON.stringify({ skipped: 'Review image learning evidence before continuing this batch.' })
+          if (imageLearningReviewNeeded) return JSON.stringify({ skipped: 'Not run: generate_image above returned image learnings to read first. Call this again in your next reply if still needed; generate_image will submit then.' })
           if (imageCompleted) return JSON.stringify({ skipped: 'Image generation completed this turn. Request further actions in a new user turn.' })
           // Only what this thread offered: a model can still name a tool that is switched off.
           if (c.name === 'save_image_learning' && !imageSettings(user).saveImageLearnings) return JSON.stringify({ error: 'Image observations are turned off. Turn on Save image observations in Settings → Agents → Images to save new notes.' })
@@ -3210,10 +3211,10 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               const image = await prepareImageGeneration(user, row.id, c.arguments ?? {}, ctl.signal)
               if (image.parameters.operation !== 'upscale' && image.parameters.operation !== 'remove') {
                 const findings = imageLearnings(user, row.id, image.parameters, image.parameters.prompt, image.backendScope, image.parameters.profile_id, false, image.parameters.operation === 'inpaint' ? 'inpaint' : image.parameters.operation === 'refine' ? 'refine' : image.parameters.hires ? 'hires' : 'generate')
-                if (!imageLearningSeen.has(findings.receipt)) {
-                  imageLearningRead.add(findings.receipt)
+                if (imageReviewGate(row.id, findings.digest, imageReview)) {
+                  imageLearningRead.add(findings.digest)
                   imageLearningReviewNeeded = true
-                  return JSON.stringify({ learning_review_required: true, submitted: false, ...findings.evidence, next: 'Review this evidence before choosing parameters. Retry generate_image, preserving explicit user requests. No image job or approval has started.' })
+                  return JSON.stringify({ status: 'review_once', submitted: false, ...findings.evidence, next: 'This is not an error. Read the evidence, then call generate_image again; the next call submits, with the same or adjusted arguments.' })
                 }
               }
               calendar = image; imageDimensions = image.dimensions; imageRun = image.run
@@ -3308,7 +3309,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             }
             return answerText(form, await askForm(row.id, assistant, index, form, ctl.signal, send))
           }
-          return runTool(user, key, row.id, mode, c, ctl.signal, (receipt) => imageLearningRead.add(receipt), zone)
+          return runTool(user, key, row.id, mode, c, ctl.signal, (digest) => imageLearningRead.add(digest), zone)
       }
       const outputs: string[] = []
       try {
@@ -3324,8 +3325,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         if (remaining.length) pending.set(row.id, remaining); else pending.delete(row.id)
         send({ type: 'imageGenerationDone', callId })
       }
-      // A receipt counts only after the entire batch is persisted and the model can read it.
-      for (const receipt of imageLearningRead) imageLearningSeen.add(receipt)
+      // Evidence counts as shown only once the batch is persisted and the model can read it.
+      for (const digest of imageLearningRead) imageLearningsShown(row.id, digest, imageReview)
       // Todo lists and titles show in the window as they change.
       send({ type: 'thread', thread: toThread(ownThread(user, row.id)) })
       if (wrapUp || imageCompleted) break

@@ -548,7 +548,7 @@ export function toolLabel(call: ToolCall, result?: string): string {
       if (call.arguments?.operation === 'inpaint') return result ? 'Inpainted image' : `Inpaint image: ${s('prompt')}`
       if (call.arguments?.operation === 'remove') return result ? 'Removed the masked area' : 'Remove the masked area'
       if (call.arguments?.operation === 'upscale') return result ? 'Upscaled image' : `Upscale image: ${s('upscale_model')}`
-      if (result?.includes('\"learning_review_required\":true')) return 'Review image learnings before generation'
+      if (result?.includes('"status":"review_once"') || result?.includes('"learning_review_required":true')) return 'Showed image learnings before generating'
       return result ? call.arguments?.source_image_id ? 'Edited image' : 'Generated image' : `${call.arguments?.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`
     case 'view_generated_image':
       return 'Inspect generated image with vision'

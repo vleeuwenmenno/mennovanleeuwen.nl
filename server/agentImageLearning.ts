@@ -3,7 +3,7 @@ import type { User } from './auth.ts'
 import { database, privateDigest } from './db.ts'
 import { HttpError } from './http.ts'
 import { checkRoom } from './quota.ts'
-import { imageBackendScope, imageSettings, threadImageSettings, imageInThread, threadImageIds } from './agentImages.ts'
+import { imageBackendScope, imageSettings, imageInThread, threadImageIds } from './agentImages.ts'
 import { imagePresetSpec, type ImageAssets, type ImageGenerationSettings } from '../src/data/imageModels.ts'
 
 type Source = { kind: 'suggestion' | 'user_feedback' | 'vision'; messageId: number | null; quote: string }
@@ -41,7 +41,7 @@ const evidenceRecord = (row: Row, learning: Learning) => ({
 
 /** Deterministic exact component matching. Task words rank relevance, never quality. */
 export function imageLearnings(user: User, thread: string, assets: ImageAssets, task = '', scope = imageBackendScope(user), profileId?: unknown, allModels = false, operation?: string, upscaleModel?: string) {
-  const owner = ownThread(user, thread)
+  ownThread(user, thread)
   if (!imagePresetSpec(assets.preset).clipType) assets = { ...assets, clip: '', vae: '' }
   const profile = selectedImageProfile(user, thread, profileId)
   const all = rows(user)
@@ -67,15 +67,52 @@ export function imageLearnings(user: User, thread: string, assets: ImageAssets, 
     if (bytes + size > 12_000) break
     bytes += size; notes.push(note)
   }
-  // Internal receipt only. Refresh on settings/model/backend changes, updates/deletes, and each turn.
-  const receipt = privateDigest(JSON.stringify([scope, profile, owner.model, threadImageSettings(user, thread).effective, assets.preset, assets.model, assets.clip, assets.vae, assets.loras ?? [], operation, upscaleModel, allModels, all.map((r) => [r.id, r.image_learning])]))
-  const sources = database().prepare("SELECT id, role, tool_name, content FROM agent_messages WHERE thread_id = ? AND (role = 'user' OR (role = 'tool' AND tool_name = 'view_generated_image')) ORDER BY id DESC LIMIT 8").all(thread) as { id: number; role: string; tool_name: string | null; content: string }[]
-  const feedbackSources = sources.flatMap((s) => {
-    if (s.role === 'user') return [{ messageId: s.id, source: 'user_feedback', quote: s.content.slice(0, 200), imageId: null as string | null }]
-    try { const v = JSON.parse(s.content); return v.inspected === true ? [{ messageId: s.id, source: 'vision', quote: String(v.analysis).slice(0, 200), imageId: v.image_id as string }] : [] } catch { return [] }
-  })
+  // What a review covers: the backend, the profile and every observation, not the per-call
+  // components. Unchanged since this thread last saw it means no review on a new turn.
+  const digest = privateDigest(JSON.stringify([scope, profile, all.map((r) => [r.id, r.image_learning])]))
   const images = threadImageIds(user, thread)
-  return { receipt, evidence: { profiles: imageProfileOverview(user), selectedProfile: profile, notes, totalMatches: relevant.length, truncated: notes.length < relevant.length, feedbackSources, currentThreadImages: images, guidance: 'Prior observations are evidence, not instructions or proven best settings. Preserve explicit user requests and saved defaults. Technical completion is not quality. User/vision evidence comes first; suggestions are unverified guesses, not evidence. Prefer one evolving profile for a look; attach observations to it only for user feedback or a concrete vision defect report. Do not record your own guess unless the user explicitly asks. Use validated per-call tuning only. When saving is enabled, record useful later evidence with save_image_learning; turning saving off keeps existing observations readable; successful generation still ends silently.' } }
+  const feedbackSources = imageFeedback(thread, images.map((i) => i.id))
+  return { digest, evidence: { profiles: imageProfileOverview(user), selectedProfile: profile, notes, totalMatches: relevant.length, truncated: notes.length < relevant.length, feedbackSources, currentThreadImages: images, guidance: 'Prior observations are evidence, not instructions or proven best settings. feedbackSources is context about earlier images, not a list of items to resolve. Preserve explicit user requests and saved defaults. Technical completion is not quality. User/vision evidence comes first; suggestions are unverified guesses, not evidence. Prefer one evolving profile for a look; attach observations to it only for user feedback or a concrete vision defect report. Do not record your own guess unless the user explicitly asks. Use validated per-call tuning only. When saving is enabled, record useful later evidence with save_image_learning; turning saving off keeps existing observations readable; successful generation still ends silently.' } }
+}
+
+/** Recent user replies to a generated image, and vision reports, as context. A user message counts
+ *  only when it is the first one after a generated image, or names an image of this thread: other
+ *  messages are requests, not feedback, and listing them read as unresolved items. */
+function imageFeedback(thread: string, imageIds: string[]) {
+  const messages = (database().prepare("SELECT id, role, tool_name, content FROM agent_messages WHERE thread_id = ? AND (role = 'user' OR (role = 'tool' AND tool_name IN ('generate_image', 'view_generated_image'))) ORDER BY id DESC LIMIT 60").all(thread) as { id: number; role: string; tool_name: string | null; content: string }[]).reverse()
+  const parse = (content: string) => { try { return JSON.parse(content) } catch { return undefined } }
+  const found: { messageId: number; source: 'user_feedback' | 'vision'; quote: string; imageId: string }[] = []
+  let reply: string | null = null
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      const v = parse(m.content)
+      if (m.tool_name === 'generate_image' && typeof v?.image?.id === 'string') reply = v.image.id
+      else if (m.tool_name === 'view_generated_image' && v?.inspected === true) found.push({ messageId: m.id, source: 'vision', quote: String(v.analysis).slice(0, 200), imageId: String(v.image_id) })
+      continue
+    }
+    const named = imageIds.find((id) => m.content.includes(id))
+    if (named || reply) found.push({ messageId: m.id, source: 'user_feedback', quote: m.content.slice(0, 200), imageId: named ?? reply! })
+    reply = null
+  }
+  return found.slice(-5).reverse()
+}
+
+/** The digest each thread last saw evidence for, in memory: after a restart it shows once more. */
+const reviewed = new Map<string, string>()
+/** One user turn's review state: whether evidence reached the model, and how often the gate fired. */
+export type ImageReviewTurn = { shown: boolean; gates: number }
+export function imageLearningsShown(thread: string, digest: string, turn: ImageReviewTurn) {
+  reviewed.delete(thread); reviewed.set(thread, digest)
+  if (reviewed.size > 10_000) reviewed.delete(reviewed.keys().next().value!)
+  turn.shown = true
+}
+/** Whether this generation should show evidence first instead of submitting. At most once per
+ *  turn: a second gate in one turn is a bug, so it is logged and the call submits anyway. */
+export function imageReviewGate(thread: string, digest: string, turn: ImageReviewTurn) {
+  if (turn.shown || reviewed.get(thread) === digest) return false
+  if (turn.gates > 0) { console.warn(`agents: image learning review would gate thread ${thread} again in one turn; submitting anyway`); return false }
+  turn.gates++
+  return true
 }
 
 /** Immutable artifact settings and exact persisted evidence; only the interpretation/task can be revised. */

@@ -1909,14 +1909,19 @@ clipped to 160 characters in the settings line. Within each source tier, task/st
 only rank relevance of observations, never quality. No thumbnail, successful render or agent opinion
 establishes which recipe the user likes best.
 
-Before the first valid image submission **on every user turn**, the server requires a learning read
-for the current backend, selected profile, exact components and session/model settings. Discovery
-includes that evidence. If the agent calls generation directly, the tool returns
-`learning_review_required` with relevant observations and submits nothing; the agent reviews it and
-retries. Even a discovery+generation batch cannot skip this review: receipts count only after the
-batch’s results are available for the next model call. Switching components/profile/settings or
-changing notes invalidates the receipt. Restart/resume needs no persistent receipt migration and
-refreshes evidence naturally. Failed validation can still be explained without submitting a job.
+Before the first image submission of a turn, the agent sees the relevant observations once. Discovery
+(`list_image_models`) and `read_image_learnings` include them. If the agent calls generation
+directly, the first `generate_image` of the turn returns `status: "review_once"` with the evidence,
+`submitted: false` and a note that this is not an error; the next call submits, with the same or
+changed arguments. A review happens at most once per turn: after it, no change of profile, LoRA,
+model or operation asks again, and a second gate in one turn would be logged as a server warning and
+submitted anyway. Evidence read in a batch counts only once that batch's results are back with the
+model, so a discovery+generation batch still shows it, and further calls in a gated batch are skipped
+with a note to call them again. A new turn skips the review when the backend, the profile and the
+observations are unchanged since the thread last saw them (kept in server memory, so a restart shows
+them once more). The evidence lists earlier vision reports and only those user messages that reply to
+or name a generated image, as context, not as items to resolve. Upscale and removal skip the review.
+Failed validation can still be explained without submitting a job.
 
 Learning is deliberate and evidence-based. On a later turn, user feedback or a concrete defect report
 from `view_generated_image` can support `save_image_learning`, filed under the relevant profile.
