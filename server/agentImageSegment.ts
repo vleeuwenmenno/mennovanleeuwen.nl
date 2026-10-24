@@ -77,6 +77,7 @@ export function autoMaskOptions(input: AutoMaskInput): AutoMaskOptions {
   return { target, exclude, grow, threshold: threshold as number | null, handOff: input.hand_off === true }
 }
 
+const DOWNLOADS = /[a-z][a-z0-9+.-]*:\/\/|^www\.|\bdownload|⬇|☁/i
 type FieldSpec = { default?: unknown; min?: number; max?: number; options?: unknown }
 /**
  * One segmenter's inputs for `prompt`, built from the schema the backend advertises rather than a
@@ -91,8 +92,10 @@ export function segmentInputs(node: Segmenter, info: SegmentNodeInfo, prompt: st
   const spec = (field: string) => (schema[field]?.[1] ?? {}) as FieldSpec
   const options = (field: string) => comboOptions(info, node, field)
   const defaultOf = (field: string): unknown => {
-    const choices = options(field), d = spec(field).default
-    if (choices.length) return typeof d === 'string' && choices.includes(d) ? d : choices[0]
+    // Never a choice that looks like it fetches something (a URL, a "download" entry): filling an
+    // input we do not understand must not start a model download. Prefer the advertised default.
+    const choices = options(field).filter((c) => !DOWNLOADS.test(c)), d = spec(field).default
+    if (options(field).length) return typeof d === 'string' && choices.includes(d) ? d : choices[0]
     const kind = schema[field]?.[0]
     return ['INT', 'FLOAT', 'BOOLEAN', 'STRING', 'COLORCODE'].includes(String(kind)) ? d : undefined
   }
@@ -185,8 +188,7 @@ export function autoMaskGraph(options: AutoMaskOptions, uploadName: string, info
  * LaMa fills the white mask area from its surroundings at the source's full size; no prompt, no
  * sampler. Its own preprocessing blurs and dilates the mask (edge_smoothness, removal_strength), so
  * the result is composited back through the original binary mask: smoothing stays inside the white
- * area and black stays the source. The server then copies black pixels from the source exactly
- * where it can decode it (compositeRemoval), since a float round trip may shift a value by one.
+ * area and black stays the source (to within one level: ComfyUI's float round trip may shift a value).
  */
 export function removeGraph(sourceName: string, maskName: string, info: SegmentNodeInfo) {
   const missing = missingNodes(info, REMOVE_NODES)
@@ -211,11 +213,9 @@ function pngPixels(bytes: Buffer) {
   const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type]
   if (depth !== 8 || !channels || interlace !== 0 || !width || !height || width > 8192 || height > 8192 || width * height > 16_777_216) return null
   const parts: Buffer[] = []
-  let oriented = false
   for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) {
     const kind = bytes.toString('ascii', at + 4, at + 8)
     if (kind === 'IDAT') parts.push(bytes.subarray(at + 8, at + 8 + bytes.readUInt32BE(at)))
-    if (kind === 'eXIf') oriented = true
   }
   const stride = width * channels, length = (stride + 1) * height
   let raw: Buffer
@@ -235,7 +235,7 @@ function pngPixels(bytes: Buffer) {
     current.copy(pixels, y * stride)
     ;[previous, current] = [current, previous]
   }
-  return { width, height, channels, pixels, oriented }
+  return { width, height, channels, pixels }
 }
 
 /** Decode a non-interlaced 8-bit PNG (gray, RGB, gray+alpha or RGBA) to its first channel. */
@@ -264,21 +264,4 @@ export function binaryMaskPng(width: number, height: number, values: Uint8Array)
   const rgb = Buffer.alloc(width * height * 3)
   for (let i = 0; i < values.length; i++) if (values[i] >= 128) rgb.fill(255, i * 3, i * 3 + 3)
   return rgbPng(width, height, rgb)
-}
-
-/**
- * The removal result with every black-mask pixel copied from the source, byte for byte. Only for
- * PNG sources this server can decode without orientation metadata; otherwise null, and the
- * graph's own composite stands (identical but for float rounding).
- */
-export function compositeRemoval(source: Buffer, mask: Buffer, output: Buffer) {
-  const s = pngPixels(source), m = pngPixels(mask), o = pngPixels(output)
-  if (!s || !m || !o || s.oriented || s.width !== o.width || s.height !== o.height || m.width !== o.width || m.height !== o.height) return null
-  const rgb = Buffer.alloc(o.width * o.height * 3)
-  const pick = (png: NonNullable<typeof s>, i: number, c: number) => png.pixels[i * png.channels + (png.channels >= 3 ? c : 0)]
-  for (let i = 0; i < o.width * o.height; i++) {
-    const keep = pick(m, i, 0) < 128
-    for (let c = 0; c < 3; c++) rgb[i * 3 + c] = keep ? pick(s, i, c) : pick(o, i, c)
-  }
-  return rgbPng(o.width, o.height, rgb, 6)
 }

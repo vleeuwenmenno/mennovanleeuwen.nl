@@ -1487,7 +1487,8 @@ GPU out of memory. The segmenter is ComfyUI-RMBG's `SAM3Segment`
 (SAM3 reads the words itself), or `SAM2Segment` (SAM2 with GroundingDINO) when SAM3 is absent or
 fails at run time, for example when GroundingDINO breaks on a newer transformers release. Each
 segmenter's inputs come from the schema the backend advertises: inputs this app understands get its
-values, any other input gets the advertised default or first choice (newer RMBG releases require a
+values, any other input gets the advertised default or first choice, never one that looks like a
+URL or a download entry (newer RMBG releases require a
 SAM3 `model_name`, which is filled in this way), and a segmenter with a required input it cannot fill
 (a link) is skipped without blocking the other. The
 server reads the result back, makes it a clean binary mask at the source's size and keeps it as an
@@ -1504,9 +1505,8 @@ area with LaMa (ComfyUI-RMBG's `AILab_LamaRemover`: LoadImage + LoadImageMask (r
 AILab_LamaRemover → ImageCompositeMasked through the original mask → SaveImage), at the source's
 full size (at most 4096 pixels per side), with no prompt, model or sampler. LaMa's own preprocessing
 blurs and grows the mask, so its output is composited back through the binary mask: the smoothing
-stays inside the white area and black pixels stay the source. For PNG sources without orientation
-metadata the server also copies every black-mask pixel from the source byte for byte; for JPEG and
-WebP the graph's composite stands, which can differ by one level from float rounding. Diffusion inpaint stays for "replace X with Y". `list_image_models`
+stays inside the white area and black pixels stay the source, to within one level (ComfyUI works in
+floats). The mask PNG and source preview routes are `private, no-store`, like generated images. Diffusion inpaint stays for "replace X with Y". `list_image_models`
 reports `automatic_masks` and `lama_remove`, and the catalog `autoMask` and `remove`, with the reason
 when either is unavailable. `view_generated_image` also takes a `mask_id` to check a mask next to its
 source with vision before an edit, when the agent is unsure (for example that it covers the person

@@ -75,7 +75,14 @@ const comfy = createServer(async (req, res) => {
     const saves = Object.keys(graph).filter((node) => graph[node].class_type === 'SaveImage')
     return send(res, { [id]: { status: { completed: true }, outputs: Object.fromEntries(saves.map((node) => [node, { images: [{ filename: node, subfolder: '', type: 'output' }] }])) } })
   }
-  if (path === '/view') { const graph = graphs.at(-1); return res.end(graph.save ? viewOf(graph, new URL(req.url!, 'http://fixture').searchParams.get('filename')!) : png(W, H, () => 120)) }
+  if (path === '/view') {
+    const graph = graphs.at(-1)
+    if (graph.save) return res.end(viewOf(graph, new URL(req.url!, 'http://fixture').searchParams.get('filename')!))
+    // Removal: LaMa repaints everything grey 120. With the composite through the mask (node 31, the
+    // fixture mask is the left quarter) the source (90) comes back outside it, off by one level in
+    // places, as ComfyUI's float round trip may do; without it, LaMa's 120 leaks everywhere.
+    return res.end(graph['31'] ? png(W, H, (x, y) => x < 4 ? 120 : 90 - ((x + y) % 3 === 0 ? 1 : 0)) : png(W, H, () => 120))
+  }
   if (path === '/queue') return send(res, {})
   return res.writeHead(404).end()
 })
@@ -138,6 +145,8 @@ try {
   const stored = Buffer.from(await (await api('GET', made.mask.mask_url)).arrayBuffer())
   assert.equal(stored[25], 2); assert.ok(!stored.includes(Buffer.from('tEXt')))
   assert.equal((await api('GET', made.mask.mask_url, undefined, 1)).status, 404)
+  // Private pictures never stay in a shared browser's cache.
+  for (const url of [made.mask.mask_url, made.mask.source_url]) assert.equal((await api('GET', url)).headers.get('cache-control'), 'private, no-store')
   // A broken SAM3 hands over to SAM2 within the same call, with one upload; the reason reaches the agent if both fail.
   const uploadsBefore = uploads.length, graphsBefore = graphs.length
   failing = 'SAM3Segment'
@@ -212,12 +221,14 @@ try {
   assert.deepEqual(Object.keys(gr).sort(), ['20', '22', '30', '31', '9'])
   // LaMa blurs and dilates its mask, so its output goes back through the original binary mask.
   assert.deepEqual(gr['31'], { class_type: 'ImageCompositeMasked', inputs: { destination: ['20', 0], source: ['30', 0], x: 0, y: 0, resize_source: false, mask: ['22', 0] } })
-  // The fake LaMa repaints everything (grey 120); black-mask pixels must still be the source's (90), byte for byte.
+  // Inside the mask: LaMa. Outside, the source to within one level (the graph's float composite).
   const { pngFirstChannel } = await import('../server/agentImageSegment.ts')
   const out = pngFirstChannel(Buffer.from(await (await api('GET', removed.image.url)).arrayBuffer()))
   assert.equal(out.values[5 * W + 3], 120, 'inside the mask: LaMa')
-  assert.equal(out.values[5 * W + 4], 90, 'black pixel next to the boundary: unchanged')
-  assert.ok([...out.values].every((v, i) => (i % W < 4 ? v === 120 : v === 90)))
+  assert.ok(Math.abs(out.values[5 * W + 4] - 90) <= 1, 'black pixel next to the boundary: unchanged within one level')
+  assert.ok([...out.values].every((v, i) => (i % W < 4 ? v === 120 : Math.abs(v - 90) <= 1)))
+  // The result is ComfyUI's composite as is: no server-side pixel rewriting.
+  assert.ok([...out.values].some((v) => v === 89))
   assert.deepEqual(gr['22'].inputs.channel, 'red'); assert.match(gr['22'].inputs.image, /^agents-mask-/)
   assert.deepEqual(gr['30'], { class_type: 'AILab_LamaRemover', inputs: { images: ['20', 0], masks: ['22', 0], removal_strength: 230, edge_smoothness: 8 } })
   assert.deepEqual(gr['9'].inputs.images, ['31', 0])
@@ -306,6 +317,13 @@ try {
   const newer = await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })
   assert.ok(newer.mask, JSON.stringify(newer))
   assert.equal(graphs.at(-1).t1.class_type, 'SAM3Segment'); assert.equal(graphs.at(-1).t1.inputs.model_name, 'sam3.1'); assert.equal(graphs.at(-1).t1.inputs.new_option, 3)
+  // Filling an input we do not understand never picks something that looks like a download.
+  schemas.SAM3Segment = { input: { required: { ...oldSam3.input.required, model_name: [['https://huggingface.co/x/sam3.pt', 'sam3 (download)', 'sam3-local'], { default: 'https://huggingface.co/x/sam3.pt' }] }, optional: oldSam3.input.optional } }
+  assert.ok((await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })).mask)
+  assert.equal(graphs.at(-1).t1.inputs.model_name, 'sam3-local')
+  schemas.SAM3Segment = { input: { required: { ...oldSam3.input.required, model_name: [['⬇ sam3', 'Download sam3.1']] }, optional: oldSam3.input.optional } }
+  assert.ok((await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })).mask)
+  assert.equal(graphs.at(-1).t1.class_type, 'SAM2Segment', 'only download choices: SAM3 is skipped')
   schemas.SAM3Segment = { input: { required: { ...oldSam3.input.required, clip: ['CLIP'] }, optional: oldSam3.input.optional } }
   const g0 = graphs.length
   const viaSam2 = await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })
@@ -319,7 +337,7 @@ try {
   assert.equal((await json('GET', '/api/agents/images/catalog')).autoMask, false)
   delete schemas.SAM2Segment.input.required.extra_link
   schemas.SAM3Segment = oldSam3
-  console.log('PASS segmenter inputs from the advertised schema: old SAM3, new SAM3 with model_name, SAM3 unbuildable falls to SAM2, neither buildable uploads nothing')
+  console.log('PASS segmenter inputs from the advertised schema: old SAM3, new SAM3 with model_name, no download choices, SAM3 unbuildable falls to SAM2, neither buildable uploads nothing')
 
   // Pruning keeps 40 agent masks, deleting only unreferenced ones, oldest first; masks shown by a
   // result card in any thread or branch are kept, also from explicit deletion. The record counts toward quota.
@@ -332,10 +350,12 @@ try {
   const src = imageSource(owner, source)
   const { binaryMaskPng } = await import('../server/agentImageSegment.ts')
   const maskBytes = binaryMaskPng(W, H, Uint8Array.from({ length: W * H }, (_, i) => (i % W < 4 ? 255 : 0)))
-  const detail = { target: 'cyclist', exclude: '', grow: 12, threshold: null, verdict: 'ok' as const }
+  // Non-ASCII text: quota counts bytes, not characters.
+  const detail = { target: '自行车', exclude: '骑自行车的人', grow: 12, threshold: null, verdict: 'ok' as const }
   const before0 = usedBytes(1)
   const first = saveAutoMask(owner, pruned.id, src, maskBytes, detail)
   const record = (database().prepare('SELECT details FROM agent_image_masks WHERE id = ?').get(first.id) as { details: string }).details
+  assert.ok(Buffer.byteLength(record) > record.length)
   assert.equal(usedBytes(1) - before0, maskBytes.length + Buffer.byteLength(record))
   const second = saveAutoMask(owner, pruned.id, src, maskBytes, detail)
   // The first is shown by a result card in another thread: kept.
@@ -350,7 +370,30 @@ try {
   for (const { id } of database().prepare('SELECT id FROM agent_image_masks WHERE thread_id = ?').all(pruned.id) as { id: string }[]) database().prepare("INSERT INTO agent_messages(thread_id, role, content, tool_name, created_at) VALUES (?, 'tool', ?, 'list_image_masks', ?)").run(pruned.id, JSON.stringify({ masks: [{ mask_id: id }] }), Date.now())
   saveAutoMask(owner, pruned.id, src, maskBytes, detail)
   assert.equal(count(), 41)
-  console.log('PASS mask pruning: cap of 40, shown or used masks never pruned or deleted, cap exceeded when all are referenced; details count toward quota')
+  // Many messages: references are collected once per operation, not searched per mask.
+  const busy = await json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model', tools: ['images'], permission: 'auto' })
+  // Inserted directly: saving them one by one would already prune.
+  const busyMasks = Array.from({ length: 100 }, (_, i) => { const id = randomUUID(); database().prepare("INSERT INTO agent_image_masks(id, thread_id, source_id, body, width, height, created_at, origin, details) VALUES (?, ?, ?, ?, ?, ?, ?, 'auto', ?)").run(id, busy.id, source, maskBytes, W, H, i, record); return id })
+  const insert = database().prepare("INSERT INTO agent_messages(thread_id, role, content, tool_name, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+  database().exec('BEGIN')
+  for (let i = 0; i < 10_000; i++) {
+    const kind = i % 4
+    if (kind === 0) insert.run(elsewhere.id, 'tool', JSON.stringify({ mask: { mask_id: busyMasks[(i / 4) % 50 | 0] }, note: 'x'.repeat(200) }), 'make_image_mask', null, Date.now())
+    else if (kind === 1) insert.run(elsewhere.id, 'assistant', '', null, JSON.stringify([{ name: 'generate_image', arguments: { operation: 'remove', mask_id: busyMasks[50 + ((i / 4) % 10 | 0)] } }]), Date.now())
+    else insert.run(elsewhere.id, kind === 2 ? 'user' : 'tool', `${busyMasks[99]} mentioned in plain text ${'y'.repeat(300)}`, kind === 3 ? 'web_fetch' : null, null, Date.now())
+  }
+  database().exec('COMMIT')
+  const started = performance.now()
+  saveAutoMask(owner, busy.id, src, maskBytes, detail)
+  const took = performance.now() - started
+  const left = new Set((database().prepare('SELECT id FROM agent_image_masks WHERE thread_id = ?').all(busy.id) as { id: string }[]).map((r) => r.id))
+  // 101 masks, cap 40: 61 must go; the 60 referenced (50 cards, 10 calls) stay, so only the
+  // 40 unreferenced (60–99; text mentions do not count) can be pruned, all of them.
+  assert.equal(left.size, 61)
+  assert.ok(busyMasks.slice(0, 60).every((id) => left.has(id)))
+  assert.ok(busyMasks.slice(60).every((id) => !left.has(id)))
+  assert.ok(took < 200, `pruning with 10k messages took ${took.toFixed(0)} ms`)
+  console.log(`PASS mask pruning: cap of 40, shown or used masks never pruned or deleted, cap exceeded when all are referenced; details counted in bytes; 10k messages pruned in ${took.toFixed(0)} ms`)
 
   // An attachment's mask preview keeps working after the thread it was sent in is deleted, via a
   // surviving branch copy, also for cards saved before (the app loads every preview by mask ID).

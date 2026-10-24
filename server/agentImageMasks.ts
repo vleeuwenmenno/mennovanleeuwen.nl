@@ -7,35 +7,51 @@ import { imageSource, type ImageSource } from './agentImageSources.ts'
 import { validateInpaintMask, type MaskStats } from './agentImageInpaint.ts'
 
 const UUID = /^[0-9a-f-]{36}$/
-// A mask stays live while any owned artifact or tool call references it. Rewind may remove
-// the call, but a generated artifact still needs its mask for Again.
-const referenced = `(EXISTS (SELECT 1 FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id
-  WHERE t.user_id = ? AND json_extract(CASE WHEN json_valid(i.metadata) THEN i.metadata ELSE '{}' END, '$.mask.id') = m.id)
-  OR EXISTS (SELECT 1 FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id, json_each(CASE WHEN json_valid(x.tool_calls) THEN x.tool_calls ELSE '[]' END) c
-  WHERE t.user_id = ? AND json_extract(c.value, '$.arguments.mask_id') = m.id))`
-// A mask a surviving chat shows (a make_image_mask or list_image_masks result, in any owned thread
-// or branch) keeps its Edit mask working, so it is kept like one a generation used.
-const shown = `EXISTS (SELECT 1 FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id
-  WHERE t.user_id = ? AND x.role = 'tool' AND x.tool_name IN ('make_image_mask', 'list_image_masks') AND instr(x.content, m.id) > 0)`
-const kept = `(${referenced} OR ${shown})`
+const MASK_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+/**
+ * Which of `ids` something still refers to, and from which threads, collected once per operation
+ * (one pass per kind of reference, then filtered in memory) instead of a search per mask:
+ * - a generated artifact made with it (Again needs it, also after a rewind removed the call);
+ * - a tool call that named it as mask_id;
+ * - a make_image_mask or list_image_masks result that shows it, in any owned thread or branch,
+ *   so its card's Edit mask keeps working.
+ */
+function maskReferences(user: User, ids: Set<string>) {
+  const refs = new Map<string, Set<string>>()
+  if (!ids.size) return refs
+  const add = (id: unknown, thread: string) => {
+    if (typeof id !== 'string' || !ids.has(id)) return
+    if (!refs.has(id)) refs.set(id, new Set())
+    refs.get(id)!.add(thread)
+  }
+  const db = database()
+  for (const r of db.prepare(`SELECT i.thread_id, json_extract(i.metadata, '$.mask.id') AS id FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id
+    WHERE t.user_id = ? AND i.metadata LIKE '%"mask"%' AND json_valid(i.metadata)`).all(user.id) as { thread_id: string; id: unknown }[]) add(r.id, r.thread_id)
+  for (const r of db.prepare(`SELECT x.thread_id, json_extract(c.value, '$.arguments.mask_id') AS id FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id,
+    json_each(CASE WHEN x.tool_calls LIKE '%mask_id%' AND json_valid(x.tool_calls) THEN x.tool_calls ELSE '[]' END) c WHERE t.user_id = ? AND x.tool_calls LIKE '%mask_id%'`).all(user.id) as { thread_id: string; id: unknown }[]) add(r.id, r.thread_id)
+  for (const r of db.prepare(`SELECT x.thread_id, x.content FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id
+    WHERE t.user_id = ? AND x.role = 'tool' AND x.tool_name IN ('make_image_mask', 'list_image_masks')`).all(user.id) as { thread_id: string; content: string }[]) {
+    for (const id of r.content.match(MASK_ID) ?? []) add(id, r.thread_id)
+  }
+  return refs
+}
 // Unused editor drafts (abandoned by interrupted clients) stay bounded at 8 a thread; agent masks at
 // 40 in all. Only masks nothing refers to are pruned, oldest first, so when every one is referenced
 // the cap is exceeded rather than a shown or used mask deleted.
 const CAP = { editor: 8, auto: 40 } as const
 function pruneDrafts(user: User, thread: string, origin: 'editor' | 'auto' = 'editor') {
   const db = database()
-  const { n } = (origin === 'auto'
-    ? db.prepare('SELECT COUNT(*) AS n FROM agent_image_masks WHERE thread_id = ? AND origin = ?').get(thread, origin)
-    : db.prepare(`SELECT COUNT(*) AS n FROM agent_image_masks m WHERE m.thread_id = ? AND m.origin = ? AND NOT ${kept}`).get(thread, origin, user.id, user.id, user.id)) as { n: number }
-  const excess = n + 1 - CAP[origin]
-  if (excess <= 0) return
-  const drafts = db.prepare(`SELECT m.id FROM agent_image_masks m WHERE m.thread_id = ? AND m.origin = ? AND NOT ${kept} ORDER BY m.created_at, m.rowid LIMIT ?`).all(thread, origin, user.id, user.id, user.id, excess) as { id: string }[]
-  for (const draft of drafts) db.prepare('DELETE FROM agent_image_masks WHERE id = ?').run(draft.id)
+  const masks = db.prepare('SELECT id FROM agent_image_masks WHERE thread_id = ? AND origin = ? ORDER BY created_at, rowid').all(thread, origin) as { id: string }[]
+  if (masks.length + 1 <= CAP[origin]) return
+  const refs = maskReferences(user, new Set(masks.map((m) => m.id)))
+  const unused = masks.filter((m) => !refs.has(m.id))
+  const excess = (origin === 'auto' ? masks.length : unused.length) + 1 - CAP[origin]
+  for (const draft of unused.slice(0, Math.max(0, excess))) db.prepare('DELETE FROM agent_image_masks WHERE id = ?').run(draft.id)
 }
 export function discardImageMask(user: User, id: string) {
   const db = database()
   if (!db.prepare('SELECT 1 FROM agent_image_masks m JOIN agent_threads t ON t.id = m.thread_id WHERE m.id = ? AND t.user_id = ?').get(id, user.id)) throw new HttpError(404, 'No such image mask')
-  if (db.prepare(`SELECT 1 FROM agent_image_masks m WHERE m.id = ? AND ${kept}`).get(id, user.id, user.id, user.id)) throw new HttpError(409, 'This mask is used by a generation or shown in a thread, so it is kept for repeat actions and Edit mask')
+  if (maskReferences(user, new Set([id])).has(id)) throw new HttpError(409, 'This mask is used by a generation or shown in a thread, so it is kept for repeat actions and Edit mask')
   db.prepare('DELETE FROM agent_image_masks WHERE id = ?').run(id)
 }
 export type ImageMask = ImageSource & { source_id: string; origin: string }
@@ -117,19 +133,13 @@ export function listImageMasks(user: User, thread: string, args: Record<string, 
   return { thread_id: id, masks, guidance: 'Newest first. made_by agent are make_image_mask attempts (status used, ready, rejected or superseded); made_by user come from the mask editor. Use a mask with generate_image (operation remove or inpaint) and its matching source_image_id. White edits, black preserves. The app shows each mask as a tinted preview with Edit mask. Never invent mask IDs.' }
 }
 
-/** Keep masks referenced by artifacts that survived deletion of their originating thread. */
+/** Before a thread is deleted, hand each of its masks still referenced elsewhere (an artifact, a call or a card in a branch) to that thread. */
 export function retainImageMasks(user: User, thread: string) {
   const db = database()
-  const masks = db.prepare(`SELECT m.id, (SELECT i.thread_id FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id
-    WHERE t.user_id = ? AND t.id != m.thread_id AND json_extract(CASE WHEN json_valid(i.metadata) THEN i.metadata ELSE '{}' END, '$.mask.id') = m.id LIMIT 1) AS artifact_survivor,
-    (SELECT x.thread_id FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id, json_each(CASE WHEN json_valid(x.tool_calls) THEN x.tool_calls ELSE '[]' END) c
-    WHERE t.user_id = ? AND t.id != m.thread_id AND json_extract(c.value, '$.arguments.mask_id') = m.id LIMIT 1) AS call_survivor,
-    (SELECT x.thread_id FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id
-    WHERE t.user_id = ? AND t.id != m.thread_id AND x.role = 'tool' AND x.tool_name IN ('make_image_mask', 'list_image_masks') AND instr(x.content, m.id) > 0 LIMIT 1) AS shown_survivor
-    FROM agent_image_masks m WHERE m.thread_id = ?`).all(user.id, user.id, user.id, thread) as { id: string; artifact_survivor: string | null; call_survivor: string | null; shown_survivor: string | null }[]
+  const masks = db.prepare('SELECT id FROM agent_image_masks WHERE thread_id = ?').all(thread) as { id: string }[]
+  const refs = maskReferences(user, new Set(masks.map((m) => m.id)))
   for (const mask of masks) {
-    // A branch that still shows the mask in its chat keeps it, so Edit mask keeps working there.
-    const survivor = mask.artifact_survivor ?? mask.call_survivor ?? mask.shown_survivor
+    const survivor = [...refs.get(mask.id) ?? []].find((t) => t !== thread)
     if (survivor) db.prepare('UPDATE agent_image_masks SET thread_id = ? WHERE id = ?').run(survivor, mask.id)
   }
 }

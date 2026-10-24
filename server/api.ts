@@ -347,14 +347,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const maskSourceView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})\/source$/.exec(path)
     if (maskSourceView && read) {
       const source = maskSource(requireUser(req), maskSourceView[1])
-      res.writeHead(200, { 'Content-Type': source.mime, 'Content-Length': String(source.bytes.length), 'Cache-Control': 'private, max-age=3600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : source.bytes)
+      // no-store: after a sign-out or account switch a shared browser must not show it from cache.
+      res.writeHead(200, { 'Content-Type': source.mime, 'Content-Length': String(source.bytes.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : source.bytes)
       return true
     }
     const maskView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})$/.exec(path)
     if (maskView && method === 'DELETE') { discardImageMask(requireUser(req), maskView[1]); return json(res, 200, { deleted: true }), true }
     if (maskView && read) {
       const mask = imageMask(requireUser(req), maskView[1], undefined, true)
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(mask.bytes.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : mask.bytes)
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(mask.bytes.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : mask.bytes)
       return true
     }
     const inpaint = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/inpaint$/.exec(path)

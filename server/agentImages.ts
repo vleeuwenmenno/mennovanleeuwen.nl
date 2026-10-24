@@ -1,7 +1,7 @@
 import { addHiresStage, refinementSize, refinementSampling } from './agentImageRefine.ts'
 import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentImageInpaint.ts'
 import { imageMask, saveAutoMask, type ImageMask } from './agentImageMasks.ts'
-import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskOptions, autoMaskPlans, binaryMaskPng, compositeRemoval, missingNodes, pngFirstChannel, removeGraph, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
+import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskOptions, autoMaskPlans, binaryMaskPng, missingNodes, pngFirstChannel, removeGraph, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
 import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
@@ -638,9 +638,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
         progress?.push({ phase: 'saving' })
         const params = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder, type: 'output' })
-        let bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
-        // Removal keeps every black-mask pixel of a decodable PNG source byte for byte (the graph already composited).
-        if (parameters.operation === 'remove' && plan.source && plan.mask) bytes = compositeRemoval(plan.source.bytes, plan.mask.bytes, bytes) ?? bytes
+        const bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
         // SaveImage writes PNG. Reject arbitrary content from an incorrectly configured server.
         if (!bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new HttpError(502, 'ComfyUI did not return a PNG image')
         if ((parameters.operation === 'upscale' || parameters.operation === 'remove' || parameters.operation === 'refine' || parameters.hires) && (bytes.length < 33 || bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== workflow.width || bytes.readUInt32BE(20) !== workflow.height)) throw new HttpError(502, 'ComfyUI output dimensions do not match the requested size')
