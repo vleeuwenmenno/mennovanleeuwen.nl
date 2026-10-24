@@ -9,6 +9,16 @@ const MAX_IMAGE = 20 * 1024 * 1024
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 const binding = (user: User) => (database().prepare("SELECT secret FROM integrations WHERE user_id = ? AND name = 'seafile'").get(user.id) as { secret: string } | undefined)?.secret
 
+/** The same gate is explained to the model, including on turns where the tool is not offered. */
+export function imageFileSaveBlockers(user: User, groups: readonly string[], permission: string): string[] {
+  return [
+    !groups.includes('images') ? 'Images is switched off for this thread; turn on Images in Tools (CLI: /tools, then Images).' : '',
+    !groups.includes('seafile_write') ? 'Seafile changes is switched off for this thread; turn on Seafile changes in Tools (CLI: /tools, then Seafile changes).' : '',
+    !seafileInfo(user) ? 'Seafile is not linked; connect it in Settings → Integrations → Seafile.' : '',
+    permission === 'plan' ? 'Plan mode refuses file writes; approve a plan or change this thread to a writing permission mode.' : '',
+  ].filter(Boolean)
+}
+
 /** No byte content or upload credentials ever pass through the model. */
 function artifact(user: User, id: string, bytes = false) {
   const row = database().prepare(`SELECT i.id, length(i.body) AS size,

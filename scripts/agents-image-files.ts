@@ -11,7 +11,8 @@ const PNG = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffe
 const files = new Map<string, Buffer>()
 const uploads: { name: string; path: string; bytes: Buffer; replace: string; mime: string }[] = []
 let duplicate = false, readOnly = false, locked = false, unauth = false, quota = false, hold = false, cancelled = 0, mutations = 0
-let renameOnUpload = false
+let renameOnUpload = false, flowMode = false, folderCreated = true
+const flowCalls: string[] = []
 let base = ''
 const remote = createServer(async (req, res) => {
   const url = new URL(req.url!, 'http://test')
@@ -31,11 +32,18 @@ const remote = createServer(async (req, res) => {
   }
   assert.equal(req.headers.authorization, 'Token fixture-token')
   if (unauth) { answer(401, { detail: 'Token expired' }); return }
-  if (url.pathname === '/api/v2.1/repos/') { answer(200, { repos: [REPO, ...(duplicate ? [OTHER] : [])].map((repo_id) => ({ repo_id, repo_name: 'Home', type: 'mine', encrypted: locked, permission: readOnly ? 'r' : 'rw' })) }); return }
+  if (url.pathname === '/api/v2.1/repos/') { answer(200, { repos: [REPO, ...(duplicate || flowMode ? [OTHER] : [])].map((repo_id) => ({ repo_id, repo_name: flowMode && repo_id === OTHER ? 'Vault' : 'Home', type: 'mine', encrypted: locked || flowMode && repo_id === OTHER, permission: readOnly ? 'r' : 'rw' })) }); return }
   if (url.pathname === `/api/v2.1/repos/${REPO}/dir/`) {
     const path = url.searchParams.get('p')
+    if (req.method === 'POST') {
+      assert.ok(flowMode); assert.equal(path, '/Desktop/18+'); assert.equal(folderCreated, false)
+      let body = ''; for await (const part of req) body += part
+      assert.equal(new URLSearchParams(body).get('operation'), 'mkdir'); folderCreated = true; mutations++
+      answer(200, { obj_name: '18+', parent_dir: '/Desktop' }); return
+    }
+    if (path === '/Desktop/18+' && !folderCreated) { answer(404, { error_msg: 'Folder absent' }); return }
     if (!['/', '/Desktop', '/Desktop/18+'].includes(path!)) { answer(404, { error_msg: 'Folder absent' }); return }
-    const dirent_list = path === '/' ? [{ type: 'dir', name: 'Desktop', id: 'desktop' }] : path === '/Desktop' ? [{ type: 'dir', name: '18+', id: 'folder' }] : [...files].map(([p, data]) => ({ type: 'file', name: p.split('/').at(-1), id: 'file', size: data.length }))
+    const dirent_list = path === '/' ? [{ type: 'dir', name: 'Desktop', id: 'desktop' }] : path === '/Desktop' ? (folderCreated ? [{ type: 'dir', name: '18+', id: 'folder' }] : []) : [...files].map(([p, data]) => ({ type: 'file', name: p.split('/').at(-1), id: 'file', size: data.length }))
     answer(200, { user_perm: readOnly ? 'r' : 'rw', dirent_list }); return
   }
   if (url.pathname === `/api2/repos/${REPO}/upload-link/`) { answer(200, `${base}/upload`); return }
@@ -51,9 +59,54 @@ const ollama = createServer(async (req, res) => {
   assert.equal(req.url, '/api/chat')
   const body = JSON.parse(raw); chats.push(body)
   if (body.stream === false) { answer({ message: { content: '{"title":"File export"}' } }); return }
+  if (flowMode) {
+    const at = body.messages.findLastIndex((m: J) => m.role === 'user' && m.content === 'Can you save these on my Desktop under 18+ folder?')
+    assert.ok(at >= 0)
+    const after = body.messages.slice(at + 1), results = after.filter((m: J) => m.role === 'tool')
+    const offered = new Set((body.tools ?? []).map((t: J) => t.function.name))
+    assert.ok(offered.has('list_generated_images') && offered.has('save_generated_image'), 'Eligible legacy thread must receive discovery and save tool definitions in every working round')
+    const system = body.messages[0].content
+    assert.match(system, /current thread ID: [0-9a-f-]{36}/)
+    assert.match(system, /save_generated_image: enabled for this thread/)
+    assert.match(system, /do not scan unrelated or locked libraries/)
+    assert.match(system, /create it with seafile_mkdir, then save/)
+    let calls: J[] = []
+    const inventory = results.find((m: J) => m.tool_name === 'list_generated_images')
+    const listings = results.filter((m: J) => m.tool_name === 'seafile_list')
+    const made = results.find((m: J) => m.tool_name === 'seafile_mkdir')
+    const saved = results.filter((m: J) => m.tool_name === 'save_generated_image')
+    if (!inventory) calls = [{ name: 'list_generated_images', arguments: {} }]
+    else if (!listings.length) calls = [{ name: 'seafile_list', arguments: {} }]
+    else {
+      const libraries = JSON.parse(listings[0].content).filter((l: J) => !l.encrypted)
+      assert.equal(libraries.length, 1)
+      const library = libraries[0].id
+      if (listings.length === 1) calls = [{ name: 'seafile_list', arguments: { library, path: '/Desktop' } }]
+      else if (!made && !JSON.parse(listings[1].content).some((f: J) => f.name === '18+' && f.folder)) calls = [{ name: 'seafile_mkdir', arguments: { library, path: '/Desktop/18+' } }]
+      else if (!saved.length) {
+        const discovered = JSON.parse(inventory.content)
+        assert.equal(discovered.images.length, 4)
+        assert.ok(system.includes(`current thread ID: ${discovered.thread_id}`))
+        calls = discovered.images.map((i: J) => ({ name: 'save_generated_image', arguments: { image_id: i.image_id, library, path: `/Desktop/18+/${i.name}` } }))
+      }
+    }
+    for (const c of calls) { assert.ok(offered.has(c.name)); flowCalls.push(c.name) }
+    const message = calls.length ? { content: '', tool_calls: calls.map((c) => ({ function: c })) } : { content: saved.map((m: J) => { const r = JSON.parse(m.content); assert.equal(r.saved, true); return r.path }).join('\n') }
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+    res.end(JSON.stringify({ message: { role: 'assistant', ...message }, done: true }) + '\n'); return
+  }
   const at = body.messages.findLastIndex((m: J) => m.role === 'user' && m.content.startsWith('RUN '))
   const args = JSON.parse(body.messages[at].content.slice(4))
-  const content = body.messages.slice(at + 1).some((m: J) => m.role === 'tool') ? { content: 'Saved result handled.' } : { content: '', tool_calls: [{ function: { name: 'save_generated_image', arguments: args } }] }
+  let content: J = body.messages.slice(at + 1).some((m: J) => m.role === 'tool') ? { content: 'Saved result handled.' } : { content: '', tool_calls: [{ function: { name: 'save_generated_image', arguments: args } }] }
+  if (args.budget_probe) {
+    if (body.tools?.length) content = { content: '', tool_calls: [{ function: { name: 'list_generated_images', arguments: {} } }] }
+    else {
+      assert.match(body.messages[0].content, /tool-round budget for this turn is exhausted/)
+      assert.match(body.messages[0].content, /does not mean enabled tools are missing or switched off/)
+      assert.match(body.messages[0].content, /save_generated_image: enabled for this thread/)
+      content = { content: 'Turn limit reached. Saving remains enabled; continue in this thread.' }
+    }
+  }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
   res.end(JSON.stringify({ message: { role: 'assistant', ...content }, done: true }) + '\n')
 })
@@ -77,8 +130,8 @@ const api = async (method: string, path: string, body?: unknown, who = 0): Promi
   assert.ok(response.ok, `${response.status}: ${response.ok ? '' : await response.text()}`)
   return response.json()
 }
-async function turn(id: string, args: J, allow = true, hook?: () => void) {
-  const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sessions[0]}`, ...await asPage(sessions[0]), Origin: server.origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: `RUN ${JSON.stringify(args)}` }) })
+async function turn(id: string, args: J, allow = true, hook?: () => void, text = `RUN ${JSON.stringify(args)}`) {
+  const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sessions[0]}`, ...await asPage(sessions[0]), Origin: server.origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
   assert.equal(res.status, 200)
   let buffer = '', approvals = 0, summary: J | undefined
   const decoder = new TextDecoder()
@@ -150,10 +203,12 @@ try {
     await api('PATCH', `/api/agents/threads/${current.id}`, { tools }); r = await turn(current.id, args); assert.match(r.result.error, /switched off/)
     const offered = chats.findLast((c) => c.tools)?.tools.map((t: J) => t.function.name)
     assert.ok(!offered?.includes('save_generated_image'))
+    assert.match(r.result.error, tools.includes('images') ? /Seafile changes.*Tools/ : /Images.*Tools/)
+    assert.ok(chats.findLast((c) => c.stream === true)!.messages[0].content.includes(r.result.error))
   }
   await api('PATCH', `/api/agents/threads/${current.id}`, { tools: ['images', 'seafile', 'seafile_write'], permission: 'bypass' })
   db.prepare("DELETE FROM integrations WHERE user_id = 1 AND name = 'seafile'").run()
-  r = await turn(current.id, args); assert.match(r.result.error, /switched off/)
+  r = await turn(current.id, args); assert.match(r.result.error, /Seafile is not linked.*Settings/); assert.match(chats.findLast((c) => c.stream === true)!.messages[0].content, /save_generated_image: unavailable: Seafile is not linked/)
   await assert.rejects(prepareImageFileSave({ id: 1, admin: true } as any, args, new AbortController().signal), /Link Seafile.*Browser-local/)
   link()
   hold = true
@@ -167,5 +222,45 @@ try {
   assert.equal((await fetch(`${server.origin}/api/agents/images/${image}`)).status, 401)
   assert.equal((await api('GET', `/api/agents/threads/${current.id}`)).thread.running, false)
   console.log('PASS disabled groups/integration, explicit local-storage limitation, cancellation and unauthenticated artifact access')
+  // The model receives a plain save request, not image IDs or a hand-built save call.
+  const legacy = await makeThread(0, 'auto')
+  db.prepare('UPDATE agent_threads SET tools = ? WHERE id = ?').run(JSON.stringify(['seafile', 'seafile_write']), legacy.id)
+  const imageIds: string[] = []
+  for (let i = 0; i < 4; i++) {
+    const id = randomUUID(); imageIds.push(id)
+    db.prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)').run(id, legacy.id, `saved-${i}.png`, PNG, stamp + i, JSON.stringify({ prompt: `Fixture scene ${i}`, width: 512, height: 512 }))
+  }
+  db.prepare('INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(legacy.id, 'compact', 'Earlier pictures were generated. Exact IDs were omitted from this summary.', stamp + 10)
+  files.clear(); flowMode = true; folderCreated = false
+  const beforeFlow = uploads.length
+  const completed = await turn(legacy.id, {}, true, undefined, 'Can you save these on my Desktop under 18+ folder?')
+  flowMode = false
+  assert.equal(completed.approvals, 5, 'Folder creation and all four saves retain normal approval')
+  assert.deepEqual(flowCalls, ['list_generated_images', 'seafile_list', 'seafile_list', 'seafile_mkdir', ...Array(4).fill('save_generated_image')])
+  assert.equal(uploads.length, beforeFlow + 4)
+  for (let i = 0; i < 4; i++) { assert.deepEqual(files.get(`/Desktop/18+/saved-${i}.png`), PNG); assert.ok(completed.view.messages.at(-1).content.includes(`saved-${i}.png`)) }
+  assert.ok(!flowCalls.some((n) => ['ask_user', 'read_thread', 'seafile_search'].includes(n)))
+  const { listGeneratedImages } = await import('../server/agentImages.ts')
+  const owner = { id: 1, admin: true } as any
+  const firstPage = listGeneratedImages(owner, legacy.id, { limit: 2 }), nextPage = listGeneratedImages(owner, legacy.id, { limit: 2, before: firstPage.next_before })
+  assert.deepEqual([...firstPage.images, ...nextPage.images].map((i) => i.image_id), imageIds.toReversed())
+  assert.equal(nextPage.next_before, null)
+  assert.throws(() => listGeneratedImages(owner, foreign.id), /No such thread/)
+  assert.throws(() => listGeneratedImages(owner, legacy.id, { before: alien }), /not an image in this thread/)
+  assert.throws(() => listGeneratedImages(owner, legacy.id, { limit: 11 }), /limit from 1 to 10/)
+  assert.throws(() => listGeneratedImages(owner, legacy.id, { thread_id: foreign.id }), /no thread ID/)
+  const branch = await makeThread()
+  db.prepare('INSERT INTO agent_messages (thread_id, role, tool_name, content, created_at) VALUES (?, ?, ?, ?, ?)').run(branch.id, 'tool', 'generate_image', JSON.stringify({ image: { id: imageIds[0] } }), stamp)
+  assert.equal(listGeneratedImages(owner, branch.id).images[0].image_id, imageIds[0])
+  const crowded = await makeThread()
+  for (let i = 0; i < 12; i++) db.prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)').run(randomUUID(), crowded.id, '\"'.repeat(200), PNG, stamp, JSON.stringify({ prompt: '\"'.repeat(2000) + 'hidden tail', width: 512, height: 512 }))
+  const bounded = listGeneratedImages(owner, crowded.id)
+  assert.equal(bounded.images.length, 10); assert.ok(bounded.next_before); assert.ok(JSON.stringify(bounded).length <= 6000); assert.ok(!JSON.stringify(bounded).includes('hidden tail'))
+  console.log('PASS legacy eligible thread: current images after compaction -> unambiguous Desktop -> requested mkdir -> four exact binary saves within Quick rounds, with approvals and no extra questions/locked-library probes')
+  console.log('PASS current-image pagination, ownership, branch references and bounded metadata; explicit off groups and integration blockers stay off')
+  const exhausted = await turn(legacy.id, { budget_probe: true })
+  assert.match(exhausted.view.messages.at(-1).content, /Saving remains enabled; continue in this thread/)
+  assert.equal(exhausted.view.messages.filter((m: J) => m.role === 'tool').slice(-6).filter((m: J) => m.toolName === 'list_generated_images').length, 6)
+  console.log('PASS exhausted Quick round budget is explained separately from disabled tools; no new thread required')
   console.log('All generated image file checks passed')
 } finally { await server.stop(); ollama.closeAllConnections(); ollama.close(); remote.closeAllConnections(); remote.close() }

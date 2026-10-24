@@ -122,6 +122,8 @@ export function stepLabel(name: string, args: Record<string, unknown>): string {
     case 'seafile_search':
     case 'grep':
       return 'Searched files'
+    case 'list_generated_images':
+      return 'Listed generated images'
     case 'seafile_read':
     case 'read_file':
       return 'Read a file'

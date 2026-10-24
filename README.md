@@ -1550,9 +1550,22 @@ through the model, and keeps the generated artifact. The approval card identifie
 Seafile account, library, path, byte count and replacement choice. Ask first, Auto and Accept edits
 ask before saving; Plan refuses and Bypass runs without a card.
 
+`list_generated_images` gives the agent exact image IDs and filenames from the current thread,
+including after compaction and in branches, without needing a thread ID. It returns up to ten
+images per page, newest first, with short prompt excerpts and a cursor for older images, within
+6,000 characters. “Save these pictures” should use that list, rather than guess an earlier thread
+ID. The agent also receives the current thread ID and the specific reason if saving is unavailable:
+Images off, Seafile changes off, Seafile not linked, or Plan mode. These choices are not changed
+for the user. Older stored tool lists keep their normal group migration; no new group is needed.
+If a turn runs out of tool rounds, the agent is told that saving remains enabled and can continue
+in the same thread on the next user message.
+
 The parent folder must exist. The agent can discover it with `seafile_list`, or use
 `seafile_mkdir` to create a folder you explicitly requested. It must ask when “Desktop” could
-mean different libraries, this browser or the host computer. Server tools cannot write browser-local
+mean different libraries, this browser or the host computer. Once the Desktop destination is clear,
+it should stay there, without probing unrelated locked libraries or asking for the same decision
+again. A request to save under a named folder also requests its creation if absent; the normal
+write approvals still apply. Separate saves can be batched in one tool round. Server tools cannot write browser-local
 Files or the host Desktop; the manual Save to Files action remains available for browser storage.
 An existing filename is refused unless you requested replacement and the tool sets `overwrite`.
 The destination and linked account are checked again after approval. Seafile can rename a new
@@ -1795,7 +1808,9 @@ not reclaim its generated images. `pnpm check:agents-images` exercises generatio
 mock ComfyUI/Ollama, permissions, owner-only downloads, cancellation, quota accounting and failures
 without running a GPU job. `pnpm check:agents-image-files` checks exact PNG transfers to a mock
 Seafile, destination validation, ownership, approval, replacement, quota failures and cancellation
-with scratch accounts only.
+with scratch accounts only. It also runs a plain save request through current-image discovery,
+folder discovery, requested folder creation and four binary saves in an older eligible thread,
+with the same tool definitions, approval events and round limit used by the app and CLI.
 
 **Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
 title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;
