@@ -54,17 +54,22 @@ function assertGraph(graph: SegmentGraph, info: SegmentNodeInfo) {
   }
 }
 
-const text = (value: unknown, name: string, required: boolean) => {
-  if (value === undefined && !required) return ''
-  if (typeof value !== 'string' || /[\x00-\x1f\x7f]/.test(value) || value.trim().length > 120 || (required && !value.trim())) throw new HttpError(400, `${name} must be ${required ? '1' : '0'}–120 characters of plain text, like "cyclist"`)
-  return value.trim()
+/** Several things can be named at once, comma separated ("cyclist, bicycle"): each is one segmenter concept. */
+export const MAX_PHRASES = 4
+const phrases = (value: unknown, name: string, required: boolean): string[] => {
+  if (value === undefined && !required) return []
+  const bad = () => new HttpError(400, `${name} must be ${required ? '1' : '0'}–${MAX_PHRASES} comma-separated phrases of plain text, each up to 80 characters, like "cyclist, bicycle"`)
+  if (typeof value !== 'string' || /[\x00-\x1f\x7f]/.test(value) || value.length > 400) throw bad()
+  const list = value.split(',').map((p) => p.trim().replace(/\s+/g, ' ')).filter(Boolean)
+  if ((required && !list.length) || list.length > MAX_PHRASES || list.some((p) => p.length > 80)) throw bad()
+  return [...new Set(list)]
 }
 export type AutoMaskInput = { source_image_id?: unknown; target?: unknown; exclude?: unknown; grow?: unknown; threshold?: unknown; hand_off?: unknown }
 /** `threshold` null: each segmenter's own sensible default. */
-export type AutoMaskOptions = { target: string; exclude: string; grow: number; threshold: number | null; handOff: boolean }
+export type AutoMaskOptions = { target: string[]; exclude: string[]; grow: number; threshold: number | null; handOff: boolean }
 export function autoMaskOptions(input: AutoMaskInput): AutoMaskOptions {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((k) => !['source_image_id', 'target', 'exclude', 'grow', 'threshold', 'hand_off'].includes(k))) throw new HttpError(400, 'Supply source_image_id, target and optional exclude, grow, threshold and hand_off; graphs and models are not tool options')
-  const target = text(input.target, 'target', true), exclude = text(input.exclude, 'exclude', false)
+  const target = phrases(input.target, 'target', true), exclude = phrases(input.exclude, 'exclude', false)
   const grow = input.grow ?? 12, threshold = input.threshold ?? null
   if (typeof grow !== 'number' || !Number.isInteger(grow) || grow < 0 || grow > 64) throw new HttpError(400, 'grow must be a whole number of pixels from 0 to 64')
   if (threshold !== null && (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0.05 || threshold > 0.95)) throw new HttpError(400, 'threshold must be from 0.05 to 0.95; lower finds more')
@@ -81,7 +86,10 @@ function segmentInputs(node: Segmenter, info: SegmentNodeInfo, prompt: string, t
     return chosen
   }
   const schema = { ...info[node].input?.required, ...info[node].input?.optional }
-  const neutral: Record<string, unknown> = { mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: false }
+  // unload_model: each node in a graph is its own instance with its own copy of the model, so with
+  // several phrases they would pile up in VRAM (seen: out of memory at three SAM3 nodes on 16 GB).
+  // Unloading after each node keeps one at a time, and leaves the GPU free for the edit after it.
+  const neutral: Record<string, unknown> = { mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: true }
   const inputs: Record<string, unknown> = { image: ['1', 0], prompt, ...Object.fromEntries(Object.entries(neutral).filter(([k]) => k in schema)) }
   if ('device' in schema) inputs.device = pick('device', ['Auto'])
   if (node === 'SAM3Segment') {
@@ -97,33 +105,47 @@ function segmentInputs(node: Segmenter, info: SegmentNodeInfo, prompt: string, t
 }
 
 /**
- * LoadImage, the segmenter for the target (and the exclusion), grow the target, subtract the
- * exclusion (grown further than the target, so its edges stay safe), then save the mask as a picture.
+ * LoadImage; the segmenter once per target phrase, unioned (MaskComposite add), grown; the same
+ * for the exclude phrases, grown further than the target so no ring is left around what stays,
+ * and subtracted; then MaskToImage → SaveImage. Each phrase's raw selection is saved too, so the
+ * result can say what every phrase caught. Node IDs and shape depend only on the phrase counts.
  */
 export function autoMaskGraph(options: AutoMaskOptions, uploadName: string, info: SegmentNodeInfo, segmenter = segmenters(info)[0]) {
   const missing = missingNodes(info, AUTO_MASK_NODES)
   if (missing) throw new HttpError(409, missing)
   if (!segmenter || !info[segmenter]) throw new HttpError(409, `ComfyUI is missing ${segmenter ?? 'a segmenter'}`)
-  if (!comboOptions(info, 'MaskComposite', 'operation').includes('subtract')) throw new HttpError(409, 'MaskComposite does not offer subtract')
+  const operations = comboOptions(info, 'MaskComposite', 'operation')
+  if (!operations.includes('subtract') || !operations.includes('add')) throw new HttpError(409, 'MaskComposite does not offer add and subtract')
+  if (!options.target.length || options.target.length > MAX_PHRASES || options.exclude.length > MAX_PHRASES) throw new HttpError(400, `Use 1–${MAX_PHRASES} target phrases and at most ${MAX_PHRASES} exclude phrases`)
   const growSchema = { ...info.GrowMask.input?.required, ...info.GrowMask.input?.optional }
   const grow = (mask: [string, number], expand: number) => ({ mask, expand, ...('tapered_corners' in growSchema ? { tapered_corners: true } : {}) })
-  const graph: SegmentGraph = {
-    1: { class_type: 'LoadImage', inputs: { image: uploadName } },
-    2: { class_type: segmenter, inputs: segmentInputs(segmenter, info, options.target, options.threshold) },
-    3: { class_type: 'GrowMask', inputs: grow(['2', 1], options.grow) },
+  const graph: SegmentGraph = { 1: { class_type: 'LoadImage', inputs: { image: uploadName } } }
+  const parts: { phrase: string; role: 'target' | 'exclude'; output: string }[] = []
+  /** Segment every phrase of one role and union them; `key` prefixes the node IDs (t or x). */
+  const union = (list: string[], key: 't' | 'x'): [string, number] => {
+    let mask: [string, number] | null = null
+    list.forEach((phrase, i) => {
+      const id = `${key}${i + 1}`
+      graph[id] = { class_type: segmenter, inputs: segmentInputs(segmenter, info, phrase, options.threshold) }
+      graph[`${id}_image`] = { class_type: 'MaskToImage', inputs: { mask: [id, 1] } }
+      graph[`${id}_save`] = { class_type: 'SaveImage', inputs: { images: [`${id}_image`, 0], filename_prefix: 'agents/mask-part' } }
+      parts.push({ phrase, role: key === 't' ? 'target' : 'exclude', output: `${id}_save` })
+      if (mask) { graph[`${key}u${i + 1}`] = { class_type: 'MaskComposite', inputs: { destination: mask, source: [id, 1], x: 0, y: 0, operation: 'add' } }; mask = [`${key}u${i + 1}`, 0] }
+      else mask = [id, 1]
+    })
+    return mask!
   }
-  let mask: [string, number] = ['3', 0]
-  if (options.exclude) {
-    graph[4] = { class_type: segmenter, inputs: segmentInputs(segmenter, info, options.exclude, options.threshold) }
-    // Grown past the target's own growth, so no ring of the grown target is left around what stays.
-    graph[5] = { class_type: 'GrowMask', inputs: grow(['4', 1], options.grow + 4) }
-    graph[6] = { class_type: 'MaskComposite', inputs: { destination: mask, source: ['5', 0], x: 0, y: 0, operation: 'subtract' } }
-    mask = ['6', 0]
+  graph.grow = { class_type: 'GrowMask', inputs: grow(union(options.target, 't'), options.grow) }
+  let mask: [string, number] = ['grow', 0]
+  if (options.exclude.length) {
+    graph.xgrow = { class_type: 'GrowMask', inputs: grow(union(options.exclude, 'x'), options.grow + 4) }
+    graph.subtract = { class_type: 'MaskComposite', inputs: { destination: mask, source: ['xgrow', 0], x: 0, y: 0, operation: 'subtract' } }
+    mask = ['subtract', 0]
   }
-  graph[7] = { class_type: 'MaskToImage', inputs: { mask } }
-  graph[8] = { class_type: 'SaveImage', inputs: { images: ['7', 0], filename_prefix: 'agents/mask' } }
+  graph.image = { class_type: 'MaskToImage', inputs: { mask } }
+  graph.save = { class_type: 'SaveImage', inputs: { images: ['image', 0], filename_prefix: 'agents/mask' } }
   assertGraph(graph, info)
-  return { graph, outputNode: '8', segmenter }
+  return { graph, outputNode: 'save', parts, segmenter }
 }
 
 /** LaMa fills the white mask area from its surroundings at the source's full size; no prompt, no sampler. */

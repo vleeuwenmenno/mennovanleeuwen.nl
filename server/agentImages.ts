@@ -227,7 +227,7 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   try { assertInpaintNodes(info) } catch (e) { inpaintError = (e as Error).message }
   // Automatic masks and LaMa removal need optional custom nodes; their absence only switches these off.
   let autoMaskError = '', removeError = ''
-  try { autoMaskGraph({ target: 'object', exclude: 'other', grow: 12, threshold: null, handOff: false }, 'source.png', info as SegmentNodeInfo) } catch (e) { autoMaskError = (e as Error).message }
+  try { autoMaskGraph({ target: ['object'], exclude: ['other'], grow: 12, threshold: null, handOff: false }, 'source.png', info as SegmentNodeInfo) } catch (e) { autoMaskError = (e as Error).message }
   try { removeGraph('source.png', 'mask.png', info as SegmentNodeInfo) } catch (e) { removeError = (e as Error).message }
   return { inpaint: !inpaintError, inpaintError, autoMask: !autoMaskError, autoMaskError, remove: !removeError, removeError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
@@ -767,8 +767,8 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
   return false
 }
 
-/** Queue a fixed graph, wait for its saved picture and read it back. Deletes only our own prompt on failure. */
-async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, outputNode: string, limit: AbortSignal) {
+/** Queue a fixed graph, wait for all its saved pictures and read them back. Deletes only our own prompt on failure. */
+async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, outputNodes: string[], limit: AbortSignal) {
   let promptId: string | null = null
   try {
     const submitted = await readJSON(user, s, '/prompt', limit, { prompt: graph, client_id: randomUUID() })
@@ -783,11 +783,15 @@ async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, ou
         const what = (v: unknown, n: number) => typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, n) : ''
         throw new HttpError(502, `ComfyUI failed${what(failure?.node_type, 80) ? ` in ${what(failure?.node_type, 80)}` : ''}${what(failure?.exception_message, 240) ? `: ${what(failure?.exception_message, 240)}` : ''}`)
       }
-      const output = job?.outputs?.[outputNode]?.images?.[0]
-      if (output) {
-        if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
-        const params = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder, type: 'output' })
-        return await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
+      const outputs = outputNodes.map((node) => job?.outputs?.[node]?.images?.[0])
+      if (outputs.every(Boolean)) {
+        const out = new Map<string, Buffer>()
+        for (const [i, output] of outputs.entries()) {
+          if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
+          const params = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder, type: 'output' })
+          out.set(outputNodes[i], await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024))
+        }
+        return out
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without a mask')
       await delay(700, undefined, { signal: limit }).catch(() => {})
@@ -798,10 +802,21 @@ async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, ou
   }
 }
 
+/** The share of a mask picture that is selected (half grey and up), checked against the source's size. */
+function maskShare(bytes: Buffer, source: ImageSource) {
+  const decoded = pngFirstChannel(bytes)
+  if (decoded.width !== source.width || decoded.height !== source.height) throw new HttpError(502, `ComfyUI returned a ${decoded.width} × ${decoded.height} mask for a ${source.width} × ${source.height} picture`)
+  let white = 0
+  for (const v of decoded.values) if (v >= 128) white++
+  return { decoded, coverage: white / decoded.values.length }
+}
+const percentOf = (share: number) => Math.round(share * 1000) / 10
+
 /**
- * make_image_mask: find `target` in an owned picture with SAM2 + GroundingDINO on the owner's
- * ComfyUI, take `exclude` out of it, grow it, and keep the result as an owned mask (even an
- * empty or oversized one, so every attempt can be listed and shown). The mask works with
+ * make_image_mask: find the `target` phrases in an owned picture with a text-prompted segmenter
+ * (SAM3, or SAM2 + GroundingDINO) on the owner's ComfyUI, union them, take the `exclude` phrases
+ * out, grow it, and keep the result as an owned mask (even an empty or oversized one, so every
+ * attempt can be listed and shown). Reports what each phrase caught. The mask works with
  * generate_image remove/inpaint unchanged. Same egress, credentials, quota and one-job lock as generation.
  */
 export async function makeImageMask(user: User, thread: string, input: AutoMaskInput, signal: AbortSignal) {
@@ -810,7 +825,7 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   const source = imageSource(user, input.source_image_id)
   const s = imageSettings(user)
   if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Agents → Images first')
-  // The first run may download the SAM2 and GroundingDINO weights, so allow as long as a generation.
+  // The first run may download the segmentation weights, so allow as long as a generation.
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
   const schemas = await nodeSchemas(user, s, AUTO_MASK_NODES, AbortSignal.any([limit, AbortSignal.timeout(30_000)]))
   const missing = missingNodes(schemas as SegmentNodeInfo, AUTO_MASK_NODES)
@@ -821,38 +836,45 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
   checkRoom(user, 256 * 1024)
   active.add(user.id)
-  let bytes: Buffer | undefined
+  let result: { outputs: Map<string, Buffer>; plan: (typeof graphs)[number] } | undefined
   const failures: string[] = []
   try {
     await uploadSource(user, s, source, uploadName, limit)
     // A segmenter that fails on this backend (a broken model or package) hands over to the next.
-    for (const { graph, outputNode, segmenter } of graphs) {
-      try { bytes = await runComfyGraph(user, s, graph, outputNode, limit); break }
+    for (const plan of graphs) {
+      try { result = { outputs: await runComfyGraph(user, s, plan.graph, [plan.outputNode, ...plan.parts.map((p) => p.output)], limit), plan }; break }
       catch (error) {
         if (limit.aborted || !(error instanceof HttpError) || error.status !== 502) throw error
-        failures.push(`${segmenter}: ${error.message}`)
+        failures.push(`${plan.segmenter}: ${error.message}`)
       }
     }
   } catch (error) {
     if (limit.aborted) throw new HttpError(signal.aborted ? 499 : 504, signal.aborted ? 'Mask making cancelled' : 'Mask making timed out after 10 minutes')
     throw error
   } finally { active.delete(user.id) }
-  if (!bytes) throw new HttpError(502, `Automatic masking failed on this ComfyUI (${failures.join('; ')}). Ask the user to paint the area with Edit selected area, or to fix the segmentation nodes.`)
-  const decoded = pngFirstChannel(bytes)
-  if (decoded.width !== source.width || decoded.height !== source.height) throw new HttpError(502, `ComfyUI returned a ${decoded.width} × ${decoded.height} mask for a ${source.width} × ${source.height} picture`)
-  let white = 0
-  for (const v of decoded.values) if (v >= 128) white++
-  const coverage = white / decoded.values.length
+  if (!result) throw new HttpError(502, `Automatic masking failed on this ComfyUI (${failures.join('; ')}). Ask the user to paint the area with Edit selected area, or to fix the segmentation nodes.`)
+  const { decoded, coverage } = maskShare(result.outputs.get(result.plan.outputNode)!, source)
+  // What each phrase found on its own, before growing and before the exclusion.
+  const phrases = result.plan.parts.map((part) => ({ phrase: part.phrase, role: part.role, coverage_percent: percentOf(maskShare(result.outputs.get(part.output)!, source).coverage) }))
   const verdict = coverage === 0 ? 'empty' as const : coverage > MASK_TOO_LARGE ? 'too_large' as const : 'ok' as const
-  const saved = saveAutoMask(user, thread, source, binaryMaskPng(decoded.width, decoded.height, decoded.values), { target: options.target, exclude: options.exclude, grow: options.grow, threshold: options.threshold, verdict })
-  const percent = Math.round(saved.coverage * 1000) / 10
-  const mask = { mask_id: saved.id, mask_url: saved.url, source_image_id: source.id, source_url: source.url, width: saved.width, height: saved.height, target: options.target, ...(options.exclude ? { exclude: options.exclude } : {}), coverage_percent: percent, bbox: saved.bbox, ...(options.handOff ? { hand_off: true } : {}) }
-  if (verdict === 'empty') return { error: `Nothing matching “${options.target}” was found${options.exclude ? ' outside the excluded area' : ''}. Try another word for it (a plainer noun such as "person", "bicycle", "car"), or a lower threshold. The empty attempt is kept in list_image_masks.`, mask }
+  const target = options.target.join(', '), exclude = options.exclude.join(', ')
+  const saved = saveAutoMask(user, thread, source, binaryMaskPng(decoded.width, decoded.height, decoded.values), { target, exclude, grow: options.grow, threshold: options.threshold, verdict, phrases })
+  const percent = percentOf(saved.coverage)
+  const mask = { mask_id: saved.id, mask_url: saved.url, source_image_id: source.id, source_url: source.url, width: saved.width, height: saved.height, target, ...(exclude ? { exclude } : {}), coverage_percent: percent, bbox: saved.bbox, ...(options.handOff ? { hand_off: true } : {}) }
+  const missed = phrases.filter((p) => p.role === 'target' && p.coverage_percent === 0).map((p) => `“${p.phrase}”`)
+  const unprotected = phrases.filter((p) => p.role === 'exclude' && p.coverage_percent === 0).map((p) => `“${p.phrase}”`)
+  const notes = [
+    ...(missed.length ? [`Found nothing for ${missed.join(', ')}; the other phrases make up the mask.`] : []),
+    ...(unprotected.length ? [`Exclude found nothing for ${unprotected.join(', ')}, so that part is not protected; describe it differently if it must stay.`] : []),
+  ]
+  if (verdict === 'empty') return { error: `Nothing matching ${options.target.map((p) => `“${p}”`).join(', ')} was found${exclude ? ' outside the excluded area' : ''}. Try another word for it (a plainer noun such as "person", "bicycle", "car"), or a lower threshold. The empty attempt is kept in list_image_masks.`, mask, phrases }
   return {
     mask,
+    phrases,
+    ...(notes.length ? { note: notes.join(' ') } : {}),
     ...(verdict === 'too_large' ? { warning: `The mask covers ${percent}% of the picture, which probably caught too much. Use exclude for what must stay, or a tighter target, before editing.` } : {}),
     next: options.handOff
       ? 'The app now shows this mask with Open mask editor. End your turn: tell the user in one sentence to refine it, save, and say when to continue.'
-      : 'Check coverage_percent and bbox fit the request, then call generate_image with operation remove (or inpaint with a prompt for a replacement), this source_image_id and mask_id. Do not ask the user first.',
+      : 'Check coverage_percent, bbox and what each phrase caught fit the request, then call generate_image with operation remove (or inpaint with a prompt for a replacement), this source_image_id and mask_id. Do not ask the user first.',
   }
 }

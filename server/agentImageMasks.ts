@@ -29,7 +29,7 @@ export function discardImageMask(user: User, id: string) {
 }
 export type ImageMask = ImageSource & { source_id: string; origin: string }
 /** What make_image_mask selected; stored with the mask so every attempt can be listed later. */
-export type AutoMaskDetails = { target: string; exclude: string; grow: number; threshold: number | null; coverage: number; bbox: MaskStats['bbox']; verdict: 'ok' | 'empty' | 'too_large'; source_url: string }
+export type AutoMaskDetails = { target: string; exclude: string; grow: number; threshold: number | null; phrases?: { phrase: string; role: 'target' | 'exclude'; coverage_percent: number }[]; coverage: number; bbox: MaskStats['bbox']; verdict: 'ok' | 'empty' | 'too_large'; source_url: string }
 function ownThread(user: User, thread: string) {
   if (!database().prepare('SELECT 1 FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id)) throw new HttpError(404, 'No such thread')
 }
@@ -96,7 +96,7 @@ export function listImageMasks(user: User, thread: string, args: Record<string, 
     const status = row.used ? 'used' : details.verdict === 'empty' || (details.verdict === 'too_large' && !latest) ? 'rejected' : latest ? 'ready' : 'superseded'
     return {
       mask_id: row.id, source_image_id: row.source_id, width: row.width, height: row.height, made_by: row.origin === 'auto' ? 'agent' : 'user', status,
-      ...(row.origin === 'auto' ? { target: details.target, ...(details.exclude ? { exclude: details.exclude } : {}), coverage_percent: typeof details.coverage === 'number' ? Math.round(details.coverage * 1000) / 10 : undefined, bbox: details.bbox, ...(details.verdict === 'too_large' ? { warning: 'Covered over 60% of the image' } : {}) } : {}),
+      ...(row.origin === 'auto' ? { target: details.target, ...(details.exclude ? { exclude: details.exclude } : {}), coverage_percent: typeof details.coverage === 'number' ? Math.round(details.coverage * 1000) / 10 : undefined, bbox: details.bbox, ...(details.phrases ? { phrases: details.phrases } : {}), ...(details.verdict === 'too_large' ? { warning: 'Covered over 60% of the image' } : {}) } : {}),
       mask_url: `/api/agents/image-masks/${row.id}`, source_url: sourceUrl(user, row.source_id),
     }
   })

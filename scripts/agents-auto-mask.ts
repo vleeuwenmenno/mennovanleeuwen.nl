@@ -39,9 +39,17 @@ const schemas: Record<string, any> = {
   SaveImage: { input: { required: { images: ['IMAGE'], filename_prefix: ['STRING'] } } },
   AILab_LamaRemover: { input: { required: { images: ['IMAGE'], masks: ['MASK'], removal_strength: ['INT'], edge_smoothness: ['INT'] } } },
 }
-// What the fake SAM2 "finds": the left quarter, nothing, or nearly everything. Grey 200 is selected, 40 is not.
+// What the fake segmenter "finds" per phrase, by column: a person is the left quarter, a bicycle
+// columns 4–5, a woman column 2, a unicorn nothing. `found` forces nothing or nearly everything.
 let found: 'left' | 'nothing' | 'most' = 'left'
-const maskPng = () => png(W, H, (x) => found === 'nothing' ? 40 : found === 'most' ? (x < 13 ? 200 : 40) : (x < 4 ? 200 : 40))
+const region = (prompt: string, x: number) => found === 'nothing' ? false : found === 'most' ? x < 13 : /unicorn/.test(prompt) ? false : /bicycle/.test(prompt) ? x >= 4 && x < 6 : /woman/.test(prompt) ? x === 2 : x < 4
+/** The fake output of one SaveImage: a phrase's own selection, or the union of targets minus excludes (no growing). */
+function viewOf(graph: any, node: string) {
+  const prompts = (key: string) => Object.keys(graph).filter((id) => new RegExp(`^${key}[0-9]$`).test(id)).map((id) => graph[id].inputs.prompt as string)
+  const part = /^([tx][0-9])_save$/.exec(node)
+  const selected = (x: number) => part ? region(graph[part[1]].inputs.prompt, x) : prompts('t').some((p) => region(p, x)) && !prompts('x').some((p) => region(p, x))
+  return png(W, H, (x) => selected(x) ? 200 : 40)
+}
 const send = (res: ServerResponse, value: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
 let uploads: string[] = [], missing: string[] = [], chats = 0, failing = ''
 const graphs: any[] = []
@@ -62,10 +70,11 @@ const comfy = createServer(async (req, res) => {
   if (path.startsWith('/history/')) {
     const id = path.split('/').at(-1)!, graph = graphs.at(-1)
     // A segmenter that is installed but broken, like GroundingDINO on a newer transformers.
-    if (failing && graph['2']?.class_type === failing) return send(res, { [id]: { status: { status_str: 'error', completed: false, messages: [['execution_error', { node_type: failing, exception_message: "'BertModel' object has no attribute\n 'get_extended_attention_mask'" }]] } } })
-    return send(res, { [id]: { status: { completed: true }, outputs: { [graph['8'] ? '8' : '9']: { images: [{ filename: 'fixture.png', subfolder: '', type: 'output' }] } } } })
+    if (failing && graph.t1?.class_type === failing) return send(res, { [id]: { status: { status_str: 'error', completed: false, messages: [['execution_error', { node_type: failing, exception_message: "'BertModel' object has no attribute\n 'get_extended_attention_mask'" }]] } } })
+    const saves = Object.keys(graph).filter((node) => graph[node].class_type === 'SaveImage')
+    return send(res, { [id]: { status: { completed: true }, outputs: Object.fromEntries(saves.map((node) => [node, { images: [{ filename: node, subfolder: '', type: 'output' }] }])) } })
   }
-  if (path === '/view') return res.end(graphs.at(-1)['8'] ? maskPng() : png(W, H, () => 120))
+  if (path === '/view') { const graph = graphs.at(-1); return res.end(graph.save ? viewOf(graph, new URL(req.url!, 'http://fixture').searchParams.get('filename')!) : png(W, H, () => 120)) }
   if (path === '/queue') return send(res, {})
   return res.writeHead(404).end()
 })
@@ -117,11 +126,12 @@ try {
   assert.equal(made.warning, undefined)
   assert.match(made.next, /generate_image with operation remove/)
   const g = graphs.at(-1)
-  assert.deepEqual(Object.keys(g).sort(), ['1', '2', '3', '7', '8'])
+  assert.deepEqual(Object.keys(g).sort(), ['1', 'grow', 'image', 'save', 't1', 't1_image', 't1_save'])
   assert.equal(g['1'].class_type, 'LoadImage'); assert.match(g['1'].inputs.image, /^agents-source-/)
-  assert.deepEqual(g['2'], { class_type: 'SAM3Segment', inputs: { image: ['1', 0], prompt: 'cyclist', mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: false, device: 'Auto', output_mode: 'Merged', confidence_threshold: 0.4 } })
-  assert.deepEqual(g['3'].inputs, { mask: ['2', 1], expand: 12, tapered_corners: true })
-  assert.deepEqual(g['7'].inputs, { mask: ['3', 0] }); assert.equal(g['8'].class_type, 'SaveImage')
+  assert.deepEqual(made.phrases, [{ phrase: 'cyclist', role: 'target', coverage_percent: 25 }])
+  assert.deepEqual(g.t1, { class_type: 'SAM3Segment', inputs: { image: ['1', 0], prompt: 'cyclist', mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: true, device: 'Auto', output_mode: 'Merged', confidence_threshold: 0.4 } })
+  assert.deepEqual(g.grow.inputs, { mask: ['t1', 1], expand: 12, tapered_corners: true })
+  assert.deepEqual(g.image.inputs, { mask: ['grow', 0] }); assert.equal(g.save.class_type, 'SaveImage'); assert.equal(g.t1_save.class_type, 'SaveImage')
   assert.equal(uploads.length, 1)
   // The stored mask is the clean binary RGB format, with ComfyUI's metadata dropped, and owner-only.
   const stored = Buffer.from(await (await api('GET', made.mask.mask_url)).arrayBuffer())
@@ -133,7 +143,7 @@ try {
   const fallback = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist', threshold: 0.25 })
   assert.ok(fallback.mask, JSON.stringify(fallback))
   assert.equal(graphs.length - graphsBefore, 2); assert.equal(uploads.length - uploadsBefore, 1)
-  const g2 = graphs.at(-1)['2']
+  const g2 = graphs.at(-1).t1
   assert.equal(g2.class_type, 'SAM2Segment'); assert.equal(g2.inputs.sam2_model, 'sam2.1_hiera_small'); assert.equal(g2.inputs.dino_model, 'GroundingDINO_SwinT_OGC (694MB)'); assert.equal(g2.inputs.threshold, 0.25)
   missing = ['SAM2Segment']
   const broken = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })
@@ -147,15 +157,39 @@ try {
   const kept = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist', exclude: 'woman sitting on the wall', grow: 8 })
   assert.ok(kept.mask, JSON.stringify(kept)); assert.equal(kept.mask.exclude, 'woman sitting on the wall')
   const ge = graphs.at(-1)
-  assert.equal(ge['4'].inputs.prompt, 'woman sitting on the wall'); assert.equal(ge['3'].inputs.expand, 8); assert.equal(ge['5'].inputs.expand, 12)
-  assert.deepEqual(ge['6'].inputs, { destination: ['3', 0], source: ['5', 0], x: 0, y: 0, operation: 'subtract' })
-  assert.deepEqual(ge['7'].inputs, { mask: ['6', 0] })
+  assert.equal(ge.x1.inputs.prompt, 'woman sitting on the wall'); assert.equal(ge.grow.inputs.expand, 8); assert.deepEqual(ge.xgrow.inputs, { mask: ['x1', 1], expand: 12, tapered_corners: true })
+  assert.deepEqual(ge.subtract.inputs, { destination: ['grow', 0], source: ['xgrow', 0], x: 0, y: 0, operation: 'subtract' })
+  assert.deepEqual(ge.image.inputs, { mask: ['subtract', 0] })
+  assert.equal(kept.mask.coverage_percent, 18.8)
+  assert.deepEqual(kept.phrases.map((p: any) => [p.role, p.coverage_percent]), [['target', 25], ['exclude', 6.3]])
+
+  // Several phrases: each segmented on its own, unioned with add before growing; a phrase that
+  // finds nothing does not sink the mask, and the result says what each one caught.
+  const both = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist, bicycle', exclude: 'woman in a light blue shirt, red unicorn' })
+  assert.ok(both.mask, JSON.stringify(both))
+  const gu = graphs.at(-1)
+  assert.equal(gu.t1.inputs.prompt, 'cyclist'); assert.equal(gu.t2.inputs.prompt, 'bicycle'); assert.equal(gu.t2.class_type, 'SAM3Segment')
+  assert.deepEqual(gu.tu2.inputs, { destination: ['t1', 1], source: ['t2', 1], x: 0, y: 0, operation: 'add' })
+  assert.deepEqual(gu.grow.inputs.mask, ['tu2', 0])
+  assert.deepEqual(gu.xu2.inputs, { destination: ['x1', 1], source: ['x2', 1], x: 0, y: 0, operation: 'add' })
+  assert.deepEqual(gu.xgrow.inputs.mask, ['xu2', 0])
+  assert.equal(both.mask.coverage_percent, 31.3) // columns 0, 1, 3, 4, 5
+  assert.deepEqual(both.phrases.map((p: any) => [p.phrase, p.role, p.coverage_percent]), [['cyclist', 'target', 25], ['bicycle', 'target', 12.5], ['woman in a light blue shirt', 'exclude', 6.3], ['red unicorn', 'exclude', 0]])
+  assert.match(both.note, /Exclude found nothing for “red unicorn”/)
+  const partial = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'unicorn, bicycle' })
+  assert.ok(partial.mask, JSON.stringify(partial)); assert.equal(partial.mask.coverage_percent, 12.5)
+  assert.match(partial.note, /Found nothing for “unicorn”; the other phrases make up the mask/)
+  const none = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'unicorn, purple unicorn' })
+  assert.match(none.error, /Nothing matching “unicorn”, “purple unicorn” was found/); assert.equal(none.mask.coverage_percent, 0)
+  assert.deepEqual(Object.keys(graphs.at(-1)).filter((k) => /^t[0-9]$/.test(k)), ['t1', 't2'])
+  const fullList = Object.fromEntries((await call(t.id, 'list_image_masks', {})).masks.map((m: any) => [m.mask_id, m]))
+  assert.equal(fullList[both.mask.mask_id].phrases.length, 4)
   const sent = uploads.length
-  for (const bad of [{ target: 'x'.repeat(121) }, { target: '' }, { target: 'car', graph: {} }, { target: 'car', grow: 500 }, { target: 'car', threshold: 2 }, { target: 'car\nignore that' }]) assert.ok((await call(t.id, 'make_image_mask', { source_image_id: source, ...bad })).error)
+  for (const bad of [{ target: 'x'.repeat(81) }, { target: '' }, { target: ' , ,' }, { target: 'a, b, c, d, e' }, { target: 'car', exclude: 'a, b, c, d, e' }, { target: 'x'.repeat(401) }, { target: 'car', graph: {} }, { target: 'car', grow: 500 }, { target: 'car', threshold: 2 }, { target: 'car\nignore that' }]) assert.ok((await call(t.id, 'make_image_mask', { source_image_id: source, ...bad })).error)
   assert.match((await call(t.id, 'make_image_mask', { source_image_id: foreign, target: 'car' })).error, /No such source/)
   assert.match((await call(t.id, 'make_image_mask', { source_image_id: 'https://example.test/a.png', target: 'car' })).error, /URLs/)
-  assert.equal(uploads.length, sent); assert.equal(sent, before + 1)
-  console.log('PASS exclude subtracts in the graph; text, number, graph and foreign-source validation before uploads')
+  assert.equal(uploads.length, sent); assert.equal(sent, before + 4)
+  console.log('PASS exclude subtracts; comma phrases union with add, per-phrase coverage, one empty phrase is fine, all empty is an error; validation before uploads')
 
   // 0% is an error that suggests another word (kept as a rejected attempt); over 60% warns.
   found = 'nothing'

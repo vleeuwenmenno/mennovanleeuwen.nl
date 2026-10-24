@@ -1470,12 +1470,20 @@ Retry replays the direct action. Approval cards identify the mask and working-si
 
 **Automatic masks and object removal.** Asked to "remove the cyclists on the left, keep Marisa", the
 agent does the whole edit without questions: `make_image_mask` selects the object by words, then
-`generate_image` erases it. `make_image_mask` takes `source_image_id`, `target` (what to select,
-1–120 characters), optional `exclude` (what must stay; it is subtracted), `grow` (pixels, 0–64,
-default 12), `threshold` (0.05–0.95) and `hand_off`. It runs one fixed graph on the owner's ComfyUI:
-LoadImage → a text-prompted segmenter for the target → GrowMask, and for `exclude` the same segmenter
-→ GrowMask (4 pixels past the target's growth, so no ring is left around what stays) →
-MaskComposite subtract, then MaskToImage → SaveImage. The segmenter is ComfyUI-RMBG's `SAM3Segment`
+`generate_image` erases it. `make_image_mask` takes `source_image_id`, `target` (what to select:
+1–4 comma-separated phrases of up to 80 characters, one thing each, like `"cyclist, bicycle"`),
+optional `exclude` (what must stay, 0–4 phrases, subtracted), `grow` (pixels, 0–64, default 12),
+`threshold` (0.05–0.95) and `hand_off`. It runs one fixed graph on the owner's ComfyUI: LoadImage →
+the text-prompted segmenter once per target phrase → MaskComposite add (the union) → GrowMask; the
+same for the `exclude` phrases → GrowMask (4 pixels past the target's growth, so no ring is left
+around what stays) → MaskComposite subtract; then MaskToImage → SaveImage. Each phrase's own
+selection is saved as well, and the result's `phrases` gives its coverage, so the agent sees what
+each one caught; a phrase that finds nothing is reported in `note` and does not sink the mask while
+another phrase finds something. The agent is told to name what people ride, push or hold
+(`"cyclist, bicycle"`, `"rider, horse"`, `"stroller"`) so no empty bike is left, and to exclude what a
+kept person rides too (`"woman in a light blue shirt, red bicycle"`). Segmenter nodes unload their
+model after running: each node in a graph holds its own copy, and three SAM3 copies ran a 16 GB
+GPU out of memory. The segmenter is ComfyUI-RMBG's `SAM3Segment`
 (SAM3 reads the words itself), or `SAM2Segment` (SAM2 with GroundingDINO) when SAM3 is absent or
 fails at run time, for example when GroundingDINO breaks on a newer transformers release. The
 server reads the result back, makes it a clean binary mask at the source's size and keeps it as an
@@ -1493,7 +1501,8 @@ AILab_LamaRemover → SaveImage), at the source's full size (at most 4096 pixels
 prompt, model or sampler. Diffusion inpaint stays for "replace X with Y". `list_image_models`
 reports `automatic_masks` and `lama_remove`, and the catalog `autoMask` and `remove`, with the reason
 when either is unavailable. `view_generated_image` also takes a `mask_id` to check a mask next to its
-source with vision before an edit, when the agent is unsure.
+source with vision before an edit, when the agent is unsure (for example that it covers the person
+and their bike); the rule against vision right after generating is unchanged.
 
 Every `make_image_mask` attempt is kept, including empty and oversized ones, with its target,
 exclude, coverage and box, for as long as the thread (or a branch that shows it) exists; up to 40
