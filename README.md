@@ -1991,8 +1991,8 @@ The facts come from three places:
 - **LoRA Manager** (optional, on the account's ComfyUI): base model, tags, auto tags, trained words,
   usage tips (a LoRA's recommended strength), notes and its Civitai IDs and file hash. All three
   lists are paged (100 a page; at most 30 pages, 3000 records read and 16 MiB per list, each bound
-  on its own), cached for 30 minutes per backend (a minute when a read failed or timed out partway,
-  keeping what it read), and joined to ComfyUI's installed names by exact folder and file name only.
+  on its own), cached for 30 minutes per backend (a minute when any page after the first failed, was
+  malformed or timed out, keeping what it read; only a missing first page means LoRA Manager is absent), and joined to ComfyUI's installed names by exact folder and file name only.
 - **Civitai** (when **Look up model details on Civitai** is on): the version's base model, trained
   words and description (HTML stripped, 3000 characters), the model page's description (1500), two
   or three short example prompts, and the settings its example pictures agree on: the most common
@@ -2001,7 +2001,9 @@ The facts come from three places:
   becomes `euler_ancestral`), and only when that sampler is installed and this app runs it;
   otherwise the consensus says it is unmapped. Lookups go by Civitai version ID, else by file hash,
   only to `https://civitai.com` (a redirect anywhere else is refused, not followed), with a 5 second
-  timeout and a 1 MiB cap. Answers are cached in the database for 7 days, "not on Civitai" for a day.
+  timeout and a 1 MiB cap. Answers are cached in the database for 7 days, and a confirmed 404 ("not
+  on Civitai") for a day; timeouts, 5xx, 429, 401 and 403 are not cached and the lookup says it is
+  partial or failed.
   Anonymous answers are shared; answers fetched with an account's key are kept under an HMAC of
   that account and key (never the key itself), so no other account or key is served them.
 - **Family defaults** (`src/data/modelFamilies.ts`), keyed by base model: Illustrious and NoobAI
@@ -2022,10 +2024,14 @@ pane shows the same facts (`GET /api/agents/images/model-details`), and chat and
 one line per call: model, family, recommended settings and source.
 
 `generate_image` takes `clip_skip` (1 to 4, checkpoints only; `CLIPSetLastLayer`). A
-**v-prediction** checkpoint (NoobAI v-pred and its merges, found from "vpred"/"v-pred" in its
-name, tags, Civitai version name, or its version or model page description) gets
-`ModelSamplingDiscrete` with `v_prediction` and `zsnr` automatically. The server decides this,
-never the tool call, with the same detector and cached Civitai facts as `model_details`. Without that node the model is
+**v-prediction** checkpoint (NoobAI v-pred and its merges) gets `ModelSamplingDiscrete` with
+`v_prediction` and `zsnr` automatically, but only on affirmative evidence about that file or
+version: "vpred"/"v-pred" in the file name, the Civitai version name, a plain statement in the
+version's own description, or LoRA Manager's base model label. Eps evidence there ("eps",
+"epsilon", "not v-pred") always prevents it, since running an eps model as v-pred ruins every
+picture. The model page, model title and model tags never apply it; when they mention v-pred,
+`model_details` only adds a note. The server decides this, never the tool call, with the same
+detector and cached Civitai facts as `model_details`. Without that node the model is
 reported as unsupported and generation is refused, as it would render garbage.
 
 **Quality check** (**Check images and retry once if clearly broken**, on by default). After each
@@ -2042,7 +2048,10 @@ better settings (the model's recommended ones, another sampler, more steps, a CF
 model of the same family). The server allows one automatic retry per user message and refuses a
 third generation; if the retry is broken too, the agent explains instead. A retry counts as fixed
 only when the same kind of check that flagged the first picture passes it; a vision check that
-fails or times out is inconclusive, and the retry's result keeps the first attempt's defects. Very bad results and
+fails or times out is inconclusive, and the retry's result keeps the first attempt's defects. After
+a retry that is broken too or could not be confirmed, the agent gets one more reply without tools
+to tell the user, and the chat card and terminal say "Retried once; couldn't confirm the new image
+is fixed" with the first picture's defects. Very bad results and
 retries that fixed one are saved as image observations with the source **Automatic check** (while
 saving is on and observations do not ask first). Upscales and LaMa removals are not checked.
 

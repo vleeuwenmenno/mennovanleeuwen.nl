@@ -42,6 +42,7 @@ const CIVITAI_NEGATIVE_TTL = DAY
 
 const normalized = (v: string) => v.replaceAll('\\', '/')
 const leafOf = (v: string) => normalized(v).split('/').pop() ?? v
+const stemOf = (v: string) => leafOf(v).replace(/\.[^.]+$/, '')
 const text = (v: unknown, max: number) => typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : ''
 const words = (v: unknown, count: number, max: number) => Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && !!x.trim() && x.length <= max && !/[\x00-\x1f]/.test(x)).map((x) => x.trim()))].slice(0, count) : []
 const id = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : typeof v === 'string' && /^\d{1,12}$/.test(v) ? Number(v) : null
@@ -126,12 +127,13 @@ async function managerList(user: User, s: ImageSettings, path: string, kind: Ass
     let data: { items?: unknown; total_pages?: unknown }
     try {
       const res = await guardedFetch(user, `${s.url}${path}?page=${page}&page_size=${MANAGER_PAGE}`, { redirect: 'manual', headers: s.token ? { Authorization: `Bearer ${s.token}` } : {}, signal })
-      if (!res.ok) { await res.body?.cancel().catch(() => {}); return { ok: any, items, truncated: false, complete: res.status === 404 } }
+      // Only a missing first page means the optional endpoint is absent; a later failure leaves the list partial.
+      if (!res.ok) { await res.body?.cancel().catch(() => {}); return { ok: any, items, truncated: false, complete: page === 1 && res.status === 404 } }
       const body = await readCapped(res, Math.min(MANAGER_PAGE_BYTES, MANAGER_LIST_BYTES - bytes))
       bytes += body.length
       data = JSON.parse(body.toString())
     } catch { return { ok: any, items, truncated: any, complete: false } }
-    if (!data || !Array.isArray(data.items)) return { ok: any, items, truncated: false, complete: any }
+    if (!data || !Array.isArray(data.items)) return { ok: any, items, truncated: false, complete: false }
     any = true
     const records = data.items.slice(0, Math.min(MANAGER_PAGE, MANAGER_MAX_RAW - raw))
     raw += records.length
@@ -195,17 +197,35 @@ export async function assetHints(user: User, catalog: Catalog, names: Iterable<s
   return out
 }
 
-/** Families whose checkpoints come in v-prediction builds, where a description saying so counts. */
-const VPRED_FAMILIES = new Set<FamilyId | null>(['noobai', 'noobai_vpred', 'illustrious', 'sdxl', 'sd15', null])
+// V-prediction, decided conservatively: running an eps model as v-pred ruins every picture, so it
+// is applied only on affirmative evidence about this file or this version. Shared model-level prose
+// (the model page, LoRA Manager's model title and tags) never applies it; it only adds a note.
+const VPRED_TERM = /\bv[-_ ]?pred(?:iction)?\b/i
+/** Explicit eps evidence: "eps", "epsilon", "not v-pred", "non-vpred". On the file or version it always wins. */
+const EPS = /(?:^|[^a-z])(?:eps|epsilon)(?:[^a-z]|$)|\b(?:not|non|no)[- ]?(?:a\s+)?v[-_ ]?pred/i
+/** A sentence about v-pred that is not about it: negated, conditional or about another version. */
+const NOT_THIS = /\b(?:not|no|non|don'?t|never|without|disable|avoid|eps|epsilon|also|available|another|other|separate|alternative|instead|if|older|previous|upcoming|soon)\b/i
+const sentences = (text: string) => text.split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter(Boolean)
+/** A version description that says this version is v-pred: a v-pred sentence with no negation or hedge. */
+const affirms = (text: string) => sentences(text).some((t) => VPRED_TERM.test(t) && !NOT_THIS.test(t))
+
+export type VpredDecision = { vpred: boolean; advisory?: string }
 /**
- * The one v-prediction decision, for model_details and generate_image alike: names, tags and the
- * Civitai version name, or the version or model description (for families that have v-pred builds).
+ * The one v-prediction decision, for model_details and generate_image alike. Affirmative evidence:
+ * the file name, the Civitai version name, the version's own description, or LoRA Manager's base
+ * model label. Eps evidence on any of those prevents it. Model-level prose only gives an advisory.
  */
-export function assetIsVpred(f: Pick<ManagerFacts, 'name' | 'title' | 'versionName' | 'tags' | 'autoTags' | 'baseModel'>, civitai?: Pick<CivitaiFacts, 'versionName' | 'description' | 'modelDescription' | 'baseModel'> | null) {
-  if (isVpred(f.name, f.title, f.versionName, ...f.tags, ...f.autoTags, civitai?.versionName)) return true
-  const text = `${civitai?.description ?? ''}\n${civitai?.modelDescription ?? ''}`
-  return VPRED_FAMILIES.has(familyOf(f.baseModel || civitai?.baseModel || '', { name: f.name })) && /\bv[-_ ]?pred(?:iction)?\b/i.test(text) && !/\b(?:not|no|non)[- ](?:a )?v[-_ ]?pred/i.test(text)
+export function vpredDecision(f: Pick<ManagerFacts, 'name' | 'title' | 'versionName' | 'tags' | 'autoTags' | 'baseModel'>, civitai?: Pick<CivitaiFacts, 'versionName' | 'description' | 'modelDescription' | 'baseModel'> | null): VpredDecision {
+  const labels = [stemOf(f.name), f.versionName, civitai?.versionName, f.baseModel].filter((v): v is string => !!v)
+  const versionText = civitai?.description ?? ''
+  const eps = labels.some((v) => EPS.test(v)) || sentences(versionText).some((t) => EPS.test(t) && !VPRED_TERM.test(t.replace(EPS, '')))
+  const affirmative = isVpred(...labels) || affirms(versionText)
+  const modelLevel = [civitai?.modelDescription ?? '', f.title, ...f.tags].some((t) => VPRED_TERM.test(t) || isVpred(t)) || (!affirmative && VPRED_TERM.test(versionText))
+  if (eps) return { vpred: false, ...(affirmative || modelLevel ? { advisory: 'This file or version says eps, so v-prediction is not applied, though v-pred is mentioned for this model.' } : {}) }
+  if (affirmative) return { vpred: true }
+  return modelLevel ? { vpred: false, advisory: 'The model page mentions a v-pred variant, but this file and version do not say they are v-pred, so v-prediction is not applied. If pictures come out black or garbled, it may be the v-pred build.' } : { vpred: false }
 }
+export const assetIsVpred = (...args: Parameters<typeof vpredDecision>) => vpredDecision(...args).vpred
 
 // --- Civitai ------------------------------------------------------------------------------------
 
@@ -380,18 +400,23 @@ export async function civitaiFacts(s: CivitaiSettings, asset: { versionId: numbe
     const facts = raw ? parseCivitaiVersion(raw, installed, identity) : null
     if (!facts) return { facts: null, note: 'That Civitai version no longer exists.', cached: wasCached }
     const modelId = facts.modelId ?? asset.modelId ?? null
+    let partial = ''
     if (modelId) {
       const modelKey = `m:${modelId}:${auth}`
       cached = cacheRead(modelKey)
       let description = cached.hit ? cached.value as string : null
       if (!cached.hit) {
-        const model = await civitaiGet(`/api/v1/models/${modelId}`, s.civitaiKey, signal).catch(() => null)
-        description = model ? stripHtml(model.description, 1500) : ''
-        cacheWrite(modelKey, description, model ? CIVITAI_TTL : CIVITAI_NEGATIVE_TTL)
+        // Only a confirmed 404 is cached as missing; a timeout, 5xx, 429 or 401/403 is not cached.
+        try {
+          const model = await civitaiGet(`/api/v1/models/${modelId}`, s.civitaiKey, signal)
+          description = model ? stripHtml(model.description, 1500) : ''
+          cacheWrite(modelKey, description, model ? CIVITAI_TTL : CIVITAI_NEGATIVE_TTL)
+        } catch (e) { if (signal.aborted) throw e; partial = `Partial lookup: Civitai's model page could not be read just now (${e instanceof Error ? e.message : 'unavailable'}).` }
       }
       facts.modelDescription = description ?? ''
     }
-    return { facts, cached: wasCached, ...(facts.imagesHidden ? { note: s.civitaiKey ? 'Civitai shows no example images for this version.' : 'Civitai shows no example images for this version; without a Civitai API key it hides NSFW examples.' } : {}) }
+    const notes = [partial, facts.imagesHidden ? s.civitaiKey ? 'Civitai shows no example images for this version.' : 'Civitai shows no example images for this version; without a Civitai API key it hides NSFW examples.' : ''].filter(Boolean)
+    return { facts, cached: wasCached, ...(notes.length ? { note: notes.join(' ') } : {}) }
   } catch (e) {
     if (signal.aborted) return { facts: null, note: 'Civitai did not answer in time.' }
     return { facts: null, note: `Civitai lookup failed: ${e instanceof Error ? e.message : 'unavailable'}.` }
@@ -497,7 +522,8 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
   const c = civitai.facts
   const baseModel = manager?.baseModel || c?.baseModel || ''
   const familyHints = { name: `${name} ${manager?.versionName ?? ''} ${c?.versionName ?? ''}`, tags: [...(manager?.tags ?? []), ...(manager?.autoTags ?? [])] }
-  const vpred = assetIsVpred(manager ?? { name, title: '', versionName: '', tags: [], autoTags: [], baseModel }, c)
+  const decision = vpredDecision(manager ?? { name, title: '', versionName: '', tags: [], autoTags: [], baseModel }, c)
+  const vpred = decision.vpred
   const family = familyOf(baseModel, { ...familyHints, vpred })
   const notes: string[] = []
   if (!available) notes.push('LoRA Manager is not installed or did not answer: no base model, tags or Civitai link for this file.')
@@ -513,6 +539,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
     let reason = family && !MODEL_FAMILIES[family].supported ? MODEL_FAMILIES[family].notes : ''
     if (vpred && !catalog.nodes.includes('ModelSamplingDiscrete')) { supported = false; reason = 'This is a v-prediction model and this ComfyUI lacks ModelSamplingDiscrete, so it would render garbage. Do not generate with it.' }
     if (!recommended.preset && supported && family === 'krea2') notes.push(MODEL_FAMILIES.krea2.notes)
+    if (decision.advisory) notes.push(decision.advisory)
     if (vpred && supported) notes.push('V-prediction: generate_image adds ModelSamplingDiscrete (v_prediction, zsnr) for this model automatically.')
     if (family === 'pony') notes.push('Start the prompt with score_9, score_8_up, score_7_up.')
     if (!family) notes.push(baseModel ? `No family defaults for base model “${baseModel}”; preset recipe only.` : 'Base model unknown; preset recipe only.')

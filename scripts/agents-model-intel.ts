@@ -12,7 +12,7 @@ import { crc32, deflateSync } from 'node:zlib'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
 import { exampleConsensus, familyOf, isVpred, mapA1111Sampler, median, MODEL_FAMILIES } from '../src/data/modelFamilies.ts'
-import { modelDetailsLabel, qualityNote } from '../src/data/imageToolLabel.ts'
+import { generateImageLabel, modelDetailsLabel, qualityNote } from '../src/data/imageToolLabel.ts'
 
 // --- PNG fixtures ------------------------------------------------------------------------------
 function png(width: number, height: number, pixel: (x: number, y: number) => [number, number, number]) {
@@ -56,6 +56,7 @@ const comfy = createServer((req, res) => {
 let plan: { name: string; arguments: Record<string, unknown> }[][] = []
 let visionVerdict = '{"score": 7, "very_bad": false, "defects": []}'
 let visionQueue: string[] = []
+const toolsOffered: number[] = []
 let visionCalls = 0, modelReplies = 0
 const ollama = createServer((req, res) => {
   let raw = ''
@@ -70,6 +71,7 @@ const ollama = createServer((req, res) => {
     const after = body.messages.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1)
     const step = plan[after.filter((m: any) => m.role === 'assistant').length]
     modelReplies++
+    toolsOffered.push(body.tools?.length ?? 0)
     const message = step ? { content: 'Retrying with other settings.', tool_calls: step.map((call) => ({ function: call })) } : { content: 'Both tries came out broken.' }
     res.end(JSON.stringify({ message: { role: 'assistant', ...message }, done: true }) + '\n')
   })
@@ -116,7 +118,7 @@ try {
   console.log('PASS A1111 → ComfyUI sampler mapping (combined names, schedules, unmapped), medians, consensus, family detection, v-pred names')
 }
 
-const { managerItem, joinInstalled, usageTips, parseCivitaiVersion, stripHtml, civitaiFacts, civitaiGet, setCivitaiFetcher, recommend, fitSize, civitaiScope, cachedCivitai, assetIsVpred, loraWeights, managerIndex, MANAGER_MAX_PAGES } = await import('../server/agentModelIntel.ts')
+const { managerItem, joinInstalled, usageTips, parseCivitaiVersion, stripHtml, civitaiFacts, civitaiGet, setCivitaiFetcher, recommend, fitSize, civitaiScope, cachedCivitai, assetIsVpred, vpredDecision, loraWeights, managerIndex, MANAGER_MAX_PAGES } = await import('../server/agentModelIntel.ts')
 const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALITY_MAX_PIXELS } = await import('../server/agentImageQuality.ts')
 {
   // LoRA Manager: folder + file joins exactly; a leaf alone never does; ambiguous joins drop.
@@ -241,10 +243,43 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   await civitaiFacts(on, hashed); await civitaiFacts(on, described)
   assert.equal(assetIsVpred(hashed, cachedCivitai('p', hashed)), true, 'version found via sha256')
   assert.equal(cachedCivitai('p', described)?.modelDescription.includes('v-prediction'), true)
-  assert.equal(assetIsVpred(described, cachedCivitai('p', described)), true, 'v-pred named only in the model description')
-  assert.equal(assetIsVpred({ ...described, baseModel: 'Krea 2' }, cachedCivitai('p', described)), false, 'not for families without v-pred builds')
-  assert.equal(assetIsVpred(described, { versionName: '', description: 'This is not a v-pred model.', modelDescription: '', baseModel: 'NoobAI' }), false)
-  console.log('PASS v-pred from cached Civitai facts: via file hash, via the model description only, one shared detector')
+  const prose = vpredDecision(described, cachedCivitai('p', described))
+  assert.equal(prose.vpred, false, 'model-level prose alone never applies v-pred')
+  assert.match(prose.advisory ?? '', /model page mentions a v-pred variant/)
+  // Conservative: only affirmative evidence about this file or version; eps evidence wins.
+  const plainFile = { name: 'NoobAI/model.safetensors', title: '', versionName: '', tags: [], autoTags: [], baseModel: 'NoobAI' }
+  const version = (description: string, versionName = '1.0', modelDescription = '') => ({ versionName, description, modelDescription, baseModel: 'NoobAI' })
+  for (const text of ['An eps checkpoint. A v-pred version is also available.', 'Do not enable v-prediction for this version.', 'This is not a v-pred model.', 'A v-pred build is coming soon.']) {
+    assert.equal(vpredDecision(plainFile, version(text)).vpred, false, `version text: ${text}`)
+    assert.equal(vpredDecision(plainFile, version('', '1.0', text)).vpred, false, `model text: ${text}`)
+  }
+  assert.equal(vpredDecision({ ...plainFile, name: 'NoobAI/noobaiXL_vpred10.safetensors' }, null).vpred, true, 'vpred in the file stem')
+  assert.equal(vpredDecision(plainFile, version('', 'v-pred 1.0')).vpred, true, 'version name')
+  assert.equal(vpredDecision(plainFile, version('This version is a v-prediction model. Use zsnr.')).vpred, true, "the version's own description")
+  assert.equal(vpredDecision({ ...plainFile, baseModel: 'NoobAI v-pred' }, null).vpred, true, 'LoRA Manager base model label')
+  assert.equal(vpredDecision({ ...plainFile, name: 'NoobAI/noob_eps_vpred-merge.safetensors' }, null).vpred, false, 'eps on the file wins')
+  assert.equal(vpredDecision(plainFile, version('An eps checkpoint.', 'v-pred 1.0')).vpred, false, 'eps in the version description wins')
+  assert.equal(vpredDecision({ ...plainFile, title: 'NoobAI-XL V-Pred', tags: ['vpred'] }, null).vpred, false, "LoRA Manager's model title and tags are model level")
+  assert.equal(vpredDecision({ ...plainFile, name: 'preview.safetensors' }, null).advisory, undefined)
+  console.log('PASS v-pred, conservative: version found via hash, file stem, version name and description, base model label; eps wins; model-level prose only advises')
+
+  // Transient failures are never cached; only a confirmed 404 is a negative entry.
+  const statusFor = new Map<string, number>([['/api/v1/models/740002', 503], ['/api/v1/model-versions/750001', 429], [`/api/v1/model-versions/by-hash/${'e'.repeat(64)}`, 500], ['/api/v1/model-versions/760001', 403], ['/api/v1/models/770002', 404]])
+  answer = (url) => statusFor.has(url.pathname) ? new Response('', { status: statusFor.get(url.pathname)! }) : url.pathname === '/api/v1/model-versions/740001' ? Response.json({ ...fixture, id: 740001, modelId: 740002 }) : url.pathname === '/api/v1/model-versions/770001' ? Response.json({ ...fixture, id: 770001, modelId: 770002 }) : Response.json({ description: '' })
+  const keys = () => (database().prepare('SELECT key FROM civitai_cache').all() as { key: string }[]).map((r) => r.key)
+  const modelDown = await civitaiFacts(on, { versionId: 740001, sha256: null })
+  assert.equal(modelDown.facts?.versionId, 740001); assert.match(modelDown.note ?? '', /Partial lookup/)
+  assert.ok(!keys().includes('m:740002:p'), 'a 503 model page is not cached')
+  assert.ok(keys().includes('v:740001:p'), 'the version itself still is')
+  for (const asset of [{ versionId: 750001, sha256: null }, { versionId: null, sha256: 'e'.repeat(64) }, { versionId: 760001, sha256: null }]) {
+    const r = await civitaiFacts(on, asset)
+    assert.equal(r.facts, null); assert.match(r.note ?? '', /lookup failed/)
+  }
+  assert.ok(!keys().some((k) => ['v:750001:p', `h:${'e'.repeat(64)}:p`, 'v:760001:p'].includes(k)), '429, 500 and 403 are not cached')
+  await civitaiFacts(on, { versionId: 770001, sha256: null })
+  const gone = database().prepare("SELECT body, expires_at FROM civitai_cache WHERE key = 'm:770002:p'").get() as { body: string; expires_at: number }
+  assert.ok(gone && Math.abs(gone.expires_at - Date.now() - 86_400_000) < 60_000, 'a confirmed 404 model page is cached as missing for a day')
+  console.log('PASS Civitai failures: 503, 429, 500 and 403 are not cached and say partial or failed; a 404 is a one-day negative entry')
 
   // Redirects: within civitai.com followed, anywhere else refused; failures are not cached.
   answer = (url) => url.pathname === '/api/v1/model-versions/5' ? new Response(null, { status: 301, headers: { location: 'https://evil.example/steal' } }) : url.pathname === '/api/v1/model-versions/6' ? new Response(null, { status: 302, headers: { location: '/api/v1/model-versions/7' } }) : url.pathname === '/api/v1/model-versions/8' ? new Response(null, { status: 302, headers: { location: 'http://civitai.com/api/v1/model-versions/7' } }) : Response.json({ ...fixture, id: 7 })
@@ -263,12 +298,14 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
 {
   // LoRA Manager paging: pages, raw records and bytes bounded on their own; a stalled page keeps what came before.
   const seen = new Map<string, number>()
-  let mode: 'junk' | 'stall' = 'junk'
+  let mode: 'junk' | 'stall' | 'late404' | 'lateJunk' | 'none' = 'junk'
   const lm = createServer((req, res) => {
     const url = new URL(req.url!, 'http://lm')
     seen.set(url.pathname, (seen.get(url.pathname) ?? 0) + 1)
     const page = Number(url.searchParams.get('page'))
     if (mode === 'stall' && page === 2) return // never answers
+    if (mode === 'none' || (mode === 'late404' && page === 2)) return res.writeHead(404).end()
+    if (mode === 'lateJunk' && page === 2) return send(res, { nope: 'not a list' })
     const items = mode === 'junk' ? Array.from({ length: 100 }, () => ({ nope: true })) : Array.from({ length: 100 }, (_, i) => ({ folder: 'F', file_path: `/m/F/${page}-${i}.safetensors`, sub_type: 'checkpoint', base_model: 'SDXL 1.0' }))
     send(res, { items, total_pages: 999 })
   })
@@ -286,8 +323,16 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   saveImageSettings(pager, { token: 'other-scope' })
   const partial = await managerIndex(pager, undefined, 800)
   assert.deepEqual([partial.available, partial.items.length, partial.complete], [true, 300, false], 'page 1 of each list kept after the timeout')
+  for (const [m, token] of [['late404', 'scope-3'], ['lateJunk', 'scope-4']] as const) {
+    mode = m; saveImageSettings(pager, { token })
+    const late = await managerIndex(pager)
+    assert.deepEqual([late.available, late.items.length, late.complete], [true, 300, false], `${m}: a later page failing leaves the list partial`)
+  }
+  mode = 'none'; saveImageSettings(pager, { token: 'scope-5' })
+  const none = await managerIndex(pager)
+  assert.deepEqual([none.available, none.complete], [false, true], 'a missing first page is the optional endpoint being absent')
   lm.closeAllConnections(); await new Promise<void>((r) => lm.close(() => r()))
-  console.log(`PASS LoRA Manager paging: ${MANAGER_MAX_PAGES}-page cap with all-rejected pages, partial results kept on timeout`)
+  console.log(`PASS LoRA Manager paging: ${MANAGER_MAX_PAGES}-page cap with all-rejected pages, partial results kept on timeout, a later 404 or malformed page is partial, a missing first page is absence`)
 }
 
 {
@@ -341,7 +386,7 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   const timedOut = { checked: true, very_bad: false, score: null, defects: [], by: ['pixels' as const], notes: ['The vision check failed: timed out.'], inconclusive: true }
   const unsure = new QualityRetry(); unsure.started(); unsure.after(visionBad); unsure.started()
   const after = unsure.after(timedOut)
-  assert.deepEqual([after.complete, after.retryFixed], [true, false])
+  assert.deepEqual([after.complete, after.retryFixed, unsure.textOnly, unsure.blocked() !== null], [false, false, true, true], 'one text-only reply follows; no further generation')
   assert.deepEqual((after.extra.first_attempt as { defects: string[] }).defects, ['melted face'])
   assert.equal((after.extra.quality as { inconclusive: boolean }).inconclusive, true)
   assert.deepEqual((after.extra.quality as { notes: string[] }).notes, ['The vision check failed: timed out.'])
@@ -352,6 +397,7 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   assert.deepEqual(fineFirst.after(good), { complete: true, extra: {}, retryFixed: false }, 'a fine picture stays silent')
   assert.deepEqual(new QualityRetry().after(null), { complete: true, extra: {}, retryFixed: false }, 'no check, no change')
   assert.equal(qualityNote(JSON.stringify({ image: {}, quality: { very_bad: true, defects: ['noise'] } })), ' · clearly broken: noise'); assert.equal(qualityNote('{}'), '')
+  assert.equal(generateImageLabel({ prompt: 'a fox' }, JSON.stringify(after.extra)), "Generated image · Retried once; couldn't confirm the new image is fixed: melted face", 'the chat card says it')
   assert.equal(modelDetailsLabel({ name: 'Illustrious/Prefect/prefect.safetensors' }, JSON.stringify({ family: { label: 'Illustrious' }, recommended: { sampler: 'dpmpp_2m', scheduler: 'karras', steps: 20, cfg: 5, clip_skip: 2, source: 'civitai_examples', agree: '9 of 9' } })), 'Model details: prefect.safetensors · Illustrious · dpmpp_2m/karras · 20 steps · CFG 5 · clip skip 2 · Civitai examples (9 of 9 agree)')
   console.log('PASS quality check: black, white, flat and noise caught without vision, fine pictures pass, tiny ones skipped, vision rubric parsed and bounded, one retry then stop, labels')
 }
@@ -437,19 +483,26 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   const put = (key: string, body: unknown) => database().prepare('INSERT INTO civitai_cache (key, body, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET body = excluded.body').run(key, JSON.stringify(body), Date.now() + 86_400_000)
   put(`h:${'c'.repeat(64)}:${scope}`, { versionId: 910001 })
   put(`v:910001:${scope}`, { id: 910001, modelId: 910002, name: 'vpred-1.0', baseModel: 'NoobAI', images: [] })
-  put(`v:920001:${scope}`, { id: 920001, modelId: 920002, name: '1.0', baseModel: 'NoobAI', description: 'Euler, 28 steps.', images: [] })
-  put(`m:920002:${scope}`, 'A v-prediction checkpoint: enable zsnr.')
+  put(`v:920001:${scope}`, { id: 920001, modelId: 920002, name: '1.0', baseModel: 'NoobAI', description: 'This version is a v-prediction model. Use zsnr.', images: [] })
+  put(`m:920002:${scope}`, 'Euler, 28 steps.')
   for (const model of ['NoobAI/hashed.safetensors', 'NoobAI/described.safetensors']) {
     outputs = [fine]; graphs.length = 0; plan = reviewed([{ name: 'generate_image', arguments: { prompt: 'a fox', model } }])
     await turn()
     assert.equal(graphs[0].vpred?.inputs.sampling, 'v_prediction', model)
   }
+  // Only the model page mentions v-pred: generation leaves it out; model_details advises.
+  put(`v:920001:${scope}`, { id: 920001, modelId: 920002, name: '1.0', baseModel: 'NoobAI', description: 'Euler, 28 steps.', images: [] })
+  put(`m:920002:${scope}`, 'An eps checkpoint. A v-pred version is also available.')
+  outputs = [fine]; graphs.length = 0; plan = reviewed([{ name: 'generate_image', arguments: { prompt: 'a fox', model: 'NoobAI/described.safetensors' } }])
+  await turn()
+  assert.equal(graphs[0].vpred, undefined, 'model-level prose never applies v-pred')
   // Vision flagged it, the retry's vision answer is unusable: inconclusive, no "retry fixed" observation.
   const fixedBefore = ((await call('GET', '/api/agents/images/observations')).observations as any[]).filter((o) => /retry fixed/.test(o.note)).length
   outputs = [fine, fine]; graphs.length = 0; plan = reviewed([gen], [retry]); visionQueue = ['{"score": 2, "very_bad": true, "defects": ["melted face"]}', 'I cannot tell.']
   m = await turn()
   r = results(m).filter((x) => x.image)
   assert.deepEqual([graphs.length, r[1].quality.inconclusive, r[1].first_attempt.defects[0]], [2, true, 'melted face'])
+  assert.equal(m.at(-1).role, 'assistant', 'the agent gets one reply to explain'); assert.equal(toolsOffered.at(-1), 0, 'that reply is offered no tools')
   assert.equal(((await call('GET', '/api/agents/images/observations')).observations as any[]).filter((o) => /retry fixed/.test(o.note)).length, fixedBefore, 'an inconclusive retry is not recorded as fixed')
 
   // model_details over HTTP: family defaults when Civitai is off; no backend secrets in the answer.

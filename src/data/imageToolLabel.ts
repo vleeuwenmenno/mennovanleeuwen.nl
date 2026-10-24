@@ -15,13 +15,19 @@ export function generateImageLabel(a: Record<string, unknown>, result?: string):
   return label + qualityNote(result)
 }
 
-/** " · clearly broken: noise", when the automatic quality check flagged a result; else empty. */
+const defectList = (v: unknown) => Array.isArray(v) ? v.filter((d): d is string => typeof d === 'string').slice(0, 2).join(', ').slice(0, 120) : ''
+/**
+ * The automatic quality check's word on a result, for the chat card and the terminal: " · clearly
+ * broken: noise", or for a retry nobody could judge " · Retried once; couldn't confirm the new image
+ * is fixed: <first defects>". Empty otherwise.
+ */
 export function qualityNote(result?: string): string {
   try {
-    const q = JSON.parse(result ?? '').quality as { very_bad?: unknown; defects?: unknown } | undefined
-    if (q?.very_bad !== true) return ''
-    const defects = Array.isArray(q.defects) ? q.defects.filter((d): d is string => typeof d === 'string').slice(0, 2).join(', ') : ''
-    return ` · clearly broken${defects ? `: ${defects.slice(0, 120)}` : ''}`
+    const v = JSON.parse(result ?? '') as { quality?: { very_bad?: unknown; defects?: unknown }; retry?: { fixed?: unknown }; first_attempt?: { defects?: unknown } }
+    if (v.retry?.fixed === 'unknown') { const first = defectList(v.first_attempt?.defects); return ` · Retried once; couldn't confirm the new image is fixed${first ? `: ${first}` : ''}` }
+    if (v.quality?.very_bad !== true) return ''
+    const defects = defectList(v.quality.defects)
+    return ` · clearly broken${defects ? `: ${defects}` : ''}`
   } catch { return '' }
 }
 

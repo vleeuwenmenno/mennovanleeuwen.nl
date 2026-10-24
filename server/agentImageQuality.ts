@@ -140,6 +140,8 @@ export class QualityRetry {
   retried = false
   /** The check that found the first picture broken, and what it said, kept for the retry's result. */
   flaggedBy: 'pixels' | 'vision' | null = null
+  /** After a retry that is broken too or could not be judged: one last reply, text only, so the agent tells the user. */
+  textOnly = false
   first: Record<string, unknown> | null = null
   /** A reason to refuse this generation, or null. */
   blocked(): string | null {
@@ -157,7 +159,9 @@ export class QualityRetry {
     if (!v?.very_bad) {
       if (!this.retried) return { complete: true, extra: {}, retryFixed: false }
       const fixed = !!v && !!this.flaggedBy && v.by.includes(this.flaggedBy)
-      return { complete: true, retryFixed: fixed, extra: { quality: quality ?? { checked_by: [], inconclusive: true, notes: ['The quality check did not run on the retry.'] }, first_attempt: this.first, ...(fixed ? {} : { retry: { fixed: 'unknown', next: 'The check that found the first picture broken could not judge this one, so it is not known whether the retry fixed it. Tell the user briefly.' } }) } }
+      if (fixed) return { complete: true, retryFixed: true, extra: { quality, first_attempt: this.first } }
+      this.textOnly = true
+      return { complete: false, retryFixed: false, extra: { quality: quality ?? { checked_by: [], inconclusive: true, notes: ['The quality check did not run on the retry.'] }, first_attempt: this.first, retry: { allowed: false, fixed: 'unknown', next: 'The check that found the first picture broken could not judge the retry, so it is not known whether it is fixed. Do not generate again. In one or two sentences, tell the user what was wrong with the first picture, what you changed, and that you could not confirm the new one is fixed.' } } }
     }
     if (!this.flagged) {
       this.flagged = true
@@ -165,6 +169,7 @@ export class QualityRetry {
       this.first = quality
       return { complete: false, retryFixed: false, extra: { quality, retry: { allowed: true, next: 'This picture is clearly broken. In this reply, tell the user in one short sentence what was wrong and what you are changing, then call generate_image once more with adjusted settings: model_details recommended settings, another sampler or scheduler, more steps, a CFG fix, or another model of the same family. Keep the user\'s explicit requests. This is the only automatic retry this turn.' } } }
     }
+    this.textOnly = true
     return { complete: false, retryFixed: false, extra: { quality, first_attempt: this.first, retry: { allowed: false, next: 'The automatic retry is also clearly broken. Do not generate again. Explain to the user in two or three sentences what went wrong both times and what they could change (model, sampler, LoRA, prompt).' } } }
   }
 }

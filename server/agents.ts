@@ -3145,7 +3145,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         : wrapUp
           ? `You have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.`
           : null
-      const offer = last ? [] : wrapUp ? todoTool : tools
+      // After a broken or unconfirmed automatic retry: one reply without tools, to tell the user.
+      const offer = last || quality.textOnly ? [] : wrapUp ? todoTool : tools
       const build = () => [{ role: 'system', content: system }, ...chatHistory(row.id, info?.vision ?? false), ...(note ? [{ role: 'user', content: `${APP_NOTE} ${note}` }] : [])]
       let messages = build()
       // Past the threshold: compacted first, this turn's work so far included (the message it
