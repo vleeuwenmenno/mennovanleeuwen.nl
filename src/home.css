@@ -2128,6 +2128,32 @@ textarea.agt-q-input {
 @media (pointer: coarse) {
   .agt-slash button { min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
 }
+/* The # picker: LoRA rows (title, folder dimmed, base model short) and the highlighted LoRA's
+   detail, beside the list (src/apps/AgentsLoraPicker.tsx), or under its row on a phone. */
+.agt-slash-split { display: flex; align-items: stretch; margin: 0 0 4px; border-bottom: 1px solid var(--line); }
+.agt-slash-split > .agt-slash { flex: 1; min-width: 0; margin: 0; border-bottom: 0; max-height: 18em; }
+.agt-slash-split > .agt-lora-pane { flex: none; width: min(420px, 55%); max-height: 18em; overflow-y: auto; border-left: 1px solid var(--line); }
+.agt-slash:has(> li > .agt-lora-pane) { max-height: min(60dvh, 30em); }
+.agt-lora-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.agt-lora-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agt-lora-folder { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.agt-lora-base { flex: none; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 10.5px; color: var(--muted); }
+.agt-lora-pane { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; min-width: 0; font-size: 12px; }
+.agt-lora-thumb { flex: none; display: block; width: 112px; height: 112px; object-fit: cover; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg-dark); }
+.agt-lora-thumb.is-empty { display: grid; place-items: center; color: var(--muted); font-size: 11px; }
+.agt-lora-facts { display: grid; gap: 4px; min-width: 0; }
+.agt-lora-pane-title { color: var(--fg-bright); overflow-wrap: anywhere; }
+.agt-lora-name { font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
+.agt-lora-facts dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; margin: 0; }
+.agt-lora-facts dt { color: var(--muted); font-size: 11px; }
+.agt-lora-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.agt-lora-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.agt-lora-chip { padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 11px; background: var(--bg-dark); overflow-wrap: anywhere; }
+.agt-lora-note { margin: 0; font-size: 11px; }
+.agt-slash button.agt-lora-use { justify-self: start; display: inline-block; width: auto; padding: 4px 10px; border: 1px solid var(--line-strong); background: var(--bg-dark); color: var(--fg-bright); }
+.agt-slash li > .agt-lora-pane { padding: 6px 8px 10px; }
+.agt-slash li > .agt-lora-pane .agt-lora-thumb { width: 96px; height: 96px; }
+@media (pointer: coarse) { .agt-slash button.agt-lora-use { min-height: 44px; } }
 
 /* The memory: a tree of categories, each memory a row to edit or forget. */
 .agt-scroll.agt-memory-view {
@@ -5375,6 +5401,7 @@ button.cal-day.is-picked:not(.is-today) {
 .image-profile-editor { display: grid; gap: 8px; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); background: var(--bg-dark); }
 .image-profile-editor label { display: grid; gap: 4px; min-width: 0; }
 .image-profile-editor label > span { color: var(--muted); font-size: 11.5px; }
+.image-profile-label { display: flex; justify-content: space-between; gap: 8px; }
 .image-profile-editor :is(input, textarea) { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); font: inherit; }
 
 /* Image observations (src/apps/AgentsObservations.tsx): style profiles beside the cards when there

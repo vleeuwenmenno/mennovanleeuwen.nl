@@ -47,6 +47,7 @@
     "check:agents-threads": "node scripts/agents-threads.ts",
     "check:agents-images": "node scripts/agents-images.ts",
     "check:agents-observations": "node scripts/agents-observations.ts",
+    "check:agents-lora-preview": "node scripts/agents-lora-preview.ts",
     "check:agents-roles": "node scripts/agents-roles.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",
     "check:agents-compact": "node scripts/agents-compact.ts",

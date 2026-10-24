@@ -1502,9 +1502,17 @@ metadata records each identifier and weight; older images without that field sti
   a mention does not enable a group or bypass permissions. Use the Tools menu or CLI `/tools`.
 
 Typing a sigil at the start of a token opens suggestions. Type to filter, use Up/Down to select,
-and Enter or Tab to accept; Escape closes the list. App suggestions also accept mouse or touch.
-LoRAs load lazily from the signed-in account's backend and show base-model hints; a disconnected
-backend shows where to connect it. Names with spaces use quotes, such as
+and Enter or Tab to accept; in the app, Right accepts too when the caret is at the end of the word
+(further in, it moves the caret as usual), the same for `#`, `$`, `@` and `/`. Escape closes the
+list. App suggestions also accept mouse or touch. LoRAs load lazily from the signed-in account's
+backend, only those ComfyUI reports as installed. Each row shows the LoRA's own title, its folder
+dimmed and its base model; a pane beside the list shows the highlighted one's preview, base model,
+trigger words, tags, folder and size when LoRA Manager supplies them (its first 50 LoRAs), and
+otherwise what the file name says, with a plain placeholder for the picture. On a phone the first
+tap on a row opens that detail under it and a second tap (or **Use**) inserts it. The preview
+comes through this server from the account's own ComfyUI, never straight from the browser: owner
+only, PNG, JPEG or WebP checked by its bytes, at most 384 KB, cached in memory for 10 minutes
+(8 MB in all). A disconnected backend shows where to connect it. Names with spaces use quotes, such as
 `#"styles/Soft light.safetensors":0.8`, which suggestions insert automatically. Message text stays
 as written; one clearly labelled application context attachment records what resolved, with skill
 instructions in their own attachments. Resolution handles at most 20 distinct mentions and five
@@ -1615,18 +1623,17 @@ form nor the stored text format (an old or hand-edited one) shows as stored, mar
 The overview reads `GET /api/agents/images/observations`: the newest 200 of the account's
 observations, parsed, and every profile; it is read-only, and deletes use the memory route.
 
-**Image learning and named style profiles:** profiles organize preferences and observations in the
-existing account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
-
 **Image learning and named style profiles:** a profile is the durable description of a look, shared
 across your threads and projects. The agent is told to create one when a look to keep first appears
 and update it as the look or feedback evolves, rather than accumulate per-image notes. Its description
 should cover the look, prompting style and vocabulary, settings it tends to want, and traps, not a
 list of images. A project-scoped memory note is for preferences specific to that project, with the
 usual permission to remember them. Profiles organise preferences and evidence in the existing
-account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
+account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a single
+global “best settings” ranking. A profile's preferences have room for depth (up to 1,200 characters,
+with a live count in the editor), so one the agent wrote can be edited by hand without being cut
+short. Style profiles live in **Settings → Agents → Images → Style profiles** (every profile, whether you
 
-single global “best settings” ranking. Style profiles live in **Settings → Agents → Images → Style profiles** (every profile, whether you
 confirmed it or the agent suggested it, its observation count, and New / Edit / Reset / Delete) and
 in each thread's **Images** dialog, which pins one profile to that thread with a dropdown and offers
 the same quick edits. Reset keeps the preferences and forgets the observations; delete removes the
@@ -1697,9 +1704,9 @@ backend provenance cannot be retroactively assigned a guessed namespace. Existin
 parameter/evidence snapshots if their source thread is later removed, until the user forgets them.
 
 Limits: 20 profiles, 100 image observations and 1000 total memories per account; names 60 characters,
-profile descriptions 1200 through the tools/API and CLI, task/style 160 and stored notes/evidence
-quotes 500. The existing profile panel’s text entry remains limited to 400 characters. Storage quota
-includes structured
+preferences 1,200 (tools, API, CLI and the profile editor, with a live count), task/style 160 and
+notes/evidence quotes 500. Storage quota includes structured
+
 records. Image memories are excluded from general system prompts and retrieved only through image
 tools. No automatic quality scoring, background experiments or extra generation occurs. Technical
 failures remain in tool history; durable quality-failure observations require an artifact. Successful

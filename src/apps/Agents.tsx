@@ -1,7 +1,8 @@
 import { mentionAt, mentionText } from '../data/agentMentions'
-import type { ImageLoraHint } from '../data/imageModels'
 import { openSessionImages } from './AgentsSessionImages'
-import { generatedImage, getImageLoras } from '../data/agentImages'
+import { generatedImage, getLoraDetails, type LoraDetail } from '../data/agentImages'
+import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
+import { useIsMobile } from '../os/useIsMobile'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
@@ -1042,7 +1043,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
   const [skills, setSkills] = useState<Skill[]>([])
   const [mentionTools, setMentionTools] = useState<MentionTool[]>([])
-  const [loras, setLoras] = useState<ImageLoraHint[] | null>(null)
+  const [loras, setLoras] = useState<LoraDetail[] | null>(null)
+  const [loraManager, setLoraManager] = useState(false)
+  const phone = useIsMobile()
   const [loraError, setLoraError] = useState('')
   const [loraLoading, setLoraLoading] = useState(false)
   const [caret, setCaret] = useState(0)
@@ -1774,15 +1777,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   useEffect(() => {
     if (activeMention?.sigil !== '#' || loras !== null || loraLoading || loraError) return
     setLoraLoading(true)
-    getImageLoras().then((result) => setLoras(result.loras), () => setLoraError('Connect ComfyUI in Settings → Agents → Images.')).finally(() => setLoraLoading(false))
+    getLoraDetails().then((result) => { setLoras(result.loras); setLoraManager(result.manager) }, () => setLoraError('Connect ComfyUI in Settings → Agents → Images.')).finally(() => setLoraLoading(false))
   }, [activeMention?.sigil, loras, loraLoading, loraError])
   useEffect(() => { setSuggestionIndex(0); setSuggestionsDismissed(false) }, [text, caret])
-  const suggestions = !completion ? [] : (completion.sigil === '#'
-    ? (loras ?? []).map((l) => ({ name: l.name, hint: l.baseModel || 'Base model unknown' }))
+  const suggestions: { name: string; hint: string; lora?: LoraDetail }[] = !completion ? [] : (completion.sigil === '#'
+    ? (loras ?? []).map((l) => ({ name: l.name, hint: l.title, lora: l }))
     : completion.sigil === '@'
       ? mentionTools.map((t) => ({ name: t.name, hint: `${TOOL_GROUPS.find((g) => g.id === t.group)?.name ?? 'Always available'} · ${!t.group || tools.includes(t.group) ? 'on' : 'off'}` }))
       : [...(completion.sigil === '/' && hasConversation ? [{ name: 'compact', hint: 'Summarise the conversation to free context' }] : []), ...skills.filter((sk) => sk.enabled).map((sk) => ({ name: sk.name, hint: sk.description }))])
-    .filter((s) => s.name.toLowerCase().includes(completion!.query)).slice(0, 50)
+    .filter((s: { name: string; hint: string; lora?: LoraDetail }) => (s.lora ? `${s.name} ${s.lora.title}` : s.name).toLowerCase().includes(completion!.query)).slice(0, 50)
   const showSuggestions = !!completion && !suggestionsDismissed
   const acceptSuggestion = (name: string) => {
     if (!completion) return
@@ -2027,10 +2030,19 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {(files.length > 0 || reading > 0) && (
             <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
-          {showSuggestions && <ul className="agt-slash" role="listbox" aria-label="Commands and mentions">
-            {suggestions.map((s, i) => <li key={s.name} role="option" aria-selected={i === suggestionIndex}><button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => acceptSuggestion(s.name)}><b>{completion.sigil}{s.name}</b> <span className="muted">{s.hint}</span></button></li>)}
-            {!suggestions.length && <li className="muted">{completion.sigil === '#' ? loraLoading ? 'Loading LoRAs…' : loraError || 'No installed LoRAs match.' : 'No matches.'}{loraError && completion.sigil === '#' && <button type="button" onClick={() => setLoraError('')}>Retry</button>}</li>}
-          </ul>}
+          {showSuggestions && (() => {
+            // LoRAs get a detail pane for the highlighted one: beside the list, or on a phone under its row
+            // (a first tap there shows it, a second inserts it, or Use in the detail).
+            const highlighted = suggestions[Math.min(suggestionIndex, suggestions.length - 1)]?.lora
+            const list = <ul className="agt-slash" role="listbox" aria-label="Commands and mentions">
+              {suggestions.map((s, i) => <li key={s.name} role="option" aria-selected={i === suggestionIndex} onMouseEnter={s.lora && !phone ? () => setSuggestionIndex(i) : undefined}>
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => (s.lora && phone && i !== suggestionIndex ? setSuggestionIndex(i) : acceptSuggestion(s.name))}>{s.lora ? <LoraRow lora={s.lora} /> : <><b>{completion.sigil}{s.name}</b> <span className="muted">{s.hint}</span></>}</button>
+                {s.lora && phone && i === suggestionIndex && <LoraDetailPane lora={s.lora} manager={loraManager} onUse={() => acceptSuggestion(s.name)} />}
+              </li>)}
+              {!suggestions.length && <li className="muted">{completion.sigil === '#' ? loraLoading ? 'Loading LoRAs…' : loraError || 'No installed LoRAs match.' : 'No matches.'}{loraError && completion.sigil === '#' && <button type="button" onClick={() => setLoraError('')}>Retry</button>}</li>}
+            </ul>
+            return highlighted && !phone ? <div className="agt-slash-split">{list}<LoraDetailPane lora={highlighted} manager={loraManager} /></div> : list
+          })()}
           {editingQ && (
             <div className="agt-editing">
               <span>
@@ -2050,7 +2062,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               if (showSuggestions && !e.nativeEvent.isComposing) {
                 if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSuggestionsDismissed(true); return }
                 if (suggestions.length && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); setSuggestionIndex((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return }
-                if (suggestions.length && (e.key === 'Tab' || e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey)) { e.preventDefault(); acceptSuggestion(suggestions[Math.min(suggestionIndex, suggestions.length - 1)].name); return }
+                // Right accepts too, like Tab and Enter: only with a list open (this branch), no modifier, and the
+                // caret at the end of the word, so moving through a word already written still moves the caret.
+                if (suggestions.length && (e.key === 'Tab' || e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey || e.key === 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !/^\S/.test(text.slice(caret)))) { e.preventDefault(); acceptSuggestion(suggestions[Math.min(suggestionIndex, suggestions.length - 1)].name); return }
               }
               // Up in an empty box edits the last queued message, Esc puts an edit back.
               if (e.key === 'ArrowUp' && !text && !files.length && !editingQ && queue.length && !e.shiftKey) {

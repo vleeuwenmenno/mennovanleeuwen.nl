@@ -5,6 +5,9 @@ import { Select } from '../os/Select'
 
 type Profile = ImageProfile & { observations: number }
 
+/** The server's limit for a profile's preferences (server/agentImageProfiles.ts), so one the agent wrote is never cut short here. */
+const DESCRIPTION_MAX = 1200
+
 const observations = (n: number) => `${n} ${n === 1 ? 'observation' : 'observations'}`
 const originLabel = (p: ImageProfile) => p.origin === 'suggestion' ? 'Suggested by the agent' : 'Confirmed by you'
 
@@ -28,7 +31,7 @@ function ProfileEditor({ profile, busy, onSave, onCancel }: { profile?: ImagePro
   const [name, setName] = useState(profile?.name ?? ''), [description, setDescription] = useState(profile?.description ?? '')
   return <div className="image-profile-editor">
     <label><span>Name</span><input value={name} maxLength={60} disabled={busy} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (name.trim()) onSave(name, description) } }} /></label>
-    <label><span>Style preferences</span><textarea value={description} maxLength={400} rows={3} disabled={busy} onChange={(e) => setDescription(e.target.value)} placeholder="What you like and what to avoid." /></label>
+    <label><span className="image-profile-label">Style preferences<span className="muted" aria-live="polite">{description.length} / {DESCRIPTION_MAX}</span></span><textarea value={description} maxLength={DESCRIPTION_MAX} rows={6} disabled={busy} onChange={(e) => setDescription(e.target.value)} placeholder="What you like and what to avoid." /></label>
     <div className="set-actions"><button type="button" className="btn btn-small btn-primary" disabled={busy || !name.trim()} onClick={() => onSave(name, description)}>Save profile</button><button type="button" className="btn btn-small" disabled={busy} onClick={onCancel}>Cancel</button></div>
   </div>
 }

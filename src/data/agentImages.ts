@@ -44,3 +44,10 @@ export const saveImageLearningPreference = (saveImageLearnings: boolean) => api<
 export const saveImageObservationApproval = (askBeforeSavingObservations: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeSavingObservations } })
 /** Read-only: the newest image observations, parsed, with every style profile. Delete with deleteMemory. */
 export const getImageObservations = () => api<ObservationsView>('/api/agents/images/observations')
+
+/** An installed LoRA as the # picker shows it: LoRA Manager's facts when it has them, else what the name says. */
+export type LoraDetail = { name: string; title: string; baseModel: string; triggers: string[]; tags: string[]; folder: string; size: number | null; hasPreview: boolean }
+/** Every installed LoRA (up to 2000), with facts for the ones LoRA Manager matches (first 50). `manager`: LoRA Manager answered. */
+export const getLoraDetails = () => api<{ loras: LoraDetail[]; total: number; truncated: boolean; manager: boolean }>('/api/agents/images/lora-details')
+/** The LoRA's own preview, through this server (only when `hasPreview`). */
+export const loraPreviewUrl = (name: string) => `/api/agents/images/lora-preview?${new URLSearchParams({ name })}`
