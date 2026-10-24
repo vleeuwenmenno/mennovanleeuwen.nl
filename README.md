@@ -1726,7 +1726,8 @@ only its observations. Each observation is a card: the picture as a thumbnail (t
 **Vision** for a vision model's, **Agent’s own guess** for an unverified suggestion), its profile,
 the date and the note in two lines. Opening a card shows the evidence quote, a settings line
 (workflow · steps · CFG · sampler/scheduler · model file · LoRAs and weights), size and seed, and the
-prompt behind **Show prompt**. Filter by profile, source and model, search task and note; the count
+prompt behind **Show prompt**. Upscale observations show their operation and upscale model, with
+each installed model kept distinct in the model filter. Filter by profile, source and model, search task and note; the count
 says how many the filter hides. Delete one card, or select several and delete them; the OS dialog
 asks first and says it removes the observation only, never the picture. With a keyboard: arrows,
 Home and End move between cards, Enter opens one, Delete deletes it. Memory's own list shows each

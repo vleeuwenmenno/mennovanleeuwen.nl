@@ -7,7 +7,7 @@ import { IMAGE_PRESETS } from './imageModels.ts'
 // raw text, and only then is that text shown. Shared by the server route and the Memory view.
 
 export type ObservationSource = 'user_feedback' | 'vision' | 'suggestion'
-export type ObservationSettings = { preset: string; model: string; clip: string; vae: string; steps: number | null; cfg: number | null; sampler: string; scheduler: string; width: number | null; height: number | null; seed: number | null; loras: { name: string; weight: number }[] }
+export type ObservationSettings = { operation?: 'generate' | 'upscale'; upscale_model?: string; preset: string; model: string; clip: string; vae: string; steps: number | null; cfg: number | null; sampler: string; scheduler: string; width: number | null; height: number | null; seed: number | null; loras: { name: string; weight: number }[] }
 export type Observation = {
   id: number
   profileId: number | null
@@ -56,7 +56,7 @@ function readSettings(value: unknown): { settings: ObservationSettings | null; p
   if (!s) return { settings: null, prompt: '', negativePrompt: '' }
   const loras = Array.isArray(s.loras) ? s.loras.flatMap((l) => { const o = obj(l); return o && typeof o.name === 'string' ? [{ name: o.name, weight: num(o.weight) ?? 1 }] : [] }) : []
   return {
-    settings: { preset: str(s.preset), model: str(s.model), clip: str(s.clip), vae: str(s.vae), steps: num(s.steps), cfg: num(s.cfg), sampler: str(s.sampler), scheduler: str(s.scheduler), width: num(s.width), height: num(s.height), seed: num(s.seed), loras },
+    settings: { operation: s.operation === 'upscale' ? 'upscale' : 'generate', upscale_model: str(s.upscale_model), preset: str(s.preset), model: str(s.model), clip: str(s.clip), vae: str(s.vae), steps: num(s.steps), cfg: num(s.cfg), sampler: str(s.sampler), scheduler: str(s.scheduler), width: num(s.width), height: num(s.height), seed: num(s.seed), loras },
     prompt: str(s.prompt),
     negativePrompt: str(s.negative_prompt),
   }
@@ -114,6 +114,7 @@ export const presetTitle = (preset: string) => IMAGE_PRESETS.find((p) => p.id ==
 /** "Krea2 Turbo · 8 steps · CFG 1 · euler_ancestral/beta · model · detail 0.8, style 1". */
 export function settingsLine(s: ObservationSettings | null): string {
   if (!s) return ''
+  if (s.operation === 'upscale') return ['Upscale', s.upscale_model ? fileTitle(s.upscale_model) : 'Unknown upscale model', s.width !== null && s.height !== null && `${s.width} × ${s.height}`].filter(Boolean).join(' · ')
   return [
     s.preset && presetTitle(s.preset),
     s.steps !== null && `${s.steps} steps`,
@@ -125,7 +126,7 @@ export function settingsLine(s: ObservationSettings | null): string {
 }
 
 /** What the model filter groups by: the workflow and the model file. */
-export const modelKey = (o: Observation) => (o.settings ? `${o.settings.preset}|${o.settings.model}` : '')
+export const modelKey = (o: Observation) => (o.settings ? o.settings.operation === 'upscale' ? `upscale|${o.settings.upscale_model ?? ''}` : `${o.settings.preset}|${o.settings.model}` : '')
 
 export type ObservationFilter = { profile: number | 'none' | 'all'; source: ObservationSource | 'all'; model: string; query: string }
 export const NO_FILTER: ObservationFilter = { profile: 'all', source: 'all', model: '', query: '' }

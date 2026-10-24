@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { freeName, imageFileName } from '../src/data/agentImageFiles.ts'
-import { matchesObservation, NO_FILTER, observationFromText, readObservation, settingsLine } from '../src/data/imageObservations.ts'
+import { matchesObservation, modelKey, NO_FILTER, observationFromText, readObservation, settingsLine } from '../src/data/imageObservations.ts'
 
 const data = mkdtempSync(join(tmpdir(), 'mvlos-observations-'))
 process.env.DATA_DIR = data
@@ -55,6 +55,23 @@ try {
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, source: 'vision' }))
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, query: 'lighthouse at dusk' }), 'the prompt is not searched')
   console.log('PASS observation text and JSON parse, raw fallback, settings line, filters')
+
+  // Upscalers retain their identity in structured and legacy text records, without diffusion facts.
+  const upscaleSettings = { operation: 'upscale', upscale_model: 'detail/4x-detail.pth', width: 2048, height: 1536 }
+  const upscale = readObservation(row, '', JSON.stringify({ ...learning, settings: upscaleSettings }))
+  const upscaleText = observationFromText(row, text(3, 'vision', 'Upscale', 'Sharper', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(upscaleSettings)}`))!
+  assert.equal(upscale.settings?.operation, 'upscale')
+  assert.equal(upscale.settings?.upscale_model, upscaleSettings.upscale_model)
+  assert.deepEqual(upscaleText.settings, upscale.settings)
+  assert.equal(settingsLine(upscale.settings), 'Upscale · 4x-detail · 2048 × 1536')
+  assert.equal(upscale.settings?.seed, null)
+  assert.equal(modelKey(upscale), 'upscale|detail/4x-detail.pth')
+  const otherUpscale = readObservation(row, '', JSON.stringify({ ...learning, settings: { ...upscaleSettings, upscale_model: 'photos/2x-photo.pth' } }))
+  assert.notEqual(modelKey(upscale), modelKey(otherUpscale))
+  assert.ok(matchesObservation(upscale, { ...NO_FILTER, model: modelKey(upscale) }))
+  assert.ok(!matchesObservation(otherUpscale, { ...NO_FILTER, model: modelKey(upscale) }))
+  assert.ok(!matchesObservation(feedback, { ...NO_FILTER, model: modelKey(upscale) }))
+  console.log('PASS upscale observation identity, text/JSON parity, summary and model filters')
 
   // Save to Files names: a prompt slug and the short id, stable, never a bare id, never a taken name.
   assert.equal(imageFileName({ id: image, settings }), 'a-lighthouse-at-dusk-ink-wash-0a1b2c3d.png')
