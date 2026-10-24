@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { openMenuAt, type MenuItem } from '../os/ContextMenu'
 
 // One action row for every message and card in a thread (your messages, answers, tool cards,
-// image cards): the same quiet text buttons in the same order, with More last. It sits on the
+// image cards): the same quiet text buttons in the same order, with Options last. It sits on the
 // message's own side: right under your messages, left under everything else. The row always
 // takes its space, so showing it never moves anything; on a desktop it appears only while the
 // pointer is over that message or something in it has keyboard focus, and on touch screens it is
@@ -18,13 +18,13 @@ export function ActionRow({ label, children }: { label: string; children: ReactN
   return <div className="agt-actions" role="toolbar" aria-label={label}>{items}</div>
 }
 
-/** More: the overflow as a real menu. From the keyboard, its first item takes focus. */
+/** Options: the rest of the message's actions as a real menu. From the keyboard, its first item takes focus. */
 export function MoreButton({ label, items }: { label: string; items: MenuItem[] }) {
   if (!items.some((i) => 'label' in i)) return null
-  return <button type="button" className={ACTION} aria-haspopup="menu" aria-label={`${label}: more actions`} onClick={(e) => {
+  return <button type="button" className={ACTION} aria-haspopup="menu" aria-label={`${label} options`} onClick={(e) => {
     openMenuAt(e.currentTarget, items)
     if (e.detail === 0) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.ctx-menu [role="menuitem"]:not(:disabled)')?.focus())
-  }}>More</button>
+  }}>Options</button>
 }
 
 /** Drops separators at the ends and doubled ones, so joined lists read cleanly. */

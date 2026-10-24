@@ -1830,9 +1830,9 @@ the same message, with its files, is answered again with the thread's model, mod
 messages run after it. Every message and card has the same quiet action row on its own side (right
 under your messages, left under answers, tool cards, images and summaries), in the same order: its
 own actions where it has them (**Share** on an answer; **Save to Files…** and **Generate another**
-on an image), then **More** last, a menu with hints for the rest. On a desktop a row shows only
+on an image), then **Options** last, a menu with hints for the rest. On a desktop a row shows only
 while the pointer is over its own message or something in it has keyboard focus; it keeps its
-space, so nothing moves. On touch it is always shown. Your messages' **More** has **Copy**, **Edit & resend** and **Rewind to
+space, so nothing moves. On touch it is always shown. Your messages' **Options** has **Copy**, **Edit & resend** and **Rewind to
 here** (also in their right-click menu): after a desktop dialog that says how many
 messages go, it and everything after it leave the thread (`POST …/rewind`; a running turn is
 stopped first, the queue stays) and it comes back into the message box with its files. What the
@@ -1848,7 +1848,7 @@ YYYY-MM-DD`, using the selected message’s UTC date, with the original title ke
 It is treated as a manual title. Wait for a running thread to finish before branching. The terminal
 has `/branch [message id]`; omitting the id branches from its last message.
 
-**Generate another** sits in an image’s action row, before **More**, and in its right-click menu.
+**Generate another** sits in an image’s action row, before **Options**, and in its right-click menu.
 It draws another image in the same thread with the same prompt, components, LoRAs, sampling and
 size, without asking the model or showing an approval card. It uses the usual progress and Stop
 controls, account job limit and storage quota. Images must be on in Tools, ComfyUI must be connected,

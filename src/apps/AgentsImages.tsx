@@ -250,7 +250,7 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
 
 /**
  * A generated image in the thread: its size, the picture, seed and settings, then the one action
- * row every message has (AgentsActions.tsx): Save to Files, Generate another, More. More and the
+ * row every message has (AgentsActions.tsx): Save to Files, Generate another, Options. Options and the
  * picture's right-click menu hold View, Open in Preview, Download, and `more` (Branch off).
  */
 export function ImageCard({ image, width, height, pending, progress, again, more }: { image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
