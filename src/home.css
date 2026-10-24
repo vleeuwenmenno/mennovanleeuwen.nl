@@ -5470,6 +5470,7 @@ button.cal-day.is-picked:not(.is-today) {
 .image-model-details dd { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .image-model-details > p { margin-top: 14px; font-size: 11px; }
 .image-artwork-details img { display: block; width: 100%; max-height: 200px; object-fit: contain; background: var(--bg); }
+.image-model-details p.image-intel { margin: 10px 0 0; font-size: 11px; }
 .image-metadata { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 11px; overflow-wrap: break-word; }
 
 /* A thread's Images dialog. */

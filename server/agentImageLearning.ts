@@ -6,7 +6,8 @@ import { checkRoom } from './quota.ts'
 import { imageBackendScope, imageSettings, imageInThread, threadImageIds } from './agentImages.ts'
 import { imagePresetSpec, type ImageAssets, type ImageGenerationSettings } from '../src/data/imageModels.ts'
 
-type Source = { kind: 'suggestion' | 'user_feedback' | 'vision'; messageId: number | null; quote: string }
+/** automatic: written by the server's own quality check (server/agentImageQuality.ts), never by the agent or as user feedback. */
+type Source = { kind: 'suggestion' | 'user_feedback' | 'vision' | 'automatic'; messageId: number | null; quote: string }
 type Learning = { version: 1; profileId: number | null; scope: string; artifactId: string; settings: ImageGenerationSettings; task: string; note: string; source: Source }
 type Row = { id: number; image_learning: string; updated_at: number | null; created_at: number }
 const rows = (user: User) => database().prepare('SELECT id, image_learning, updated_at, created_at FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL ORDER BY id').all(user.id) as Row[]
@@ -165,14 +166,40 @@ export function saveImageLearning(user: User, thread: string, input: Record<stri
     if (profileId !== null) ownImageProfile(user, profileId)
     learning = { version: 1, profileId: profileId as number | null, scope: image.backend_scope, artifactId: imageId, settings: parameters, task, note, source }
   }
+  return storeLearning(user, thread, learning, existing?.id)
+}
+
+/**
+ * An observation from the automatic quality check: a clearly broken picture, or a retry that
+ * fixed one. Source automatic, with the check's own words as its quote. Only while saving is on
+ * and observation writes do not ask (an automatic write cannot wait for approval); never in Plan.
+ * Returns null when not written.
+ */
+export function saveAutomaticImageLearning(user: User, thread: string, imageId: string, task: string, note: string, quote: string, permission: string) {
+  const settings = imageSettings(user)
+  if (!settings.saveImageLearnings || settings.askBeforeSavingObservations || permission === 'plan') return null
+  try {
+    const image = imageInThread(user, thread, imageId)
+    if (!image.metadata || !image.backend_scope) return null
+    const parameters = JSON.parse(image.metadata) as ImageGenerationSettings
+    const profileId = parameters.operation === 'upscale' || parameters.operation === 'remove' ? null : parameters.profile_id ?? null
+    const learning: Learning = { version: 1, profileId, scope: image.backend_scope, artifactId: imageId, settings: parameters, task: clipped(task.trim() || 'image', 160), note: clipped(note, 500), source: { kind: 'automatic', messageId: null, quote: quote.slice(0, 500) } }
+    return storeLearning(user, thread, learning)
+  } catch (e) {
+    console.warn('agents: automatic image observation not saved:', (e as Error).message)
+    return null
+  }
+}
+
+function storeLearning(user: User, thread: string, learning: Learning, existingId?: number) {
   const all = rows(user)
   const count = (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = ?').get(user.id) as { n: number }).n
-  if (!existing && (all.length >= 100 || count >= 1000)) throw new HttpError(409, 'Image learning memory is full (100 image notes / 1000 total memories); forget old notes first')
+  if (!existingId && (all.length >= 100 || count >= 1000)) throw new HttpError(409, 'Image learning memory is full (100 image notes / 1000 total memories); forget old notes first')
   const data = JSON.stringify(learning)
   const text = `Image learning · profile ${learning.profileId ?? 'none'} · ${learning.source.kind} · ${learning.task}\nInterpretation (not verified): ${learning.note}\nEvidence #${learning.source.messageId ?? 'none'}: ${learning.source.quote || 'Unverified suggestion'}\nImage: ${learning.artifactId}\nRecorded settings: ${JSON.stringify(learning.settings)}`
   checkRoom(user, Buffer.byteLength(text + data))
   const now = Date.now()
-  let id = existing?.id
+  let id = existingId
   if (id) database().prepare('UPDATE agent_memories SET text = ?, image_learning = ?, updated_at = ? WHERE id = ? AND user_id = ?').run(text, data, now, id, user.id)
   else id = Number(database().prepare('INSERT INTO agent_memories (user_id, text, category, project_id, thread_id, created_at, image_learning) VALUES (?, ?, ?, NULL, ?, ?, ?)').run(user.id, text, 'Images/Learnings', thread, now, data).lastInsertRowid)
   return publicRecord({ id, image_learning: data, created_at: now, updated_at: now }, learning)

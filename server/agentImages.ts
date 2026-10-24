@@ -22,8 +22,11 @@ const NAME = 'agents-comfyui'
 export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const
 export type Preset = (typeof PRESETS)[number]
 /** askBeforeGenerate: off by default, so generations run without an approval card in every mode except Plan. */
-export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean }
-const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true })
+/** civitaiLookup: model_details may ask civitai.com about a model by its Civitai ID or file hash (never prompts).
+ *  civitaiKey: optional Civitai API key, sent only to civitai.com as a Bearer header.
+ *  qualityCheck: check each generated picture and allow one automatic retry when it is clearly broken. */
+export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: string; qualityCheck: boolean }
+const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true, civitaiLookup: true, civitaiKey: '', qualityCheck: true })
 function settingsFor(userId: number): ImageSettings {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(userId, NAME) as { secret: string } | undefined
   return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
@@ -34,16 +37,18 @@ export const imageGenerationAsks = (userId: number) => settingsFor(userId).askBe
 /** Whether observation writes wait for approval outside Plan and Bypass. */
 export const imageObservationAsks = (userId: number) => settingsFor(userId).askBeforeSavingObservations
 export const imageBackendScope = (user: User, settings = imageSettings(user)) => privateDigest(JSON.stringify(['image-backend', user.id, settings.url, settings.token]))
-const view = (s: ImageSettings) => ({ ...s, token: !!s.token })
+const view = (s: ImageSettings) => ({ ...s, token: !!s.token, civitaiKey: !!s.civitaiKey })
 export function saveImageSettings(user: User, input: Record<string, unknown>) {
   const s = imageSettings(user)
-  for (const key of ['url', 'token', 'model', 'clip', 'vae'] as const) {
-    if (input[key] === undefined || (key === 'token' && input[key] === '')) continue
+  for (const key of ['url', 'token', 'model', 'clip', 'vae', 'civitaiKey'] as const) {
+    // The settings view reports civitaiKey as a boolean; sending that view back keeps the saved key.
+    if (input[key] === undefined || ((key === 'token' || key === 'civitaiKey') && input[key] === '') || (key === 'civitaiKey' && typeof input[key] === 'boolean')) continue
     if (typeof input[key] !== 'string' || input[key].length > 2048) throw new HttpError(400, `Invalid ${key}`)
     s[key] = input[key].trim()
   }
   if (input.clearToken === true) s.token = ''
-  for (const key of ['askBeforeGenerate', 'askBeforeSavingObservations', 'saveImageLearnings'] as const) {
+  if (input.clearCivitaiKey === true) s.civitaiKey = ''
+  for (const key of ['askBeforeGenerate', 'askBeforeSavingObservations', 'saveImageLearnings', 'civitaiLookup', 'qualityCheck'] as const) {
     if (input[key] === undefined) continue
     if (typeof input[key] !== 'boolean') throw new HttpError(400, `Invalid ${key}`)
     s[key] = input[key]
@@ -59,6 +64,7 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
     s.url = u.href.replace(/\/+$/, '')
   }
   if (/[\r\n]/.test(s.token)) throw new HttpError(400, 'Invalid authorization token')
+  if (s.civitaiKey && !/^[A-Za-z0-9._-]{8,200}$/.test(s.civitaiKey)) throw new HttpError(400, 'A Civitai API key is letters and digits only')
   database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret').run(user.id, NAME, encrypt(JSON.stringify(s)), Date.now())
   return view(s)
 }
@@ -181,7 +187,7 @@ async function readJSON(user: User, s: ImageSettings, path: string, signal: Abor
 const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user), forPlanning = false) {
@@ -275,7 +281,7 @@ async function imageLoraHints(user: User, settings: ImageSettings, signal: Abort
     return hints.filter((h) => !duplicates.has(h.name))
   } catch { return [] }
 }
-export type ImageInput = { mask_id?: unknown; hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+export type ImageInput = { clip_skip?: unknown; v_prediction?: unknown; mask_id?: unknown; hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }, sourceName?: string) {
   if (!PRESETS.includes(s.preset)) throw new HttpError(400, 'Unsupported image workflow')
@@ -306,6 +312,16 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   const node = (id: string, class_type: string, inputs: Record<string, unknown>) => (graph[id] = { class_type, inputs }, [id, 0])
   let model = diffusion ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
   let clip = diffusion ? node('2', 'CLIPLoader', { clip_name: s.clip, type: spec.clipType, device: 'default' }) : ['1', 1]
+  // Clip skip (checkpoints only): 1 is the default and adds no node, 2 stops one layer early.
+  const clipSkip = input.clip_skip === undefined ? 1 : input.clip_skip
+  if (typeof clipSkip !== 'number' || !Number.isInteger(clipSkip) || clipSkip < 1 || clipSkip > 4) throw new HttpError(400, 'clip_skip must be an integer from 1 to 4')
+  if (clipSkip > 1 && diffusion) throw new HttpError(400, 'clip_skip applies to SD 1.5 and SDXL checkpoints only')
+  if (clipSkip > 1) clip = node('clipSkip', 'CLIPSetLastLayer', { clip, stop_at_clip_layer: -clipSkip })
+  // A v-prediction checkpoint (NoobAI v-pred and its merges) samples as v_prediction with zero terminal SNR.
+  if (input.v_prediction === true) {
+    if (diffusion) throw new HttpError(400, 'V-prediction applies to SD 1.5 and SDXL checkpoints only')
+    model = node('vpred', 'ModelSamplingDiscrete', { model, sampling: 'v_prediction', zsnr: true })
+  }
   const vae = diffusion ? node('3', 'VAELoader', { vae_name: s.vae }) : ['1', 2]
   const loras = validateLoras(input.loras ?? [])
   if (loras.length) {
@@ -328,8 +344,8 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
-  const progress: ImageGraphProgress | undefined = refining ? { phases: { '1': 'loading', '2': 'loading', '3': 'loading', '4': 'encoding', '5': 'encoding', '6': 'encoding', '7': 'refining', '8': 'decoding', '9': 'saving', '20': 'loading', '21': 'refining', refineModel: 'loading', refineUpscale: 'upscaling' }, counters: { '7': 'refining', refineUpscale: 'upscaling' } } : undefined
-  return { graph, width, height, seed, sampling, loras, denoise, outputNode: '9', progress }
+  const progress: ImageGraphProgress | undefined = refining ? { phases: { clipSkip: 'loading', vpred: 'loading', '1': 'loading', '2': 'loading', '3': 'loading', '4': 'encoding', '5': 'encoding', '6': 'encoding', '7': 'refining', '8': 'decoding', '9': 'saving', '20': 'loading', '21': 'refining', refineModel: 'loading', refineUpscale: 'upscaling' }, counters: { '7': 'refining', refineUpscale: 'upscaling' } } : undefined
+  return { graph, width, height, seed, sampling, loras, denoise, outputNode: '9', progress, clipSkip, vPrediction: input.v_prediction === true }
 }
 
 // Branches retain the artifact ID in the copied generate_image result, never a second PNG.
@@ -411,7 +427,9 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   if (input?.operation === 'upscale') return planUpscale(user, input, signal)
   if (input?.operation === 'remove') return planRemove(user, input, signal)
   if (input?.operation !== undefined && input.operation !== 'generate' && input.operation !== 'refine' && input.operation !== 'inpaint') throw new HttpError(400, 'Choose operation generate, refine, inpaint, remove or upscale')
-  const allowed = new Set(['operation', 'mask_id', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
+  // V-prediction is decided below from the model's facts, never by the caller ("Generate another" carries the recorded flag).
+  if (input && typeof input === 'object' && 'v_prediction' in input) { const { v_prediction: _vpred, ...rest } = input; input = rest }
+  const allowed = new Set(['clip_skip', 'operation', 'mask_id', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const source = input.source_image_id === undefined ? undefined : imageSource(user, input.source_image_id)
   const refining = input.operation === 'refine'
@@ -451,7 +469,11 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   const settings = { ...configured, ...resolved.effective }
   const defaults = recommendedImageSampling(settings.preset, settings.model, catalog)
   const uploadName = source ? `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}` : undefined
-  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input, ...(source ? { width: configured.width, height: configured.height } : {}) }, catalog, uploadName)
+  // Loaded on demand: agentModelIntel imports this module.
+  const vpred = !imagePresetSpec(settings.preset).clipType && await (await import('./agentModelIntel.ts')).modelNeedsVpred(user, settings, catalog, settings.model)
+  if (vpred && !catalog.nodes.includes('ModelSamplingDiscrete')) throw new HttpError(409, `${settings.model} is a v-prediction model and this ComfyUI lacks ModelSamplingDiscrete, so it would render garbage. Choose another model.`)
+  if (input.clip_skip !== undefined && input.clip_skip !== 1 && !catalog.nodes.includes('CLIPSetLastLayer')) throw new HttpError(409, 'This ComfyUI lacks CLIPSetLastLayer, so clip_skip is unavailable; omit it')
+  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input, ...(vpred ? { v_prediction: true } : {}), ...(source ? { width: configured.width, height: configured.height } : {}) }, catalog, uploadName)
   if (refining) refinementSampling(input, workflow.sampling, settings.preset)
   const spec = imagePresetSpec(settings.preset)
   if (!spec.clipType && (input.clip !== undefined && input.clip !== '' || input.vae !== undefined && input.vae !== '')) throw new HttpError(400, 'Checkpoint workflows use embedded encoder and VAE; separate component overrides are not supported')
@@ -465,7 +487,7 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
     workflow.graph['22'] = { class_type: 'LoadImageMask', inputs: { image: maskUploadName, channel: 'red' } }
     workflow.graph = inpaintGraph({ graph: workflow.graph, source: { ...source, image: ['20', 0] }, mask: { ...mask, mask: ['22', 0] }, samplerId: '7', decodeId: '8', saveId: '9', denoise: workflow.denoise }, catalog.inpaintSchemas ?? {}).graph
   }
-  const parameters: ImageGenerationSettings = { ...(mask ? { operation: 'inpaint' as const, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' as const } } : {}), ...(refining ? { operation: 'refine' as const, ...(input.upscale_model ? { upscale_model: input.upscale_model as string } : {}) } : {}), ...(hires ? { hires } : {}), loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
+  const parameters: ImageGenerationSettings = { ...(mask ? { operation: 'inpaint' as const, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' as const } } : {}), ...(refining ? { operation: 'refine' as const, ...(input.upscale_model ? { upscale_model: input.upscale_model as string } : {}) } : {}), ...(hires ? { hires } : {}), loras: workflow.loras, ...(workflow.clipSkip > 1 ? { clip_skip: workflow.clipSkip } : {}), ...(workflow.vPrediction ? { v_prediction: true } : {}), profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
   return { settings, workflow, parameters, source, uploadName, mask, maskUploadName }
 }
 /** Walk only owned generated-image provenance, without reinterpreting uploaded filenames. */
@@ -485,7 +507,7 @@ function inheritedRefinementInput(user: User, id: string, input: ImageInput): Im
     if (depth === 7 && next) throw new HttpError(409, 'Source provenance exceeds 8 images; choose an earlier source')
   }
   if (!inherited && (typeof input.prompt !== 'string' || !input.prompt.trim())) throw new HttpError(409, 'This source has no recorded diffusion settings. Supply a prompt and configure compatible image components before refining.')
-  const keys = ['preset', 'model', 'clip', 'vae', 'seed', 'loras', 'prompt', 'negative_prompt', 'steps', 'cfg', 'sampler', 'scheduler'] as const
+  const keys = ['preset', 'model', 'clip', 'vae', 'seed', 'loras', 'prompt', 'negative_prompt', 'steps', 'cfg', 'sampler', 'scheduler', 'clip_skip'] as const
   return { ...Object.fromEntries(inherited ? keys.filter(k => inherited[k] !== undefined).map(k => [k, inherited![k]]) : []), ...input, denoise: input.denoise ?? 0.2 }
 }
 
@@ -567,7 +589,7 @@ export async function prepareImageGeneration(user: User, thread: string, input: 
   if (p.operation === 'upscale') return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Upscale image · review resolved settings', rows: [
     ['Source', `${p.source.name} · ${p.source.width} × ${p.source.height}`], ['Upscale model', p.upscale_model], ['Model input', `${p.input_width} × ${p.input_height}`], ['Output', `${p.width} × ${p.height} · Lanczos final resize`], ['Resources', UPSCALE_RESOURCE_NOTE],
   ] as [string, string][], body: '', image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
-  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
+  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}${p.clip_skip ? ` · clip skip ${p.clip_skip}` : ''}${p.v_prediction ? ' · v-prediction' : ''}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
   if (p.operation === 'refine') rows.unshift(['Operation', 'Refine existing image'], ...(p.upscale_model ? [['Upscale model', p.upscale_model], ['Resources', UPSCALE_RESOURCE_NOTE]] as [string, string][] : []))
   if (p.hires) rows.unshift(['Hires', `${p.hires.base_width} × ${p.hires.base_height} → ${p.hires.width} × ${p.hires.height} · ${p.hires.steps} steps · CFG ${p.hires.cfg} · ${p.hires.sampler}/${p.hires.scheduler} · denoise ${p.hires.denoise} · seed ${p.hires.seed}`], ['Hires upscale model', p.hires.upscale_model ?? 'Lanczos resize only'])
   return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: p.operation === 'inpaint' ? 'Inpaint image · review resolved settings' : p.operation === 'refine' ? 'Refine image · review resolved settings' : p.hires ? 'Generate with hires · review resolved settings' : p.source ? 'Edit image · review resolved settings' : 'Generate image · review resolved settings', rows: [...(p.source ? [['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Resize', p.mask ? 'Source and mask use matching Lanczos/center crop. Black working-mask pixels preserve the working source through final compositing; output is working size.' : 'Lanczos resize with center crop; no stretching. Whole-image edit, no mask.'], ...(p.mask ? [['Mask', `${p.mask.id} · ${p.mask.width} × ${p.mask.height} · white edits, black preserves · ${p.mask.url}`]] : [])] as [string, string][] : []), ...rows], body: p.prompt, ...(p.source ? { image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } } : {}) }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }

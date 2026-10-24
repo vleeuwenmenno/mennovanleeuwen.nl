@@ -1,6 +1,6 @@
 import { agentMasks, generatedImage } from '../../data/agentImages'
 import { calendarTime, compactionText, toolLabel, type AgentMessage, type Todo, type ToolCall } from '../../data/agents'
-import { IMAGE_REVIEW_LABEL, isImageReview } from '../../data/imageToolLabel'
+import { IMAGE_REVIEW_LABEL, isImageReview, modelDetailsLabel, qualityNote } from '../../data/imageToolLabel'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
 import { clipLine, count, seg, width, wrap, type Line } from './text'
@@ -59,6 +59,8 @@ export function toolTitle(call: ToolCall): [string, string] {
     case 'list_image_attachments': return ['Image attachments', 'Source images']
     case 'list_image_models':
       return ['Image models', 'ComfyUI']
+    case 'model_details':
+      return ['Model details', s(call, 'name') || `${s(call, 'kind')}: ${s(call, 'query')}`]
     case 'read_file':
       return ['Read', s(call, 'path')]
     case 'write_file':
@@ -212,10 +214,12 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
         const label = image.settings?.operation === 'inpaint' ? 'Inpainted image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings?.hires ? 'Generated image with hires refinement' : 'Generated image'
         const hires = image.settings?.hires
         const stages = hires ? `\n  Hires: ${hires.base_width} × ${hires.base_height} to ${hires.width} × ${hires.height} · strength ${hires.denoise} · ${hires.steps} steps · CFG ${hires.cfg} · ${hires.sampler}/${hires.scheduler} · seed ${hires.seed}${hires.upscale_model ? ` · ${hires.upscale_model}` : ''}` : ''
-        return ok([under(`${label} · ${image.width} × ${image.height}${image.seed === undefined ? '' : ` · seed ${image.seed}`}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}${image.settings.mask ? `\n  Mask: ${image.settings.mask.id} · white edits, black preserves working source` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}${image.settings.upscale_model ? `\n  Upscaler: ${image.settings.upscale_model}` : ''}${stages}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+        return ok([under(`${label} · ${image.width} × ${image.height}${image.seed === undefined ? '' : ` · seed ${image.seed}`}${qualityNote(result)}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}${image.settings.mask ? `\n  Mask: ${image.settings.mask.id} · white edits, black preserves working source` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}${image.settings.upscale_model ? `\n  Upscaler: ${image.settings.upscale_model}` : ''}${stages}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
       }
       return ok([under(oneLine(result))])
     }
+    case 'model_details':
+      return ok([under(modelDetailsLabel(call.arguments ?? {}, result).replace(/^(Model|LoRA) details: /, '').replace(/^Searched models: /, 'Search: '))])
     case 'make_image_mask':
     case 'list_image_masks': {
       // One line a mask: what it selected, how much, how it ended, and its private link.

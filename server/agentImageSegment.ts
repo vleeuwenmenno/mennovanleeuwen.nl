@@ -207,7 +207,7 @@ export function removeGraph(sourceName: string, maskName: string, info: SegmentN
 
 const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 /** Unfiltered pixels of a non-interlaced 8-bit PNG (gray, RGB, gray+alpha or RGBA), or null when it is another kind. */
-function pngPixels(bytes: Buffer) {
+export function pngPixels(bytes: Buffer) {
   if (bytes.length < 33 || !bytes.subarray(0, 8).equals(SIGNATURE) || bytes.toString('ascii', 12, 16) !== 'IHDR') return null
   const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20), depth = bytes[24], type = bytes[25], interlace = bytes[28]
   const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type]

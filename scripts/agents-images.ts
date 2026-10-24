@@ -436,7 +436,7 @@ try {
   assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'])
   assert.deepEqual(catalog.schedulers, ['simple', 'beta', 'karras', 'normal', 'sgm_uniform'])
   assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
-  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked', 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite'])
+  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked', 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete'])
   // Without the ComfyUI-RMBG nodes, automatic masks and LaMa removal are reported off, nothing else changes.
   assert.equal(catalog.autoMask, false); assert.match(catalog.autoMaskError, /SAM3Segment or SAM2Segment/); assert.equal(catalog.remove, false)
   assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)

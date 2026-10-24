@@ -2,7 +2,7 @@ import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { getNote } from './notes'
 import type { ImageProgress } from './imageModels'
-import { generateImageLabel } from './imageToolLabel'
+import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -549,6 +549,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return 'Inspect generated image with vision'
     case 'list_image_models':
       return 'Discover image models'
+    case 'model_details':
+      return modelDetailsLabel(a, result)
     case 'web_search':
       return `Searched the web for “${s('query')}”`
     case 'web_fetch':

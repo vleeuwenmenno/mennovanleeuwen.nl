@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from 'react'
-import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageObservationApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
+import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageIntelSettings, saveImageObservationApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
 import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
@@ -10,6 +10,8 @@ export function AgentsImageSettings() {
   const [settings, setSettings] = useState<ImageSettings | null>(null)
   const [token, setToken] = useState('')
   const [clearToken, setClearToken] = useState(false)
+  const [civitaiKey, setCivitaiKey] = useState('')
+  const civitaiHint = useId(), qualityHint = useId()
   const [catalog, setCatalog] = useState<ImageCatalog | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -86,6 +88,31 @@ export function AgentsImageSettings() {
         <ImageModelFields value={settings} catalog={catalog} onChange={(patch) => setSettings({ ...settings, ...patch })} disabled={busy} loading={discovering} error={catalogError} onRefresh={() => void discover()} />
         {catalogError && <p className="t-red copyable" role="alert">{catalogError}</p>}
         <div className="set-actions"><button className="btn btn-small btn-primary" disabled={busy || !settings.url}>{busy ? 'Saving…' : 'Save defaults'}</button></div>
+      </section>
+      <section className="set-section image-group" aria-labelledby="image-intel">
+        <h4 className="set-subhead" id="image-intel">Model details and quality</h4>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Check images and retry once if clearly broken</strong>
+              <span className="muted set-row-wrap" id={qualityHint}>After each generation the server checks the picture: black, white, flat or pure noise, and, when one of your models can see pictures, a short look by the cheapest of them. Only a clearly broken picture (melted faces, mush, noise, the wrong subject) gets one automatic retry with better settings, and the agent says what it changed. Fine or mediocre pictures end the turn as usual. The picture goes only to your configured model provider.</span>
+            </span>
+            <button type="button" role="switch" aria-checked={settings.qualityCheck} aria-label="Check images and retry once if clearly broken" aria-describedby={qualityHint} className={`set-toggle ${settings.qualityCheck ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, qualityCheck: (await saveImageIntelSettings({ qualityCheck: !settings.qualityCheck })).qualityCheck }); setNotice('Saved') })} />
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Look up model details on Civitai</strong>
+              <span className="muted set-row-wrap" id={civitaiHint}>Before using a model, the agent reads its Civitai page: base model, trained words, description and the settings its example pictures were made with. This sends the model’s Civitai ID or file hash to civitai.com, never your prompts, pictures or ComfyUI address. Answers are kept for a week.</span>
+            </span>
+            <button type="button" role="switch" aria-checked={settings.civitaiLookup} aria-label="Look up model details on Civitai" aria-describedby={civitaiHint} className={`set-toggle ${settings.civitaiLookup ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, civitaiLookup: (await saveImageIntelSettings({ civitaiLookup: !settings.civitaiLookup })).civitaiLookup }); setNotice('Saved') })} />
+          </li>
+        </ul>
+        <label><span>Civitai API key</span><SecretInput value={civitaiKey} onChange={(e) => setCivitaiKey(e.target.value)} placeholder={settings.civitaiKey ? 'Saved; leave empty to keep' : 'Optional'} disabled={busy || !settings.civitaiLookup} /></label>
+        <p className="muted set-help">Optional, stored encrypted and sent only to civitai.com. Without a key Civitai hides NSFW example pictures, so their settings are missing for some models. Create one under Account settings → API keys on civitai.com.</p>
+        <div className="set-actions">
+          <button type="button" className="btn btn-small" disabled={busy || !civitaiKey.trim()} onClick={() => void run(async () => { setSettings(await saveImageIntelSettings({ civitaiKey: civitaiKey.trim() })); setCivitaiKey(''); setNotice('Saved') })}>Save key</button>
+          {settings.civitaiKey && <button type="button" className="btn btn-small" disabled={busy} onClick={() => void run(async () => { setSettings(await saveImageIntelSettings({ clearCivitaiKey: true })); setNotice('Key removed') })}>Remove key</button>}
+        </div>
       </section>
     </form>}
     <section className="set-section image-group" aria-labelledby="image-profiles">

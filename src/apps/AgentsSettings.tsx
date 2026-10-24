@@ -467,7 +467,7 @@ function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: S
     failed('permissions', mail, sites) ?? { id: 'permissions', summary: !mail || !sites ? loading : `Mail reads: ${mail && 'value' in mail && mail.value.mode === 'always' ? 'always allowed' : 'ask first'} · ${plural(sites && 'value' in sites ? sites.value.length : 0, 'web site')} allowed` },
     failed('images', images) ?? (images && 'value' in images && !images.value.url
       ? { id: 'images', summary: 'ComfyUI not connected', fix: 'Set up', tone: 'warn' }
-      : { id: 'images', summary: !images ? loading : `ComfyUI connected${preset ? ` · ${preset}` : ''}${profiles && 'value' in profiles ? ` · ${plural(profiles.value.length, 'style profile')}` : ''}` }),
+      : { id: 'images', summary: !images ? loading : `ComfyUI connected${preset ? ` · ${preset}` : ''}${'value' in images && images.value.qualityCheck ? ' · checks pictures' : ''}${profiles && 'value' in profiles ? ` · ${plural(profiles.value.length, 'style profile')}` : ''}` }),
     failed('search', search) ?? { id: 'search', summary: !provider ? loading : search && 'value' in search && search.value.provider === 'ollama' ? 'Ollama web search (built in)' : provider },
     failed('skills', skills) ?? { id: 'skills', summary: enabledSkills === null ? loading : `${enabledSkills} of ${plural(skills && 'value' in skills ? skills.value.length : 0, 'skill')} on` },
     failed('shares', shares) ?? { id: 'shares', summary: !shares ? loading : shares && 'value' in shares && shares.value.length ? `${plural(shares.value.length, 'link')} shared` : 'Nothing shared' },

@@ -1,16 +1,19 @@
 import { readEvents, type TurnEvent } from './agents'
 import { api } from '../os/account'
 import type { ObservationsView } from './imageObservations'
+import type { Recommended } from './modelFamilies'
 
 import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
-export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean }
+export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: boolean; qualityCheck: boolean }
 export type ImageCatalog = ImageAssetCatalog
 export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed?: number; preset?: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
 /** Saves only the approval choice; the rest of the saved settings stay as they are. */
 export const saveImageApproval = (askBeforeGenerate: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeGenerate } })
-export const saveImageSettings = (s: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s })
+export const saveImageSettings = ({ civitaiKey: _saved, ...s }: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s })
+/** Saves one of the model details and quality check switches, or the Civitai key (empty keeps it). */
+export const saveImageIntelSettings = (patch: { civitaiLookup?: boolean; qualityCheck?: boolean; civitaiKey?: string; clearCivitaiKey?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: patch })
 export const resetImageSettings = () => api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' })
 export const getImageCatalog = () => api<ImageCatalog>('/api/agents/images/catalog')
 
@@ -39,6 +42,17 @@ export type ModelCategory = 'checkpoints' | 'diffusion_models' | 'text_encoders'
 export type ModelMetadata = { available: boolean; reason?: string; source?: string; title?: string; baseModel?: string; size?: number; tags?: string[]; preview?: string }
 export const getModelMetadata = (category: ModelCategory, name: string, signal: AbortSignal) => api<ModelMetadata>(`/api/agents/images/model-metadata?${new URLSearchParams({ category, name })}`, { signal })
 
+/** model_details' facts for one installed checkpoint, LoRA or embedding (server/agentModelIntel.ts). */
+export type ModelDetails = {
+  name: string; kind: 'checkpoint' | 'lora' | 'embedding'
+  family: { id: string; label: string; supported: boolean } | null
+  supported?: boolean; unsupported_reason?: string
+  lora_manager: { title: string; base_model: string; tags: string[]; auto_tags: string[]; trained_words: string[]; notes: string } | null
+  civitai: { url: string; model: string; version: string; base_model: string; trained_words: string[] } | null
+  recommended?: Partial<Recommended> & { strength?: number; strength_source?: string; trained_words?: string[]; matches_selected_model?: boolean | null }
+  notes: string[]
+}
+export const getModelDetails = (name: string, kind: 'checkpoint' | 'lora' | 'embedding', signal?: AbortSignal) => api<ModelDetails>(`/api/agents/images/model-details?${new URLSearchParams({ name, kind })}`, { signal })
 export const getImageLoras = () => api<{ loras: ImageLoraHint[]; total: number; truncated: boolean }>('/api/agents/images/loras')
 export const saveImageLearningPreference = (saveImageLearnings: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { saveImageLearnings } })
 

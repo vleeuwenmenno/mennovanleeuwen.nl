@@ -1853,7 +1853,7 @@ Style profiles sit beside the list (above it, folded, on a phone): each with its
 description, observation count, when it last changed and the threads that pin it; pick one to see
 only its observations. Each observation is a card: the picture as a thumbnail (tap for the full view;
 “Gone” when its thread was deleted), the task, a source badge (**Yours** for your feedback,
-**Vision** for a vision model's, **Agent’s own guess** for an unverified suggestion), its profile,
+**Vision** for a vision model's, **Automatic check** for the quality check's, **Agent’s own guess** for an unverified suggestion), its profile,
 the date and the note in two lines. Opening a card shows the evidence quote, a settings line
 (workflow · steps · CFG · sampler/scheduler · model file · LoRAs and weights), size and seed, and the
 prompt behind **Show prompt**. Upscale observations show their operation and upscale model, with
@@ -1981,6 +1981,69 @@ requested or clearly needed. Steps are integers from 1 to 80; CFG is finite from
 fixed at 1 for both Turbo workflows. Only the listed KSampler options are accepted. Denoise stays
 1 for text-to-image; arbitrary graphs, backend settings, model downloads, batch generation,
 prompt enhancement, LoRAs and upscaling are not tool options.
+
+**Model details (`model_details`)** give the agent a recipe per model instead of one per preset.
+It is a read-only Images tool, with no approval card: `name` (an exact installed identifier) returns
+the facts for that checkpoint, diffusion model, LoRA or embedding, and `kind` + `query` searches the
+installed ones by name, tag or base model (up to 10 matches, each with its base model and tags).
+The facts come from three places:
+
+- **LoRA Manager** (optional, on the account's ComfyUI): base model, tags, auto tags, trained words,
+  usage tips (a LoRA's recommended strength), notes and its Civitai IDs and file hash. All three
+  lists are paged (100 a page, at most 3000 items, 2 MiB a page) and cached for 30 minutes per
+  backend, and joined to ComfyUI's installed names by exact folder and file name only.
+- **Civitai** (when **Look up model details on Civitai** is on): the version's base model, trained
+  words and description (HTML stripped, 3000 characters), the model page's description (1500), two
+  or three short example prompts, and the settings its example pictures agree on: the most common
+  sampler and schedule, the median steps, CFG and clip skip, and the usual size. A1111 names map to
+  ComfyUI's (`DPM++ 2M` + `Karras` and `DPM++ 2M Karras` both become `dpmpp_2m`/`karras`, `Euler a`
+  becomes `euler_ancestral`), and only when that sampler is installed and this app runs it;
+  otherwise the consensus says it is unmapped. Lookups go by Civitai version ID, else by file hash,
+  only to `https://civitai.com` (a redirect anywhere else is refused, not followed), with a 5 second
+  timeout and a 1 MiB cap. Answers are cached in the database for 7 days, "not on Civitai" for a day.
+- **Family defaults** (`src/data/modelFamilies.ts`), keyed by base model: Illustrious and NoobAI
+  (Euler a or DPM++ 2M Karras, about 26 steps, CFG 5, clip skip 2), Pony (needs score tags),
+  SDXL, SD 1.5, Krea 2 turbo and raw, Z-Image and Z-Image Turbo (CFG 1, few steps). Flux, Anima and
+  MiniMax H3 are reported as not supported here.
+
+The result's `recommended` block (preset, sampler, scheduler, steps, CFG, clip skip, size) says its
+`source`: `civitai_examples` with how many pictures agree, `family_default`, or `user_saved` for a
+size the thread saved. The Civitai consensus wins over the family default, and the user's explicit
+request wins over both. LoRAs get a recommended strength (usage tips, then their weight in the
+example prompts), their trained words, and whether they match the selected model's family. The
+agent calls `model_details` once before the first generation with a model or LoRA it has not used
+in the thread. `list_image_models` also gives every listed model and LoRA its base model, family
+and top tags (`assetFacts`), so the agent can pick a model by style. The model browser's details
+pane shows the same facts (`GET /api/agents/images/model-details`), and chat and the terminal show
+one line per call: model, family, recommended settings and source.
+
+`generate_image` takes `clip_skip` (1 to 4, checkpoints only; `CLIPSetLastLayer`). A
+**v-prediction** checkpoint (NoobAI v-pred and its merges, found from "vpred"/"v-pred" in its
+name, tags or Civitai version) gets `ModelSamplingDiscrete` with `v_prediction` and `zsnr`
+automatically; the server decides this, never the tool call. Without that node the model is
+reported as unsupported and generation is refused, as it would render garbage.
+
+**Quality check** (**Check images and retry once if clearly broken**, on by default). After each
+generated, refined or inpainted picture the server checks it: first the pixels (almost all black,
+white or one flat colour, or noise across the whole frame; pictures under 64 pixels a side are
+skipped), then, if those pass and one of the account's models can see pictures, one capped call
+to the cheapest of them (the safety check model, the quick model, the title model, then the
+thread's own) with a fixed rubric that returns a score, `very_bad` and defects. Only broken output
+counts as very bad: melted faces or anatomy, mush, noise, a clearly wrong subject. Style and
+mediocre quality never do. A fine or mediocre picture ends the turn silently as before. A very bad
+one comes back to the agent with `quality: { very_bad, score, defects }` and one retry allowed:
+it tells the user in a sentence what was wrong and what it changes, and generates once more with
+better settings (the model's recommended ones, another sampler, more steps, a CFG fix, another
+model of the same family). The server allows one automatic retry per user message and refuses a
+third generation; if the retry is broken too, the agent explains instead. Very bad results and
+retries that fixed one are saved as image observations with the source **Automatic check** (while
+saving is on and observations do not ask first). Upscales and LaMa removals are not checked.
+
+**Settings → Agents → Images → Model details and quality** holds both switches and an optional
+**Civitai API key** (stored encrypted like the ComfyUI token, sent only to civitai.com as a Bearer
+header). Civitai lookups send the model's Civitai ID or file hash, never prompts, pictures or the
+ComfyUI address. Without a key, Civitai hides NSFW example pictures, so some models have fewer
+example settings. The Overview card says "checks pictures" while the quality check is on.
 
 Approvals show the complete resolved model/components, prompt, negative prompt, dimensions,
 steps, CFG, sampler/scheduler and seed. Those settings are frozen before approval; changing saved

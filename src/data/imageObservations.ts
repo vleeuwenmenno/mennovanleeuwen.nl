@@ -6,7 +6,7 @@ import { IMAGE_PRESETS } from './imageModels.ts'
 // "Evidence #12: …" / "Image: <uuid>" / "Recorded settings: {…}"). A row that fits neither keeps its
 // raw text, and only then is that text shown. Shared by the server route and the Memory view.
 
-export type ObservationSource = 'user_feedback' | 'vision' | 'suggestion'
+export type ObservationSource = 'user_feedback' | 'vision' | 'automatic' | 'suggestion'
 export type ObservationHires = { base_width: number | null; base_height: number | null; width: number | null; height: number | null; denoise: number | null; seed: number | null; steps: number | null; cfg: number | null; sampler: string; scheduler: string; upscale_model: string }
 export type ObservationSettings = { operation?: 'generate' | 'upscale' | 'refine' | 'inpaint' | 'remove'; mask?: { id: string; width: number | null; height: number | null }; upscale_model?: string; denoise?: number | null; hires?: ObservationHires; preset: string; model: string; clip: string; vae: string; steps: number | null; cfg: number | null; sampler: string; scheduler: string; width: number | null; height: number | null; seed: number | null; loras: { name: string; weight: number }[] }
 export type Observation = {
@@ -41,12 +41,13 @@ export type ObservationsView = { observations: Observation[]; total: number; lim
 export const OBSERVATION_SOURCES: { id: ObservationSource; label: string; detail: string }[] = [
   { id: 'user_feedback', label: 'Yours', detail: 'From what you said about the picture' },
   { id: 'vision', label: 'Vision', detail: 'From what a vision model saw in the picture' },
+  { id: 'automatic', label: 'Automatic check', detail: 'From the quality check after a generation: a clearly broken picture, or a retry that fixed one' },
   { id: 'suggestion', label: 'Agent’s own guess', detail: 'The agent’s own idea, with no evidence behind it' },
 ]
 export const sourceLabel = (s: ObservationSource | null) => OBSERVATION_SOURCES.find((x) => x.id === s)?.label ?? 'Unknown source'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const isSource = (v: unknown): v is ObservationSource => v === 'user_feedback' || v === 'vision' || v === 'suggestion'
+const isSource = (v: unknown): v is ObservationSource => v === 'user_feedback' || v === 'vision' || v === 'automatic' || v === 'suggestion'
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null)

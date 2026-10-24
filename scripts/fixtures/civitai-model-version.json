@@ -1,0 +1,19 @@
+{
+  "id": 111222,
+  "modelId": 333444,
+  "name": "v8.0",
+  "baseModel": "Illustrious",
+  "trainedWords": ["fixture style", ""],
+  "description": "<p>Recommended: <b>DPM++ 2M Karras</b>, 20 steps, CFG 5.</p><script>alert(1)</script><p>Clip skip 2 &amp; no score tags.</p>",
+  "model": { "name": "Fixture Illustrious XL", "type": "Checkpoint", "nsfw": false },
+  "stats": { "downloadCount": 10 },
+  "files": [{ "name": "fixtureIllustriousXL_v8.safetensors", "hashes": { "SHA256": "AB" } }],
+  "images": [
+    { "nsfwLevel": 1, "width": 832, "height": 1216, "meta": { "sampler": "DPM++ 2M", "Schedule type": "Karras", "steps": 20, "cfgScale": 5, "clipSkip": 2, "Size": "832x1216", "prompt": "masterpiece, best quality, a lighthouse on a cliff at dawn, <lora:fixtureDetail:0.6>", "negativePrompt": "lowres, blurry" } },
+    { "nsfwLevel": 1, "width": 832, "height": 1216, "meta": { "sampler": "DPM++ 2M Karras", "steps": 20, "cfgScale": 5, "clipSkip": 2, "Size": "832x1216", "prompt": "a red fox in a snowy forest, <lora:fixtureDetail:0.8>", "negativePrompt": "lowres" } },
+    { "nsfwLevel": 2, "width": 1664, "height": 2432, "meta": { "sampler": "DPM++ 2M", "Schedule type": "Karras", "steps": 24, "cfgScale": 5.5, "clipSkip": 2, "prompt": "a cup of tea on a wooden table" } },
+    { "nsfwLevel": 1, "width": 1024, "height": 1024, "meta": { "sampler": "Euler a", "steps": 28, "cfgScale": 4, "clipSkip": 1, "Size": "1024x1024", "prompt": "a sailboat on a calm lake" } },
+    { "nsfwLevel": 1, "width": 832, "height": 1216, "meta": null },
+    { "nsfwLevel": 1, "width": 832, "height": 1216, "meta": { "sampler": "DPM++ 2M", "Schedule type": "Karras", "steps": 18, "cfgScale": 5, "Size": "832x1216", "prompt": "a mountain village at night" } }
+  ]
+}
