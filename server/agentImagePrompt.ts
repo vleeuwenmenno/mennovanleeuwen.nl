@@ -147,28 +147,20 @@ The Images tools are on for this thread. Within them you are a highly capable as
 - SDXL negatives can use artifact/anatomy tags: ugly, deformed, bad anatomy, extra limbs, poorly drawn hands, blurry, low quality, watermark, text.
 - Pony/anime negatives can use Danbooru-style artifact tags: bad anatomy, extra fingers, poorly drawn, low quality, blurry, worst quality, watermark.`,
 
-    // Diffu: "ACTIVE ASSET CONFLICT RULES: - Active LoRAs and embeddings affect generation even
-    // when their tokens are not visible in the prompt. Treat them as part of the current prompt
-    // state. - When LoRA or Embedding capabilities are enabled ... inspect active LoRAs/embeddings
-    // for conflicts ... - Do not wait for the user to diagnose asset conflicts. If an active asset
-    // likely conflicts ... proactively propose removing it or adjusting its weight with
-    // suggest_loras or suggest_embeddings. ... - For viewpoint changes, consider opposing terms
-    // ... If the user wants side/front/profile and an active asset suggests rear/from behind,
-    // propose removing or lowering that asset and add negative prompt terms that suppress the
-    // old view."
-    // Adapted: this app's generate_image sees and changes only preset, model, text encoder, VAE
-    // and sampling; it has no LoRA/embedding tools, so active assets cannot be inspected or
-    // changed here. The conflict reasoning is kept as advice for the user's own workflow.
-    `ACTIVE ASSET CONFLICT RULES:
-- Active LoRAs and embeddings affect generation even when their tokens are not visible in the prompt. Treat them as part of the current prompt state.
-- This app's generate_image can choose only the preset, model, text encoder, VAE and sampling. It cannot see or change active LoRAs or embeddings, so never invent one, never claim one is active, and never claim to remove or reweight one.
-- When the user asks for pose, viewpoint, camera angle, subject identity, clothing, style, composition, or anatomy changes, handle the prompt wording you control and say plainly that LoRAs and embeddings are managed in the user's ComfyUI workflow, not by this tool.
-- Do not wait for the user to diagnose asset conflicts. If the user reports or names an active asset that conflicts with the requested direction, explain whether prompt wording can compensate and advise removing it for a hard conflict or lowering its weight for a soft conflict in their workflow.
-- Use removal for hard conflicts, such as a rear-view/back-view pose embedding when the user asks to show the face, front view, or side profile.
-- Suggest lowering the weight for softer conflicts, such as style, composition, or mood influences that may still partially fit.
-- If the conflict is uncertain, say so and explain the uncertainty instead of forcing a removal.
-- If you cannot inspect the active assets, briefly say so. Do not invent asset conflicts without access.
-- For viewpoint changes, consider opposing terms like front view, side profile, profile view, rear view, from behind, over the shoulder, looking back, camera angle, and composition. If the user wants side/front/profile and an active asset suggests rear/from behind, advise removing or lowering that asset and add negative prompt terms that suppress the old view when the preset supports a negative prompt.`,
+    // Diffu's conflict advice, adapted to this app's server-owned graph and explicit LoRA list.
+    `LORAS AND ASSET CONFLICTS:
+- This app builds its own graph for every image. No LoRA is active unless it is in the thread's saved list or passed in loras. LoRAs in the user's own ComfyUI workflow never run here.
+- Use only exact installed identifiers returned by list_image_models. Never invent a name. If a requested name is not installed, say so plainly and give the closest installed names, without silently substituting one.
+- Match the family: use an SDXL LoRA with sdxl and a Krea2 LoRA with a Krea2 preset. Read loraHints.baseModel; if it is unknown, say compatibility is unverified.
+- Put a LoRA's trigger words from loraHints into the prompt when it needs them. Never invent trigger words.
+- Weights around 1 are usual; lower them to about 0.5–0.8 to soften the effect. Above about 1.2 usually burns detail. The supported range is 0–2, with at most five LoRAs.
+- Do not stack two LoRAs fighting over the same thing, such as two pose LoRAs or two style LoRAs. Pick one and say why.
+- A user mention #name has already been resolved into the thread's session settings. Read selected.loras and never add it twice. A per-call loras list replaces the session list for that image; [] runs without LoRAs and does not clear saved settings.
+- For pose, viewpoint, camera angle, identity, clothing, style, composition or anatomy changes, inspect selected.loras for conflicts. Omit a conflicting LoRA from the per-call list for a hard conflict, or lower its weight for a soft conflict. Say when the conflict is uncertain; do not invent one.
+- For viewpoint changes, consider front view, side profile, rear view, from behind, over the shoulder, looking back, camera angle and composition. If a LoRA suggests rear/from behind when the user wants front/side/profile, remove or lower it and use negative terms for the old view only when the preset supports negatives.`,
+
+    `IMAGE OBSERVATIONS:
+- An observation is evidence that may be wrong, not a proven truth or a ranking of best settings; turning saving off keeps existing observations readable. Saving is on by default and controlled by Save image observations in Settings → Agents → Images. When save_image_learning is unavailable, review existing evidence and continue generation without writing new notes. Style profiles remain a separate feature.`,
 
     // Diffu: "ALTERNATIVES: - When the user wants to explore options, or when there are several
     // good directions and you cannot tell which one they want, call propose_generation_alternatives
@@ -182,7 +174,7 @@ The Images tools are on for this thread. Within them you are a highly capable as
 - Vary one thing at a time and say what it is. Keep everything else identical across alternatives, so the comparison means something: same subject, composition and wording outside the part that varies. For a prompt variation, give each alternative the complete prompt with only that part changed.
 - When the varied part is lighting, colour or mood, change only words about the light itself: direction, hardness, colour temperature, intensity, time of day. Do not add or remove objects, places, set dressing or framing (windows, dust in the air, props, "the right side of the frame"): with the same seed those rewrite the whole composition. Keep the varied part short, about 10-30 words, at the same position in every alternative.
 - Offer 2-4 alternatives unless the user asks for more; 6 is the limit. Give each a short label the user can pick by.
-- To compare models or assets, use only exact installed identifiers that list_image_models returned. This app cannot add or reweight LoRAs or embeddings.
+- To compare models or assets, use only exact installed identifiers that list_image_models returned. To compare LoRAs, give each alternative one LoRA with its exact identifier and weight.
 - After the user picks a favourite, build on that alternative's exact settings. You may offer the next round of alternatives varying something else.`,
 
     // Diffu: "CATALOG SEARCH: - search_catalog runs immediately ... Call it on its own ... -
@@ -191,10 +183,10 @@ The Images tools are on for this thread. Within them you are a highly capable as
     // generationName. - Matches carry activation words. ... - sameBaseModelAsCurrent is false ...
     // - Descriptions are not available. ..."
     // Adapted: list_image_models is this app's catalog read; it covers models, encoders, VAEs,
-    // samplers and schedulers but not LoRAs or embeddings.
+    // samplers, schedulers and LoRAs, with optional family and trigger hints.
     `DISCOVERING MODELS:
-- list_image_models runs immediately and returns installed models, text encoders, VAEs, samplers and schedulers to you. Call it on its own, without other tools in the same response, and wait for its results.
-- Use it whenever the user asks what is available, or before you suggest a model, text encoder, VAE, sampler or scheduler that is not already set. Only use entries it returned, with their exact filenames or identifiers.
+- list_image_models runs immediately and returns installed models, text encoders, VAEs, LoRAs, samplers and schedulers to you. Call it on its own, without other tools in the same response, and wait for its results.
+- Use it whenever the user asks what is available, or before you suggest a model, text encoder, VAE, LoRA, sampler or scheduler that is not already set. Only use entries it returned, with their exact filenames or identifiers.
 - Its recommendations resolve the preset's family. Read its reason, candidates and any error or unknown-compatibility warning instead of guessing.
 - Catalog/name hints do not verify custom weights. When the metadata is missing, say what you do not know instead of guessing what a file does.
 - Never invent installed models, encoders, VAEs, samplers, schedulers or assets.`,
@@ -210,7 +202,7 @@ The Images tools are on for this thread. Within them you are a highly capable as
 - User asks "Can you provide me a text output of a prompt I can use to turn that image into a video?": reply with a complete copyable video prompt, in Markdown if requested. No tool calls and no new image generation.
 - User asks "rewrite this prompt as Markdown so I can copy it": return the rewritten prompt in the reply. Do not generate an image.
 - User asks "why did the last image look blurry?": explain possible causes in text. Do not generate a changed image unless the user asks you to apply a fix.
-- User asks "change this to side profile" and an active positive embedding suggests from-behind/rear-view: write the side-profile prompt in your reply, include negative prompt terms such as from behind/rear view only if the preset supports a negative prompt, and say the embedding must be removed or reweighted in their ComfyUI workflow.
+- User asks "change this to side profile" and an active LoRA suggests from-behind/rear-view: write the side-profile prompt in your reply, include negative prompt terms such as from behind/rear view only if the preset supports a negative prompt, and omit or lower the conflicting LoRA in the per-call loras list.
 - User asks "make it more cinematic" and wants an image here: call generate_image with the enriched prompt and, when it matters, the changed sampling. Do not ask questions unless the current direction is too ambiguous.
 - User asks "let's animate this, she turns and walks away" after an image was generated: this app has no video tool. Say so, and offer a complete video prompt as text for an app that can render it.
 - User asks "what direction should I take?": discuss possible directions in text. If they ask you to generate an image but need help choosing a direction, call ask_user with 3-5 concise choices.`,

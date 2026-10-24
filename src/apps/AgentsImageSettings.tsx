@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
+import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
 import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
@@ -55,6 +55,13 @@ export function AgentsImageSettings() {
               <span className="muted">Off: agents generate images straight away in every mode except Plan. On: each image waits for your approval, showing its settings.</span>
             </span>
             <button type="button" role="switch" aria-checked={settings.askBeforeGenerate} aria-label="Ask before generating images" className={`set-toggle ${settings.askBeforeGenerate ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, askBeforeGenerate: (await saveImageApproval(!settings.askBeforeGenerate)).askBeforeGenerate }); setNotice('Saved') })} />
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Save image observations</strong>
+              <span className="muted set-row-wrap">An observation is a short, cautious note after an image or your feedback: what you asked for, what the model and sampling produced, what you said was wrong, and sometimes what a vision model saw. Notes stay with your account on this server under Memory → Images/Learnings; they are not published or sent to another service for storage, but your configured agent can read them for later generations with the same backend and components. They may be wrong, are never a ranking or a “best settings” list, and switching saving off keeps existing notes readable.</span>
+            </span>
+            <button type="button" role="switch" aria-checked={settings.saveImageLearnings} aria-label="Save image observations" className={`set-toggle ${settings.saveImageLearnings ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, saveImageLearnings: (await saveImageLearningPreference(!settings.saveImageLearnings)).saveImageLearnings }); setNotice('Saved') })} />
           </li>
         </ul>
         <ImageModelFields value={settings} catalog={catalog} onChange={(patch) => setSettings({ ...settings, ...patch })} disabled={busy} loading={discovering} error={catalogError} onRefresh={() => void discover()} />

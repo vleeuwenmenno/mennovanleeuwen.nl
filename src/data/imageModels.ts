@@ -54,7 +54,9 @@ export function visibleModelAssets(assets: readonly ModelAsset[], folder: string
   return assets.filter((a) => words.length ? words.every((word) => `${a.folder}/${a.name}`.toLocaleLowerCase().includes(word)) : a.folder === folder)
 }
 export type ImagePreset = 'sd15' | 'sdxl' | 'z_image' | 'z_image_turbo' | 'krea2_raw' | 'krea2_turbo'
-export type ImageConfig = { preset: ImagePreset; model: string; clip: string; vae: string; width: number; height: number; seed: number | null }
+export type ImageLora = { name: string; weight: number }
+export type ImageLoraHint = { name: string; baseModel: string; triggers: string[] }
+export type ImageConfig = { loras: ImageLora[]; preset: ImagePreset; model: string; clip: string; vae: string; width: number; height: number; seed: number | null }
 export type ImageOverrides = Partial<ImageConfig>
 export const IMAGE_PRESETS: { id: ImagePreset; title: string; detail: string; requirements: string; size: number }[] = [
   { id: 'sd15', title: 'SD 1.5', detail: '512 px · 20 steps · CFG 7 · DPM++ 2M / Karras', requirements: 'A complete SD 1.5 checkpoint with its text encoder and VAE.', size: 512 },
@@ -77,10 +79,10 @@ export function imagePresetSpec(preset: ImagePreset) {
   }
 }
 
-export type ImageAssets = Pick<ImageConfig, 'preset' | 'model' | 'clip' | 'vae'>
+export type ImageAssets = Pick<ImageConfig, 'preset' | 'model' | 'clip' | 'vae'> & { loras?: ImageLora[] }
 export type ImageAssetField = 'model' | 'clip' | 'vae'
 export type ImageModelHint = { name: string; category: 'checkpoints' | 'diffusionModels'; baseModel: string }
-export type ImageAssetCatalog = { checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
+export type ImageAssetCatalog = { checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; loras?: string[]; loraHints?: ImageLoraHint[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
 export type ImageSelection = { value: string; automatic: boolean; reason: string; candidates: string[]; error?: string }
 const assetKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 const assetLeaf = (name: string) => name.split(/[\\/]/).at(-1)!.replace(/\.[^.]+$/, '')
@@ -150,7 +152,7 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
 export const IMAGE_SAMPLERS = ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'] as const
 export const IMAGE_SCHEDULERS = ['simple', 'karras', 'normal', 'sgm_uniform', 'beta'] as const
 export type ImageSampling = { steps: number; cfg: number; sampler: string; scheduler: string }
-export type ImageGenerationSettings = ImageAssets & ImageSampling & { width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: 1; profile_id?: number | null; profile_reason?: string }
+export type ImageGenerationSettings = ImageAssets & ImageSampling & { loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: 1; profile_id?: number | null; profile_reason?: string }
 /** Diffu defaults.ts preferences, restricted to the KSampler workflows we actually build. */
 export function recommendedImageSampling(preset: ImagePreset, model: string, catalog?: { samplers?: string[]; schedulers?: string[]; modelHints?: ImageModelHint[] }): ImageSampling {
   const spec = imagePresetSpec(preset)

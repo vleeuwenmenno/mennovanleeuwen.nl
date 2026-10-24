@@ -52,6 +52,15 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
       {!view && !error && <p role="status">Loading session settings…</p>}
       {view && effective && <>
         <ImageModelFields value={effective} catalog={catalog} onChange={change} disabled={busy} loading={loading} error={catalogError} onRefresh={() => void refresh()} extra={source} />
+        <div className="image-config-field">
+          <div className="image-config-label"><span>LoRAs</span>{source('loras')}</div>
+          <p className="muted set-help">Add installed LoRAs with # in a message. They run in this order; weights range from 0 to 2.</p>
+          {!effective.loras.length && <p className="muted">No LoRAs selected.</p>}
+          {effective.loras.map((lora, i) => <div className="image-lora-row" key={`${i}:${lora.name}`}>
+            <label><span>{lora.name}</span><input aria-label={`Weight for ${lora.name}`} type="number" min={0} max={2} step={0.1} value={lora.weight} disabled={busy} onChange={(e) => change({ loras: effective.loras.map((l, at) => at === i ? { ...l, weight: Number(e.target.value) } : l) })} /></label>
+            <button type="button" className="btn btn-small" aria-label={`Remove ${lora.name}`} disabled={busy} onClick={() => change({ loras: effective.loras.filter((_, at) => at !== i) })}>Remove</button>
+          </div>)}
+        </div>
         <div className="image-numbers">
           {(['width', 'height'] as const).map((key) => <div className="image-config-field" key={key}><div className="image-config-label"><label htmlFor={`session-image-${key}`}>{key === 'width' ? 'Width' : 'Height'} (px)</label>{source(key)}</div><input id={`session-image-${key}`} type="number" min={256} max={1536} step={64} value={effective[key]} disabled={busy} onChange={(e) => change({ [key]: Number(e.target.value) })} /></div>)}
           <div className="image-config-field"><div className="image-config-label"><label htmlFor="session-image-seed">Seed</label>{source('seed')}</div><input id="session-image-seed" type="number" min={0} step={1} placeholder="Random each time" value={effective.seed ?? ''} disabled={busy} onChange={(e) => change({ seed: e.target.value === '' ? null : Number(e.target.value) })} /></div>

@@ -1,3 +1,4 @@
+import { messageMentions, mentionAt, mentionText } from '../src/data/agentMentions.ts'
 // Real Agents HTTP/streaming integration against mocked Ollama and ComfyUI. No GPU or real data.
 import assert from 'node:assert/strict'
 import { createServer, type ServerResponse } from 'node:http'
@@ -121,7 +122,11 @@ console.log('PASS ComfyUI progress messages for this prompt only, step validatio
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
 const send = (res: ServerResponse, data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
-const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
+const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
+const loraNames = ['Krea/style.safetensors', 'SDXL/pose.safetensors', 'Folder/Soft light.safetensors']
+info.LoraLoader.input.required.lora_name = [[loraNames[1], loraNames[0]]]
+info.LoraLoaderModelOnly.input.required.lora_name = [[loraNames[0], loraNames[2]]]
+let loraHintsMode = 'ok'
 info.CheckpointLoaderSimple.input.required.ckpt_name = [['test.safetensors']]
 info.UNETLoader.input.required.unet_name = [['z-test.safetensors', 'krea-raw.safetensors', 'krea-turbo.safetensors']]
 info.CLIPLoader.input.required = { clip_name: [['encoder.safetensors']], type: [['lumina2', 'krea2']] }
@@ -196,6 +201,18 @@ const comfy = createServer((req, res) => {
       if (catalogBehavior === 'invalid') return res.end('not JSON')
       if (catalogBehavior === 'missing' && node === 'SaveImage') return send(res, {})
       return send(res, { [node]: info[node], ...(catalogBehavior === 'aggregate' ? { padding: 'x'.repeat(900 * 1024) } : {}) })
+    }
+    if (path === '/api/lm/loras/list') {
+      if (loraHintsMode === 'missing') return res.writeHead(404).end()
+      if (loraHintsMode === 'invalid') return res.end('not JSON')
+      if (loraHintsMode === 'oversize') return res.end('x'.repeat(1024 * 1024 + 1))
+      const items = [
+        { folder: 'Krea', file_path: '/private/models/loras/Krea/style.safetensors', base_model: 'Krea2', civitai: { trainedWords: ['style-trigger', ...Array.from({ length: 12 }, (_, i) => `trigger-${i}`), 'x'.repeat(200)] } },
+        { folder: 'SDXL', file_path: '/private/models/loras/SDXL/pose.safetensors', base_model: 'SDXL', civitai: { trainedWords: ['pose-trigger'] } },
+        { folder: 'Wrong', file_path: '/private/models/loras/Wrong/Soft light.safetensors', base_model: 'Wrong family', civitai: { trainedWords: ['must-not-join'] } },
+      ]
+      if (loraHintsMode === 'duplicate') items.push(items[0])
+      return send(res, { items })
     }
     if (path === '/api/lm/checkpoints/list') {
       if (previewMode === 'missing') return res.writeHead(404).end()
@@ -294,8 +311,8 @@ const json = async (method: string, path: string, body?: unknown, account = 0) =
 const thread = (permission = 'bypass') => json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model', permission })
 const approvalSummaries: any[] = []
 let approvalHook: (() => Promise<void>) | undefined
-const turn = async (id: string, approve?: boolean) => {
-  const response = await api('POST', `/api/agents/threads/${id}/messages`, { text: 'Generate a bird image' })
+const turn = async (id: string, approve?: boolean, text = 'Generate a bird image') => {
+  const response = await api('POST', `/api/agents/threads/${id}/messages`, { text })
   const reader = response.body!.getReader()
   let buffer = ''
   for (;;) {
@@ -338,6 +355,8 @@ try {
   const settings = { url: comfyUrl, token: 'test-secret', preset: 'sdxl' as const, model: 'test.safetensors', clip: '', vae: '' }
   const saved = await json('PUT', '/api/agents/images/settings', settings)
   assert.equal(saved.token, true)
+  assert.equal(saved.saveImageLearnings, true)
+  assert.equal((await api('PUT', '/api/agents/images/settings', { saveImageLearnings: 'false' })).status, 400)
   assert.ok(!JSON.stringify(saved).includes('test-secret'))
   assert.ok(!String((database().prepare("SELECT secret FROM integrations WHERE name = 'agents-comfyui'").get() as any).secret).includes('test-secret'))
   assert.equal((await json('GET', '/api/agents/images/settings', undefined, 1)).url, '')
@@ -346,6 +365,11 @@ try {
   assert.deepEqual(catalog.diffusionModels, ['z-test.safetensors', 'krea-raw.safetensors', 'krea-turbo.safetensors'])
   assert.deepEqual(catalog.clips, ['encoder.safetensors'])
   assert.deepEqual(catalog.vaes, ['vae.safetensors'])
+  assert.deepEqual(catalog.loras, [...loraNames].sort())
+  assert.equal(catalog.loraHints.length, 2)
+  assert.equal(catalog.loraHints[0].baseModel, 'Krea2')
+  assert.equal(catalog.loraHints[0].triggers.length, 8)
+  assert.equal(catalog.loraHints[0].triggers[0], 'style-trigger')
   assert.deepEqual(catalog.clipTypes, ['lumina2', 'krea2'])
   assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'])
   assert.deepEqual(catalog.schedulers, ['simple', 'beta', 'karras', 'normal', 'sgm_uniform'])
@@ -377,6 +401,40 @@ try {
       assert.throws(() => imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'test', negative_prompt: 'blur' }), /positive prompt only/)
     }
   }
+  const chain = [{ name: loraNames[0], weight: 0.8 }, { name: loraNames[1], weight: 1.2 }]
+  for (const preset of ['krea2_turbo', 'sdxl'] as const) {
+    const graph = imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'LoRA chain', loras: chain }, catalog).graph
+    assert.equal(graph['10'].class_type, preset === 'sdxl' ? 'LoraLoader' : 'LoraLoaderModelOnly')
+    assert.deepEqual(graph['10'].inputs.model, ['1', 0])
+    assert.deepEqual(graph['11'].inputs.model, ['10', 0])
+    assert.equal(graph['10'].inputs.strength_model, 0.8)
+    assert.equal(graph['11'].inputs.strength_model, 1.2)
+    assert.deepEqual(graph['7'].inputs.model, ['11', 0])
+    assert.deepEqual(graph['4'].inputs.clip, preset === 'sdxl' ? ['11', 1] : ['2', 0])
+    if (preset === 'sdxl') {
+      assert.deepEqual(graph['10'].inputs.clip, ['1', 1])
+      assert.deepEqual(graph['11'].inputs.clip, ['10', 1])
+      assert.deepEqual(graph['5'].inputs.clip, ['11', 1])
+      assert.equal(graph['10'].inputs.strength_clip, 0.8)
+      assert.equal(graph['11'].inputs.strength_clip, 1.2)
+    } else assert.equal(graph['10'].inputs.clip, undefined)
+    assert.equal(graph['9'].class_type, 'SaveImage')
+    const fallback = preset === 'sdxl' ? 'LoraLoaderModelOnly' : 'LoraLoader'
+    assert.equal(imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }).graph['10'].class_type, fallback)
+  }
+  assert.throws(() => imageWorkflow(settings, { prompt: 'missing loader', loras: chain }, { nodes: [] }), /no LoRA loader/)
+  assert.equal(imageWorkflow(settings, { prompt: 'default weight', loras: [{ name: loraNames[0] }] }).graph['10'].inputs.strength_model, 1)
+  for (const loras of [null, {}, Array.from({ length: 6 }, () => chain[0]), [{ name: 'a', weight: NaN }], [{ name: 'a', weight: Infinity }], [{ name: 'a', weight: -0.1 }], [{ name: 'a', weight: 2.1 }], [{ name: 'a', weight: '1' }]]) {
+    const { validateImageOverrides } = await import('../server/agentImages.ts')
+    assert.throws(() => validateImageOverrides({ loras }))
+  }
+  const quoted = mentionText('#', loraNames[2])
+  assert.equal(quoted, '#"Folder/Soft light.safetensors"')
+  assert.deepEqual(messageMentions(`Use ${quoted}:0.8 $msh @list_image_models #missing`), [{ sigil: '#', name: loraNames[2], weight: 0.8 }, { sigil: '$', name: 'msh' }, { sigil: '@', name: 'list_image_models' }, { sigil: '#', name: 'missing', weight: 1 }])
+  assert.deepEqual(messageMentions('email@example.com @./file # remember this'), [])
+  assert.deepEqual(mentionAt('text #Sty', 9), { start: 5, sigil: '#', query: 'sty' })
+  assert.equal(mentionAt('text @./file', 12), null)
+  console.log('PASS ordered checkpoint and model-only LoRA graphs, fallbacks, weights/count bounds and shared mention syntax')
   assert.throws(() => imageWorkflow(settings, { prompt: 'test', width: 513 }))
   assert.throws(() => imageWorkflow(settings, { prompt: 'test', width: 1536, height: 1536 }))
   assert.throws(() => imageWorkflow(settings, { prompt: 'test', seed: -1 }))
@@ -421,6 +479,10 @@ try {
   // The Diffu image guidance is part of the system prompt only while Images is on.
   const imageGuidance = imagePromptSection()
   assert.ok(imageGuidance.includes('MODEL FAMILY GUIDANCE'))
+  assert.ok(imageGuidance.includes('LORAS AND ASSET CONFLICTS'))
+  assert.ok(imageGuidance.includes('selected.loras'))
+  assert.ok(imageGuidance.includes('IMAGE OBSERVATIONS'))
+  assert.ok(!imageGuidance.includes('cannot see or change active LoRAs'))
   // The adult-content stance, without which models refuse an explicit request (Diffu never
   // filters a generation, so it never needed the wording).
   assert.ok(imageGuidance.includes('CONTENT AND REFUSALS'))
@@ -538,7 +600,7 @@ try {
   assert.equal((await api('DELETE', endpoint(first.id), undefined, 1)).status, 404)
   const exactModel = 'studio\\portraits\\test.safetensors'
   info.CheckpointLoaderSimple.input.required.ckpt_name[0].push(exactModel)
-  const overrides = { preset: 'sd15', model: exactModel, width: 768, height: 512, seed: 123 }
+  const overrides = { preset: 'sd15', model: exactModel, width: 768, height: 512, seed: 123, loras: [{ name: loraNames[1], weight: 0.8 }] }
   const custom = await json('PUT', endpoint(first.id), overrides)
   assert.deepEqual(custom.overrides, overrides)
   assert.equal((await json('GET', endpoint(second.id))).effective.model, settings.model)
@@ -552,18 +614,24 @@ try {
   generationArgs = { prompt: 'Use session settings' }
   const fromSession = result(await turn(first.id)).image
   assert.equal(fromSession.seed, 123)
+  assert.deepEqual(fromSession.settings.loras, overrides.loras)
+  assert.equal(submitted['10'].inputs.strength_clip, 0.8)
   assert.equal(fromSession.width, 768)
   assert.equal(fromSession.height, 512)
   assert.equal(submitted['1'].inputs.ckpt_name, exactModel)
-  generationArgs = { prompt: 'Use per-call settings', seed: 77, width: 512 }
+  generationArgs = { prompt: 'Use per-call settings', seed: 77, width: 512, loras: [] }
   const once = result(await turn(first.id)).image
   assert.equal(once.seed, 77)
   assert.equal(once.width, 512)
+  assert.deepEqual(once.settings.loras, [])
+  assert.equal(submitted['10'], undefined)
   assert.deepEqual((await json('GET', endpoint(first.id))).overrides, overrides)
   await json('PUT', '/api/agents/images/settings', { preset: 'sd15' })
   assert.equal((await json('GET', endpoint(second.id))).effective.width, 512)
   await json('PUT', '/api/agents/images/settings', { url: '' })
-  assert.deepEqual((await json('DELETE', endpoint(first.id))).overrides, {})
+  const resetImages = await json('DELETE', endpoint(first.id)) // /images reset uses this endpoint, including offline.
+  assert.deepEqual(resetImages.overrides, {})
+  assert.deepEqual(resetImages.effective.loras, [])
   await json('PUT', '/api/agents/images/settings', settings)
   const z = await json('PUT', endpoint(second.id), { preset: 'z_image_turbo', model: 'z-test.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors', seed: null })
   assert.equal(z.effective.seed, null)
@@ -634,7 +702,7 @@ try {
   const tuningThread = await thread('default')
   const beforeAccount = await json('GET', '/api/agents/images/settings')
   const beforeSession = (await json('GET', endpoint(tuningThread.id))).overrides
-  generationArgs = { prompt: 'Tuned image', preset: 'krea2_raw', model: 'krea-raw.safetensors', clip: 'qwen3vl_4b.safetensors', vae: 'qwen_image_vae.safetensors', steps: 32, cfg: 4.5, sampler: 'dpmpp_2m', scheduler: 'karras', width: 768, height: 1024, seed: 321, negative_prompt: 'blurry' }
+  generationArgs = { prompt: 'Tuned image', preset: 'krea2_raw', model: 'krea-raw.safetensors', clip: 'qwen3vl_4b.safetensors', vae: 'qwen_image_vae.safetensors', steps: 32, cfg: 4.5, sampler: 'dpmpp_2m', scheduler: 'karras', width: 768, height: 1024, seed: 321, negative_prompt: 'blurry', loras: chain }
   const tuned = result(await turn(tuningThread.id, true)).image
   assert.equal(tuned.settings.steps, 32)
   assert.equal(tuned.settings.cfg, 4.5)
@@ -643,6 +711,8 @@ try {
   assert.equal(submitted['7'].inputs.sampler_name, 'dpmpp_2m')
   const review = approvalSummaries.at(-1)
   assert.equal(review.body, 'Tuned image')
+  assert.ok(review.rows.some(([label, value]: string[]) => label === 'LoRAs' && value === `${loraNames[0]} (0.8), ${loraNames[1]} (1.2)`))
+  assert.deepEqual(tuned.settings.loras, chain)
   assert.ok(review.rows.some(([label, value]: string[]) => label === 'Sampling' && value.includes('32 steps') && value.includes('4.5')))
   assert.ok(review.rows.some(([label, value]: string[]) => label === 'VAE' && value === 'qwen_image_vae.safetensors'))
   assert.deepEqual(await json('GET', '/api/agents/images/settings'), beforeAccount)
@@ -839,6 +909,29 @@ try {
   requestedTool = 'save_image_learning'; generationArgs = { image_id: lastVisionImage.id, profile_id: profile.id, task: 'Experiment', note: 'Try another framing only if requested.', source: 'suggestion' }
   const saveTurn = await turn(visionThread.id)
   assert.equal(JSON.parse(saveTurn.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).source.kind, 'suggestion')
+  const savedCount = () => (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = 1 AND image_learning IS NOT NULL').get() as any).n
+  const countBeforeOff = savedCount()
+  await json('PUT', '/api/agents/images/settings', { saveImageLearnings: false })
+  const offSave = await turn(visionThread.id)
+  assert.match(JSON.parse(offSave.messages.findLast((m: any) => m.toolName === 'save_image_learning').content).error, /observations are turned off.*Settings/)
+  assert.ok(!providerInputs.at(-1).tools.some((t: any) => t.function.name === 'save_image_learning'))
+  assert.ok(providerInputs.at(-1).tools.some((t: any) => t.function.name === 'read_image_learnings'))
+  assert.ok(providerInputs.at(-1).tools.some((t: any) => t.function.name === 'save_image_profile'))
+  assert.equal(savedCount(), countBeforeOff)
+  assert.throws(() => saveImageLearning(owner, visionThread.id, generationArgs), /observations are turned off/)
+  const saveArgs = generationArgs
+  requestedTool = 'read_image_learnings'; generationArgs = { profile_id: profile.id, all_models: true }
+  const readWhileOff = await turn(visionThread.id)
+  assert.ok(JSON.parse(readWhileOff.messages.findLast((m: any) => m.toolName === 'read_image_learnings').content).notes.length)
+  requestedTool = 'generate_image'; generationArgs = { prompt: 'Review without saving', profile_id: profile.id }
+  assert.ok(result(await turn(visionThread.id)).image)
+  assert.equal(savedCount(), countBeforeOff)
+  await json('PUT', '/api/agents/images/settings', { saveImageLearnings: true })
+  requestedTool = 'save_image_learning'; generationArgs = saveArgs
+  assert.equal(JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'save_image_learning').content).source.kind, 'suggestion')
+  assert.equal(savedCount(), countBeforeOff + 1)
+  assert.ok(providerInputs.at(-1).tools.some((t: any) => t.function.name === 'save_image_learning'))
+  console.log('PASS observations default on, disabled tool and direct writes, existing reads and review/retry, re-enabled writes')
   assert.equal(decide('test', 'default', { name: 'save_image_learning', arguments: {} }), 'ask')
   assert.equal(decide('test', 'plan', { name: 'save_image_profile', arguments: {} }), 'refuse')
   await server.stop(); await server.start()
@@ -879,6 +972,67 @@ try {
   await json('DELETE', `/api/agents/image-profiles/${otherProfile.id}`)
   requestedTool = 'generate_image'; generationArgs = { prompt: 'Normal generation' }
   console.log('PASS durable image evidence, exact provenance/settings, profile and backend isolation, first-attempt and batch review guard, per-call precedence, protected preferences, quota, bounded relevance, deletion/reset and restart')
+  // LoRA HTTP discovery, mention resolution and real tool calls use the same installed identifiers.
+  const loraEndpoint = '/api/agents/images/loras'
+  assert.equal((await fetch(server.origin + loraEndpoint)).status, 401)
+  const exposedLoras = await json('GET', loraEndpoint)
+  assert.deepEqual(exposedLoras.loras.map((l: any) => l.name), [...loraNames].sort())
+  assert.ok(!JSON.stringify(exposedLoras).includes('/private/') && !JSON.stringify(exposedLoras).includes('test-secret'))
+  for (const mode of ['missing', 'invalid', 'oversize']) {
+    loraHintsMode = mode
+    assert.ok((await json('GET', loraEndpoint)).loras.every((l: any) => !l.baseModel && !l.triggers.length))
+  }
+  loraHintsMode = 'duplicate'
+  assert.equal((await json('GET', loraEndpoint)).loras.find((l: any) => l.name === loraNames[0]).baseModel, '')
+  loraHintsMode = 'ok'
+  const mentionThread = await thread()
+  requestedTool = 'list_image_models'; generationArgs = { query: 'style', limit: 1 }
+  const mentionTextInput = `Use #STYLE:0.8 $msh @list_image_models #not-installed $missing-skill @missing_tool and #"Folder/Soft light.safetensors"`
+  const mentioned = await turn(mentionThread.id, undefined, mentionTextInput)
+  const userMessage = mentioned.messages.findLast((m: any) => m.role === 'user')
+  assert.equal(userMessage.content, mentionTextInput)
+  assert.equal(userMessage.attachments.filter((a: any) => a.source === 'application context').length, 1)
+  assert.ok(userMessage.attachments.some((a: any) => a.name === 'msh skill'))
+  const mentionedFiles = JSON.parse((database().prepare('SELECT attachments FROM agent_messages WHERE id = ?').get(userMessage.id) as any).attachments)
+  const contextNote = mentionedFiles.find((a: any) => a.source === 'application context').text
+  assert.match(contextNote, /not user instructions/)
+  assert.match(contextNote, /#not-installed: not installed/)
+  assert.match(contextNote, /\$missing-skill: no such skill/)
+  assert.match(contextNote, /@missing_tool: no such tool/)
+  assert.match(contextNote, /group images is on/)
+  const mentionDiscovery = JSON.parse(mentioned.messages.findLast((m: any) => m.toolName === 'list_image_models').content)
+  assert.deepEqual(mentionDiscovery.options.loras.values, [loraNames[0]])
+  assert.equal(mentionDiscovery.loraHints[0].baseModel, 'Krea2')
+  assert.deepEqual(mentionDiscovery.selected.loras, [{ name: loraNames[0], weight: 0.8 }, { name: loraNames[2], weight: 1 }])
+  assert.deepEqual((await json('GET', endpoint(mentionThread.id))).effective.loras, mentionDiscovery.selected.loras)
+  await turn(mentionThread.id, undefined, '#style:0.5 #not-installed')
+  assert.deepEqual((await json('GET', endpoint(mentionThread.id))).effective.loras, [{ name: loraNames[0], weight: 0.5 }, { name: loraNames[2], weight: 1 }])
+  const slashSkill = await turn(mentionThread.id, undefined, '/msh help with a command')
+  assert.ok(slashSkill.messages.findLast((m: any) => m.role === 'user').attachments.some((a: any) => a.name === 'msh skill'))
+  await json('PATCH', `/api/agents/threads/${mentionThread.id}`, { tools: ['web'] })
+  const disabledMention = await turn(mentionThread.id, undefined, 'Use @generate_image')
+  const disabledUser = disabledMention.messages.findLast((m: any) => m.role === 'user')
+  assert.match((database().prepare('SELECT attachments FROM agent_messages WHERE id = ?').get(disabledUser.id) as any).attachments, /is off.*Tools menu or CLI \/tools/)
+  await json('PATCH', `/api/agents/threads/${mentionThread.id}`, { tools: ['images'] })
+  requestedTool = 'generate_image'
+  for (const loras of [[{ name: 'invented.safetensors' }], [{ name: loraNames[0], weight: -1 }], [{ name: loraNames[0], weight: 3 }], Array.from({ length: 6 }, () => ({ name: loraNames[0] }))]) {
+    const before = submissions
+    generationArgs = { prompt: 'Invalid LoRAs', loras }
+    assert.ok(result(await turn(mentionThread.id)).error)
+    assert.equal(submissions, before)
+    assert.equal((await api('PUT', endpoint(mentionThread.id), { loras })).status, 400)
+  }
+  generationArgs = { prompt: 'Mention settings actually run' }
+  const mentionImage = result(await turn(mentionThread.id)).image
+  assert.equal(submitted['10'].inputs.lora_name, loraNames[0])
+  assert.equal(submitted['10'].inputs.strength_model, 0.5)
+  assert.equal(submitted['11'].inputs.lora_name, loraNames[2])
+  const legacyMetadata = { ...mentionImage.settings }; delete legacyMetadata.loras
+  database().prepare('UPDATE agent_images SET metadata = ? WHERE id = ?').run(JSON.stringify(legacyMetadata), mentionImage.id)
+  assert.deepEqual((await json('GET', mentionImage.url + '/metadata')).settings, legacyMetadata)
+  await json('DELETE', endpoint(mentionThread.id))
+  assert.deepEqual((await json('GET', endpoint(mentionThread.id))).effective.loras, [])
+  console.log('PASS bounded private LoRA discovery/enrichment, mentions and unchanged text, skills, disabled/unknown tools, exact installed names, persistent and per-call lists, legacy metadata')
   const metadataPath = '/api/agents/images/model-metadata?category=checkpoints&name=test.safetensors'
   const metadata = await json('GET', metadataPath)
   assert.equal(metadata.source, 'LoRA Manager')

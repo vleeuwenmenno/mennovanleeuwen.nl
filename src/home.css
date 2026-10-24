@@ -2096,7 +2096,7 @@ textarea.agt-q-input {
 .agt-plan {
   margin: 6px 0;
 }
-/* Skills offered while typing /name in the message box. */
+/* Commands, skills, LoRAs and tools offered at the message caret. */
 .agt-slash {
   list-style: none;
   margin: 0 0 4px;
@@ -2120,8 +2120,13 @@ textarea.agt-q-input {
   white-space: nowrap;
   cursor: pointer;
 }
-.agt-slash button:hover {
+.agt-slash button:hover,
+.agt-slash [aria-selected="true"] button {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+@media (pointer: coarse) {
+  .agt-slash button { min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
 }
 
 /* The memory: a tree of categories, each memory a row to edit or forget. */
@@ -5412,3 +5417,8 @@ button.cal-day.is-picked:not(.is-today) {
 /* Scrolled up while the thread keeps going: a hint that sticks to the bottom of the conversation. */
 .agt-jump-latest { position: sticky; bottom: 4px; align-self: center; z-index: 2; min-height: 36px; padding-inline: 14px; border-radius: 999px; background: var(--bg-dark); border: 1px solid var(--line-strong); color: var(--fg-bright); box-shadow: 0 4px 14px color-mix(in srgb, var(--bg-darker) 35%, transparent); }
 @media (pointer: coarse) { .agt-jump-latest { min-height: 44px; } }
+
+.image-lora-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.image-lora-row label { display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0; }
+.image-lora-row label span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.image-lora-row input { width: 5em; flex-shrink: 0; }

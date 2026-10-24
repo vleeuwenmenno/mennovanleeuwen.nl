@@ -1,4 +1,6 @@
-import { getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
+import { mentionAt, mentionText } from '../../data/agentMentions'
+import type { ImageLoraHint } from '../../data/imageModels'
+import { getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
 import {
   addMemory,
   agentModels,
@@ -23,6 +25,8 @@ import {
   listProjects,
   listShares,
   listSkills,
+  listMentionTools,
+  type MentionTool,
   listThreads,
   overrideTurn,
   queueMessage,
@@ -184,6 +188,11 @@ export class Session {
   private timer: ReturnType<typeof setInterval> | null = null
   private models: ModelInfo[] = []
   private skills: Skill[] = []
+  private mentionTools: MentionTool[] = []
+  private loras: ImageLoraHint[] | null = null
+  private loraLoading = false
+  private loraError = ''
+  private dismissedCompletion = ''
   private done: (() => void) | null = null
   private closed = false
 
@@ -279,7 +288,7 @@ export class Session {
       this.out([
         [seg(' Tips for getting started:', 'muted')],
         [seg(' 1. Ask about your files, or ask for changes: edits wait for your yes', 'muted')],
-        [seg(' 2. @ adds a file, ! runs a command, # remembers something', 'muted')],
+        [seg(' 2. #LoRA, $skill, @tool; @./path attaches a file; ! runs a command', 'muted')],
         [seg(' 3. shift+tab: auto, accept edits, or plan first', 'muted')],
         [],
       ])
@@ -306,6 +315,7 @@ export class Session {
   }
 
   private loadSkills() {
+    listMentionTools().then((items) => { this.mentionTools = items; this.draw() }, () => {})
     listSkills(this.thread ? { thread: this.thread.id } : { folder: this.workdir })
       .then((s) => (this.skills = s))
       .catch(() => {})
@@ -384,16 +394,29 @@ export class Session {
     return [...framed, ...this.drawCompletions(w)]
   }
 
-  /** What Tab would put in: slash commands and skills, or files after @. */
+  /** Shared mentions, slash commands and explicit @./path file attachments. */
   private completions(): { start: number; items: PickItem[] } | null {
     const at = this.editor.wordAtCursor()
-    if (!at || this.modal) return null
+    if (this.modal || this.dismissedCompletion === `${this.editor.cursor}:${this.editor.text}`) return null
+    const mention = mentionAt(this.editor.text, this.editor.cursor)
+    if (mention) {
+      if (mention.sigil === '#' && this.loras === null && !this.loraLoading && !this.loraError) {
+        this.loraLoading = true
+        void getImageLoras().then((result) => { this.loras = result.loras }, () => { this.loraError = 'Connect ComfyUI in Settings → Agents → Images; reopen this CLI to retry.' }).finally(() => { this.loraLoading = false; this.draw() })
+      }
+      const choices = mention.sigil === '#' ? (this.loras ?? []).map((l) => ({ name: l.name, hint: l.baseModel || 'Base model unknown' }))
+        : mention.sigil === '$' ? this.skills.filter((s) => s.enabled).map((s) => ({ name: s.name, hint: s.description }))
+        : this.mentionTools.map((t) => ({ name: t.name, hint: `${t.group ?? 'Always available'} · ${!t.group || (this.thread?.tools ?? this.tools).includes(t.group) ? 'on' : 'off'}` }))
+      const items = choices.filter((c) => c.name.toLowerCase().includes(mention.query)).slice(0, 50).map((c) => ({ value: mentionText(mention.sigil, c.name), label: `${mention.sigil}${c.name}`, hint: c.hint }))
+      return items.length ? { start: mention.start, items } : null
+    }
+    if (!at) return null
     if (at.word.startsWith('/') && at.start === 0) {
       const all: PickItem[] = [...SLASH.map(([v, h]) => ({ value: v, label: v, hint: h })), ...this.skills.map((s) => ({ value: `/${s.name}`, label: `/${s.name}`, hint: `skill: ${s.description}` }))]
       const items = all.filter((x) => x.value.startsWith(at.word))
       return items.length && !(items.length === 1 && items[0].value === at.word) ? { start: 0, items } : null
     }
-    if (at.word.startsWith('@')) {
+    if (/^@(?:[.~]?\/|\\)/.test(at.word)) {
       const base = this.baseDir()
       const typed = at.word.slice(1)
       const slash = typed.lastIndexOf('/')
@@ -416,8 +439,9 @@ export class Session {
   }
 
   private drawCompletions(w: number): Line[] {
+    if (this.dismissedCompletion === `${this.editor.cursor}:${this.editor.text}`) return []
     const c = this.completions()
-    if (!c) return []
+    if (!c) return mentionAt(this.editor.text, this.editor.cursor)?.sigil === '#' ? [[seg(this.loraLoading ? ' Loading LoRAs…' : this.loraError || ' No installed LoRAs match.', 'muted')]] : []
     this.pick = Math.min(this.pick, c.items.length - 1)
     const from = Math.max(0, Math.min(this.pick - 3, c.items.length - 8))
     const nameW = Math.min(24, Math.max(...c.items.map((i) => i.label.length)) + 2)
@@ -467,7 +491,8 @@ export class Session {
         ['shift+tab', 'cycle: ask for changes, auto, accept edits, plan'],
         ['! ', 'run a command in msh; its output goes with your next message'],
         ['# ', 'remember something'],
-        ['@', 'add a file (tab completes)'],
+        ['#name[:weight], $name, @name', 'mention a LoRA, skill or tool (Tab completes)'],
+        ['@./path', 'add a file (Tab completes)'],
         ['ctrl+o', 'show thinking and full tool output'],
         ['ctrl+t', 'show or hide the plan'],
         ['ctrl+r', 'retry: run your last message again'],
@@ -843,7 +868,8 @@ export class Session {
     if (m?.kind === 'pick') return this.pickKey(m, k, text)
     const e = this.editor
     const comp = this.completions()
-    if (comp && (k === 'ArrowUp' || k === 'ArrowDown' || k === 'Tab' || (k === 'Enter' && comp.items[this.pick]?.value !== e.wordAtCursor()?.word))) {
+    if ((comp || mentionAt(e.text, e.cursor)) && k === 'Escape') { this.dismissedCompletion = `${e.cursor}:${e.text}`; this.draw(); return true }
+    if (comp && (k === 'ArrowUp' || k === 'ArrowDown' || k === 'Tab' || (k === 'Enter' && (mentionAt(e.text, e.cursor) || comp.items[this.pick]?.value !== e.wordAtCursor()?.word)))) {
       if (k === 'ArrowUp') this.pick = (this.pick - 1 + comp.items.length) % comp.items.length
       else if (k === 'ArrowDown') this.pick = (this.pick + 1) % comp.items.length
       else {
@@ -1049,7 +1075,7 @@ export class Session {
 
   private async submitText(text: string) {
     if (text.startsWith('!')) return this.shell(text.slice(1).trim())
-    if (text.startsWith('#') && !text.startsWith('#!')) return this.remember(text.slice(1).trim())
+    if (/^#\s/.test(text)) return this.remember(text.slice(1).trim())
     if (text.startsWith('/')) {
       const [cmd, ...rest] = text.split(/\s+/)
       const handled = await this.slash(cmd.toLowerCase(), rest.join(' ').trim(), text)
@@ -1211,7 +1237,7 @@ export class Session {
   private async attachments(text: string): Promise<Attachment[]> {
     const out: Attachment[] = []
     const base = this.baseDir()
-    for (const m of text.matchAll(/(?:^|\s)@([^\s]+)/g)) {
+    for (const m of text.matchAll(/(?:^|\s)@((?:[.~]?\/|\\)[^\s]+)/g)) {
       const abs = resolvePath(base, m[1])
       const node = lookup(abs)
       if (node?.type !== 'file') continue
@@ -1727,7 +1753,7 @@ export class Session {
               : arg.startsWith('set ') ? await saveThreadImageSettings(thread.id, { ...(await getThreadImageSettings(thread.id)).overrides, ...patch })
               : null
             if (!settings) { this.say('Usage: /images | /images show | /images reset | /images set {"width":768,"height":1024,"seed":42}', 'yellow'); return true }
-            this.out([[seg('Session image settings', 'bold')], ...Object.entries(settings.effective).flatMap(([key, value]) => wrap([seg(`${key}: ${value === null ? 'random' : value === '' ? '(not configured)' : value} (${key in settings.overrides ? 'session override' : 'account default / preset'})`)], w)), []])
+            this.out([[seg('Session image settings', 'bold')], ...Object.entries(settings.effective).flatMap(([key, value]) => wrap([seg(`${key}: ${Array.isArray(value) ? value.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)' : value === null ? 'random' : value === '' ? '(not configured)' : value} (${key in settings.overrides ? 'session override' : 'account default / preset'})`)], w)), []])
             for (const [field, selected] of Object.entries(settings.selection ?? {})) this.say(`${field}: ${selected.automatic ? 'automatic' : 'manual'} · ${selected.error ?? selected.reason}`, selected.error ? 'yellow' : 'gray')
             if (settings.sampling) this.say(`Recommended sampling: ${settings.sampling.steps} steps · CFG ${settings.sampling.cfg} · ${settings.sampling.sampler}/${settings.sampling.scheduler}`, 'gray')
             if (settings.discoveryError) this.say(settings.discoveryError, 'yellow')

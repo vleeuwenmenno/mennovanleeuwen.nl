@@ -1,5 +1,7 @@
+import { mentionAt, mentionText } from '../data/agentMentions'
+import type { ImageLoraHint } from '../data/imageModels'
 import { openSessionImages } from './AgentsSessionImages'
-import { generatedImage } from '../data/agentImages'
+import { generatedImage, getImageLoras } from '../data/agentImages'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
@@ -73,6 +75,8 @@ import {
   type Thread,
   type ToolCall,
   listSkills,
+  listMentionTools,
+  type MentionTool,
   canAlwaysAllow,
   PERMISSIONS,
   siteOf,
@@ -828,7 +832,7 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         <p className="muted agt-mem-help">
           {project
             ? `Facts that only matter to ${project.name}. Threads in this project read them, next to what the agent knows about you.`
-            : 'What the agent knows about you. Image profiles and observations are retrieved only for image tasks; edit profiles in Images, or forget them here. Other memories follow every thread.'}
+            : 'What the agent knows about you. Image profiles and observations are retrieved only for image tasks; edit profiles in Images, or forget them here. The Images/Learnings marker identifies cautious image observations, not proven facts or rankings. Other memories follow every thread.'}
         </p>
         <label className="agt-search agt-mem-search">
           <Icon name="search" />
@@ -1002,6 +1006,14 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
   const [skills, setSkills] = useState<Skill[]>([])
+  const [mentionTools, setMentionTools] = useState<MentionTool[]>([])
+  const [loras, setLoras] = useState<ImageLoraHint[] | null>(null)
+  const [loraError, setLoraError] = useState('')
+  const [loraLoading, setLoraLoading] = useState(false)
+  const [caret, setCaret] = useState(0)
+  const [suggestionIndex, setSuggestionIndex] = useState(0)
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false)
+  useEffect(() => { listMentionTools().then(setMentionTools, () => {}) }, [])
   const [text, setText] = useState(() => getDraft(id ?? 'new')?.text ?? '')
   const [live, setLive] = useState<Live | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1217,7 +1229,6 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const permissionMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, PERMISSIONS.map((p) => ({ label: PERMISSION_LABEL[p], hint: PERMISSION_HELP[p], checked: permission === p, onSelect: () => setPermission(p) })))
   useEffect(() => {
-    if (!account.seafile && !thread) return
     listSkills(thread ? { thread: thread.id } : { folder: workdir }).then(setSkills, () => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id, workdir?.repo, workdir?.path])
@@ -1683,14 +1694,34 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     const t = setInterval(() => void getThread(thread.id).then((r) => setThread((now) => (now?.id === r.thread.id ? r.thread : now)), () => {}), 4000)
     return () => clearInterval(t)
   }, [thread?.id, answering, thread?.queue.length])
-  // "/name" starts a skill: the skills that fit what is typed so far.
-  const slashAt = /^\/([\w.-]*)$/.exec(text)
-  const slashSkills = slashAt ? skills.filter((sk) => sk.enabled && sk.name.startsWith(slashAt[1])).slice(0, 8) : []
-  // The one built-in command: /compact, once there is something to compact.
-  const slashCompact = !!slashAt && hasConversation && 'compact'.startsWith(slashAt[1]) && slashAt[1] !== 'compact'
   const projectName = projects.find((p) => p.id === (thread ? thread.projectId : draftProject))?.name ?? null
   const modelOptions = models.length ? models : model ? [{ name: model, thinking: false, vision: false, contextLength: null }] : []
   const tools = thread?.tools ?? draftTools
+  const activeMention = mentionAt(text, caret)
+  const slashAt = /^\/([\w.-]*)$/.exec(text.slice(0, caret))
+  const completion = activeMention ?? (slashAt ? { start: 0, sigil: '/', query: slashAt[1].toLowerCase() } : null)
+  useEffect(() => {
+    if (activeMention?.sigil !== '#' || loras !== null || loraLoading || loraError) return
+    setLoraLoading(true)
+    getImageLoras().then((result) => setLoras(result.loras), () => setLoraError('Connect ComfyUI in Settings → Agents → Images.')).finally(() => setLoraLoading(false))
+  }, [activeMention?.sigil, loras, loraLoading, loraError])
+  useEffect(() => { setSuggestionIndex(0); setSuggestionsDismissed(false) }, [text, caret])
+  const suggestions = !completion ? [] : (completion.sigil === '#'
+    ? (loras ?? []).map((l) => ({ name: l.name, hint: l.baseModel || 'Base model unknown' }))
+    : completion.sigil === '@'
+      ? mentionTools.map((t) => ({ name: t.name, hint: `${TOOL_GROUPS.find((g) => g.id === t.group)?.name ?? 'Always available'} · ${!t.group || tools.includes(t.group) ? 'on' : 'off'}` }))
+      : [...(completion.sigil === '/' && hasConversation ? [{ name: 'compact', hint: 'Summarise the conversation to free context' }] : []), ...skills.filter((sk) => sk.enabled).map((sk) => ({ name: sk.name, hint: sk.description }))])
+    .filter((s) => s.name.toLowerCase().includes(completion!.query)).slice(0, 50)
+  const showSuggestions = !!completion && !suggestionsDismissed
+  const acceptSuggestion = (name: string) => {
+    if (!completion) return
+    const inserted = `${mentionText(completion.sigil, name)} `
+    const end = caret + (text.slice(caret).match(/^[^\s]*/)?.[0].length ?? 0)
+    const nextCaret = completion.start + inserted.length
+    setText(text.slice(0, completion.start) + inserted + text.slice(end)); setCaret(nextCaret)
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(nextCaret, nextCaret) })
+  }
+  useEffect(() => { composerBox.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [suggestionIndex])
   const visionless = files.some((f) => f.kind === 'image') && !models.find((m) => m.name === model)?.vision
 
   // Tools: one group at a time, for this thread (and new threads start with the last choice).
@@ -1933,38 +1964,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {(files.length > 0 || reading > 0) && (
             <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
-          {(slashSkills.length > 0 || slashCompact) && (
-            <ul className="agt-slash" aria-label="Commands and skills">
-              {slashCompact && (
-                <li>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setText('/compact ')
-                      input.current?.focus()
-                    }}
-                  >
-                    <b>/compact</b> <span className="muted">Summarise the conversation so far to free up the context window; add what the summary should keep</span>
-                  </button>
-                </li>
-              )}
-              {slashSkills.map((sk) => (
-                <li key={sk.name}>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setText(`/${sk.name} `)
-                      input.current?.focus()
-                    }}
-                  >
-                    <b>/{sk.name}</b> <span className="muted">{sk.description}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          {showSuggestions && <ul className="agt-slash" role="listbox" aria-label="Commands and mentions">
+            {suggestions.map((s, i) => <li key={s.name} role="option" aria-selected={i === suggestionIndex}><button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => acceptSuggestion(s.name)}><b>{completion.sigil}{s.name}</b> <span className="muted">{s.hint}</span></button></li>)}
+            {!suggestions.length && <li className="muted">{completion.sigil === '#' ? loraLoading ? 'Loading LoRAs…' : loraError || 'No installed LoRAs match.' : 'No matches.'}{loraError && completion.sigil === '#' && <button type="button" onClick={() => setLoraError('')}>Retry</button>}</li>}
+          </ul>}
           {editingQ && (
             <div className="agt-editing">
               <span>
@@ -1978,12 +1981,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           <textarea
             ref={input}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart) }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyDown={(e) => {
-              if (e.key === 'Tab' && (slashCompact || slashSkills.length)) {
-                e.preventDefault()
-                setText(slashCompact ? '/compact ' : `/${slashSkills[0].name} `)
-                return
+              if (showSuggestions && !e.nativeEvent.isComposing) {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSuggestionsDismissed(true); return }
+                if (suggestions.length && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); setSuggestionIndex((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return }
+                if (suggestions.length && (e.key === 'Tab' || e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey)) { e.preventDefault(); acceptSuggestion(suggestions[Math.min(suggestionIndex, suggestions.length - 1)].name); return }
               }
               // Up in an empty box edits the last queued message, Esc puts an edit back.
               if (e.key === 'ArrowUp' && !text && !files.length && !editingQ && queue.length && !e.shiftKey) {

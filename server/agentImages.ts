@@ -1,6 +1,6 @@
 import { selectedImageProfile } from './agentImageProfiles.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition, throttleProgress } from './comfyProgress.ts'
-import { imagePresetSpec, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
+import { imagePresetSpec, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, type ImageLora, type ImageLoraHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -16,8 +16,8 @@ const NAME = 'agents-comfyui'
 export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const
 export type Preset = (typeof PRESETS)[number]
 /** askBeforeGenerate: off by default, so generations run without an approval card in every mode except Plan. */
-export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean }
-const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false })
+export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; saveImageLearnings: boolean }
+const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, saveImageLearnings: true })
 function settingsFor(userId: number): ImageSettings {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(userId, NAME) as { secret: string } | undefined
   return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
@@ -35,9 +35,10 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
     s[key] = input[key].trim()
   }
   if (input.clearToken === true) s.token = ''
-  if (input.askBeforeGenerate !== undefined) {
-    if (typeof input.askBeforeGenerate !== 'boolean') throw new HttpError(400, 'Invalid askBeforeGenerate')
-    s.askBeforeGenerate = input.askBeforeGenerate
+  for (const key of ['askBeforeGenerate', 'saveImageLearnings'] as const) {
+    if (input[key] === undefined) continue
+    if (typeof input[key] !== 'boolean') throw new HttpError(400, `Invalid ${key}`)
+    s[key] = input[key]
   }
   if (input.preset !== undefined) {
     if (!PRESETS.includes(input.preset as Preset)) throw new HttpError(400, 'Choose a supported image preset')
@@ -54,8 +55,8 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
   return view(s)
 }
 
-export type ImageOverrides = Partial<Pick<ImageSettings, 'preset' | 'model' | 'clip' | 'vae'>> & { width?: number; height?: number; seed?: number | null }
-const CONFIG_KEYS = new Set(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed'])
+export type ImageOverrides = Partial<Pick<ImageSettings, 'preset' | 'model' | 'clip' | 'vae'>> & { width?: number; height?: number; seed?: number | null; loras?: ImageLora[] }
+const CONFIG_KEYS = new Set(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed', 'loras'])
 export function validateImageOverrides(value: unknown): ImageOverrides {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'Image overrides must be an object')
   const input = value as Record<string, unknown>
@@ -81,7 +82,19 @@ export function validateImageOverrides(value: unknown): ImageOverrides {
     if (v !== null && (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0)) throw new HttpError(400, 'Seed must be random (null) or a non-negative safe integer')
     out.seed = v as number | null
   }
+  if ('loras' in input) out.loras = validateLoras(input.loras)
   return out
+}
+/** Exact installed identifiers are checked separately, after bounded input validation. */
+export function validateLoras(value: unknown, installed?: readonly string[]): ImageLora[] {
+  if (!Array.isArray(value) || value.length > 5) throw new HttpError(400, 'Supply at most 5 LoRAs')
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => key !== 'name' && key !== 'weight') || typeof item.name !== 'string' || !item.name || item.name.length > 2048 || /[\x00-\x1f]/.test(item.name)) throw new HttpError(400, 'LoRA names must be exact installed identifiers from discovery')
+    const weight = item.weight === undefined ? 1 : item.weight
+    if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0 || weight > 2) throw new HttpError(400, 'LoRA weight must be a finite number from 0 to 2')
+    if (installed && !installed.includes(item.name)) throw new HttpError(400, 'LoRA name is not installed; use an exact installed identifier from list_image_models')
+    return { name: item.name, weight }
+  })
 }
 function ownImageThread(user: User, thread: string) {
   const row = database().prepare('SELECT image_config FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id) as { image_config: string | null } | undefined
@@ -90,7 +103,7 @@ function ownImageThread(user: User, thread: string) {
 }
 function effectiveConfig(s: ImageSettings, overrides: ImageOverrides) {
   const preset = overrides.preset ?? s.preset
-  return { preset, model: overrides.model ?? s.model, clip: overrides.clip ?? s.clip, vae: overrides.vae ?? s.vae, width: overrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? (preset === 'sd15' ? 512 : 1024), seed: overrides.seed ?? null }
+  return { loras: overrides.loras ?? [], preset, model: overrides.model ?? s.model, clip: overrides.clip ?? s.clip, vae: overrides.vae ?? s.vae, width: overrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? (preset === 'sd15' ? 512 : 1024), seed: overrides.seed ?? null }
 }
 export function threadImageSettings(user: User, thread: string, catalog?: ImageAssetCatalog) {
   const row = ownImageThread(user, thread)
@@ -110,15 +123,16 @@ export async function discoverThreadImageSettings(user: User, thread: string) {
   }
   catch (error) { return { ...current, discoveryError: error instanceof Error ? error.message : 'Image discovery unavailable' } }
 }
-export async function saveThreadImageSettings(user: User, thread: string, value: unknown) {
+export async function saveThreadImageSettings(user: User, thread: string, value: unknown, discovered?: Awaited<ReturnType<typeof imageCatalog>>) {
   ownImageThread(user, thread)
   const overrides = validateImageOverrides(value)
   const s = imageSettings(user)
   let effective = effectiveConfig(s, overrides)
   if (effective.width * effective.height > 1536 * 1024) throw new HttpError(400, 'Image area must not exceed 1536 × 1024 pixels')
   // Resetting to defaults must also work with an offline or disconnected backend.
-  if (['preset', 'model', 'clip', 'vae'].some((key) => key in overrides)) {
-    const catalog = await imageCatalog(user)
+  if (['preset', 'model', 'clip', 'vae'].some((key) => key in overrides) || overrides.loras?.length) {
+    const catalog = discovered ?? await imageCatalog(user)
+    validateLoras(effective.loras, catalog.loras)
     const resolved = resolveImageAssets(effective, catalog)
     for (const selected of Object.values(resolved.selection)) if (!selected.automatic && 'error' in selected && selected.error) throw new HttpError(400, selected.error)
     effective = { ...effective, ...resolved.effective }
@@ -129,7 +143,7 @@ export async function saveThreadImageSettings(user: User, thread: string, value:
     if (overrides.clip && !catalog.clips.includes(overrides.clip) || overrides.vae && !catalog.vaes.includes(overrides.vae)) throw new HttpError(400, 'Choose an installed text encoder and VAE')
   }
   database().prepare('UPDATE agent_threads SET image_config = ? WHERE id = ? AND user_id = ?').run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, thread, user.id)
-  return discoverThreadImageSettings(user, thread)
+  return discovered ? threadImageSettings(user, thread, discovered) : discoverThreadImageSettings(user, thread)
 }
 
 async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown, optional = false) {
@@ -163,7 +177,7 @@ const options = (info: NodeInfo, node: string, field: string): string[] => {
 }
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user)) {
@@ -195,7 +209,9 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
     }
   }
   const modelHints = await imageModelHints(user, s, limit)
-  return { modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  const loras = [...new Set([...options(info, 'LoraLoader', 'lora_name'), ...options(info, 'LoraLoaderModelOnly', 'lora_name')])].sort()
+  const loraHints = await imageLoraHints(user, s, limit, loras)
+  return { loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
 /** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
 async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
@@ -217,9 +233,30 @@ async function imageModelHints(user: User, settings: ImageSettings, signal: Abor
     return hints.filter((h) => !duplicates.has(`${h.category}:${h.name}`))
   } catch { return [] } // Plain ComfyUI/offline optional extension does not block node discovery.
 }
-export type ImageInput = { profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+/** Optional LoRA Manager enrichment joins only an exact folder and filename, never a leaf alone. */
+async function imageLoraHints(user: User, settings: ImageSettings, signal: AbortSignal, installed: string[]): Promise<ImageLoraHint[]> {
+  try {
+    const res = await request(user, settings, '/api/lm/loras/list?page=1&page_size=50', AbortSignal.any([signal, AbortSignal.timeout(3000)]), undefined, true)
+    if (res.status === 404) { await res.body?.cancel(); return [] }
+    const data = JSON.parse((await readCapped(res, 1024 * 1024)).toString())
+    if (!data || !Array.isArray(data.items) || data.items.length > 50) return []
+    const hints: ImageLoraHint[] = [], duplicates = new Set<string>()
+    for (const item of data.items) {
+      if (!item || typeof item.folder !== 'string' || typeof item.file_path !== 'string') continue
+      const path = [normalizedPath(item.folder), normalizedPath(item.file_path).split('/').at(-1)].filter(Boolean).join('/')
+      const matches = installed.filter((name) => normalizedPath(name) === path)
+      if (matches.length !== 1) continue
+      const name = matches[0]
+      if (hints.some((h) => h.name === name)) duplicates.add(name)
+      const triggers = Array.isArray(item.civitai?.trainedWords) ? item.civitai.trainedWords.filter((v: unknown): v is string => typeof v === 'string' && !!v.trim() && v.length <= 120 && !/[\x00-\x1f]/.test(v)).slice(0, 8) : []
+      hints.push({ name, baseModel: typeof item.base_model === 'string' ? item.base_model.slice(0, 200) : '', triggers })
+    }
+    return hints.filter((h) => !duplicates.has(h.name))
+  } catch { return [] }
+}
+export type ImageInput = { loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
-export function imageWorkflow(s: ImageSettings, input: ImageInput) {
+export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }) {
   if (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 6000) throw new HttpError(400, 'Supply an image prompt of 1–6000 characters')
   if (input.negative_prompt !== undefined && (typeof input.negative_prompt !== 'string' || input.negative_prompt.length > 6000)) throw new HttpError(400, 'Negative prompt must be at most 6000 characters')
   const dimension = (v: unknown) => {
@@ -241,16 +278,28 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput) {
   if (!spec.negative && input.negative_prompt) throw new HttpError(400, 'This Turbo preset uses a positive prompt only')
   const graph: Graph = {}
   const node = (id: string, class_type: string, inputs: Record<string, unknown>) => (graph[id] = { class_type, inputs }, [id, 0])
-  const model = diffusion ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
-  const clip = diffusion ? node('2', 'CLIPLoader', { clip_name: s.clip, type: spec.clipType, device: 'default' }) : ['1', 1]
+  let model = diffusion ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
+  let clip = diffusion ? node('2', 'CLIPLoader', { clip_name: s.clip, type: spec.clipType, device: 'default' }) : ['1', 1]
   const vae = diffusion ? node('3', 'VAELoader', { vae_name: s.vae }) : ['1', 2]
+  const loras = validateLoras(input.loras ?? [])
+  if (loras.length) {
+    const preferred = diffusion ? 'LoraLoaderModelOnly' : 'LoraLoader'
+    const fallback = diffusion ? 'LoraLoader' : 'LoraLoaderModelOnly'
+    const loader = !catalog || catalog.nodes.includes(preferred) ? preferred : catalog.nodes.includes(fallback) ? fallback : null
+    if (!loader) throw new HttpError(409, 'This ComfyUI has no LoRA loader')
+    loras.forEach((lora, i) => {
+      const id = String(10 + i)
+      model = node(id, loader, { model, lora_name: lora.name, strength_model: lora.weight, ...(loader === 'LoraLoader' ? { clip, strength_clip: lora.weight } : {}) })
+      if (loader === 'LoraLoader') clip = [id, 1]
+    })
+  }
   const positive = node('4', 'CLIPTextEncode', { clip, text: input.prompt.trim() })
   const negative = spec.zeroNegative ? node('5', 'ConditioningZeroOut', { conditioning: positive }) : node('5', 'CLIPTextEncode', { clip, text: input.negative_prompt ?? '' })
   const latent = node('6', 'EmptyLatentImage', { width, height, batch_size: 1 })
   const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise: 1 })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
-  return { graph, width, height, seed, sampling }
+  return { graph, width, height, seed, sampling, loras }
 }
 
 /** Only the current owner's current thread can supply bytes to a vision tool. */
@@ -265,32 +314,34 @@ export function generatedImageForVision(user: User, thread: string, id?: unknown
 
 type ImagePlan = { settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
 async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
-  const allowed = new Set(['profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler'])
+  const allowed = new Set(['profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const profile = selectedImageProfile(user, thread, input.profile_id)
   if (input.profile_reason !== undefined && (typeof input.profile_reason !== 'string' || input.profile_reason.length > 200)) throw new HttpError(400, 'Profile reason must be up to 200 characters')
   const { effective, overrides: sessionOverrides } = threadImageSettings(user, thread)
-  const overrides = validateImageOverrides(Object.fromEntries(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed'].filter((key) => input[key as keyof ImageInput] !== undefined).map((key) => [key, input[key as keyof ImageInput]])))
+  const overrides = validateImageOverrides(Object.fromEntries(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed', 'loras'].filter((key) => input[key as keyof ImageInput] !== undefined).map((key) => [key, input[key as keyof ImageInput]])))
   // The entire plan, including credentials, is captured before approval. Per-call overrides never persist.
   const preset = overrides.preset ?? effective.preset
   const configured = { ...imageSettings(user), ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
   const catalog = await imageCatalog(user, signal, configured)
+  if (configured.loras.length && !catalog.nodes.some((n) => n === 'LoraLoader' || n === 'LoraLoaderModelOnly')) throw new HttpError(409, 'This ComfyUI has no LoRA loader')
+  validateLoras(configured.loras, catalog.loras)
   const resolved = resolveImageAssets(configured, catalog)
   if (resolved.errors.length) throw new HttpError(409, resolved.errors.join(' '))
   const settings = { ...configured, ...resolved.effective }
   const defaults = recommendedImageSampling(settings.preset, settings.model, catalog)
-  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input })
+  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input }, catalog)
   const spec = imagePresetSpec(settings.preset)
   if (!spec.clipType && (input.clip !== undefined && input.clip !== '' || input.vae !== undefined && input.vae !== '')) throw new HttpError(400, 'Checkpoint workflows use embedded encoder and VAE; separate component overrides are not supported')
   if (spec.clipType && !catalog.clipTypes.includes(spec.clipType)) throw new HttpError(409, 'ComfyUI does not support the required text encoder type')
   if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes(workflow.sampling.sampler) || !catalog.schedulers.includes(workflow.sampling.scheduler)) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
-  const parameters: ImageGenerationSettings = { profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
+  const parameters: ImageGenerationSettings = { loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
   return { settings, workflow, parameters }
 }
 export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
   const plan = await planImageGeneration(user, thread, input, signal)
   const p = plan.parameters
-  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
+  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
   return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
 }
 export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
@@ -432,6 +483,11 @@ async function sendModelPreview(user: User, id: string, res: ServerResponse) {
 }
 
 export async function handleImageApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string, user: User): Promise<boolean> {
+  if (url.pathname === '/api/agents/images/loras' && method === 'GET') {
+    const catalog = await imageCatalog(user)
+    const loras = catalog.loras.slice(0, 2000).map((name) => catalog.loraHints.find((h) => h.name === name) ?? { name, baseModel: '', triggers: [] })
+    return json(res, 200, { loras, total: catalog.loras.length, truncated: catalog.loras.length > loras.length }), true
+  }
   if (url.pathname === '/api/agents/images/model-metadata' && method === 'GET') return json(res, 200, await modelMetadata(user, url.searchParams.get('category') ?? '', url.searchParams.get('name') ?? '')), true
   const preview = /^\/api\/agents\/images\/model-previews\/([0-9a-f-]{36})$/.exec(url.pathname)
   if (preview && method === 'GET') return await sendModelPreview(user, preview[1], res), true

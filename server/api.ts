@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -384,6 +384,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return deleteShare(requireUser(req), shareToken), json(res, 200, { ok: true }), true
     }
     if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
+    if (path === '/api/agents/mention-tools' && read) { requireUser(req); return json(res, 200, mentionTools()), true }
     if (path === '/api/agents/skills' && read) return json(res, 200, await skillsList(requireUser(req), url.searchParams)), true
     if (path === '/api/agents/skills/install' && method === 'POST') return json(res, 200, await skillsInstall(requireUser(req), await readJson(req, 8192))), true
     if (path === '/api/agents/skills/remove' && method === 'POST') return await skillsRemove(requireUser(req), await readJson(req, 8192)), json(res, 200, { ok: true }), true

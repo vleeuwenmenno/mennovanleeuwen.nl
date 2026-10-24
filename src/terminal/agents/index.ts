@@ -33,13 +33,16 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        follows the folder's AGENTS.md. Threads are the Agents app's: /open shows one there.
 
        Type a message and press Enter. Shift+Enter (or Alt+Enter, or \\ at the end) starts a
-       new line. @path adds a file, ! runs a command (its output goes along with your next
-       message), # remembers something. Esc stops the agent; Shift+Tab cycles between asking
+       new line. #name[:weight] selects a LoRA, $name invokes a skill anywhere, and @name
+       points at a tool; Tab completes all three. /name still invokes a skill at the start.
+       @./path adds a file, ! runs a command (its output goes along with your next message),
+       and # followed by a space remembers something. Esc stops the agent; Shift+Tab cycles between asking
        for each change, accepting edits, and plan mode (read only until you approve a plan).
        Ask for an image after configuring ComfyUI in Settings → Apps → Agents → Images.
        /images opens the model browser and session overrides; /images show prints effective
        settings, /images reset follows account defaults, /images set {"seed":42} updates them.
        Empty model/clip/vae values mean automatic recommendations: /images set {"vae":""}.
+       /images set {"loras":[{"name":"style.safetensors","weight":0.8}]} saves LoRAs.
        /images show explains automatic/manual choices and missing or ambiguous assets.
        /images profile lists style profiles; select <id|none>, save {"name":"…","description":"…"},
        reset <id> or delete <id> manages them. /memory reset-images forgets image observations.

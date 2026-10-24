@@ -391,7 +391,7 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - A `terminal` tool runs msh command lines in the user's own terminal.
 - Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
   asking first, accepting edits, and plan mode (read only until a plan is approved).
-- Prompt modes: `!cmd` runs a command, `# text` remembers something, `@path` attaches a file.
+- Prompt modes: `!cmd` runs a command, `# text` remembers something, `@./path` attaches a file. `#name[:weight]`, `$name` and `@name` mention a LoRA, skill and tool.
 - While the agent works, Enter queues a message (shown over the prompt; the server sends it when
   the turn is done). ↑ in an empty prompt edits the last queued one, Ctrl+X removes it (or the last
   one), Ctrl+Enter sends it, or the next one, now (stopping the agent). While it asks for an
@@ -433,7 +433,7 @@ descriptions and system prompt are untuned. Known limits:
 - **Not in the TUI yet:**
   - Claude Code's undo/rewind, custom slash commands, hooks, MCP servers, subagents,
     background tasks and usage display
-  - image paste (`@path` attaches text files only)
+  - image paste (`@./path` attaches text files only)
 - **Tried in the browser:** messages, approvals, forms, plan mode, `!`, `#`, `@`, `/status`,
   `/context`, `/model`, `/resume`, `-c`, `-p`, `ls`. **Not tried:** Esc interrupting a turn,
   messages queued while it works, `/export`, `/copy`, `/open`, `/delete`, `/archive`,
@@ -1395,7 +1395,7 @@ manual files missing from the new backend remain visible and require user action
 
 **Session image settings** are available from **Images** in the conversation toolbar (including a
 new thread), or `/images` in the Agents terminal. Both open the same browser and settings dialog.
-A thread may override its preset, model, text encoder, VAE, width, height and seed. Fields marked
+A thread may override its preset, model, text encoder, VAE, LoRAs, width, height and seed. Fields marked
 *Account default* follow later changes to the account; dimensions without an override follow the
 chosen preset's size. **Use default** removes one override; **Use all account defaults** clears the
 thread's overrides, even when ComfyUI is offline. Empty seed means a fresh random seed each time.
@@ -1414,6 +1414,44 @@ are rejected by the shared server. Opening `/images` before the first message cr
 The model can discover effective settings through `list_image_models`; it cannot reconfigure the
 backend or persist session settings. Explicit supported model/components, sampling and
 width/height/seed on `generate_image` override the session only for that call. Use `/images` to change the saved model or workflow.
+
+**LoRAs** are discovered from ComfyUI's `LoraLoader` and `LoraLoaderModelOnly` nodes.
+The optional LoRA Manager adds base-model hints and trigger words from one bounded page, joined
+by exact folder and filename. Discovery never guesses a trigger word or downloads a model.
+`list_image_models` includes query-filtered `options.loras`, matching `loraHints` and the thread's
+current list in `selected.loras`. Match the LoRA's family to the preset, for example SDXL with
+`sdxl` or Krea2 with a Krea2 preset; unknown base models mean compatibility is unverified.
+
+Save a list with `/images set {"loras":[{"name":"style.safetensors","weight":0.8}]}` using an
+exact installed identifier. The thread’s Images dialog shows the saved list and lets you change
+weights or remove entries before saving. Up to five LoRAs run in list order; weights are finite numbers from
+0 to 2 and default to 1. `generate_image` accepts the same `loras` list for one image without
+saving it; an empty list disables LoRAs for that call. `/images reset` clears the saved list along
+with the other thread overrides. Each image uses this app's own graph, so LoRAs in a separate
+ComfyUI workflow never run here. Diffusion presets prefer the model-only loader and leave the
+text encoder untouched; checkpoint presets patch both model and text encoder. If only the other
+loader exists, the graph uses it instead. Approval cards show a **LoRAs** row, and saved generation
+metadata records each identifier and weight; older images without that field still open normally.
+
+**Mentions in a message** work in the app and the CLI:
+
+- `#name` or `#name:0.8` selects an installed LoRA for this thread. Exact identifiers win;
+  otherwise a unique, case-insensitive filename or filename without its extension is accepted.
+  Repeating a LoRA updates its weight rather than adding it twice. Unknown or ambiguous names
+  produce an application context note with nearby installed names and leave the list unchanged.
+- `$name` attaches a skill's instructions anywhere in a message. `/name` still works at the start.
+- `@name` points at a tool for this turn. Its group and on/off state appear in the context note;
+  a mention does not enable a group or bypass permissions. Use the Tools menu or CLI `/tools`.
+
+Typing a sigil at the start of a token opens suggestions. Type to filter, use Up/Down to select,
+and Enter or Tab to accept; Escape closes the list. App suggestions also accept mouse or touch.
+LoRAs load lazily from the signed-in account's backend and show base-model hints; a disconnected
+backend shows where to connect it. Names with spaces use quotes, such as
+`#"styles/Soft light.safetensors":0.8`, which suggestions insert automatically. Message text stays
+as written; one clearly labelled application context attachment records what resolved, with skill
+instructions in their own attachments. Resolution handles at most 20 distinct mentions and five
+skills per message. The CLI keeps `# ` followed by text for remembering a fact and `@./path`,
+`@/path` or `@~/path` for attaching a file; bare `@name` now refers to a tool.
 
 Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
 The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. When it is on, the agent's system prompt also gets Diffu's image-generation guidance (model families, prompting style, negatives, sampling and size); when it is off, that section is left out. Generation runs
@@ -1469,7 +1507,18 @@ Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 
 `/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
-LoRAs, image editing and model downloads are not included in these initial presets.
+image editing and model downloads are not included in these presets.
+
+**Image observations** are short, cautious notes an agent records after an image or your feedback:
+what you asked for, what the model and sampling produced, what you said was wrong, and sometimes
+what a vision model saw. They may be wrong; they are evidence, never a ranking or a “best settings”
+list. Saving is on by default. Turn off **Save image observations** in **Settings → Apps → Agents
+→ Images** to stop new notes and updates. This removes `save_image_learning` from the available
+tools and rejects stale calls; it does not delete existing notes, stop their review before generation,
+or change style profiles. Turn it back on to resume saving. Notes stay with your account on this
+server under **Memory → Images/Learnings**, scoped to the backend and components (including the
+LoRA list and weights). They are not published or sent elsewhere for storage; relevant notes are
+read by your configured agent during later image tasks.
 
 **Image learning and named style profiles:** profiles organize preferences and observations in the
 existing account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
@@ -1537,7 +1586,7 @@ tools. No automatic quality scoring, background experiments or extra generation 
 failures remain in tool history; durable quality-failure observations require an artifact. Successful
 generation still ends silently, so learning happens on a later user turn, never as hidden follow-up.
 
-**Per-generation tuning:** the agent can now select `preset`, `model`, `clip`, `vae`, `steps`,
+**Per-generation tuning:** the agent can now select `preset`, `model`, `clip`, `vae`, `loras`, `steps`,
 `cfg`, `sampler` and `scheduler`, as well as size and seed. Before this change, sampling was fixed
 and the agent could only adjust prompt, size and seed. Precedence is explicit per-call value,
 then session asset/size/seed override, then account assets and Diffu-grounded sampling/preset

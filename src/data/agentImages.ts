@@ -1,8 +1,8 @@
 import { api } from '../os/account'
 
-import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings } from './imageModels'
+import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
-export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean }
+export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; saveImageLearnings: boolean }
 export type ImageCatalog = ImageAssetCatalog
 export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
@@ -36,3 +36,6 @@ export const resetThreadImageSettings = (id: string) => api<ThreadImageSettings>
 export type ModelCategory = 'checkpoints' | 'diffusion_models' | 'text_encoders' | 'vae'
 export type ModelMetadata = { available: boolean; reason?: string; source?: string; title?: string; baseModel?: string; size?: number; tags?: string[]; preview?: string }
 export const getModelMetadata = (category: ModelCategory, name: string, signal: AbortSignal) => api<ModelMetadata>(`/api/agents/images/model-metadata?${new URLSearchParams({ category, name })}`, { signal })
+
+export const getImageLoras = () => api<{ loras: ImageLoraHint[]; total: number; truncated: boolean }>('/api/agents/images/loras')
+export const saveImageLearningPreference = (saveImageLearnings: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { saveImageLearnings } })

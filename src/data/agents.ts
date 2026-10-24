@@ -691,3 +691,6 @@ export function textAttachment(text: string, name: string): Attachment {
 export const pictureUrl = (thread: string, message: number, index: number) => `/api/agents/threads/${thread}/messages/${message}/attachments/${index}`
 
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
+
+export type MentionTool = { name: string; group: ToolGroup | null }
+export const listMentionTools = () => api<MentionTool[]>('/api/agents/mention-tools')
