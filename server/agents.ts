@@ -1,4 +1,4 @@
-import { imageSource, listImageAttachments } from './agentImageSources.ts'
+import { imageSource, listImageAttachments, aliasBranchedImageSources } from './agentImageSources.ts'
 import { imageFileSaveBlockers, prepareImageFileSave } from './agentImageFiles.ts'
 import { searchThreads, readThread } from './agentThreadSearch.ts'
 import { messageMentions } from '../src/data/agentMentions.ts'
@@ -3459,7 +3459,11 @@ export function branchThread(user: User, id: string, body: { messageId?: unknown
     db.prepare(`INSERT INTO agent_threads (id, user_id, title, mode, model, tools, project_id, workdir, permission, image_config, image_profile_id, title_history, created_at, updated_at)
       SELECT ?, user_id, title, mode, model, tools, project_id, workdir, permission, image_config, image_profile_id, title_history, ?, ? FROM agent_threads WHERE id = ? AND user_id = ?`).run(branch, now, now, id, user.id)
     const insert = db.prepare('INSERT INTO agent_messages (thread_id, role, content, thinking, tool_calls, tool_name, attachments, checked, compact, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    for (const m of copies) insert.run(branch, m.role, m.content, m.thinking, m.tool_calls, m.tool_name, m.attachments, m.checked, m.compact, m.created_at)
+    for (const m of copies) {
+      const copy = insert.run(branch, m.role, m.content, m.thinking, m.tool_calls, m.tool_name, m.attachments, m.checked, m.compact, m.created_at)
+      if (m.role === 'user') aliasBranchedImageSources(m.id, Number(copy.lastInsertRowid))
+    }
+    checkRoom(user, 0) // Include the copied attachment aliases in the transaction's quota check.
     setTitle(ownThread(user, branch), `${row.title} — from ${new Date(target.created_at).toISOString().slice(0, 10)}`, 'user')
     db.exec('COMMIT')
   } catch (e) { db.exec('ROLLBACK'); throw e }

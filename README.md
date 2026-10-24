@@ -1454,7 +1454,11 @@ source**; grid rounding can trim edges and extreme ratios can crop substantially
 size, model, settings and denoise appear in approval when enabled, with a source thumbnail. Existing
 permission modes, silent success, progress and cancellation apply. Results and image observations
 record source ID/name/original dimensions, resize policy and actual denoise/settings. Generate
-another reuses that source and settings with a fresh seed; it fails if the source was deleted.
+another reuses that source and settings with a fresh seed. Branches retain attachment source IDs
+through owner-scoped aliases to their copied messages, including branches of branches. Deleting the
+parent keeps Generate another working while a surviving branch holds the source; deleting every
+copy makes that source unavailable. Aliases count toward storage quota and are removed with their
+copied messages. `pnpm check:agents-image-source-branches` covers this retention and owner isolation.
 
 Source validation is a bounded structural and dimension preflight, not a full image decode. Corrupt
 compressed pixels may still be rejected by ComfyUI; upload, prompt and decoding failures are reported
