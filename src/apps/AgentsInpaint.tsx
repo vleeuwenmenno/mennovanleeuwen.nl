@@ -46,7 +46,7 @@ export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }:
     const saved = await saveImageMask(threadId, image.id, mask)
     if (!alive.current) { await discardImageMask(saved.id).catch(() => {}); return }
     const s = image.settings
-    const settings = s && s.operation !== 'upscale' ? { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler } : {}
+    const settings = s && s.operation !== 'upscale' && s.operation !== 'remove' ? { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler } : {}
     onInpaint({ ...settings, operation: 'inpaint', source_image_id: image.id, mask_id: saved.id, prompt: prompt.trim(), denoise })
   }} />
   const problem = sourceError || error || (catalog && !catalog.inpaint ? catalog.inpaintError || 'This backend does not support masked editing.' : '')

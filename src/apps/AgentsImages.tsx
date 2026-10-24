@@ -263,7 +263,7 @@ export function ImageCard({ image, width, height, pending, progress, again, more
   const [upscaleOpen, setUpscaleOpen] = useState(false)
   const [refineOpen, setRefineOpen] = useState(false)
   const isRefine = image?.settings?.operation === 'refine' || !image && operation === 'refine'
-  const hasHires = image?.settings?.operation !== 'upscale' && !!image?.settings?.hires
+  const hasHires = !!image?.settings && 'hires' in image.settings && !!image.settings.hires
   const isInpaint = image?.settings?.operation === 'inpaint' || !image && operation === 'inpaint'
   const isUpscale = image?.settings?.operation === 'upscale' || !image && operation === 'upscale'
   const wm = useWM()

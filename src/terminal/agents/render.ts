@@ -49,8 +49,10 @@ export function toolTitle(call: ToolCall): [string, string] {
     case 'read_image_learnings': return ['Image learnings', s(call, 'task')]
     case 'save_image_learning': return ['Save image observation', s(call, 'task')]
     case 'save_image_profile': return ['Save style profile', s(call, 'name')]
+    case 'make_image_mask': return ['Make mask', `${s(call, 'target')}${s(call, 'exclude') ? `, keeping ${s(call, 'exclude')}` : ''}`]
+    case 'list_image_masks': return ['Image masks', 'This thread']
     case 'generate_image':
-      return call.arguments?.operation === 'inpaint' ? ['Inpaint image', s(call, 'prompt')] : call.arguments?.operation === 'refine' ? ['Refine image', s(call, 'prompt') || 'Inherited prompt'] : call.arguments?.operation === 'upscale' ? ['Upscale image', s(call, 'upscale_model')] : [call.arguments?.source_image_id ? 'Edit image' : 'Generate image', s(call, 'prompt')]
+      return call.arguments?.operation === 'remove' ? ['Remove masked area', 'LaMa'] : call.arguments?.operation === 'inpaint' ? ['Inpaint image', s(call, 'prompt')] : call.arguments?.operation === 'refine' ? ['Refine image', s(call, 'prompt') || 'Inherited prompt'] : call.arguments?.operation === 'upscale' ? ['Upscale image', s(call, 'upscale_model')] : [call.arguments?.source_image_id ? 'Edit image' : 'Generate image', s(call, 'prompt')]
     case 'view_generated_image':
       return ['Inspect image', String(call.arguments?.image_id ?? 'latest in this thread')]
     case 'list_image_attachments': return ['Image attachments', 'Source images']
@@ -199,6 +201,10 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
         if (image.settings?.operation === 'upscale') {
           const settings = image.settings
           return ok([under(`Upscaled image · ${image.width} × ${image.height}`), ...wrap([seg(`  Model: ${settings.upscale_model}\n  Source: ${settings.source.name} (${settings.source.width} × ${settings.source.height})\n  Model input: ${settings.input_width} × ${settings.input_height}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w), ...wrap([{ t: url, link: url }], w)])
+        }
+        if (image.settings?.operation === 'remove') {
+          const settings = image.settings
+          return ok([under(`Removed with LaMa · ${image.width} × ${image.height}`), ...wrap([seg(`  Source: ${settings.source.name}\n  Mask: ${new URL(settings.mask.url, location.origin).href}`)], w), ...wrap([{ t: url, link: url }], w)])
         }
         const label = image.settings?.operation === 'inpaint' ? 'Inpainted image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings?.hires ? 'Generated image with hires refinement' : 'Generated image'
         const hires = image.settings?.hires

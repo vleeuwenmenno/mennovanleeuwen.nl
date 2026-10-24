@@ -47,7 +47,8 @@ function matching(source: Dimensions, mask: Dimensions) {
 }
 
 /** Raster structure/orientation validation stays in sourceRaster; these are mask-specific rules. */
-export function validateInpaintMask(bytes: Buffer, source: Dimensions) {
+export type MaskStats = { coverage: number; bbox: { x: number; y: number; width: number; height: number } | null }
+export function validateInpaintMask(bytes: Buffer, source: Dimensions, allowEmpty = false): Dimensions & { mime: string } & MaskStats {
   const mask = sourceRaster(bytes, 8 * 1024 * 1024)
   if (mask.mime !== 'image/png' || bytes[24] !== 8 || ![2, 6].includes(bytes[25]) || bytes[26] !== 0 || bytes[27] !== 0 || bytes[28] !== 0) throw new HttpError(400, 'Use an opaque 8-bit RGB PNG mask: white edits, black preserves')
   for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) {
@@ -65,7 +66,8 @@ export function validateInpaintMask(bytes: Buffer, source: Dimensions) {
   let raw: Buffer
   try { raw = inflateSync(Buffer.concat(parts), { maxOutputLength: length }) } catch { throw new HttpError(400, 'Invalid PNG mask pixel data') }
   if (raw.length !== length) throw new HttpError(400, 'Invalid PNG mask pixel length')
-  let previous = Buffer.alloc(stride), current = Buffer.alloc(stride), nonempty = false
+  let previous = Buffer.alloc(stride), current = Buffer.alloc(stride), nonempty = false, white = 0
+  let left = mask.width, top = mask.height, right = -1, bottom = -1
   for (let y = 0; y < mask.height; y++) {
     const offset = y * (stride + 1), filter = raw[offset]
     if (filter > 4) throw new HttpError(400, 'Invalid PNG mask filter')
@@ -79,13 +81,20 @@ export function validateInpaintMask(bytes: Buffer, source: Dimensions) {
         if (current[x] !== 255) throw new HttpError(400, 'Mask pixels must be fully opaque')
       } else {
         if (current[x] !== 0 && current[x] !== 255 || channel && current[x] !== current[x - 1]) throw new HttpError(400, 'Mask pixels must be black or white RGB')
-        nonempty ||= current[x] === 255
+        if (channel === 0 && current[x] === 255) {
+          nonempty = true; white++
+          const px = x / channels
+          if (px < left) left = px
+          if (px > right) right = px
+          if (y < top) top = y
+          bottom = y
+        }
       }
     }
     ;[previous, current] = [current, previous]
   }
-  if (!nonempty) throw new HttpError(400, 'The mask is empty; select an area to edit')
-  return mask
+  if (!nonempty && !allowEmpty) throw new HttpError(400, 'The mask is empty; select an area to edit')
+  return { ...mask, coverage: white / (mask.width * mask.height), bbox: nonempty ? { x: left, y: top, width: right - left + 1, height: bottom - top + 1 } : null }
 }
 
 export type InpaintGraphInput = {

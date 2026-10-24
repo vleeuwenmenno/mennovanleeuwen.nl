@@ -1,6 +1,7 @@
 import { addHiresStage, refinementSize, refinementSampling } from './agentImageRefine.ts'
 import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentImageInpaint.ts'
-import { imageMask, type ImageMask } from './agentImageMasks.ts'
+import { imageMask, saveAutoMask, type ImageMask } from './agentImageMasks.ts'
+import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskGraph, autoMaskOptions, binaryMaskPng, missingNodes, pngFirstChannel, removeGraph, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
 import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
@@ -180,7 +181,7 @@ async function readJSON(user: User, s: ImageSettings, path: string, signal: Abor
 const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user), forPlanning = false) {
@@ -224,7 +225,11 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   } catch (e) { upscaleError = (e as Error).message }
   let inpaintError = ''
   try { assertInpaintNodes(info) } catch (e) { inpaintError = (e as Error).message }
-  return { inpaint: !inpaintError, inpaintError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  // Automatic masks and LaMa removal need optional custom nodes; their absence only switches these off.
+  let autoMaskError = '', removeError = ''
+  try { autoMaskGraph({ target: 'object', exclude: 'other', grow: 12, threshold: 0.3, handOff: false }, 'source.png', info as SegmentNodeInfo) } catch (e) { autoMaskError = (e as Error).message }
+  try { removeGraph('source.png', 'mask.png', info as SegmentNodeInfo) } catch (e) { removeError = (e as Error).message }
+  return { inpaint: !inpaintError, inpaintError, autoMask: !autoMaskError, autoMaskError, remove: !removeError, removeError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
 /** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
 async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
@@ -387,6 +392,7 @@ export function imageAgainInput(user: User, thread: string, id: string): ImageIn
   const image = imageInThread(user, thread, id)
   if (!image.metadata) throw new HttpError(409, 'This image has no recorded generation settings')
   const stored = JSON.parse(image.metadata) as ImageGenerationSettings
+  if (stored.operation === 'remove') return { operation: 'remove', source_image_id: stored.source.id, mask_id: stored.mask.id }
   if (stored.operation === 'upscale') return { operation: 'upscale', source_image_id: stored.source.id, upscale_model: stored.upscale_model, width: stored.width, height: stored.height }
   const { source, denoise, mask, ...settings } = stored
   let seed: number
@@ -400,7 +406,8 @@ type ImagePlan = { mask?: ImageMask; maskUploadName?: string; source?: ImageSour
 async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false): Promise<ImagePlan> {
   ownImageThread(user, thread)
   if (input?.operation === 'upscale') return planUpscale(user, input, signal)
-  if (input?.operation !== undefined && input.operation !== 'generate' && input.operation !== 'refine' && input.operation !== 'inpaint') throw new HttpError(400, 'Choose operation generate, refine, inpaint or upscale')
+  if (input?.operation === 'remove') return planRemove(user, input, signal)
+  if (input?.operation !== undefined && input.operation !== 'generate' && input.operation !== 'refine' && input.operation !== 'inpaint') throw new HttpError(400, 'Choose operation generate, refine, inpaint, remove or upscale')
   const allowed = new Set(['operation', 'mask_id', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const source = input.source_image_id === undefined ? undefined : imageSource(user, input.source_image_id)
@@ -470,7 +477,7 @@ function inheritedRefinementInput(user: User, id: string, input: ImageInput): Im
     if (!row) throw new HttpError(409, 'An owned source ancestor is unavailable; choose an available original source')
     if (!row.metadata) break
     const saved = JSON.parse(row.metadata) as ImageGenerationSettings
-    if (saved.operation !== 'upscale') { inherited = saved; break }
+    if (saved.operation !== 'upscale' && saved.operation !== 'remove') { inherited = saved; break }
     next = saved.source?.id
     if (depth === 7 && next) throw new HttpError(409, 'Source provenance exceeds 8 images; choose an earlier source')
   }
@@ -494,6 +501,35 @@ async function validateRefinementCapabilities(user: User, settings: ImageSetting
     if (data?.[name]) schemas[name] = data[name]
   }
   validateUpscaleGraph(extra, schemas)
+}
+/** Bounded schemas for a few named classes; an absent class is simply missing from the result. */
+async function nodeSchemas(user: User, settings: ImageSettings, nodes: readonly string[], signal: AbortSignal) {
+  const schemas: NodeInfo = {}
+  let remaining = CATALOG_LIMIT
+  for (const name of new Set(nodes)) {
+    const response = await request(user, settings, `/object_info/${name}`, signal, undefined, true)
+    if (response.status === 404) { await response.body?.cancel(); continue }
+    const bytes = await readCapped(response, Math.min(NODE_INFO_LIMIT, remaining)); remaining -= bytes.length
+    let data: NodeInfo
+    try { data = JSON.parse(bytes.toString()) } catch { throw new HttpError(502, `Invalid ComfyUI metadata for ${name}`) }
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data[name] && (typeof data[name] !== 'object' || Array.isArray(data[name]))) throw new HttpError(502, `Invalid ComfyUI metadata for ${name}`)
+    if (data[name]) schemas[name] = data[name]
+  }
+  return schemas
+}
+/** LaMa removal: the owned source at full size plus its owned mask. No prompt, model or sampler. */
+async function planRemove(user: User, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
+  signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+  if (Object.keys(input).some((key) => !['operation', 'source_image_id', 'mask_id'].includes(key))) throw new HttpError(400, 'Remove accepts only operation, source_image_id and mask_id; LaMa needs no prompt, model or sampling settings')
+  const source = imageSource(user, input.source_image_id)
+  if (source.width > REMOVE_MAX_SIDE || source.height > REMOVE_MAX_SIDE) throw new HttpError(400, `Removal runs at full size and needs a source at most ${REMOVE_MAX_SIDE} pixels per side; upscale less or crop first`)
+  const mask = imageMask(user, input.mask_id, source)
+  const settings = imageSettings(user)
+  const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
+  const maskUploadName = `agents-mask-${randomUUID()}.png`
+  const schemas = await nodeSchemas(user, settings, REMOVE_NODES, signal)
+  const { graph, outputNode } = removeGraph(uploadName, maskUploadName, schemas as SegmentNodeInfo)
+  return { settings, source, uploadName, mask, maskUploadName, workflow: { graph, width: source.width, height: source.height, outputNode }, parameters: { operation: 'remove', width: source.width, height: source.height, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' }, source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'none' } } }
 }
 async function planUpscale(user: User, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
   signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
@@ -522,6 +558,9 @@ async function planUpscale(user: User, input: ImageInput, signal: AbortSignal): 
 export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false) {
   const plan = await planImageGeneration(user, thread, input, signal, exact)
   const p = plan.parameters
+  if (p.operation === 'remove') return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Remove masked area · LaMa', rows: [
+    ['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Mask', `${p.mask.id} · white is removed and filled from its surroundings · ${p.mask.url}`], ['Output', `${p.width} × ${p.height} · full size, no prompt or sampler`],
+  ] as [string, string][], body: '', image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
   if (p.operation === 'upscale') return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Upscale image · review resolved settings', rows: [
     ['Source', `${p.source.name} · ${p.source.width} × ${p.source.height}`], ['Upscale model', p.upscale_model], ['Model input', `${p.input_width} × ${p.input_height}`], ['Output', `${p.width} × ${p.height} · Lanczos final resize`], ['Resources', UPSCALE_RESOURCE_NOTE],
   ] as [string, string][], body: '', image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
@@ -599,12 +638,12 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         const bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
         // SaveImage writes PNG. Reject arbitrary content from an incorrectly configured server.
         if (!bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new HttpError(502, 'ComfyUI did not return a PNG image')
-        if ((parameters.operation === 'upscale' || parameters.operation === 'refine' || parameters.hires) && (bytes.length < 33 || bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== workflow.width || bytes.readUInt32BE(20) !== workflow.height)) throw new HttpError(502, 'ComfyUI output dimensions do not match the requested size')
+        if ((parameters.operation === 'upscale' || parameters.operation === 'remove' || parameters.operation === 'refine' || parameters.hires) && (bytes.length < 33 || bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== workflow.width || bytes.readUInt32BE(20) !== workflow.height)) throw new HttpError(502, 'ComfyUI output dimensions do not match the requested size')
         limit.throwIfAborted()
         const id = randomUUID(), name = `generated-${id}.png`
         checkRoom(user, bytes.length + Buffer.byteLength(JSON.stringify(parameters)))
         database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata, backend_scope) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now(), JSON.stringify(parameters), imageBackendScope(user, s))
-        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, ...(parameters.operation === 'upscale' ? {} : { seed: parameters.seed, preset: parameters.preset }), settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
+        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, ...(parameters.operation === 'upscale' || parameters.operation === 'remove' ? {} : { seed: parameters.seed, preset: parameters.preset }), settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without an image')
       // The socket saying the prompt is done ends the wait early; the next /history read has it.
@@ -726,4 +765,79 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
     return true
   }
   return false
+}
+
+/** Queue a fixed graph, wait for its saved picture and read it back. Deletes only our own prompt on failure. */
+async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, outputNode: string, limit: AbortSignal) {
+  let promptId: string | null = null
+  try {
+    const submitted = await readJSON(user, s, '/prompt', limit, { prompt: graph, client_id: randomUUID() })
+    if (typeof submitted.prompt_id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(submitted.prompt_id)) throw new HttpError(502, 'ComfyUI did not return a prompt ID')
+    promptId = submitted.prompt_id
+    for (;;) {
+      limit.throwIfAborted()
+      const job = (await readJSON(user, s, `/history/${encodeURIComponent(promptId)}`, limit))[promptId]
+      if (job?.status?.status_str === 'error') throw new HttpError(502, 'ComfyUI could not run the segmentation; check that the SAM2 and GroundingDINO models can load (the first run downloads them)')
+      const output = job?.outputs?.[outputNode]?.images?.[0]
+      if (output) {
+        if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
+        const params = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder, type: 'output' })
+        return await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
+      }
+      if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without a mask')
+      await delay(700, undefined, { signal: limit }).catch(() => {})
+    }
+  } catch (error) {
+    if (promptId) await request(user, s, '/queue', AbortSignal.timeout(3000), { delete: [promptId] }).then((r) => r.body?.cancel()).catch(() => {})
+    throw error
+  }
+}
+
+/**
+ * make_image_mask: find `target` in an owned picture with SAM2 + GroundingDINO on the owner's
+ * ComfyUI, take `exclude` out of it, grow it, and keep the result as an owned mask (even an
+ * empty or oversized one, so every attempt can be listed and shown). The mask works with
+ * generate_image remove/inpaint unchanged. Same egress, credentials, quota and one-job lock as generation.
+ */
+export async function makeImageMask(user: User, thread: string, input: AutoMaskInput, signal: AbortSignal) {
+  ownImageThread(user, thread)
+  const options = autoMaskOptions(input)
+  const source = imageSource(user, input.source_image_id)
+  const s = imageSettings(user)
+  if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Agents → Images first')
+  // The first run may download the SAM2 and GroundingDINO weights, so allow as long as a generation.
+  const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
+  const schemas = await nodeSchemas(user, s, AUTO_MASK_NODES, AbortSignal.any([limit, AbortSignal.timeout(30_000)]))
+  const missing = missingNodes(schemas as SegmentNodeInfo, AUTO_MASK_NODES)
+  if (missing) throw new HttpError(409, `Automatic masks are unavailable: ${missing}. Ask the user to paint the area with Edit selected area instead.`)
+  const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
+  const { graph, outputNode } = autoMaskGraph(options, uploadName, schemas as SegmentNodeInfo)
+  if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
+  checkRoom(user, 256 * 1024)
+  active.add(user.id)
+  let bytes: Buffer
+  try {
+    await uploadSource(user, s, source, uploadName, limit)
+    bytes = await runComfyGraph(user, s, graph, outputNode, limit)
+  } catch (error) {
+    if (limit.aborted) throw new HttpError(signal.aborted ? 499 : 504, signal.aborted ? 'Mask making cancelled' : 'Mask making timed out after 10 minutes')
+    throw error
+  } finally { active.delete(user.id) }
+  const decoded = pngFirstChannel(bytes)
+  if (decoded.width !== source.width || decoded.height !== source.height) throw new HttpError(502, `ComfyUI returned a ${decoded.width} × ${decoded.height} mask for a ${source.width} × ${source.height} picture`)
+  let white = 0
+  for (const v of decoded.values) if (v >= 128) white++
+  const coverage = white / decoded.values.length
+  const verdict = coverage === 0 ? 'empty' as const : coverage > MASK_TOO_LARGE ? 'too_large' as const : 'ok' as const
+  const saved = saveAutoMask(user, thread, source, binaryMaskPng(decoded.width, decoded.height, decoded.values), { target: options.target, exclude: options.exclude, grow: options.grow, threshold: options.threshold, verdict })
+  const percent = Math.round(saved.coverage * 1000) / 10
+  const mask = { mask_id: saved.id, mask_url: saved.url, source_image_id: source.id, source_url: source.url, width: saved.width, height: saved.height, target: options.target, ...(options.exclude ? { exclude: options.exclude } : {}), coverage_percent: percent, bbox: saved.bbox, ...(options.handOff ? { hand_off: true } : {}) }
+  if (verdict === 'empty') return { error: `Nothing matching “${options.target}” was found${options.exclude ? ' outside the excluded area' : ''}. Try another word for it (a plainer noun such as "person", "bicycle", "car"), or a lower threshold. The empty attempt is kept in list_image_masks.`, mask }
+  return {
+    mask,
+    ...(verdict === 'too_large' ? { warning: `The mask covers ${percent}% of the picture, which probably caught too much. Use exclude for what must stay, or a tighter target, before editing.` } : {}),
+    next: options.handOff
+      ? 'The app now shows this mask with Open mask editor. End your turn: tell the user in one sentence to refine it, save, and say when to continue.'
+      : 'Check coverage_percent and bbox fit the request, then call generate_image with operation remove (or inpaint with a prompt for a replacement), this source_image_id and mask_id. Do not ask the user first.',
+  }
 }

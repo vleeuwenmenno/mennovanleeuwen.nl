@@ -346,7 +346,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const maskView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})$/.exec(path)
     if (maskView && method === 'DELETE') { discardImageMask(requireUser(req), maskView[1]); return json(res, 200, { deleted: true }), true }
     if (maskView && read) {
-      const mask = imageMask(requireUser(req), maskView[1])
+      const mask = imageMask(requireUser(req), maskView[1], undefined, true)
       res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(mask.bytes.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : mask.bytes)
       return true
     }
