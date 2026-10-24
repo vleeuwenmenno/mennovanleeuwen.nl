@@ -1956,6 +1956,17 @@ controls, account job limit and storage quota. Images must be on in Tools, Comfy
 and the recorded components must still be installed; a missing component is named in the error.
 Retry after this action repeats it directly. Both actions work with keyboard controls and touch.
 
+**Upscale an image.** Choose **Options → Upscale…**, browse the installed upscale models by
+folder or search, select a model, and choose 1.5×, 2× or 4×. The preview shows the final dimensions
+with the source aspect ratio preserved; outputs above 4096 px per side or 16,777,216 pixels are
+blocked. No prompt or diffusion settings are needed. The model's native intermediate image can
+exceed the requested output size, so the output limit is not a memory guarantee. Sources above
+2048 px per side must be resized separately before upscaling; original pixels are never silently
+reduced. **Upscale settings** records the source and model input dimensions. Upscaled results have
+no seed. **Upscale again** repeats the recorded
+operation from its original source rather than enlarging the enlarged result. Progress and Stop
+work like Generate another, and the terminal labels upscale results and settings explicitly.
+
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the
 conversation so far (the user's goals and requests, decisions, files and paths, the current state,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import type { GeneratedImage } from '../data/agentImages'
+import { UpscaleDialog } from './AgentsUpscale'
+import type { GeneratedImage, UpscaleImageInput } from '../data/agentImages'
 import { imageProgressFraction, imageProgressLabel, type ImageProgress } from '../data/imageModels'
 import { createPortal } from 'react-dom'
 import { fileSize, pictureUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
@@ -211,7 +212,7 @@ function blockGrid(width: number, height: number) {
 }
 
 /** Same frame before and after generation: only its contents change, never its aspect ratio. */
-export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu }: { image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
+export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu, operation = 'generate' }: { operation?: 'generate' | 'upscale'; image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
   const displayedImage = useRef<HTMLImageElement>(null)
   const [animate, setAnimate] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -237,13 +238,13 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
   const lit = fraction === null ? 0 : Math.round(fraction * grid.rank.length)
   return (
     <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }} onContextMenu={image ? onMenu : undefined}>
-      {(!image || !loaded) && !failed && <div className={`agt-image-wait ${fraction === null ? 'is-idle' : ''}`} role="status" aria-live="polite" aria-busy={progress?.phase === 'sampling'}>
+      {(!image || !loaded) && !failed && <div className={`agt-image-wait ${fraction === null ? 'is-idle' : ''}`} role="status" aria-live="polite" aria-busy={pending}>
         <div className="agt-block-grid" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))` }}>
           {grid.rank.map((r, i) => <span key={i} className={`agt-block ${r < lit ? 'is-lit' : ''}`} style={{ animationDelay: `${-((i % grid.cols) + Math.floor(i / grid.cols)) * 0.12}s` }} />)}
         </div>
-        <span className="agt-image-status">{pending ? imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
+        <span className="agt-image-status">{pending ? operation === 'upscale' && (!progress || progress.phase === 'running') ? 'Upscaling image…' : imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
       </div>}
-      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt="Generated image" width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
+      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt={operation === 'upscale' ? 'Upscaled image' : 'Generated image'} width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>
   )
 }
@@ -253,14 +254,17 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
  * row every message has (AgentsActions.tsx): Save to Files, Generate another, Options. Options and the
  * picture's right-click menu hold View, Open in Preview, Download, and `more` (Branch off).
  */
-export function ImageCard({ image, width, height, pending, progress, again, more, retry, edit }: { edit?: { disabled: boolean; onClick: () => void }; /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
+export function ImageCard({ image, width, height, pending, progress, again, more, retry, edit, upscale, operation = 'generate' }: { operation?: 'generate' | 'upscale'; upscale?: { disabled: boolean; onSubmit: (input: UpscaleImageInput) => void }; edit?: { disabled: boolean; onClick: () => void }; /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
   const frame = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  const [upscaleOpen, setUpscaleOpen] = useState(false)
+  const isUpscale = image?.settings?.operation === 'upscale' || !image && operation === 'upscale'
   const wm = useWM()
   // Save to Files only where it can work: no Seafile and no browser store, no entry (not a dead one).
   const to = useSaveDestination()
   const save = image && to ? { label: saveLabel(to), onSelect: () => void saveImageToFiles(image) } : null
   const own: MenuItem[] = image ? [
+    ...(upscale ? [{ label: 'Upscale…', hint: 'Enlarge with an installed upscale model', disabled: upscale.disabled, onSelect: () => setUpscaleOpen(true) }] : []),
     ...(edit ? [{ label: 'Edit image…', hint: 'Use as source; describe the change in the message box', disabled: edit.disabled, onSelect: edit.onClick }] : []),
     { label: 'View full size', onSelect: () => setOpen(true) },
     { label: 'Open in Preview', hint: 'Zoom, rotate, full screen', onSelect: () => wm.openNew('preview', { src: image.url, name: imageFileName(image), from: 'Agents' }) },
@@ -268,20 +272,21 @@ export function ImageCard({ image, width, height, pending, progress, again, more
   ] : []
   const picture = image ? { name: imageFileName(image), src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
   return <>
-    <p className="muted">{image ? image.settings?.source ? 'Edited image' : 'Generated image' : 'Generating image'} · {width} × {height}</p>
-    <GeneratedPicture image={image} width={width} height={height} pending={pending} progress={progress} frame={frame} onView={() => setOpen(true)} onMenu={(e) => openContextMenu(e, tidy([...own, ...(save ? [save] : []), { separator: true }, ...more]))} />
-    {image && <p className="muted">Seed {image.seed}</p>}
+    <p className="muted">{isUpscale ? image ? 'Upscaled image' : 'Upscaling image' : image ? image.settings?.source ? 'Edited image' : 'Generated image' : 'Generating image'} · {width} × {height}</p>
+    <GeneratedPicture operation={isUpscale ? 'upscale' : 'generate'} image={image} width={width} height={height} pending={pending} progress={progress} frame={frame} onView={() => setOpen(true)} onMenu={(e) => openContextMenu(e, tidy([...own, ...(save ? [save] : []), { separator: true }, ...more]))} />
+    {image && !isUpscale && image.seed !== undefined && <p className="muted">Seed {image.seed}</p>}
     {image?.settings && <details className="agt-image-settings">
-      <summary>Generation settings</summary>
+      <summary>{isUpscale ? 'Upscale settings' : 'Generation settings'}</summary>
       <pre className="copyable">{JSON.stringify(image.settings, null, 2)}</pre>
       <a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a>
     </details>}
     {image && <ActionRow label="Image actions">
       {save && <button key="save" type="button" className={ACTION} aria-label={save.label} title={save.label} onClick={save.onSelect}>Save to Files…</button>}
-      {again && <button key="again" type="button" className={ACTION} disabled={again.disabled} title={again.hint} onClick={again.onClick}>Generate another</button>}
+      {again && <button key="again" type="button" className={ACTION} disabled={again.disabled} title={again.hint} onClick={again.onClick}>{isUpscale ? 'Upscale again' : 'Generate another'}</button>}
       {retry}
       <MoreButton key="more" label="Image" items={tidy([...own, { separator: true }, ...more])} />
     </ActionRow>}
+    {upscaleOpen && image && upscale && <UpscaleDialog image={image} disabled={upscale.disabled} onClose={() => setUpscaleOpen(false)} onUpscale={(input) => { setUpscaleOpen(false); upscale.onSubmit(input) }} />}
     {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} actions={save ? [save] : []} />}
   </>
 }

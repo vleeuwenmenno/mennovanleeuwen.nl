@@ -1,3 +1,4 @@
+import { readEvents, type TurnEvent } from './agents'
 import { api } from '../os/account'
 import type { ObservationsView } from './imageObservations'
 
@@ -5,7 +6,7 @@ import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, Image
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
 export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean }
 export type ImageCatalog = ImageAssetCatalog
-export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset; settings?: ImageGenerationSettings }
+export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed?: number; preset?: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
 /** Saves only the approval choice; the rest of the saved settings stay as they are. */
 export const saveImageApproval = (askBeforeGenerate: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeGenerate } })
@@ -34,7 +35,7 @@ export const getThreadImageSettings = (id: string) => api<ThreadImageSettings>(`
 export const saveThreadImageSettings = (id: string, overrides: ImageOverrides) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'PUT', json: overrides })
 export const resetThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'DELETE' })
 
-export type ModelCategory = 'checkpoints' | 'diffusion_models' | 'text_encoders' | 'vae'
+export type ModelCategory = 'checkpoints' | 'diffusion_models' | 'text_encoders' | 'vae' | 'upscale_models'
 export type ModelMetadata = { available: boolean; reason?: string; source?: string; title?: string; baseModel?: string; size?: number; tags?: string[]; preview?: string }
 export const getModelMetadata = (category: ModelCategory, name: string, signal: AbortSignal) => api<ModelMetadata>(`/api/agents/images/model-metadata?${new URLSearchParams({ category, name })}`, { signal })
 
@@ -51,3 +52,12 @@ export type LoraDetail = { name: string; title: string; baseModel: string; trigg
 export const getLoraDetails = () => api<{ loras: LoraDetail[]; total: number; truncated: boolean; manager: boolean }>('/api/agents/images/lora-details')
 /** The LoRA's own preview, through this server (only when `hasPreview`). */
 export const loraPreviewUrl = (name: string) => `/api/agents/images/lora-preview?${new URLSearchParams({ name })}`
+
+/** An explicit model upscale; diffusion settings are deliberately absent. */
+export type UpscaleImageInput = { operation: 'upscale'; source_image_id: string; upscale_model: string } & ({ scale: number } | { width: number; height: number })
+export async function upscaleImage(id: string, input: UpscaleImageInput, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  const res = await fetch(`/api/agents/threads/${id}/upscale`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
+  })
+  await readEvents(res, onEvent)
+}

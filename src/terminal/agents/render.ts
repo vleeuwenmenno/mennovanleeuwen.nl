@@ -50,7 +50,7 @@ export function toolTitle(call: ToolCall): [string, string] {
     case 'save_image_learning': return ['Save image observation', s(call, 'task')]
     case 'save_image_profile': return ['Save style profile', s(call, 'name')]
     case 'generate_image':
-      return [call.arguments?.source_image_id ? 'Edit image' : 'Generate image', s(call, 'prompt')]
+      return call.arguments?.operation === 'upscale' ? ['Upscale image', s(call, 'upscale_model')] : [call.arguments?.source_image_id ? 'Edit image' : 'Generate image', s(call, 'prompt')]
     case 'view_generated_image':
       return ['Inspect image', String(call.arguments?.image_id ?? 'latest in this thread')]
     case 'list_image_attachments': return ['Image attachments', 'Source images']
@@ -196,7 +196,11 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
       const image = generatedImage(result)
       if (image) {
         const url = new URL(image.url, location.origin).href
-        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+        if (image.settings?.operation === 'upscale') {
+          const settings = image.settings
+          return ok([under(`Upscaled image · ${image.width} × ${image.height}`), ...wrap([seg(`  Model: ${settings.upscale_model}\n  Source: ${settings.source.name} (${settings.source.width} × ${settings.source.height})\n  Model input: ${settings.input_width} × ${settings.input_height}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w), ...wrap([{ t: url, link: url }], w)])
+        }
+        return ok([under(`${image.width} × ${image.height}${image.seed === undefined ? '' : ` · seed ${image.seed}`}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
       }
       return ok([under(oneLine(result))])
     }
