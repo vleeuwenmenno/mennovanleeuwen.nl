@@ -1,3 +1,4 @@
+import { listImageMasks, retainImageMasks } from './agentImageMasks.ts'
 import { imageSource, listImageAttachments } from './agentImageSources.ts'
 import { imageFileSaveBlockers, prepareImageFileSave } from './agentImageFiles.ts'
 import { searchThreads, readThread } from './agentThreadSearch.ts'
@@ -167,6 +168,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
   search_threads: 'threads',
   read_thread: 'threads',
   generate_image: 'images',
+  list_image_masks: 'images',
   list_image_attachments: 'images',
   list_image_models: 'images',
   list_generated_images: 'images',
@@ -385,7 +387,7 @@ type Verdict = { allow: boolean; always?: 'edits' | 'command' | 'domain' | 'mail
 type Queued = { id: string; text: string; attachments: Attachment[]; zone: string | null; createdAt: number }
 export type QueuedInfo = { id: string; text: string; attachments: AttachmentInfo[]; createdAt: number; /** A window is editing it: the queue waits */ editing: boolean }
 /** What a turn starts from: the user's message, its files and the time zone they are in. */
-type Ask = { text: string; files: Attachment[]; zone: string; again?: string; upscale?: ImageInput }
+type Ask = { text: string; files: Attachment[]; zone: string; again?: string; upscale?: ImageInput; inpaint?: ImageInput }
 const MAX_QUEUE = 20
 /**
  * The queued message a window is editing, by thread. The queue waits while one is, so a message is
@@ -862,6 +864,7 @@ export function deleteThread(user: User, id: string) {
   clearTimeout(held.get(row.id)?.timer)
   held.delete(row.id)
   retainBranchedImages(user, row.id)
+  retainImageMasks(user, row.id)
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
 }
 
@@ -1549,13 +1552,15 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   if (imageSettings(user).url) tools.push(
     tool('list_image_models', 'Discover installed image options, automatic recommendations and effective sampling defaults once before generation. `selected` is what a generation will actually use: the thread\'s preset, model, encoder, VAE, size and the preset\'s steps/CFG/sampler/scheduler. Quote it before discussing settings; recommendations cover every preset separately, so one checkpoint can appear under several. Results are bounded; use query/limit to find omitted filenames. Catalog/name hints do not verify custom weights or a Krea2 raw/turbo variant. Backend credentials are never exposed.', { preset: { type: 'string', enum: [...PRESETS] }, query: str('Optional filename search, at most 200 characters'), limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Maximum options per category; default 40' } }, []),
 
-    tool('generate_image', 'Generate or upscale one image only when the user requests it. For existing-image refinement use operation=refine with source_image_id, optional scale (default 1.5, range 1–2), denoise(default 0.2), optional upscale_model and explicit sampling/component/prompt overrides. Saved owned diffusion settings are inherited; sources without those need an explicit prompt and compatible configured components. Refinement dimensions use a 64-pixel grid, 256–2048 per side, 4 megapixels. For a second pass on new generation supply hires with its own size/denoise and optional sampling/upscaler. For model upscaling use operation=upscale, source_image_id, an installed upscale_model from list_image_models, and scale (default 2, greater than 1 up to 4) OR aspect-matched dimensions. Upscale requires no prompt, diffusion model, seed, or sampling options; omit those. Source must be at most 2048 pixels per side; final size at most 4096 per side and 16 megapixels. Native model intermediate size can exceed final size; memory is not guaranteed. Set source_image_id to edit a whole existing image with configurable denoise; this is not masked inpainting. Use list_generated_images for current generated images, read_thread for earlier generated IDs, or list_image_attachments for user attachments. Source ratio sets default dimensions; explicit dimensions center-crop without stretching. First discover once with list_image_models, which retrieves relevant prior image learnings. If generation returns learning_review_required, review its evidence and retry with validated settings; it has not submitted a job. Prefer its recommended defaults and preserve explicit user model/sampling requests; tune when requested or clearly needed. Per-call preset/model/clip/vae/loras/steps/cfg/sampler/scheduler/size/seed override session then account defaults without persistence. Empty asset strings request automatic selection. A different preset may require all matching assets. Never promise VAE swapping improves quality; use compatible assets only. Turbo CFG stays 1. Runs without approval unless the owner turned on Ask before generating images; then the approval card shows the resolved settings. Backend URLs/tokens, downloads and arbitrary graphs are forbidden. Can take minutes. Success ends the turn immediately: the app/CLI displays the image, URL and settings. Do not add follow-up text or call vision after generation; inspect on a later user turn. Do not claim success before it succeeds.', {
-      operation: { type: 'string', enum: ['generate', 'refine', 'upscale'], description: 'Defaults to generate. Upscale enlarges existing pixels with an installed upscale model, without diffusion.' },
+    tool('list_image_masks', 'List up to 20 saved image masks for this or an explicitly named owned thread. Each mask belongs to its source_image_id; do not invent mask IDs.', { thread_id: str('Optional owned thread ID') }, []),
+    tool('generate_image', 'Generate or upscale one image only when the user requests it. For existing-image refinement use operation=refine with source_image_id, optional scale (default 1.5, range 1–2), denoise(default 0.2), optional upscale_model and explicit sampling/component/prompt overrides. Saved owned diffusion settings are inherited; sources without those need an explicit prompt and compatible configured components. Refinement dimensions use a 64-pixel grid, 256–2048 per side, 4 megapixels. For a second pass on new generation supply hires with its own size/denoise and optional sampling/upscaler. For model upscaling use operation=upscale, source_image_id, an installed upscale_model from list_image_models, and scale (default 2, greater than 1 up to 4) OR aspect-matched dimensions. Upscale requires no prompt, diffusion model, seed, or sampling options; omit those. Source must be at most 2048 pixels per side; final size at most 4096 per side and 16 megapixels. Native model intermediate size can exceed final size; memory is not guaranteed. Set source_image_id to edit a whole existing image with configurable denoise; for localized edits use operation=inpaint with a saved mask_id from list_image_masks. White edits, black preserves the resized working source through a final composite. Inpaint cannot include hires; refine its result separately. Source and mask dimensions must match. Use list_generated_images for current generated images, read_thread for earlier generated IDs, or list_image_attachments for user attachments. Source ratio sets default dimensions; explicit dimensions center-crop without stretching. First discover once with list_image_models, which retrieves relevant prior image learnings. If generation returns learning_review_required, review its evidence and retry with validated settings; it has not submitted a job. Prefer its recommended defaults and preserve explicit user model/sampling requests; tune when requested or clearly needed. Per-call preset/model/clip/vae/loras/steps/cfg/sampler/scheduler/size/seed override session then account defaults without persistence. Empty asset strings request automatic selection. A different preset may require all matching assets. Never promise VAE swapping improves quality; use compatible assets only. Turbo CFG stays 1. Runs without approval unless the owner turned on Ask before generating images; then the approval card shows the resolved settings. Backend URLs/tokens, downloads and arbitrary graphs are forbidden. Can take minutes. Success ends the turn immediately: the app/CLI displays the image, URL and settings. Do not add follow-up text or call vision after generation; inspect on a later user turn. Do not claim success before it succeeds.', {
+      operation: { type: 'string', enum: ['generate', 'refine', 'upscale', 'inpaint'], description: 'Defaults to generate. Upscale enlarges existing pixels with an installed upscale model, without diffusion.' },
+      mask_id: str('Required for inpaint: owned saved mask ID from the editor or list_image_masks, matching source_image_id. Never a URL or arbitrary graph.'),
       upscale_model: str('Required for upscale: exact installed identifier from options.upscalers'),
       scale: { type: 'number', minimum: 1, maximum: 4, description: 'Refine: 1–2, default 1.5. Upscale: greater than 1 up to 4, default 2. Omit with dimensions.' },
       hires: { type: 'object', additionalProperties: false, description: 'Optional second diffusion pass after generation. Shares components and seed; defaults to 1.5× and denoise 0.2.', properties: { scale: { type: 'number', minimum: 1, maximum: 2 }, width: { type: 'integer', minimum: 256, maximum: 2048 }, height: { type: 'integer', minimum: 256, maximum: 2048 }, denoise: { type: 'number', minimum: 0.1, maximum: 1 }, upscale_model: str('Optional installed upscale model before refinement'), steps: { type: 'integer', minimum: 1, maximum: 80 }, cfg: { type: 'number', minimum: 0, maximum: 20 }, sampler: { type: 'string', enum: [...IMAGE_SAMPLERS] }, scheduler: { type: 'string', enum: [...IMAGE_SCHEDULERS] } } },
       profile_id: { type: ['integer', 'null'], description: 'Style profile for this image; omitted uses session pin. Profile evidence guides only, never replaces explicit user settings.' },
-      source_image_id: str('Optional owned generated image UUID or attachment ID from list_image_attachments. Never a URL, path or base64. Edits the whole image.'),
+      source_image_id: str('Optional owned generated image UUID or attachment ID from list_image_attachments. Never a URL, path or base64. Inpaint also requires its matching mask_id.'),
       denoise: { type: 'number', minimum: 0.1, maximum: 1, default: 0.65, description: 'Only with source_image_id. Default 0.65 for img2img, 0.2 for refine; lower preserves more structure.' },
       profile_reason: str('Why this profile fits the request, up to 200 characters'),
       preset: { type: 'string', enum: [...PRESETS], description: 'Optional supported workflow for this image only' },
@@ -1994,6 +1999,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
   try {
     switch (call.name) {
       case 'search_threads': return JSON.stringify(searchThreads(user.id, thread, args, zone))
+      case 'list_image_masks': return JSON.stringify(listImageMasks(user, thread, args))
       case 'list_image_attachments': return JSON.stringify(listImageAttachments(user, thread, args))
       case 'list_generated_images': return JSON.stringify(listGeneratedImages(user, thread, args))
       case 'read_thread': return JSON.stringify(readThread(user.id, args, zone, MODES[mode].pageChars))
@@ -2056,7 +2062,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
           const r = resolveImageAssets({ preset, model: '', clip: '', vae: '' }, catalog)
           return { ...r.effective, selection: Object.fromEntries(Object.entries(r.selection).map(([key, value]) => [key, { ...value, candidates: value.candidates.slice(0, 10) }])), sampling: recommendedImageSampling(preset, r.effective.model, catalog) }
         })
-        return JSON.stringify({ refinement: { available: catalog.img2img, defaultScale: 1.5, defaultDenoise: 0.2, maxSide: 2048, maxArea: 4_194_304, alignment: 64, settings: 'Inherit owned diffusion source settings; explicit overrides win' }, model_upscale: { available: catalog.upscale, reason: catalog.upscaleError, sourceMaxSide: 2048, outputMaxSide: 4096, outputMaxArea: 16_777_216, scale: [1, 4], defaultScale: 2, nativeScale: 'unknown; intermediate output can exceed requested size and memory is not guaranteed' }, image_to_image: { available: catalog.img2img, presets: catalog.img2img ? PRESETS : [], denoise: [0.1, 1], default_denoise: 0.65, resize: 'lanczos-center-crop', localized_inpainting: false }, learnings: findings.evidence, selected: { ...current.effective, ...resolved.effective, ...sampling }, overrides: current.overrides, selection: Object.fromEntries(Object.entries(resolved.selection).map(([key, value]) => [key, { ...value, candidates: value.candidates.slice(0, 10) }])), recommendations, options: bounded, loraHints: catalog.loraHints.filter((h) => bounded.loras.values.includes(h.name)), samplers: catalog.samplers.filter((s) => IMAGE_SAMPLERS.includes(s as typeof IMAGE_SAMPLERS[number])), schedulers: catalog.schedulers.filter((s) => IMAGE_SCHEDULERS.includes(s as typeof IMAGE_SCHEDULERS[number])), limits: { steps: [1, 80], cfg: [0, 20], turboCfg: 1, maximumArea: 1536 * 1024, images: 1 } })
+        return JSON.stringify({ refinement: { available: catalog.img2img, defaultScale: 1.5, defaultDenoise: 0.2, maxSide: 2048, maxArea: 4_194_304, alignment: 64, settings: 'Inherit owned diffusion source settings; explicit overrides win' }, model_upscale: { available: catalog.upscale, reason: catalog.upscaleError, sourceMaxSide: 2048, outputMaxSide: 4096, outputMaxArea: 16_777_216, scale: [1, 4], defaultScale: 2, nativeScale: 'unknown; intermediate output can exceed requested size and memory is not guaranteed' }, image_to_image: { available: catalog.img2img, presets: catalog.img2img ? PRESETS : [], denoise: [0.1, 1], default_denoise: 0.65, resize: 'lanczos-center-crop', localized_inpainting: catalog.inpaint, inpaint_error: catalog.inpaintError, mask: 'opaque RGB PNG; white edits, black preserves working-size source; use mask_id from list_image_masks' }, learnings: findings.evidence, selected: { ...current.effective, ...resolved.effective, ...sampling }, overrides: current.overrides, selection: Object.fromEntries(Object.entries(resolved.selection).map(([key, value]) => [key, { ...value, candidates: value.candidates.slice(0, 10) }])), recommendations, options: bounded, loraHints: catalog.loraHints.filter((h) => bounded.loras.values.includes(h.name)), samplers: catalog.samplers.filter((s) => IMAGE_SAMPLERS.includes(s as typeof IMAGE_SAMPLERS[number])), schedulers: catalog.schedulers.filter((s) => IMAGE_SCHEDULERS.includes(s as typeof IMAGE_SCHEDULERS[number])), limits: { steps: [1, 80], cfg: [0, 20], turboCfg: 1, maximumArea: 1536 * 1024, images: 1 } })
       }
       case 'web_search': {
         const query = argString(args, 'query')
@@ -2963,7 +2969,7 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
 
 /** One turn: the user's message saved, then rounds of the model and its tools until it answers. */
 async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<TurnResult> {
-  if (ask.again || ask.upscale) return imageAgainTurn(user, thread, ask.again, ctl, send, ask.upscale)
+  if (ask.again || ask.upscale || ask.inpaint) return imageAgainTurn(user, thread, ask.again, ctl, send, ask.upscale ?? ask.inpaint)
   // /compact is no message for the model: the thread is compacted instead.
   const step = compactAsk(ask)
   if (step) return compactTurn(user, thread, step.instructions, ctl, send)
@@ -3441,11 +3447,12 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   checkTurnRoom(user)
   const again = !cut?.compact && last?.checked?.startsWith('image-again:') ? last.checked.slice('image-again:'.length) : undefined
   const upscale = !cut?.compact && last?.checked?.startsWith('image-upscale:') ? JSON.parse(last.checked.slice('image-upscale:'.length)) as ImageInput : undefined
+  const inpaint = !cut?.compact && last?.checked?.startsWith('image-inpaint:') ? JSON.parse(last.checked.slice('image-inpaint:'.length)) as ImageInput : undefined
   if (again) imageAgainAllowed(user, row.id, again)
-  else if (upscale) imageActionAllowed(user, row.id)
+  else if (upscale || inpaint) imageActionAllowed(user, row.id)
   else requireKey(user)
   const zone = zoneFor(body.client?.timeZone)
-  const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again, upscale }
+  const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again, upscale, inpaint }
   if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   const fromTerminal = body.client?.terminal === true
@@ -3494,6 +3501,16 @@ export async function upscaleImage(res: ServerResponse, user: User, id: string, 
   await runChain(user, id, { text: input.operation === 'refine' ? 'Refine image' : 'Upscale image', files: [], zone: 'UTC', upscale: input }, res, false)
 }
 
+/** Applying an editor mask is an explicit user request; the normal streaming lifecycle owns it. */
+export async function inpaintImage(res: ServerResponse, user: User, id: string, input: ImageInput) {
+  imageActionAllowed(user, id)
+  if (running.has(id)) throw new HttpError(409, 'This thread is still answering')
+  checkTurnRoom(user)
+  if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'inpaint') throw new HttpError(400, 'Choose an inpaint operation')
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  await runChain(user, id, { text: 'Inpaint image', files: [], zone: 'UTC', inpaint: input }, res, false)
+}
+
 /** A direct user action uses the normal streamed lifecycle, but never calls a model or asks approval. */
 export async function generateAnother(res: ServerResponse, user: User, id: string, image: string) {
   ownThread(user, id)
@@ -3511,7 +3528,7 @@ async function imageAgainTurn(user: User, thread: string, image: string | undefi
     imageActionAllowed(user, thread)
     const input = upscale ?? imageAgainAllowed(user, thread, image!)
     // checked is a server-owned marker, preserved by branches; Retry repeats the direct action.
-    send({ type: 'message', message: addMessage(thread, { role: 'user', content: input.operation === 'upscale' ? 'Upscale image' : input.operation === 'refine' ? 'Refine image' : 'Generate another', checked: upscale ? `image-upscale:${JSON.stringify(upscale)}` : `image-again:${image}` }) })
+    send({ type: 'message', message: addMessage(thread, { role: 'user', content: input.operation === 'inpaint' ? 'Inpaint image' : input.operation === 'upscale' ? 'Upscale image' : input.operation === 'refine' ? 'Refine image' : 'Generate another', checked: upscale ? `image-${input.operation === 'inpaint' ? 'inpaint' : 'upscale'}:${JSON.stringify(upscale)}` : `image-again:${image}` }) })
     assistant = addMessage(thread, { role: 'assistant', content: '', toolCalls: [{ name: 'generate_image', arguments: input }] })
     send({ type: 'message', message: assistant })
     const plan = await prepareImageGeneration(user, thread, input, ctl.signal, !upscale)

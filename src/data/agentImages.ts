@@ -70,3 +70,18 @@ export async function refineImage(id: string, input: RefineImageInput, onEvent: 
   })
   await readEvents(res, onEvent)
 }
+
+export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
+export async function saveImageMask(thread: string, source: string, mask: Blob) {
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1])
+    reader.onerror = () => reject(new Error('Could not read the mask'))
+    reader.readAsDataURL(mask)
+  })
+  return api<{ id: string; url: string; width: number; height: number }>(`/api/agents/threads/${thread}/image-masks`, { method: 'POST', json: { source_image_id: source, data } })
+}
+export async function inpaintImage(id: string, input: InpaintImageInput, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  const res = await fetch(`/api/agents/threads/${id}/inpaint`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal })
+  await readEvents(res, onEvent)
+}

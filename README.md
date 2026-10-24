@@ -1431,8 +1431,18 @@ provides earlier owned image IDs, and `list_image_attachments` discovers persist
 this or an explicitly named owned thread. `view_generated_image` can inspect either source kind
 when the conversational model supports vision. Attaching a picture alone does not request a job.
 
-**Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` provides a standalone modal for
-forthcoming localized editing; it is not yet connected to an image job or attachment storage.
+**Localized editing.** On a generated image, choose **Options → Edit selected area…**, describe
+the replacement and denoise (default 0.65), then **Paint edit area**. **Apply mask** saves an owned
+mask and starts inpainting; cancel before applying discards the selection without starting a job.
+The backend capability is checked first. The app uses the source image's recorded diffusion
+components/sampling when available; otherwise it uses current image settings. For a saved mask,
+the CLI/model can call `generate_image` with `operation: "inpaint"`, `source_image_id`, `mask_id`,
+and a prompt. `list_image_masks` discovers up to 20 masks in this or an explicitly owned thread.
+Masks are bound to one source, remain private, count toward account storage, and are retained
+with surviving branch artifacts. Again reuses the recorded source and mask with a fresh seed;
+Retry replays the direct action. Approval cards identify the mask and working-size preservation.
+
+**Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` is a reusable standalone modal.
 Pass `sourceUrl` (authenticated same-origin HTTP(S)), `sourceName`, EXIF-oriented `width` and
 `height`, `onCancel`, and `onApply({ mask, width, height })`. The caller closes the editor after
 applying. Cancel never calls `onApply`; changing the source or dimensions starts a fresh mask.
@@ -1444,19 +1454,21 @@ Brush/erase work with mouse, pen and touch, at fitted display sizes. Focus the c
 cursor with arrows (Shift moves farther) and paint a dot with Space. Ctrl/Command+Z undoes;
 Reset clears all strokes and Escape cancels. Undo stores at most 512 strokes / 32,768 points,
 with a clear limit message instead of unbounded snapshots. Preview resolution is capped at
-1600 pixels per side; export retains source dimensions. No source is uploaded or persisted.
+1600 pixels per side; export retains source dimensions. The component itself performs no uploads.
+Its caller persists the mask only on Apply. The server validates opaque binary RGB PNG pixels,
+nonempty selection, source binding, dimensions and the 8 MiB mask cap before backend uploads.
 The synthetic browser check is `node scripts/agents-mask-check.ts http://127.0.0.1:<dev-port>`.
 `server/agentImageInpaint.ts` supplies the pure graph composition and mask-format validation for
 integration. `assertInpaintNodes` checks the discovered schemas before uploads; `inpaintGraph`
 accepts a server-built img2img graph and source/mask references, retains its preset and LoRA
 chain, and adds matched mask resizing, latent noise masking and a final pixel composite.
 Only the working-size image is preserved outside the resized mask, not the original-resolution
-source. `node scripts/agents-image-inpaint.ts` checks all six preset graphs without a GPU.
+source. `node scripts/agents-image-inpaint.ts` checks all six preset graphs without a GPU;
+`node scripts/agents-inpaint.ts` checks the real HTTP/approval lifecycle against mocked services.
 
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
-preserve more source structure; higher values allow larger changes. This changes the **whole image**:
-there are no masks or localized inpainting yet, and unchanged regions
-are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
+preserve more source structure; higher values allow larger changes. Without `operation: "inpaint"`
+and its matching `mask_id`, this changes the **whole image**, and unchanged regions are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
 VAEEncode → KSampler path, with the same encoder/VAE, LoRA and sampling validation as text-to-image.
 The live catalog must support LoadImage, VAEEncode and ImageScale's lanczos/center options; otherwise
 editing is refused. Custom model weights remain unverified even when their catalog names match.

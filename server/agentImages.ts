@@ -1,4 +1,6 @@
 import { addHiresStage, refinementSize, refinementSampling } from './agentImageRefine.ts'
+import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentImageInpaint.ts'
+import { imageMask, type ImageMask } from './agentImageMasks.ts'
 import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
@@ -178,10 +180,10 @@ async function readJSON(user: User, s: ImageSettings, path: string, signal: Abor
 const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
-export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user)) {
+export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user), forPlanning = false) {
   const info: NodeInfo = {}
   const limit = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
   let remaining = CATALOG_LIMIT
@@ -220,7 +222,9 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
     if (!upscalers.length) throw new Error('Install an upscale model in ComfyUI/models/upscale_models')
     validateUpscaleGraph(upscaleWorkflow({ width: 512, height: 512 }, { upscale_model: upscalers[0] }, 'source.png').graph, info)
   } catch (e) { upscaleError = (e as Error).message }
-  return { upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  let inpaintError = ''
+  try { assertInpaintNodes(info) } catch (e) { inpaintError = (e as Error).message }
+  return { inpaint: !inpaintError, inpaintError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
 /** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
 async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
@@ -263,7 +267,7 @@ async function imageLoraHints(user: User, settings: ImageSettings, signal: Abort
     return hints.filter((h) => !duplicates.has(h.name))
   } catch { return [] }
 }
-export type ImageInput = { hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+export type ImageInput = { mask_id?: unknown; hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }, sourceName?: string) {
   if (!PRESETS.includes(s.preset)) throw new HttpError(400, 'Unsupported image workflow')
@@ -384,26 +388,31 @@ export function imageAgainInput(user: User, thread: string, id: string): ImageIn
   if (!image.metadata) throw new HttpError(409, 'This image has no recorded generation settings')
   const stored = JSON.parse(image.metadata) as ImageGenerationSettings
   if (stored.operation === 'upscale') return { operation: 'upscale', source_image_id: stored.source.id, upscale_model: stored.upscale_model, width: stored.width, height: stored.height }
-  const { source, denoise, ...settings } = stored
+  const { source, denoise, mask, ...settings } = stored
   let seed: number
   do { seed = randomInt(2 ** 48 - 1) } while (seed === settings.seed)
   const { hires, ...base } = settings
   const hiresInput = hires ? { width: hires.width, height: hires.height, steps: hires.steps, cfg: hires.cfg, sampler: hires.sampler, scheduler: hires.scheduler, denoise: hires.denoise, ...(hires.upscale_model ? { upscale_model: hires.upscale_model } : {}) } : undefined
-  return { ...base, loras: settings.loras ?? [], seed, ...(hires ? { width: hires.base_width, height: hires.base_height, hires: hiresInput } : {}), ...(source ? { source_image_id: source.id, denoise } : {}) }
+  return { ...base, loras: settings.loras ?? [], seed, ...(hires ? { width: hires.base_width, height: hires.base_height, hires: hiresInput } : {}), ...(source ? { source_image_id: source.id, denoise } : {}), ...(mask ? { mask_id: mask.id } : {}) }
 }
 
-type ImagePlan = { source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: { graph: ImageGraph; width: number; height: number; outputNode: string; progress?: ImageGraphProgress; sampling?: { steps: number } }; parameters: ImageGenerationSettings }
+type ImagePlan = { mask?: ImageMask; maskUploadName?: string; source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: { graph: ImageGraph; width: number; height: number; outputNode: string; progress?: ImageGraphProgress; sampling?: { steps: number } }; parameters: ImageGenerationSettings }
 async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false): Promise<ImagePlan> {
   ownImageThread(user, thread)
   if (input?.operation === 'upscale') return planUpscale(user, input, signal)
-  if (input?.operation !== undefined && input.operation !== 'generate' && input.operation !== 'refine') throw new HttpError(400, 'Choose operation generate, refine or upscale')
-  const allowed = new Set(['operation', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
+  if (input?.operation !== undefined && input.operation !== 'generate' && input.operation !== 'refine' && input.operation !== 'inpaint') throw new HttpError(400, 'Choose operation generate, refine, inpaint or upscale')
+  const allowed = new Set(['operation', 'mask_id', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const source = input.source_image_id === undefined ? undefined : imageSource(user, input.source_image_id)
   const refining = input.operation === 'refine'
   if (refining && (!source || input.hires !== undefined)) throw new HttpError(400, 'Refine requires a source image and cannot include a second hires stage')
   if (!refining && (input.scale !== undefined || input.upscale_model !== undefined)) throw new HttpError(400, 'Scale and upscale_model require refine, upscale, or a nested hires stage')
   if (refining) input = inheritedRefinementInput(user, source!.id, input)
+  const isInpaint = input.operation === 'inpaint'
+  if (isInpaint && !source) throw new HttpError(400, 'Inpainting requires source_image_id and mask_id')
+  if (!isInpaint && input.mask_id !== undefined) throw new HttpError(400, 'mask_id requires operation inpaint')
+  const mask = isInpaint ? imageMask(user, input.mask_id, source) : undefined
+  if (isInpaint && input.hires !== undefined) throw new HttpError(400, 'Inpainting cannot include a hires pass; refine the saved result separately')
   const profile = selectedImageProfile(user, thread, input.profile_id)
   if (input.profile_reason !== undefined && (typeof input.profile_reason !== 'string' || input.profile_reason.length > 200)) throw new HttpError(400, 'Profile reason must be up to 200 characters')
   const { effective, overrides: sessionOverrides } = threadImageSettings(user, thread)
@@ -412,7 +421,8 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   const preset = overrides.preset ?? effective.preset
   const configured = { ...imageSettings(user), ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
   if (source) Object.assign(configured, refining ? refinementSize(source, input) : sourceDimensions(source, input.width, input.height, preset === 'sd15' ? 512 : 1024))
-  const catalog = await imageCatalog(user, signal, configured)
+  const catalog = await imageCatalog(user, signal, configured, isInpaint)
+  if (isInpaint && !catalog.inpaint) throw new HttpError(409, catalog.inpaintError)
   if (source && !catalog.img2img) throw new HttpError(409, 'ComfyUI needs LoadImage, ImageScale with lanczos/center, and VAEEncode for image-to-image')
   if (exact) {
     const spec = imagePresetSpec(preset)
@@ -440,8 +450,13 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   let hires: HiresSettings | undefined
   if (input.hires !== undefined) { const stage = addHiresStage(workflow.graph, input.hires, workflow, settings.preset); hires = stage.settings; workflow.width = hires.width; workflow.height = hires.height; workflow.progress = stage.progress }
   if (refining || hires) await validateRefinementCapabilities(user, settings, workflow.graph, catalog, signal, source)
-  const parameters: ImageGenerationSettings = { ...(refining ? { operation: 'refine' as const, ...(input.upscale_model ? { upscale_model: input.upscale_model as string } : {}) } : {}), ...(hires ? { hires } : {}), loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
-  return { settings, workflow, parameters, source, uploadName }
+  const maskUploadName = mask ? `agents-mask-${randomUUID()}.png` : undefined
+  if (mask && source && maskUploadName) {
+    workflow.graph['22'] = { class_type: 'LoadImageMask', inputs: { image: maskUploadName, channel: 'red' } }
+    workflow.graph = inpaintGraph({ graph: workflow.graph, source: { ...source, image: ['20', 0] }, mask: { ...mask, mask: ['22', 0] }, samplerId: '7', decodeId: '8', saveId: '9', denoise: workflow.denoise }, catalog.inpaintSchemas ?? {}).graph
+  }
+  const parameters: ImageGenerationSettings = { ...(mask ? { operation: 'inpaint' as const, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' as const } } : {}), ...(refining ? { operation: 'refine' as const, ...(input.upscale_model ? { upscale_model: input.upscale_model as string } : {}) } : {}), ...(hires ? { hires } : {}), loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
+  return { settings, workflow, parameters, source, uploadName, mask, maskUploadName }
 }
 /** Walk only owned generated-image provenance, without reinterpreting uploaded filenames. */
 function inheritedRefinementInput(user: User, id: string, input: ImageInput): ImageInput {
@@ -513,7 +528,7 @@ export async function prepareImageGeneration(user: User, thread: string, input: 
   const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
   if (p.operation === 'refine') rows.unshift(['Operation', 'Refine existing image'], ...(p.upscale_model ? [['Upscale model', p.upscale_model], ['Resources', UPSCALE_RESOURCE_NOTE]] as [string, string][] : []))
   if (p.hires) rows.unshift(['Hires', `${p.hires.base_width} × ${p.hires.base_height} → ${p.hires.width} × ${p.hires.height} · ${p.hires.steps} steps · CFG ${p.hires.cfg} · ${p.hires.sampler}/${p.hires.scheduler} · denoise ${p.hires.denoise} · seed ${p.hires.seed}`], ['Hires upscale model', p.hires.upscale_model ?? 'Lanczos resize only'])
-  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: p.operation === 'refine' ? 'Refine image · review resolved settings' : p.hires ? 'Generate with hires · review resolved settings' : p.source ? 'Edit image · review resolved settings' : 'Generate image · review resolved settings', rows: [...(p.source ? [['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Resize', 'Lanczos resize with center crop; no stretching. Whole-image edit, no mask.']] as [string, string][] : []), ...rows], body: p.prompt, ...(p.source ? { image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } } : {}) }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
+  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: p.operation === 'inpaint' ? 'Inpaint image · review resolved settings' : p.operation === 'refine' ? 'Refine image · review resolved settings' : p.hires ? 'Generate with hires · review resolved settings' : p.source ? 'Edit image · review resolved settings' : 'Generate image · review resolved settings', rows: [...(p.source ? [['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Resize', p.mask ? 'Source and mask use matching Lanczos/center crop. Black working-mask pixels preserve the working source through final compositing; output is working size.' : 'Lanczos resize with center crop; no stretching. Whole-image edit, no mask.'], ...(p.mask ? [['Mask', `${p.mask.id} · ${p.mask.width} × ${p.mask.height} · white edits, black preserves · ${p.mask.url}`]] : [])] as [string, string][] : []), ...rows], body: p.prompt, ...(p.source ? { image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } } : {}) }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
 }
 export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
   return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal, onProgress)
@@ -555,6 +570,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
   try {
     limit.throwIfAborted()
     if (plan.source && plan.uploadName) await uploadSource(user, s, plan.source, plan.uploadName, limit)
+    if (plan.mask && plan.maskUploadName) await uploadSource(user, s, plan.mask, plan.maskUploadName, limit)
     limit.throwIfAborted()
     if (progress) socket = await openComfySocket(user, s.url, s.token, clientId, limit, (message) => {
       if (applyComfyMessage(state, message, promptId, workflow.sampling?.steps ?? 0, workflow.progress) && state.progress) progress.push(state.progress)

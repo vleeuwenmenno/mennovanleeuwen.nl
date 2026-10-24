@@ -1,7 +1,8 @@
+import { InpaintDialog } from './AgentsInpaint'
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { RefineDialog } from './AgentsRefine'
 import { UpscaleDialog } from './AgentsUpscale'
-import type { GeneratedImage, UpscaleImageInput, RefineImageInput } from '../data/agentImages'
+import type { GeneratedImage, UpscaleImageInput, RefineImageInput, InpaintImageInput } from '../data/agentImages'
 import { imageProgressFraction, imageProgressLabel, type ImageProgress } from '../data/imageModels'
 import { createPortal } from 'react-dom'
 import { fileSize, pictureUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
@@ -213,7 +214,7 @@ function blockGrid(width: number, height: number) {
 }
 
 /** Same frame before and after generation: only its contents change, never its aspect ratio. */
-export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu, operation = 'generate' }: { operation?: 'generate' | 'upscale' | 'refine'; image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
+export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu, operation = 'generate' }: { operation?: 'generate' | 'upscale' | 'refine' | 'inpaint'; image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
   const displayedImage = useRef<HTMLImageElement>(null)
   const [animate, setAnimate] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -245,7 +246,7 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
         </div>
         <span className="agt-image-status">{pending ? operation !== 'generate' && (!progress || progress.phase === 'running') ? operation === 'upscale' ? 'Upscaling image…' : 'Refining image…' : imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
       </div>}
-      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt={operation === 'upscale' ? 'Upscaled image' : operation === 'refine' ? 'Refined image' : 'Generated image'} width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
+      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt={operation === 'inpaint' ? 'Inpainted image' : operation === 'upscale' ? 'Upscaled image' : operation === 'refine' ? 'Refined image' : 'Generated image'} width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>
   )
 }
@@ -255,13 +256,15 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
  * row every message has (AgentsActions.tsx): Save to Files, Generate another, Options. Options and the
  * picture's right-click menu hold View, Open in Preview, Download, and `more` (Branch off).
  */
-export function ImageCard({ image, width, height, pending, progress, again, more, retry, edit, upscale, refine, operation = 'generate' }: { refine?: { threadId: string; disabled: boolean; onSubmit: (input: RefineImageInput) => void }; operation?: 'generate' | 'upscale' | 'refine'; upscale?: { disabled: boolean; onSubmit: (input: UpscaleImageInput) => void }; edit?: { disabled: boolean; onClick: () => void }; /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
+export function ImageCard({ image, width, height, pending, progress, again, more, retry, edit, upscale, refine, inpaint, operation = 'generate' }: { refine?: { threadId: string; disabled: boolean; onSubmit: (input: RefineImageInput) => void }; operation?: 'generate' | 'upscale' | 'refine' | 'inpaint'; inpaint?: { threadId: string; disabled: boolean; onSubmit: (input: InpaintImageInput) => void }; upscale?: { disabled: boolean; onSubmit: (input: UpscaleImageInput) => void }; edit?: { disabled: boolean; onClick: () => void }; /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
   const frame = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  const [inpaintOpen, setInpaintOpen] = useState(false)
   const [upscaleOpen, setUpscaleOpen] = useState(false)
   const [refineOpen, setRefineOpen] = useState(false)
   const isRefine = image?.settings?.operation === 'refine' || !image && operation === 'refine'
   const hasHires = image?.settings?.operation !== 'upscale' && !!image?.settings?.hires
+  const isInpaint = image?.settings?.operation === 'inpaint' || !image && operation === 'inpaint'
   const isUpscale = image?.settings?.operation === 'upscale' || !image && operation === 'upscale'
   const wm = useWM()
   // Save to Files only where it can work: no Seafile and no browser store, no entry (not a dead one).
@@ -269,6 +272,7 @@ export function ImageCard({ image, width, height, pending, progress, again, more
   const save = image && to ? { label: saveLabel(to), onSelect: () => void saveImageToFiles(image) } : null
   const own: MenuItem[] = image ? [
     ...(refine ? [{ label: 'Refine…', hint: 'Refine with diffusion; may change image details', disabled: refine.disabled, onSelect: () => setRefineOpen(true) }] : []),
+    ...(inpaint ? [{ label: 'Edit selected area…', hint: 'Paint a mask and describe the replacement', disabled: inpaint.disabled, onSelect: () => setInpaintOpen(true) }] : []),
     ...(upscale ? [{ label: 'Upscale…', hint: 'Enlarge with an installed upscale model', disabled: upscale.disabled, onSelect: () => setUpscaleOpen(true) }] : []),
     ...(edit ? [{ label: 'Edit image…', hint: 'Use as source; describe the change in the message box', disabled: edit.disabled, onSelect: edit.onClick }] : []),
     { label: 'View full size', onSelect: () => setOpen(true) },
@@ -277,11 +281,11 @@ export function ImageCard({ image, width, height, pending, progress, again, more
   ] : []
   const picture = image ? { name: imageFileName(image), src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
   return <>
-    <p className="muted">{isRefine ? image ? 'Refined image' : 'Refining image' : hasHires ? 'Generated image with hires refinement' : isUpscale ? image ? 'Upscaled image' : 'Upscaling image' : image ? image.settings?.source ? 'Edited image' : 'Generated image' : 'Generating image'} · {width} × {height}</p>
-    <GeneratedPicture operation={isUpscale ? 'upscale' : isRefine ? 'refine' : 'generate'} image={image} width={width} height={height} pending={pending} progress={progress} frame={frame} onView={() => setOpen(true)} onMenu={(e) => openContextMenu(e, tidy([...own, ...(save ? [save] : []), { separator: true }, ...more]))} />
+    <p className="muted">{isInpaint ? image ? 'Inpainted image' : 'Inpainting image' : isRefine ? image ? 'Refined image' : 'Refining image' : hasHires ? 'Generated image with hires refinement' : isUpscale ? image ? 'Upscaled image' : 'Upscaling image' : image ? image.settings?.source ? 'Edited image' : 'Generated image' : 'Generating image'} · {width} × {height}</p>
+    <GeneratedPicture operation={isInpaint ? 'inpaint' : isUpscale ? 'upscale' : isRefine ? 'refine' : 'generate'} image={image} width={width} height={height} pending={pending} progress={progress} frame={frame} onView={() => setOpen(true)} onMenu={(e) => openContextMenu(e, tidy([...own, ...(save ? [save] : []), { separator: true }, ...more]))} />
     {image && !isUpscale && image.seed !== undefined && <p className="muted">Seed {image.seed}</p>}
     {image?.settings && <details className="agt-image-settings">
-      <summary>{isUpscale ? 'Upscale settings' : isRefine ? 'Refinement settings' : hasHires ? 'Generation and hires settings' : 'Generation settings'}</summary>
+      <summary>{isInpaint ? 'Inpaint settings' : isUpscale ? 'Upscale settings' : isRefine ? 'Refinement settings' : hasHires ? 'Generation and hires settings' : 'Generation settings'}</summary>
       <pre className="copyable">{JSON.stringify(image.settings, null, 2)}</pre>
       <a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a>
     </details>}
@@ -292,6 +296,7 @@ export function ImageCard({ image, width, height, pending, progress, again, more
       <MoreButton key="more" label="Image" items={tidy([...own, { separator: true }, ...more])} />
     </ActionRow>}
     {refineOpen && image && refine && <RefineDialog image={image} threadId={refine.threadId} disabled={refine.disabled} onClose={() => setRefineOpen(false)} onRefine={(input) => { setRefineOpen(false); refine.onSubmit(input) }} />}
+    {inpaintOpen && image && inpaint && <InpaintDialog image={image} threadId={inpaint.threadId} disabled={inpaint.disabled} onClose={() => setInpaintOpen(false)} onInpaint={input => { setInpaintOpen(false); inpaint.onSubmit(input) }} />}
     {upscaleOpen && image && upscale && <UpscaleDialog image={image} disabled={upscale.disabled} onClose={() => setUpscaleOpen(false)} onUpscale={(input) => { setUpscaleOpen(false); upscale.onSubmit(input) }} />}
     {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} actions={save ? [save] : []} />}
   </>

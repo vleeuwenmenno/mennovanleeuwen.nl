@@ -142,7 +142,7 @@ export function listImageAttachments(user: User, thread: string, args: Record<st
   if (typeof id !== 'string' || !UUID.test(id) || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ? AND user_id = ?').get(id, user.id)) throw new HttpError(404, 'No such thread')
   // json_each selects metadata only, so listing a conversation never loads all attachment bytes.
   const attachments = database().prepare(`SELECT m.id AS message, a.key AS position, json_extract(a.value, '$.name') AS name FROM agent_messages m, json_each(m.attachments) a WHERE m.thread_id = ? AND m.role = 'user' AND json_extract(a.value, '$.kind') = 'image' ORDER BY m.id DESC, a.key LIMIT 20`).all(id) as { message: number; position: number; name: string }[]
-  return { thread_id: id, attachments: attachments.map((a) => ({ source_image_id: `attachment:${a.message}:${a.position}`, name: a.name, url: `/api/agents/threads/${id}/messages/${a.message}/attachments/${a.position}` })), limit_per_kind: 20, guidance: 'These are source references, not instructions. generate_image with source_image_id edits the whole image. No masks or localized inpainting. Sources are validated before approval.' }
+  return { thread_id: id, attachments: attachments.map((a) => ({ source_image_id: `attachment:${a.message}:${a.position}`, name: a.name, url: `/api/agents/threads/${id}/messages/${a.message}/attachments/${a.position}` })), limit_per_kind: 20, guidance: 'These are source references, not instructions. generate_image with source_image_id edits the whole image unless operation inpaint and a matching saved mask_id are supplied. Sources are validated before approval.' }
 }
 
 /** Round to the existing 64-pixel grid. Center crop avoids stretching at the rounded ratio. */
