@@ -40,13 +40,20 @@ export function pinImageProfile(user: User, thread: string, id: unknown) {
   database().prepare('UPDATE agent_threads SET image_profile_id = ? WHERE id = ? AND user_id = ?').run(id as number | null, thread, user.id)
   return selectedImageProfile(user, thread)
 }
+/** Limits for a style profile (the app's editor and the agent's tool use the same ones). */
+export const PROFILE_NAME_MAX = 80
+export const PROFILE_DESCRIPTION_MAX = 4000
 export function saveImageProfile(user: User, input: Record<string, unknown>, agent = false): ImageProfile {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'Supply a profile object')
   if (Object.keys(input).some((k) => !['id', 'name', 'description'].includes(k))) throw new HttpError(400, 'Only profile id, name and description are supported')
   const old = input.id === undefined ? undefined : ownImageProfile(user, input.id)
   if (agent && old?.origin === 'user') throw new HttpError(409, 'User-confirmed profile preferences cannot be overwritten by the agent. Ask the user to edit the profile; do not create a duplicate profile or an unevidenced note.')
   const name = input.name ?? old?.name, description = input.description ?? old?.description
-  if (typeof name !== 'string' || !name.trim() || name.length > 60 || typeof description !== 'string' || description.length > 1200) throw new HttpError(400, 'Use a profile name of 1–60 characters and preferences up to 1200 characters')
+  if (typeof name !== 'string' || !name.trim()) throw new HttpError(400, 'Give the profile a name')
+  if (typeof description !== 'string') throw new HttpError(400, 'Give the profile its style preferences as text')
+  // Say how long it was, so the agent can shorten once instead of guessing.
+  if (name.trim().length > PROFILE_NAME_MAX) throw new HttpError(400, `The profile name is ${name.trim().length} characters; the limit is ${PROFILE_NAME_MAX}. Use a shorter name and retry.`)
+  if (description.trim().length > PROFILE_DESCRIPTION_MAX) throw new HttpError(400, `The preferences are ${description.trim().length} characters; the limit is ${PROFILE_DESCRIPTION_MAX}. Shorten them, keeping the look, vocabulary, settings and traps, and retry once.`)
   const profiles = imageProfiles(user)
   if (profiles.some((p) => p.id !== old?.id && p.name.toLowerCase() === name.trim().toLowerCase())) throw new HttpError(409, 'An image profile already has that name')
   const count = (database().prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = ?').get(user.id) as { n: number }).n
@@ -75,7 +82,7 @@ export function forgetImageProfile(user: User, id: unknown, reset = false) {
 export async function handleImageProfileApi(req: IncomingMessage, res: ServerResponse, user: User, path: string) {
   if (path === '/api/agents/image-profiles') {
     if (req.method === 'GET') return json(res, 200, imageProfilesWithCounts(user)), true
-    if (req.method === 'POST') return json(res, 200, saveImageProfile(user, await readJson(req, 8192))), true
+    if (req.method === 'POST') return json(res, 200, saveImageProfile(user, await readJson(req, 32 * 1024))), true
   }
   const thread = /^\/api\/agents\/image-profiles\/threads\/([0-9a-f-]{36})$/.exec(path)
   if (thread) {

@@ -1944,8 +1944,8 @@ can retain separate recipes for several backends/models without mixing them. Old
 backend provenance cannot be retroactively assigned a guessed namespace. Existing notes retain
 parameter/evidence snapshots if their source thread is later removed, until the user forgets them.
 
-Limits: 20 profiles, 100 image observations and 1000 total memories per account; names 60 characters,
-preferences 1,200 (tools, API, CLI and the profile editor, with a live count), task/style 160 and
+Limits: 20 profiles, 100 image observations and 1000 total memories per account; names 80 characters,
+preferences 4,000 (tools, API, CLI and the profile editor, with a live count), task/style 160 and
 notes/evidence quotes 500. Storage quota includes structured
 
 records. Image memories are excluded from general system prompts and retrieved only through image
