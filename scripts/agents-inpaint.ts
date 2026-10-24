@@ -228,6 +228,34 @@ try {
   await json('DELETE',`/api/agents/threads/${branch.thread.id}`)
   assert.equal((await api('GET',mask.url)).status,404)
   assert.equal(database().prepare('SELECT COUNT(*) AS n FROM agent_image_masks WHERE thread_id=?').get(t.id)?.n,0)
+  // A persisted upload needs no intermediary generation; its identity and mask survive branches.
+  const attachedThread = await json('POST', '/api/agents/threads', { mode:'quick', model:'test-model', tools:['images'], permission:'auto' })
+  const attachmentBytes = png(16,12)
+  const attachedMessage = Number(database().prepare('INSERT INTO agent_messages(thread_id,role,content,attachments,created_at) VALUES(?,?,?,?,?)').run(attachedThread.id,'user','Paint this upload',JSON.stringify([{kind:'image',name:'upload.png',type:'image/png',size:attachmentBytes.length,data:attachmentBytes.toString('base64')}]),Date.now()).lastInsertRowid)
+  const attachmentId = `attachment:${attachedMessage}:0`
+  const attachedMask = await json('POST', `/api/agents/threads/${attachedThread.id}/image-masks`, { source_image_id:attachmentId,data })
+  const attachedResult = toolResult(await events(`/api/agents/threads/${attachedThread.id}/inpaint`, { operation:'inpaint',source_image_id:attachmentId,mask_id:attachedMask.id,prompt:'Paint the selected upload area',width:outputWidth,height:outputHeight }))
+  assert.ok(attachedResult.image,JSON.stringify(attachedResult))
+  const attachedHistory = await json('GET',`/api/agents/threads/${attachedThread.id}`)
+  let survivor = await json('POST',`/api/agents/threads/${attachedThread.id}/branch`,{messageId:attachedHistory.messages.at(-1).id})
+  await json('DELETE',`/api/agents/threads/${attachedThread.id}`)
+  for (let generation=0;generation<2;generation++) {
+    const replay = toolResult(await events(`/api/agents/threads/${survivor.thread.id}/images/${attachedResult.image.id}/again`))
+    assert.ok(replay.image,JSON.stringify(replay))
+    assert.equal(replay.image.settings.source.id,attachmentId)
+    assert.equal(replay.image.settings.mask.id,attachedMask.id)
+    assert.equal((await api('GET',replay.image.settings.source.url)).status,200)
+    if (generation===0) {
+      const history = await json('GET',`/api/agents/threads/${survivor.thread.id}`)
+      const descendant = await json('POST',`/api/agents/threads/${survivor.thread.id}/branch`,{messageId:history.messages.at(-1).id})
+      await json('DELETE',`/api/agents/threads/${survivor.thread.id}`)
+      survivor=descendant
+    }
+  }
+  await json('DELETE',`/api/agents/threads/${survivor.thread.id}`)
+  assert.equal((await api('GET',attachedMask.url)).status,404)
+  assert.equal(database().prepare('SELECT COUNT(*) AS n FROM agent_image_source_aliases').get()?.n,0)
+  console.log('PASS attachment inpainting: upload, nested branch after parent deletion, Again, stable mask/source binding, live source URL, cleanup')
   await json('DELETE','/api/admin/users/2')
   assert.equal(database().prepare('SELECT COUNT(*) AS n FROM agent_image_masks WHERE id=?').get(foreignMask.id)?.n,0)
   console.log('PASS mask quota/size, bounded abandoned uploads, protected deletion, rewind, branch retention/Again, thread/account cleanup and public-share exclusion')
