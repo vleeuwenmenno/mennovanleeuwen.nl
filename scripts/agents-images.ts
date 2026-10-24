@@ -11,6 +11,7 @@ import { asPage } from './as-page.ts'
 import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, imageProgressFraction, imageProgressLabel, type ImageAssetCatalog } from '../src/data/imageModels.ts'
 import { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } from '../server/comfyProgress.ts'
 import { createHash } from 'node:crypto'
+import { crc32 } from 'node:zlib'
 import type { Duplex } from 'node:stream'
 
 // CLI art helpers run without a browser; PNG decoding itself is checked in the browser.
@@ -161,7 +162,10 @@ console.log('PASS ComfyUI progress messages for this prompt only, step validatio
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
 const send = (res: ServerResponse, data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
-const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
+const info = Object.fromEntries(['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode'].map((name) => [name, { input: { required: {} } }])) as Record<string, any>
+info.ImageScale.input.required = { crop: [['center', 'disabled']], upscale_method: [['lanczos', 'bilinear']] }
+let uploadBehavior = 'ok'
+const uploads: string[] = []
 const loraNames = ['Krea/style.safetensors', 'SDXL/pose.safetensors', 'Folder/Soft light.safetensors']
 info.LoraLoader.input.required.lora_name = [[loraNames[1], loraNames[0]]]
 info.LoraLoaderModelOnly.input.required.lora_name = [[loraNames[0], loraNames[2]]]
@@ -228,6 +232,16 @@ const comfy = createServer((req, res) => {
   req.on('data', (b) => raw += b)
   req.on('end', () => {
     const path = new URL(req.url!, 'http://test').pathname
+    if (path === '/upload/image') {
+      const name = /filename="([^"]+)"/.exec(raw)?.[1]
+      assert.match(name ?? '', /^agents-source-[0-9a-f-]{36}\.png$/)
+      assert.equal(req.headers.authorization, 'Bearer test-secret')
+      assert.ok(raw.includes('name="overwrite"\r\n\r\nfalse'))
+      uploads.push(name!)
+      if (uploadBehavior === 'hold') return
+      if (uploadBehavior === 'fail') return res.writeHead(500).end()
+      return send(res, { name: uploadBehavior === 'path' ? '../other.png' : name, subfolder: '', type: 'input' })
+    }
     if (path === '/object_info') { fullCatalogRequests++; return res.end(irrelevantCatalog) }
     if (path.startsWith('/object_info/')) {
       const node = path.slice('/object_info/'.length)
@@ -1250,6 +1264,146 @@ try {
   behavior = 'ok'
   await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: false })
   console.log('PASS Generate another preserves settings, writes a new private image, streams progress without model/approval, Retry, missing LoRA, group/ownership guards, follow and cancellation')
+  // Source bytes are private persisted data, never a URL supplied by the model.
+  const { imageSource, sourceRaster, sourceDimensions, listImageAttachments } = await import('../server/agentImageSources.ts')
+  const { prepareImageGeneration, imageAgainInput } = await import('../server/agentImages.ts')
+  await json('PUT', '/api/agents/images/settings', { ...settings, askBeforeGenerate: true })
+  const editThread = await thread('default')
+  await json('PATCH', `/api/agents/threads/${editThread.id}`, { model: 'text-model' })
+  const sourceThread = await thread()
+  const sourceId = randomUUID()
+  database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(sourceId, sourceThread.id, 'source.png', png, Date.now())
+  const attached = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Edit this picture', ?, ?)").run(editThread.id, JSON.stringify([{ kind: 'image', name: 'attached.png', mime: 'image/png', data: png.toString('base64'), size: png.length }]), Date.now()).lastInsertRowid)
+  const attachmentId = `attachment:${attached}:0`
+  const extra = Buffer.alloc(9 * 1024 * 1024, 65); extra.write('Comment\0')
+  const length = Buffer.alloc(4); length.writeUInt32BE(extra.length)
+  const checksum = Buffer.alloc(4); checksum.writeUInt32BE(crc32(Buffer.concat([Buffer.from('tEXt'), extra])))
+  const largeSource = Buffer.concat([png.subarray(0, -12), length, Buffer.from('tEXt'), extra, checksum, png.subarray(-12)])
+  const largeId = randomUUID()
+  database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(largeId, sourceThread.id, 'large.png', largeSource, Date.now())
+  assert.equal(imageSource(admin, largeId).bytes.length, largeSource.length)
+  const largeAttachment = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', '', ?, ?)").run(editThread.id, JSON.stringify([{ kind: 'image', name: 'large.png', data: largeSource.toString('base64') }]), Date.now()).lastInsertRowid)
+  assert.throws(() => imageSource(admin, `attachment:${largeAttachment}:0`), /8 MiB/)
+  database().prepare('DELETE FROM agent_messages WHERE id = ?').run(largeAttachment)
+  assert.deepEqual(sourceRaster(png), { width: 1, height: 1, mime: 'image/png' })
+  assert.equal(listImageAttachments(admin, editThread.id, {}).attachments[0].source_image_id, attachmentId)
+  assert.throws(() => listImageAttachments({ ...admin, id: 2 }, editThread.id, {}), /No such thread/)
+  for (const id of [sourceId, attachmentId]) {
+    assert.deepEqual(imageSource(admin, id).bytes, png)
+    assert.throws(() => imageSource({ ...admin, id: 2 }, id), /No such source/)
+  }
+  for (const id of ['https://example.test/private.png', '/private/a.png', 'data:image/png;base64,a', `attachment:${attached}:9`]) assert.throws(() => imageSource(admin, id))
+  assert.throws(() => sourceRaster(Buffer.from('<svg/>')), /valid still/)
+  assert.throws(() => sourceRaster(Buffer.alloc(8 * 1024 * 1024 + 1)), /8 MiB/)
+  const huge = Buffer.from(png); huge.writeUInt32BE(8193, 16)
+  assert.throws(() => sourceRaster(huge), /dimensions exceed/)
+  assert.deepEqual(sourceDimensions({ width: 1600, height: 800 }, undefined, undefined, 1024), { width: 1024, height: 512 })
+  assert.deepEqual(sourceDimensions({ width: 1600, height: 800 }, undefined, 256, 1024), { width: 512, height: 256 })
+  const editSettings = { ...settings, askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true }
+  for (const preset of ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const) {
+    const graph = imageWorkflow({ ...editSettings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'Change sky', denoise: 0.45, loras: [{ name: loraNames[0], weight: 0.8 }] }, { nodes: Object.keys(info) }, 'scoped.png')
+    assert.equal(graph.graph['20'].inputs.image, 'scoped.png')
+    assert.equal(graph.graph['21'].inputs.crop, 'center')
+    assert.equal(graph.graph['6'].class_type, 'VAEEncode')
+    assert.deepEqual(graph.graph['6'].inputs.vae, preset === 'sd15' || preset === 'sdxl' ? ['1', 2] : ['3', 0])
+    assert.deepEqual(graph.graph['7'].inputs.latent_image, ['6', 0])
+    assert.equal(graph.graph['7'].inputs.denoise, 0.45)
+    assert.equal(graph.graph['10'].inputs.strength_model, 0.8)
+  }
+  for (const denoise of [null, 0, -1, 1.01, NaN, Infinity, '0.5']) assert.throws(() => imageWorkflow(editSettings, { prompt: 'test', denoise }, undefined, 'scoped.png'), /Denoise/)
+  assert.throws(() => imageWorkflow(editSettings, { prompt: 'test', denoise: 0.5 }), /requires source/)
+  const textGraph = imageWorkflow(editSettings, { prompt: 'text only' })
+  assert.equal(textGraph.graph['6'].class_type, 'EmptyLatentImage'); assert.equal(textGraph.graph['7'].inputs.denoise, 1)
+  delete info.VAEEncode
+  await assert.rejects(prepareImageGeneration(admin, editThread.id, { prompt: 'edit', source_image_id: sourceId }, new AbortController().signal), /needs LoadImage/)
+  info.VAEEncode = { input: { required: {} } }
+  generationArgs = { prompt: 'Change the sky', source_image_id: sourceId, denoise: 0.45, width: 512, height: 768, seed: 123 }
+  requestedTool = 'generate_image'; extraToolCalls = []; retryLearning = true
+  const declinedEdit = await thread('default'), beforeDeclinedUpload = uploads.length
+  await turn(declinedEdit.id, false, 'Edit this source image')
+  assert.equal(uploads.length, beforeDeclinedUpload)
+  const editBefore = uploads.length, eventsBeforeEdit = streamEvents.length
+  approvalHook = async () => { assert.equal(uploads.length, editBefore) }
+  const edited = await turn(editThread.id, true, 'Use this image, change the sky')
+  approvalHook = undefined
+  const editResult = result(edited)
+  assert.equal(editResult.image.settings.source.id, sourceId)
+  assert.equal(editResult.image.settings.denoise, 0.45)
+  assert.equal(editResult.image.settings.source.resize, 'lanczos-center-crop')
+  assert.equal(approvalSummaries.at(-1).image.url, `/api/agents/images/${sourceId}`)
+  assert.match(approvalSummaries.at(-1).title, /Edit image/)
+  assert.equal(uploads.length, editBefore + 1)
+  assert.equal(submitted['20'].inputs.image, uploads.at(-1))
+  assert.equal(submitted['6'].class_type, 'VAEEncode')
+  assert.deepEqual(imageSource(admin, sourceId).bytes, png)
+  const editEvents = streamEvents.slice(eventsBeforeEdit)
+  assert.ok(editEvents.some((e) => e.type === 'imageGeneration' && e.width === 512 && e.height === 768))
+  assert.ok(!editEvents.some((e) => e.type === 'message' && e.message.role === 'assistant' && e.message.content))
+  const againEdit = imageAgainInput(admin, editThread.id, editResult.image.id)
+  assert.equal(againEdit.source_image_id, sourceId); assert.equal(againEdit.denoise, 0.45)
+  assert.notEqual(againEdit.seed, 123)
+  assert.ok(providerInputs.some((p) => p.tools?.some((x: any) => x.function?.name === 'list_image_attachments')))
+  assert.ok(providerInputs.some((p) => p.tools?.some((x: any) => x.function?.name === 'generate_image' && x.function.parameters.properties.source_image_id)))
+  // Prepare captures bytes before approval, even if the owner removes their original message.
+  const captured = await prepareImageGeneration(admin, editThread.id, { prompt: 'edit attached', source_image_id: attachmentId }, new AbortController().signal)
+  database().prepare('DELETE FROM agent_messages WHERE id = ?').run(attached)
+  const captureResult = JSON.parse(await captured.run())
+  assert.equal(captureResult.image.settings.source.id, attachmentId)
+  assert.equal(captureResult.image.settings.denoise, 0.65)
+  assert.equal(new Set(uploads).size, uploads.length)
+  for (const mode of ['fail', 'path']) {
+    uploadBehavior = mode
+    const before = submissions
+    await assert.rejects(generateImage(admin, editThread.id, { prompt: 'edit', source_image_id: sourceId }, new AbortController().signal), /upload/)
+    assert.equal(submissions, before)
+  }
+  uploadBehavior = 'hold'
+  const cancelUpload = new AbortController(), uploadsBeforeCancel = uploads.length, submissionsBeforeCancel = submissions
+  const uploading = generateImage(admin, editThread.id, { prompt: 'edit', source_image_id: sourceId }, cancelUpload.signal)
+  const rejectedUpload = assert.rejects(uploading, /cancelled/)
+  await until(() => uploads.length > uploadsBeforeCancel)
+  cancelUpload.abort(); await rejectedUpload
+  assert.equal(submissions, submissionsBeforeCancel)
+  uploadBehavior = 'ok'
+  const stopped = new AbortController(); stopped.abort()
+  const beforeStoppedUpload = uploads.length
+  await assert.rejects(generateImage(admin, editThread.id, { prompt: 'edit', source_image_id: sourceId }, stopped.signal))
+  assert.equal(uploads.length, beforeStoppedUpload)
+  behavior = 'wait'
+  const cancelEdit = new AbortController(), beforeEditSubmissions = submissions
+  const editing = generateImage(admin, editThread.id, { prompt: 'edit', source_image_id: sourceId }, cancelEdit.signal)
+  const refusedEdit = assert.rejects(editing, /cancelled/)
+  await until(() => submissions > beforeEditSubmissions)
+  cancelEdit.abort(); await refusedEdit
+  assert.ok(deletions.includes(`job-${submissions}`)); assert.equal(interrupts, 0)
+  behavior = 'ok'
+  await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: false })
+  console.log('PASS img2img six families, source/attachment ownership, source validation, preserved ratio, upload errors, pinned bytes, provenance, approvals, silent completion, cancellation and text-to-image regression')
+  // Attachment IDs remain usable after copied messages receive new IDs and the parent is deleted.
+  const branchSourceParent = await thread('default')
+  await json('PATCH', `/api/agents/threads/${branchSourceParent.id}`, { model: 'text-model' })
+  const branchSourceMessage = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Attached source', ?, ?)").run(branchSourceParent.id, JSON.stringify([{ kind: 'image', name: 'branch-source.png', mime: 'image/png', data: png.toString('base64'), size: png.length }]), Date.now()).lastInsertRowid)
+  const branchSourceId = `attachment:${branchSourceMessage}:0`
+  generationArgs = { prompt: 'Change the attached sky', source_image_id: branchSourceId, denoise: 0.4 }
+  const branchSourceEdited = result(await turn(branchSourceParent.id, true, 'Edit the attached source'))
+  assert.equal(branchSourceEdited.image.settings.source.id, branchSourceId)
+  const branchSourceMessages = (await json('GET', `/api/agents/threads/${branchSourceParent.id}`)).messages
+  const sourceBranch = await json('POST', `/api/agents/threads/${branchSourceParent.id}/branch`, { messageId: branchSourceMessages.at(-1).id })
+  const copiedSource = sourceBranch.messages.find((m: any) => m.attachments?.some((a: any) => a.name === 'branch-source.png'))
+  assert.ok(copiedSource && copiedSource.id !== branchSourceMessage)
+  await json('DELETE', `/api/agents/threads/${branchSourceParent.id}`)
+  const branchedAgain = await directEvents(`/api/agents/threads/${sourceBranch.thread.id}/images/${branchSourceEdited.image.id}/again`)
+  const branchedAgainOutput = branchedAgain.find((e: any) => e.type === 'message' && e.message.role === 'tool')
+  const branchedAgainImage = branchedAgainOutput && JSON.parse(branchedAgainOutput.message.content).image
+  assert.ok(branchedAgainImage, `Attachment source must survive branching and parent deletion: ${JSON.stringify(branchedAgain)}`)
+  assert.equal(branchedAgainImage.settings.source.id, branchSourceId)
+  assert.equal(branchedAgainImage.settings.denoise, 0.4)
+  assert.deepEqual(imageSource(admin, branchSourceId).bytes, png)
+  assert.throws(() => imageSource({ ...admin, id: 2 }, branchSourceId), /No such source/)
+  assert.equal((await api('GET', imageSource(admin, branchSourceId).url)).status, 200)
+  assert.equal(submitted['6'].class_type, 'VAEEncode')
+  assert.ok(!branchedAgain.some((e: any) => e.type === 'error' || e.type === 'message' && e.message.role === 'assistant' && e.message.content))
+  console.log('PASS attachment img2img source survives branch, parent deletion and Generate another with owner isolation and silent completion')
   const metadataPath = '/api/agents/images/model-metadata?category=checkpoints&name=test.safetensors'
   const metadata = await json('GET', metadataPath)
   assert.equal(metadata.source, 'LoRA Manager')

@@ -1345,7 +1345,14 @@ asks about them or is changing them, so swapping the model or the LoRA is one sh
 than a tour of the settings, and nothing ends with an offer of further work. The
 composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
 for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
-pdf.js) and pictures, from Seafile, this computer, a drop (from the computer, Files or the desktop) or a paste. Its tools: web search
+pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
+**From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
+and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP
+or GIF through the authenticated Photos proxy, not the thumbnail. Images keep the normal 5 MB per-file,
+10-attachment and combined payload limits; unsupported originals (including HEIC and RAW) show an error.
+Cancel leaves the draft and attachments unchanged; a failed download adds nothing. These are normal
+image attachments for vision and, after sending, supported still-image sources for image-to-image.
+Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
 stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
@@ -1419,6 +1426,52 @@ and installed model, and save again. Connections belong to the signed-in account
 stored encrypted and are never returned to the browser or model. Internal/LAN ComfyUI addresses
 are allowed only for admins, using the same DNS-pinned network guard as other integrations for
 non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
+
+**Edit an existing image (image-to-image).** In a generated image's **Options → Edit image…**,
+Agents adds a named source chip and starts an edit prompt in the message box; describe the change
+and send. Picking another source replaces the chip; existing draft text is kept. An attached
+picture can also be edited: attach it with a request such as “use this image, change the sky”, or
+choose **Edit image** from a sent message's Options. Images must be enabled in Tools. The CLI uses
+the same server tools: ask to edit an earlier image or attached picture; no ID copying is needed.
+`list_generated_images` discovers current generated artifacts (including branches), `read_thread`
+provides earlier owned image IDs, and `list_image_attachments` discovers persisted attachments in
+this or an explicitly named owned thread. `view_generated_image` can inspect either source kind
+when the conversational model supports vision. Attaching a picture alone does not request a job.
+
+`generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
+preserve more source structure; higher values allow larger changes. This changes the **whole image**:
+there are no masks, localized inpainting, hires or dedicated upscaling yet, and unchanged regions
+are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
+VAEEncode → KSampler path, with the same encoder/VAE, LoRA and sampling validation as text-to-image.
+The live catalog must support LoadImage, VAEEncode and ImageScale's lanczos/center options; otherwise
+editing is refused. Custom model weights remain unverified even when their catalog names match.
+
+With a source, omitted dimensions follow its aspect ratio, using a 512-pixel longest edge for SD1.5
+or 1024 for the other presets. Dimensions round to multiples of 64 and clamp to 256–1536; maximum
+area remains 1536 × 1024. Providing one dimension derives the other from the source ratio; two
+explicit dimensions set the requested shape. **Lanczos resize and center crop never stretch the
+source**; grid rounding can trim edges and extreme ratios can crop substantially. Source, final
+size, model, settings and denoise appear in approval when enabled, with a source thumbnail. Existing
+permission modes, silent success, progress and cancellation apply. Results and image observations
+record source ID/name/original dimensions, resize policy and actual denoise/settings. Generate
+another reuses that source and settings with a fresh seed. Branches retain attachment source IDs
+through owner-scoped aliases to their copied messages, including branches of branches. Deleting the
+parent keeps Generate another working while a surviving branch holds the source; deleting every
+copy makes that source unavailable. Aliases count toward storage quota and are removed with their
+copied messages. `pnpm check:agents-image-source-branches` covers this retention and owner isolation.
+
+Source validation is a bounded structural and dimension preflight, not a full image decode. Corrupt
+compressed pixels may still be rejected by ComfyUI; upload, prompt and decoding failures are reported
+as errors, with no successful image result.
+Sources are read only from the owner's persisted artifacts/attachments, never model-provided
+paths, URLs or base64. Supported sources are still PNG, JPEG and WebP, at most 20 MiB for generated artifacts or 8 MiB for attachments, 8192 pixels
+per side and 16 megapixels (attachment upload limits still apply). EXIF orientation is honored when sizing the source, matching ComfyUI's loader. Malformed EXIF
+and animated inputs are refused. Original bytes are held through
+approval and generation, and the original artifact is never changed. Uploads use unpredictable
+unique names, no overwrite, and the configured guarded ComfyUI connection. ComfyUI has no standard
+input-delete endpoint, so uploaded source files remain in its input folder: admins can remove
+`agents-source-*` files **only after their jobs finish**. Cancellation deletes only this job's
+queued prompt; it never globally interrupts ComfyUI or deletes another job's inputs.
 
 Every image model field opens the same **model browser**, in account settings and session
 settings: checkpoints/diffusion models, text encoders and VAEs. It shows the installed catalog as

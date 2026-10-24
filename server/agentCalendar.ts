@@ -25,7 +25,7 @@ export const CALENDAR_WRITES = new Set(['calendar_create_event', 'calendar_updat
 export const CALENDAR_TOOLS = new Set(['calendar_list_calendars', 'calendar_list_events', ...CALENDAR_WRITES])
 
 /** A short summary of a change for the approval card: a headline, then label and value rows, and a text shown whole (an email's body). */
-export type CallSummary = { title: string; rows: [string, string][]; body?: string }
+export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; body?: string }
 /** A calendar call checked and ready: what the user is shown (for a change), and running it. */
 export type Prepared = { summary?: CallSummary; run: () => Promise<string> }
 

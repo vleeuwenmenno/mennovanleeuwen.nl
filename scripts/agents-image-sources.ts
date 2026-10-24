@@ -1,0 +1,51 @@
+// Structural raster/EXIF and sizing checks. Integration/ownership/upload checks: agents-images.ts.
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { crc32 } from 'node:zlib'
+import { sourceRaster, sourceDimensions } from '../server/agentImageSources.ts'
+
+const fixture = (name: string) => readFileSync(new URL(`./fixtures/agent-image-sources/${name}`, import.meta.url))
+const png = fixture('source.png')
+assert.deepEqual(sourceRaster(png), { width: 48, height: 32, mime: 'image/png' })
+assert.throws(() => sourceRaster(png.subarray(0, -12)), /Truncated/)
+for (const name of ['source.jpg', 'progressive.jpg']) assert.deepEqual(sourceRaster(fixture(name)), { width: 48, height: 32, mime: 'image/jpeg' })
+assert.deepEqual(sourceRaster(fixture('rotated.jpg')), { width: 32, height: 48, mime: 'image/jpeg' })
+for (const name of ['lossy.webp', 'lossless.webp']) assert.deepEqual(sourceRaster(fixture(name)), { width: 48, height: 32, mime: 'image/webp' })
+assert.deepEqual(sourceRaster(fixture('extended.webp')), { width: 32, height: 48, mime: 'image/webp' })
+// A second IHDR could otherwise replace the validated dimensions in downstream decoders.
+const duplicate = Buffer.concat([png.subarray(0, 33), png.subarray(8)])
+duplicate.writeUInt32BE(8193, 41)
+assert.throws(() => sourceRaster(duplicate), /Duplicate PNG IHDR/)
+const jpeg = fixture('source.jpg'), scan = jpeg.indexOf(Buffer.from([255, 218]))
+assert.ok(scan > 0)
+assert.throws(() => sourceRaster(jpeg.subarray(0, scan)), /payload/)
+const emptyScan = Buffer.concat([jpeg.subarray(0, scan + 2 + jpeg.readUInt16BE(scan + 2)), Buffer.from([255, 217])])
+assert.throws(() => sourceRaster(emptyScan), /payload/)
+assert.throws(() => sourceRaster(jpeg.subarray(0, -2)), /payload/)
+const webp = fixture('extended.webp').subarray(0, 30)
+const canvasOnly = Buffer.from(webp); canvasOnly.writeUInt32LE(22, 4)
+assert.throws(() => sourceRaster(canvasOnly), /payload/)
+const mismatched = fixture('extended.webp'); mismatched.writeUIntLE(0, 24, 3)
+assert.throws(() => sourceRaster(mismatched), /dimensions do not match/)
+canvasOnly[20] |= 2
+assert.throws(() => sourceRaster(canvasOnly), /still image/)
+assert.throws(() => sourceRaster(fixture('lossy.webp').subarray(0, -2)), /Truncated/)
+// Valid large PNG ancillary data exercises the optional generated-artifact byte cap.
+const metadata = Buffer.alloc(9 * 1024 * 1024, 65), length = Buffer.alloc(4)
+metadata.write('Comment\0')
+length.writeUInt32BE(metadata.length)
+const checksum = Buffer.alloc(4); checksum.writeUInt32BE(crc32(Buffer.concat([Buffer.from('tEXt'), metadata])))
+const large = Buffer.concat([png.subarray(0, -12), length, Buffer.from('tEXt'), metadata, checksum, png.subarray(-12)])
+assert.throws(() => sourceRaster(large), /8 MiB/)
+assert.equal(sourceRaster(large, 20 * 1024 * 1024).width, 48)
+assert.throws(() => sourceRaster(Buffer.alloc(20 * 1024 * 1024 + 1), 20 * 1024 * 1024), /20 MiB/)
+for (const bad of [Buffer.alloc(0), Buffer.from('<svg/>'), Buffer.from('GIF89a'), Buffer.alloc(8 * 1024 * 1024 + 1)]) assert.throws(() => sourceRaster(bad))
+const wide = Buffer.from(png); wide.writeUInt32BE(8193, 16)
+assert.throws(() => sourceRaster(wide), /dimensions/)
+assert.deepEqual(sourceDimensions({ width: 1600, height: 800 }, undefined, undefined, 1024), { width: 1024, height: 512 })
+assert.deepEqual(sourceDimensions({ width: 1600, height: 800 }, 768, undefined, 512), { width: 768, height: 384 })
+assert.deepEqual(sourceDimensions({ width: 800, height: 1600 }, undefined, 768, 512), { width: 384, height: 768 })
+assert.deepEqual(sourceDimensions({ width: 800, height: 1600 }, 512, 512, 512), { width: 512, height: 512 })
+assert.throws(() => sourceDimensions({ width: 100, height: 100 }, 1536, 1536, 512), /area/)
+assert.throws(() => sourceDimensions({ width: 100, height: 100 }, 500, undefined, 512), /multiples/)
+console.log('PASS bounded raster headers, EXIF rotation, malformed/animated/oversized sources, ratio defaults, explicit crop sizes and area limits')

@@ -51,10 +51,10 @@ export function AttachedFiles({ files, pictureOf, onRemove, sent = false, more }
         <ul className={`agt-files ${sent ? 'is-sent' : ''}`}>
           {chips.map(({ f, i }) => (
             <li key={`${f.name}-${i}`} title={f.source}>
-              <span aria-hidden>{f.kind === 'image' ? '🖼' : '📄'}</span> {f.name}
-              {!sent && <span className="muted">{fileSize(f.size)}</span>}
+              <span aria-hidden>{f.kind === 'image' || f.source === 'Image-to-image source' ? '🖼' : '📄'}</span> {f.source === 'Image-to-image source' ? <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span> : f.name}
+              {!sent && f.source !== 'Image-to-image source' && <span className="muted">{fileSize(f.size)}</span>}
               {onRemove && (
-                <button type="button" onClick={() => onRemove(i)} aria-label={`Remove ${f.name}`}>
+                <button type="button" style={f.source === 'Image-to-image source' ? { flexShrink: 0 } : undefined} onClick={() => onRemove(i)} aria-label={`Remove ${f.name}`}>
                   ×
                 </button>
               )}
@@ -253,7 +253,7 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
  * row every message has (AgentsActions.tsx): Save to Files, Generate another, Options. Options and the
  * picture's right-click menu hold View, Open in Preview, Download, and `more` (Branch off).
  */
-export function ImageCard({ image, width, height, pending, progress, again, more, retry }: { /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
+export function ImageCard({ image, width, height, pending, progress, again, more, retry, edit }: { edit?: { disabled: boolean; onClick: () => void }; /** Retry the turn, when this image ends the last one */ retry?: ReactNode; image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
   const frame = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const wm = useWM()
@@ -261,13 +261,14 @@ export function ImageCard({ image, width, height, pending, progress, again, more
   const to = useSaveDestination()
   const save = image && to ? { label: saveLabel(to), onSelect: () => void saveImageToFiles(image) } : null
   const own: MenuItem[] = image ? [
+    ...(edit ? [{ label: 'Edit image…', hint: 'Use as source; describe the change in the message box', disabled: edit.disabled, onSelect: edit.onClick }] : []),
     { label: 'View full size', onSelect: () => setOpen(true) },
     { label: 'Open in Preview', hint: 'Zoom, rotate, full screen', onSelect: () => wm.openNew('preview', { src: image.url, name: imageFileName(image), from: 'Agents' }) },
     { label: 'Download', onSelect: () => Object.assign(document.createElement('a'), { href: image.url, download: imageFileName(image), rel: 'noopener' }).click() },
   ] : []
   const picture = image ? { name: imageFileName(image), src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
   return <>
-    <p className="muted">{image ? 'Generated image' : 'Generating image'} · {width} × {height}</p>
+    <p className="muted">{image ? image.settings?.source ? 'Edited image' : 'Generated image' : 'Generating image'} · {width} × {height}</p>
     <GeneratedPicture image={image} width={width} height={height} pending={pending} progress={progress} frame={frame} onView={() => setOpen(true)} onMenu={(e) => openContextMenu(e, tidy([...own, ...(save ? [save] : []), { separator: true }, ...more]))} />
     {image && <p className="muted">Seed {image.seed}</p>}
     {image?.settings && <details className="agt-image-settings">

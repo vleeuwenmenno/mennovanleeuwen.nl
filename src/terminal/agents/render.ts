@@ -50,9 +50,10 @@ export function toolTitle(call: ToolCall): [string, string] {
     case 'save_image_learning': return ['Save image observation', s(call, 'task')]
     case 'save_image_profile': return ['Save style profile', s(call, 'name')]
     case 'generate_image':
-      return ['Generate image', s(call, 'prompt')]
+      return [call.arguments?.source_image_id ? 'Edit image' : 'Generate image', s(call, 'prompt')]
     case 'view_generated_image':
       return ['Inspect image', String(call.arguments?.image_id ?? 'latest in this thread')]
+    case 'list_image_attachments': return ['Image attachments', 'Source images']
     case 'list_image_models':
       return ['Image models', 'ComfyUI']
     case 'read_file':
@@ -195,7 +196,7 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
       const image = generatedImage(result)
       if (image) {
         const url = new URL(image.url, location.origin).href
-        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+        return ok([under(`${image.width} × ${image.height} · seed ${image.seed}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
       }
       return ok([under(oneLine(result))])
     }
