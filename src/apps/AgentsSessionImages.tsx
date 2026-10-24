@@ -35,7 +35,7 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
   }, [threadId])
   const change = (patch: ImageOverrides) => { setDraft((d) => ({ ...d, ...patch })); setNotice('') }
   const inherit = (key: keyof ImageConfig) => { setDraft((d) => { const next = { ...d }; delete next[key]; return next }); setNotice('') }
-  const source = (key: keyof ImageConfig) => key in draft ? <button type="button" className="image-inherit" disabled={busy} onClick={() => inherit(key)}>Session override · Use default</button> : <span className="muted">Account default{key === 'width' || key === 'height' ? ' / preset size' : ''}</span>
+  const source = (key: keyof ImageConfig) => key in draft ? <span className="image-source"><span className="image-source-tag">This thread</span><button type="button" className="btn btn-small" disabled={busy} onClick={() => inherit(key)}>Use default</button></span> : <span className="muted image-source">Default{key === 'width' || key === 'height' ? ' · preset size' : ''}</span>
   const save = async (reset = false) => {
     setBusy(true); setError(''); setNotice('')
     try {
@@ -48,7 +48,7 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
   return <ImageDialog title="Session image settings" onClose={onClose} wide>
     <div className="image-session-body">
       <ImageProfiles threadId={threadId} />
-      <p className="muted">Only this thread changes. Unchanged fields follow account defaults; size follows the chosen preset. Generation still uses this thread’s permission mode. Explicit size/seed in a generation request applies to that image only.</p>
+      <p className="muted set-help">Only this thread changes; untouched fields follow your account defaults. A size or seed asked for in a message applies to that image only.</p>
       {!view && !error && <p role="status">Loading session settings…</p>}
       {view && effective && <>
         <ImageModelFields value={effective} catalog={catalog} onChange={change} disabled={busy} loading={loading} error={catalogError} onRefresh={() => void refresh()} extra={source} />
@@ -56,12 +56,12 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
           {(['width', 'height'] as const).map((key) => <div className="image-config-field" key={key}><div className="image-config-label"><label htmlFor={`session-image-${key}`}>{key === 'width' ? 'Width' : 'Height'} (px)</label>{source(key)}</div><input id={`session-image-${key}`} type="number" min={256} max={1536} step={64} value={effective[key]} disabled={busy} onChange={(e) => change({ [key]: Number(e.target.value) })} /></div>)}
           <div className="image-config-field"><div className="image-config-label"><label htmlFor="session-image-seed">Seed</label>{source('seed')}</div><input id="session-image-seed" type="number" min={0} step={1} placeholder="Random each time" value={effective.seed ?? ''} disabled={busy} onChange={(e) => change({ seed: e.target.value === '' ? null : Number(e.target.value) })} /></div>
         </div>
-        <p className="muted">Sizes: multiples of 64, from 256 to 1536 px; maximum area 1536 × 1024. Leave seed empty for a new random seed each time. Selecting a model does not establish family compatibility.</p>
+        <p className="muted set-help">Sizes in steps of 64 from 256 to 1536 px, at most 1536 × 1024 in area. Empty seed: random each time.</p>
       </>}
       {error && <p className="t-red copyable" role="alert">{error}</p>}
       {catalogError && <p className="t-red copyable" role="alert">{catalogError}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && <p role="status" className="muted">{notice}</p>}
     </div>
-    <footer className="image-dialog-foot"><button type="button" className="btn" disabled={busy || !view} onClick={() => void save(true)}>Use all account defaults</button><span className="image-grow" /><button type="button" className="btn" onClick={onClose}>Close</button><button type="button" className="btn btn-primary" disabled={busy || !view} onClick={() => void save()}>{busy ? 'Saving…' : 'Save session settings'}</button></footer>
+    <footer className="image-dialog-foot"><button type="button" className="btn btn-small" disabled={busy || !view} onClick={() => void save(true)}>Use all account defaults</button><span className="image-grow" /><button type="button" className="btn btn-small" onClick={onClose}>Close</button><button type="button" className="btn btn-small btn-primary" disabled={busy || !view} onClick={() => void save()}>{busy ? 'Saving…' : 'Save session settings'}</button></footer>
   </ImageDialog>
 }

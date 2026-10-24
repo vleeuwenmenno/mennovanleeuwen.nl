@@ -1343,20 +1343,23 @@ non-admin accounts. The server must be able to reach ComfyUI; browsers never con
 
 Every image model field opens the same **model browser**, in account settings and session
 settings: checkpoints/diffusion models, text encoders and VAEs. It shows the installed catalog as
-folders, with breadcrumbs and a folder sidebar, search across all paths, full horizontally scrollable filenames,
+folders, with breadcrumbs and a folder sidebar, search across all paths, filenames (the full identifier in the details pane),
 a current-selection marker and details for the selected file. Slash and backslash separators both
 form folders, but the original identifier is sent unchanged to ComfyUI. Folder/name/extension are
-shown; sizes, compatibility claims and thumbnails are not invented. Arrow keys move through rows,
-Right opens a folder, Left goes to its parent, Enter selects a row, and **Use selected model** or
+shown; sizes, compatibility claims and thumbnails are not invented: a row shows artwork, size and
+base model only when the backend's metadata supplies them, and a file icon otherwise. Each picked
+model is a compact row (thumb, name, path when it differs, **Change…**). Arrow keys move through rows,
+Right opens a folder, Left goes to its parent, Enter selects a row, and **Use selected** or
 a double-click confirms. Escape cancels and returns focus to the picker. On phones, folder rows
-and breadcrumbs replace the sidebar. The workflow picker has descriptive cards for the six
-supported presets; selecting a card does not imply that an arbitrary installed model supports it.
+and breadcrumbs replace the sidebar. The workflow picker lists the six supported presets as
+compact cards; selecting one does not imply that an arbitrary installed model supports it.
+These dialogs sit in the desktop's layer, so the OS dropdowns and confirm dialogs open above them.
 
 **Automatic asset recommendations** are shared by account settings, session settings, the CLI
 and generation. New empty model, encoder and VAE selections mean automatic; existing nonempty
 selections remain manual, so an upgrade or workflow/backend change never silently replaces them.
 **Use recommended assets** explicitly opts all three fields into automatic mode; each field also
-has its own automatic control and an advanced manual browser. Automatic encoder/VAE choices
+has its own **Auto | Manual** switch (Auto clears the manual choice, Manual opens the browser). Automatic encoder/VAE choices
 follow the selected workflow. Known incompatible manual choices are flagged and refused before
 generation; unknown custom names remain manual with an unverified-compatibility warning.
 
@@ -1446,10 +1449,11 @@ LoRAs, image editing and model downloads are not included in these initial prese
 
 **Image learning and named style profiles:** profiles organize preferences and observations in the
 existing account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
-single global “best settings” ranking. Create a profile with your own name and concise preferences
-in the session **Images → Style profile** panel; select it to pin it to that thread. The panel also
-renames/edits profiles, resets their observations while retaining preferences, or deletes a profile
-and its observations. Changes in this panel save immediately. Deleting a profile clears its thread
+single global “best settings” ranking. Style profiles live in **Settings → Agents → Images → Style profiles** (every profile, whether you
+confirmed it or the agent suggested it, its observation count, and New / Edit / Reset / Delete) and
+in each thread's **Images** dialog, which pins one profile to that thread with a dropdown and offers
+the same quick edits. Reset keeps the preferences and forgets the observations; delete removes the
+profile and its observations. Both ask first. Changes save immediately. Deleting a profile clears its thread
 pins. Ordinary image defaults and other memories are unchanged. The Memory view can inspect and
 forget individual observations or profiles; structured evidence cannot be overwritten by its generic
 text editor. Use the profile panel or image learning tools for typed edits.

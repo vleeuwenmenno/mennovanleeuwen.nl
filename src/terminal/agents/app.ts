@@ -1689,7 +1689,7 @@ export class Session {
               this.say(action === 'reset' ? 'Profile observations reset.' : 'Profile and observations deleted.')
             } else {
               const pin = await getImageProfilePin(thread.id)
-              for (const p of await getImageProfiles()) this.say(`#${p.id} ${p.name}${pin.profile?.id === p.id ? ' (selected)' : ''} [${p.origin}]: ${p.description}`)
+              for (const p of await getImageProfiles()) this.say(`#${p.id} ${p.name}${pin.profile?.id === p.id ? ' (selected)' : ''} [${p.origin}, ${p.observations} ${p.observations === 1 ? 'observation' : 'observations'}]: ${p.description}`)
               this.say('/images profile select <id|none> | save {"name":"…","description":"…"} (optional id edits) | reset <id> | delete <id>')
             }
           } else if (!arg.trim()) {

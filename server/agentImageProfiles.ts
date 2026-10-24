@@ -8,6 +8,11 @@ export type ImageProfile = { id: number; name: string; description: string; orig
 export function imageProfiles(user: User): ImageProfile[] {
   return (database().prepare('SELECT id, image_profile FROM agent_memories WHERE user_id = ? AND image_profile IS NOT NULL ORDER BY id').all(user.id) as { id: number; image_profile: string }[]).map((r) => ({ id: r.id, ...JSON.parse(r.image_profile) }))
 }
+/** The list the UI shows: each profile with how many image observations are filed under it. */
+export function imageProfilesWithCounts(user: User): (ImageProfile & { observations: number })[] {
+  const counts = new Map((database().prepare("SELECT json_extract(image_learning, '$.profileId') AS profile, COUNT(*) AS n FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL GROUP BY profile").all(user.id) as { profile: number | null; n: number }[]).map((r) => [r.profile, r.n]))
+  return imageProfiles(user).map((p) => ({ ...p, observations: counts.get(p.id) ?? 0 }))
+}
 export function ownImageProfile(user: User, id: unknown) {
   const profile = imageProfiles(user).find((p) => p.id === id)
   if (!profile) throw new HttpError(404, 'No such image profile')
@@ -59,7 +64,7 @@ export function forgetImageProfile(user: User, id: unknown, reset = false) {
 }
 export async function handleImageProfileApi(req: IncomingMessage, res: ServerResponse, user: User, path: string) {
   if (path === '/api/agents/image-profiles') {
-    if (req.method === 'GET') return json(res, 200, imageProfiles(user)), true
+    if (req.method === 'GET') return json(res, 200, imageProfilesWithCounts(user)), true
     if (req.method === 'POST') return json(res, 200, saveImageProfile(user, await readJson(req, 4096))), true
   }
   const thread = /^\/api\/agents\/image-profiles\/threads\/([0-9a-f-]{36})$/.exec(path)

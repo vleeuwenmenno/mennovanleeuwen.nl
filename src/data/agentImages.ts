@@ -11,7 +11,8 @@ export const resetImageSettings = () => api<ImageSettings>('/api/agents/images/s
 export const getImageCatalog = () => api<ImageCatalog>('/api/agents/images/catalog')
 
 export type ImageProfile = { id: number; name: string; description: string; origin: 'user' | 'suggestion' }
-export const getImageProfiles = () => api<ImageProfile[]>('/api/agents/image-profiles')
+/** The account's profiles, each with the number of image observations filed under it. */
+export const getImageProfiles = () => api<(ImageProfile & { observations: number })[]>('/api/agents/image-profiles')
 export const saveImageProfile = (profile: { id?: number; name: string; description: string }) => api<ImageProfile>('/api/agents/image-profiles', { method: 'POST', json: profile })
 export const deleteImageProfile = (id: number, reset = false) => api(`/api/agents/image-profiles/${id}${reset ? '/reset' : ''}`, { method: 'DELETE' })
 export const getImageProfilePin = (thread: string) => api<{ profile: ImageProfile | null }>(`/api/agents/image-profiles/threads/${thread}`)
