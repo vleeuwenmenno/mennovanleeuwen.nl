@@ -7,6 +7,23 @@ import { imageSource, type ImageSource } from './agentImageSources.ts'
 import { validateInpaintMask } from './agentImageInpaint.ts'
 
 const UUID = /^[0-9a-f-]{36}$/
+// A mask stays live while any owned artifact or tool call references it. Rewind may remove
+// the call, but a generated artifact still needs its mask for Again.
+const referenced = `(EXISTS (SELECT 1 FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id
+  WHERE t.user_id = ? AND json_extract(CASE WHEN json_valid(i.metadata) THEN i.metadata ELSE '{}' END, '$.mask.id') = m.id)
+  OR EXISTS (SELECT 1 FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id, json_each(CASE WHEN json_valid(x.tool_calls) THEN x.tool_calls ELSE '[]' END) c
+  WHERE t.user_id = ? AND json_extract(c.value, '$.arguments.mask_id') = m.id))`
+function pruneDrafts(user: User, thread: string) {
+  const db = database()
+  const drafts = db.prepare(`SELECT m.id FROM agent_image_masks m WHERE m.thread_id = ? AND NOT ${referenced} ORDER BY m.created_at DESC, m.rowid DESC LIMIT -1 OFFSET 7`).all(thread, user.id, user.id) as { id: string }[]
+  for (const draft of drafts) db.prepare('DELETE FROM agent_image_masks WHERE id = ?').run(draft.id)
+}
+export function discardImageMask(user: User, id: string) {
+  const db = database()
+  if (!db.prepare('SELECT 1 FROM agent_image_masks m JOIN agent_threads t ON t.id = m.thread_id WHERE m.id = ? AND t.user_id = ?').get(id, user.id)) throw new HttpError(404, 'No such image mask')
+  if (db.prepare(`SELECT 1 FROM agent_image_masks m WHERE m.id = ? AND ${referenced}`).get(id, user.id, user.id)) throw new HttpError(409, 'This mask is referenced by a generation and must be retained for repeat actions')
+  db.prepare('DELETE FROM agent_image_masks WHERE id = ?').run(id)
+}
 export type ImageMask = ImageSource & { source_id: string }
 function ownThread(user: User, thread: string) {
   if (!database().prepare('SELECT 1 FROM agent_threads WHERE id = ? AND user_id = ?').get(thread, user.id)) throw new HttpError(404, 'No such thread')
@@ -20,6 +37,7 @@ export function saveImageMask(user: User, thread: string, input: { source_image_
   const bytes = Buffer.from(input.data, 'base64')
   if (bytes.toString('base64') !== input.data) throw new HttpError(400, 'Invalid base64 mask')
   const { width, height } = validateInpaintMask(bytes, source)
+  pruneDrafts(user, thread)
   checkRoom(user, bytes.length)
   const id = randomUUID()
   database().prepare('INSERT INTO agent_image_masks(id, thread_id, source_id, body, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, thread, source.id, bytes, width, height, Date.now())
@@ -47,7 +65,12 @@ export function listImageMasks(user: User, thread: string, args: Record<string, 
 export function retainImageMasks(user: User, thread: string) {
   const db = database()
   const masks = db.prepare(`SELECT m.id, (SELECT i.thread_id FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id
-    WHERE t.user_id = ? AND t.id != m.thread_id AND json_extract(CASE WHEN json_valid(i.metadata) THEN i.metadata ELSE '{}' END, '$.mask.id') = m.id LIMIT 1) AS survivor
-    FROM agent_image_masks m WHERE m.thread_id = ?`).all(user.id, thread) as { id: string; survivor: string | null }[]
-  for (const mask of masks) if (mask.survivor) db.prepare('UPDATE agent_image_masks SET thread_id = ? WHERE id = ?').run(mask.survivor, mask.id)
+    WHERE t.user_id = ? AND t.id != m.thread_id AND json_extract(CASE WHEN json_valid(i.metadata) THEN i.metadata ELSE '{}' END, '$.mask.id') = m.id LIMIT 1) AS artifact_survivor,
+    (SELECT x.thread_id FROM agent_messages x JOIN agent_threads t ON t.id = x.thread_id, json_each(CASE WHEN json_valid(x.tool_calls) THEN x.tool_calls ELSE '[]' END) c
+    WHERE t.user_id = ? AND t.id != m.thread_id AND json_extract(c.value, '$.arguments.mask_id') = m.id LIMIT 1) AS call_survivor
+    FROM agent_image_masks m WHERE m.thread_id = ?`).all(user.id, user.id, thread) as { id: string; artifact_survivor: string | null; call_survivor: string | null }[]
+  for (const mask of masks) {
+    const survivor = mask.artifact_survivor ?? mask.call_survivor
+    if (survivor) db.prepare('UPDATE agent_image_masks SET thread_id = ? WHERE id = ?').run(survivor, mask.id)
+  }
 }

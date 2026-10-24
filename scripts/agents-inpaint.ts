@@ -79,7 +79,7 @@ const ollama = createServer(async (req, res) => {
 })
 const listen = async (s: ReturnType<typeof createServer>) => { await new Promise<void>(r => s.listen(0, '127.0.0.1', r)); return `http://127.0.0.1:${(s.address() as { port: number }).port}` }
 const comfyUrl = await listen(comfy), ollamaUrl = await listen(ollama)
-const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'synthetic', GITHUB_CLIENT_ID: 'fixture', GITHUB_CLIENT_SECRET: 'fixture', ADMIN_USERS: 'upscale-admin' })
+const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'synthetic', GITHUB_CLIENT_ID: 'fixture', GITHUB_CLIENT_SECRET: 'fixture', ADMIN_USERS: 'upscale-admin', USER_STORAGE_MB: '2' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const sessions = [randomBytes(24).toString('hex'), randomBytes(24).toString('hex')]
@@ -126,7 +126,10 @@ try {
   assert.equal((await api('POST', upload, { source_image_id: foreign, data })).status, 404)
   assert.equal((await api('POST', upload, { source_image_id: source, data: png(16,12).toString('base64') })).status, 400)
   assert.equal((await api('POST', upload, { source_image_id: source, data: png(12,16,true).toString('base64') })).status, 400)
+  const { usedBytes } = await import('../server/quota.ts')
+  const beforeMaskBytes = usedBytes(1)
   const mask = await json('POST', upload, { source_image_id: source, data })
+  assert.equal(usedBytes(1) - beforeMaskBytes, Buffer.from(data,'base64').length)
   assert.equal((await api('GET', mask.url)).status, 200)
   assert.equal((await api('GET', mask.url, undefined, 1)).status, 404)
   const foreignMask = await json('POST', `/api/agents/threads/${other.id}/image-masks`, { source_image_id: foreign, data }, 1)
@@ -156,7 +159,7 @@ try {
   assert.equal(toolResult(await events(`/api/agents/threads/${t.id}/retry`, {})).image.settings.operation, 'inpaint')
   console.log('PASS owned mask storage, binary/empty/dimension validation, final-composite graph, metadata, Again and Retry')
   const u0 = uploads, s0 = submissions
-  for (const bad of [{ mask_id: foreignMask.id }, { source_image_id: foreign }, { source_image_id: alternate }, { mask_id: undefined }, { mask_id: 'https://example.test/mask.png' }, { graph: {} }, { denoise: 0 }, { width: 2048 }]) assert.ok(toolResult(await events(direct, { ...args, ...bad })).error)
+  for (const bad of [{ mask_id: foreignMask.id }, { source_image_id: foreign }, { source_image_id: alternate }, { mask_id: undefined }, { mask_id: 'https://example.test/mask.png' }, { graph: {} }, { hires: { scale: 1.5 } }, { denoise: 0 }, { width: 2048 }]) assert.ok(toolResult(await events(direct, { ...args, ...bad })).error)
   missing = 'ImageCompositeMasked'
   assert.equal((await json('GET','/api/agents/images/catalog')).inpaint, false)
   assert.ok(toolResult(await events(direct, args)).error)
@@ -187,6 +190,48 @@ try {
   requestedTool='list_image_masks'; args={}
   assert.equal(toolResult(await events(`/api/agents/threads/${t.id}/messages`,{text:'List saved masks'})).masks[0].mask_id,mask.id)
   console.log('PASS tool discovery, mask-aware approval, decline, frozen credentials, scoped cancellation and recovery')
+  // Unused uploads from interrupted clients are bounded; referenced masks are never evicted.
+  const drafts: any[] = []
+  for (let i=0;i<12;i++) drafts.push(await json('POST',upload,{source_image_id:source,data}))
+  const storedMasks = database().prepare('SELECT id FROM agent_image_masks WHERE thread_id=?').all(t.id)
+  assert.equal(storedMasks.length,9) // 8 drafts plus the used mask
+  assert.equal((await api('GET',drafts[0].url)).status,404)
+  assert.equal((await api('GET',mask.url)).status,200)
+  assert.equal((await api('DELETE',mask.url)).status,409)
+  assert.equal((await api('DELETE',drafts.at(-1).url,undefined,1)).status,404)
+  await json('DELETE',drafts.at(-1).url)
+  assert.equal((await api('GET',drafts.at(-1).url)).status,404)
+  database().prepare('INSERT INTO state(user_id,key,value,updated_at) VALUES(?,?,?,?)').run(1,'quota-fixture','x'.repeat(2*1024*1024),Date.now())
+  assert.equal((await api('POST',upload,{source_image_id:source,data})).status,413)
+  database().prepare('DELETE FROM state WHERE user_id=1 AND key=?').run('quota-fixture')
+  assert.equal((await api('POST',upload,{source_image_id:source,data:Buffer.alloc(8*1024*1024+1).toString('base64')})).status,413)
+  // Rewind removes messages, but the persisted output still references its mask for Again.
+  const beforeRewind = await json('GET',`/api/agents/threads/${t.id}`)
+  const lastUser = beforeRewind.messages.findLast((m:any)=>m.role==='user')
+  await json('POST',`/api/agents/threads/${t.id}/rewind`,{messageId:lastUser.id})
+  assert.equal((await api('GET',mask.url)).status,200)
+  assert.equal((await api('DELETE',mask.url)).status,409)
+  // Synthetic source has no original generation turn; add its reference like a real source turn.
+  database().prepare('INSERT INTO agent_messages(thread_id,role,content,tool_name,created_at) VALUES(?,?,?,?,?)').run(t.id,'tool',JSON.stringify({image:{id:source}}),'generate_image',Date.now())
+  const thread = await json('GET',`/api/agents/threads/${t.id}`)
+  const branch = await json('POST',`/api/agents/threads/${t.id}/branch`,{messageId:thread.messages.at(-1).id})
+  const shared = await json('POST',`/api/agents/threads/${t.id}/share`,{kind:'thread'})
+  const publicPage = await (await fetch(shared.url)).text()
+  assert.ok(!publicPage.includes(mask.id) && !publicPage.includes('image-masks/') && !publicPage.includes(data))
+  const unauthenticated = await fetch(server.origin+mask.url)
+  assert.ok(unauthenticated.status===401 || unauthenticated.status===404)
+  await json('DELETE',`/api/agents/threads/${t.id}`)
+  assert.equal((await api('GET',mask.url)).status,200)
+  assert.equal((database().prepare('SELECT thread_id FROM agent_image_masks WHERE id=?').get(mask.id) as any).thread_id,branch.thread.id)
+  const branchAgain = toolResult(await events(`/api/agents/threads/${branch.thread.id}/images/${result.image.id}/again`))
+  assert.ok(branchAgain.image,JSON.stringify(branchAgain))
+  await json('DELETE',`/api/agents/threads/${branch.thread.id}`)
+  assert.equal((await api('GET',mask.url)).status,404)
+  assert.equal(database().prepare('SELECT COUNT(*) AS n FROM agent_image_masks WHERE thread_id=?').get(t.id)?.n,0)
+  await json('DELETE','/api/admin/users/2')
+  assert.equal(database().prepare('SELECT COUNT(*) AS n FROM agent_image_masks WHERE id=?').get(foreignMask.id)?.n,0)
+  console.log('PASS mask quota/size, bounded abandoned uploads, protected deletion, rewind, branch retention/Again, thread/account cleanup and public-share exclusion')
+
 } finally {
   await server.dispose(); database().close()
   comfy.closeAllConnections(); ollama.closeAllConnections()

@@ -432,7 +432,7 @@ try {
   assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'])
   assert.deepEqual(catalog.schedulers, ['simple', 'beta', 'karras', 'normal', 'sgm_uniform'])
   assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
-  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel'])
+  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked'])
   assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)
   assert.equal(fullCatalogRequests, 0)
   for (const [mode, error] of [['oversize', /CheckpointLoaderSimple.*1 MiB/], ['aggregate', /4 MiB total/], ['invalid', /invalid JSON.*CheckpointLoaderSimple/]] as const) {

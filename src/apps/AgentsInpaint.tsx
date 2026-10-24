@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getImageCatalog, saveImageMask, type GeneratedImage, type ImageCatalog, type InpaintImageInput } from '../data/agentImages'
+import { getImageCatalog, saveImageMask, discardImageMask, type GeneratedImage, type ImageCatalog, type InpaintImageInput } from '../data/agentImages'
 import { ImageDialog } from './AgentsModelBrowser'
 import { AgentsMaskEditor } from './AgentsMaskEditor'
 
@@ -22,7 +22,7 @@ export function InpaintDialog({ image, threadId, disabled, onClose, onInpaint }:
   if (painting) return <AgentsMaskEditor sourceUrl={image.url} sourceName={image.name} width={image.width} height={image.height} onCancel={onClose} onApply={async ({ mask }) => {
     if (disabled) throw new Error('Wait for the current turn to finish before applying a mask.')
     const saved = await saveImageMask(threadId, image.id, mask)
-    if (!alive.current) return
+    if (!alive.current) { await discardImageMask(saved.id).catch(() => {}); return }
     const s = image.settings
     const settings = s && s.operation !== 'upscale' ? { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler } : {}
     onInpaint({ ...settings, operation: 'inpaint', source_image_id: image.id, mask_id: saved.id, prompt: prompt.trim(), denoise })

@@ -1439,7 +1439,9 @@ components/sampling when available; otherwise it uses current image settings. Fo
 the CLI/model can call `generate_image` with `operation: "inpaint"`, `source_image_id`, `mask_id`,
 and a prompt. `list_image_masks` discovers up to 20 masks in this or an explicitly owned thread.
 Masks are bound to one source, remain private, count toward account storage, and are retained
-with surviving branch artifacts. Again reuses the recorded source and mask with a fresh seed;
+with surviving branch artifacts. At most eight unused mask uploads are kept per thread;
+new uploads prune older unused masks. Canceling during upload discards an unused completed upload
+when its response arrives. Referenced masks cannot be deleted separately. Again reuses the recorded source and mask with a fresh seed;
 Retry replays the direct action. Approval cards identify the mask and working-size preservation.
 
 **Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` is a reusable standalone modal.

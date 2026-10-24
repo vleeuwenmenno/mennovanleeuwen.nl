@@ -1,4 +1,4 @@
-import { saveImageMask, imageMask } from './agentImageMasks.ts'
+import { saveImageMask, imageMask, discardImageMask } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
@@ -344,6 +344,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const maskUpload = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/image-masks$/.exec(path)
     if (maskUpload && method === 'POST') return json(res, 200, saveImageMask(requireUser(req), maskUpload[1], await readJson(req, 12 * 1024 * 1024))), true
     const maskView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})$/.exec(path)
+    if (maskView && method === 'DELETE') { discardImageMask(requireUser(req), maskView[1]); return json(res, 200, { deleted: true }), true }
     if (maskView && read) {
       const mask = imageMask(requireUser(req), maskView[1])
       res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(mask.bytes.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : mask.bytes)

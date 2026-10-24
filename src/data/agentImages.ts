@@ -85,3 +85,5 @@ export async function inpaintImage(id: string, input: InpaintImageInput, onEvent
   const res = await fetch(`/api/agents/threads/${id}/inpaint`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal })
   await readEvents(res, onEvent)
 }
+
+export const discardImageMask = (id: string) => api(`/api/agents/image-masks/${id}`, { method: 'DELETE' })
