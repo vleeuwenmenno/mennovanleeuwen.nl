@@ -1,6 +1,6 @@
 import { saveImageProfile, forgetImageProfile } from './agentImageProfiles.ts'
 import { imageLearnings, saveImageLearning } from './agentImageLearning.ts'
-import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS } from '../src/data/imageModels.ts'
+import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageProgress } from '../src/data/imageModels.ts'
 import { generateImage, prepareImageGeneration, generatedImageForVision, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
@@ -282,7 +282,7 @@ const titling = new Set<string>()
 const checkingTitle = new Set<string>()
 
 /** A change waiting for the user: which reply asked for it (message and call index) and how to answer; `summary` says what it does where the call alone doesn't (a calendar change). */
-type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; form?: Form; call?: ToolCall; summary?: CallSummary; /** A web read the automatic check would not clear: what it said */ check?: string; resolve: (answer: unknown) => void }
+type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; /** A web read the automatic check would not clear: what it said */ check?: string; resolve: (answer: unknown) => void }
 export type PendingApproval = Omit<Pending, 'resolve'>
 const pending = new Map<string, Pending[]>() // by thread
 /** Windows following a turn they did not start (opened again, another tab), by thread. */
@@ -2696,6 +2696,8 @@ function askForm(thread: string, messageId: number, index: number, form: Form, s
 
 export type TurnEvent =
   | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  /** Where an image job is (throttled to 4 a second), for the thread that runs it */
+  | { type: 'imageProgress'; callId: string; progress: ImageProgress }
   | { type: 'imageGenerationDone'; callId: string }
   /** `check`: a web read the automatic check (Auto) would not clear, and what it said */
   | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
@@ -3009,6 +3011,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           // back to the model before the user is asked, and they see what will happen.
           let calendar: Prepared | null = null
           let imageDimensions: { width: number; height: number } | undefined
+          let imageRun: ((onProgress: (p: ImageProgress) => void) => Promise<string>) | undefined
           if (CALENDAR_TOOLS.has(c.name) || NOTE_LINK_TOOLS.has(c.name)) {
             try {
               calendar = CALENDAR_TOOLS.has(c.name) ? await prepareCalendarCall(user, c.name, c.arguments ?? {}, zone) : await prepareNoteLinkCall(user, c.name, c.arguments ?? {}, zone)
@@ -3037,7 +3040,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
                 imageLearningReviewNeeded = true
                 return JSON.stringify({ learning_review_required: true, submitted: false, ...findings.evidence, next: 'Review this evidence before choosing parameters. Retry generate_image, preserving explicit user requests. No image job or approval has started.' })
               }
-              calendar = image; imageDimensions = image.dimensions
+              calendar = image; imageDimensions = image.dimensions; imageRun = image.run
             }
             catch (e) { if (ctl.signal.aborted) throw e; return JSON.stringify({ error: (e as Error).message }) }
           }
@@ -3102,13 +3105,17 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           }
           if (calendar) {
             try {
+              let onImageProgress: ((p: ImageProgress) => void) | undefined
               if (imageDimensions) {
                 const callId = randomUUID()
                 generationPending.push(callId)
-                pending.set(row.id, [...(pending.get(row.id) ?? []), { callId, messageId: assistant, index, kind: 'image', ...imageDimensions, resolve: () => {} }])
+                const entry: Pending = { callId, messageId: assistant, index, kind: 'image', ...imageDimensions, resolve: () => {} }
+                pending.set(row.id, [...(pending.get(row.id) ?? []), entry])
                 send({ type: 'imageGeneration', callId, messageId: assistant, index, ...imageDimensions })
+                // Kept on the entry too, so a window that joins halfway sees where it is.
+                onImageProgress = (progress) => { entry.progress = progress; send({ type: 'imageProgress', callId, progress }) }
               }
-              const output = await calendar.run()
+              const output = imageRun && onImageProgress ? await imageRun(onImageProgress) : await calendar.run()
               if (imageDimensions && JSON.parse(output).image) imageCompleted = true
               return output
             } catch (e) {

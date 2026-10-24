@@ -1,5 +1,6 @@
 import { selectedImageProfile } from './agentImageProfiles.ts'
-import { imagePresetSpec, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
+import { applyComfyMessage, openComfySocket, progressState, queuePosition, throttleProgress } from './comfyProgress.ts'
+import { imagePresetSpec, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -290,13 +291,14 @@ export async function prepareImageGeneration(user: User, thread: string, input: 
   const plan = await planImageGeneration(user, thread, input, signal)
   const p = plan.parameters
   const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
-  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async () => JSON.stringify(await executeImagePlan(user, thread, plan, signal)) }
+  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
 }
-export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
-  return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal)
+export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
+  return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal, onProgress)
 }
 const active = new Set<number>()
-async function executeImagePlan(user: User, thread: string, plan: ImagePlan, signal: AbortSignal) {
+/** `onProgress` hears where this job is (throttled to 4 a second); only the caller's own job, never another's. */
+async function executeImagePlan(user: User, thread: string, plan: ImagePlan, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
   ownImageThread(user, thread)
   if (active.has(user.id)) throw new HttpError(409, 'An image is already generating for this account')
   const current = imageSettings(user), { settings: s, workflow, parameters } = plan
@@ -305,19 +307,38 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
   active.add(user.id)
   let promptId: string | null = null
+  // Live progress (server/comfyProgress.ts) for the caller only, at most 4 updates a second. The
+  // socket is opened before the prompt is queued: ComfyUI reports a prompt to the client that queued it.
+  const progress = onProgress ? throttleProgress(onProgress) : null
+  const state = progressState()
+  let wake: (() => void) | null = null
+  const clientId = randomUUID()
+  let socket: { close: () => void } | null = null
   try {
     limit.throwIfAborted()
-    const submitted = await readJSON(user, s, '/prompt', limit, { prompt: workflow.graph, client_id: randomUUID() })
+    if (progress) socket = await openComfySocket(user, s.url, s.token, clientId, limit, (message) => {
+      if (applyComfyMessage(state, message, promptId, workflow.sampling.steps) && state.progress) progress.push(state.progress)
+      if (state.finished) wake?.()
+    })
+    const submitted = await readJSON(user, s, '/prompt', limit, { prompt: workflow.graph, client_id: clientId })
     if (typeof submitted.prompt_id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(submitted.prompt_id)) throw new HttpError(502, 'ComfyUI did not return a prompt ID')
     promptId = submitted.prompt_id
+    if (progress && !state.started) progress.push((state.progress = { phase: 'queued' }))
     for (;;) {
       limit.throwIfAborted()
+      // Before it starts: where it is in ComfyUI's queue. Optional; an older or proxied ComfyUI may not answer.
+      if (progress && !state.started) {
+        const place = await readJSON(user, s, '/queue', limit).then((q) => queuePosition(q, promptId!)).catch((e) => { if (limit.aborted) throw e; return null })
+        if (place === 'running') { state.started = true; if (!socket) progress.push((state.progress = { phase: 'running' })) }
+        else if (place !== null && !state.started) progress.push((state.progress = { phase: 'queued', position: place }))
+      }
       const history = await readJSON(user, s, `/history/${encodeURIComponent(promptId)}`, limit)
       const job = history[promptId]
       if (job?.status?.status_str === 'error') throw new HttpError(502, 'ComfyUI generation failed; check its model compatibility and available memory')
       const output = job?.outputs?.['9']?.images?.[0]
       if (output) {
         if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
+        progress?.push({ phase: 'saving' })
         const params = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder, type: 'output' })
         const bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
         // SaveImage writes PNG. Reject arbitrary content from an incorrectly configured server.
@@ -329,14 +350,23 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, seed: workflow.seed, preset: s.preset, settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without an image')
-      await delay(1000, undefined, { signal: limit })
+      // The socket saying the prompt is done ends the wait early; the next /history read has it.
+      const pause = new AbortController()
+      wake = () => pause.abort()
+      if (!state.finished) await delay(1000, undefined, { signal: AbortSignal.any([limit, pause.signal]) }).catch(() => {})
+      wake = null
+      state.finished = false
     }
   } catch (error) {
     // Delete only our queued prompt. Never use /interrupt: it can stop another client's GPU job.
     if (promptId) await request(user, s, '/queue', AbortSignal.timeout(3000), { delete: [promptId] }).then((r) => r.body?.cancel()).catch(() => {})
     if (limit.aborted) throw new HttpError(signal.aborted ? 499 : 504, signal.aborted ? 'Image generation cancelled. An already running ComfyUI job may finish, but its output will not be saved here.' : 'Image generation timed out after 10 minutes')
     throw error
-  } finally { active.delete(user.id) }
+  } finally {
+    active.delete(user.id)
+    progress?.stop()
+    socket?.close()
+  }
 }
 
 // Opaque short-lived preview handles bind an exact catalog asset to its owner's backend.

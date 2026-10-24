@@ -1561,7 +1561,7 @@ artwork are not supported; refresh the browser if a preview handle expires.
 
 Each call makes one PNG. Width/height can be requested in multiples of 64 from 256 to 1536,
 with at most 1536 × 1024 pixels; the result includes a reproducible seed. One generation runs per
-account at a time, with a ten-minute deadline and a 20 MB output limit. Stop/Esc stops waiting and
+account at a time, with a ten-minute deadline and a 20 MB output limit. While it runs, a flat grid of blocks fills in with live progress (queue position, model loading, step and percentage, also on the CLI's status line), read from ComfyUI's `/ws` socket for that prompt only ([`server/comfyProgress.ts`](server/comfyProgress.ts)), sent at most 4 times a second to the owner's thread, falling back to `/queue` polling without the socket. Stop/Esc stops waiting and
 removes that prompt from ComfyUI's pending queue. An already running GPU job may finish there;
 Agents never sends a global interrupt that could stop someone else's job, and cancelled output is
 not stored. Errors appear in the existing tool card and CLI output. Successful PNGs live in the

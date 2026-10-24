@@ -155,8 +155,7 @@ export async function fetchPinned(url: URL, init: RequestInit, addresses: Lookup
     if (k !== 'accept-encoding') headers[k] = v
   })
   if (body) headers['content-length'] = String(body.length)
-  const pinned = (_host: string, opts: { all?: boolean }, done: (err: Error | null, address: string | LookupAddress[], family?: number) => void) =>
-    opts?.all ? done(null, addresses) : done(null, addresses[0].address, addresses[0].family)
+  const pinned = pinnedLookup(addresses)
   return new Promise<Response>((resolve, reject) => {
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest
     const r = send(url, { method: req.method, headers, lookup: pinned as never, signal: init.signal ?? undefined }, (res: IncomingMessage) => {
@@ -170,6 +169,21 @@ export async function fetchPinned(url: URL, init: RequestInit, addresses: Lookup
     r.on('error', reject)
     r.end(body ?? undefined)
   })
+}
+
+/** A `lookup` for http.request that answers only `addresses`. */
+export const pinnedLookup = (addresses: LookupAddress[]) => (_host: string, opts: { all?: boolean }, done: (err: Error | null, address: string | LookupAddress[], family?: number) => void) =>
+  opts?.all ? done(null, addresses) : done(null, addresses[0].address, addresses[0].family)
+
+/**
+ * For a raw http(s) request to an address a user chose (a WebSocket upgrade, which fetch cannot
+ * make): the same check guardedFetch makes, as a `lookup` that connects only to the checked
+ * addresses. Admins may reach any host (their LAN too), so they get the system resolver (undefined).
+ */
+export async function guardedLookup(user: User | null, url: URL, signal?: AbortSignal) {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EgressError(400, 'Only web addresses')
+  if (user?.admin) return undefined
+  return pinnedLookup(await publicAddresses(url, signal))
 }
 
 /** Lets an EgressError through a `.catch()` that turns network failures into null or a message. */

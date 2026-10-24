@@ -1,6 +1,7 @@
 import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { getNote } from './notes'
+import type { ImageProgress } from './imageModels'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -119,10 +120,12 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 
 export type TurnEvent =
   | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  /** Where an image job is (at most 4 a second) */
+  | { type: 'imageProgress'; callId: string; progress: ImageProgress }
   | { type: 'imageGenerationDone'; callId: string }
   | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
   /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
