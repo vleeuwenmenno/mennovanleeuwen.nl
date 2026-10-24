@@ -35,6 +35,7 @@ const tiny = png(1, 1, () => [0, 0, 0])
 const send = (res: ServerResponse, v: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(v))
 const nodes = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'CLIPSetLastLayer', 'ModelSamplingDiscrete']
 const info: Record<string, any> = Object.fromEntries(nodes.map((n) => [n, { input: { required: {} } }]))
+info.UNETLoader.input.required.unet_name = [['Krea2/krea_vpred.safetensors']]
 info.CheckpointLoaderSimple.input.required.ckpt_name = [['NoobAI/noob_vpred.safetensors', 'Illustrious/prefect.safetensors', 'NoobAI/hashed.safetensors', 'NoobAI/described.safetensors', 'NoobAI/noob_eps_vpred-merge.safetensors', 'vpred/model.safetensors', 'NoobAI/noobVpred10.safetensors']]
 info.KSampler.input.required = { sampler_name: [['euler', 'euler_ancestral', 'dpmpp_2m']], scheduler: [['simple', 'karras', 'normal']] }
 let outputs: Buffer[] = []
@@ -118,7 +119,7 @@ try {
   console.log('PASS A1111 → ComfyUI sampler mapping (combined names, schedules, unmapped), medians, consensus, family detection, v-pred names')
 }
 
-const { managerItem, joinInstalled, usageTips, parseCivitaiVersion, stripHtml, civitaiFacts, civitaiGet, setCivitaiFetcher, recommend, fitSize, civitaiScope, cachedCivitai, assetIsVpred, vpredDecision, loraWeights, managerIndex, MANAGER_MAX_PAGES } = await import('../server/agentModelIntel.ts')
+const { managerItem, joinInstalled, usageTips, parseCivitaiVersion, stripHtml, civitaiFacts, civitaiGet, setCivitaiFetcher, recommend, variantFor, fitSize, civitaiScope, cachedCivitai, assetIsVpred, vpredDecision, loraWeights, managerIndex, MANAGER_MAX_PAGES } = await import('../server/agentModelIntel.ts')
 const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALITY_MAX_PIXELS } = await import('../server/agentImageQuality.ts')
 {
   // LoRA Manager: folder + file joins exactly; a leaf alone never does; ambiguous joins drop.
@@ -176,6 +177,19 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   assert.deepEqual([turbo.preset, turbo.cfg, turbo.clip_skip, turbo.steps], ['z_image_turbo', 1, 1, 9], 'Turbo keeps CFG 1; diffusion presets have no clip skip')
   assert.equal(recommend('checkpoints', 'noobai_vpred', null, installed, true).v_prediction, true)
   assert.equal(recommend('diffusionModels', 'sdxl', null, installed, false).preset, null, 'a separate diffusion model never gets a checkpoint preset')
+  // A raw/turbo split follows the effective preset; examples from the other variant are not used.
+  assert.equal(variantFor('krea2', 'krea2_raw'), 'krea2_raw'); assert.equal(variantFor('krea2_turbo', 'krea2_raw'), 'krea2_raw'); assert.equal(variantFor('krea2', 'sdxl'), 'krea2')
+  assert.equal(variantFor('z_image_turbo', 'z_image'), 'z_image'); assert.equal(variantFor('illustrious', 'krea2_raw'), 'illustrious')
+  const turboExamples = exampleConsensus([{ sampler: 'Euler a', steps: 8, cfgScale: 1 }, { sampler: 'Euler a', steps: 8, cfgScale: 1 }])
+  const rawExamples = exampleConsensus([{ sampler: 'Euler', steps: 50, cfgScale: 3.5 }, { sampler: 'Euler', steps: 50, cfgScale: 3.5 }])
+  const rawRecipe = recommend('diffusionModels', variantFor('krea2', 'krea2_raw'), turboExamples, installed, false)
+  assert.deepEqual([rawRecipe.preset, rawRecipe.steps, rawRecipe.cfg, rawRecipe.sampler, rawRecipe.source], ['krea2_raw', 52, 3.5, 'euler', 'family_default'], 'turbo examples on a raw preset: Raw recipe')
+  assert.match(rawRecipe.consensus_ignored ?? '', /turbo variant/)
+  const fast = recommend('diffusionModels', variantFor('krea2', 'krea2_turbo'), rawExamples, installed, false)
+  assert.deepEqual([fast.preset, fast.steps, fast.cfg, fast.source], ['krea2_turbo', 8, 1, 'family_default'], 'raw examples on a turbo preset: Turbo recipe')
+  assert.match(fast.consensus_ignored ?? '', /raw variant/)
+  const agreeing = recommend('diffusionModels', 'krea2_raw', rawExamples, installed, false)
+  assert.deepEqual([agreeing.steps, agreeing.source, agreeing.consensus_ignored], [50, 'civitai_examples', undefined], 'matching examples still apply')
   assert.deepEqual(fitSize(1664, 2432), { width: 832, height: 1216 }); assert.deepEqual(fitSize(2048, 2048), { width: 1024, height: 1024 }); assert.deepEqual(fitSize(512, 768), { width: 512, height: 768 })
   console.log('PASS Civitai parsing from a fixture: base model, trained words, stripped description, consensus 4 of 5, sizes, example prompts, LoRA weight, recommended block and its precedence')
 
@@ -530,6 +544,19 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
     const d = await call('GET', `/api/agents/images/model-details?${new URLSearchParams({ name: model, kind: 'checkpoint' })}`)
     return { graph: graphs[0].vpred?.inputs.sampling === 'v_prediction', details: d.prediction.v_prediction, source: d.prediction.source }
   }
+  // Lookups off: neither path uses cached Civitai facts (here a version found by hash, named v-pred). On: both do.
+  assert.deepEqual(await prediction('NoobAI/hashed.safetensors'), { graph: false, details: false, source: 'auto' })
+  put(`m:910002:${scope}`, '')
+  await call('PUT', '/api/agents/images/settings', { civitaiLookup: true })
+  assert.deepEqual(await prediction('NoobAI/hashed.safetensors'), { graph: true, details: true, source: 'auto' })
+  await call('PUT', '/api/agents/images/settings', { civitaiLookup: false })
+  // Diffusion-model (component) workflows: no Prediction setting, and v-pred is reported as unsupported.
+  assert.equal((await fetch(server.origin + '/api/agents/images/settings', { method: 'PUT', headers, body: JSON.stringify({ prediction: { model: 'Krea2/krea_vpred.safetensors', value: 'vpred' } }) })).status, 400)
+  assert.equal((await fetch(server.origin + '/api/agents/images/settings', { method: 'PUT', headers, body: JSON.stringify({ prediction: { model: 'not/installed.safetensors', value: 'eps' } }) })).status, 400)
+  const component = await call('GET', `/api/agents/images/model-details?${new URLSearchParams({ name: 'Krea2/krea_vpred.safetensors', kind: 'checkpoint' })}`)
+  assert.deepEqual([component.prediction, component.supported, component.recommended.v_prediction], [undefined, false, undefined])
+  assert.match(component.unsupported_reason, /only to SD 1.5 and SDXL checkpoints/)
+  assert.ok(!component.notes.some((n: string) => /ModelSamplingDiscrete/.test(n)), 'no promise of ModelSamplingDiscrete')
   assert.deepEqual(await prediction('NoobAI/noob_eps_vpred-merge.safetensors'), { graph: false, details: false, source: 'auto' })
   assert.deepEqual(await prediction('vpred/model.safetensors'), { graph: false, details: false, source: 'auto' })
   assert.deepEqual(await prediction('NoobAI/noobVpred10.safetensors'), { graph: true, details: true, source: 'auto' })

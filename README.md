@@ -2014,7 +2014,9 @@ The facts come from three places:
 The result's `recommended` block (preset, sampler, scheduler, steps, CFG, clip skip, size) says its
 `source`: `civitai_examples` with how many pictures agree, `family_default`, or `user_saved` for a
 size the thread saved. The Civitai consensus wins over the family default, and the user's explicit
-request wins over both. LoRAs get a recommended strength (usage tips, then their own weight in the
+request wins over both. For a raw/turbo split (Krea 2, Z-Image) the thread's preset decides the
+variant, and example settings from the other variant (turbo steps on a raw preset, or the reverse)
+are not used; a note says so. LoRAs get a recommended strength (usage tips, then their own weight in the
 example pictures: a resource entry with their Civitai version ID, or a resource or `<lora:NAME:w>`
 tag whose name is their file; none when that cannot be told), their trained words, and whether they match the selected model's family. The
 agent calls `model_details` once before the first generation with a model or LoRA it has not used
@@ -2031,8 +2033,11 @@ version's own description, or LoRA Manager's base model label. Eps evidence ther
 "epsilon", "not v-pred", even in a sentence that also mentions v-pred) always prevents it, since running an eps model as v-pred ruins every
 picture. The model page, model title and model tags never apply it; when they mention v-pred,
 `model_details` only adds a note. The server decides this, never the tool call, with the same
-detector and cached Civitai facts as `model_details`. When detection is wrong, the model browser's
-details pane has **Prediction: Auto / v-pred / eps** for each checkpoint: your setting, saved per
+detector and cached Civitai facts as `model_details` (and, like it, none of them while Civitai
+lookups are off). When detection is wrong, the model browser's
+details pane has **Prediction: Auto / v-pred / eps** for each checkpoint (diffusion-model workflows
+never apply v-prediction, so they have no such setting, and a v-pred diffusion model is reported as
+unsupported): your setting, saved per
 account and per model file in the image settings, wins over detection, and `model_details` reports
 it as `source: user_override`. The agent cannot change it. Without that node the model is
 reported as unsupported and generation is refused, as it would render garbage.

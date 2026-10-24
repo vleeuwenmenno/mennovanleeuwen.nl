@@ -115,7 +115,7 @@ function ModelDetails({ category, name, revision }: { category?: ModelCategory; 
 }
 
 /** What model_details knows about the selected checkpoint: family, tags, trained words, and the recipe with its source. */
-function ModelIntel({ name }: { name: string }) {
+function ModelIntel({ name, checkpoint }: { name: string; checkpoint: boolean }) {
   const [details, setDetails] = useState<ModelDetails | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -139,7 +139,7 @@ function ModelIntel({ name }: { name: string }) {
   const words = [...new Set([...(details.lora_manager?.trained_words ?? []), ...(details.civitai?.trained_words ?? [])])].slice(0, 8)
   return <dl className="image-intel">
     <dt>Base model</dt><dd>{details.lora_manager?.base_model || details.civitai?.base_model || 'Unknown'}{details.family ? ` · ${details.family.label}` : ''}</dd>
-    {details.prediction && <><dt>Prediction</dt><dd>
+    {checkpoint && details.prediction && <><dt>Prediction</dt><dd>
       <span className="image-prediction" role="group" aria-label="Prediction type">
         {(['auto', 'vpred', 'eps'] as const).map((v) => <button key={v} type="button" className={`btn btn-small ${details.prediction!.setting === v ? 'btn-primary' : ''}`} aria-pressed={details.prediction!.setting === v} disabled={saving} onClick={() => setPrediction(v)}>{v === 'auto' ? 'Auto' : v === 'vpred' ? 'v-pred' : 'eps'}</button>)}
       </span>
@@ -236,7 +236,7 @@ export function ModelBrowser({ category, label, values, value, onChoose, onClose
         {files.length > shown && <button type="button" className="btn btn-small image-browser-more" onClick={() => setShown((n) => n + 150)}>Show more ({files.length - shown} left)</button>}
       </section>
       <aside className="image-model-details" aria-label="Selected model details">
-        {picked ? <><h3>{picked.name}{picked.value === value && <span className="image-current">Current</span>}</h3><ModelDetails category={category} name={picked.value} revision={artworkRevision} />{(category === 'checkpoints' || category === 'diffusion_models') && <ModelIntel name={picked.value} />}<dl><dt>Folder</dt><dd>{picked.folder || 'Root'}</dd><dt>Format</dt><dd>{picked.extension}</dd><dt>Identifier</dt><dd className="copyable image-path">{picked.value}</dd></dl><p className="muted">Artwork and metadata don’t prove workflow compatibility.</p></> : <p className="muted">{selected ? 'The saved selection is not in this catalog. Refresh or choose an installed model.' : 'Select a model to see its details.'}</p>}
+        {picked ? <><h3>{picked.name}{picked.value === value && <span className="image-current">Current</span>}</h3><ModelDetails category={category} name={picked.value} revision={artworkRevision} />{(category === 'checkpoints' || category === 'diffusion_models') && <ModelIntel name={picked.value} checkpoint={category === 'checkpoints'} />}<dl><dt>Folder</dt><dd>{picked.folder || 'Root'}</dd><dt>Format</dt><dd>{picked.extension}</dd><dt>Identifier</dt><dd className="copyable image-path">{picked.value}</dd></dl><p className="muted">Artwork and metadata don’t prove workflow compatibility.</p></> : <p className="muted">{selected ? 'The saved selection is not in this catalog. Refresh or choose an installed model.' : 'Select a model to see its details.'}</p>}
       </aside>
     </div>
     <footer className="image-dialog-foot"><span className="muted image-dialog-hint">Arrows move · ← up · Double-click uses</span><span className="image-grow" /><button type="button" className="btn btn-small" onClick={onClose}>Cancel</button><button type="button" className="btn btn-small btn-primary" disabled={!picked || loading} onClick={() => picked && onChoose(picked.value)}>Use selected</button></footer>

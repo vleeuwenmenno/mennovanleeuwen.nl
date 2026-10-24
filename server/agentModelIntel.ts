@@ -193,7 +193,7 @@ export async function assetHints(user: User, catalog: Catalog, names: Iterable<s
   const s = imageSettings(user), scope = civitaiScope(user.id, s.civitaiKey)
   const { facts } = await quickFacts(user, catalog, s)
   const out: Record<string, { base_model: string; family: string | null; tags: string[] }> = {}
-  for (const f of facts) if (wanted.has(f.name)) out[f.name] = { base_model: f.baseModel, family: familyOf(f.baseModel, { name: `${f.name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, cachedCivitai(scope, f)) }), tags: [...f.tags.filter((t) => !/^(base models?|checkpoint|lora)$/i.test(t))].slice(0, 5) }
+  for (const f of facts) if (wanted.has(f.name)) out[f.name] = { base_model: f.baseModel, family: familyOf(f.baseModel, { name: `${f.name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, civitaiEvidence(s, scope, f)) }), tags: [...f.tags.filter((t) => !/^(base models?|checkpoint|lora)$/i.test(t))].slice(0, 5) }
   return out
 }
 
@@ -230,6 +230,8 @@ export function vpredDecision(f: Pick<ManagerFacts, 'name' | 'title' | 'versionN
   return modelLevel ? { vpred: false, source: 'auto', advisory: `The model page mentions a v-pred variant, but this file and version do not say they are v-pred, so v-prediction is not applied. If pictures come out black or garbled, it may be the v-pred build.${OVERRIDE_HINT}` } : { vpred: false, source: 'auto' }
 }
 export const assetIsVpred = (...args: Parameters<typeof vpredDecision>) => vpredDecision(...args).vpred
+/** Civitai facts as v-pred evidence: from the cache, and only while lookups are on, for every path alike. */
+const civitaiEvidence = (s: Pick<ImageSettings, 'civitaiLookup' | 'civitaiKey'>, scope: string, f: { versionId: number | null; modelId?: number | null; sha256: string | null }) => s.civitaiLookup ? cachedCivitai(scope, f) : null
 const noFacts = (name: string, baseModel = '') => ({ name, title: '', versionName: '', tags: [] as string[], autoTags: [] as string[], baseModel })
 
 // --- Civitai ------------------------------------------------------------------------------------
@@ -455,6 +457,17 @@ const presetFor = (family: FamilyId | null, category: Category): ImagePreset | n
  * consensus when at least two images agree. Samplers and schedulers only when installed and
  * supported here. Turbo presets keep CFG 1.
  */
+/**
+ * The variant a raw/turbo split runs as: the effective preset decides (one file can run either
+ * recipe), so an ambiguous or differently named Krea 2 or Z-Image file follows the thread's preset.
+ */
+export function variantFor(family: FamilyId | null, preset?: ImagePreset): FamilyId | null {
+  const krea = family === 'krea2' || family === 'krea2_raw' || family === 'krea2_turbo'
+  const zimage = family === 'z_image' || family === 'z_image_turbo'
+  if (krea && (preset === 'krea2_raw' || preset === 'krea2_turbo')) return preset
+  if (zimage && (preset === 'z_image' || preset === 'z_image_turbo')) return preset
+  return family
+}
 export function recommend(category: Category, family: FamilyId | null, consensus: Consensus | null, installed: { samplers: readonly string[]; schedulers: readonly string[] }, vpred: boolean): Recommended {
   const fam = family ? MODEL_FAMILIES[family] : null
   const preset = presetFor(family, category)
@@ -465,8 +478,14 @@ export function recommend(category: Category, family: FamilyId | null, consensus
   const size = fam ? { width: fam.width, height: fam.height } : preset === 'sd15' ? { width: 512, height: 512 } : { width: 1024, height: 1024 }
   const r: Recommended = { preset, sampler, scheduler, steps: fam?.steps ?? fallback.steps, cfg: fam?.cfg ?? fallback.cfg, clip_skip: fam?.clipSkip ?? 1, ...size, source: fam ? 'family_default' : 'none', ...(vpred ? { v_prediction: true } : {}), ...(fam ? { notes: fam.notes } : {}) }
   const turbo = preset === 'krea2_turbo' || preset === 'z_image_turbo'
+  const split = preset === 'krea2_raw' || preset === 'z_image' || turbo
   const n = consensus?.images ?? 0
-  if (consensus && n >= 2) {
+  // Examples made with the other variant (turbo settings on a raw preset, or the reverse) do not apply.
+  const looksTurbo = consensus && consensus.steps !== null && consensus.steps <= 12 && (consensus.cfg === null || consensus.cfg <= 1.5)
+  const looksRaw = consensus && consensus.steps !== null && consensus.steps >= 16
+  if (consensus && n >= 2 && split && (turbo ? looksRaw : looksTurbo)) {
+    r.consensus_ignored = `The Civitai examples look like the ${turbo ? 'raw' : 'turbo'} variant (${consensus.steps ?? '?'} steps, CFG ${consensus.cfg ?? '?'}), so ${fam?.label ?? preset}'s own recipe is used.`
+  } else if (consensus && n >= 2) {
     let used = false
     const top = consensus.sampler
     const needed = Math.max(2, Math.ceil(n * 0.4))
@@ -513,7 +532,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
       const f = facts.find((x) => x.category === category && x.name === name)
       const hay = [name, f?.title, f?.baseModel, ...(f?.tags ?? []), ...(f?.autoTags ?? [])].join(' ').toLowerCase()
       if (!q.every((w) => hay.includes(w))) continue
-      rows.push({ name, kind, base_model: f?.baseModel ?? '', family: f ? familyLabel(familyOf(f.baseModel, { name: `${name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, cachedCivitai(scope, f)) })) : null, tags: (f?.tags ?? []).filter((t) => !/^(base models?|checkpoint)$/i.test(t)).slice(0, 6) })
+      rows.push({ name, kind, base_model: f?.baseModel ?? '', family: f ? familyLabel(familyOf(f.baseModel, { name: `${name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, civitaiEvidence(s, scope, f)) })) : null, tags: (f?.tags ?? []).filter((t) => !/^(base models?|checkpoint)$/i.test(t)).slice(0, 6) })
       if (rows.length >= 10) break
     }
     return { query: args.query, matches: rows, lora_manager: available, note: rows.length ? 'Call model_details with an exact name for its recommended settings.' : 'Nothing installed matches; try a base model (Illustrious, Pony, SDXL) or a style tag.' }
@@ -527,9 +546,11 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
   const c = civitai.facts
   const baseModel = manager?.baseModel || c?.baseModel || ''
   const familyHints = { name: `${name} ${manager?.versionName ?? ''} ${c?.versionName ?? ''}`, tags: [...(manager?.tags ?? []), ...(manager?.autoTags ?? [])] }
-  const decision = vpredDecision(manager ?? noFacts(name, baseModel), c, kind === 'checkpoint' ? s.prediction?.[name] : undefined)
-  const vpred = decision.vpred
-  const family = familyOf(baseModel, { ...familyHints, vpred })
+  // Only checkpoints (SD 1.5/SDXL loaders) can run v-prediction here; the owner's setting applies to them alone.
+  const checkpoint = category === 'checkpoints'
+  const decision = vpredDecision(manager ?? noFacts(name, baseModel), c, checkpoint ? s.prediction?.[name] : undefined)
+  const vpred = checkpoint && decision.vpred
+  const family = variantFor(familyOf(baseModel, { ...familyHints, vpred }), thread?.preset)
   const notes: string[] = []
   if (!available) notes.push('LoRA Manager is not installed or did not answer: no base model, tags or Civitai link for this file.')
   if (civitai.note) notes.push(civitai.note)
@@ -544,11 +565,13 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
     let reason = family && !MODEL_FAMILIES[family].supported ? MODEL_FAMILIES[family].notes : ''
     if (vpred && !catalog.nodes.includes('ModelSamplingDiscrete')) { supported = false; reason = 'This is a v-prediction model and this ComfyUI lacks ModelSamplingDiscrete, so it would render garbage. Do not generate with it.' }
     if (!recommended.preset && supported && family === 'krea2') notes.push(MODEL_FAMILIES.krea2.notes)
-    if (decision.advisory) notes.push(decision.advisory)
+    if (recommended.consensus_ignored) notes.push(recommended.consensus_ignored)
+    if (!checkpoint && decision.vpred) { supported = false; reason = 'This diffusion model looks like a v-prediction build, and this app applies v-prediction only to SD 1.5 and SDXL checkpoints, so its workflow cannot run it correctly.' }
+    if (decision.advisory && checkpoint) notes.push(decision.advisory)
     if (vpred && supported) notes.push('V-prediction: generate_image adds ModelSamplingDiscrete (v_prediction, zsnr) for this model automatically.')
     if (family === 'pony') notes.push('Start the prompt with score_9, score_8_up, score_7_up.')
     if (!family) notes.push(baseModel ? `No family defaults for base model “${baseModel}”; preset recipe only.` : 'Base model unknown; preset recipe only.')
-    Object.assign(out, { supported, ...(reason ? { unsupported_reason: reason } : {}), prediction: { v_prediction: vpred, source: decision.source, setting: s.prediction?.[name] ?? 'auto' }, recommended, recommended_sources: sources })
+    Object.assign(out, { supported, ...(reason ? { unsupported_reason: reason } : {}), ...(checkpoint ? { prediction: { v_prediction: vpred, source: decision.source, setting: s.prediction?.[name] ?? 'auto' } } : {}), recommended, recommended_sources: sources })
   } else if (kind === 'lora') {
     const tip = typeof manager?.usageTips.strength === 'number' ? manager.usageTips.strength : null
     const strength = tip !== null && tip > 0 && tip <= 2 ? { value: tip, source: 'lora_manager_usage_tips' } : c?.loraWeight ? { value: c.loraWeight, source: 'civitai_examples' } : { value: 1, source: 'default' }
@@ -586,7 +609,7 @@ export async function modelNeedsVpred(user: User, s: ImageSettings, catalog: Cat
   const { facts } = await quickFacts(user, catalog, s).catch(() => ({ facts: [] as ManagerFacts[] }))
   const f = facts.find((x) => (x.category === 'checkpoints' || x.category === 'diffusionModels') && x.name === model)
   // Exactly the decision model_details makes: file stem only, eps wins, the same cached Civitai facts.
-  return vpredDecision(f ?? noFacts(model), f ? cachedCivitai(civitaiScope(user.id, s.civitaiKey), f) : null).vpred
+  return vpredDecision(f ?? noFacts(model), f ? civitaiEvidence(s, civitaiScope(user.id, s.civitaiKey), f) : null).vpred
 }
 
 /** GET /api/agents/images/model-details?name=&kind=: the same facts for the model browser, the account's own backend only. */

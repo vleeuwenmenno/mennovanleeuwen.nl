@@ -198,6 +198,8 @@ export type Recommended = {
   agree?: string
   v_prediction?: boolean
   notes?: string
+  /** Why the Civitai example settings were not used (they belong to the other raw/turbo variant). */
+  consensus_ignored?: string
 }
 /** One line: "dpmpp_2m/karras · 20 steps · CFG 5 · clip skip 2 · 832 × 1216". */
 export const recommendedLine = (r: Pick<Recommended, 'sampler' | 'scheduler' | 'steps' | 'cfg' | 'clip_skip' | 'width' | 'height'>) => `${r.sampler}/${r.scheduler} · ${r.steps} steps · CFG ${r.cfg} · clip skip ${r.clip_skip} · ${r.width} × ${r.height}`

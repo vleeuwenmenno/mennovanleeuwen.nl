@@ -780,7 +780,13 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
   }
   if (url.pathname === '/api/agents/images/settings') {
     if (method === 'GET') return json(res, 200, view(imageSettings(user))), true
-    if (method === 'PUT') return json(res, 200, saveImageSettings(user, await readJson(req, 16 * 1024))), true
+    if (method === 'PUT') {
+      const body = await readJson(req, 16 * 1024) as Record<string, unknown>
+      // A Prediction setting names an installed checkpoint: component (diffusion model) workflows never apply v-prediction.
+      const p = body?.prediction as { model?: unknown; value?: unknown } | undefined
+      if (p && typeof p === 'object' && p.value !== 'auto' && !(await imageCatalog(user)).checkpoints.includes(p.model as string)) throw new HttpError(400, 'Prediction can be set only for an installed checkpoint; diffusion-model workflows do not use it')
+      return json(res, 200, saveImageSettings(user, body)), true
+    }
     if (method === 'DELETE') {
       database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME)
       return json(res, 200, view(defaults())), true
