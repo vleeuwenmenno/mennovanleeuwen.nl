@@ -1827,8 +1827,12 @@ Retry and Look again. A message that never got there goes back into the box. Ret
 …/retry`, streamed like a message) also sits under the last answer to have it written again: the
 last turn's output (a partial or failed reply, its tool calls and results, or the answer) goes and
 the same message, with its files, is answered again with the thread's model, mode and tools; queued
-messages run after it. Each of your messages has **Copy**, **Edit & resend** and **Rewind to here**
-(on hover, always on touch, and in its right-click menu): after a desktop dialog that says how many
+messages run after it. Every message and card ends in the same action row at the right edge, in the
+same order: its own buttons where it has them (**Share** on an answer; **Save to Files…** and
+**Generate another** on an image), then **More** last, which holds the rest as a menu with hints.
+The row keeps its space, so it fades in on hover or keyboard focus without moving anything, and is
+always shown on touch. Your messages' **More** has **Copy**, **Edit & resend** and **Rewind to
+here** (also in their right-click menu): after a desktop dialog that says how many
 messages go, it and everything after it leave the thread (`POST …/rewind`; a running turn is
 stopped first, the queue stays) and it comes back into the message box with its files. What the
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
@@ -1843,7 +1847,7 @@ YYYY-MM-DD`, using the selected message’s UTC date, with the original title ke
 It is treated as a manual title. Wait for a running thread to finish before branching. The terminal
 has `/branch [message id]`; omitting the id branches from its last message.
 
-**Generate another** sits beside an image’s generation settings and in its More/right-click menu.
+**Generate another** sits in an image’s action row, before **More**, and in its right-click menu.
 It draws another image in the same thread with the same prompt, components, LoRAs, sampling and
 size, without asking the model or showing an approval card. It uses the usual progress and Stop
 controls, account job limit and storage quota. Images must be on in Tools, ComfyUI must be connected,
@@ -1899,7 +1903,7 @@ or as plain bytes otherwise, never rendered as a page. Preview opens such an add
 
 **Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
 *Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and
-**Share** under each answer (on hover, always on touch) make a link to the whole thread or to one
+**Share** in the action row under each final answer (on hover or focus, always on touch) make a link to the whole thread or to one
 answer with the message it answers. A link is a snapshot taken then: later messages, a rewind or a
 retry don't change it. It can expire after 1 hour, 1 day, 7 days or 30 days, or never (the
 default). The dialog shows the links the thread or answer has already (Copy, Open, *Stop

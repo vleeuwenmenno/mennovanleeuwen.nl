@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { GeneratedImage } from '../data/agentImages'
 import { imageProgressFraction, imageProgressLabel, type ImageProgress } from '../data/imageModels'
 import { createPortal } from 'react-dom'
@@ -7,6 +7,7 @@ import { useWM } from '../os/wm'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { imageFileName } from '../data/agentImageFiles'
 import { saveImageToFiles, saveLabel, useSaveDestination } from './AgentsSaveImage'
+import { ActionRow, MoreButton, tidy } from './AgentsActions'
 
 // Pictures attached to Agents messages: small thumbnails in the message box and on your sent
 // messages, and a full-size view over the window when one is clicked (arrow keys or a swipe to the
@@ -210,13 +211,11 @@ function blockGrid(width: number, height: number) {
 }
 
 /** Same frame before and after generation: only its contents change, never its aspect ratio. */
-export function GeneratedPicture({ image, width, height, pending, progress }: { image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress }) {
-  const frame = useRef<HTMLDivElement>(null)
+export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu }: { image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
   const displayedImage = useRef<HTMLImageElement>(null)
   const [animate, setAnimate] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
-  const [open, setOpen] = useState(false)
   useEffect(() => { setLoaded(!!displayedImage.current?.complete && displayedImage.current.naturalWidth > 0); setFailed(false) }, [image?.url])
   useEffect(() => {
     if (!pending || !frame.current) { setAnimate(false); return }
@@ -236,28 +235,51 @@ export function GeneratedPicture({ image, width, height, pending, progress }: { 
   const grid = useMemo(() => blockGrid(width, height), [width, height])
   const fraction = pending ? imageProgressFraction(progress) : null
   const lit = fraction === null ? 0 : Math.round(fraction * grid.rank.length)
-  const picture = image ? { name: imageFileName(image), src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
-  const wm = useWM()
-  // Save to Files only where it can work: no Seafile and no browser store, no entry (not a dead one).
-  const to = useSaveDestination()
-  const save = image && to ? { label: saveLabel(to), onSelect: () => void saveImageToFiles(image) } : null
-  const menu: MenuItem[] = image ? [
-    { label: 'View', onSelect: () => setOpen(true) },
-    { label: 'Open in Preview', onSelect: () => wm.openNew('preview', { src: image.url, name: imageFileName(image), from: 'Agents' }) },
-    { label: 'Download', onSelect: () => Object.assign(document.createElement('a'), { href: image.url, download: imageFileName(image), rel: 'noopener' }).click() },
-    ...(save ? [save] : []),
-  ] : []
-  return <>
-    <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }} onContextMenu={image ? (e) => openContextMenu(e, menu) : undefined}>
+  return (
+    <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }} onContextMenu={image ? onMenu : undefined}>
       {(!image || !loaded) && !failed && <div className={`agt-image-wait ${fraction === null ? 'is-idle' : ''}`} role="status" aria-live="polite" aria-busy={progress?.phase === 'sampling'}>
         <div className="agt-block-grid" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))` }}>
           {grid.rank.map((r, i) => <span key={i} className={`agt-block ${r < lit ? 'is-lit' : ''}`} style={{ animationDelay: `${-((i % grid.cols) + Math.floor(i / grid.cols)) * 0.12}s` }} />)}
         </div>
         <span className="agt-image-status">{pending ? imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
       </div>}
-      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={() => setOpen(true)}><img ref={displayedImage} src={image.url} alt="Generated image" width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
+      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt="Generated image" width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>
-    {image && <div className="agt-image-actions">{menu.slice(1).map((m) => 'label' in m && <button key={m.label} type="button" className="btn btn-small" onClick={m.onSelect}>{m.label}</button>)}</div>}
+  )
+}
+
+/**
+ * A generated image in the thread: its size, the picture, seed and settings, then the one action
+ * row every message has (AgentsActions.tsx): Save to Files, Generate another, More. More and the
+ * picture's right-click menu hold View, Open in Preview, Download, and `more` (Branch off).
+ */
+export function ImageCard({ image, width, height, pending, progress, again, more }: { image?: GeneratedImage; width: number; height: number; pending: boolean; progress?: ImageProgress; /** Generate another, when it can be offered */ again?: { disabled: boolean; hint: string; onClick: () => void }; /** The message's own actions, after the image's */ more: MenuItem[] }) {
+  const frame = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const wm = useWM()
+  // Save to Files only where it can work: no Seafile and no browser store, no entry (not a dead one).
+  const to = useSaveDestination()
+  const save = image && to ? { label: saveLabel(to), onSelect: () => void saveImageToFiles(image) } : null
+  const own: MenuItem[] = image ? [
+    { label: 'View full size', onSelect: () => setOpen(true) },
+    { label: 'Open in Preview', hint: 'Zoom, rotate, full screen', onSelect: () => wm.openNew('preview', { src: image.url, name: imageFileName(image), from: 'Agents' }) },
+    { label: 'Download', onSelect: () => Object.assign(document.createElement('a'), { href: image.url, download: imageFileName(image), rel: 'noopener' }).click() },
+  ] : []
+  const picture = image ? { name: imageFileName(image), src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
+  return <>
+    <p className="muted">{image ? 'Generated image' : 'Generating image'} · {width} × {height}</p>
+    <GeneratedPicture image={image} width={width} height={height} pending={pending} progress={progress} frame={frame} onView={() => setOpen(true)} onMenu={(e) => openContextMenu(e, tidy([...own, ...(save ? [save] : []), { separator: true }, ...more]))} />
+    {image && <p className="muted">Seed {image.seed}</p>}
+    {image?.settings && <details className="agt-image-settings">
+      <summary>Generation settings</summary>
+      <pre className="copyable">{JSON.stringify(image.settings, null, 2)}</pre>
+      <a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a>
+    </details>}
+    {image && <ActionRow label="Image actions">
+      {save && <button key="save" type="button" className="btn btn-small" aria-label={save.label} title={save.label} onClick={save.onSelect}>Save to Files…</button>}
+      {again && <button key="again" type="button" className="btn btn-small" disabled={again.disabled} title={again.hint} onClick={again.onClick}>Generate another</button>}
+      <MoreButton key="more" label="Image" items={tidy([...own, { separator: true }, ...more])} />
+    </ActionRow>}
     {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} actions={save ? [save] : []} />}
   </>
 }
