@@ -1552,8 +1552,10 @@ call, then returns that model's visual analysis. A text-only model is told to sw
 model; a URL alone is never presented as visual inspection. Input is limited to 8 MiB, instructions
 to 2000 characters, and the call to 45 seconds with bounded output. Account ownership is checked
 before reading bytes; omitting the ID still selects the latest image in the current thread. Existing
-images remain inspectable after disconnecting ComfyUI. Inspection
-never silently generates, downloads models, changes settings, or guarantees an accurate diagnosis.
+images remain inspectable after disconnecting ComfyUI. An empty or reasoning-only answer gets one
+retry with thinking off and a larger answer allowance, within the same 45-second deadline. If that
+also returns no text, the result names the model and says inspection failed; it does not blame the
+image or contradict the model's vision capability. Inspection never silently generates, downloads models, changes settings, or guarantees an accurate diagnosis.
 
 The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 px) and SDXL
 (1024 px) use a complete checkpoint with its text encoder and VAE; Z-Image and Z-Image Turbo use

@@ -217,6 +217,7 @@ let providerChats = 0
 let retryLearning = true
 const providerInputs: any[] = []
 const visionRequests: any[] = []
+let visionReply: 'normal' | 'thinking' | 'empty' | 'long-thinking' = 'normal'
 let holdVision = false
 let cancelledVision = 0
 const streamEvents: any[] = []
@@ -321,6 +322,8 @@ const ollama = createServer((req, res) => {
       visionRequests.push(body)
       if (holdVision) { res.on('close', () => cancelledVision++); return }
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+      if (visionReply === 'empty') return res.end(JSON.stringify({ message: { role: 'assistant', content: '' }, done: true }) + '\n')
+      if (visionReply !== 'normal' && body.think !== false) return res.end(JSON.stringify({ message: { role: 'assistant', thinking: visionReply === 'long-thinking' ? 'Reasoning. '.repeat(1800) : 'I should inspect the visible shapes.', content: '' }, done: true }) + '\n')
       return res.end(JSON.stringify({ message: { role: 'assistant', content: 'The image shows a small fixture. Quality observations are uncertain at this size.' }, done: true }) + '\n')
     }
     const after = body.messages.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1)
@@ -819,6 +822,25 @@ try {
   assert.equal(inspected.inspected, true)
   assert.equal(visionRequests.length, beforeVision + 1)
   assert.equal(visionRequests.at(-1).messages.at(-1).images[0], png.toString('base64'))
+  for (const response of ['thinking', 'long-thinking', 'empty'] as const) {
+    visionReply = response
+    const beforeRetry = visionRequests.length
+    const inspection = JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content)
+    assert.equal(visionRequests.length, beforeRetry + 2)
+    assert.equal(visionRequests.at(-2).options.num_predict, 2048)
+    assert.equal(visionRequests.at(-1).think, false)
+    assert.equal(visionRequests.at(-1).options.num_predict, 4096)
+    assert.match(visionRequests.at(-1).messages[0].content, /Answer with the visual analysis itself/)
+    if (response === 'empty') {
+      assert.match(inspection.error, /test-model returned no text.*reasoning only or an empty answer/)
+      assert.match(inspection.error, /The image is fine; only the inspection failed/)
+      assert.doesNotMatch(inspection.error, /different vision-capable/)
+      assert.equal(inspection.inspected, false)
+      assert.equal(inspection.status, 'inspection_unavailable')
+    } else { assert.equal(inspection.inspected, true); assert.match(inspection.analysis, /small fixture/) }
+  }
+  visionReply = 'normal'
+  console.log('PASS reasoning-only and watchdog-truncated vision retries with thinking off; empty answers report inspection unavailable')
   generationArgs = { image_id: firstVisionImage.id }
   assert.equal(JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content).image_id, firstVisionImage.id)
   generationArgs = { image_id: tuned.id }
