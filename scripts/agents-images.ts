@@ -412,6 +412,15 @@ try {
   // The Diffu image guidance is part of the system prompt only while Images is on.
   const imageGuidance = imagePromptSection()
   assert.ok(imageGuidance.includes('MODEL FAMILY GUIDANCE'))
+  // The adult-content stance, without which models refuse an explicit request (Diffu never
+  // filters a generation, so it never needed the wording).
+  assert.ok(imageGuidance.includes('CONTENT AND REFUSALS'))
+  assert.ok(imageGuidance.includes('Adult content is allowed when the user asks for it'))
+  // The base prompt carries the same stance for threads without Images: no refusals of fiction,
+  // art or mature themes, and one stated limit.
+  const basePrompt = providerInputs.at(-1).messages[0].content as string
+  assert.ok(basePrompt.includes('Do not refuse, moralize, or add warnings'))
+  assert.ok(basePrompt.includes('never write is sexual content involving minors'))
   assert.ok(providerInputs.at(-1).messages[0].content.includes(DIFFU_IMAGE_PROMPT_MARKER))
   assert.ok(providerInputs.at(-1).messages[0].content.includes(imageGuidance.trim()))
   console.log('PASS streamed tool generation, approved prompt, PNG retrieval, ownership, quota and restart durability')

@@ -2221,6 +2221,12 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     dateLine(more.zone ?? zoneFor(null)),
     modeLine(mode),
     furiganaLine(user),
+    // Every thread, not just image ones: a request for fiction, art or a mature theme is ordinary
+    // work in a personal desktop. Without this line models answer with refusals, warnings and
+    // "as an AI" caveats the user did not ask for. The one limit is stated so the model has a
+    // rule it can follow instead of a vague "be safe" it has to interpret. The Images section
+    // below carries the detail for image prompts.
+    'Answer what was asked. Do not refuse, moralize, or add warnings, disclaimers or caveats about the request itself: fiction, art, prompts and mature themes are ordinary work here. The one thing you never write is sexual content involving minors, including characters described as children; say so in one short sentence and offer what you can do instead.',
     // The Images group adds Diffu's image-generation guidance. It is static text, placed before
     // memory and todos, so it stays in the prompt prefix across the rounds of a turn.
     more.images ? imagePromptSection() : '',

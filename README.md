@@ -1419,6 +1419,18 @@ visible. Hidden windows/tabs and offscreen frames pause it; reduced-motion users
 matrix. The finished image uses exactly the same frame dimensions. Stop retains the existing
 cancellation behavior; errors replace the pending status rather than leaving a fake progress image.
 
+**What the agent will write.** Agents never filters a prompt, but the model reading it can still
+refuse: Diffu gets away without saying so because its catalog is the only place adult material is
+optional, while Agents talks to cloud models that decline an explicit request on their own. So the
+system prompt states it: a prompt here goes to the user's own ComfyUI and nowhere else, adult
+content is written when asked for (exact words and tags kept, no softening, euphemisms, warnings or
+moralizing), and a refusal by the model is reported as the model's, never as a rule of the app. The
+one limit, stated there too, is sexual content involving minors. Every thread gets that stance,
+not only image ones; the **CONTENT AND REFUSALS** section carries the image-specific detail while
+Images is on. A model or provider that filters on its side is out of the app's hands: switch the
+thread's model in Settings → Agents. Agents itself talks only to Ollama Cloud, so the local
+uncensored models Diffu can point at through its own providers are not reachable from Agents yet.
+
 Successful image generation ends the turn without any assistant follow-up text or automatic vision
 call. The app displays the image and settings; the CLI displays its private link. Tool batches that
 include generation execute in order: after the first successful image, later calls receive explicit
