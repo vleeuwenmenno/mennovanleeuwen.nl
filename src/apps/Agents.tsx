@@ -1666,7 +1666,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       tidyMenu([
         ...fieldMenu(e.currentTarget),
         { separator: true },
-        { label: 'Attach from Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) },
+        ...(account.seafile ? [{ label: 'Attach from Files (Seafile)…', onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) }] : []),
         { label: 'Attach from this computer…', onSelect: () => pcFiles.current?.click() },
         { separator: true },
         { label: 'Quick', checked: mode === 'quick', disabled: answering, onSelect: () => setMode('quick') },
@@ -1818,7 +1818,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const fromComputer = (list: FileList | File[]) => addFiles(() => [...list].map((f) => toAttachment(f, f.name, 'This computer')))
   const attachMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
-      { label: 'From Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) },
+      ...(account.seafile ? [{ label: 'From Files (Seafile)…', onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) }] : []),
       { label: 'From this computer…', onSelect: () => pcFiles.current?.click() },
     ], 'above')
 
