@@ -2,10 +2,12 @@ import { api } from '../os/account'
 
 import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
-export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string }
+export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean }
 export type ImageCatalog = ImageAssetCatalog
 export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed: number; preset: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
+/** Saves only the approval choice; the rest of the saved settings stay as they are. */
+export const saveImageApproval = (askBeforeGenerate: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeGenerate } })
 export const saveImageSettings = (s: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s })
 export const resetImageSettings = () => api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' })
 export const getImageCatalog = () => api<ImageCatalog>('/api/agents/images/catalog')

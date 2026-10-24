@@ -281,6 +281,9 @@ try {
   const edRun = await turn(ed.id, 'SCENARIO edits', () => ({ allow: false }))
   check(`Ask first with a work folder: the edit and the delete asked (asked ${edRun.asked.length})`, edRun.asked.length === 2)
   const t = by.id
+  const img = { name: 'generate_image', arguments: { prompt: 'a lighthouse' } }
+  check('Images: generate_image runs without asking by default', decide(t, 'default', img, 1) === 'run' && decide(t, 'auto', img, 1) === 'run')
+  check('Images: Plan refuses generate_image', decide(t, 'plan', img, 1) === 'refuse')
   const cal = { name: 'calendar_create_event', arguments: { title: 'x', start: '2026-10-14T10:00' } }
   check('Bypass: a calendar write still asks', decide(t, 'bypass', cal) === 'ask')
   check('Bypass: a calendar delete still asks', decide(t, 'bypass', { name: 'calendar_delete_event', arguments: { id: 'x' } }) === 'ask')

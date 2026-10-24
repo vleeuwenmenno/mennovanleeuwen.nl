@@ -1404,11 +1404,11 @@ backend or persist session settings. Explicit supported model/components, sampli
 width/height/seed on `generate_image` override the session only for that call. Use `/images` to change the saved model or workflow.
 
 Ask “Generate an illustration of a blue bird” in either Agents or the `agents` terminal session.
-The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. Generation asks for
-approval in Ask first, Auto and Edits allowed; Plan cannot generate, and Bypass runs without a
-prompt. Non-interactive `agents -p` declines approvals as usual; use an interactive session to
-approve generation, or explicitly choose `--permission-mode bypass` when unattended generation
-is intended. Both interactive and print output include a private image URL. `/open` opens the
+The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. Generation runs
+without an approval card in every mode except Plan, which cannot generate. To approve each image
+first, turn on **Ask before generating images** in Settings → Agents → Images (off by default);
+then Ask first, Auto and Edits allowed show the resolved settings for approval, Bypass still runs
+without a prompt, and non-interactive `agents -p` declines as usual. Both interactive and print output include a private image URL. `/open` opens the
 thread in the app, where the image has a thumbnail, full-size view, **Open in Preview** and
 **Download**. The link requires the owner's signed-in session; sharing a thread does not publish
 its generated images.

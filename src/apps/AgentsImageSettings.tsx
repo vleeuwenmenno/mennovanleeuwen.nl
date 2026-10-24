@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { getImageCatalog, getImageSettings, resetImageSettings, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
+import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
 import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
@@ -48,6 +48,15 @@ export function AgentsImageSettings() {
       </section>
       <section className="set-section image-group" aria-labelledby="image-defaults">
         <h4 className="set-subhead" id="image-defaults">Defaults</h4>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Ask before generating images</strong>
+              <span className="muted">Off: agents generate images straight away in every mode except Plan. On: each image waits for your approval, showing its settings.</span>
+            </span>
+            <button type="button" role="switch" aria-checked={settings.askBeforeGenerate} aria-label="Ask before generating images" className={`set-toggle ${settings.askBeforeGenerate ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, askBeforeGenerate: (await saveImageApproval(!settings.askBeforeGenerate)).askBeforeGenerate }); setNotice('Saved') })} />
+          </li>
+        </ul>
         <ImageModelFields value={settings} catalog={catalog} onChange={(patch) => setSettings({ ...settings, ...patch })} disabled={busy} loading={discovering} error={catalogError} onRefresh={() => void discover()} />
         {catalogError && <p className="t-red copyable" role="alert">{catalogError}</p>}
         <div className="set-actions"><button className="btn btn-small btn-primary" disabled={busy || !settings.url}>{busy ? 'Saving…' : 'Save defaults'}</button></div>

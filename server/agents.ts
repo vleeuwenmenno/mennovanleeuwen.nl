@@ -1,7 +1,7 @@
 import { saveImageProfile, forgetImageProfile } from './agentImageProfiles.ts'
 import { imageLearnings, saveImageLearning } from './agentImageLearning.ts'
 import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS } from '../src/data/imageModels.ts'
-import { generateImage, prepareImageGeneration, generatedImageForVision, PRESETS, imageCatalog, imageSettings, threadImageSettings } from './agentImages.ts'
+import { generateImage, prepareImageGeneration, generatedImageForVision, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
@@ -1522,7 +1522,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   if (imageSettings(user).url) tools.push(
     tool('list_image_models', 'Discover installed image options, automatic recommendations and effective sampling defaults once before generation. Results are bounded; use query/limit to find omitted filenames. Catalog/name hints do not verify custom weights. Backend credentials are never exposed.', { preset: { type: 'string', enum: [...PRESETS] }, query: str('Optional filename search, at most 200 characters'), limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Maximum options per category; default 40' } }, []),
 
-    tool('generate_image', 'Generate one image only when the user requests it. First discover once with list_image_models, which retrieves relevant prior image learnings. If generation returns learning_review_required, review its evidence and retry with validated settings; it has not submitted a job. Prefer its recommended defaults and preserve explicit user model/sampling requests; tune when requested or clearly needed. Per-call preset/model/clip/vae/steps/cfg/sampler/scheduler/size/seed override session then account defaults without persistence. Empty asset strings request automatic selection. A different preset may require all matching assets. Never promise VAE swapping improves quality; use compatible assets only. Turbo CFG stays 1. Approval shows complete resolved cost/settings. Backend URLs/tokens, downloads and arbitrary graphs are forbidden. Can take minutes. Success ends the turn immediately: the app/CLI displays the image, URL and settings. Do not add follow-up text or call vision after generation; inspect on a later user turn. Do not claim success before it succeeds.', {
+    tool('generate_image', 'Generate one image only when the user requests it. First discover once with list_image_models, which retrieves relevant prior image learnings. If generation returns learning_review_required, review its evidence and retry with validated settings; it has not submitted a job. Prefer its recommended defaults and preserve explicit user model/sampling requests; tune when requested or clearly needed. Per-call preset/model/clip/vae/steps/cfg/sampler/scheduler/size/seed override session then account defaults without persistence. Empty asset strings request automatic selection. A different preset may require all matching assets. Never promise VAE swapping improves quality; use compatible assets only. Turbo CFG stays 1. Runs without approval unless the owner turned on Ask before generating images; then the approval card shows the resolved settings. Backend URLs/tokens, downloads and arbitrary graphs are forbidden. Can take minutes. Success ends the turn immediately: the app/CLI displays the image, URL and settings. Do not add follow-up text or call vision after generation; inspect on a later user turn. Do not claim success before it succeeds.', {
       profile_id: { type: ['integer', 'null'], description: 'Style profile for this image; omitted uses session pin. Profile evidence guides only, never replaces explicit user settings.' },
       profile_reason: str('Why this profile fits the request, up to 200 characters'),
       preset: { type: 'string', enum: [...PRESETS], description: 'Optional supported workflow for this image only' },
@@ -1839,6 +1839,8 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
   }
   if (!changes(name)) return 'run'
   if (permission === 'plan') return 'refuse'
+  // Images only use the owner's own ComfyUI and storage quota: they run unless the owner asked to approve each one.
+  if (name === 'generate_image') return user === undefined || imageGenerationAsks(user) ? 'ask' : 'run'
   // AGENTS.md, CLAUDE.md, .agents/ and .claude/ steer later turns: a lasting injection, so always asked.
   const paths = ['path', 'from', 'to', 'to_folder', 'name'].map((k) => argString(call.arguments ?? {}, k)).filter(Boolean)
   if (paths.some((p) => STEERING.test(p))) return 'ask'

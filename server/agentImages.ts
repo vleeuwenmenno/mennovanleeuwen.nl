@@ -14,12 +14,16 @@ import { checkRoom } from './quota.ts'
 const NAME = 'agents-comfyui'
 export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const
 export type Preset = (typeof PRESETS)[number]
-export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string }
-const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '' })
-export function imageSettings(user: User): ImageSettings {
-  const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) as { secret: string } | undefined
+/** askBeforeGenerate: off by default, so generations run without an approval card in every mode except Plan. */
+export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean }
+const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false })
+function settingsFor(userId: number): ImageSettings {
+  const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(userId, NAME) as { secret: string } | undefined
   return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
 }
+export const imageSettings = (user: User): ImageSettings => settingsFor(user.id)
+/** Whether generate_image waits for the owner's approval (Settings → Agents → Images). */
+export const imageGenerationAsks = (userId: number) => settingsFor(userId).askBeforeGenerate
 export const imageBackendScope = (user: User, settings = imageSettings(user)) => privateDigest(JSON.stringify(['image-backend', user.id, settings.url, settings.token]))
 const view = (s: ImageSettings) => ({ ...s, token: !!s.token })
 export function saveImageSettings(user: User, input: Record<string, unknown>) {
@@ -30,6 +34,10 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
     s[key] = input[key].trim()
   }
   if (input.clearToken === true) s.token = ''
+  if (input.askBeforeGenerate !== undefined) {
+    if (typeof input.askBeforeGenerate !== 'boolean') throw new HttpError(400, 'Invalid askBeforeGenerate')
+    s.askBeforeGenerate = input.askBeforeGenerate
+  }
   if (input.preset !== undefined) {
     if (!PRESETS.includes(input.preset as Preset)) throw new HttpError(400, 'Choose a supported image preset')
     s.preset = input.preset as Preset
