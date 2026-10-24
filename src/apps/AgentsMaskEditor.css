@@ -1,0 +1,37 @@
+.agt-mask {
+  box-sizing: border-box;
+  width: min(960px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  background: var(--bg, Canvas);
+  color: var(--fg, CanvasText);
+  font: 13px var(--ui, sans-serif);
+}
+.agt-mask::backdrop { background: color-mix(in srgb, var(--bg-dark, CanvasText) 65%, transparent); }
+.agt-mask header, .agt-mask-tools, .agt-mask footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agt-mask h2 { margin: 0; flex: 1; font-size: 16px; overflow-wrap: anywhere; }
+.agt-mask p { line-height: 1.5; }
+.agt-mask-tools { margin-top: 12px; }
+.agt-mask-tools label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.agt-mask input { accent-color: var(--accent, Highlight); max-width: 100%; }
+.agt-mask button { min-height: 44px; padding: 6px 12px; border: 1px solid var(--line-strong, ButtonBorder); background: var(--bg-light, ButtonFace); color: inherit; font: inherit; cursor: pointer; }
+.agt-mask button:disabled { opacity: .5; cursor: default; }
+.agt-mask button[aria-pressed='true'], .agt-mask .agt-mask-apply { border-color: var(--accent, Highlight); background: var(--accent, Highlight); color: var(--on-accent, HighlightText); }
+.agt-mask :focus-visible { outline: 2px solid var(--accent, Highlight); outline-offset: 2px; }
+.agt-mask-stage { display: flex; align-items: center; justify-content: center; min-height: 40px; background: var(--bg-dark, Canvas); }
+.agt-mask-image { position: relative; max-width: 100%; flex: none; line-height: 0; }
+.agt-mask-image img { display: block; width: 100%; height: 100%; image-orientation: from-image; user-select: none; }
+.agt-mask-image canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; color: var(--accent, Highlight); touch-action: none; cursor: crosshair; }
+.agt-mask-cursor { display: none; position: absolute; pointer-events: none; border: 2px solid var(--fg-bright, CanvasText); outline: 1px solid var(--bg, Canvas); border-radius: 50%; transform: translate(-50%, -50%); box-sizing: border-box; }
+.agt-mask-image:focus-within .agt-mask-cursor { display: block; }
+.agt-mask-status { min-height: 1.5em; overflow-wrap: anywhere; }
+.agt-mask-status[role='alert'] { color: var(--red, CanvasText); }
+.agt-mask footer { justify-content: flex-end; }
+@media (max-width: 600px) {
+  .agt-mask { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); padding: 10px; }
+  .agt-mask-tools label { order: 1; flex-basis: 100%; }
+  .agt-mask-tools input { flex: 1; min-width: 70px; }
+  .agt-mask footer button { flex: 1; }
+}

@@ -1431,6 +1431,22 @@ provides earlier owned image IDs, and `list_image_attachments` discovers persist
 this or an explicitly named owned thread. `view_generated_image` can inspect either source kind
 when the conversational model supports vision. Attaching a picture alone does not request a job.
 
+**Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` provides a standalone modal for
+forthcoming localized editing; it is not yet connected to an image job or attachment storage.
+Pass `sourceUrl` (authenticated same-origin HTTP(S)), `sourceName`, EXIF-oriented `width` and
+`height`, `onCancel`, and `onApply({ mask, width, height })`. The caller closes the editor after
+applying. Cancel never calls `onApply`; changing the source or dimensions starts a fresh mask.
+The editor checks the loaded dimensions and accepts at most 8192 pixels per side and 16,000,000
+pixels total. The exported PNG is opaque and binary: white edits, black preserves; the preview
+uses the current theme accent. Empty masks and exports above 8 MiB report an error.
+
+Brush/erase work with mouse, pen and touch, at fitted display sizes. Focus the canvas to move its
+cursor with arrows (Shift moves farther) and paint a dot with Space. Ctrl/Command+Z undoes;
+Reset clears all strokes and Escape cancels. Undo stores at most 512 strokes / 32,768 points,
+with a clear limit message instead of unbounded snapshots. Preview resolution is capped at
+1600 pixels per side; export retains source dimensions. No source is uploaded or persisted.
+The synthetic browser check is `node scripts/agents-mask-check.ts http://127.0.0.1:<dev-port>`.
+
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
 preserve more source structure; higher values allow larger changes. This changes the **whole image**:
 there are no masks, localized inpainting, hires or dedicated upscaling yet, and unchanged regions
