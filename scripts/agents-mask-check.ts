@@ -25,7 +25,7 @@ try {
     await page.waitFor('!!window.maskResult')
     const result = await page.eval<{ bytes: number[]; width: number; height: number }>('window.maskResult')
     const bytes = Buffer.from(result.bytes)
-    assert.equal(bytes[25], 2, 'PNG uses RGB, not alpha')
+    assert.ok([2, 6].includes(bytes[25]), 'PNG uses RGB or opaque RGBA')
     const png = decodePng(bytes)
     assert.equal(png.width, 640)
     assert.equal(png.height, 400)

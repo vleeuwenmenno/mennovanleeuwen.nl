@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib'
 // Pure graph/PNG fixtures, no HTTP, GPU or user data.
 import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
@@ -111,8 +112,28 @@ try {
   const png = encodePng({ width: 2, height: 2, data: Uint8Array.from([0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255]) })
   assert.deepEqual(validateInpaintMask(png, { width: 2, height: 2 }), { width: 2, height: 2, mime: 'image/png' })
   assert.throws(() => validateInpaintMask(png, { width: 2, height: 3 }), /dimensions must match/)
-  const alpha = Buffer.from(png); alpha[25] = 6
-  assert.throws(() => validateInpaintMask(alpha, { width: 2, height: 2 }))
+  // Independent RGBA encoder exercises browser-portable opaque alpha, not a forged IHDR.
+  const rgbaPng = (alpha: number, white = true) => {
+    const chunk = (type: string, body: Buffer) => {
+      const data = Buffer.concat([Buffer.from(type), body])
+      let crc = 0xffffffff
+      for (const byte of data) {
+        crc ^= byte
+        for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1
+      }
+      const head = Buffer.alloc(4), tail = Buffer.alloc(4)
+      head.writeUInt32BE(body.length); tail.writeUInt32BE((crc ^ 0xffffffff) >>> 0)
+      return Buffer.concat([head, data, tail])
+    }
+    const header = Buffer.alloc(13)
+    header.writeUInt32BE(2, 0); header.writeUInt32BE(1, 4); header.set([8, 6], 8)
+    return Buffer.concat([png.subarray(0, 8), chunk('IHDR', header),
+      chunk('IDAT', deflateSync(Buffer.from([0, 0, 0, 0, 255, ...Array(3).fill(white ? 255 : 0), alpha]))),
+      chunk('IEND', Buffer.alloc(0))])
+  }
+  assert.deepEqual(validateInpaintMask(rgbaPng(255), { width: 2, height: 1 }), { width: 2, height: 1, mime: 'image/png' })
+  for (const alpha of [0, 254]) assert.throws(() => validateInpaintMask(rgbaPng(alpha), { width: 2, height: 1 }), /fully opaque/)
+  assert.throws(() => validateInpaintMask(rgbaPng(255, false), { width: 2, height: 1 }), /empty/)
   assert.throws(() => validateInpaintMask(Buffer.alloc(8 * 1024 * 1024 + 1), { width: 2, height: 2 }), /8 MiB/)
   assert.deepEqual(readdirSync(scratch), [], 'pure fixtures never opened a database')
   console.log('PASS inpaint: six real preset graphs/LoRAs, shared geometry, masked composite, no alpha inversion, preflight, bounds, immutable input, PNG contract')
