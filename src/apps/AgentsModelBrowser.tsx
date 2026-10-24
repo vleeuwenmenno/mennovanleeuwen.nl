@@ -1,4 +1,5 @@
-import { getModelMetadata, type ModelCategory, type ModelMetadata } from '../data/agentImages'
+import { getModelDetails, getModelMetadata, saveImageIntelSettings, type ModelCategory, type ModelDetails, type ModelMetadata, type PredictionSetting } from '../data/agentImages'
+import { recommendedLine, recommendedSourceLabel, type Recommended } from '../data/modelFamilies'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { IMAGE_PRESETS, imagePresetSpec, resolveImageAssets, recommendedImageSampling, type ImageAssetCatalog, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
@@ -113,6 +114,46 @@ function ModelDetails({ category, name, revision }: { category?: ModelCategory; 
   </div>
 }
 
+/** What model_details knows about the selected checkpoint: family, tags, trained words, and the recipe with its source. */
+function ModelIntel({ name, checkpoint }: { name: string; checkpoint: boolean }) {
+  const [details, setDetails] = useState<ModelDetails | null>(null)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [revision, setRevision] = useState(0)
+  useEffect(() => {
+    setDetails(null); setError('')
+    const abort = new AbortController()
+    // A short pause, so arrowing through the list does not ask about every file.
+    const timer = setTimeout(() => void getModelDetails(name, 'checkpoint', abort.signal).then((d) => { if (!abort.signal.aborted) setDetails(d) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) }), 350)
+    return () => { clearTimeout(timer); abort.abort() }
+  }, [name, revision])
+  // The owner's own word on the file's prediction type, for when automatic detection is wrong.
+  const setPrediction = (value: PredictionSetting) => {
+    setSaving(true)
+    void saveImageIntelSettings({ prediction: { model: name, value } }).then(() => setRevision((n) => n + 1), (e: Error) => setError(e.message)).finally(() => setSaving(false))
+  }
+  if (error) return <p className="muted image-intel">Model details unavailable: {error}</p>
+  if (!details) return <p className="muted image-intel" role="status">Reading model details…</p>
+  const r = details.recommended
+  const tags = details.lora_manager?.tags.filter((t) => !/^(base models?|checkpoint)$/i.test(t)).slice(0, 8) ?? []
+  const words = [...new Set([...(details.lora_manager?.trained_words ?? []), ...(details.civitai?.trained_words ?? [])])].slice(0, 8)
+  return <dl className="image-intel">
+    <dt>Base model</dt><dd>{details.lora_manager?.base_model || details.civitai?.base_model || 'Unknown'}{details.family ? ` · ${details.family.label}` : ''}</dd>
+    {checkpoint && details.prediction && <><dt>Prediction</dt><dd>
+      <span className="image-prediction" role="group" aria-label="Prediction type">
+        {(['auto', 'vpred', 'eps'] as const).map((v) => <button key={v} type="button" className={`btn btn-small ${details.prediction!.setting === v ? 'btn-primary' : ''}`} aria-pressed={details.prediction!.setting === v} disabled={saving} onClick={() => setPrediction(v)}>{v === 'auto' ? 'Auto' : v === 'vpred' ? 'v-pred' : 'eps'}</button>)}
+      </span>
+      <span className="muted">{details.prediction.setting === 'auto' ? `Detected: ${details.prediction.v_prediction ? 'v-pred' : 'eps'}` : 'Your setting'}</span>
+    </dd></>}
+    {details.supported === false && <><dt>Supported</dt><dd className="t-yellow">No: {details.unsupported_reason}</dd></>}
+    {!!tags.length && <><dt>Tags</dt><dd>{tags.join(' · ')}</dd></>}
+    {!!words.length && <><dt>Trained words</dt><dd className="copyable">{words.join(', ')}</dd></>}
+    {r?.sampler && <><dt>Recommended</dt><dd>{r.preset ? `${r.preset} · ` : ''}{recommendedLine(r as Recommended)}{r.v_prediction ? ' · v-prediction' : ''}<br /><span className="muted">{recommendedSourceLabel(r as Recommended)}</span></dd></>}
+    {details.civitai && <><dt>Civitai</dt><dd><a href={details.civitai.url} target="_blank" rel="noopener noreferrer">{details.civitai.model || 'Model page'}{details.civitai.version ? ` · ${details.civitai.version}` : ''}</a></dd></>}
+    {!!details.notes.length && <><dt>Notes</dt><dd className="muted">{details.notes.join(' ')}</dd></>}
+  </dl>
+}
+
 /** The compact row for a chosen model, with its artwork when the catalog has some. */
 function ModelPickRow({ category, label, value, onClick, disabled }: { category?: ModelCategory; label: string; value: string; onClick: () => void; disabled?: boolean }) {
   const ref = useRef<HTMLSpanElement>(null)
@@ -195,7 +236,7 @@ export function ModelBrowser({ category, label, values, value, onChoose, onClose
         {files.length > shown && <button type="button" className="btn btn-small image-browser-more" onClick={() => setShown((n) => n + 150)}>Show more ({files.length - shown} left)</button>}
       </section>
       <aside className="image-model-details" aria-label="Selected model details">
-        {picked ? <><h3>{picked.name}{picked.value === value && <span className="image-current">Current</span>}</h3><ModelDetails category={category} name={picked.value} revision={artworkRevision} /><dl><dt>Folder</dt><dd>{picked.folder || 'Root'}</dd><dt>Format</dt><dd>{picked.extension}</dd><dt>Identifier</dt><dd className="copyable image-path">{picked.value}</dd></dl><p className="muted">Artwork and metadata don’t prove workflow compatibility.</p></> : <p className="muted">{selected ? 'The saved selection is not in this catalog. Refresh or choose an installed model.' : 'Select a model to see its details.'}</p>}
+        {picked ? <><h3>{picked.name}{picked.value === value && <span className="image-current">Current</span>}</h3><ModelDetails category={category} name={picked.value} revision={artworkRevision} />{(category === 'checkpoints' || category === 'diffusion_models') && <ModelIntel name={picked.value} checkpoint={category === 'checkpoints'} />}<dl><dt>Folder</dt><dd>{picked.folder || 'Root'}</dd><dt>Format</dt><dd>{picked.extension}</dd><dt>Identifier</dt><dd className="copyable image-path">{picked.value}</dd></dl><p className="muted">Artwork and metadata don’t prove workflow compatibility.</p></> : <p className="muted">{selected ? 'The saved selection is not in this catalog. Refresh or choose an installed model.' : 'Select a model to see its details.'}</p>}
       </aside>
     </div>
     <footer className="image-dialog-foot"><span className="muted image-dialog-hint">Arrows move · ← up · Double-click uses</span><span className="image-grow" /><button type="button" className="btn btn-small" onClick={onClose}>Cancel</button><button type="button" className="btn btn-small btn-primary" disabled={!picked || loading} onClick={() => picked && onChoose(picked.value)}>Use selected</button></footer>

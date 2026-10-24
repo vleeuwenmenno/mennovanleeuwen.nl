@@ -63,7 +63,7 @@ export function ObservationDetail({ o }: { o: Observation }) {
   const line = settingsLine(o.settings)
   return <div className="agt-obs-detail">
     {o.note && <p className="agt-obs-full-note selectable">{o.note}</p>}
-    {o.quote ? <blockquote className="agt-obs-quote selectable"><span className="muted">{o.source === 'vision' ? 'The vision model saw' : 'You said'}</span>{o.quote}</blockquote>
+    {o.quote ? <blockquote className="agt-obs-quote selectable"><span className="muted">{o.source === 'vision' ? 'The vision model saw' : o.source === 'automatic' ? 'The quality check found' : 'You said'}</span>{o.quote}</blockquote>
       : <p className="muted agt-obs-small">No evidence: the agent’s own guess, not checked against what you said or what a vision model saw.</p>}
     {line && <p className="agt-obs-settings" title={[o.settings?.model, ...(o.settings?.loras.map((l) => l.name) ?? [])].filter(Boolean).join('\n')}>{line}</p>}
     {o.settings && (o.settings.width || o.settings.seed !== null) && <p className="muted agt-obs-small">{[o.settings.width && o.settings.height && `${o.settings.width} × ${o.settings.height} px`, o.settings.seed !== null && `seed ${o.settings.seed}`].filter(Boolean).join(' · ')}</p>}
