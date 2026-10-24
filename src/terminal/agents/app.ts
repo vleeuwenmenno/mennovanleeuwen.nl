@@ -1,6 +1,10 @@
+import { localPref } from '../../os/localPref'
+import { accountGuard, TAB_ACCOUNT } from '../../os/accountSpace'
+import { artMode, artBytes, decodeArt, ART_BYTES } from './imageArt'
+import { threadsCommand, threadSearchLines } from './threads'
 import { mentionAt, mentionText } from '../../data/agentMentions'
 import type { ImageLoraHint } from '../../data/imageModels'
-import { getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
+import { generatedImage, getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
 import {
   addMemory,
   agentModels,
@@ -28,6 +32,7 @@ import {
   listMentionTools,
   type MentionTool,
   listThreads,
+  searchPastThreads,
   overrideTurn,
   queueMessage,
   releaseQueued,
@@ -86,6 +91,8 @@ import { ago, box, clipLine, count, lines as toMarkup, seg, width, wrap, type Li
 // the terminal's scrollback; the reply being written, tool calls under way, the prompt box, menus
 // and the status line are one live block at the bottom, redrawn as things change.
 
+const imageArtPreference = localPref<boolean>('mvlos.agents.cli.imageArt', (raw) => raw !== 'false', undefined, { account: true })
+
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 const VERBS = ['Thinking', 'Pondering', 'Brewing', 'Tinkering', 'Mulling', 'Working', 'Noodling', 'Percolating', 'Computing', 'Considering']
 /** The modes shift+tab cycles through; Bypass is only ever picked on purpose (/permissions, --permission-mode). */
@@ -121,8 +128,9 @@ const SLASH: [string, string][] = [
   ['/help', 'keys and commands'],
   ['/clear', 'start a new thread (also /new)'],
   ['/resume', 'continue an earlier thread'],
+  ['/threads', 'search past threads: <words>, this [words], open <id>'],
   ['/model', 'pick the model'],
-  ['/images', 'browse image models and session settings (show, set JSON, reset)'],
+  ['/images', 'image settings (show, set JSON, reset); inline preview: art on|off'],
   ['/mode', 'quick answers or deep research'],
   ['/permissions', 'how changes are allowed (also shift+tab)'],
   ['/tools', 'switch tool groups on and off'],
@@ -163,6 +171,13 @@ export class Session {
   private permission: Permission
   private tools: ToolGroup[]
   private first: string | null
+
+  private lastThreadQuery = ''
+  private threadHits: string[] = []
+  private outputEpoch = 0
+  private outputQueue: { lines: Line[]; art?: () => Promise<Line[]> }[] = []
+  private outputting = false
+  private artController = new AbortController()
 
   private editor = new Editor()
   private turn: { ctl: AbortController; started: number; content: string; thinking: string; chars: number; verb: string } | null = null
@@ -245,6 +260,7 @@ export class Session {
   private exit() {
     if (this.closed) return
     this.closed = true
+    this.resetOutput()
     this.follow?.abort()
     if (this.timer) clearInterval(this.timer)
     if (this.editingQ && this.thread) void releaseQueued(this.thread.id, this.editingQ.id).catch(() => {})
@@ -262,12 +278,49 @@ export class Session {
     return Math.max(30, this.ctx.size.cols - 1)
   }
 
-  /** Prints finished lines above the live block. */
-  private out(ls: Line[]) {
-    if (!ls.length || this.closed) return
-    this.ctx.live(null)
-    this.ctx.print(toMarkup(ls))
-    this.draw()
+  /** Keep asynchronous image art below its links, ahead of the next finished message. */
+  private out(lines: Line[], art?: () => Promise<Line[]>) {
+    if ((!lines.length && !art) || this.closed) return
+    this.outputQueue.push({ lines, art })
+    if (!this.outputting) void this.drainOutput()
+  }
+
+  private resetOutput() {
+    this.outputEpoch++
+    this.outputQueue = []
+    this.outputting = false
+    this.artController.abort()
+    this.artController = new AbortController()
+  }
+
+  private async drainOutput() {
+    this.outputting = true
+    const epoch = this.outputEpoch
+    const print = (lines: Line[]) => {
+      if (!lines.length || this.closed || epoch !== this.outputEpoch) return
+      this.ctx.live(null); this.ctx.print(toMarkup(lines)); this.draw()
+    }
+    try {
+      while (this.outputQueue.length && !this.closed && epoch === this.outputEpoch) {
+        const next = this.outputQueue.shift()!
+        print(next.lines)
+        if (next.art) { const art = await next.art().catch(() => []); print([...art, []]) }
+      }
+    } finally { if (epoch === this.outputEpoch) this.outputting = false }
+  }
+
+  private imageArt(result: string): (() => Promise<Line[]>) | undefined {
+    const image = generatedImage(result)
+    if (!image || image.size > ART_BYTES) return undefined
+    return async () => {
+      const cols = this.ctx.size.cols, mode = artMode(this.ctx.tty, imageArtPreference.get(), cols, this.ctx.env)
+      if (!mode || !accountGuard()) return []
+      const signal = AbortSignal.any([this.ctx.signal, this.artController.signal, AbortSignal.timeout(5000)])
+      const bytes = await artBytes(image.url, { 'X-MvL-Account': TAB_ACCOUNT }, signal)
+      if (!bytes || signal.aborted || !accountGuard()) return []
+      const lines = await decodeArt(bytes, cols, mode)
+      return signal.aborted || !accountGuard() || !imageArtPreference.get() || this.ctx.size.cols < cols ? [] : lines
+    }
   }
 
   private say(text: string, color = 'muted') {
@@ -307,7 +360,10 @@ export class Session {
         if (m.content.trim()) out.push(...assistantLines(m.content, w), [])
         ;(m.toolCalls ?? []).forEach((c, k) => {
           const result = msgs.slice(i + 1).filter((x) => x.role === 'tool')[k]
-          if (result) out.push(...toolLines(c, result.content, w, false), [])
+          if (result) {
+            out.push(...toolLines(c, result.content, w, false), [])
+            if (c.name === 'generate_image') { this.out(out.splice(0), this.imageArt(result.content)) }
+          }
         })
       }
     })
@@ -985,6 +1041,7 @@ export class Session {
         this.ctrlCKey()
         return true
       case '^L':
+        this.resetOutput()
         this.ctx.clear()
         this.welcome()
         break
@@ -1409,6 +1466,7 @@ export class Session {
       this.thread = r.thread
       this.messages = this.messages.filter((m) => m.id < id)
       // The screen shows the thread as it is now.
+      this.resetOutput()
       this.ctx.clear()
       this.welcome()
       this.history()
@@ -1621,7 +1679,7 @@ export class Session {
     const k = this.liveCalls.findIndex((c) => c.call.name === m.toolName)
     const live = this.liveCalls.splice(k >= 0 ? k : 0, 1)[0]
     const call = live?.call ?? { name: m.toolName ?? 'tool', arguments: {} }
-    this.out([...toolLines(call, m.content, w, this.verbose), []])
+    this.out([...toolLines(call, m.content, w, this.verbose), []], call.name === 'generate_image' ? this.imageArt(m.content) : undefined)
   }
 
   /** Runs a terminal tool call here and sends back what it printed. */
@@ -1706,6 +1764,7 @@ export class Session {
         if (busy()) return true
         this.thread = null
         this.messages = []
+        this.resetOutput()
         this.ctx.clear()
         this.welcome()
         this.loadSkills()
@@ -1720,7 +1779,34 @@ export class Session {
         if (picked) await this.open(picked[0])
         return true
       }
+      case '/threads': {
+        if (busy()) return true
+        const command = threadsCommand(arg, this.lastThreadQuery)
+        if (command.kind === 'error') { this.say(command.error); return true }
+        if (command.kind === 'open') {
+          const matches = this.threadHits.filter((id) => id.startsWith(command.id))
+          if (matches.length > 1 || command.id.length < 36 && matches.length !== 1) { this.say('Use a full thread id or a unique prefix from the last results.'); return true }
+          await this.open(matches[0] ?? command.id, true)
+          return true
+        }
+        if (command.current && !this.thread) { this.say('Open a thread before using /threads this.'); return true }
+        try {
+          const result = await searchPastThreads(command.query, this.thread?.id ?? null, command.current)
+          this.lastThreadQuery = command.query
+          this.threadHits = 'threads' in result ? result.threads.map((t) => t.thread_id) : []
+          this.out(threadSearchLines(result, Math.max(1, this.ctx.size.cols - 1)))
+        } catch (e) { this.say(`Thread search: ${(e as Error).message}`, 'red') }
+        return true
+      }
       case '/images': {
+        if (/^art(?:\s|$)/.test(arg)) {
+          const choice = arg.slice(3).trim()
+          if (choice !== 'on' && choice !== 'off') { this.say('/images art on|off (inline image previews)'); return true }
+          imageArtPreference.set(choice === 'on')
+          if (choice === 'off') { this.artController.abort(); this.artController = new AbortController() }
+          this.say(`Inline image art ${choice}.`)
+          return true
+        }
         if (busy()) return true
         try {
           const thread = await this.ensureThread()
@@ -2136,15 +2222,17 @@ export class Session {
   }
 
   /** Switches to another thread. */
-  private async open(id: string) {
+  private async open(id: string, pastOnly = false) {
     try {
       const { thread, messages, pending } = await getThread(id)
+      if (pastOnly && thread.quick) throw new Error('No such past thread')
       this.thread = thread
       this.messages = messages
       this.workdir = thread.workdir
       this.permission = thread.permission
       this.mode = thread.mode
       this.model = thread.model
+      this.resetOutput()
       this.ctx.clear()
       this.welcome()
       this.history()

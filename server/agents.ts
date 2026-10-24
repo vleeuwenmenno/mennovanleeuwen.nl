@@ -2226,6 +2226,19 @@ function dateLine(zone: string): string {
 /** The zone the window said the user is in, else the server's own. */
 const zoneFor = (v: unknown) => zoneOf(v) ?? Intl.DateTimeFormat().resolvedOptions().timeZone
 
+/** A deliberate user search, independent of which tools the model may use. */
+export function searchPastThreads(user: User, input: Record<string, unknown>) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'Supply a search object')
+  const current = input.current_thread
+  if (current !== undefined) {
+    if (typeof current !== 'string') throw new HttpError(400, 'Supply the current thread id')
+    ownThread(user, current)
+  }
+  if (input.thread === 'this' && !current) return { error: 'Open a thread before searching its history' }
+  const client = input.client as { timeZone?: unknown } | undefined
+  return searchThreads(user.id, typeof current === 'string' ? current : '', input, zoneFor(client?.timeZone))
+}
+
 /** AGENTS.md, then today's date, the mode, how to work, the project and the memories. */
 async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = [], more: { zone?: string; calendar?: string; mail?: string; images?: boolean; threads?: boolean } = {}): Promise<string> {
   const all = listMemories(user).filter((m) => !m.imageLearning && !m.imageProfile)

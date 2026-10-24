@@ -1815,7 +1815,7 @@ textarea.agt-q-input {
 .agt-ring.is-full .agt-ring-fill {
   stroke: var(--red);
 }
-.agt-ring:hover .agt-ring-track,
+.agt-ring:hover:not(:disabled) .agt-ring-track,
 .agt-ring.is-on .agt-ring-track {
   stroke: var(--muted);
 }
@@ -1833,7 +1833,7 @@ textarea.agt-q-input {
 .agt-send:disabled {
   background: color-mix(in srgb, var(--fg) 12%, transparent);
   color: var(--muted);
-  cursor: default;
+  cursor: not-allowed;
 }
 .agt-send.is-stop {
   background: var(--fg-bright);
@@ -5422,3 +5422,23 @@ button.cal-day.is-picked:not(.is-today) {
 .image-lora-row label { display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0; }
 .image-lora-row label span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .image-lora-row input { width: 5em; flex-shrink: 0; }
+
+/* Unavailable controls retain readable text in either palette, without active accents or hover. */
+.agt-pill:disabled,
+.agt-icon:disabled,
+.agt-chip:disabled,
+.agt-ring:disabled {
+  color: color-mix(in srgb, var(--fg) 55%, var(--bg));
+  background: transparent;
+  border-color: color-mix(in srgb, var(--fg) 15%, transparent);
+  cursor: not-allowed;
+}
+.agt-pill:disabled .agt-count {
+  color: inherit;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.agt-ring:disabled .agt-ring-track,
+.agt-ring:disabled .agt-ring-fill {
+  stroke: currentColor;
+  opacity: 0.6;
+}

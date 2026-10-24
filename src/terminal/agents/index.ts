@@ -47,9 +47,15 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        /images profile lists style profiles; select <id|none>, save {"name":"…","description":"…"},
        reset <id> or delete <id> manages them. /memory reset-images forgets image observations.
        Krea2 presets are krea2_raw and krea2_turbo; both need installed model, clip and vae.
-       Generated images show a private download URL; /open previews them in the app.
+       Generated images keep their private download URL, settings and metadata link, with an inline
+       preview below in interactive sessions. /images art on|off controls it (on by default,
+       remembered for this account in this browser). Previews use at most 48 columns and 24 rows;
+       large downloads, narrow terminals, TERM=dumb and print mode skip them. /open shows the image in the app.
+       /threads <words> searches past threads, including archives, across projects.
+       /threads open <id> resumes a result (a unique prefix from the last results also works).
+       /threads this [words] searches this thread; without words it repeats the last search.
 
-       /help lists the commands: /resume, /model, /tools, /skills, /context, /export, ….
+       /help lists the commands: /resume, /threads, /images, /model, /tools, /skills, /context, /export, ….
 
 {c:bold}OPTIONS{/}
        -c, --continue          continue the latest thread in this folder

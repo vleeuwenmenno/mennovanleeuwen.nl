@@ -391,6 +391,21 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - A `terminal` tool runs msh command lines in the user's own terminal.
 - Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
   asking first, accepting edits, and plan mode (read only until a plan is approved).
+- `/threads <words>` searches earlier conversations across projects, including marked archives.
+  Results show the title, project, date, first excerpt and thread id as plain text fitted to the
+  terminal width. `/threads open <id>` resumes one; a unique id prefix from the last results also
+  works. `/threads this <words>` searches the current thread, while `/threads this` repeats the
+  last query there. These are deliberate user searches, independent of the model's tool groups;
+  the same ownership, Spotlight exclusion and bounded search rules apply.
+- Generated PNGs get an inline preview below their unchanged private URL, size/seed and metadata
+  link. The interactive terminal samples two vertical pixels per `▀` cell using foreground and
+  background RGB colours, at most 48 columns and 24 rows, shrinking tall pictures to fit.
+  Terminals without truecolour use coarse grayscale density blocks. `/images art off` hides
+  future previews; `/images art on` restores them. This CLI preference starts on and is kept for
+  the account in this browser. Print mode, pipes, `TERM=dumb`, terminals below 24 columns,
+  downloads over 3 MiB and invalid or oversized PNG dimensions skip art. Fetches use only the
+  signed-in account's private image route, with a five-second deadline; a failed preview leaves
+  the links and settings available. Resumed threads use the same preview rules.
 - Prompt modes: `!cmd` runs a command, `# text` remembers something, `@./path` attaches a file. `#name[:weight]`, `$name` and `@name` mention a LoRA, skill and tool.
 - While the agent works, Enter queues a message (shown over the prompt; the server sends it when
   the turn is done). ↑ in an empty prompt edits the last queued one, Ctrl+X removes it (or the last
@@ -1327,7 +1342,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted, and the sidebar folds to a rail.
+suggestion), archived and deleted, and the sidebar folds to a rail. While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Past threads** lets the agent look back when you refer to an earlier conversation and the
 answer is not already in this thread or memory. The `threads` tool group is on by default,

@@ -719,3 +719,12 @@ export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? 
 
 export type MentionTool = { name: string; group: ToolGroup | null }
 export const listMentionTools = () => api<MentionTool[]>('/api/agents/mention-tools')
+
+/** Explicit user history searches use the same bounded result as the agent tool. */
+export type ThreadSearchResult = { error: string } | { found: 0; searched: string; note: string } | {
+  note: string; more_threads: boolean; capped: boolean; truncated: boolean;
+  threads: { thread_id: string; title: string; project: { id: number | null; name: string } | null; archived: boolean; started: string; last_active: string; also_known_as: string[]; matched: string[]; hits: { message_id: number; from: string; date: string; excerpt: string; attachments?: { name: string; kind: string }[] }[] }[];
+}
+export const searchPastThreads = (query: string, currentThread: string | null, current = false) => api<ThreadSearchResult>('/api/agents/threads/search', {
+  method: 'POST', json: { query, ...(currentThread ? { current_thread: currentThread } : {}), ...(current ? { thread: 'this' } : {}), client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } },
+})

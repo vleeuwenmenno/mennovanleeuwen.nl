@@ -2019,7 +2019,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             aria-label="Message"
           />
           <div className="agt-box-bar">
-            <button type="button" className="agt-icon" onClick={attachMenu} aria-label="Attach files" title="Attach files">
+            <button type="button" className="agt-icon" onClick={attachMenu} disabled={answering} aria-label="Attach files" title="Attach files">
               <Icon name="clip" />
             </button>
             <button type="button" className="agt-pill" onClick={modeMenu} disabled={answering} title={MODE_HELP[mode]}>
@@ -2037,7 +2037,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               <span className="agt-model-name">{model || usualModel || 'Automatic'}</span>
               <Icon name="chevron" size={12} />
             </button>
-            {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
+            {thread && <ContextMeter thread={thread} models={models} disabled={answering} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
             {answering && (
               <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
                 <Icon name="stop" size={14} />
@@ -2779,14 +2779,14 @@ function RenameBox({ thread, onSave, onCancel }: { thread: Thread; onSave: (titl
 const PART_COLORS = ['var(--magenta)', 'var(--muted)', 'var(--yellow)', 'var(--orange)', 'var(--blue)', 'var(--green)', 'var(--fg)', 'var(--cyan)']
 
 /** How full the model's context was after the last reply, as a small ring; opens the breakdown. */
-function ContextMeter({ thread, models, open, onToggle }: { thread: Thread; models: ModelInfo[]; open: boolean; onToggle: () => void }) {
+function ContextMeter({ thread, models, open, onToggle, disabled }: { thread: Thread; models: ModelInfo[]; disabled: boolean; open: boolean; onToggle: () => void }) {
   const size = models.find((m) => m.name === thread.model)?.contextLength ?? null
   const used = thread.contextTokens
   const share = used !== null && size ? Math.min(1, used / size) : 0
   const C = 2 * Math.PI * 7
   const label = used !== null ? `${used.toLocaleString()}${size ? ` of ${size.toLocaleString()}` : ''} tokens in context (${share < 0.01 && used ? '<1' : Math.round(share * 100)}%)` : 'Context window'
   return (
-    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} aria-expanded={open} title={label} aria-label={label}>
+    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} disabled={disabled} aria-expanded={open} title={label} aria-label={label}>
       <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden>
         <circle cx="9" cy="9" r="7" className="agt-ring-track" />
         <circle cx="9" cy="9" r="7" className="agt-ring-fill" strokeDasharray={`${Math.max(share, used ? 0.03 : 0) * C} ${C}`} transform="rotate(-90 9 9)" />

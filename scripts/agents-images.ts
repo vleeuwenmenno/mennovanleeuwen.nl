@@ -1,3 +1,6 @@
+import { artMode, artSize, artBytes, pixelArt, ART_BYTES } from '../src/terminal/agents/imageArt.ts'
+import { lines as artMarkup } from '../src/terminal/agents/text.ts'
+import { parseMarkupLines, stripMarkup } from '../src/terminal/markup.ts'
 import { messageMentions, mentionAt, mentionText } from '../src/data/agentMentions.ts'
 // Real Agents HTTP/streaming integration against mocked Ollama and ComfyUI. No GPU or real data.
 import assert from 'node:assert/strict'
@@ -9,6 +12,42 @@ import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, reco
 import { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } from '../server/comfyProgress.ts'
 import { createHash } from 'node:crypto'
 import type { Duplex } from 'node:stream'
+
+// CLI art helpers run without a browser; PNG decoding itself is checked in the browser.
+assert.deepEqual(artSize(1024, 1024, 80), { width: 48, height: 48, rows: 24 })
+assert.deepEqual(artSize(512, 1536, 80), { width: 16, height: 48, rows: 24 })
+assert.equal(artSize(1536, 512, 30)?.width, 26)
+assert.deepEqual(artSize(1, 1, 80), { width: 1, height: 1, rows: 1 })
+assert.equal(artSize(1024, 1024, 23), null)
+assert.equal(artSize(8192, 8192, 80), null)
+assert.equal(artMode(true, true, 80, { TERM: 'xterm-mvlos' }), 'truecolour')
+assert.equal(artMode(true, true, 80, { TERM: 'xterm-256color' }), 'grayscale')
+for (const [tty, enabled, cols, term] of [[false, true, 80, 'xterm-mvlos'], [true, false, 80, 'xterm-mvlos'], [true, true, 23, 'xterm-mvlos'], [true, true, 80, 'dumb']] as const) assert.equal(artMode(tty, enabled, cols, { TERM: term }), null)
+const pixel = new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255])
+const rgbArt = artMarkup(pixelArt(pixel, 2, 2, 'truecolour'))
+assert.equal(stripMarkup(rgbArt), '  ▀▀')
+assert.ok(rgbArt.includes('{fg:#ff0000}') && rgbArt.includes('{bg:#0000ff}'))
+assert.equal(parseMarkupLines(rgbArt)[0].nodes.length, 3)
+assert.ok(!artMarkup(pixelArt(pixel, 2, 2, 'grayscale')).includes('{fg:'))
+assert.equal(pixelArt(new Uint8ClampedArray(0), 49, 2, 'truecolour').length, 0)
+const artHeader = new Uint8Array(24)
+artHeader.set([137, 80, 78, 71, 13, 10, 26, 10]); artHeader.set([73, 72, 68, 82], 12)
+new DataView(artHeader.buffer).setUint32(16, 2); new DataView(artHeader.buffer).setUint32(20, 2)
+let artRequests = 0, artRequest: RequestInit | undefined
+const artFetch: typeof fetch = async (_url, init) => { artRequests++; artRequest = init; return new Response(artHeader, { headers: { 'Content-Type': 'image/png' } }) }
+const privateImage = '/api/agents/images/00000000-0000-0000-0000-000000000000'
+assert.equal(await artBytes('https://example.test/image.png', {}, new AbortController().signal, artFetch), null)
+assert.equal(await artBytes('/api/shares/image.png', {}, new AbortController().signal, artFetch), null)
+assert.equal(artRequests, 0)
+assert.ok(await artBytes(privateImage, { 'X-MvL-Account': '1' }, new AbortController().signal, artFetch))
+assert.equal(artRequest?.credentials, 'same-origin'); assert.equal(artRequest?.redirect, 'error')
+assert.equal((artRequest?.headers as Record<string, string>)['X-MvL-Account'], '1')
+assert.equal(await artBytes(privateImage, {}, new AbortController().signal, async () => new Response(artHeader, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(ART_BYTES + 1) } })), null)
+let artCancelled = false
+assert.equal(await artBytes(privateImage, {}, new AbortController().signal, async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(ART_BYTES + 1)) }, cancel() { artCancelled = true } }), { headers: { 'Content-Type': 'image/png' } })), null)
+assert.ok(artCancelled)
+assert.equal(await artBytes(privateImage, {}, new AbortController().signal, async () => new Response('not PNG', { headers: { 'Content-Type': 'image/png' } })), null)
+console.log('PASS CLI image art sizing, RGB markup, grayscale, private authenticated fetches and download refusal bounds')
 
 // Deterministic recommendation fixtures: exact identifiers survive every decision.
 const automaticCatalog: ImageAssetCatalog = {

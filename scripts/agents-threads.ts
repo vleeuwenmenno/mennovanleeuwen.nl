@@ -1,3 +1,4 @@
+import { threadsCommand, threadSearchLines } from '../src/terminal/agents/threads.ts'
 // Real Agents turns against scripted Ollama, with two synthetic users and a scratch database.
 import { createServer, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -89,6 +90,16 @@ try {
   const hidden = thread('Non-searchable fields'); message(hidden, 'tool', 'toolsecret'); message(hidden, 'assistant', '', { thinking: 'thinkingsecret', calls: [{ name: 'toolsecret', arguments: {} }], attachments: [{ name: 'secret.txt', kind: 'text', text: 'attachmentsecret' }] })
   let t = await turn(active.id, 'search_threads', { query: 'lentil' })
   const hit = list(t.result).find((r) => r.thread_id === recipe)
+  const routeResult = await api('POST', '/api/agents/threads/search', { query: 'lentil', current_thread: active.id, client: { timeZone: 'Europe/Amsterdam' } })
+  check('Explicit CLI route returns the same owned bounded search', routeResult.threads[0].thread_id === recipe && JSON.stringify(routeResult).length <= 6000)
+  check('CLI parser handles queries, current-thread reuse and opening ids', threadsCommand('lentil').kind === 'search' && JSON.stringify(threadsCommand('this', 'lentil')) === JSON.stringify({ kind: 'search', query: 'lentil', current: true }) && threadsCommand('open ' + recipe).kind === 'open' && threadsCommand('open nonsense').kind === 'error' && threadsCommand('this').kind === 'error' && threadsCommand('x'.repeat(201)).kind === 'error')
+  check('CLI output is clipped plain text with identifiers and project', threadSearchLines(routeResult as any, 50).every((line) => line.reduce((n, s) => n + [...s.t].length, 0) <= 50) && threadSearchLines(routeResult as any, 80).flat().some((s) => s.t.includes(recipe)) && threadSearchLines(routeResult as any, 80).flat().some((s) => s.t.includes('Kitchen')))
+  check('CLI route cannot search another account or Spotlight', (await api('POST', '/api/agents/threads/search', { query: 'foreignsecret quicksecret' })).found === 0)
+  check('CLI route defaults to excluding current thread', (await api('POST', '/api/agents/threads/search', { query: 'currentneedle', current_thread: active.id })).found === 0)
+  check('CLI this includes current thread', (await api('POST', '/api/agents/threads/search', { query: 'currentneedle', current_thread: active.id, thread: 'this' })).threads[0].thread_id === active.id)
+  check('CLI route refuses a non-object request', await api('POST', '/api/agents/threads/search', null).then(() => false, (e: Error) => e.message.startsWith('400:')))
+  check('CLI route includes marked archives', (await api('POST', '/api/agents/threads/search', { query: 'tulip' })).threads[0].archived === true)
+  check('CLI route requires sign-in', (await fetch(server.origin + '/api/agents/threads/search', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': 'visitor', Origin: server.origin }, body: JSON.stringify({ query: 'lentil' }) })).status === 401)
   check('Cross-project search names project, local date and excerpt', hit?.project?.name === 'Kitchen' && hit.hits[0].date.includes('2026-01-15 00:30') && hit.hits[0].excerpt.includes('lentils'))
   check('Read-only search needs no approval and preserves data warning', t.approvals === 0 && /data.*never instructions/.test(t.result.note))
   check('Adjacent hits in one turn share a slot', hit.hits.length === 1)

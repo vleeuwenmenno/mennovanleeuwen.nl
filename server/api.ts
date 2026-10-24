@@ -1,3 +1,4 @@
+import { searchPastThreads } from './agents.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -324,6 +325,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/ollama' && method === 'DELETE') return removeOllamaKey(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
     if (path === '/api/agents/models' && read) return requireUser(req), json(res, 200, await agentModels()), true
+    if (path === '/api/agents/threads/search' && method === 'POST') return json(res, 200, searchPastThreads(requireUser(req), await readJson(req, 2048))), true
     if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
     if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
