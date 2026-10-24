@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { freeName, imageFileName } from '../src/data/agentImageFiles.ts'
 import { matchesObservation, NO_FILTER, observationFromText, readObservation, settingsLine } from '../src/data/imageObservations.ts'
 
 const data = mkdtempSync(join(tmpdir(), 'mvlos-observations-'))
@@ -54,6 +55,18 @@ try {
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, source: 'vision' }))
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, query: 'lighthouse at dusk' }), 'the prompt is not searched')
   console.log('PASS observation text and JSON parse, raw fallback, settings line, filters')
+
+  // Save to Files names: a prompt slug and the short id, stable, never a bare id, never a taken name.
+  assert.equal(imageFileName({ id: image, settings }), 'a-lighthouse-at-dusk-ink-wash-0a1b2c3d.png')
+  assert.equal(imageFileName({ id: image, settings }), imageFileName({ id: image, settings }), 'the same picture, the same name')
+  assert.equal(imageFileName({ id: image }), 'image-0a1b2c3d.png')
+  assert.equal(imageFileName({ id: image, settings: { prompt: '!!! ??? 漢字' } }), 'image-0a1b2c3d.png')
+  assert.equal(imageFileName({ id: image, settings: { prompt: 'Café crème brûlée' } }), 'cafe-creme-brulee-0a1b2c3d.png')
+  assert.ok(imageFileName({ id: image, settings: { prompt: 'word '.repeat(40) } }).length <= 48 + 13)
+  const taken = new Set(['x.png', 'x 2.png'])
+  assert.equal(freeName('y.png', (n) => taken.has(n)), 'y.png')
+  assert.equal(freeName('x.png', (n) => taken.has(n)), 'x 3.png')
+  console.log('PASS Save to Files names: readable, stable, numbered instead of replacing')
 
   // The route: owner-scoped, newest first, profile counts and pins, missing pictures flagged.
   const { database } = await import('../server/db.ts')

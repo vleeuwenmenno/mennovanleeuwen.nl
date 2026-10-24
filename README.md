@@ -1517,9 +1517,21 @@ without an approval card in every mode except Plan, which cannot generate. To ap
 first, turn on **Ask before generating images** in Settings → Agents → Images (off by default);
 then Ask first, Auto and Edits allowed show the resolved settings for approval, Bypass still runs
 without a prompt, and non-interactive `agents -p` declines as usual. Both interactive and print output include a private image URL. `/open` opens the
-thread in the app, where the image has a thumbnail, full-size view, **Open in Preview** and
-**Download**. The link requires the owner's signed-in session; sharing a thread does not publish
+thread in the app, where the image has a thumbnail, full-size view, **Open in Preview**,
+**Download** and **Save to Files…** (on the card, in its right-click menu, and in the
+full view). The link requires the owner's signed-in session; sharing a thread does not publish
 its generated images.
+
+**Save to Files…** saves the PNG itself into your Files, through the same folder picker and upload
+path as Mail's Save to Files. The entry names where it saves: **(Seafile)** when Seafile is linked
+(the picker then also offers **This browser**), **(this browser)** when only the browser's own
+files can be written; with neither, it is not shown. The name comes from the prompt and the image's
+short id (`a-lone-lighthouse-at-dusk-8f3a2c1d.png`, or `image-8f3a2c1d.png` without a prompt), the
+same each time; when that name is taken, it offers a numbered one (`… 2.png`) and never replaces the
+file that is there. A failure says what it was: a read-only, locked or encrypted library, Seafile's
+quota, this browser being full, Seafile no longer linked, or the picture deleted with its thread.
+The recorded settings are not saved next to it; **Download settings** under *Generation settings*
+still gives them as JSON.
 
 After approval, the app reserves the resolved output aspect ratio in a larger responsive image
 frame (up to 640 px wide). A themed 7×7 matrix of cubes animates while generation is active and

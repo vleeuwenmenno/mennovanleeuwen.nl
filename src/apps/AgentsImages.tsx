@@ -4,6 +4,9 @@ import { imageProgressFraction, imageProgressLabel, type ImageProgress } from '.
 import { createPortal } from 'react-dom'
 import { fileSize, pictureUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
 import { useWM } from '../os/wm'
+import { openContextMenu, type MenuItem } from '../os/ContextMenu'
+import { imageFileName } from '../data/agentImageFiles'
+import { saveImageToFiles, saveLabel, useSaveDestination } from './AgentsSaveImage'
 
 // Pictures attached to Agents messages: small thumbnails in the message box and on your sent
 // messages, and a full-size view over the window when one is clicked (arrow keys or a swipe to the
@@ -94,7 +97,7 @@ export function Thumbnails({ pictures, onRemove, onBroken }: { pictures: Picture
  * The full view: over the window the thumbnail is in (or the whole page outside one). It takes the
  * keys while open, so Escape and the arrows do not also reach the message box behind it.
  */
-export function Lightbox({ pictures, start, anchor, onClose }: { pictures: Picture[]; start: number; anchor: HTMLElement | null; onClose: () => void }) {
+export function Lightbox({ pictures, start, anchor, onClose, actions = [] }: { pictures: Picture[]; start: number; anchor: HTMLElement | null; onClose: () => void; /** More buttons in the bar, before Download (they close the view first) */ actions?: { label: string; onSelect: () => void }[] }) {
   const wm = useWM()
   const [at, setAt] = useState(start)
   const [failed, setFailed] = useState(false)
@@ -158,6 +161,11 @@ export function Lightbox({ pictures, start, anchor, onClose }: { pictures: Pictu
             Open in Preview
           </button>
         )}
+        {actions.map((a) => (
+          <button key={a.label} type="button" className="btn btn-small" onClick={() => (onClose(), a.onSelect())}>
+            {a.label}
+          </button>
+        ))}
         <button type="button" className="btn btn-small" onClick={save}>
           Download
         </button>
@@ -228,9 +236,19 @@ export function GeneratedPicture({ image, width, height, pending, progress }: { 
   const grid = useMemo(() => blockGrid(width, height), [width, height])
   const fraction = pending ? imageProgressFraction(progress) : null
   const lit = fraction === null ? 0 : Math.round(fraction * grid.rank.length)
-  const picture = image ? { name: image.name, src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
+  const picture = image ? { name: imageFileName(image), src: image.url, size: image.size, source: 'Generated with ComfyUI', preview: true } : null
+  const wm = useWM()
+  // Save to Files only where it can work: no Seafile and no browser store, no entry (not a dead one).
+  const to = useSaveDestination()
+  const save = image && to ? { label: saveLabel(to), onSelect: () => void saveImageToFiles(image) } : null
+  const menu: MenuItem[] = image ? [
+    { label: 'View', onSelect: () => setOpen(true) },
+    { label: 'Open in Preview', onSelect: () => wm.openNew('preview', { src: image.url, name: imageFileName(image), from: 'Agents' }) },
+    { label: 'Download', onSelect: () => Object.assign(document.createElement('a'), { href: image.url, download: imageFileName(image), rel: 'noopener' }).click() },
+    ...(save ? [save] : []),
+  ] : []
   return <>
-    <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }}>
+    <div ref={frame} className={`agt-generated-image ${pending && animate ? 'is-animating' : ''}`} style={{ aspectRatio: `${width} / ${height}` }} onContextMenu={image ? (e) => openContextMenu(e, menu) : undefined}>
       {(!image || !loaded) && !failed && <div className={`agt-image-wait ${fraction === null ? 'is-idle' : ''}`} role="status" aria-live="polite" aria-busy={progress?.phase === 'sampling'}>
         <div className="agt-block-grid" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))` }}>
           {grid.rank.map((r, i) => <span key={i} className={`agt-block ${r < lit ? 'is-lit' : ''}`} style={{ animationDelay: `${-((i % grid.cols) + Math.floor(i / grid.cols)) * 0.12}s` }} />)}
@@ -239,6 +257,7 @@ export function GeneratedPicture({ image, width, height, pending, progress }: { 
       </div>}
       {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={() => setOpen(true)}><img ref={displayedImage} src={image.url} alt="Generated image" width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>
-    {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} />}
+    {image && <div className="agt-image-actions">{menu.slice(1).map((m) => 'label' in m && <button key={m.label} type="button" className="btn btn-small" onClick={m.onSelect}>{m.label}</button>)}</div>}
+    {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} actions={save ? [save] : []} />}
   </>
 }

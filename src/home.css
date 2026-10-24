@@ -5461,6 +5461,10 @@ button.cal-day.is-picked:not(.is-today) {
 }
 
 /* A bounded 7×7 cube matrix; transform/opacity only, paused outside active visible generation. */
+/* A generated image's actions: always shown (no hover step), tap-sized on touch. */
+.agt-image-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+@media (pointer: coarse) { .agt-image-actions .btn { min-height: 44px; } .fp-list button, .fp-crumbs button { min-height: 44px; } }
+.fp-source { flex: 1; align-self: center; color: var(--fg-bright); font-size: 12.5px; }
 .agt-generated-image { position: relative; width: min(100%, 640px); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-dark); }
 .agt-generated-open, .agt-image-wait { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; }
 .agt-generated-open { cursor: zoom-in; background: transparent; }

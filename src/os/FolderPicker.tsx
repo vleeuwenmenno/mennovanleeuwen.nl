@@ -1,5 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { libraryName, mkdir, parseSf, sfPath, useDir, useLibraries } from '../data/seafile'
+import { browserFilesState, listBrowser, mkdirBrowser, useBrowserFiles } from '../data/browserfs'
+import { browserMountPoint } from '../data/mounts'
 import { Select } from './Select'
 
 // Choosing a Seafile folder, in the desktop's own dialog: a library, then into its folders,
@@ -9,14 +11,19 @@ import { Select } from './Select'
 //   const path = await pickFolder({ title: 'Folder for Documents', start: current })
 //   const paths = await pickFiles({ title: 'Attach files' })     // files instead, several at once
 //   const path = await pickFolder({ title: 'Folder with photos', any: true })  // read-only libraries too
+//   const path = await pickFolder({ title: 'Save to', local: true })  // "This browser" as a choice too
+//
+// With `local`, the files kept in this browser (data/browserfs.ts) are one more choice next to the
+// libraries, when that store is open; the path that comes back is then the folder's place in the
+// filesystem (~/Pictures, or /mnt/browser/… when Seafile is home), which uploadFiles takes as is.
 
-type Request = { title: string; start?: string | null; files?: boolean; any?: boolean; resolve: (paths: string[] | null) => void }
+type Request = { title: string; start?: string | null; files?: boolean; any?: boolean; local?: boolean; resolve: (paths: string[] | null) => void }
 
 let current: Request | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 
-export function pickFolder(r: { title: string; start?: string | null; any?: boolean }): Promise<string | null> {
+export function pickFolder(r: { title: string; start?: string | null; any?: boolean; local?: boolean }): Promise<string | null> {
   return new Promise((resolve) => {
     current?.resolve(null)
     current = { ...r, resolve: (paths) => resolve(paths?.[0] ?? null) }
@@ -51,18 +58,27 @@ export function FolderPicker() {
   return request ? <Picker key={request.title + (request.start ?? '')} request={request} /> : null
 }
 
+/** The library menu's value for the files kept in this browser. */
+const BROWSER = 'browser:'
+/** Where this browser's files can be written now, or null (signed out, storage blocked or still loading). */
+export const writableBrowserFolder = () => (browserFilesState() === 'ready' ? browserMountPoint() : null)
+
 function Picker({ request }: { request: Request }) {
   const { libraries } = useLibraries()
+  useBrowserFiles()
   // Folders to save into need a library that can be written; files (and folders) to read can come from any.
   const writable = (libraries ?? []).filter((l) => request.files || request.any || l.permission === 'rw')
+  const local = request.local && !request.files ? writableBrowserFolder() : null
   const [chosen, setChosen] = useState<string[]>([])
   const start = request.start ? parseSf(request.start) : null
   const [repo, setRepo] = useState<string | null>(start?.repo ?? null)
   const [dir, setDir] = useState(start?.p ?? '/')
-  const lib = repo ?? writable[0]?.id ?? null
-  const here = lib ? sfPath(lib, dir) : null
-  const listing = useDir(here)
+  const lib = repo ?? writable[0]?.id ?? (local ? BROWSER : null)
+  const inBrowser = lib === BROWSER && !!local
+  const here = inBrowser ? (dir === '/' ? local : `${local === '/' ? '' : local}${dir}`) : lib && lib !== BROWSER ? sfPath(lib, dir) : null
+  const listing = useDir(inBrowser ? null : here)
   const [error, setError] = useState<string | null>(null)
+  const sources = [...writable.map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}` })), ...(local ? [{ value: BROWSER, label: 'This browser' }] : [])]
 
   useEffect(() => {
     // With the library menu open, Escape only closes that menu (the menu host handles it).
@@ -71,7 +87,8 @@ function Picker({ request }: { request: Request }) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
-  const folders = (listing.listing?.entries ?? []).filter((e) => e.dir && !e.name.startsWith('.')).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  const entries = inBrowser ? listBrowser(dir).map((e) => ({ name: e.path.split('/').pop()!, dir: e.dir })) : (listing.listing?.entries ?? [])
+  const folders = entries.filter((e) => e.dir && !e.name.startsWith('.')).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
   const parts = dir.split('/').filter(Boolean)
   const into = (name: string) => setDir(`${dir === '/' ? '' : dir}/${name}`)
   const files = request.files ? (listing.listing?.entries ?? []).filter((e) => !e.dir && !e.name.startsWith('.')).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) : []
@@ -81,6 +98,11 @@ function Picker({ request }: { request: Request }) {
     const taken = new Set(folders.map((f) => f.name))
     let name = 'New folder'
     for (let n = 2; taken.has(name); n++) name = `New folder ${n}`
+    if (inBrowser) {
+      const made = `${dir === '/' ? '' : dir}/${name}`
+      mkdirBrowser(made).then(() => setDir(made), (e: Error) => setError(e.message))
+      return
+    }
     mkdir(`${here}/${name}`)
       .then((made) => setDir(parseSf(made)!.p))
       .catch((e: Error) => setError(e.message))
@@ -91,7 +113,7 @@ function Picker({ request }: { request: Request }) {
       <div className="dlg fp" role="dialog" aria-modal="true" aria-label={request.title}>
         <strong className="dlg-title">{request.title}</strong>
         <div className="fp-bar">
-          <Select
+          {sources.length > 1 || !request.local ? <Select
             className="set-select"
             value={lib ?? ''}
             onChange={(id) => {
@@ -99,8 +121,8 @@ function Picker({ request }: { request: Request }) {
               setDir('/')
             }}
             aria-label="Library"
-            options={writable.map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}` }))}
-          />
+            options={sources}
+          /> : <span className="fp-source">{sources[0]?.label ?? 'Nowhere to save'}</span>}
           {!request.files && !request.any && (
             <button className="btn btn-small" onClick={newFolder} disabled={!here}>
               New folder
@@ -108,7 +130,7 @@ function Picker({ request }: { request: Request }) {
           )}
         </div>
         <div className="fp-crumbs">
-          <button onClick={() => setDir('/')}>{lib ? libraryName(lib) : '…'}</button>
+          <button onClick={() => setDir('/')}>{inBrowser ? 'This browser' : lib ? libraryName(lib) : '…'}</button>
           {parts.map((p, i) => (
             <span key={i}>
               {' › '}
@@ -122,8 +144,8 @@ function Picker({ request }: { request: Request }) {
               <button onClick={() => setDir('/' + parts.slice(0, -1).join('/'))}>⤴ Up</button>
             </li>
           )}
-          {listing.status === 423 && <li className="muted fp-note">This library is locked: unlock it in Files first.</li>}
-          {listing.loading && !listing.listing && <li className="muted fp-note">Loading…</li>}
+          {!inBrowser && listing.status === 423 && <li className="muted fp-note">This library is locked: unlock it in Files first.</li>}
+          {!inBrowser && listing.loading && !listing.listing && <li className="muted fp-note">Loading…</li>}
           {folders.map((f) => (
             <li key={f.name}>
               <button onDoubleClick={() => into(f.name)} onClick={() => into(f.name)}>
@@ -141,7 +163,7 @@ function Picker({ request }: { request: Request }) {
               </li>
             )
           })}
-          {listing.listing && !folders.length && !files.length && <li className="muted fp-note">{request.files ? 'Nothing in here.' : 'No folders in here.'}</li>}
+          {(inBrowser || listing.listing) && !folders.length && !files.length && <li className="muted fp-note">{request.files ? 'Nothing in here.' : 'No folders in here.'}</li>}
         </ul>
         {error && <p className="t-red copyable">{error}</p>}
         <div className="dlg-actions">
@@ -153,8 +175,8 @@ function Picker({ request }: { request: Request }) {
               {chosen.length > 1 ? `Attach ${chosen.length} files` : 'Attach'}
             </button>
           ) : (
-            <button className="btn btn-small btn-primary" disabled={!here || listing.status === 423} onClick={() => here && close([here])}>
-              Use {parts.length ? `“${parts[parts.length - 1]}”` : 'the library'}
+            <button className="btn btn-small btn-primary" disabled={!here || (!inBrowser && listing.status === 423)} onClick={() => here && close([here])}>
+              Use {parts.length ? `“${parts[parts.length - 1]}”` : inBrowser ? 'this browser' : 'the library'}
             </button>
           )}
         </div>
