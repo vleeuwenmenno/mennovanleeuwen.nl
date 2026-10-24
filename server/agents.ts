@@ -2494,8 +2494,10 @@ function chatHistory(thread: string, vision = true): ChatMessage[] {
   const lastUser = all.map((m) => m.role).lastIndexOf('user')
   // A long turn keeps its last 16 tool results whole; older ones are shortened like earlier turns'.
   const toolIdx = all.flatMap((m, i) => (m.role === 'tool' ? [i] : []))
-  // Image learning evidence shown instead of a generation stays whole for the rest of its turn too.
-  const keepWhole = new Set([...toolIdx.filter((i) => i > lastUser).slice(-16), ...toolIdx.filter((i) => i > lastUser && all[i].toolName === 'generate_image' && all[i].content.startsWith('{"status":"review_once"'))])
+  // Image learning evidence (discovery, a read, or a review shown instead of a generation) stays whole
+  // for the rest of its turn too: the turn counts it as seen, so it must not lose notes on the way.
+  const evidence = (m: AgentMessage) => m.toolName === 'list_image_models' || m.toolName === 'read_image_learnings' || (m.toolName === 'generate_image' && m.content.startsWith('{"status":"review_once"'))
+  const keepWhole = new Set([...toolIdx.filter((i) => i > lastUser).slice(-16), ...toolIdx.filter((i) => i > lastUser && evidence(all[i]))])
   const history = all.map((m, i): ChatMessage => {
     if (m.role === 'tool') return { role: 'tool', tool_name: m.toolName ?? '', content: keepWhole.has(i) ? m.content : clip(m.content, 1500) }
     const current = i >= lastUser

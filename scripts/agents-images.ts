@@ -1095,6 +1095,19 @@ try {
   const wideSent = providerInputs.at(-1).messages.find((m: any) => m.role === 'tool' && m.content.includes('"status":"review_once"'))
   assert.equal(wideSent.content, storedReview)
   assert.ok(result(wideTurn).image)
+  // Discovery or a read behind 16 more results reaches the model whole too, so its coverage holds.
+  for (const [name, args] of [['list_image_models', {}], ['read_image_learnings', { profile_id: profile.id, all_models: true }]] as const) {
+    const t = await thread()
+    if (name === 'list_image_models') await json('PUT', `/api/agents/image-profiles/threads/${t.id}`, { id: profile.id })
+    sequence = [[{ name, arguments: args }, ...Array.from({ length: 16 }, () => ({ name: 'list_generated_images', arguments: {} }))], [{ name: 'generate_image', arguments: { prompt: 'Wide evidence', profile_id: profile.id } }], [{ name: 'generate_image', arguments: { prompt: 'Wide evidence', profile_id: profile.id } }]]
+    const wideEvidence = await turn(t.id)
+    const stored = wideEvidence.messages.find((m: any) => m.toolName === name).content
+    assert.ok(stored.length > 1500, `${name} payload is only ${stored.length} characters`)
+    const sent = providerInputs.at(-1).messages.find((m: any) => m.role === 'tool' && m.tool_name === name)
+    assert.equal(sent.content, stored, `${name} reaches the model whole`)
+    assert.equal(reviewCount(wideEvidence), 0)
+    assert.ok(result(wideEvidence).image)
+  }
   // The essentials lead the payload, so even a clipped copy keeps them.
   assert.deepEqual(Object.keys(JSON.parse(storedReview)).slice(0, 4), ['status', 'submitted', 'next', 'notes'])
   // Two generations in one reply: the first shows evidence, the second waits, the next reply submits.

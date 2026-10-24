@@ -1918,7 +1918,8 @@ this is not an error; the next call submits. Changing components, LoRAs or the s
 more; another profile or operation shows its own evidence once. A turn shows evidence at most twice:
 after that every call submits and the server logs a warning, so it can never loop. Evidence counts as
 shown once the next model call has gone out with it; a compaction in between folds it away, so it is
-shown again. That result stays whole for the rest of its turn, however many calls follow it, and
+shown again. Evidence results (discovery, a read, a review) stay whole for the rest of their turn,
+however many calls follow them, and
 further calls in a gated batch are skipped with a note to call them again. Nothing carries over
 between turns, so Retry, Rewind and clipped old results never hide it. The evidence lists earlier
 vision reports and only those user messages that reply to or name an image of the thread (any of its
