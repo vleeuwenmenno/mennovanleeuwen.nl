@@ -312,25 +312,18 @@ async function browserChecks() {
     check('offline: Empires At War, its code missing, says it can\'t load (no white page)', () => {
       assert.match(msg, /Empires At War couldn't load/)
       assert.match(msg, /offline/)
-      assert.ok(msg.includes('Try again'))
+      assert.ok(msg.includes('Reload'))
     })
 
-    // Back online: Try again (or, when the browser remembers the failed load, the Reload it then
-    // offers) gets the game.
+    // Back online: Reload (never a retry in place, which can mount the game without its stylesheet)
+    // brings the game back, styled.
     await startProxy()
     await page.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
     await page.waitFor(`navigator.onLine`, 10_000)
-    await page.clickText('.games-play [role="alert"] button', 'Try again')
-    const recovered = `(async () => (await caches.open('mvlos-runtime').then((c) => c.keys())).some((r) => /EmpiresAtWar-[^/]*\\.js$/.test(r.url)) && !document.querySelector('.games-play [role="alert"]'))()`
-    try {
-      await page.waitFor(recovered, 20_000)
-    } catch {
-      const text = await page.eval<string>(`document.querySelector('.games-play [role="alert"]')?.innerText ?? ''`)
-      console.log(`after Try again online: ${text.replace(/\s+/g, ' ').slice(0, 120)}`)
-      await page.clickText('.games-play [role="alert"] button', 'Reload')
-      await page.waitFor(recovered, 60_000)
-    }
-    check('back online, the game that could not load opens', () => assert.ok(true))
+    await page.clickText('.games-play [role="alert"] button', 'Reload')
+    const recovered = `(async () => !document.querySelector('.games-play [role="alert"]') && [...document.styleSheets].some((sh) => /EmpiresAtWar-[^/]*\\.css$/.test(sh.href ?? '') && sh.cssRules.length > 0))()`
+    await page.waitFor(recovered, 60_000)
+    check('back online, Reload opens the game that could not load, with its styles', () => assert.ok(true))
   } finally {
     await browser.close()
   }
