@@ -2694,7 +2694,8 @@ window's saved geometry is retained, including when returning to a larger screen
 
 With the on-screen keyboard open, windows end just above it, whether the browser lays the
 keyboard over the page (iOS) or shrinks the page (Android, newer iOS). Text fields are at least
-16px on touch screens, so iOS does not zoom the page in when one gets focus.
+16px on touch screens, and on iOS the page has a maximum scale of 1, so focusing a field never
+zooms the page in; double-tap zoom is off everywhere. Pinch zoom still works.
 
 ## Games
 

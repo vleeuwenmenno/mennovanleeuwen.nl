@@ -12696,6 +12696,12 @@ kbd {
   }
 }
 
+/* A double tap zooms the page on phones; nothing here needs that, and it pans the whole OS.
+   Pinch zoom and scrolling still work. */
+html {
+  touch-action: manipulation;
+}
+
 /* iOS zooms the page in when a text field under 16px gets focus, and stays zoomed. That also
    reads as a pinch zoom to trackVisualViewport, so windows stop fitting above the keyboard.
    On touch screens every field is at least 16px. */
