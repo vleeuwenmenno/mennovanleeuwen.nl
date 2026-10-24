@@ -114,6 +114,16 @@ export function sourceRaster(bytes: Buffer, maxBytes = MAX_BYTES): { width: numb
   return orientation >= 5 ? { width: height, height: width, mime } : { width, height, mime }
 }
 
+/** Branch copies keep original attachment identities, including aliases inherited from ancestors.
+ * Called inside branchThread's transaction, after the identical attachment payload was copied. */
+export function aliasBranchedImageSources(original: number, copy: number) {
+  const db = database()
+  db.prepare(`INSERT OR IGNORE INTO agent_image_source_aliases(source_id, message_id)
+    SELECT 'attachment:' || m.id || ':' || a.key, ? FROM agent_messages m, json_each(m.attachments) a
+    WHERE m.id = ? AND m.role = 'user' AND json_extract(a.value, '$.kind') = 'image'`).run(copy, original)
+  db.prepare('INSERT OR IGNORE INTO agent_image_source_aliases(source_id, message_id) SELECT source_id, ? FROM agent_image_source_aliases WHERE message_id = ?').run(copy, original)
+}
+
 /** IDs identify persisted, owner-scoped bytes only. Never fetch a URL supplied by a tool. */
 export function imageSource(user: User, id: unknown): ImageSource {
   if (typeof id !== 'string') throw new HttpError(400, 'Choose source_image_id from list_image_attachments or list_generated_images')
@@ -125,12 +135,17 @@ export function imageSource(user: User, id: unknown): ImageSource {
   } else {
     const match = /^attachment:([1-9][0-9]{0,14}):([0-9])$/.exec(id)
     if (!match) throw new HttpError(400, 'Choose source_image_id from list_image_attachments or list_generated_images; URLs, paths and image data are not accepted')
-    const row = database().prepare("SELECT m.thread_id, m.attachments FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE m.id = ? AND m.role = 'user' AND t.user_id = ?").get(Number(match[1]), user.id) as { thread_id: string; attachments: string | null } | undefined
+    type AttachmentRow = { message_id: number; thread_id: string; attachments: string | null }
+    const db = database()
+    const row = db.prepare("SELECT m.id AS message_id, m.thread_id, m.attachments FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE m.id = ? AND m.role = 'user' AND t.user_id = ?").get(Number(match[1]), user.id) as AttachmentRow | undefined
+      ?? db.prepare(`SELECT m.id AS message_id, m.thread_id, m.attachments FROM agent_image_source_aliases a
+        JOIN agent_messages m ON m.id = a.message_id JOIN agent_threads t ON t.id = m.thread_id
+        WHERE a.source_id = ? AND m.role = 'user' AND t.user_id = ? ORDER BY m.id LIMIT 1`).get(id, user.id) as AttachmentRow | undefined
     const attachment = row?.attachments ? JSON.parse(row.attachments)[Number(match[2])] : null
     if (!attachment || attachment.kind !== 'image' || typeof attachment.data !== 'string') throw new HttpError(404, 'No such source image')
     if (attachment.data.length > Math.ceil(MAX_BYTES * 4 / 3) + 4) throw new HttpError(413, 'Source image must be at most 8 MiB')
     bytes = Buffer.from(attachment.data, 'base64'); name = String(attachment.name).slice(0, 200)
-    url = `/api/agents/threads/${row!.thread_id}/messages/${match[1]}/attachments/${match[2]}`
+    url = `/api/agents/threads/${row!.thread_id}/messages/${row!.message_id}/attachments/${match[2]}`
   }
   return { id, name, url, bytes, ...sourceRaster(bytes, UUID.test(id) ? 20 * 1024 * 1024 : MAX_BYTES) }
 }
