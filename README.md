@@ -1380,7 +1380,7 @@ pnpm check:agents-threads   # History search, ownership, attachment reads, bound
 ```
 
 The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
-`check:agents-images`, `check:agents-mail` and `check:agents-threads`.
+`check:agents-images`, `check:agents-image-files`, `check:agents-mail` and `check:agents-threads`.
 
 A reply that only thinks gets one more round asking for the answer, and an answer given while the
 todo list still has open items gets one asking to update it. Those asks go to the model as a user
@@ -1540,6 +1540,29 @@ file that is there. A failure says what it was: a read-only, locked or encrypted
 quota, this browser being full, Seafile no longer linked, or the picture deleted with its thread.
 The recorded settings are not saved next to it; **Download settings** under *Generation settings*
 still gives them as JSON.
+
+On a later explicit request, the agent can save an existing image with `save_generated_image`,
+in the app or the `agents` terminal. Images and Seafile changes must both be on, and Seafile must
+be linked; ComfyUI need not be connected. The tool takes an image ID from any of your own threads,
+an exact library ID or unambiguous library name, and a full `.png` file path such as
+`/Desktop/18+/picture.png`. It copies the original PNG bytes internally, without sending them
+through the model, and keeps the generated artifact. The approval card identifies the image,
+Seafile account, library, path, byte count and replacement choice. Ask first, Auto and Accept edits
+ask before saving; Plan refuses and Bypass runs without a card.
+
+The parent folder must exist. The agent can discover it with `seafile_list`, or use
+`seafile_mkdir` to create a folder you explicitly requested. It must ask when “Desktop” could
+mean different libraries, this browser or the host computer. Server tools cannot write browser-local
+Files or the host Desktop; the manual Save to Files action remains available for browser storage.
+An existing filename is refused unless you requested replacement and the tool sets `overwrite`.
+The destination and linked account are checked again after approval. Seafile can rename a new
+upload if another writer takes its name during transfer; the result reports the actual path and
+a warning, rather than claiming the requested path was written. Nothing is automatically deleted
+or retried. Results include the library, filename, byte count, PNG type and a private file link.
+Transfers are limited to 20 MiB and 45 seconds, honour Stop, and report Seafile permission, lock,
+authentication and storage errors. Cancellation cannot undo a file already accepted by Seafile;
+check the destination before retrying an interrupted or unconfirmed upload. Saving does not change
+the rule that a successful generation ends its turn silently.
 
 After approval, the app reserves the resolved output aspect ratio in a larger responsive image
 frame (up to 640 px wide). A themed 7×7 matrix of cubes animates while generation is active and
@@ -1770,7 +1793,9 @@ private image ID and stored bytes; deleting the original transfers retained imag
 branch. The last referencing thread’s deletion reclaims that storage. Rewinding a conversation does
 not reclaim its generated images. `pnpm check:agents-images` exercises generation with
 mock ComfyUI/Ollama, permissions, owner-only downloads, cancellation, quota accounting and failures
-without running a GPU job.
+without running a GPU job. `pnpm check:agents-image-files` checks exact PNG transfers to a mock
+Seafile, destination validation, ownership, approval, replacement, quota failures and cancellation
+with scratch accounts only.
 
 **Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
 title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;

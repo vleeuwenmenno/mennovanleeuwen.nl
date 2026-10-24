@@ -626,6 +626,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return `Searched ${s('library') || 'Seafile'} for “${s('query')}”`
     case 'seafile_mkdir':
       return `Make folder ${s('path')} in ${s('library')}`
+    case 'save_generated_image':
+      return `${a.overwrite === true ? 'Save/replace' : 'Save'} generated PNG ${s('path')} in ${s('library')}`
     case 'seafile_write':
       return `${a.overwrite === true ? 'Replace' : 'Write'} ${s('path')} in ${s('library')} (${size(new TextEncoder().encode(s('content')).length)})`
     case 'seafile_rename':

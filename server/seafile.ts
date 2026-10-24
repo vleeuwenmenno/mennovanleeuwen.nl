@@ -74,7 +74,7 @@ async function call(user: User, base: string, path: string, init: RequestInit & 
   const headers = new Headers(rest.headers)
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `Token ${token}`)
-  const res = await guardedFetch(user, `${base}${path}`, { ...rest, headers, redirect: 'manual', signal: AbortSignal.timeout(timeout) }).catch((e) => (rethrowEgress(e), null))
+  const res = await guardedFetch(user, `${base}${path}`, { ...rest, headers, redirect: 'manual', signal: rest.signal ? AbortSignal.any([rest.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile did not answer')
   return res
 }
@@ -178,8 +178,8 @@ export async function seafile<T>(user: User, path: string, init: RequestInit = {
 
 type ApiRepo = { repo_id: string; repo_name: string; type: string; owner_email?: string; owner_name?: string; encrypted: boolean; permission: string; size: number; last_modified: string }
 
-export async function libraries(user: User): Promise<Library[]> {
-  const { repos } = await seafile<{ repos: ApiRepo[] }>(user, '/api/v2.1/repos/?type=mine&type=shared&type=group&type=public')
+export async function libraries(user: User, signal?: AbortSignal): Promise<Library[]> {
+  const { repos } = await seafile<{ repos: ApiRepo[] }>(user, '/api/v2.1/repos/?type=mine&type=shared&type=group&type=public', { signal })
   for (const r of repos) encryptedRepos.set(`${user.id}:${r.repo_id}`, !!r.encrypted)
   const seen = new Set<string>()
   return repos
@@ -225,15 +225,15 @@ onUserGone((id) => {
   for (const m of [encryptedRepos, unlockedUntil]) for (const k of m.keys()) if (k.startsWith(`${id}:`)) m.delete(k)
 })
 
-async function isEncrypted(user: User, id: string): Promise<boolean> {
+async function isEncrypted(user: User, id: string, signal?: AbortSignal): Promise<boolean> {
   const key = `${user.id}:${id}`
-  if (!encryptedRepos.has(key)) encryptedRepos.set(key, !!(await seafile<{ encrypted?: boolean }>(user, `/api/v2.1/repos/${id}/`)).encrypted)
+  if (!encryptedRepos.has(key)) encryptedRepos.set(key, !!(await seafile<{ encrypted?: boolean }>(user, `/api/v2.1/repos/${id}/`, { signal })).encrypted)
   return encryptedRepos.get(key)!
 }
 
 /** Throws 423 for an encrypted library that is locked (here; Seafile may still hold it open). */
-export async function guard(user: User, id: string) {
-  if (!(await isEncrypted(user, id))) return
+export async function guard(user: User, id: string, signal?: AbortSignal) {
+  if (!(await isEncrypted(user, id, signal))) return
   if ((unlockedUntil.get(`${user.id}:${id}`) ?? 0) > Date.now()) return
   throw new HttpError(423, 'Locked')
 }
@@ -249,11 +249,11 @@ export const unlocked = (user: User) =>
 export const lock = (user: User, repo: unknown) => void unlockedUntil.delete(`${user.id}:${repoId(repo)}`)
 
 /** A folder's contents, and whether the account may change things in it. */
-export async function listDir(user: User, repo: unknown, path: unknown): Promise<{ perm: 'r' | 'rw'; entries: Entry[] }> {
+export async function listDir(user: User, repo: unknown, path: unknown, signal?: AbortSignal): Promise<{ perm: 'r' | 'rw'; entries: Entry[] }> {
   const id = repoId(repo)
   const p = seafPath(path)
-  await guard(user, id)
-  const body = await seafile<{ user_perm?: string; dirent_list: ApiDirent[] }>(user, `/api/v2.1/repos/${id}/dir/?p=${encodeURIComponent(p)}`)
+  await guard(user, id, signal)
+  const body = await seafile<{ user_perm?: string; dirent_list: ApiDirent[] }>(user, `/api/v2.1/repos/${id}/dir/?p=${encodeURIComponent(p)}`, { signal })
   return {
     perm: body.user_perm === 'rw' ? 'rw' : 'r',
     entries: body.dirent_list.map((d) => ({ name: d.name, dir: d.type === 'dir', size: d.size ?? 0, mtime: (d.mtime ?? 0) * 1000, id: d.id, ...(d.is_locked ? { locked: true } : {}) })),
@@ -264,14 +264,14 @@ export async function listDir(user: User, repo: unknown, path: unknown): Promise
  * A short-lived link on Seafile's file server, which the browser uses directly (it answers with
  * CORS headers): download (reusable for an hour), upload into a folder, or update (overwrite) a file.
  */
-export async function fileLink(user: User, repo: unknown, path: unknown, op: unknown): Promise<{ url: string }> {
+export async function fileLink(user: User, repo: unknown, path: unknown, op: unknown, signal?: AbortSignal): Promise<{ url: string }> {
   const id = repoId(repo)
   const p = seafPath(path)
   const q = encodeURIComponent(p)
-  await guard(user, id)
-  if (op === 'download') return { url: await seafile<string>(user, `/api2/repos/${id}/file/?p=${q}&reuse=1`) }
-  if (op === 'upload') return { url: await seafile<string>(user, `/api2/repos/${id}/upload-link/?p=${q}`) }
-  if (op === 'update') return { url: await seafile<string>(user, `/api2/repos/${id}/update-link/?p=${q}`) }
+  await guard(user, id, signal)
+  if (op === 'download') return { url: await seafile<string>(user, `/api2/repos/${id}/file/?p=${q}&reuse=1`, { signal }) }
+  if (op === 'upload') return { url: await seafile<string>(user, `/api2/repos/${id}/upload-link/?p=${q}`, { signal }) }
+  if (op === 'update') return { url: await seafile<string>(user, `/api2/repos/${id}/update-link/?p=${q}`, { signal }) }
   throw new HttpError(400, 'Unknown link')
 }
 

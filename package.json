@@ -45,6 +45,7 @@
     "check:empires-gui-fit": "node scripts/empires-gui-fit.ts",
     "check:empires-mechanics": "node scripts/empires-mechanics.ts",
     "check:agents-threads": "node scripts/agents-threads.ts",
+    "check:agents-image-files": "node scripts/agents-image-files.ts",
     "check:agents-images": "node scripts/agents-images.ts",
     "check:agents-observations": "node scripts/agents-observations.ts",
     "check:agents-lora-preview": "node scripts/agents-lora-preview.ts",

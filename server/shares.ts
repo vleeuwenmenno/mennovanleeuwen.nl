@@ -130,6 +130,7 @@ export function stepLabel(name: string, args: Record<string, unknown>): string {
     case 'multi_edit':
       return 'Edited a file'
     case 'seafile_mkdir':
+    case 'save_generated_image':
     case 'seafile_write':
     case 'seafile_rename':
     case 'seafile_move':

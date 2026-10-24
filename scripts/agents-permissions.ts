@@ -298,6 +298,7 @@ try {
   await api('PUT', '/api/agents/images/settings', { askBeforeSavingObservations: false })
   check('Observations: missing account still asks', decide(t, 'default', observation) === 'ask')
   const cal = { name: 'calendar_create_event', arguments: { title: 'x', start: '2026-10-14T10:00' } }
+  for (const mode of ['default', 'auto', 'acceptEdits', 'plan', 'bypass'] as const) check(`Image file saves: ${mode}`, decide(t, mode, { name: 'save_generated_image', arguments: { image_id: 'x', library: 'Home', path: '/Desktop/picture.png' } }) === (mode === 'plan' ? 'refuse' : mode === 'bypass' ? 'run' : 'ask'))
   check('Bypass: a calendar write still asks', decide(t, 'bypass', cal) === 'ask')
   check('Bypass: a calendar delete still asks', decide(t, 'bypass', { name: 'calendar_delete_event', arguments: { id: 'x' } }) === 'ask')
   check('Bypass: a seafile write to AGENTS.md still asks', decide(t, 'bypass', { name: 'seafile_write', arguments: { library: 'Home', path: '/AGENTS.md', content: 'x' } }) === 'ask')

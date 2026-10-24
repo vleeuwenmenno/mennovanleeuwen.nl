@@ -1,3 +1,4 @@
+import { prepareImageFileSave } from './agentImageFiles.ts'
 import { searchThreads, readThread } from './agentThreadSearch.ts'
 import { messageMentions } from '../src/data/agentMentions.ts'
 import { saveImageProfile, forgetImageProfile } from './agentImageProfiles.ts'
@@ -185,6 +186,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
   seafile_read: 'seafile',
   seafile_mkdir: 'seafile_write',
   seafile_write: 'seafile_write',
+  save_generated_image: 'seafile_write',
   seafile_rename: 'seafile_write',
   seafile_move: 'seafile_write',
   seafile_delete: 'seafile_write',
@@ -1471,6 +1473,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
       tool('seafile_search', 'Find files and folders in Seafile by name (part of the name is enough). Searches one library, or all of them without `library`.', { query: str('Part of the name'), library: lib }, ['query']),
       tool('seafile_read', 'Read a text file from Seafile (Markdown, text, code, CSV...).', { library: lib, path: str('File path inside the library, starting with /') }, ['library', 'path']),
       tool('seafile_mkdir', 'Make a folder in Seafile (the user is asked first).', { library: lib, path: str('The new folder path, starting with /') }, ['library', 'path']),
+      tool('save_generated_image', 'Save an existing generated PNG, from any of your own threads, to an explicitly requested Seafile library and exact file path. Transfers the original bytes internally; never pass base64, text content or a URL. Available only with Images and Seafile changes on and Seafile linked; no ComfyUI connection is needed. Discover library IDs and folders with seafile_list. Ask when the library or Desktop location is ambiguous: a Seafile Desktop folder is not the host Desktop or browser-local Files. This tool cannot write either of those; use the image’s manual Save to Files action for browser storage. The parent folder must exist; use seafile_mkdir only when the user requested the folder. Existing files are refused unless the user requested overwrite. Follows Seafile write approvals; Plan refuses, Bypass runs. Successful generation still ends its turn silently: save on a later explicit user request, then report the returned path.', { image_id: str('Exact generated image UUID from this or an earlier owned thread'), library: lib, path: str('Exact absolute file path inside the chosen library, ending in .png, for example /Desktop/18+/picture.png'), overwrite: { type: 'boolean', description: 'Replace the exact destination only when requested by the user; default false' } }, ['image_id', 'library', 'path']),
       tool('seafile_write', 'Write a text file in Seafile: a new one, or replace an existing one with `overwrite` (the user is asked first; Seafile keeps the old version).', { library: lib, path: str('File path, starting with /'), content: str('The whole file content'), overwrite: { type: 'boolean', description: 'Replace the file if it exists (default false)' } }, ['library', 'path', 'content']),
       tool('seafile_rename', 'Rename a file or folder in place (the user is asked first).', { library: lib, path: str('Its path, starting with /'), name: str('The new name, without a path') }, ['library', 'path', 'name']),
       tool('seafile_move', 'Move or copy a file or folder into another folder, in the same or another library (the user is asked first).', { library: lib, path: str('Its path, starting with /'), to_folder: str('The folder to put it in, starting with /'), to_library: str('Target library (default: the same one)'), copy: { type: 'boolean', description: 'Copy instead of move (default false)' } }, ['library', 'path', 'to_folder']),
@@ -1563,7 +1566,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   if (opts.terminal) tools.push(terminalTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
   // update_todos and ask_user belong to no group: they are always there. Planning only reads.
-  return tools.filter((t) => (t.function.name !== 'save_image_learning' || imageSettings(user).saveImageLearnings) && (!GROUP_OF[t.function.name] || groups.includes(GROUP_OF[t.function.name])) && (!NOTE_LINK_TOOLS.has(t.function.name) || groups.includes('notes')) && !(opts.permission === 'plan' && changes(t.function.name)))
+  return tools.filter((t) => (t.function.name !== 'save_generated_image' || groups.includes('images')) && (t.function.name !== 'save_image_learning' || imageSettings(user).saveImageLearnings) && (!GROUP_OF[t.function.name] || groups.includes(GROUP_OF[t.function.name])) && (!NOTE_LINK_TOOLS.has(t.function.name) || groups.includes('notes')) && !(opts.permission === 'plan' && changes(t.function.name)))
 }
 
 // --- reading addresses the agent was not given -------------------------------------------------
@@ -1621,7 +1624,7 @@ function givenUrls(thread: string): Set<string> {
   return given
 }
 
-const PRIVATE_TOOLS = new Set(['search_threads', 'read_thread', 'search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS, ...MAIL_TOOLS])
+const PRIVATE_TOOLS = new Set(['search_threads', 'read_thread', 'search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'save_generated_image', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS, ...MAIL_TOOLS])
 /** Whether the model has anything private in front of it: memories, private tool results, attachments. */
 function holdsPrivate(user: User, thread: string): boolean {
   if (listMemories(user).length) return true
@@ -1819,7 +1822,7 @@ async function webReadGate(user: User, key: string, thread: string, permission: 
  * event lands in a calendar others may share, and can mail its guests. (Mail asks for every call,
  * reads too: see decide.)
  */
-const NEEDS_APPROVAL = new Set(['generate_image', 'save_image_learning', 'save_image_profile', 'seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
+const NEEDS_APPROVAL = new Set(['generate_image', 'save_generated_image', 'save_image_learning', 'save_image_profile', 'seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
 const changes = (name: string) => NEEDS_APPROVAL.has(name) || NOTE_LINK_WRITES.has(name) || MAIL_WRITES.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
 const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
 
@@ -3157,6 +3160,10 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               return JSON.stringify({ error: mailError(e) })
             }
             if (decision === 'run') notes[index] = mailReadsUntil(row.id) ? 'You allowed mail reads in this thread for a while' : 'You always allow mail reads (Settings → Agents → Permissions)'
+          }
+          if (c.name === 'save_generated_image') {
+            try { calendar = await prepareImageFileSave(user, c.arguments ?? {}, ctl.signal) }
+            catch (e) { if (ctl.signal.aborted) throw e; return JSON.stringify({ error: e instanceof HttpError && e.status === 423 ? 'That library is encrypted and locked: unlock it in Files first' : (e as Error).message }) }
           }
           if (c.name === 'generate_image') {
             try {
