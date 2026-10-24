@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
 import { openContextMenu, type MenuItem } from '../../os/ContextMenu'
 import { notify } from '../../os/notify'
 import { playUrl } from '../../os/playMode'
@@ -6,6 +6,7 @@ import { useWM, type WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
 import { Library } from './Library'
+import { lazyGame } from './lazyGame'
 import { notePlayed } from './prefs'
 import { holdSession, newSession } from './session'
 import { Minecraft } from './Minecraft'
@@ -16,8 +17,9 @@ import { Snake } from './Snake'
 import { Tetris } from './Tetris'
 
 // Gladiator and Empires At War are big (art, rules, sound), so they load only when picked.
-const Gladiator = lazy(() => import('./Gladiator').then((m) => ({ default: m.Gladiator })))
-const EmpiresAtWar = lazy(() => import('./EmpiresAtWar').then((m) => ({ default: m.EmpiresAtWar })))
+// When their code can't be loaded, they say so instead of taking the page down (lazyGame.tsx).
+const Gladiator = lazyGame('Gladiator', () => import('./Gladiator').then((m) => m.Gladiator))
+const EmpiresAtWar = lazyGame('Empires At War', () => import('./EmpiresAtWar').then((m) => m.EmpiresAtWar))
 
 const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'tetris': Tetris,

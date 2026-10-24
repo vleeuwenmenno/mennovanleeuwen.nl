@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto'
 import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
+import zlib, { brotliCompress, gzip } from 'node:zlib'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
@@ -53,11 +57,44 @@ const serviceWorker = (): Plugin => ({
       .map((f) => `/${f}`)
     const statics = ['/', '/favicon.svg', '/manifest.webmanifest', '/icons/app.svg', '/icons/app-192.png', '/icons/boltwarden.svg', '/recents.json', '/contributions.json']
     const precache = [...statics, ...built]
-    const version = createHash('sha256').update(precache.join('\n')).digest('hex').slice(0, 12)
-    const source = readFileSync(new URL('./pwa/sw.js', import.meta.url), 'utf8').replace('__VERSION__', version).replace('__PRECACHE__', JSON.stringify(precache))
+    const template = readFileSync(new URL('./pwa/sw.js', import.meta.url), 'utf8')
+    // The worker's own code counts too, so a change to it alone still gets a fresh shell cache.
+    const version = createHash('sha256').update(`${template}\n${precache.join('\n')}`).digest('hex').slice(0, 12)
+    const source = template.replace('__VERSION__', version).replace('__PRECACHE__', JSON.stringify(precache))
     this.emitFile({ type: 'asset', fileName: 'sw.js', source })
   },
 })
+
+/**
+ * Brotli (quality 11) and gzip (level 9) copies next to each text file of the build, for
+ * server/index.ts to send to browsers that accept them. Only kept when smaller than the file.
+ */
+const precompress = (): Plugin => {
+  let outDir = 'dist'
+  return {
+    name: 'mvlos-precompress',
+    apply: 'build',
+    configResolved: (c) => void (outDir = resolve(c.root, c.build.outDir)),
+    async closeBundle() {
+      const TEXT = /\.(js|mjs|css|html|svg|json|webmanifest|txt)$/
+      const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : TEXT.test(e.name) ? [join(dir, e.name)] : []))
+      const br = promisify(brotliCompress)
+      const gz = promisify(gzip)
+      await Promise.all(
+        walk(outDir).map(async (path) => {
+          const raw = await readFile(path)
+          if (raw.length < 256) return
+          const [b, g] = await Promise.all([
+            br(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length, [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT } }),
+            gz(raw, { level: 9 }),
+          ])
+          if (b.length < raw.length) await writeFile(`${path}.br`, b)
+          if (g.length < raw.length) await writeFile(`${path}.gz`, g)
+        }),
+      )
+    },
+  }
+}
 
 /** Release builds get APP_VERSION/APP_COMMIT from the workflow; local ones ask git. */
 const git = (cmd: string) => {
@@ -75,7 +112,7 @@ const appCommit = process.env.APP_COMMIT || git('rev-parse HEAD')
 Object.assign(process.env, { ...loadEnv('development', process.cwd(), ''), ...process.env })
 
 export default defineConfig({
-  plugins: [react(), liveApi(), serviceWorker()],
+  plugins: [react(), liveApi(), serviceWorker(), precompress()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __APP_COMMIT__: JSON.stringify(appCommit),

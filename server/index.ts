@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import { handleApi } from './api.ts'
 import { empiresUpgrade, startEmpires } from './empires.ts'
 import { startAgents } from './agents.ts'
@@ -39,6 +40,41 @@ function cacheFor(path: string) {
   if (path.startsWith('/assets/')) return 'public, max-age=31536000, immutable'
   if (path.endsWith('.json')) return 'public, max-age=300'
   return 'no-cache'
+}
+
+// The build writes a Brotli (.br) and a gzip (.gz) copy next to each text file (the precompress
+// plugin in vite.config.ts): sent to browsers that accept them, the raw file to the rest.
+const COMPRESSIBLE = new Set(['.js', '.mjs', '.css', '.html', '.svg', '.json', '.webmanifest', '.txt'])
+const VARIANTS = [
+  { encoding: 'br', suffix: '.br' },
+  { encoding: 'gzip', suffix: '.gz' },
+] as const
+type Encoding = (typeof VARIANTS)[number]['encoding']
+
+/**
+ * The encodings an Accept-Encoding header allows, the most preferred (highest q) first, Brotli
+ * before gzip when they tie. A Range request gets none: a range of the raw file is what it asks
+ * for, never of a compressed one.
+ *
+ * `identity;q=0` (refusing the raw file) is not honoured with a 406: when neither copy fits, the
+ * raw file is sent anyway, which every browser accepts.
+ */
+function accepted(req: IncomingMessage): Encoding[] {
+  const header = req.headers['accept-encoding']
+  if (req.headers.range || typeof header !== 'string') return []
+  const q = new Map<string, number>()
+  for (const part of header.toLowerCase().split(',')) {
+    const [name, ...params] = part.trim().split(';')
+    if (!name) continue
+    const qp = params.map((p) => p.trim()).find((p) => p.startsWith('q='))
+    const value = qp ? Number(qp.slice(2)) : 1
+    q.set(name.trim(), Number.isFinite(value) ? value : 0)
+  }
+  const weight = (e: Encoding) => q.get(e) ?? q.get('*') ?? 0
+  // VARIANTS is in tie order (br, then gzip), and the sort is stable.
+  return VARIANTS.map((v) => v.encoding)
+    .filter((e) => weight(e) > 0)
+    .sort((a, b) => weight(b) - weight(a))
 }
 
 async function file(path: string) {
@@ -90,12 +126,15 @@ function playHead(path: string): { key: string; meta: string; noscript: string }
 }
 
 /** index.html with another page's title, description, link preview and noscript text, made once per page. */
-const swappedPages = new Map<string, Buffer>()
-async function swappedIndex(full: string, key: string, meta: string, noscript: string): Promise<Buffer> {
+type Page = Record<Encoding | 'raw', Buffer>
+const swappedPages = new Map<string, Page>()
+async function swappedIndex(full: string, key: string, meta: string, noscript: string): Promise<Page> {
   const hit = swappedPages.get(key)
   if (hit) return hit
   const html = await readFile(full, 'utf8')
-  const page = Buffer.from(html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, meta).replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, noscript))
+  const raw = Buffer.from(html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, meta).replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, noscript))
+  // Compressed once too, like the build's own copies: a few kilobytes, so quick.
+  const page = { raw, br: brotliCompressSync(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } }), gzip: gzipSync(raw, { level: 9 }) }
   swappedPages.set(key, page)
   return page
 }
@@ -134,19 +173,46 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
   }
   const play = served === '/index.html' ? playHead(path) : null
   if (served === '/index.html' && (play || /^\/cv\/?$/.test(path))) {
-    const body = play ? await swappedIndex(found.full, play.key, play.meta, play.noscript) : await swappedIndex(found.full, 'cv', CV_META, CV_NOSCRIPT)
-    res.writeHead(200, { 'Content-Type': TYPES['.html'], 'Content-Length': body.length, 'Cache-Control': 'no-cache', ...SECURITY })
+    const page = play ? await swappedIndex(found.full, play.key, play.meta, play.noscript) : await swappedIndex(found.full, 'cv', CV_META, CV_NOSCRIPT)
+    const encoding = accepted(req)[0]
+    const body = encoding ? page[encoding] : page.raw
+    res.writeHead(200, {
+      'Content-Type': TYPES['.html'],
+      'Content-Length': body.length,
+      ...(encoding && { 'Content-Encoding': encoding }),
+      Vary: 'Accept-Encoding',
+      'Cache-Control': 'no-cache',
+      ...SECURITY,
+    })
     res.end(req.method === 'HEAD' ? undefined : body)
     return
   }
+  // The compressed copy the browser takes, if the build made one; otherwise the file itself.
+  const compressible = COMPRESSIBLE.has(extname(found.full))
+  let send = found
+  let encoding: Encoding | undefined
+  if (compressible) {
+    for (const e of accepted(req)) {
+      const v = VARIANTS.find((x) => x.encoding === e)!
+      const s = await stat(found.full + v.suffix).catch(() => null)
+      if (s?.isFile()) {
+        send = { full: found.full + v.suffix, size: s.size }
+        encoding = e
+        break
+      }
+    }
+  }
   res.writeHead(200, {
+    // The type of the file asked for, not of its .br/.gz copy.
     'Content-Type': TYPES[extname(found.full)] ?? 'application/octet-stream',
-    'Content-Length': found.size,
+    'Content-Length': send.size,
+    ...(encoding && { 'Content-Encoding': encoding }),
+    ...(compressible && { Vary: 'Accept-Encoding' }),
     'Cache-Control': cacheFor(served),
     ...SECURITY,
   })
   if (req.method === 'HEAD') res.end()
-  else createReadStream(found.full).pipe(res)
+  else createReadStream(send.full).pipe(res)
 }
 
 // Anyone can send anything: a request that breaks something gets an error, and the server and

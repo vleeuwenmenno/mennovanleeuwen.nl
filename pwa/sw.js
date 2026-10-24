@@ -5,7 +5,8 @@
 // - The app shell (index.html, the built JS/CSS, icons) is cached up front, so the OS boots
 //   offline.
 // - Pages: network first, the cached shell when offline.
-// - Hashed /assets/: cache first (they never change under the same name).
+// - Hashed /assets/: cache first (they never change under the same name). A release reuses the
+//   ones already cached and downloads only those that changed.
 // - Data snapshots (*.json) and Google Fonts: network first / stale-while-revalidate.
 // - /api/*, Agents shared links (/s/*) and other sites: always the network, never cached (a link
 //   that was revoked must stop showing, offline too).
@@ -14,9 +15,45 @@ const VERSION = '__VERSION__'
 const PRECACHE = __PRECACHE__
 const SHELL = `mvlos-shell-${VERSION}`
 const RUNTIME = 'mvlos-runtime'
+// The server sends Vary: Accept-Encoding with its compressed files. A cached body is already
+// decoded, so the encoding a request would accept must not stop it from matching.
+const MATCH = { ignoreVary: true }
+
+// A hashed file (/assets/name-<hash>.js) never changes under its name, so one kept from an earlier
+// release (its shell cache, or the runtime cache) is reused rather than downloaded again: a release
+// only downloads what changed. Like cache.addAll, all or nothing: every file is in hand before any is
+// stored, and a failure fails the install, so the release that is running stays as it was.
+//
+// A cache that already existed under this name is left as it is when the install fails. It can only
+// come from an install of this same worker: VERSION covers the worker's code and the file list, and
+// the browser doesn't install a byte-identical worker again. Either that install finished (and this
+// one only rewrites the same files) or it failed (and never took over). Only an install that
+// succeeds, after every file is stored, can lead to activation, so a half-filled shell is never used.
+async function precache() {
+  const existed = await caches.has(SHELL)
+  const cache = await caches.open(SHELL)
+  try {
+    const got = await Promise.all(
+      PRECACHE.map(async (url) => {
+        if (url.startsWith('/assets/')) {
+          const kept = await caches.match(url, MATCH)
+          if (kept && kept.ok && kept.type === 'basic') return [url, kept]
+        }
+        const res = await fetch(url)
+        if (!res.ok) throw new TypeError(`precache: ${url} answered ${res.status}`)
+        return [url, res]
+      }),
+    )
+    await Promise.all(got.map(([url, res]) => cache.put(url, res)))
+  } catch (err) {
+    // Half a shell is no use: the next attempt starts clean. Only one this install made itself.
+    if (!existed) await caches.delete(SHELL)
+    throw err
+  }
+}
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(PRECACHE)))
+  event.waitUntil(precache())
 })
 
 self.addEventListener('activate', (event) => {
@@ -96,14 +133,14 @@ async function networkFirst(request, cacheName, fallback) {
     if (res.ok) (await caches.open(cacheName)).put(request, res.clone())
     return res
   } catch (err) {
-    const hit = (await caches.match(request)) ?? (fallback && (await caches.match(fallback)))
+    const hit = (await caches.match(request, MATCH)) ?? (fallback && (await caches.match(fallback, MATCH)))
     if (hit) return hit
     throw err
   }
 }
 
 async function cacheFirst(request) {
-  const hit = await caches.match(request)
+  const hit = await caches.match(request, MATCH)
   if (hit) return hit
   const res = await fetch(request)
   if (res.ok) (await caches.open(RUNTIME)).put(request, res.clone())
@@ -112,7 +149,7 @@ async function cacheFirst(request) {
 
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(RUNTIME)
-  const hit = await cache.match(request)
+  const hit = await cache.match(request, MATCH)
   const fresh = fetch(request)
     .then((res) => {
       if (res.ok || res.type === 'opaque') cache.put(request, res.clone())
