@@ -1449,7 +1449,7 @@ The synthetic browser check is `node scripts/agents-mask-check.ts http://127.0.0
 
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
 preserve more source structure; higher values allow larger changes. This changes the **whole image**:
-there are no masks, localized inpainting, hires or dedicated upscaling yet, and unchanged regions
+there are no masks, localized inpainting or hires diffusion refinement yet, and unchanged regions
 are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
 VAEEncode → KSampler path, with the same encoder/VAE, LoRA and sampling validation as text-to-image.
 The live catalog must support LoadImage, VAEEncode and ImageScale's lanczos/center options; otherwise
