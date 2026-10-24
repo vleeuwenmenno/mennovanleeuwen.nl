@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { sfPath } from './seafile'
+import { photoOriginalUrl } from './photoAttachments'
 
 // The Photos app's data (server/photos.ts does the work): which sources are set up, the months
 // there are photos in and each month's photos, a photo's details, albums and favourites, from
@@ -215,7 +216,7 @@ export function countOf(items: { video: boolean }[], n = items.length): string {
 
 export type ThumbSize = 'small' | 'medium' | 'large'
 export const thumbUrl = (source: SourceId, id: string, size: ThumbSize, v = '') => `/api/photos/${source}/thumb?id=${encodeURIComponent(id)}&size=${size}${v ? `&v=${v}` : ''}`
-export const originalUrl = (source: SourceId, id: string, download = false) => `/api/photos/${source}/original?id=${encodeURIComponent(id)}${download ? '&download=1' : ''}`
+export const originalUrl = photoOriginalUrl
 
 /** Pictures a browser shows as they are; others (HEIC, TIFF) show as their large thumbnail. */
 export const webShows = (name: string) => /\.(jpe?g|png|webp|gif|avif)$/i.test(name)
