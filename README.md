@@ -1436,7 +1436,7 @@ forthcoming localized editing; it is not yet connected to an image job or attach
 Pass `sourceUrl` (authenticated same-origin HTTP(S)), `sourceName`, EXIF-oriented `width` and
 `height`, `onCancel`, and `onApply({ mask, width, height })`. The caller closes the editor after
 applying. Cancel never calls `onApply`; changing the source or dimensions starts a fresh mask.
-The editor checks the loaded dimensions and accepts at most 8192 pixels per side and 16,000,000
+The editor checks the loaded dimensions and accepts at most 8192 pixels per side and 16,777,216
 pixels total. The exported PNG is opaque and binary: white edits, black preserves; the preview
 uses the current theme accent. Empty masks and exports above 8 MiB report an error.
 

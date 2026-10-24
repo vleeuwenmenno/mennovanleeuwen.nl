@@ -19,7 +19,7 @@ const MAX_STROKES = 512
 const MAX_BYTES = 8 * 1024 * 1024
 
 export function maskDimensionsValid(width: number, height: number) {
-  return Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 && width <= 8192 && height <= 8192 && width * height <= 16_000_000
+  return Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 && width <= 8192 && height <= 8192 && width * height <= 16_777_216
 }
 
 function draw(ctx: CanvasRenderingContext2D, stroke: Stroke, color: string, opaque = false) {

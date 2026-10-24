@@ -41,6 +41,11 @@ try {
     return (x: number, y: number) => png.data[(y * png.width + x) * 4]
   }
   await ready()
+  assert.deepEqual(await page.eval(`(async () => {
+    const { maskDimensionsValid: valid } = await import('/src/apps/AgentsMaskEditor.tsx')
+    return [valid(4096, 4096), valid(8192, 2048), valid(4096, 4097), valid(8193, 1)]
+  })()`), [true, true, false, false])
+  console.log('PASS 4096-square / 16,777,216-pixel and 8192-side boundaries')
   assert.equal(await page.eval('document.activeElement.textContent'), 'Cancel')
   assert.equal(await page.eval(`document.querySelector('.agt-mask-apply').disabled`), true)
   let p = await at(.25, .25)
