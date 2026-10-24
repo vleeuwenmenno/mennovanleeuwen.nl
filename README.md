@@ -1990,8 +1990,9 @@ The facts come from three places:
 
 - **LoRA Manager** (optional, on the account's ComfyUI): base model, tags, auto tags, trained words,
   usage tips (a LoRA's recommended strength), notes and its Civitai IDs and file hash. All three
-  lists are paged (100 a page, at most 3000 items, 2 MiB a page) and cached for 30 minutes per
-  backend, and joined to ComfyUI's installed names by exact folder and file name only.
+  lists are paged (100 a page; at most 30 pages, 3000 records read and 16 MiB per list, each bound
+  on its own), cached for 30 minutes per backend (a minute when a read failed or timed out partway,
+  keeping what it read), and joined to ComfyUI's installed names by exact folder and file name only.
 - **Civitai** (when **Look up model details on Civitai** is on): the version's base model, trained
   words and description (HTML stripped, 3000 characters), the model page's description (1500), two
   or three short example prompts, and the settings its example pictures agree on: the most common
@@ -2001,6 +2002,8 @@ The facts come from three places:
   otherwise the consensus says it is unmapped. Lookups go by Civitai version ID, else by file hash,
   only to `https://civitai.com` (a redirect anywhere else is refused, not followed), with a 5 second
   timeout and a 1 MiB cap. Answers are cached in the database for 7 days, "not on Civitai" for a day.
+  Anonymous answers are shared; answers fetched with an account's key are kept under an HMAC of
+  that account and key (never the key itself), so no other account or key is served them.
 - **Family defaults** (`src/data/modelFamilies.ts`), keyed by base model: Illustrious and NoobAI
   (Euler a or DPM++ 2M Karras, about 26 steps, CFG 5, clip skip 2), Pony (needs score tags),
   SDXL, SD 1.5, Krea 2 turbo and raw, Z-Image and Z-Image Turbo (CFG 1, few steps). Flux, Anima and
@@ -2009,8 +2012,9 @@ The facts come from three places:
 The result's `recommended` block (preset, sampler, scheduler, steps, CFG, clip skip, size) says its
 `source`: `civitai_examples` with how many pictures agree, `family_default`, or `user_saved` for a
 size the thread saved. The Civitai consensus wins over the family default, and the user's explicit
-request wins over both. LoRAs get a recommended strength (usage tips, then their weight in the
-example prompts), their trained words, and whether they match the selected model's family. The
+request wins over both. LoRAs get a recommended strength (usage tips, then their own weight in the
+example pictures: a resource entry with their Civitai version ID, or a resource or `<lora:NAME:w>`
+tag whose name is their file; none when that cannot be told), their trained words, and whether they match the selected model's family. The
 agent calls `model_details` once before the first generation with a model or LoRA it has not used
 in the thread. `list_image_models` also gives every listed model and LoRA its base model, family
 and top tags (`assetFacts`), so the agent can pick a model by style. The model browser's details
@@ -2019,14 +2023,15 @@ one line per call: model, family, recommended settings and source.
 
 `generate_image` takes `clip_skip` (1 to 4, checkpoints only; `CLIPSetLastLayer`). A
 **v-prediction** checkpoint (NoobAI v-pred and its merges, found from "vpred"/"v-pred" in its
-name, tags or Civitai version) gets `ModelSamplingDiscrete` with `v_prediction` and `zsnr`
-automatically; the server decides this, never the tool call. Without that node the model is
+name, tags, Civitai version name, or its version or model page description) gets
+`ModelSamplingDiscrete` with `v_prediction` and `zsnr` automatically. The server decides this,
+never the tool call, with the same detector and cached Civitai facts as `model_details`. Without that node the model is
 reported as unsupported and generation is refused, as it would render garbage.
 
 **Quality check** (**Check images and retry once if clearly broken**, on by default). After each
 generated, refined or inpainted picture the server checks it: first the pixels (almost all black,
-white or one flat colour, or noise across the whole frame; pictures under 64 pixels a side are
-skipped), then, if those pass and one of the account's models can see pictures, one capped call
+white or one flat colour, or noise across the whole frame, on a sampled grid of rows and columns;
+pictures under 64 pixels a side are skipped, and above about 4 megapixels only vision judges), then, if those pass and one of the account's models can see pictures, one capped call
 to the cheapest of them (the safety check model, the quick model, the title model, then the
 thread's own) with a fixed rubric that returns a score, `very_bad` and defects. Only broken output
 counts as very bad: melted faces or anatomy, mush, noise, a clearly wrong subject. Style and
@@ -2035,7 +2040,9 @@ one comes back to the agent with `quality: { very_bad, score, defects }` and one
 it tells the user in a sentence what was wrong and what it changes, and generates once more with
 better settings (the model's recommended ones, another sampler, more steps, a CFG fix, another
 model of the same family). The server allows one automatic retry per user message and refuses a
-third generation; if the retry is broken too, the agent explains instead. Very bad results and
+third generation; if the retry is broken too, the agent explains instead. A retry counts as fixed
+only when the same kind of check that flagged the first picture passes it; a vision check that
+fails or times out is inconclusive, and the retry's result keeps the first attempt's defects. Very bad results and
 retries that fixed one are saved as image observations with the source **Automatic check** (while
 saving is on and observations do not ask first). Upscales and LaMa removals are not checked.
 

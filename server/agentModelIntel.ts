@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
-import { database } from './db.ts'
+import { database, privateDigest } from './db.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json } from './http.ts'
 import { imageBackendScope, imageCatalog, imageSettings, type ImageSettings } from './agentImages.ts'
@@ -26,8 +26,11 @@ type ManagerItem = { kind: AssetKind; category: Category; path: string; title: s
 export type ManagerFacts = Omit<ManagerItem, 'path'> & { name: string }
 
 const MANAGER_PAGE = 100
-const MANAGER_MAX_ITEMS = 3000
+/** Per list, each bound on its own: pages requested, raw records read (accepted or not), bytes read. */
+export const MANAGER_MAX_PAGES = 30
+const MANAGER_MAX_RAW = 3000
 const MANAGER_PAGE_BYTES = 2 * 1024 * 1024
+const MANAGER_LIST_BYTES = 16 * 1024 * 1024
 const MANAGER_TTL = 30 * 60_000
 const MANAGER_SCOPES = 64
 const CIVITAI = 'https://civitai.com'
@@ -106,43 +109,54 @@ export function joinInstalled(items: readonly ManagerItem[], installed: Partial<
 
 // --- LoRA Manager, paged and cached per backend --------------------------------------------------
 
-type ManagerIndex = { available: boolean; items: ManagerItem[]; truncated: boolean }
+type ManagerIndex = { available: boolean; items: ManagerItem[]; truncated: boolean; complete?: boolean }
 const managerCache = new Map<string, { expires: number; value: Promise<ManagerIndex> }>()
 /** Test hook and the Refresh button: forget LoRA Manager lists. */
 export const clearManagerCache = () => managerCache.clear()
 
-async function managerList(user: User, s: ImageSettings, path: string, kind: AssetKind, signal: AbortSignal): Promise<{ ok: boolean; items: ManagerItem[]; truncated: boolean }> {
+/**
+ * One LoRA Manager list, page by page, until it ends or a bound is hit: 30 pages, 3000 raw records
+ * and 16 MiB, each counted on its own, so pages of records that are all rejected still stop. A
+ * failed or timed-out page keeps what was read before it (`complete` false).
+ */
+async function managerList(user: User, s: ImageSettings, path: string, kind: AssetKind, signal: AbortSignal): Promise<{ ok: boolean; items: ManagerItem[]; truncated: boolean; complete: boolean }> {
   const items: ManagerItem[] = []
-  let any = false
-  for (let page = 1; items.length < MANAGER_MAX_ITEMS; page++) {
-    const res = await guardedFetch(user, `${s.url}${path}?page=${page}&page_size=${MANAGER_PAGE}`, { redirect: 'manual', headers: s.token ? { Authorization: `Bearer ${s.token}` } : {}, signal })
-    if (!res.ok) { await res.body?.cancel().catch(() => {}); break }
+  let any = false, raw = 0, bytes = 0
+  for (let page = 1; page <= MANAGER_MAX_PAGES && raw < MANAGER_MAX_RAW && bytes < MANAGER_LIST_BYTES; page++) {
     let data: { items?: unknown; total_pages?: unknown }
-    try { data = JSON.parse((await readCapped(res, MANAGER_PAGE_BYTES)).toString()) } catch { break }
-    if (!data || !Array.isArray(data.items)) break
+    try {
+      const res = await guardedFetch(user, `${s.url}${path}?page=${page}&page_size=${MANAGER_PAGE}`, { redirect: 'manual', headers: s.token ? { Authorization: `Bearer ${s.token}` } : {}, signal })
+      if (!res.ok) { await res.body?.cancel().catch(() => {}); return { ok: any, items, truncated: false, complete: res.status === 404 } }
+      const body = await readCapped(res, Math.min(MANAGER_PAGE_BYTES, MANAGER_LIST_BYTES - bytes))
+      bytes += body.length
+      data = JSON.parse(body.toString())
+    } catch { return { ok: any, items, truncated: any, complete: false } }
+    if (!data || !Array.isArray(data.items)) return { ok: any, items, truncated: false, complete: any }
     any = true
-    for (const raw of data.items.slice(0, MANAGER_PAGE)) { const item = managerItem(raw, kind); if (item) items.push(item) }
+    const records = data.items.slice(0, Math.min(MANAGER_PAGE, MANAGER_MAX_RAW - raw))
+    raw += records.length
+    for (const record of records) { const item = managerItem(record, kind); if (item) items.push(item) }
     const pages = typeof data.total_pages === 'number' ? data.total_pages : null
-    if (data.items.length < MANAGER_PAGE || (pages !== null && page >= pages)) return { ok: true, items, truncated: false }
+    if (data.items.length < MANAGER_PAGE || (pages !== null && page >= pages)) return { ok: true, items, truncated: false, complete: true }
   }
-  return { ok: any, items: items.slice(0, MANAGER_MAX_ITEMS), truncated: items.length >= MANAGER_MAX_ITEMS }
+  return { ok: any, items, truncated: true, complete: true }
 }
 
 /** Every checkpoint, LoRA and embedding LoRA Manager lists, for 30 minutes per backend. Optional: absent means no facts. */
-export function managerIndex(user: User, s = imageSettings(user)): Promise<ManagerIndex> {
+export function managerIndex(user: User, s = imageSettings(user), timeout = 20_000): Promise<ManagerIndex> {
   const scope = imageBackendScope(user, s)
   const hit = managerCache.get(scope)
   if (hit && hit.expires > Date.now()) return hit.value
   const value = (async (): Promise<ManagerIndex> => {
     if (!s.url) return { available: false, items: [], truncated: false }
-    const signal = AbortSignal.timeout(20_000)
+    const signal = AbortSignal.timeout(timeout)
     const lists = await Promise.all(([['/api/lm/checkpoints/list', 'checkpoint'], ['/api/lm/loras/list', 'lora'], ['/api/lm/embeddings/list', 'embedding']] as const)
-      .map(([path, kind]) => managerList(user, s, path, kind, signal).catch(() => ({ ok: false, items: [] as ManagerItem[], truncated: false }))))
-    return { available: lists.some((l) => l.ok), items: lists.flatMap((l) => l.items), truncated: lists.some((l) => l.truncated) }
+      .map(([path, kind]) => managerList(user, s, path, kind, signal).catch(() => ({ ok: false, items: [] as ManagerItem[], truncated: false, complete: false }))))
+    return { available: lists.some((l) => l.ok), items: lists.flatMap((l) => l.items), truncated: lists.some((l) => l.truncated), complete: lists.every((l) => l.complete) }
   })()
   managerCache.set(scope, { expires: Date.now() + MANAGER_TTL, value })
-  // A failed read is retried after a minute, not half an hour.
-  value.then((v) => { if (!v.available) managerCache.set(scope, { expires: Date.now() + 60_000, value }) }, () => managerCache.delete(scope))
+  // A failed or partial read is tried again after a minute, not half an hour.
+  value.then((v) => { if (!v.available || !v.complete) managerCache.set(scope, { expires: Date.now() + 60_000, value }) }, () => managerCache.delete(scope))
   while (managerCache.size > MANAGER_SCOPES) managerCache.delete(managerCache.keys().next().value!)
   return value
 }
@@ -174,14 +188,24 @@ async function quickFacts(user: User, catalog: Catalog, s: ImageSettings, ms = 4
 /** Base model and top tags per installed name, for list_image_models. From the cache, or a read bounded to 4 seconds. */
 export async function assetHints(user: User, catalog: Catalog, names: Iterable<string>) {
   const wanted = new Set(names)
-  const { facts } = await quickFacts(user, catalog, imageSettings(user))
+  const s = imageSettings(user), scope = civitaiScope(user.id, s.civitaiKey)
+  const { facts } = await quickFacts(user, catalog, s)
   const out: Record<string, { base_model: string; family: string | null; tags: string[] }> = {}
-  for (const f of facts) if (wanted.has(f.name)) out[f.name] = { base_model: f.baseModel, family: familyOf(f.baseModel, { name: `${f.name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f) }), tags: [...f.tags.filter((t) => !/^(base models?|checkpoint|lora)$/i.test(t))].slice(0, 5) }
+  for (const f of facts) if (wanted.has(f.name)) out[f.name] = { base_model: f.baseModel, family: familyOf(f.baseModel, { name: `${f.name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, cachedCivitai(scope, f)) }), tags: [...f.tags.filter((t) => !/^(base models?|checkpoint|lora)$/i.test(t))].slice(0, 5) }
   return out
 }
 
-const assetIsVpred = (f: Pick<ManagerFacts, 'name' | 'title' | 'versionName' | 'tags' | 'autoTags'>, civitai?: { versionName?: string; description?: string; family?: FamilyId | null }) =>
-  isVpred(f.name, f.title, f.versionName, ...f.tags, ...f.autoTags, civitai?.versionName) || (!!civitai?.description && (civitai.family === 'noobai' || civitai.family === 'noobai_vpred') && /\bv[-_ ]?pred(?:iction)?\b/i.test(civitai.description) && !/\b(?:not|no|non)[- ]v[-_ ]?pred/i.test(civitai.description))
+/** Families whose checkpoints come in v-prediction builds, where a description saying so counts. */
+const VPRED_FAMILIES = new Set<FamilyId | null>(['noobai', 'noobai_vpred', 'illustrious', 'sdxl', 'sd15', null])
+/**
+ * The one v-prediction decision, for model_details and generate_image alike: names, tags and the
+ * Civitai version name, or the version or model description (for families that have v-pred builds).
+ */
+export function assetIsVpred(f: Pick<ManagerFacts, 'name' | 'title' | 'versionName' | 'tags' | 'autoTags' | 'baseModel'>, civitai?: Pick<CivitaiFacts, 'versionName' | 'description' | 'modelDescription' | 'baseModel'> | null) {
+  if (isVpred(f.name, f.title, f.versionName, ...f.tags, ...f.autoTags, civitai?.versionName)) return true
+  const text = `${civitai?.description ?? ''}\n${civitai?.modelDescription ?? ''}`
+  return VPRED_FAMILIES.has(familyOf(f.baseModel || civitai?.baseModel || '', { name: f.name })) && /\bv[-_ ]?pred(?:iction)?\b/i.test(text) && !/\b(?:not|no|non)[- ](?:a )?v[-_ ]?pred/i.test(text)
+}
 
 // --- Civitai ------------------------------------------------------------------------------------
 
@@ -213,9 +237,21 @@ export async function civitaiGet(path: string, key: string, signal: AbortSignal)
 
 let cacheReady = false
 function cacheTable() {
-  if (!cacheReady) { database().exec('CREATE TABLE IF NOT EXISTS civitai_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL, expires_at INTEGER NOT NULL)'); cacheReady = true }
+  if (!cacheReady) {
+    database().exec('CREATE TABLE IF NOT EXISTS civitai_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL, expires_at INTEGER NOT NULL)')
+    // Entries from before keys were scoped per account and credential shared one namespace: gone.
+    database().prepare("DELETE FROM civitai_cache WHERE key LIKE '%:k'").run()
+    cacheReady = true
+  }
   return database()
 }
+
+/**
+ * The cache namespace: `p` for anonymous answers (public, shared), else one per account and key,
+ * an HMAC of both with the server's secret. The key itself is never stored. A key sees what that
+ * key may see on Civitai, so its answers are never served to another account or another key.
+ */
+export const civitaiScope = (userId: number, key: string) => key ? `a${privateDigest(JSON.stringify(['civitai-cache', userId, key])).slice(0, 40)}` : 'p'
 const cacheRead = (key: string): { hit: boolean; value: unknown } => {
   const row = cacheTable().prepare('SELECT body, expires_at FROM civitai_cache WHERE key = ?').get(key) as { body: string; expires_at: number } | undefined
   if (!row || row.expires_at < Date.now()) return { hit: false, value: undefined }
@@ -246,8 +282,12 @@ export type CivitaiFacts = {
   imagesHidden: boolean
 }
 
-/** Parse a /model-versions answer. `installed` limits sampler mapping to what the backend runs here. */
-export function parseCivitaiVersion(v: Record<string, any>, installed?: { samplers?: readonly string[]; schedulers?: readonly string[] }): CivitaiFacts | null {
+/**
+ * Parse a /model-versions answer. `installed` limits sampler mapping to what the backend runs here.
+ * `identity`: the installed file's names (its stem); a LoRA's weight is read only from example
+ * resources that are this version (by modelVersionId) or this file (by name), never from others.
+ */
+export function parseCivitaiVersion(v: Record<string, any>, installed?: { samplers?: readonly string[]; schedulers?: readonly string[] }, identity: string[] = []): CivitaiFacts | null {
   const versionId = id(v?.id)
   if (!versionId) return null
   const images = Array.isArray(v.images) ? v.images.slice(0, 60).filter((i: unknown) => i && typeof i === 'object') : []
@@ -259,27 +299,65 @@ export function parseCivitaiVersion(v: Record<string, any>, installed?: { sample
     .filter((e: { meta: ExampleMeta | null }) => e.meta && typeof e.meta.prompt === 'string' && e.meta.prompt.trim())
     .sort((a: { level: number }, b: { level: number }) => a.level - b.level).slice(0, 3)
     .map((e: { meta: ExampleMeta | null }) => ({ prompt: text(e.meta!.prompt, 300), negative: text(e.meta!.negativePrompt, 200) }))
-  // A LoRA's own weight in its example prompts: <lora:name:0.8>.
-  const weights: number[] = []
-  for (const m of metas) for (const hit of typeof m?.prompt === 'string' ? m.prompt.matchAll(/<lora:[^:>]{1,200}:(-?\d+(?:\.\d+)?)/gi) : []) { const w = Number(hit[1]); if (w > 0 && w <= 2) weights.push(w) }
+  const weights = loraWeights(metas, versionId, [...identity, ...(Array.isArray(v.files) ? v.files.map((f: any) => typeof f?.name === 'string' ? f.name : '') : [])])
   return {
     versionId, modelId, url: modelId ? `${CIVITAI}/models/${modelId}?modelVersionId=${versionId}` : `${CIVITAI}/model-versions/${versionId}`,
     versionName: text(v.name, 120), modelName: text(v.model?.name, 160), modelType: text(v.model?.type, 40), baseModel: text(v.baseModel, 80),
     trainedWords: words(v.trainedWords, 12, 160), description: stripHtml(v.description, 3000), modelDescription: '',
-    consensus: exampleConsensus(metas, installed), examples, loraWeight: weights.length >= 2 ? median(weights) : null,
+    consensus: exampleConsensus(metas, installed), examples, loraWeight: weights.length ? median(weights) : null,
     imagesHidden: images.length === 0,
   }
 }
 
+const nameKey = (v: string) => leafOf(v).replace(/\.(safetensors|ckpt|pt|bin)$/i, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const weightOf = (v: unknown) => { const w = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN; return Number.isFinite(w) && w > 0 && w <= 2 ? w : null }
+/**
+ * This LoRA's weight in each example picture: from Civitai's resource lists (civitaiResources, then
+ * resources) when an entry is this version, else an entry or <lora:NAME:w> tag whose name is this
+ * file. Pictures that say nothing about this LoRA give nothing.
+ */
+export function loraWeights(metas: (ExampleMeta | null)[], versionId: number, names: string[]): number[] {
+  const own = new Set(names.map(nameKey).filter((k) => k.length >= 3))
+  const out: number[] = []
+  for (const m of metas) {
+    if (!m) continue
+    const resources = [...(Array.isArray(m.civitaiResources) ? m.civitaiResources : []), ...(Array.isArray(m.resources) ? m.resources : [])].filter((r) => r && typeof r === 'object') as Record<string, unknown>[]
+    const byVersion = resources.find((r) => id(r.modelVersionId) === versionId)
+    if (byVersion) { const w = weightOf(byVersion.weight ?? byVersion.strength); if (w !== null) out.push(w); continue }
+    if (!own.size) continue
+    const byName = resources.find((r) => typeof r.name === 'string' && own.has(nameKey(r.name)) && (r.type === undefined || String(r.type).toLowerCase() === 'lora'))
+    if (byName) { const w = weightOf(byName.weight ?? byName.strength); if (w !== null) out.push(w); continue }
+    if (typeof m.prompt !== 'string') continue
+    for (const hit of m.prompt.matchAll(/<lora:([^:>]{1,200}):(-?\d+(?:\.\d+)?)/gi)) if (own.has(nameKey(hit[1]))) { const w = weightOf(hit[2]); if (w !== null) out.push(w); break }
+  }
+  return out
+}
+
+/** What the cache already holds about an asset (its version, found by hash too, and the model page), without a request. */
+export function cachedCivitai(scope: string, asset: { versionId: number | null; modelId?: number | null; sha256: string | null }) {
+  let versionId = asset.versionId
+  if (!versionId && asset.sha256) { const h = cacheRead(`h:${asset.sha256}:${scope}`); versionId = h.hit ? (h.value as { versionId: number | null }).versionId : null }
+  if (!versionId) return null
+  const v = cacheRead(`v:${versionId}:${scope}`)
+  const facts = v.hit && v.value ? parseCivitaiVersion(v.value as Record<string, any>) : null
+  if (!facts) return null
+  const modelId = facts.modelId ?? asset.modelId ?? null
+  const m = modelId ? cacheRead(`m:${modelId}:${scope}`) : { hit: false, value: undefined }
+  facts.modelDescription = m.hit && typeof m.value === 'string' ? m.value : ''
+  return facts
+}
+
 export type CivitaiResult = { facts: CivitaiFacts | null; note?: string; cached?: boolean }
+type CivitaiSettings = Pick<ImageSettings, 'civitaiLookup' | 'civitaiKey'> & { scope: string }
 /**
  * Civitai facts for one asset: by version ID first, else by file hash. Cached in the database for
  * 7 days per version (and key or no key), "not on Civitai" for a day. A failed request is not
  * cached. Never sends the backend's URL or token, never a prompt.
  */
-export async function civitaiFacts(s: Pick<ImageSettings, 'civitaiLookup' | 'civitaiKey'>, asset: { versionId: number | null; modelId?: number | null; sha256: string | null }, installed?: { samplers?: readonly string[]; schedulers?: readonly string[] }, signal = AbortSignal.timeout(15_000)): Promise<CivitaiResult> {
+export async function civitaiFacts(s: CivitaiSettings, asset: { versionId: number | null; modelId?: number | null; sha256: string | null }, installed?: { samplers?: readonly string[]; schedulers?: readonly string[] }, signal = AbortSignal.timeout(15_000), identity: string[] = []): Promise<CivitaiResult> {
   if (!s.civitaiLookup) return { facts: null, note: 'Civitai lookups are off (Settings → Agents → Images).' }
-  const auth = s.civitaiKey ? 'k' : 'p'
+  if (s.civitaiKey && s.scope === 'p') throw new Error('An authenticated lookup needs its own cache scope')
+  const auth = s.scope
   try {
     let versionId = asset.versionId
     if (!versionId && asset.sha256) {
@@ -299,7 +377,7 @@ export async function civitaiFacts(s: Pick<ImageSettings, 'civitaiLookup' | 'civ
     const wasCached = cached.hit
     if (cached.hit) raw = cached.value as Record<string, any> | null
     else { raw = await civitaiGet(`/api/v1/model-versions/${versionId}`, s.civitaiKey, signal); cacheWrite(versionKey, raw, raw ? CIVITAI_TTL : CIVITAI_NEGATIVE_TTL) }
-    const facts = raw ? parseCivitaiVersion(raw, installed) : null
+    const facts = raw ? parseCivitaiVersion(raw, installed, identity) : null
     if (!facts) return { facts: null, note: 'That Civitai version no longer exists.', cached: wasCached }
     const modelId = facts.modelId ?? asset.modelId ?? null
     if (modelId) {
@@ -392,7 +470,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
   if (args.kind !== undefined && !KINDS.includes(args.kind as AssetKind)) throw new HttpError(400, 'kind is checkpoint, lora or embedding')
   for (const k of ['name', 'query'] as const) if (args[k] !== undefined && (typeof args[k] !== 'string' || !args[k] || (args[k] as string).length > (k === 'name' ? 2048 : 200) || /[\x00-\x1f]/.test(args[k] as string))) throw new HttpError(400, `Invalid ${k}`)
   if (args.name === undefined && args.query === undefined) throw new HttpError(400, 'Supply name, or kind and query')
-  const s = imageSettings(user)
+  const s = imageSettings(user), scope = civitaiScope(user.id, s.civitaiKey)
   const catalog = await imageCatalog(user, signal, s)
   const embeddings = !args.kind || args.kind === 'embedding' ? await installedEmbeddings(user, s, signal) : []
   const { available, facts } = await installedFacts(user, catalog, s, embeddings)
@@ -405,7 +483,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
       const f = facts.find((x) => x.category === category && x.name === name)
       const hay = [name, f?.title, f?.baseModel, ...(f?.tags ?? []), ...(f?.autoTags ?? [])].join(' ').toLowerCase()
       if (!q.every((w) => hay.includes(w))) continue
-      rows.push({ name, kind, base_model: f?.baseModel ?? '', family: f ? familyLabel(familyOf(f.baseModel, { name: `${name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f) })) : null, tags: (f?.tags ?? []).filter((t) => !/^(base models?|checkpoint)$/i.test(t)).slice(0, 6) })
+      rows.push({ name, kind, base_model: f?.baseModel ?? '', family: f ? familyLabel(familyOf(f.baseModel, { name: `${name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, cachedCivitai(scope, f)) })) : null, tags: (f?.tags ?? []).filter((t) => !/^(base models?|checkpoint)$/i.test(t)).slice(0, 6) })
       if (rows.length >= 10) break
     }
     return { query: args.query, matches: rows, lora_manager: available, note: rows.length ? 'Call model_details with an exact name for its recommended settings.' : 'Nothing installed matches; try a base model (Illustrious, Pony, SDXL) or a style tag.' }
@@ -415,12 +493,11 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
   if (!hits.length) throw new HttpError(404, 'That name is not installed on this backend; use an exact identifier from list_image_models or search with kind and query')
   const { kind, category } = hits[0]
   const manager = facts.find((f) => f.category === category && f.name === name) ?? null
-  const civitai = manager ? await civitaiFacts(s, manager, { samplers: catalog.samplers, schedulers: catalog.schedulers }, signal) : { facts: null, note: s.civitaiLookup ? 'LoRA Manager has no record of this file, so there is no Civitai ID or hash to look up.' : 'Civitai lookups are off (Settings → Agents → Images).' }
+  const civitai = manager ? await civitaiFacts({ ...s, scope }, manager, { samplers: catalog.samplers, schedulers: catalog.schedulers }, signal, kind === 'lora' ? [name] : []) : { facts: null, note: s.civitaiLookup ? 'LoRA Manager has no record of this file, so there is no Civitai ID or hash to look up.' : 'Civitai lookups are off (Settings → Agents → Images).' }
   const c = civitai.facts
   const baseModel = manager?.baseModel || c?.baseModel || ''
   const familyHints = { name: `${name} ${manager?.versionName ?? ''} ${c?.versionName ?? ''}`, tags: [...(manager?.tags ?? []), ...(manager?.autoTags ?? [])] }
-  const first = familyOf(baseModel, familyHints)
-  const vpred = assetIsVpred(manager ?? { name, title: '', versionName: '', tags: [], autoTags: [] }, { versionName: c?.versionName, description: `${c?.description ?? ''} ${c?.modelDescription ?? ''}`, family: first })
+  const vpred = assetIsVpred(manager ?? { name, title: '', versionName: '', tags: [], autoTags: [], baseModel }, c)
   const family = familyOf(baseModel, { ...familyHints, vpred })
   const notes: string[] = []
   if (!available) notes.push('LoRA Manager is not installed or did not answer: no base model, tags or Civitai link for this file.')
@@ -475,11 +552,8 @@ export async function modelNeedsVpred(user: User, s: ImageSettings, catalog: Cat
   if (isVpred(model)) return true
   const { facts } = await quickFacts(user, catalog, s).catch(() => ({ facts: [] as ManagerFacts[] }))
   const f = facts.find((x) => (x.category === 'checkpoints' || x.category === 'diffusionModels') && x.name === model)
-  if (!f) return false
-  const versionId = f.versionId
-  const raw = versionId ? cacheRead(`v:${versionId}:${s.civitaiKey ? 'k' : 'p'}`) : { hit: false, value: undefined }
-  const c = raw.hit && raw.value ? parseCivitaiVersion(raw.value as Record<string, any>) : null
-  return assetIsVpred(f, { versionName: c?.versionName, description: c?.description, family: familyOf(f.baseModel, { name: f.name }) })
+  // The same decision model_details makes, from the same cached Civitai facts (version by ID or hash, model page).
+  return f ? assetIsVpred(f, cachedCivitai(civitaiScope(user.id, s.civitaiKey), f)) : false
 }
 
 /** GET /api/agents/images/model-details?name=&kind=: the same facts for the model browser, the account's own backend only. */

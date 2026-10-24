@@ -35,7 +35,7 @@ const tiny = png(1, 1, () => [0, 0, 0])
 const send = (res: ServerResponse, v: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(v))
 const nodes = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'CLIPSetLastLayer', 'ModelSamplingDiscrete']
 const info: Record<string, any> = Object.fromEntries(nodes.map((n) => [n, { input: { required: {} } }]))
-info.CheckpointLoaderSimple.input.required.ckpt_name = [['NoobAI/noob_vpred.safetensors', 'Illustrious/prefect.safetensors']]
+info.CheckpointLoaderSimple.input.required.ckpt_name = [['NoobAI/noob_vpred.safetensors', 'Illustrious/prefect.safetensors', 'NoobAI/hashed.safetensors', 'NoobAI/described.safetensors']]
 info.KSampler.input.required = { sampler_name: [['euler', 'euler_ancestral', 'dpmpp_2m']], scheduler: [['simple', 'karras', 'normal']] }
 let outputs: Buffer[] = []
 const graphs: Record<string, any>[] = []
@@ -45,7 +45,7 @@ const comfy = createServer((req, res) => {
   req.on('end', () => {
     const url = new URL(req.url!, 'http://test')
     if (url.pathname.startsWith('/object_info/')) { const n = url.pathname.slice(13); return send(res, info[n] ? { [n]: info[n] } : {}) }
-    if (url.pathname === '/api/lm/checkpoints/list') return send(res, { items: [{ folder: 'NoobAI', file_path: '/m/NoobAI/noob_vpred.safetensors', sub_type: 'checkpoint', base_model: 'NoobAI' }, { folder: 'Illustrious', file_path: '/m/Illustrious/prefect.safetensors', sub_type: 'checkpoint', base_model: 'Illustrious', tags: ['anime'] }], total_pages: 1 })
+    if (url.pathname === '/api/lm/checkpoints/list') return send(res, { items: [{ folder: 'NoobAI', file_path: '/m/NoobAI/noob_vpred.safetensors', sub_type: 'checkpoint', base_model: 'NoobAI' }, { folder: 'Illustrious', file_path: '/m/Illustrious/prefect.safetensors', sub_type: 'checkpoint', base_model: 'Illustrious', tags: ['anime'] }, { folder: 'NoobAI', file_path: '/m/NoobAI/hashed.safetensors', sub_type: 'checkpoint', base_model: 'NoobAI', sha256: 'c'.repeat(64) }, { folder: 'NoobAI', file_path: '/m/NoobAI/described.safetensors', sub_type: 'checkpoint', base_model: 'NoobAI', civitai: { id: 920001, modelId: 920002 } }], total_pages: 1 })
     if (url.pathname.startsWith('/api/lm/')) return send(res, { items: [], total_pages: 1 })
     if (url.pathname === '/prompt') { graphs.push(JSON.parse(raw).prompt); return send(res, { prompt_id: `job-${graphs.length}` }) }
     if (url.pathname.startsWith('/history/')) { const id = url.pathname.split('/').pop()!; return send(res, { [id]: { status: { completed: true }, outputs: { '9': { images: [{ filename: `${id}.png`, subfolder: '', type: 'output' }] } } } }) }
@@ -55,6 +55,7 @@ const comfy = createServer((req, res) => {
 })
 let plan: { name: string; arguments: Record<string, unknown> }[][] = []
 let visionVerdict = '{"score": 7, "very_bad": false, "defects": []}'
+let visionQueue: string[] = []
 let visionCalls = 0, modelReplies = 0
 const ollama = createServer((req, res) => {
   let raw = ''
@@ -65,7 +66,7 @@ const ollama = createServer((req, res) => {
     const body = JSON.parse(raw)
     if (!body.stream) return send(res, { message: { content: '{"title":"Quality test"}' } })
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
-    if (body.messages.some((m: any) => m.images?.length)) { visionCalls++; return res.end(JSON.stringify({ message: { role: 'assistant', content: visionVerdict }, done: true }) + '\n') }
+    if (body.messages.some((m: any) => m.images?.length)) { visionCalls++; return res.end(JSON.stringify({ message: { role: 'assistant', content: visionQueue.shift() ?? visionVerdict }, done: true }) + '\n') }
     const after = body.messages.slice(body.messages.findLastIndex((m: any) => m.role === 'user') + 1)
     const step = plan[after.filter((m: any) => m.role === 'assistant').length]
     modelReplies++
@@ -115,8 +116,8 @@ try {
   console.log('PASS A1111 → ComfyUI sampler mapping (combined names, schedules, unmapped), medians, consensus, family detection, v-pred names')
 }
 
-const { managerItem, joinInstalled, usageTips, parseCivitaiVersion, stripHtml, civitaiFacts, civitaiGet, setCivitaiFetcher, recommend, fitSize } = await import('../server/agentModelIntel.ts')
-const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = await import('../server/agentImageQuality.ts')
+const { managerItem, joinInstalled, usageTips, parseCivitaiVersion, stripHtml, civitaiFacts, civitaiGet, setCivitaiFetcher, recommend, fitSize, civitaiScope, cachedCivitai, assetIsVpred, loraWeights, managerIndex, MANAGER_MAX_PAGES } = await import('../server/agentModelIntel.ts')
+const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALITY_MAX_PIXELS } = await import('../server/agentImageQuality.ts')
 {
   // LoRA Manager: folder + file joins exactly; a leaf alone never does; ambiguous joins drop.
   const raw = [
@@ -156,7 +157,14 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   assert.deepEqual(facts.consensus.sizes[0], { size: '832x1216', count: 3 })
   assert.ok(facts.consensus.sizes.some((s) => s.size === '1664x2432'), 'the picture size stands in for a missing Size')
   assert.deepEqual(facts.examples.map((e) => e.prompt.split(',')[0]), ['masterpiece', 'a red fox in a snowy forest', 'a sailboat on a calm lake'])
-  assert.equal(facts.loraWeight, 0.7)
+  assert.equal(facts.loraWeight, null, 'without the LoRA file name, other LoRAs in the prompts say nothing')
+  assert.equal(parseCivitaiVersion(fixture, installed, ['Detail/fixtureDetail.safetensors'])!.loraWeight, 0.7)
+  // Only this LoRA's own weight: by modelVersionId in the resource lists, else by its file name.
+  assert.deepEqual(loraWeights([{ prompt: '<lora:target:0.2> <lora:unrelated:1.8>' }], 1, ['Style/target.safetensors']), [0.2])
+  assert.deepEqual(loraWeights([{ prompt: '<lora:target:0.2> <lora:unrelated:1.8>' }], 1, []), [], 'no identity, no recommendation')
+  assert.deepEqual(loraWeights([{ prompt: '<lora:renamed:0.9>', civitaiResources: [{ type: 'lora', modelVersionId: 77, weight: 0.45 }, { type: 'lora', modelVersionId: 78, weight: 1.9 }] }], 77, ['Style/target.safetensors']), [0.45])
+  assert.deepEqual(loraWeights([{ resources: [{ type: 'lora', name: 'other', weight: 1.7 }, { type: 'lora', name: 'Target', weight: 0.6 }] }], 1, ['target.safetensors']), [0.6])
+  assert.deepEqual(loraWeights([{ prompt: '<lora:unrelated:1.8>', civitaiResources: [{ type: 'lora', modelVersionId: 78, weight: 1.9 }] }], 77, ['target.safetensors']), [])
   assert.equal(stripHtml('<p>a&nbsp;b &lt;c&gt;</p><style>x{}</style>', 100), 'a b <c>')
   const rec = recommend('checkpoints', 'illustrious', facts.consensus, installed, false)
   assert.deepEqual({ ...rec, notes: undefined }, { preset: 'sdxl', sampler: 'dpmpp_2m', scheduler: 'karras', steps: 20, cfg: 5, clip_skip: 2, width: 832, height: 1216, source: 'civitai_examples', agree: '4 of 5', notes: undefined })
@@ -173,8 +181,12 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   const requests: { url: string; auth: string | null }[] = []
   let answer: (url: URL) => Response = (url) => url.pathname.includes('/by-hash/') ? Response.json({ id: 111222 }) : url.pathname.startsWith('/api/v1/models/') ? Response.json({ description: '<p>Model page</p>' }) : url.pathname.endsWith('/404404') ? new Response('', { status: 404 }) : Response.json(fixture)
   setCivitaiFetcher(async (url, init) => { requests.push({ url: url.href, auth: new Headers(init.headers).get('authorization') }); assert.equal(init.redirect, 'manual'); return answer(url) })
-  const on = { civitaiLookup: true, civitaiKey: '' }
-  assert.equal((await civitaiFacts({ civitaiLookup: false, civitaiKey: 'k' }, { versionId: 111222, sha256: null })).facts, null)
+  const { database } = await import('../server/db.ts')
+  // An entry from before keys were scoped (shared `k` namespace) is discarded on first use.
+  database().exec('CREATE TABLE IF NOT EXISTS civitai_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL, expires_at INTEGER NOT NULL)')
+  database().prepare('INSERT INTO civitai_cache (key, body, expires_at) VALUES (?, ?, ?)').run('v:111222:k', JSON.stringify({ ...fixture, name: 'leaked' }), Date.now() + 86_400_000)
+  const on = { civitaiLookup: true, civitaiKey: '', scope: 'p' }
+  assert.equal((await civitaiFacts({ civitaiLookup: false, civitaiKey: 'k', scope: civitaiScope(1, 'k') }, { versionId: 111222, sha256: null })).facts, null)
   assert.equal(requests.length, 0, 'the switch off means no requests')
   const first = await civitaiFacts(on, { versionId: 111222, sha256: null }, installed)
   assert.equal(first.facts?.modelDescription, 'Model page'); assert.equal(first.cached, false)
@@ -182,7 +194,7 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   assert.ok(requests.every((r) => r.auth === null), 'no key, no Authorization header')
   assert.equal((await civitaiFacts(on, { versionId: 111222, sha256: null }, installed)).cached, true)
   assert.equal(requests.length, 2, 'the second read is cached')
-  const { database } = await import('../server/db.ts')
+  assert.equal(database().prepare("SELECT 1 FROM civitai_cache WHERE key LIKE '%:k'").get(), undefined, 'legacy shared-key entries are gone')
   database().prepare("UPDATE civitai_cache SET expires_at = ? WHERE key LIKE 'v:111222:%'").run(Date.now() - 1)
   await civitaiFacts(on, { versionId: 111222, sha256: null }, installed)
   assert.equal(requests.length, 3, 'past its TTL the version is read again (the model page still cached)')
@@ -194,11 +206,46 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   const negative = database().prepare("SELECT expires_at FROM civitai_cache WHERE key = 'v:404404:p'").get() as { expires_at: number }
   assert.ok(Math.abs(negative.expires_at - Date.now() - 86_400_000) < 60_000, 'negative results last a day')
   requests.length = 0
-  const byHash = await civitaiFacts({ civitaiLookup: true, civitaiKey: 'civitai-key-123' }, { versionId: null, sha256: 'b'.repeat(64) }, installed)
+  const byHash = await civitaiFacts({ civitaiLookup: true, civitaiKey: 'civitai-key-123', scope: civitaiScope(1, 'civitai-key-123') }, { versionId: null, sha256: 'b'.repeat(64) }, installed)
   assert.equal(byHash.facts?.versionId, 111222)
   assert.equal(requests[0].url, `https://civitai.com/api/v1/model-versions/by-hash/${'b'.repeat(64)}`)
   assert.ok(requests.every((r) => r.auth === 'Bearer civitai-key-123'), 'the key goes as a Bearer header, to civitai.com only')
   assert.ok(requests.every((r) => new URL(r.url).origin === 'https://civitai.com'))
+  // Keys never share answers: account A's keyed answer is not served to B, with another or an invalid key.
+  const keyA = { civitaiLookup: true, civitaiKey: 'key-of-account-a', scope: civitaiScope(31, 'key-of-account-a') }
+  const sameKeyOtherAccount = { civitaiLookup: true, civitaiKey: 'key-of-account-a', scope: civitaiScope(32, 'key-of-account-a') }
+  const keyB = { civitaiLookup: true, civitaiKey: 'not-a-valid-key', scope: civitaiScope(32, 'not-a-valid-key') }
+  assert.notEqual(keyA.scope, sameKeyOtherAccount.scope); assert.notEqual(keyA.scope, keyB.scope); assert.ok(!keyA.scope.includes('key-of-account-a'))
+  answer = (url) => url.pathname === '/api/v1/model-versions/515151' ? Response.json({ ...fixture, id: 515151, name: 'members-only' }) : Response.json({ description: '' })
+  const answers = new Map<string, Response>()
+  setCivitaiFetcher(async (url, init) => { const auth = new Headers(init.headers).get('authorization'); requests.push({ url: url.href, auth }); return auth === 'Bearer not-a-valid-key' ? new Response('', { status: 401 }) : answers.get(url.href) ?? answer(url) })
+  assert.equal((await civitaiFacts(keyA, { versionId: 515151, sha256: null })).facts?.versionName, 'members-only')
+  requests.length = 0
+  const b = await civitaiFacts(keyB, { versionId: 515151, sha256: null })
+  assert.equal(b.facts, null, 'B with an invalid key gets nothing A fetched'); assert.match(b.note ?? '', /401/)
+  assert.equal(requests.length, 1, 'B asked Civitai itself')
+  await civitaiFacts(sameKeyOtherAccount, { versionId: 515151, sha256: null })
+  assert.equal(requests.length, 3, 'another account with the same key also asks itself (version and model page)')
+  assert.equal(cachedCivitai(keyB.scope, { versionId: 515151, sha256: null }), null)
+  assert.equal(cachedCivitai('p', { versionId: 515151, sha256: null }), null, 'keyed answers never land in the shared anonymous namespace')
+  assert.ok(!(database().prepare('SELECT group_concat(key) AS k FROM civitai_cache').get() as { k: string }).k.includes('key-of-account'), 'the key itself is never stored')
+  setCivitaiFetcher(async (url, init) => { requests.push({ url: url.href, auth: new Headers(init.headers).get('authorization') }); assert.equal(init.redirect, 'manual'); return answer(url) })
+  console.log('PASS Civitai cache scope: anonymous shared, keyed answers per account and key digest, invalid key gets nothing, legacy entries discarded')
+
+  // V-pred from cached Civitai facts, shared by model_details and generate_image: a version found by
+  // hash whose name says v-pred, and a version whose model page alone says so.
+  answer = (url) => url.pathname.includes('/by-hash/') ? Response.json({ ...fixture, id: 620001, name: 'v-pred 1.0' }) : url.pathname === '/api/v1/model-versions/630001' ? Response.json({ ...fixture, id: 630001, modelId: 630002, name: '1.0', description: '<p>Use Euler.</p>' }) : url.pathname === '/api/v1/models/630002' ? Response.json({ description: '<p>This is a v-prediction model; enable zsnr.</p>' }) : Response.json({ description: '' })
+  const hashed = { name: 'NoobAI/x.safetensors', title: 'x', versionName: '', tags: [], autoTags: [], baseModel: 'NoobAI', versionId: null, modelId: null, sha256: 'd'.repeat(64) }
+  const described = { ...hashed, name: 'NoobAI/y.safetensors', versionId: 630001, sha256: null }
+  assert.equal(assetIsVpred(hashed, cachedCivitai('p', hashed)), false, 'nothing cached yet')
+  await civitaiFacts(on, hashed); await civitaiFacts(on, described)
+  assert.equal(assetIsVpred(hashed, cachedCivitai('p', hashed)), true, 'version found via sha256')
+  assert.equal(cachedCivitai('p', described)?.modelDescription.includes('v-prediction'), true)
+  assert.equal(assetIsVpred(described, cachedCivitai('p', described)), true, 'v-pred named only in the model description')
+  assert.equal(assetIsVpred({ ...described, baseModel: 'Krea 2' }, cachedCivitai('p', described)), false, 'not for families without v-pred builds')
+  assert.equal(assetIsVpred(described, { versionName: '', description: 'This is not a v-pred model.', modelDescription: '', baseModel: 'NoobAI' }), false)
+  console.log('PASS v-pred from cached Civitai facts: via file hash, via the model description only, one shared detector')
+
   // Redirects: within civitai.com followed, anywhere else refused; failures are not cached.
   answer = (url) => url.pathname === '/api/v1/model-versions/5' ? new Response(null, { status: 301, headers: { location: 'https://evil.example/steal' } }) : url.pathname === '/api/v1/model-versions/6' ? new Response(null, { status: 302, headers: { location: '/api/v1/model-versions/7' } }) : url.pathname === '/api/v1/model-versions/8' ? new Response(null, { status: 302, headers: { location: 'http://civitai.com/api/v1/model-versions/7' } }) : Response.json({ ...fixture, id: 7 })
   requests.length = 0
@@ -214,6 +261,36 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
 }
 
 {
+  // LoRA Manager paging: pages, raw records and bytes bounded on their own; a stalled page keeps what came before.
+  const seen = new Map<string, number>()
+  let mode: 'junk' | 'stall' = 'junk'
+  const lm = createServer((req, res) => {
+    const url = new URL(req.url!, 'http://lm')
+    seen.set(url.pathname, (seen.get(url.pathname) ?? 0) + 1)
+    const page = Number(url.searchParams.get('page'))
+    if (mode === 'stall' && page === 2) return // never answers
+    const items = mode === 'junk' ? Array.from({ length: 100 }, () => ({ nope: true })) : Array.from({ length: 100 }, (_, i) => ({ folder: 'F', file_path: `/m/F/${page}-${i}.safetensors`, sub_type: 'checkpoint', base_model: 'SDXL 1.0' }))
+    send(res, { items, total_pages: 999 })
+  })
+  const lmUrl = await listen(lm)
+  const { database, encrypt } = await import('../server/db.ts')
+  database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (20, 20, ?, ?, 0, 0)').run('paging', encrypt('none'))
+  const { saveImageSettings } = await import('../server/agentImages.ts')
+  const pager = { id: 20, admin: true } as never
+  saveImageSettings(pager, { url: lmUrl })
+  const junk = await managerIndex(pager)
+  for (const [path, n] of seen) assert.ok(n <= MANAGER_MAX_PAGES, `${path}: ${n} requests`)
+  assert.equal(seen.get('/api/lm/checkpoints/list'), MANAGER_MAX_PAGES, 'full pages of rejected records stop at the page cap')
+  assert.deepEqual([junk.items.length, junk.truncated], [0, true])
+  mode = 'stall'; seen.clear()
+  saveImageSettings(pager, { token: 'other-scope' })
+  const partial = await managerIndex(pager, undefined, 800)
+  assert.deepEqual([partial.available, partial.items.length, partial.complete], [true, 300, false], 'page 1 of each list kept after the timeout')
+  lm.closeAllConnections(); await new Promise<void>((r) => lm.close(() => r()))
+  console.log(`PASS LoRA Manager paging: ${MANAGER_MAX_PAGES}-page cap with all-rejected pages, partial results kept on timeout`)
+}
+
+{
   // Pixel checks.
   assert.equal(pixelQuality(black).very_bad, true); assert.match(pixelQuality(black).defects[0], /black/)
   assert.equal(pixelQuality(white).very_bad, true)
@@ -221,6 +298,23 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   assert.equal(pixelQuality(noise).very_bad, true); assert.match(pixelQuality(noise).defects.join(), /noise/)
   assert.equal(pixelQuality(fine).very_bad, false, JSON.stringify(pixelQuality(fine)))
   assert.equal(pixelQuality(tiny).checked, false); assert.equal(pixelQuality(Buffer.from('nope')).checked, false)
+  // Normal generation sizes, sampled; above about 4 MP only vision runs.
+  const wide = png(1536, 1024, (x, y) => (x * y) % 997 < 2 ? [3, 3, 3] : [0, 0, 0])
+  let started = performance.now()
+  assert.equal(pixelQuality(wide).very_bad, true)
+  const wideMs = performance.now() - started
+  const big = png(2048, 2048, () => { const v = Math.floor(rand() * 256); return [v, v, v] })
+  started = performance.now()
+  assert.equal(pixelQuality(big).very_bad, true, '2048 × 2048 noise')
+  const bigMs = performance.now() - started
+  assert.ok(bigMs < 400, `2048 × 2048 checked in ${Math.round(bigMs)} ms`)
+  const huge = png(2100, 2100, () => [0, 0, 0])
+  assert.ok(2100 * 2100 > QUALITY_MAX_PIXELS)
+  assert.deepEqual([pixelQuality(huge).checked, pixelQuality(huge).large], [false, true])
+  let hugeAsked = 0
+  assert.equal((await checkImageQuality(huge, 'x', async () => { hugeAsked++; return '{"score": 2, "very_bad": true, "defects": ["mush"]}' })).very_bad, true); assert.equal(hugeAsked, 1, 'too large for pixels: vision decides')
+  assert.equal(await checkImageQuality(tiny, 'x', async () => { throw new Error('must not be asked') }).then((v) => v.checked), false)
+  console.log(`PASS pixel checks sampled: 1536 × 1024 in ${Math.round(wideMs)} ms, 2048 × 2048 in ${Math.round(bigMs)} ms, larger pictures left to vision`)
   // Vision verdicts.
   assert.deepEqual(parseVisionVerdict('Sure: {"score": 2, "very_bad": true, "defects": ["melted face", 5]} done'), { score: 2, very_bad: true, defects: ['melted face'] })
   assert.equal(parseVisionVerdict('{"score": 7, "very_bad": true, "defects": []}')?.very_bad, false, 'very_bad needs a low score')
@@ -242,6 +336,18 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   assert.match(q.blocked() ?? '', /already used/, 'no third generation')
   const fixed = new QualityRetry(); fixed.started(); fixed.after(bad); fixed.started()
   assert.deepEqual([fixed.after(good).complete, fixed.after(good).retryFixed], [true, true])
+  // Flagged by vision; the retry's vision check timed out: inconclusive, not a fix; the first failure stays in the result.
+  const visionBad = { checked: true, very_bad: true, score: 2, defects: ['melted face'], by: ['pixels' as const, 'vision' as const], notes: [] }
+  const timedOut = { checked: true, very_bad: false, score: null, defects: [], by: ['pixels' as const], notes: ['The vision check failed: timed out.'], inconclusive: true }
+  const unsure = new QualityRetry(); unsure.started(); unsure.after(visionBad); unsure.started()
+  const after = unsure.after(timedOut)
+  assert.deepEqual([after.complete, after.retryFixed], [true, false])
+  assert.deepEqual((after.extra.first_attempt as { defects: string[] }).defects, ['melted face'])
+  assert.equal((after.extra.quality as { inconclusive: boolean }).inconclusive, true)
+  assert.deepEqual((after.extra.quality as { notes: string[] }).notes, ['The vision check failed: timed out.'])
+  // Flagged by pixels (black); the retry passes the pixels with vision down: the same check passed, so fixed.
+  const pixelsFixed = new QualityRetry(); pixelsFixed.started(); pixelsFixed.after(bad); pixelsFixed.started()
+  assert.equal(pixelsFixed.after(timedOut).retryFixed, true)
   const fineFirst = new QualityRetry(); fineFirst.started()
   assert.deepEqual(fineFirst.after(good), { complete: true, extra: {}, retryFixed: false }, 'a fine picture stays silent')
   assert.deepEqual(new QualityRetry().after(null), { complete: true, extra: {}, retryFixed: false }, 'no check, no change')
@@ -252,6 +358,7 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
 
 {
   const { database, encrypt, sha256 } = await import('../server/db.ts')
+  const { civitaiScope } = await import('../server/agentModelIntel.ts')
   const session = randomBytes(24).toString('hex')
   database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (1, 1, ?, ?, ?, ?)').run('intel-admin', encrypt('none'), Date.now(), Date.now())
   database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(session), Date.now(), Date.now() + 86400_000)
@@ -325,6 +432,25 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry } = aw
   outputs = [fine]; graphs.length = 0; plan = reviewed([gen])
   await turn()
   assert.equal(graphs[0].vpred, undefined, 'an eps model is unchanged')
+  // Known v-pred only from cached Civitai facts (this account's key scope): by hash, and by model page.
+  const scope = civitaiScope(1, 'civitai-key-123')
+  const put = (key: string, body: unknown) => database().prepare('INSERT INTO civitai_cache (key, body, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET body = excluded.body').run(key, JSON.stringify(body), Date.now() + 86_400_000)
+  put(`h:${'c'.repeat(64)}:${scope}`, { versionId: 910001 })
+  put(`v:910001:${scope}`, { id: 910001, modelId: 910002, name: 'vpred-1.0', baseModel: 'NoobAI', images: [] })
+  put(`v:920001:${scope}`, { id: 920001, modelId: 920002, name: '1.0', baseModel: 'NoobAI', description: 'Euler, 28 steps.', images: [] })
+  put(`m:920002:${scope}`, 'A v-prediction checkpoint: enable zsnr.')
+  for (const model of ['NoobAI/hashed.safetensors', 'NoobAI/described.safetensors']) {
+    outputs = [fine]; graphs.length = 0; plan = reviewed([{ name: 'generate_image', arguments: { prompt: 'a fox', model } }])
+    await turn()
+    assert.equal(graphs[0].vpred?.inputs.sampling, 'v_prediction', model)
+  }
+  // Vision flagged it, the retry's vision answer is unusable: inconclusive, no "retry fixed" observation.
+  const fixedBefore = ((await call('GET', '/api/agents/images/observations')).observations as any[]).filter((o) => /retry fixed/.test(o.note)).length
+  outputs = [fine, fine]; graphs.length = 0; plan = reviewed([gen], [retry]); visionQueue = ['{"score": 2, "very_bad": true, "defects": ["melted face"]}', 'I cannot tell.']
+  m = await turn()
+  r = results(m).filter((x) => x.image)
+  assert.deepEqual([graphs.length, r[1].quality.inconclusive, r[1].first_attempt.defects[0]], [2, true, 'melted face'])
+  assert.equal(((await call('GET', '/api/agents/images/observations')).observations as any[]).filter((o) => /retry fixed/.test(o.note)).length, fixedBefore, 'an inconclusive retry is not recorded as fixed')
 
   // model_details over HTTP: family defaults when Civitai is off; no backend secrets in the answer.
   await call('PUT', '/api/agents/images/settings', { civitaiLookup: false })
