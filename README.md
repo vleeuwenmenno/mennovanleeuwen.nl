@@ -1827,11 +1827,12 @@ Retry and Look again. A message that never got there goes back into the box. Ret
 …/retry`, streamed like a message) also sits under the last answer to have it written again: the
 last turn's output (a partial or failed reply, its tool calls and results, or the answer) goes and
 the same message, with its files, is answered again with the thread's model, mode and tools; queued
-messages run after it. Every message and card ends in the same action row at the right edge, in the
-same order: its own buttons where it has them (**Share** on an answer; **Save to Files…** and
-**Generate another** on an image), then **More** last, which holds the rest as a menu with hints.
-The row keeps its space, so it fades in on hover or keyboard focus without moving anything, and is
-always shown on touch. Your messages' **More** has **Copy**, **Edit & resend** and **Rewind to
+messages run after it. Every message and card has the same quiet action row on its own side (right
+under your messages, left under answers, tool cards, images and summaries), in the same order: its
+own actions where it has them (**Share** on an answer; **Save to Files…** and **Generate another**
+on an image), then **More** last, a menu with hints for the rest. On a desktop a row shows only
+while the pointer is over its own message or something in it has keyboard focus; it keeps its
+space, so nothing moves. On touch it is always shown. Your messages' **More** has **Copy**, **Edit & resend** and **Rewind to
 here** (also in their right-click menu): after a desktop dialog that says how many
 messages go, it and everything after it leave the thread (`POST …/rewind`; a running turn is
 stopped first, the queue stays) and it comes back into the message box with its files. What the

@@ -355,39 +355,64 @@
   min-width: 0;
   max-width: min(78%, 640px);
 }
-/* One action row under every message and card (src/apps/AgentsActions.tsx): the app's small
-   buttons, More last, all at the right edge of the conversation. The row always takes its height,
-   so showing it moves nothing; it fades in when the pointer is over its message or anything in it
-   has keyboard focus (opacity, not visibility, so its buttons stay reachable with Tab), and is
-   always shown where there is no hover. Being in its own space, it never covers what is behind. */
+/* One action row under every message and card (src/apps/AgentsActions.tsx): quiet text buttons,
+   More last, on the message's own side (right under yours, left under the agent's). The row always
+   takes its height, so showing it moves nothing, and it sits in its own space, so it never covers
+   what is behind. On a desktop it shows only while the pointer is over its own message or card,
+   or something in it has keyboard focus (opacity, not visibility, so Tab still reaches it); with
+   a touch pointer it is always shown, with 44 px targets. */
 .agt-act-host {
   min-width: 0;
 }
-.agt-actions {
+.agt-act-host > .agt-actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
   align-self: stretch;
-  gap: 6px;
-  margin-top: 4px;
+  gap: 2px;
+  min-height: 20px;
+  margin: 2px 0 0 -6px;
   opacity: 0;
   transition: opacity 0.12s;
+}
+.agt-user-wrap.agt-act-host > .agt-actions {
+  justify-content: flex-end;
+  margin: 2px -6px 0 0;
 }
 .agt-act-host:hover > .agt-actions,
 .agt-act-host:focus-within > .agt-actions {
   opacity: 1;
 }
-@media (hover: none), (pointer: coarse) {
-  .agt-actions {
+.agt-actions > .agt-act {
+  padding: 1px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.agt-actions > .agt-act:hover:not(:disabled),
+.agt-actions > .agt-act:focus-visible {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.agt-actions > .agt-act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (pointer: coarse) {
+  .agt-act-host > .agt-actions {
     opacity: 1;
   }
-  .agt-actions .btn {
+  .agt-actions > .agt-act {
     min-height: 44px;
+    padding: 0 10px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .agt-actions {
+  .agt-act-host > .agt-actions {
     transition: none;
   }
 }
@@ -466,6 +491,15 @@
   border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
   background: color-mix(in srgb, var(--red) 10%, transparent);
   color: var(--red);
+}
+.agt-cut .agt-retry {
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.agt-cut .agt-retry:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
 }
 .agt-user {
   min-width: 0;

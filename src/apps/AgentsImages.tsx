@@ -7,7 +7,7 @@ import { useWM } from '../os/wm'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { imageFileName } from '../data/agentImageFiles'
 import { saveImageToFiles, saveLabel, useSaveDestination } from './AgentsSaveImage'
-import { ActionRow, MoreButton, tidy } from './AgentsActions'
+import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
 
 // Pictures attached to Agents messages: small thumbnails in the message box and on your sent
 // messages, and a full-size view over the window when one is clicked (arrow keys or a swipe to the
@@ -276,8 +276,8 @@ export function ImageCard({ image, width, height, pending, progress, again, more
       <a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a>
     </details>}
     {image && <ActionRow label="Image actions">
-      {save && <button key="save" type="button" className="btn btn-small" aria-label={save.label} title={save.label} onClick={save.onSelect}>Save to Files…</button>}
-      {again && <button key="again" type="button" className="btn btn-small" disabled={again.disabled} title={again.hint} onClick={again.onClick}>Generate another</button>}
+      {save && <button key="save" type="button" className={ACTION} aria-label={save.label} title={save.label} onClick={save.onSelect}>Save to Files…</button>}
+      {again && <button key="again" type="button" className={ACTION} disabled={again.disabled} title={again.hint} onClick={again.onClick}>Generate another</button>}
       <MoreButton key="more" label="Image" items={tidy([...own, { separator: true }, ...more])} />
     </ActionRow>}
     {open && picture && <Lightbox pictures={[picture]} start={0} anchor={frame.current} onClose={() => setOpen(false)} actions={save ? [save] : []} />}

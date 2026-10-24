@@ -110,7 +110,7 @@ import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture, ImageCard } from './AgentsImages'
-import { ActionRow, MoreButton, tidy } from './AgentsActions'
+import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
 import { ObservationLine, ObservationsDialog } from './AgentsObservations'
 import { readObservation } from '../data/imageObservations'
 import { MarkdownPreview } from './Zed'
@@ -1992,10 +1992,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (dropped || !!thread.interrupted || messages.at(-1)?.role !== 'compact') && (
           <div className={`agt-cut ${dropped || thread.interrupted ? 'is-error' : ''}`}>
             {dropped ? <span>The connection dropped</span> : thread.interrupted && <span>{interruptionText(thread.interrupted)}</span>}
-            <button type="button" className="btn btn-small" onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">
+            <button type="button" className={dropped || thread.interrupted ? 'btn btn-small' : 'agt-retry'} onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">
               ↻ Retry
             </button>
-            {messages.at(-1) && <button type="button" className="btn btn-small" onClick={() => void branchFrom(messages.at(-1)!)} title="Continue in a new thread; keep the original">Branch off from here</button>}
+            {messages.at(-1) && <button type="button" className="agt-retry" onClick={() => void branchFrom(messages.at(-1)!)} title="Continue in a new thread; keep the original">Branch off from here</button>}
             {dropped && (
               <button type="button" className="btn btn-small" onClick={() => (lose(), setRejoin((n) => n + 1))} title="Look for the turn again">
                 Look again
@@ -2225,7 +2225,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
             <article className="zed-preview agt-answer">
               <MarkdownPreview text={m.content} money />
             </article>
-            {row(m, 'Answer', [{ label: 'Copy answer', onSelect: () => copy(m.content) }], answers.has(m.id) ? [<button key="share" type="button" className="btn btn-small" onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">Share</button>] : [])}
+            {row(m, 'Answer', [{ label: 'Copy answer', onSelect: () => copy(m.content) }], answers.has(m.id) ? [<button key="share" type="button" className={ACTION} onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">Share</button>] : [])}
           </div>
         )}
         {!m.content.trim() && !calls.length && <div className="agt-act-host" data-msg={m.id}>{row(m, 'Message')}</div>}
