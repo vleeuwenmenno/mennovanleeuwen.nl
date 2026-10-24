@@ -1380,6 +1380,31 @@ try {
   behavior = 'ok'
   await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: false })
   console.log('PASS img2img six families, source/attachment ownership, source validation, preserved ratio, upload errors, pinned bytes, provenance, approvals, silent completion, cancellation and text-to-image regression')
+  // Attachment IDs remain usable after copied messages receive new IDs and the parent is deleted.
+  const branchSourceParent = await thread('default')
+  await json('PATCH', `/api/agents/threads/${branchSourceParent.id}`, { model: 'text-model' })
+  const branchSourceMessage = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Attached source', ?, ?)").run(branchSourceParent.id, JSON.stringify([{ kind: 'image', name: 'branch-source.png', mime: 'image/png', data: png.toString('base64'), size: png.length }]), Date.now()).lastInsertRowid)
+  const branchSourceId = `attachment:${branchSourceMessage}:0`
+  generationArgs = { prompt: 'Change the attached sky', source_image_id: branchSourceId, denoise: 0.4 }
+  const branchSourceEdited = result(await turn(branchSourceParent.id, true, 'Edit the attached source'))
+  assert.equal(branchSourceEdited.image.settings.source.id, branchSourceId)
+  const branchSourceMessages = (await json('GET', `/api/agents/threads/${branchSourceParent.id}`)).messages
+  const sourceBranch = await json('POST', `/api/agents/threads/${branchSourceParent.id}/branch`, { messageId: branchSourceMessages.at(-1).id })
+  const copiedSource = sourceBranch.messages.find((m: any) => m.attachments?.some((a: any) => a.name === 'branch-source.png'))
+  assert.ok(copiedSource && copiedSource.id !== branchSourceMessage)
+  await json('DELETE', `/api/agents/threads/${branchSourceParent.id}`)
+  const branchedAgain = await directEvents(`/api/agents/threads/${sourceBranch.thread.id}/images/${branchSourceEdited.image.id}/again`)
+  const branchedAgainOutput = branchedAgain.find((e: any) => e.type === 'message' && e.message.role === 'tool')
+  const branchedAgainImage = branchedAgainOutput && JSON.parse(branchedAgainOutput.message.content).image
+  assert.ok(branchedAgainImage, `Attachment source must survive branching and parent deletion: ${JSON.stringify(branchedAgain)}`)
+  assert.equal(branchedAgainImage.settings.source.id, branchSourceId)
+  assert.equal(branchedAgainImage.settings.denoise, 0.4)
+  assert.deepEqual(imageSource(admin, branchSourceId).bytes, png)
+  assert.throws(() => imageSource({ ...admin, id: 2 }, branchSourceId), /No such source/)
+  assert.equal((await api('GET', imageSource(admin, branchSourceId).url)).status, 200)
+  assert.equal(submitted['6'].class_type, 'VAEEncode')
+  assert.ok(!branchedAgain.some((e: any) => e.type === 'error' || e.type === 'message' && e.message.role === 'assistant' && e.message.content))
+  console.log('PASS attachment img2img source survives branch, parent deletion and Generate another with owner isolation and silent completion')
   const metadataPath = '/api/agents/images/model-metadata?category=checkpoints&name=test.safetensors'
   const metadata = await json('GET', metadataPath)
   assert.equal(metadata.source, 'LoRA Manager')
