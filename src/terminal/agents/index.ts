@@ -171,8 +171,8 @@ async function listing(ctx: Ctx): Promise<string> {
 /** agents -p: one answer, printed; nobody is there to allow changes, so those are declined. */
 async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null; mode: 'quick' | 'deep'; model: string | null; projectId: number | null; permission: Permission; tools: ReturnType<typeof agentSettings>['tools'] }): Promise<string> {
   const thread = await createThread({ mode: o.mode, model: o.model ?? undefined, tools: o.tools, projectId: o.projectId, workdir: o.workdir, permission: o.permission })
-  const imageLinks = new Set<string>()
-  const imageSettingsLinks = new Set<string>()
+  const imageLinks = new Map<string, string>()
+  const imageSettingsLinks = new Map<string, string>()
   let answer = ''
   let failure: string | null = null
   const dir = o.workdir ? workdirPath(o.workdir) : ctx.cwd
@@ -183,7 +183,7 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     (e) => {
       if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
         const image = generatedImage(e.message.content)
-        if (image) { imageLinks.add(new URL(image.url, location.origin).href); if (image.settings) imageSettingsLinks.add(new URL(image.url + '/metadata', location.origin).href) }
+        if (image) { imageLinks.set(new URL(image.url, location.origin).href, image.settings?.operation === 'inpaint' ? 'Inpainted image' : image.settings?.operation === 'upscale' ? 'Upscaled image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings?.hires ? 'Generated image with hires refinement' : 'Generated image'); if (image.settings) imageSettingsLinks.set(new URL(image.url + '/metadata', location.origin).href, image.settings.operation === 'inpaint' ? 'Inpaint settings' : image.settings.operation === 'upscale' ? 'Upscale settings' : image.settings.operation === 'refine' ? 'Refinement settings' : image.settings.hires ? 'Generation and hires settings' : 'Generation settings') }
       }
       if (e.type === 'message' && e.message.role === 'assistant') {
         if (e.message.content.trim()) answer = e.message.content.trim()
@@ -199,8 +199,8 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
     { terminal: true },
   )
   if (failure) throw new CmdError(`agents: ${failure}`)
-  for (const link of imageLinks) if (!answer.includes(link)) answer += `\n\nGenerated image: ${link}`
-  for (const link of imageSettingsLinks) if (!answer.includes(link)) answer += `\nGeneration settings: ${link}`
+  for (const [link, label] of imageLinks) if (!answer.includes(link)) answer += `\n\n${label}: ${link}`
+  for (const [link, label] of imageSettingsLinks) if (!answer.includes(link)) answer += `\n${label}: ${link}`
   if (!ctx.tty) return answer
   return toMarkup(markdown(answer, Math.max(30, ctx.size.cols - 1)))
 }

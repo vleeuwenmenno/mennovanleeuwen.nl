@@ -3,11 +3,11 @@
  * `queued`: waiting in ComfyUI's queue, `position` 1 when it is next. `running`: started, with no step
  * detail (no live connection to ComfyUI). `sampling`: step `value` of `max`.
  */
-export type ImageProgress = { phase: 'queued' | 'running' | 'loading' | 'encoding' | 'sampling' | 'decoding' | 'saving'; position?: number; value?: number; max?: number }
+export type ImageProgress = { phase: 'queued' | 'running' | 'loading' | 'encoding' | 'sampling' | 'decoding' | 'saving' | 'upscaling' | 'refining'; position?: number; value?: number; max?: number }
 /** How much of the picture is done, 0–1, or null when that is not known yet (queued, loading). */
 export function imageProgressFraction(p: ImageProgress | null | undefined): number | null {
   if (!p) return null
-  if (p.phase === 'sampling' && p.max) return Math.min(1, Math.max(0, (p.value ?? 0) / p.max))
+  if ((p.phase === 'sampling' || p.phase === 'upscaling' || p.phase === 'refining') && p.max) return Math.min(1, Math.max(0, (p.value ?? 0) / p.max))
   return p.phase === 'decoding' || p.phase === 'saving' ? 1 : null
 }
 /** A short status line: "Queued (position 2)", "Loading model…", "Step 12 of 30 · 40%". */
@@ -17,6 +17,8 @@ export function imageProgressLabel(p: ImageProgress | null | undefined): string 
     case 'loading': return 'Loading model…'
     case 'encoding': return 'Reading the prompt…'
     case 'sampling': return p.max ? `Step ${p.value ?? 0} of ${p.max} · ${Math.round(imageProgressFraction(p)! * 100)}%` : 'Generating image…'
+    case 'refining': return p.max ? `Refining · step ${p.value ?? 0} of ${p.max}` : 'Refining image…'
+    case 'upscaling': return p.max ? `Upscaling · ${Math.round(imageProgressFraction(p)! * 100)}%` : 'Upscaling image…'
     case 'decoding': return 'Decoding image…'
     case 'saving': return 'Saving image…'
     default: return 'Generating image…'
@@ -82,7 +84,7 @@ export function imagePresetSpec(preset: ImagePreset) {
 export type ImageAssets = Pick<ImageConfig, 'preset' | 'model' | 'clip' | 'vae'> & { loras?: ImageLora[] }
 export type ImageAssetField = 'model' | 'clip' | 'vae'
 export type ImageModelHint = { name: string; category: 'checkpoints' | 'diffusionModels'; baseModel: string }
-export type ImageAssetCatalog = { checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; loras?: string[]; loraHints?: ImageLoraHint[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
+export type ImageAssetCatalog = { inpaint?: boolean; inpaintError?: string; upscalers?: string[]; upscale?: boolean; upscaleError?: string; checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; loras?: string[]; loraHints?: ImageLoraHint[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
 export type ImageSelection = { value: string; automatic: boolean; reason: string; candidates: string[]; error?: string }
 const assetKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 const assetLeaf = (name: string) => name.split(/[\\/]/).at(-1)!.replace(/\.[^.]+$/, '')
@@ -152,7 +154,10 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
 export const IMAGE_SAMPLERS = ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'] as const
 export const IMAGE_SCHEDULERS = ['simple', 'karras', 'normal', 'sgm_uniform', 'beta'] as const
 export type ImageSampling = { steps: number; cfg: number; sampler: string; scheduler: string }
-export type ImageGenerationSettings = ImageAssets & ImageSampling & { loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: number; source?: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos-center-crop' }; profile_id?: number | null; profile_reason?: string }
+export type HiresSettings = ImageSampling & { base_width: number; base_height: number; width: number; height: number; denoise: number; seed: number; upscale_model?: string }
+export type DiffusionImageSettings = ImageAssets & ImageSampling & { operation?: 'generate' | 'refine' | 'inpaint'; mask?: { id: string; url: string; width: number; height: number; semantics: 'white-edits-black-preserves' }; upscale_model?: string; hires?: HiresSettings; loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: number; source?: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos-center-crop' }; profile_id?: number | null; profile_reason?: string }
+export type UpscaleImageSettings = { operation: 'upscale'; upscale_model: string; width: number; height: number; input_width: number; input_height: number; source: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos' } }
+export type ImageGenerationSettings = DiffusionImageSettings | UpscaleImageSettings
 /** Diffu defaults.ts preferences, restricted to the KSampler workflows we actually build. */
 export function recommendedImageSampling(preset: ImagePreset, model: string, catalog?: { samplers?: string[]; schedulers?: string[]; modelHints?: ImageModelHint[] }): ImageSampling {
   const spec = imagePresetSpec(preset)

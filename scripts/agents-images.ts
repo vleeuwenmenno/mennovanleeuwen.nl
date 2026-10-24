@@ -432,7 +432,7 @@ try {
   assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'])
   assert.deepEqual(catalog.schedulers, ['simple', 'beta', 'karras', 'normal', 'sgm_uniform'])
   assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
-  assert.deepEqual(discoveryRequests, Object.keys(info))
+  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked'])
   assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)
   assert.equal(fullCatalogRequests, 0)
   for (const [mode, error] of [['oversize', /CheckpointLoaderSimple.*1 MiB/], ['aggregate', /4 MiB total/], ['invalid', /invalid JSON.*CheckpointLoaderSimple/]] as const) {
@@ -478,7 +478,8 @@ try {
     } else assert.equal(graph['10'].inputs.clip, undefined)
     assert.equal(graph['9'].class_type, 'SaveImage')
     const fallback = preset === 'sdxl' ? 'LoraLoaderModelOnly' : 'LoraLoader'
-    assert.equal(imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }).graph['10'].class_type, fallback)
+    if (preset.startsWith('krea2')) assert.throws(() => imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }), /model-only LoRA loader/)
+    else assert.equal(imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }).graph['10'].class_type, fallback)
   }
   assert.throws(() => imageWorkflow(settings, { prompt: 'missing loader', loras: chain }, { nodes: [] }), /no LoRA loader/)
   assert.equal(imageWorkflow(settings, { prompt: 'default weight', loras: [{ name: loraNames[0] }] }).graph['10'].inputs.strength_model, 1)

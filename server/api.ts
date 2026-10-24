@@ -1,3 +1,4 @@
+import { saveImageMask, imageMask, discardImageMask } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
@@ -8,7 +9,7 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, branchThread, generateAnother, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -339,6 +340,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const p = messagePicture(requireUser(req), agentPicture[1], agentPicture[2], agentPicture[3])
       res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
+    }
+    const maskUpload = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/image-masks$/.exec(path)
+    if (maskUpload && method === 'POST') return json(res, 200, saveImageMask(requireUser(req), maskUpload[1], await readJson(req, 12 * 1024 * 1024))), true
+    const maskView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})$/.exec(path)
+    if (maskView && method === 'DELETE') { discardImageMask(requireUser(req), maskView[1]); return json(res, 200, { deleted: true }), true }
+    if (maskView && read) {
+      const mask = imageMask(requireUser(req), maskView[1])
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(mask.bytes.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : mask.bytes)
+      return true
+    }
+    const inpaint = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/inpaint$/.exec(path)
+    if (inpaint && method === 'POST') return await inpaintImage(res, requireUser(req), inpaint[1], await readJson(req, 32 * 1024)), true
+    const upscale = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/(upscale|refine)$/.exec(path)
+    if (upscale && method === 'POST') {
+      const input = await readJson<Record<string, unknown>>(req, 4096)
+      if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== upscale[2]) throw new HttpError(400, 'Image operation does not match the requested route')
+      return await upscaleImage(res, requireUser(req), upscale[1], input), true
     }
     const againImage = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/images\/([0-9a-f-]{36})\/again$/.exec(path)
     if (againImage && method === 'POST') return await generateAnother(res, requireUser(req), againImage[1], againImage[2]), true

@@ -147,6 +147,16 @@ export function database(): DatabaseSync {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS agent_images_thread ON agent_images (thread_id);
+    CREATE TABLE IF NOT EXISTS agent_image_masks (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+      source_id TEXT NOT NULL,
+      body BLOB NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_image_masks_thread ON agent_image_masks(thread_id);
     CREATE TABLE IF NOT EXISTS agent_memories (
       id INTEGER PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

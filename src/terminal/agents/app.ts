@@ -1643,7 +1643,7 @@ export class Session {
     this.imageJobs.set(callId, { messageId, index })
     const c = this.liveCalls.find((x) => x.messageId === messageId && x.index === index)
     if (!c) return
-    c.detail = imageProgressLabel(progress)
+    c.detail = (c.call.arguments?.operation === 'upscale' || c.call.arguments?.operation === 'refine' || c.call.arguments?.operation === 'inpaint') && (!progress || progress.phase === 'running') ? c.call.arguments.operation === 'inpaint' ? 'Inpainting image…' : c.call.arguments.operation === 'refine' ? 'Refining image…' : 'Upscaling image…' : imageProgressLabel(progress)
     this.draw()
   }
 

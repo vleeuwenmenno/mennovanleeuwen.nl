@@ -23,9 +23,10 @@ try {
   const source = imageSource(owner,sourceId)
   const images: { id:string; operation:string }[] = []
   let last = message
-  for (const operation of ['generate']) {
+  for (const operation of ['generate','refine','upscale']) {
     const id=randomUUID()
-    const settings = { preset:'sdxl',model:'test.safetensors',clip:'',vae:'',loras:[],steps:20,cfg:7,sampler:'euler',scheduler:'normal',seed:42,prompt:'Edit shape',negative_prompt:'',denoise:0.65,width:512,height:512,source }
+    const settings = operation==='upscale' ? { operation,upscale_model:'2x-test',width:source.width*2,height:source.height*2,input_width:source.width,input_height:source.height,source }
+      : { operation,preset:'sdxl',model:'test.safetensors',clip:'',vae:'',loras:[],steps:20,cfg:7,sampler:'euler',scheduler:'normal',seed:42,prompt:'Edit shape',negative_prompt:'',denoise:operation==='refine'?0.2:0.65,width:512,height:512,source }
     // Metadata contains references, never a source byte copy.
     delete (settings.source as Partial<typeof source>).bytes
     db.prepare('INSERT INTO agent_images(id,thread_id,name,body,metadata,created_at) VALUES(?,?,?,?,?,0)').run(id,thread,'output.png',bytes,JSON.stringify(settings))
@@ -41,8 +42,11 @@ try {
   deleteThread(owner,thread)
   for (const image of images) {
     const again=imageAgainInput(owner,first.thread.id,image.id)
-    assert.equal(again.denoise,0.65)
-    assert.equal(again.prompt,'Edit shape')
+    assert.equal(again.operation,image.operation)
+    if (image.operation !== 'upscale') {
+      assert.equal(again.denoise,image.operation === 'refine' ? 0.2 : 0.65)
+      assert.equal(again.prompt,'Edit shape')
+    }
     assert.equal(again.source_image_id,sourceId)
     const restored=imageSource(owner,again.source_image_id)
     assert.deepEqual(restored.bytes,bytes)
@@ -63,5 +67,5 @@ try {
   assert.throws(()=>imageSource(owner,sourceId),/No such source image/)
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM agent_image_source_aliases').get() as {n:number}).n,0)
   db.close()
-  console.log('PASS attachment aliases: img2img Again inputs, branch-of-branch, original deletion, owner isolation, stable IDs/bytes, current preview URLs and cascade cleanup')
+  console.log('PASS attachment aliases: img2img/refine/upscale Again inputs, branch-of-branch, original deletion, owner isolation, stable IDs/bytes, current preview URLs and cascade cleanup')
 } finally { rmSync(dir,{recursive:true,force:true}) }

@@ -1438,10 +1438,59 @@ provides earlier owned image IDs, and `list_image_attachments` discovers persist
 this or an explicitly named owned thread. `view_generated_image` can inspect either source kind
 when the conversational model supports vision. Attaching a picture alone does not request a job.
 
+**Localized editing.** On a generated image, choose **Options → Edit selected area…**.
+For a sent upload or Photos attachment, use its message’s **More → Edit selected area: filename**;
+the original owned attachment is used directly, with EXIF-oriented dimensions read when it loads. Describe
+the replacement and denoise (default 0.65), then **Paint edit area**. **Apply mask** saves an owned
+mask and starts inpainting; cancel before applying discards the selection without starting a job.
+The backend capability is checked first. The app uses the source image's recorded diffusion
+components/sampling when available; otherwise it uses current image settings. For a saved mask,
+the CLI/model can call `generate_image` with `operation: "inpaint"`, `source_image_id`, `mask_id`,
+and a prompt. Select an uploaded source with `list_image_attachments` and reuse its exact
+`attachment:message:index` ID; select a mask whose `source_image_id` matches that ID. Paint new masks
+in the app; CLI tools reuse saved masks. `list_image_masks` discovers up to 20 masks in this or an explicitly owned thread.
+Masks are bound to one source, remain private, count toward account storage, and are retained
+with surviving branch artifacts. Attachment source IDs keep resolving through owned copies
+in surviving branches, including branches of branches, after the original thread is deleted. At most eight unused mask uploads are kept per thread;
+new uploads prune older unused masks. Canceling during upload discards an unused completed upload
+when its response arrives. Referenced masks cannot be deleted separately. Again reuses the recorded source and mask with a fresh seed;
+Retry replays the direct action. Approval cards identify the mask and working-size preservation.
+
+Opaque 8-bit RGB and RGBA PNG masks are accepted; RGBA alpha must be 255 for every pixel.
+RGB channels must be equal and either black (0) or white (255); transparency is rejected.
+
+**Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` is a reusable standalone modal.
+Pass `sourceUrl` (authenticated same-origin HTTP(S)), `sourceName`, EXIF-oriented `width` and
+`height`, `onCancel`, and `onApply({ mask, width, height })`. The caller closes the editor after
+applying. Cancel never calls `onApply`; changing the source or dimensions starts a fresh mask.
+The editor checks the loaded dimensions and accepts at most 8192 pixels per side and 16,777,216
+pixels total. The exported PNG is opaque and binary: white edits, black preserves; the preview
+uses the current theme accent. Empty masks and exports above 8 MiB report an error.
+
+Brush/erase work with mouse, pen and touch, at fitted display sizes. Focus the canvas to move its
+cursor with arrows (Shift moves farther) and paint a dot with Space. Ctrl/Command+Z undoes;
+Reset clears all strokes and Escape cancels. Undo stores at most 512 strokes / 32,768 points,
+with a clear limit message instead of unbounded snapshots. Preview resolution is capped at
+1600 pixels per side; export retains source dimensions. The component itself performs no uploads.
+Its caller persists the mask only on Apply. The server validates opaque binary RGB PNG pixels,
+nonempty selection, source binding, dimensions and the 8 MiB mask cap before backend uploads.
+The synthetic browser check is `node scripts/agents-mask-check.ts http://127.0.0.1:<dev-port>`.
+`server/agentImageInpaint.ts` supplies the pure graph composition and mask-format validation for
+integration. `assertInpaintNodes` checks the discovered schemas before uploads; `inpaintGraph`
+accepts a server-built img2img graph and source/mask references, retains its preset and LoRA
+chain, and adds matched mask resizing, latent noise masking and a final pixel composite.
+Only the working-size image is preserved outside the resized mask, not the original-resolution
+source. `node scripts/agents-image-inpaint.ts` checks all six preset graphs without a GPU;
+`node scripts/agents-inpaint.ts` checks the real HTTP/approval lifecycle against mocked services.
+Run them as `pnpm check:agents-image-inpaint` and `pnpm check:agents-inpaint`.
+`pnpm check:agents-image-source-branches` (`node scripts/agents-image-source-branches.ts`)
+checks attachment identity retention and Again inputs across img2img, refine and upscale branches.
+For keyboard/touch, attachment editor, EXIF export and cancellation browser checks, start a scratch
+Vite server and run `node scripts/agents-mask-check.ts http://127.0.0.1:<port>`.
+
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
-preserve more source structure; higher values allow larger changes. This changes the **whole image**:
-there are no masks, localized inpainting, hires or dedicated upscaling yet, and unchanged regions
-are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
+preserve more source structure; higher values allow larger changes. Without `operation: "inpaint"`
+and its matching `mask_id`, this changes the **whole image**, and unchanged regions are not guaranteed. All six existing presets use Diffu's matching LoadImage → ImageScale →
 VAEEncode → KSampler path, with the same encoder/VAE, LoRA and sampling validation as text-to-image.
 The live catalog must support LoadImage, VAEEncode and ImageScale's lanczos/center options; otherwise
 editing is refused. Custom model weights remain unverified even when their catalog names match.
@@ -1724,7 +1773,8 @@ only its observations. Each observation is a card: the picture as a thumbnail (t
 **Vision** for a vision model's, **Agent’s own guess** for an unverified suggestion), its profile,
 the date and the note in two lines. Opening a card shows the evidence quote, a settings line
 (workflow · steps · CFG · sampler/scheduler · model file · LoRAs and weights), size and seed, and the
-prompt behind **Show prompt**. Filter by profile, source and model, search task and note; the count
+prompt behind **Show prompt**. Upscale observations show their operation and upscale model, with
+each installed model kept distinct in the model filter. Filter by profile, source and model, search task and note; the count
 says how many the filter hides. Delete one card, or select several and delete them; the OS dialog
 asks first and says it removes the observation only, never the picture. With a keyboard: arrows,
 Home and End move between cards, Enter opens one, Delete deletes it. Memory's own list shows each
@@ -1969,6 +2019,65 @@ size, without asking the model or showing an approval card. It uses the usual pr
 controls, account job limit and storage quota. Images must be on in Tools, ComfyUI must be connected,
 and the recorded components must still be installed; a missing component is named in the error.
 Retry after this action repeats it directly. Both actions work with keyboard controls and touch.
+
+**Upscale an image.** Choose **Options → Upscale…**, browse the installed upscale models by
+folder or search, select a model, and choose 1.5×, 2× or 4×. The preview shows the final dimensions
+with the source aspect ratio preserved; outputs above 4096 px per side or 16,777,216 pixels are
+blocked. No prompt or diffusion settings are needed. The model's native intermediate image can
+exceed the requested output size, so the output limit is not a memory guarantee. Sources above
+2048 px per side must be resized separately before upscaling; original pixels are never silently
+reduced. **Upscale settings** records the source and model input dimensions. Upscaled results have
+no seed. **Upscale again** repeats the recorded
+operation from its original source rather than enlarging the enlarged result. Progress and Stop
+work like Generate another, and the terminal labels upscale results and settings explicitly.
+Upscale observations retain their operation and exact upscale model. `read_image_learnings` with
+`operation: "upscale"` retrieves those notes (optionally filtered by `upscale_model`);
+`all_models: true` can include all operations. Default diffusion evidence excludes upscale notes.
+
+**Refine an existing image or generate with hires.** Refinement uses diffusion to add or change
+fine detail. `generate_image` with `operation: "refine"` starts from an owned source, inherits its
+recorded diffusion components, prompts, LoRAs, sampling and seed, then applies explicit overrides.
+If the source was model-upscaled, the server follows owned provenance to its diffusion ancestor
+(up to eight images, rejecting cycles and foreign or missing ancestors). A source without saved
+diffusion settings requires an explicit prompt and compatible configured components; no prompt
+is invented. The original image is never changed.
+
+Refinement defaults to 1.5× and denoise 0.2; scale 1–2 or explicit dimensions are accepted. Sizes
+round to a 64-pixel grid from 256 to 2048 per side, with at most 4,194,304 pixels. Lanczos resize
+with center crop fits the requested shape, so grid rounding can trim edges. An optional installed
+`upscale_model` enlarges pixels before encoding; that model stage accepts sources up to 2048 per
+side and retains the native-intermediate memory caveat above. Refinement does not require an
+upscale model. Turbo CFG remains 1; Krea2 always requires model-only LoRAs.
+
+For new generation, `hires: { scale: 1.5, denoise: 0.2 }` adds a second image-space diffusion pass.
+The first pass uses ordinary generation limits; the second uses refinement limits, the same
+components, conditioning and seed, and its own optional steps/CFG/sampler/scheduler/upscale model.
+Only the final image is saved. Approval shows both stages; metadata records base and final sizes
+and resolved stage settings. Generate another reconstructs both stages with a fresh shared seed,
+without applying the scale twice. Refine again starts from the original source with a fresh seed.
+The existing optional generation approval, Stop, quota, private storage and silent-success rules
+apply. Refinement and hires observations retain their operation, separate from ordinary generation
+and model-upscale evidence. These workflows do not implement masked inpainting.
+
+**Refine an image.** Choose **Options → Refine…** for a diffusion pass over an existing image.
+Choose 1×, 1.5× (default), 2×, or custom dimensions, and strength from 0.1 to 1 (default 0.2).
+Higher strength can change details and composition. Scale rounds each side to the nearest 64 px,
+so the aspect ratio is approximate; custom dimensions can crop. Outputs must be multiples of 64,
+256–2048 px per side, at most 4,194,304 pixels. An optional upscale model runs before diffusion;
+its intermediate size and memory needs can exceed the requested output.
+The nearest owned diffusion source supplies the prompt, components and sampling. The dialog can
+override the prompt and, under **Advanced components and sampling**, the workflow, model,
+encoder, VAE, steps, CFG, sampler and scheduler. Images without recorded diffusion settings need
+an explicit prompt and configured components; the backend never invents a missing prompt.
+**Refinement settings** records the operation. Observations retain refinement strength and the
+full hires stage settings, with separate workflow labels and model filters. **Refine again** starts from the original source
+with a fresh seed. Progress and Stop work as for other image operations.
+
+For a new image with a second hires pass, ask the agent in the composer or terminal, for example:
+“Generate a lighthouse, then apply a 1.5× hires pass at strength 0.2.” The `generate_image` tool
+accepts `hires: {scale: 1.5, denoise: 0.2}` with optional upscaler and sampling overrides.
+**Generation and hires settings** records both stages and the final image dimensions;
+**Generate another** repeats both stages. This does not change the session's saved defaults.
 
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the

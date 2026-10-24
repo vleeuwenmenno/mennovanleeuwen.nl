@@ -166,7 +166,7 @@ export function ObservationsPanel({ initialProfile, onChanged }: { initialProfil
   const models = useMemo(() => {
     const seen = new Map<string, Observation['settings']>()
     for (const o of all) if (o.settings && !seen.has(modelKey(o))) seen.set(modelKey(o), o.settings)
-    return [...seen].map(([value, s]) => ({ value, label: s!.model ? fileTitle(s!.model) : 'Automatic model', note: presetTitle(s!.preset) })).sort((a, b) => a.label.localeCompare(b.label))
+    return [...seen].map(([value, s]) => ({ value, label: s!.operation === 'upscale' ? s!.upscale_model ? fileTitle(s!.upscale_model) : 'Unknown upscale model' : s!.model ? fileTitle(s!.model) : 'Automatic model', note: s!.operation === 'upscale' ? 'Upscale' : `${s!.hires ? 'Hires · ' : s!.operation === 'inpaint' ? 'Inpaint · ' : s!.operation === 'refine' ? 'Refine · ' : ''}${presetTitle(s!.preset)}${s!.hires?.upscale_model ? ` · ${fileTitle(s!.hires.upscale_model)}` : ''}` })).sort((a, b) => a.label.localeCompare(b.label))
   }, [all])
   const chosen = shown.filter((o) => selected.has(o.id))
   const set = (patch: Partial<ObservationFilter>) => setFilter((f) => ({ ...f, ...patch }))

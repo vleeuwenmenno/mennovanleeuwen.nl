@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { freeName, imageFileName } from '../src/data/agentImageFiles.ts'
-import { matchesObservation, NO_FILTER, observationFromText, readObservation, settingsLine } from '../src/data/imageObservations.ts'
+import { matchesObservation, modelKey, NO_FILTER, observationFromText, readObservation, settingsLine } from '../src/data/imageObservations.ts'
 
 const data = mkdtempSync(join(tmpdir(), 'mvlos-observations-'))
 process.env.DATA_DIR = data
@@ -55,6 +55,44 @@ try {
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, source: 'vision' }))
   assert.ok(!matchesObservation(feedback, { ...NO_FILTER, query: 'lighthouse at dusk' }), 'the prompt is not searched')
   console.log('PASS observation text and JSON parse, raw fallback, settings line, filters')
+
+  // Upscalers retain their identity in structured and legacy text records, without diffusion facts.
+  const upscaleSettings = { operation: 'upscale', upscale_model: 'detail/4x-detail.pth', width: 2048, height: 1536 }
+  const upscale = readObservation(row, '', JSON.stringify({ ...learning, settings: upscaleSettings }))
+  const upscaleText = observationFromText(row, text(3, 'vision', 'Upscale', 'Sharper', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(upscaleSettings)}`))!
+  assert.equal(upscale.settings?.operation, 'upscale')
+  assert.equal(upscale.settings?.upscale_model, upscaleSettings.upscale_model)
+  assert.deepEqual(upscaleText.settings, upscale.settings)
+  assert.equal(settingsLine(upscale.settings), 'Upscale · 4x-detail · 2048 × 1536')
+  assert.equal(upscale.settings?.seed, null)
+  assert.equal(modelKey(upscale), 'upscale|detail/4x-detail.pth')
+  const otherUpscale = readObservation(row, '', JSON.stringify({ ...learning, settings: { ...upscaleSettings, upscale_model: 'photos/2x-photo.pth' } }))
+  assert.notEqual(modelKey(upscale), modelKey(otherUpscale))
+  assert.ok(matchesObservation(upscale, { ...NO_FILTER, model: modelKey(upscale) }))
+  assert.ok(!matchesObservation(otherUpscale, { ...NO_FILTER, model: modelKey(upscale) }))
+  assert.ok(!matchesObservation(feedback, { ...NO_FILTER, model: modelKey(upscale) }))
+  const refined = readObservation(row, '', JSON.stringify({ ...learning, settings: { ...settings, operation: 'refine', denoise: 0.2 } }))
+  assert.equal(refined.settings?.operation, 'refine')
+  assert.ok(settingsLine(refined.settings).startsWith('Refine · strength 0.2 · Krea2 Turbo'))
+  assert.notEqual(modelKey(refined), modelKey(feedback))
+  const hires = { base_width: 1024, base_height: 768, width: 1536, height: 1152, denoise: 0.25, seed: 43, steps: 12, cfg: 5, sampler: 'euler', scheduler: 'simple', upscale_model: 'detail/4x-detail.pth' }
+  const hiresSettings = { ...settings, operation: 'generate', width: 1536, height: 1152, hires }
+  const hiresObservation = readObservation(row, '', JSON.stringify({ ...learning, settings: hiresSettings }))
+  assert.equal(hiresObservation.settings?.operation, 'generate', 'hires preserves its recorded operation')
+  assert.deepEqual(hiresObservation.settings?.hires, hires, 'all stage settings survive')
+  assert.equal(refined.settings?.denoise, 0.2)
+  assert.ok(settingsLine(hiresObservation.settings).includes('Hires · 1024 × 768 · to 1536 × 1152 · strength 0.25 · 12 steps · CFG 5 · euler/simple · 4x-detail'))
+  assert.notEqual(modelKey(hiresObservation), modelKey(feedback))
+  assert.notEqual(modelKey(hiresObservation), modelKey(refined))
+  const hiresText = observationFromText(row, text(3, 'vision', 'Hires', 'Sharper', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(hiresSettings)}`))!
+  assert.deepEqual(hiresText.settings, hiresObservation.settings)
+  const inpaintSettings = { ...settings, operation: 'inpaint', denoise: 0.65, mask: { id: image, width: 1024, height: 1024 } }
+  const inpaintObservation = observationFromText(row, text(3, 'vision', 'Masked edit', 'Matches', 9, 'edges').replace(/Recorded settings: .*/, `Recorded settings: ${JSON.stringify(inpaintSettings)}`))!
+  assert.equal(inpaintObservation.settings?.operation, 'inpaint')
+  assert.deepEqual(inpaintObservation.settings?.mask, inpaintSettings.mask)
+  assert.match(settingsLine(inpaintObservation.settings), /Inpaint · strength 0.65/)
+  assert.notEqual(modelKey(inpaintObservation), modelKey(refined))
+  console.log('PASS upscale/refine observation identity, text/JSON parity, summary and model filters')
 
   // Save to Files names: a prompt slug and the short id, stable, never a bare id, never a taken name.
   assert.equal(imageFileName({ id: image, settings }), 'a-lighthouse-at-dusk-ink-wash-0a1b2c3d.png')
