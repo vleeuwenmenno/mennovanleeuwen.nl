@@ -55,7 +55,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        /threads open <id> resumes a result (a unique prefix from the last results also works).
        /threads this [words] searches this thread; without words it repeats the last search.
 
-       /help lists the commands: /resume, /threads, /images, /model, /tools, /skills, /context, /export, ….
+       /branch [message id] continues in a new thread; the original stays unchanged.
+       /help lists the commands: /resume, /threads, /branch, /images, /model, /tools, /skills, /context, /export, ….
 
 {c:bold}OPTIONS{/}
        -c, --continue          continue the latest thread in this folder

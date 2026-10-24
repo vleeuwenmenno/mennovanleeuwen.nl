@@ -414,6 +414,7 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   with that message, or answers the form with it.
 - A dropped stream reconnects by itself (for a minute) and an interrupted turn says so; Ctrl+R or
   `/retry` runs the last message again, and `/rewind` picks one of your messages to go back to.
+  `/branch [message id]` continues in a new thread up to that message, or the last message when omitted; the original stays unchanged.
 - `/share` shares the thread as a link and `/share last` its last answer, never expiring unless
   given `1h`, `1d`, `7d` or `30d` (`/share last 7d`); `/shares` lists the thread's links and
   `/unshare <id>` (or `/unshare` and a pick) stops one. See *Shared links* under Agents below.
@@ -1712,8 +1713,10 @@ removes that prompt from ComfyUI's pending queue. An already running GPU job may
 Agents never sends a global interrupt that could stop someone else's job, and cancelled output is
 not stored. Errors appear in the existing tool card and CLI output. Successful PNGs live in the
 server database, survive restarts and backend cleanup, count toward the account's storage quota,
-and are deleted with their thread. Rewinding a conversation does not reclaim its generated images;
-delete the thread to reclaim that storage. `pnpm check:agents-images` exercises generation with
+and are deleted with their thread unless a branch still references them. Branches share the same
+private image ID and stored bytes; deleting the original transfers retained images to a surviving
+branch. The last referencing thread’s deletion reclaims that storage. Rewinding a conversation does
+not reclaim its generated images. `pnpm check:agents-images` exercises generation with
 mock ComfyUI/Ollama, permissions, owner-only downloads, cancellation, quota accounting and failures
 without running a GPU job.
 
@@ -1778,6 +1781,22 @@ messages go, it and everything after it leave the thread (`POST …/rewind`; a r
 stopped first, the queue stays) and it comes back into the message box with its files. What the
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
+
+**Branch off from here** is in each message’s More menu and right-click menu, and beside Retry
+for the last message. It opens a new thread containing every message through that point, including
+files, thoughts, tool results and compaction summaries. The original stays unchanged. Mode, model,
+tools, project, work folder, permission and image settings/profile carry over; queues and pending
+approvals do not. Account/project memories remain shared. The title is `<original title> — from
+YYYY-MM-DD`, using the selected message’s UTC date, with the original title kept in its history.
+It is treated as a manual title. Wait for a running thread to finish before branching. The terminal
+has `/branch [message id]`; omitting the id branches from its last message.
+
+**Generate another** sits beside an image’s generation settings and in its More/right-click menu.
+It draws another image in the same thread with the same prompt, components, LoRAs, sampling and
+size, without asking the model or showing an approval card. It uses the usual progress and Stop
+controls, account job limit and storage quota. Images must be on in Tools, ComfyUI must be connected,
+and the recorded components must still be installed; a missing component is named in the error.
+Retry after this action repeats it directly. Both actions work with keyboard controls and touch.
 
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the

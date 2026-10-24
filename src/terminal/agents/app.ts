@@ -22,6 +22,7 @@ import {
   interruptionText,
   isDropped,
   retryTurn,
+  branchThread,
   rewindThread,
   getContext,
   getThread,
@@ -152,6 +153,7 @@ const SLASH: [string, string][] = [
   ['/export', 'save the thread as Markdown'],
   ['/copy', 'copy the last reply'],
   ['/retry', 'run your last message again (also ctrl+r)'],
+  ['/branch', 'continue in a new thread from the last message, or /branch <message id>'],
   ['/rewind', 'go back to one of your messages and edit it'],
   ['/share', 'share the thread as a link (last: the last answer; 1h, 1d, 7d, 30d)'],
   ['/shares', "this thread's shared links"],
@@ -2142,6 +2144,17 @@ export class Session {
       case '/retry':
         await this.retry()
         return true
+      case '/branch': {
+        if (busy()) return true
+        const messageId = arg.trim() ? Number(arg.trim()) : this.messages.at(-1)?.id
+        if (!this.thread || !Number.isSafeInteger(messageId) || !messageId) { this.say('Use /branch [message id] in a thread with messages.'); return true }
+        try {
+          const result = await branchThread(this.thread.id, messageId)
+          await this.open(result.thread.id)
+          this.say('Branched here; the original thread is unchanged.')
+        } catch (e) { this.say((e as Error).message, 'red') }
+        return true
+      }
       case '/rewind':
         await this.rewindPick()
         return true

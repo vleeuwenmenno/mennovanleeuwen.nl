@@ -402,6 +402,13 @@ export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, sig
   await readEvents(res, onEvent)
 }
 
+/** Start an idle branch through this message, leaving the original untouched. */
+export const branchThread = (id: string, messageId: number) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}/branch`, { method: 'POST', json: { messageId } })
+export async function generateAnother(id: string, imageId: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  const res = await fetch(`/api/agents/threads/${id}/images/${imageId}/again`, { method: 'POST', credentials: 'same-origin', signal })
+  await readEvents(res, onEvent)
+}
+
 /**
  * Rewind to one of your messages: it and everything after it leave the thread (a running turn is
  * stopped first), and it comes back, files and all, to edit and send again. What tools changed is

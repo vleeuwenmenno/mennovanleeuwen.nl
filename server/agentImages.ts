@@ -304,18 +304,47 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   return { graph, width, height, seed, sampling, loras }
 }
 
-/** Only the current owner's current thread can supply bytes to a vision tool. */
-export function generatedImageForVision(user: User, thread: string, id?: unknown) {
+// Branches retain the artifact ID in the copied generate_image result, never a second PNG.
+const imageReference = "m.role = 'tool' AND m.tool_name = 'generate_image' AND json_extract(CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END, '$.image.id') = i.id"
+export function threadImageIds(user: User, thread: string) {
   ownImageThread(user, thread)
-  if (id !== undefined && (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id))) throw new HttpError(400, 'Choose a generated image ID from this thread')
-  const row = database().prepare(`SELECT i.id, i.body FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.id = ? AND t.user_id = ? ${id ? 'AND i.id = ?' : ''} ORDER BY i.created_at DESC, i.rowid DESC LIMIT 1`).get(thread, user.id, ...(id ? [id as string] : [])) as { id: string; body: Uint8Array } | undefined
+  return database().prepare(`SELECT i.id FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ? AND (i.thread_id = ? OR EXISTS (SELECT 1 FROM agent_messages m WHERE m.thread_id = ? AND ${imageReference})) ORDER BY i.created_at DESC, i.rowid DESC LIMIT 5`).all(user.id, thread, thread) as { id: string }[]
+}
+export function imageInThread(user: User, thread: string, id: unknown) {
+  ownImageThread(user, thread)
+  if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) throw new HttpError(400, 'Choose a generated image ID from this thread')
+  const row = database().prepare(`SELECT i.id, i.metadata, i.backend_scope, i.created_at FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ? AND (i.thread_id = ? OR EXISTS (SELECT 1 FROM agent_messages m WHERE m.thread_id = ? AND ${imageReference}))`).get(id, user.id, thread, thread) as { id: string; metadata: string | null; backend_scope: string | null; created_at: number } | undefined
   if (!row) throw new HttpError(404, 'No generated image in this thread matches that request')
+  return row
+}
+/** Before the originating thread is deleted, move shared artifacts to a surviving owned branch. */
+export function retainBranchedImages(user: User, thread: string) {
+  const db = database()
+  const shared = db.prepare(`SELECT i.id, (SELECT m.thread_id FROM agent_messages m JOIN agent_threads b ON b.id = m.thread_id WHERE b.user_id = ? AND b.id != i.thread_id AND ${imageReference} ORDER BY m.id LIMIT 1) AS survivor FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ? AND t.id = ?`).all(user.id, user.id, thread) as { id: string; survivor: string | null }[]
+  for (const image of shared) if (image.survivor) db.prepare('UPDATE agent_images SET thread_id = ? WHERE id = ?').run(image.survivor, image.id)
+}
+
+/** Vision accepts only artifacts generated here or referenced by an owned branch's messages. */
+export function generatedImageForVision(user: User, thread: string, id?: unknown) {
+  const imageId = id ?? threadImageIds(user, thread)[0]?.id
+  if (imageId === undefined) throw new HttpError(404, 'No generated image in this thread matches that request')
+  const image = imageInThread(user, thread, imageId)
+  const row = database().prepare('SELECT id, body FROM agent_images WHERE id = ?').get(image.id) as { id: string; body: Uint8Array }
   if (row.body.byteLength > 8 * 1024 * 1024) throw new HttpError(413, 'This image exceeds the 8 MiB vision limit; generate a smaller image to inspect it')
   return { id: row.id, data: Buffer.from(row.body).toString('base64') }
 }
 
+export function imageAgainInput(user: User, thread: string, id: string): ImageInput {
+  const image = imageInThread(user, thread, id)
+  if (!image.metadata) throw new HttpError(409, 'This image has no recorded generation settings')
+  const { denoise: _denoise, ...settings } = JSON.parse(image.metadata) as ImageGenerationSettings
+  let seed: number
+  do { seed = randomInt(2 ** 48 - 1) } while (seed === settings.seed)
+  return { ...settings, loras: settings.loras ?? [], seed }
+}
+
 type ImagePlan = { settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
-async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
+async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false): Promise<ImagePlan> {
   const allowed = new Set(['profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const profile = selectedImageProfile(user, thread, input.profile_id)
@@ -326,6 +355,16 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   const preset = overrides.preset ?? effective.preset
   const configured = { ...imageSettings(user), ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
   const catalog = await imageCatalog(user, signal, configured)
+  if (exact) {
+    const spec = imagePresetSpec(preset)
+    const required: [string, unknown, readonly string[]][] = [
+      ['model', configured.model, spec.clipType ? catalog.diffusionModels : catalog.checkpoints],
+      ...(spec.clipType ? [['encoder', configured.clip, catalog.clips], ['VAE', configured.vae, catalog.vaes]] as [string, unknown, readonly string[]][] : []),
+      ['sampler', input.sampler, catalog.samplers], ['scheduler', input.scheduler, catalog.schedulers],
+      ...configured.loras.map((l): [string, unknown, readonly string[]] => ['LoRA', l.name, catalog.loras]),
+    ]
+    for (const [kind, name, options] of required) if (typeof name !== 'string' || !name || !options.includes(name)) throw new HttpError(409, `Cannot Generate another: ${kind} “${String(name ?? '')}” is no longer installed on this backend`)
+  }
   if (configured.loras.length && !catalog.nodes.some((n) => n === 'LoraLoader' || n === 'LoraLoaderModelOnly')) throw new HttpError(409, 'This ComfyUI has no LoRA loader')
   validateLoras(configured.loras, catalog.loras)
   const resolved = resolveImageAssets(configured, catalog)
@@ -340,8 +379,8 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   const parameters: ImageGenerationSettings = { loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
   return { settings, workflow, parameters }
 }
-export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal) {
-  const plan = await planImageGeneration(user, thread, input, signal)
+export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false) {
+  const plan = await planImageGeneration(user, thread, input, signal, exact)
   const p = plan.parameters
   const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
   return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }

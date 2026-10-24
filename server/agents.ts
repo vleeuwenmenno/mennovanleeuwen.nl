@@ -3,7 +3,7 @@ import { messageMentions } from '../src/data/agentMentions.ts'
 import { saveImageProfile, forgetImageProfile } from './agentImageProfiles.ts'
 import { imageLearnings, saveImageLearning } from './agentImageLearning.ts'
 import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageProgress } from '../src/data/imageModels.ts'
-import { generateImage, prepareImageGeneration, generatedImageForVision, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
+import { generateImage, prepareImageGeneration, generatedImageForVision, imageAgainInput, retainBranchedImages, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
@@ -379,7 +379,7 @@ type Verdict = { allow: boolean; always?: 'edits' | 'command' | 'domain' | 'mail
 type Queued = { id: string; text: string; attachments: Attachment[]; zone: string | null; createdAt: number }
 export type QueuedInfo = { id: string; text: string; attachments: AttachmentInfo[]; createdAt: number; /** A window is editing it: the queue waits */ editing: boolean }
 /** What a turn starts from: the user's message, its files and the time zone they are in. */
-type Ask = { text: string; files: Attachment[]; zone: string }
+type Ask = { text: string; files: Attachment[]; zone: string; again?: string }
 const MAX_QUEUE = 20
 /**
  * The queued message a window is editing, by thread. The queue waits while one is, so a message is
@@ -724,7 +724,7 @@ export function listQuick(user: User): QuickAnswer[] {
   const keep = quickKeep(user)
   if (keep !== null) {
     const old = database().prepare('SELECT id FROM agent_threads WHERE user_id = ? AND quick = 1 AND updated_at < ?').all(user.id, Date.now() - keep) as { id: string }[]
-    for (const { id } of old) if (!running.has(id)) database().prepare('DELETE FROM agent_threads WHERE id = ?').run(id)
+    for (const { id } of old) if (!running.has(id)) deleteThread(user, id)
   }
   const rows = database().prepare('SELECT * FROM agent_threads WHERE user_id = ? AND quick = 1 ORDER BY updated_at DESC LIMIT 100').all(user.id) as ThreadRow[]
   return rows.map((r) => {
@@ -740,7 +740,7 @@ export function listQuick(user: User): QuickAnswer[] {
 /** Forgets every quick answer that is not answering right now. */
 export function clearQuick(user: User) {
   const rows = database().prepare('SELECT id FROM agent_threads WHERE user_id = ? AND quick = 1').all(user.id) as { id: string }[]
-  for (const { id } of rows) if (!running.has(id)) database().prepare('DELETE FROM agent_threads WHERE id = ?').run(id)
+  for (const { id } of rows) if (!running.has(id)) deleteThread(user, id)
 }
 
 export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown; quick?: unknown; workdir?: unknown; permission?: unknown }): Promise<Thread> {
@@ -855,6 +855,7 @@ export function deleteThread(user: User, id: string) {
   editing.delete(row.id)
   clearTimeout(held.get(row.id)?.timer)
   held.delete(row.id)
+  retainBranchedImages(user, row.id)
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
 }
 
@@ -2925,6 +2926,7 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
 
 /** One turn: the user's message saved, then rounds of the model and its tools until it answers. */
 async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<TurnResult> {
+  if (ask.again) return imageAgainTurn(user, thread, ask.again, ctl, send)
   // /compact is no message for the model: the thread is compacted instead.
   const step = compactAsk(ask)
   if (step) return compactTurn(user, thread, step.instructions, ctl, send)
@@ -3392,14 +3394,82 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   const last = [...messagesOf(row.id)].reverse().find((m) => m.role === 'user')
   if (!last && !cut?.compact) throw new HttpError(400, 'There is nothing to try again')
   checkTurnRoom(user)
-  requireKey(user)
+  const again = !cut?.compact && last?.checked?.startsWith('image-again:') ? last.checked.slice('image-again:'.length) : undefined
+  if (again) imageAgainAllowed(user, row.id, again)
+  else requireKey(user)
   const zone = zoneFor(body.client?.timeZone)
-  const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone }
+  const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again }
   if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
   await runChain(user, row.id, ask, res, fromTerminal)
+}
+
+/** A branch is an idle, exact prefix; scoped memories are shared, not copied. */
+export function branchThread(user: User, id: string, body: { messageId?: unknown }) {
+  const row = ownThread(user, id), db = database()
+  if (running.has(id)) throw new HttpError(409, 'Wait for this thread to finish before branching')
+  if (!body || !Number.isSafeInteger(body.messageId) || Number(body.messageId) < 1) throw new HttpError(400, 'Choose a message to branch from')
+  const target = db.prepare('SELECT id, created_at FROM agent_messages WHERE thread_id = ? AND id = ?').get(id, Number(body.messageId)) as { id: number; created_at: number } | undefined
+  if (!target) throw new HttpError(404, 'That message is not in this thread any more')
+  const copies = db.prepare('SELECT * FROM agent_messages WHERE thread_id = ? AND id <= ? ORDER BY id').all(id, target.id) as MessageRow[]
+  checkRoom(user, Buffer.byteLength(JSON.stringify(copies)))
+  const branch = randomUUID(), now = Date.now()
+  db.exec('BEGIN')
+  try {
+    db.prepare(`INSERT INTO agent_threads (id, user_id, title, mode, model, tools, project_id, workdir, permission, image_config, image_profile_id, title_history, created_at, updated_at)
+      SELECT ?, user_id, title, mode, model, tools, project_id, workdir, permission, image_config, image_profile_id, title_history, ?, ? FROM agent_threads WHERE id = ? AND user_id = ?`).run(branch, now, now, id, user.id)
+    const insert = db.prepare('INSERT INTO agent_messages (thread_id, role, content, thinking, tool_calls, tool_name, attachments, checked, compact, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    for (const m of copies) insert.run(branch, m.role, m.content, m.thinking, m.tool_calls, m.tool_name, m.attachments, m.checked, m.compact, m.created_at)
+    setTitle(ownThread(user, branch), `${row.title} — from ${new Date(target.created_at).toISOString().slice(0, 10)}`, 'user')
+    db.exec('COMMIT')
+  } catch (e) { db.exec('ROLLBACK'); throw e }
+  return getThread(user, branch)
+}
+
+function imageAgainAllowed(user: User, thread: string, image: string) {
+  if (!toThread(ownThread(user, thread)).tools.includes('images')) throw new HttpError(409, 'Images are off for this thread. Turn on Images in Tools to use Generate another.')
+  if (!imageSettings(user).url) throw new HttpError(409, 'Connect ComfyUI in Settings → Agents → Images to use Generate another.')
+  return imageAgainInput(user, thread, image)
+}
+
+/** A direct user action uses the normal streamed lifecycle, but never calls a model or asks approval. */
+export async function generateAnother(res: ServerResponse, user: User, id: string, image: string) {
+  ownThread(user, id)
+  if (running.has(id)) throw new HttpError(409, 'This thread is still answering')
+  checkTurnRoom(user)
+  imageAgainAllowed(user, id, image)
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  await runChain(user, id, { text: 'Generate another', files: [], zone: 'UTC', again: image }, res, false)
+}
+
+async function imageAgainTurn(user: User, thread: string, image: string, ctl: AbortController, send: (e: TurnEvent) => void): Promise<TurnResult> {
+  let assistant: AgentMessage | undefined
+  const callId = randomUUID()
+  try {
+    const input = imageAgainAllowed(user, thread, image)
+    // checked is a server-owned marker, preserved by branches; Retry repeats the direct action.
+    send({ type: 'message', message: addMessage(thread, { role: 'user', content: 'Generate another', checked: `image-again:${image}` }) })
+    assistant = addMessage(thread, { role: 'assistant', content: '', toolCalls: [{ name: 'generate_image', arguments: input }] })
+    send({ type: 'message', message: assistant })
+    const plan = await prepareImageGeneration(user, thread, input, ctl.signal, true)
+    const entry: Pending = { callId, messageId: assistant.id, index: 0, kind: 'image', ...plan.dimensions, resolve: () => {} }
+    pending.set(thread, [entry])
+    send({ type: 'imageGeneration', callId, messageId: assistant.id, index: 0, ...plan.dimensions })
+    const output = await plan.run((progress) => { entry.progress = progress; send({ type: 'imageProgress', callId, progress }) })
+    send({ type: 'message', message: addMessage(thread, { role: 'tool', toolName: 'generate_image', content: output }) })
+    send({ type: 'done' })
+    return { outcome: 'answered' }
+  } catch (e) {
+    const error = e instanceof Error ? e.message : 'Could not Generate another'
+    if (assistant && database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) send({ type: 'message', message: addMessage(thread, { role: 'tool', toolName: 'generate_image', content: JSON.stringify({ error }) }) })
+    send(ctl.signal.aborted ? { type: 'done' } : { type: 'error', error })
+    return { outcome: ctl.signal.aborted ? 'stopped' : 'failed', error }
+  } finally {
+    pending.delete(thread)
+    send({ type: 'imageGenerationDone', callId })
+  }
 }
 
 /**

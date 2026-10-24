@@ -53,6 +53,8 @@ import {
   type QueuedMessage,
   isDropped,
   retryTurn,
+  branchThread,
+  generateAnother,
   rewindThread,
   interruptionText,
   compactionText,
@@ -1404,6 +1406,38 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     }
   }
 
+  const branchFrom = async (message: AgentMessage) => {
+    if (!thread || answering || sending.current) return
+    sending.current = true
+    try {
+      const result = await branchThread(thread.id, message.id)
+      onCreated(result.thread)
+      onChanged()
+    } catch (e) { setError((e as Error).message) }
+    finally { sending.current = false }
+  }
+  const again = async (imageId: string) => {
+    if (!thread || answering || sending.current) return
+    sending.current = true
+    setError(null); setDropped(false); setBusy(true); pinned.current = true
+    const ctl = new AbortController()
+    abort.current = ctl
+    try { await generateAnother(thread.id, imageId, onEvent, ctl.signal) }
+    catch (e) {
+      if (isDropped(e) && !ctl.signal.aborted) lose()
+      else if ((e as Error).name !== 'AbortError') setError((e as Error).message)
+    } finally {
+      abort.current = null; sending.current = false; setBusy(false); setLive(null); setApprovals([]); onChanged()
+    }
+  }
+  const messageActions = (message: AgentMessage): MenuItem[] => {
+    const image = message.toolName === 'generate_image' ? generatedImage(message.content) : null
+    return [
+      { label: 'Branch off from here', hint: answering ? 'Wait for this thread to finish' : 'Continue in a new thread; keep the original', disabled: answering, onSelect: () => void branchFrom(message) },
+      ...(image ? [{ label: 'Generate another', hint: !image.settings ? 'This image has no recorded generation settings' : !tools.includes('images') ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : 'Draw this image again with the same prompt and settings', disabled: answering || !tools.includes('images') || !image.settings, onSelect: () => void again(image.id) }] : []),
+    ]
+  }
+
   // Rewind to one of your messages: it and everything after it go (asked first, saying what is not
   // undone), and it comes back into the message box to edit and send again.
   const rewindTo = async (m: AgentMessage, edit: boolean) => {
@@ -1644,6 +1678,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         ...(msg.thinking ? [{ label: 'Copy thoughts', onSelect: () => copy(msg.thinking!) }] : []),
         { separator: true },
       )
+    if (msg) {
+      const target = tool ? messages.slice(messages.indexOf(msg) + 1).filter((m) => m.role === 'tool')[Number(tool[1])] ?? msg : msg
+      items.push(...messageActions(target), { separator: true })
+    }
     items.push({
       label: 'Select all',
       shortcut: 'Ctrl A',
@@ -1900,7 +1938,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <MoneyThread currencies={threadCurrencies}>
-          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} actions={messageActions} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} />
         </MoneyThread>
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
@@ -1920,6 +1958,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <button type="button" className={dropped || thread.interrupted ? 'btn btn-small' : 'agt-retry'} onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">
               ↻ Retry
             </button>
+            {messages.at(-1) && <button type="button" className="agt-retry" onClick={() => void branchFrom(messages.at(-1)!)} title="Continue in a new thread; keep the original">Branch off from here</button>}
             {dropped && (
               <button type="button" className="btn btn-small" onClick={() => (lose(), setRejoin((n) => n + 1))} title="Look for the turn again">
                 Look again
@@ -2081,7 +2120,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways }: { /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, imagesOn }: { actions: (m: AgentMessage) => MenuItem[]; onAgain: (imageId: string) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+  const more = (m: AgentMessage) => <button type="button" className="btn btn-small" style={{ visibility: 'visible' }} aria-label={`Message ${m.id}: more actions`} onClick={(e) => { openMenuAt(e.currentTarget, actions(m)); if (e.detail === 0) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.ctx-menu [role="menuitem"]:not(:disabled)')?.focus()) }}>More</button>
   const out: ReactNode[] = []
   // A turn's answer is its last message with text: Share sits under it, once the turn is done.
   const answers = new Set<number>()
@@ -2108,6 +2148,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           </div>
           {/* Under each of your messages on hover (always on touch): copy it, or go back to it. */}
           <div className="agt-user-actions">
+            {more(m)}
             {m.content && (
               <button type="button" onClick={() => copy(m.content)} title="Copy the message">
                 Copy
@@ -2126,7 +2167,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
     }
     if (m.role === 'tool') continue // drawn with the call that asked for it
     if (m.role === 'compact') {
-      out.push(<CompactDivider key={m.id} m={m} />)
+      out.push(<div key={m.id} data-msg={m.id}><CompactDivider m={m} />{more(m)}</div>)
       continue
     }
     const calls = m.toolCalls ?? []
@@ -2144,22 +2185,36 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
               <MarkdownPreview text={m.content} money />
             </article>
             {/* Under each answer on hover (always on touch): share it as a link. */}
-            {answers.has(m.id) && (
-              <div className="agt-msg-actions">
-                <button type="button" onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">
-                  Share
-                </button>
-              </div>
-            )}
+            <div className="agt-msg-actions">
+              {more(m)}
+              {answers.has(m.id) && <button type="button" onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">Share</button>}
+            </div>
           </div>
         )}
+        {!m.content.trim() && !calls.length && more(m)}
         {calls.map((c, j) => {
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
-          if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
+          if (c.name === 'ask_user' && results[j]) return <div key={j} data-tool={`${m.id}:${j}`}><AnsweredForm tag={`${m.id}:${j}`} call={c} result={results[j].content} />{more(results[j])}</div>
           const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
-          if (image || wait?.kind === 'image' && wait.width && wait.height) return <div key={j} data-tool={`${m.id}:${j}`}><p className="muted">{image ? 'Generated image' : 'Generating image'} · {image?.width ?? wait?.width} × {image?.height ?? wait?.height}</p><GeneratedPicture image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} />{image && <p className="muted">Seed {image.seed}</p>}{image?.settings && <details className="agt-image-settings"><summary>Generation settings</summary><pre className="copyable">{JSON.stringify(image.settings, null, 2)}</pre><a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a></details>}</div>
-          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
+          if (image || wait?.kind === 'image' && wait.width && wait.height) return (
+            <div key={j} data-tool={`${m.id}:${j}`}>
+              <p className="muted">{image ? 'Generated image' : 'Generating image'} · {image?.width ?? wait?.width} × {image?.height ?? wait?.height}</p>
+              <GeneratedPicture image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} />
+              {image && <p className="muted">Seed {image.seed}</p>}
+              {image?.settings && <details className="agt-image-settings">
+                <summary>Generation settings</summary>
+                <pre className="copyable">{JSON.stringify(image.settings, null, 2)}</pre>
+                <a href={`${image.url}/metadata`} download={`${image.id}.json`}>Download settings</a>
+              </details>}
+              {image && <div className="set-actions">
+                <button type="button" className="btn btn-small" disabled={answering || !imagesOn || !image.settings} title={!image.settings ? 'This image has no recorded generation settings' : !imagesOn ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : 'Draw this image again with the same prompt and settings'} onClick={() => onAgain(image.id)}>Generate another</button>
+                {more(results[j] ?? m)}
+                {!imagesOn && <span className="muted">Turn on Images in Tools first</span>}
+              </div>}
+            </div>
+          )
+          return <div key={j} data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{more(results[j] ?? m)}</div>
         })}
       </Fragment>,
     )

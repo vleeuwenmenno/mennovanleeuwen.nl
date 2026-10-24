@@ -1152,6 +1152,69 @@ try {
   await json('DELETE', endpoint(mentionThread.id))
   assert.deepEqual((await json('GET', endpoint(mentionThread.id))).effective.loras, [])
   console.log('PASS bounded private LoRA discovery/enrichment, mentions and unchanged text, skills, disabled/unknown tools, exact installed names, persistent and per-call lists, legacy metadata')
+  // Generate another is a direct streamed action: no provider round and no approval card.
+  await json('PUT', '/api/agents/images/settings', { ...settings, askBeforeGenerate: true })
+  await json('PATCH', `/api/agents/threads/${mentionThread.id}`, { permission: 'default' })
+  database().prepare('UPDATE agent_images SET metadata = ? WHERE id = ?').run(JSON.stringify(mentionImage.settings), mentionImage.id)
+  const againPath = `/api/agents/threads/${mentionThread.id}/images/${mentionImage.id}/again`
+  const directEvents = async (path: string) => {
+    const response = await api('POST', path, {})
+    assert.equal(response.status, 200, await response.clone().text())
+    return (await response.text()).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  }
+  const callsBeforeAgain = providerChats, imageRowsBeforeAgain = (database().prepare('SELECT COUNT(*) AS n FROM agent_images').get() as any).n
+  const againEvents = await directEvents(againPath)
+  const another = JSON.parse(againEvents.find((e: any) => e.type === 'message' && e.message.role === 'tool').message.content).image
+  assert.ok(another, JSON.stringify(againEvents))
+  assert.equal(providerChats, callsBeforeAgain)
+  assert.ok(!againEvents.some((e: any) => e.type === 'approval'))
+  assert.ok(againEvents.some((e: any) => e.type === 'imageGeneration') && againEvents.some((e: any) => e.type === 'imageProgress') && againEvents.some((e: any) => e.type === 'imageGenerationDone'))
+  assert.notEqual(another.id, mentionImage.id)
+  assert.notEqual(another.settings.seed, mentionImage.settings.seed)
+  assert.deepEqual({ ...another.settings, seed: 0 }, { ...mentionImage.settings, seed: 0 })
+  assert.equal((database().prepare('SELECT COUNT(*) AS n FROM agent_images').get() as any).n, imageRowsBeforeAgain + 1)
+  assert.equal((await api('GET', another.url)).status, 200)
+  assert.deepEqual((await json('GET', another.url + '/metadata')).settings, another.settings)
+  const retryEvents = await directEvents(`/api/agents/threads/${mentionThread.id}/retry`)
+  assert.ok(retryEvents.some((e: any) => e.type === 'message' && e.message.role === 'tool' && JSON.parse(e.message.content).image))
+  assert.equal(providerChats, callsBeforeAgain)
+  assert.ok(!retryEvents.some((e: any) => e.type === 'approval'))
+  const previousLoras = [info.LoraLoader.input.required.lora_name, info.LoraLoaderModelOnly.input.required.lora_name]
+  info.LoraLoader.input.required.lora_name = [[]]; info.LoraLoaderModelOnly.input.required.lora_name = [[]]
+  const beforeMissing = submissions
+  const missingAgain = await directEvents(againPath)
+  assert.ok(missingAgain.some((e: any) => e.type === 'error' && e.error.includes(loraNames[0]) && e.error.includes('no longer installed')))
+  assert.equal(submissions, beforeMissing)
+  ;[info.LoraLoader.input.required.lora_name, info.LoraLoaderModelOnly.input.required.lora_name] = previousLoras
+  await json('PATCH', `/api/agents/threads/${mentionThread.id}`, { tools: ['web'] })
+  assert.equal((await api('POST', againPath)).status, 409)
+  await json('PATCH', `/api/agents/threads/${mentionThread.id}`, { tools: ['images'] })
+  assert.equal((await api('POST', againPath, undefined, 1)).status, 404)
+  const unrelated = await thread()
+  assert.equal((await api('POST', `/api/agents/threads/${unrelated.id}/images/${mentionImage.id}/again`)).status, 404)
+  // A running direct action can be followed and stopped, and refuses a concurrent account job.
+  const concurrentBranch = await json('POST', `/api/agents/threads/${mentionThread.id}/branch`, { messageId: (await json('GET', `/api/agents/threads/${mentionThread.id}`)).messages.at(-1).id })
+  behavior = 'wait'
+  const startAt = submissions
+  const pendingAgain = directEvents(againPath)
+  await until(() => submissions > startAt)
+  assert.equal((await api('POST', `/api/agents/threads/${mentionThread.id}/branch`, { messageId: mentioned.messages[0].id })).status, 409)
+  const follow = await api('GET', `/api/agents/threads/${mentionThread.id}/follow`)
+  const reader = follow.body!.getReader()
+  let snapshot = ''
+  while (!snapshot.includes('\n')) { const chunk = await reader.read(); assert.ok(!chunk.done); snapshot += new TextDecoder().decode(chunk.value) }
+  assert.ok(JSON.parse(snapshot.split('\n')[0]).pending.some((p: any) => p.kind === 'image'))
+  await reader.cancel()
+  const concurrentEvents = await directEvents(`/api/agents/threads/${concurrentBranch.thread.id}/images/${mentionImage.id}/again`)
+  assert.ok(concurrentEvents.some((e: any) => e.type === 'error' && e.error.includes('already generating for this account')))
+  const rowsBeforeStop = (database().prepare('SELECT COUNT(*) AS n FROM agent_images').get() as any).n
+  await json('POST', `/api/agents/threads/${mentionThread.id}/stop`, {})
+  await pendingAgain
+  assert.equal((database().prepare('SELECT COUNT(*) AS n FROM agent_images').get() as any).n, rowsBeforeStop)
+  assert.ok(deletions.includes(`job-${submissions}`))
+  behavior = 'ok'
+  await json('PUT', '/api/agents/images/settings', { askBeforeGenerate: false })
+  console.log('PASS Generate another preserves settings, writes a new private image, streams progress without model/approval, Retry, missing LoRA, group/ownership guards, follow and cancellation')
   const metadataPath = '/api/agents/images/model-metadata?category=checkpoints&name=test.safetensors'
   const metadata = await json('GET', metadataPath)
   assert.equal(metadata.source, 'LoRA Manager')
