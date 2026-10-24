@@ -31,12 +31,13 @@ function png(width: number, height: number, fill: (x: number, y: number) => numb
 const schemas: Record<string, any> = {
   LoadImage: { input: { required: { image: [['source.png']] } } },
   LoadImageMask: { input: { required: { image: [['mask.png']], channel: [['red', 'green', 'blue', 'alpha']] } } },
-  SAM3Segment: { input: { required: { image: ['IMAGE'], prompt: ['STRING'], output_mode: [['Merged', 'Separate']], confidence_threshold: ['FLOAT'] }, optional: { max_segments: ['INT'], segment_pick: ['INT'], mask_blur: ['INT'], mask_offset: ['INT'], device: [['Auto', 'CPU', 'GPU']], invert_output: ['BOOLEAN'], unload_model: ['BOOLEAN'], background: [['Alpha', 'Color']], background_color: ['COLORCODE'] } } },
-  SAM2Segment: { input: { required: { image: ['IMAGE'], prompt: ['STRING'], sam2_model: [['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_large']], dino_model: [['GroundingDINO_SwinT_OGC (694MB)', 'GroundingDINO_SwinB (938MB)']], device: [['Auto', 'CPU', 'GPU']] }, optional: { threshold: ['FLOAT'], mask_blur: ['INT'], mask_offset: ['INT'], invert_output: ['BOOLEAN'], background: [['Alpha', 'Color']], background_color: ['COLORCODE'] } } },
+  SAM3Segment: { input: { required: { image: ['IMAGE'], prompt: ['STRING'], output_mode: [['Merged', 'Separate']], confidence_threshold: ['FLOAT'] }, optional: { max_segments: ['INT'], segment_pick: ['INT'], mask_blur: ['INT'], mask_offset: ['INT'], device: [['Auto', 'CPU', 'GPU']], invert_output: ['BOOLEAN'], unload_model: ['BOOLEAN'], background: [['Alpha', 'Color']], background_color: ['COLORCODE', { default: '#222222' }] } } },
+  SAM2Segment: { input: { required: { image: ['IMAGE'], prompt: ['STRING'], sam2_model: [['sam2.1_hiera_tiny', 'sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_large']], dino_model: [['GroundingDINO_SwinT_OGC (694MB)', 'GroundingDINO_SwinB (938MB)']], device: [['Auto', 'CPU', 'GPU']] }, optional: { threshold: ['FLOAT'], mask_blur: ['INT'], mask_offset: ['INT'], invert_output: ['BOOLEAN'], background: [['Alpha', 'Color']], background_color: ['COLORCODE', { default: '#222222' }] } } },
   GrowMask: { input: { required: { mask: ['MASK'], expand: ['INT'], tapered_corners: ['BOOLEAN'] } } },
   MaskComposite: { input: { required: { destination: ['MASK'], source: ['MASK'], x: ['INT'], y: ['INT'], operation: ['COMBO', { options: ['multiply', 'add', 'subtract', 'and', 'or', 'xor'] }] } } },
   MaskToImage: { input: { required: { mask: ['MASK'] } } },
   SaveImage: { input: { required: { images: ['IMAGE'], filename_prefix: ['STRING'] } } },
+  ImageCompositeMasked: { input: { required: { destination: ['IMAGE'], source: ['IMAGE'], x: ['INT'], y: ['INT'], resize_source: ['BOOLEAN'] }, optional: { mask: ['MASK'] } } },
   AILab_LamaRemover: { input: { required: { images: ['IMAGE'], masks: ['MASK'], removal_strength: ['INT'], edge_smoothness: ['INT'] } } },
 }
 // What the fake segmenter "finds" per phrase, by column: a person is the left quarter, a bicycle
@@ -122,7 +123,7 @@ try {
   assert.ok(made.mask, JSON.stringify(made))
   assert.equal(made.mask.coverage_percent, 25)
   assert.deepEqual(made.mask.bbox, { x: 0, y: 0, width: 4, height: 12 })
-  assert.equal(made.mask.source_url, `/api/agents/images/${source}`)
+  assert.equal(made.mask.source_url, `${made.mask.mask_url}/source`); assert.ok(Buffer.from(await (await api('GET', made.mask.source_url)).arrayBuffer()).equals(png(W, H)))
   assert.equal(made.warning, undefined)
   assert.match(made.next, /generate_image with operation remove/)
   const g = graphs.at(-1)
@@ -208,10 +209,18 @@ try {
   assert.equal(removed.image.settings.operation, 'remove'); assert.equal(removed.image.settings.mask.id, made.mask.mask_id)
   assert.equal(removed.image.width, W); assert.equal(removed.image.seed, undefined)
   const gr = graphs.at(-1)
-  assert.deepEqual(Object.keys(gr).sort(), ['20', '22', '30', '9'])
+  assert.deepEqual(Object.keys(gr).sort(), ['20', '22', '30', '31', '9'])
+  // LaMa blurs and dilates its mask, so its output goes back through the original binary mask.
+  assert.deepEqual(gr['31'], { class_type: 'ImageCompositeMasked', inputs: { destination: ['20', 0], source: ['30', 0], x: 0, y: 0, resize_source: false, mask: ['22', 0] } })
+  // The fake LaMa repaints everything (grey 120); black-mask pixels must still be the source's (90), byte for byte.
+  const { pngFirstChannel } = await import('../server/agentImageSegment.ts')
+  const out = pngFirstChannel(Buffer.from(await (await api('GET', removed.image.url)).arrayBuffer()))
+  assert.equal(out.values[5 * W + 3], 120, 'inside the mask: LaMa')
+  assert.equal(out.values[5 * W + 4], 90, 'black pixel next to the boundary: unchanged')
+  assert.ok([...out.values].every((v, i) => (i % W < 4 ? v === 120 : v === 90)))
   assert.deepEqual(gr['22'].inputs.channel, 'red'); assert.match(gr['22'].inputs.image, /^agents-mask-/)
   assert.deepEqual(gr['30'], { class_type: 'AILab_LamaRemover', inputs: { images: ['20', 0], masks: ['22', 0], removal_strength: 230, edge_smoothness: 8 } })
-  assert.deepEqual(gr['9'].inputs.images, ['30', 0])
+  assert.deepEqual(gr['9'].inputs.images, ['31', 0])
   assert.match((await call(t.id, 'generate_image', { operation: 'remove', source_image_id: source, mask_id: empty.mask.mask_id })).error, /empty/)
   assert.match((await call(t.id, 'generate_image', { operation: 'remove', source_image_id: source, mask_id: made.mask.mask_id, prompt: 'x' })).error, /no prompt/)
   // The editor's direct route can remove too, and Again repeats it.
@@ -287,6 +296,83 @@ try {
   assert.equal((await api('GET', handed.mask.mask_url)).status, 404)
   assert.equal(chats > 0, true)
   console.log('PASS mask history survives in a branch and goes with the last thread')
+
+  // Segmenter schemas: built from what the backend advertises. The newer SAM3Segment requires
+  // model_name; an unbuildable SAM3 falls to SAM2 without blocking it; neither buildable: nothing uploaded.
+  const fresh = await json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model', tools: ['images'], permission: 'auto' })
+  database().prepare('INSERT INTO agent_images(id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(source, fresh.id, 'street.png', png(W, H), Date.now())
+  const oldSam3 = schemas.SAM3Segment
+  schemas.SAM3Segment = { input: { required: { ...oldSam3.input.required, model_name: [['sam3', 'sam3.1'], { default: 'sam3.1' }] }, optional: { ...oldSam3.input.optional, new_option: ['INT', { default: 3 }] } } }
+  const newer = await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })
+  assert.ok(newer.mask, JSON.stringify(newer))
+  assert.equal(graphs.at(-1).t1.class_type, 'SAM3Segment'); assert.equal(graphs.at(-1).t1.inputs.model_name, 'sam3.1'); assert.equal(graphs.at(-1).t1.inputs.new_option, 3)
+  schemas.SAM3Segment = { input: { required: { ...oldSam3.input.required, clip: ['CLIP'] }, optional: oldSam3.input.optional } }
+  const g0 = graphs.length
+  const viaSam2 = await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })
+  assert.ok(viaSam2.mask, JSON.stringify(viaSam2))
+  assert.equal(graphs.length - g0, 1); assert.equal(graphs.at(-1).t1.class_type, 'SAM2Segment')
+  assert.equal((await json('GET', '/api/agents/images/catalog')).autoMask, true)
+  schemas.SAM2Segment.input.required.extra_link = ['LATENT']
+  const u2 = uploads.length
+  assert.match((await call(fresh.id, 'make_image_mask', { source_image_id: source, target: 'cyclist' })).error, /unavailable.*SAM3Segment needs clip.*SAM2Segment needs extra_link/)
+  assert.equal(uploads.length, u2)
+  assert.equal((await json('GET', '/api/agents/images/catalog')).autoMask, false)
+  delete schemas.SAM2Segment.input.required.extra_link
+  schemas.SAM3Segment = oldSam3
+  console.log('PASS segmenter inputs from the advertised schema: old SAM3, new SAM3 with model_name, SAM3 unbuildable falls to SAM2, neither buildable uploads nothing')
+
+  // Pruning keeps 40 agent masks, deleting only unreferenced ones, oldest first; masks shown by a
+  // result card in any thread or branch are kept, also from explicit deletion. The record counts toward quota.
+  const { saveAutoMask } = await import('../server/agentImageMasks.ts')
+  const { imageSource } = await import('../server/agentImageSources.ts')
+  const { usedBytes } = await import('../server/quota.ts')
+  const owner = { id: 1, login: 'mask-admin' } as Parameters<typeof saveAutoMask>[0]
+  const pruned = await json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model', tools: ['images'], permission: 'auto' })
+  const elsewhere = await json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model', tools: ['images'], permission: 'auto' })
+  const src = imageSource(owner, source)
+  const { binaryMaskPng } = await import('../server/agentImageSegment.ts')
+  const maskBytes = binaryMaskPng(W, H, Uint8Array.from({ length: W * H }, (_, i) => (i % W < 4 ? 255 : 0)))
+  const detail = { target: 'cyclist', exclude: '', grow: 12, threshold: null, verdict: 'ok' as const }
+  const before0 = usedBytes(1)
+  const first = saveAutoMask(owner, pruned.id, src, maskBytes, detail)
+  const record = (database().prepare('SELECT details FROM agent_image_masks WHERE id = ?').get(first.id) as { details: string }).details
+  assert.equal(usedBytes(1) - before0, maskBytes.length + Buffer.byteLength(record))
+  const second = saveAutoMask(owner, pruned.id, src, maskBytes, detail)
+  // The first is shown by a result card in another thread: kept.
+  database().prepare("INSERT INTO agent_messages(thread_id, role, content, tool_name, created_at) VALUES (?, 'tool', ?, 'make_image_mask', ?)").run(elsewhere.id, JSON.stringify({ mask: { mask_id: first.id } }), Date.now())
+  for (let i = 0; i < 40; i++) saveAutoMask(owner, pruned.id, src, maskBytes, detail)
+  const count = () => (database().prepare("SELECT COUNT(*) AS n FROM agent_image_masks WHERE thread_id = ? AND origin = 'auto'").get(pruned.id) as { n: number }).n
+  assert.equal(count(), 40)
+  assert.equal((await api('GET', `/api/agents/image-masks/${first.id}`)).status, 200)
+  assert.equal((await api('GET', `/api/agents/image-masks/${second.id}`)).status, 404)
+  assert.equal((await api('DELETE', `/api/agents/image-masks/${first.id}`)).status, 409)
+  // When every mask is referenced the cap is exceeded instead.
+  for (const { id } of database().prepare('SELECT id FROM agent_image_masks WHERE thread_id = ?').all(pruned.id) as { id: string }[]) database().prepare("INSERT INTO agent_messages(thread_id, role, content, tool_name, created_at) VALUES (?, 'tool', ?, 'list_image_masks', ?)").run(pruned.id, JSON.stringify({ masks: [{ mask_id: id }] }), Date.now())
+  saveAutoMask(owner, pruned.id, src, maskBytes, detail)
+  assert.equal(count(), 41)
+  console.log('PASS mask pruning: cap of 40, shown or used masks never pruned or deleted, cap exceeded when all are referenced; details count toward quota')
+
+  // An attachment's mask preview keeps working after the thread it was sent in is deleted, via a
+  // surviving branch copy, also for cards saved before (the app loads every preview by mask ID).
+  const sent2 = await json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model', tools: ['images'], permission: 'auto' })
+  const photo = png(W, H, () => 77)
+  const photoMessage = Number(database().prepare("INSERT INTO agent_messages(thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Remove the cyclist', ?, ?)").run(sent2.id, JSON.stringify([{ kind: 'image', name: 'photo.png', type: 'image/png', size: photo.length, data: photo.toString('base64') }]), Date.now()).lastInsertRowid)
+  const attached = await call(sent2.id, 'make_image_mask', { source_image_id: `attachment:${photoMessage}:0`, target: 'cyclist' })
+  assert.ok(attached.mask, JSON.stringify(attached))
+  assert.equal(attached.mask.source_url, `${attached.mask.mask_url}/source`)
+  const history2 = await json('GET', `/api/agents/threads/${sent2.id}`)
+  const copy = await json('POST', `/api/agents/threads/${sent2.id}/branch`, { messageId: history2.messages.at(-1).id })
+  await json('DELETE', `/api/agents/threads/${sent2.id}`)
+  const preview = await api('GET', attached.mask.source_url)
+  assert.equal(preview.status, 200); assert.ok(Buffer.from(await preview.arrayBuffer()).equals(photo))
+  assert.equal((await api('GET', attached.mask.source_url, undefined, 1)).status, 404)
+  const copied = (await json('GET', `/api/agents/threads/${copy.thread.id}`)).messages.find((m: any) => m.toolName === 'make_image_mask')
+  const { agentMasks } = await import('../src/data/agentMasks.ts')
+  const card = agentMasks(copied.content)[0]
+  assert.equal(card.source_url, `/api/agents/image-masks/${attached.mask.mask_id}/source`)
+  // An older card that stored the original attachment link still loads by mask ID.
+  assert.equal(agentMasks(JSON.stringify({ mask: { ...attached.mask, source_url: `/api/agents/threads/${sent2.id}/messages/${photoMessage}/attachments/0` } }))[0].source_url, attached.mask.source_url)
+  console.log('PASS attachment mask previews by mask ID: after the parent thread is deleted, owner-only, older cards included')
 } finally {
   await server.dispose(); database().close()
   comfy.closeAllConnections(); ollama.closeAllConnections()

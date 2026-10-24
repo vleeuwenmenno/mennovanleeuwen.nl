@@ -1,4 +1,4 @@
-import { deflateSync, inflateSync } from 'node:zlib'
+import { crc32, deflateSync, inflateSync } from 'node:zlib'
 import { HttpError } from './http.ts'
 
 // Server-owned graphs for automatic masks (make_image_mask) and LaMa object removal
@@ -19,7 +19,7 @@ export const SEGMENTERS = ['SAM3Segment', 'SAM2Segment'] as const
 export type Segmenter = (typeof SEGMENTERS)[number]
 const MASK_NODES = ['LoadImage', 'GrowMask', 'MaskComposite', 'MaskToImage', 'SaveImage'] as const
 export const AUTO_MASK_NODES = [...MASK_NODES, ...SEGMENTERS] as const
-export const REMOVE_NODES = ['LoadImage', 'LoadImageMask', 'AILab_LamaRemover', 'SaveImage'] as const
+export const REMOVE_NODES = ['LoadImage', 'LoadImageMask', 'AILab_LamaRemover', 'ImageCompositeMasked', 'SaveImage'] as const
 /** Coverage above this is reported as a probable over-selection. */
 export const MASK_TOO_LARGE = 0.6
 /** LaMa runs at the source's full resolution; keep its memory use within reason. */
@@ -77,31 +77,64 @@ export function autoMaskOptions(input: AutoMaskInput): AutoMaskOptions {
   return { target, exclude, grow, threshold: threshold as number | null, handOff: input.hand_off === true }
 }
 
-/** One segmenter's inputs for `prompt`. Optional inputs get explicit neutral values: these nodes read them all. */
-function segmentInputs(node: Segmenter, info: SegmentNodeInfo, prompt: string, threshold: number | null) {
-  const pick = (field: string, preferred: string[]) => {
-    const options = comboOptions(info, node, field)
-    const chosen = preferred.find((p) => options.includes(p)) ?? options[0]
-    if (!chosen) throw new HttpError(409, `${node} offers no ${field}`)
-    return chosen
+type FieldSpec = { default?: unknown; min?: number; max?: number; options?: unknown }
+/**
+ * One segmenter's inputs for `prompt`, built from the schema the backend advertises rather than a
+ * fixed list, so an updated node (RMBG's SAM3Segment gained a required model_name) keeps working.
+ * Inputs we understand get our values; any other input gets the server-chosen default (the
+ * advertised default, else the first choice). A required input with no usable default (a link
+ * such as CLIP) makes this segmenter unbuildable; the caller then tries the next one.
+ */
+export function segmentInputs(node: Segmenter, info: SegmentNodeInfo, prompt: string, threshold: number | null) {
+  const required = info[node]?.input?.required ?? {}, optional = info[node]?.input?.optional ?? {}
+  const schema: Record<string, unknown[]> = { ...optional, ...required }
+  const spec = (field: string) => (schema[field]?.[1] ?? {}) as FieldSpec
+  const options = (field: string) => comboOptions(info, node, field)
+  const defaultOf = (field: string): unknown => {
+    const choices = options(field), d = spec(field).default
+    if (choices.length) return typeof d === 'string' && choices.includes(d) ? d : choices[0]
+    const kind = schema[field]?.[0]
+    return ['INT', 'FLOAT', 'BOOLEAN', 'STRING', 'COLORCODE'].includes(String(kind)) ? d : undefined
   }
-  const schema = { ...info[node].input?.required, ...info[node].input?.optional }
+  const choose = (field: string, preferred: string[]) => preferred.find((p) => options(field).includes(p)) ?? defaultOf(field)
+  const number = (field: string, value: number) => { const { min, max } = spec(field); return Math.min(max ?? value, Math.max(min ?? value, value)) }
   // unload_model: each node in a graph is its own instance with its own copy of the model, so with
   // several phrases they would pile up in VRAM (seen: out of memory at three SAM3 nodes on 16 GB).
   // Unloading after each node keeps one at a time, and leaves the GPU free for the edit after it.
-  const neutral: Record<string, unknown> = { mask_blur: 0, mask_offset: 0, invert_output: false, background: 'Alpha', background_color: '#222222', max_segments: 0, segment_pick: 0, unload_model: true }
-  const inputs: Record<string, unknown> = { image: ['1', 0], prompt, ...Object.fromEntries(Object.entries(neutral).filter(([k]) => k in schema)) }
-  if ('device' in schema) inputs.device = pick('device', ['Auto'])
-  if (node === 'SAM3Segment') {
-    inputs.output_mode = pick('output_mode', ['Merged'])
-    inputs.confidence_threshold = threshold ?? 0.4
-  } else {
-    // Small balances speed and edges; then whatever this backend offers.
-    inputs.sam2_model = pick('sam2_model', ['sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_tiny'])
-    inputs.dino_model = pick('dino_model', ['GroundingDINO_SwinT_OGC (694MB)'])
-    if ('threshold' in schema) inputs.threshold = threshold ?? 0.3
+  const ours: Record<string, () => unknown> = {
+    image: () => ['1', 0], prompt: () => prompt,
+    confidence_threshold: () => number('confidence_threshold', threshold ?? 0.4),
+    threshold: () => number('threshold', threshold ?? 0.3),
+    output_mode: () => choose('output_mode', ['Merged']), device: () => choose('device', ['Auto']),
+    // Small balances speed and edges for SAM2. model_name (newer SAM3): the advertised default, else the first.
+    sam2_model: () => choose('sam2_model', ['sam2.1_hiera_small', 'sam2.1_hiera_base_plus', 'sam2.1_hiera_tiny']),
+    dino_model: () => choose('dino_model', ['GroundingDINO_SwinT_OGC (694MB)']),
+    mask_blur: () => 0, mask_offset: () => 0, invert_output: () => false, max_segments: () => 0, segment_pick: () => 0, unload_model: () => true,
+    background: () => choose('background', ['Alpha']),
   }
+  const inputs: Record<string, unknown> = {}
+  for (const field of Object.keys(schema)) {
+    const value = field in ours ? ours[field]() : defaultOf(field)
+    if (value === undefined) {
+      if (field in required) throw new HttpError(409, `${node} needs ${field}, which this app cannot fill in`)
+      continue
+    }
+    const choices = options(field)
+    if (choices.length && !choices.includes(value as string)) throw new HttpError(409, `${node} offers no usable ${field}`)
+    inputs[field] = value
+  }
+  if (!('image' in inputs) || !('prompt' in inputs)) throw new HttpError(409, `${node} does not take an image and a text prompt`)
   return inputs
+}
+
+/** Each segmenter this backend has, built on its own: one that cannot be built never blocks another. */
+export function autoMaskPlans(options: AutoMaskOptions, uploadName: string, info: SegmentNodeInfo) {
+  const plans: ReturnType<typeof autoMaskGraph>[] = [], problems: string[] = []
+  for (const segmenter of segmenters(info)) {
+    try { plans.push(autoMaskGraph(options, uploadName, info, segmenter)) }
+    catch (error) { if (!(error instanceof HttpError) || error.status !== 409) throw error; problems.push(error.message) }
+  }
+  return { plans, problems }
 }
 
 /**
@@ -148,7 +181,13 @@ export function autoMaskGraph(options: AutoMaskOptions, uploadName: string, info
   return { graph, outputNode: 'save', parts, segmenter }
 }
 
-/** LaMa fills the white mask area from its surroundings at the source's full size; no prompt, no sampler. */
+/**
+ * LaMa fills the white mask area from its surroundings at the source's full size; no prompt, no
+ * sampler. Its own preprocessing blurs and dilates the mask (edge_smoothness, removal_strength), so
+ * the result is composited back through the original binary mask: smoothing stays inside the white
+ * area and black stays the source. The server then copies black pixels from the source exactly
+ * where it can decode it (compositeRemoval), since a float round trip may shift a value by one.
+ */
 export function removeGraph(sourceName: string, maskName: string, info: SegmentNodeInfo) {
   const missing = missingNodes(info, REMOVE_NODES)
   if (missing) throw new HttpError(409, missing)
@@ -157,56 +196,89 @@ export function removeGraph(sourceName: string, maskName: string, info: SegmentN
     20: { class_type: 'LoadImage', inputs: { image: sourceName } },
     22: { class_type: 'LoadImageMask', inputs: { image: maskName, channel: 'red' } },
     30: { class_type: 'AILab_LamaRemover', inputs: { images: ['20', 0], masks: ['22', 0], removal_strength: 230, edge_smoothness: 8 } },
-    9: { class_type: 'SaveImage', inputs: { images: ['30', 0], filename_prefix: 'agents/removed' } },
+    31: { class_type: 'ImageCompositeMasked', inputs: { destination: ['20', 0], source: ['30', 0], x: 0, y: 0, resize_source: false, mask: ['22', 0] } },
+    9: { class_type: 'SaveImage', inputs: { images: ['31', 0], filename_prefix: 'agents/removed' } },
   }
   assertGraph(graph, info)
   return { graph, outputNode: '9' }
 }
 
-/** Decode a non-interlaced 8-bit PNG (gray, RGB, gray+alpha or RGBA) to its first channel. */
-export function pngFirstChannel(bytes: Buffer) {
-  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || bytes.toString('ascii', 12, 16) !== 'IHDR') throw new HttpError(502, 'ComfyUI did not return a PNG mask')
+const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+/** Unfiltered pixels of a non-interlaced 8-bit PNG (gray, RGB, gray+alpha or RGBA), or null when it is another kind. */
+function pngPixels(bytes: Buffer) {
+  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(SIGNATURE) || bytes.toString('ascii', 12, 16) !== 'IHDR') return null
   const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20), depth = bytes[24], type = bytes[25], interlace = bytes[28]
   const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type]
-  if (depth !== 8 || !channels || interlace !== 0 || !width || !height || width > 8192 || height > 8192 || width * height > 16_777_216) throw new HttpError(502, 'ComfyUI returned an unsupported mask PNG')
+  if (depth !== 8 || !channels || interlace !== 0 || !width || !height || width > 8192 || height > 8192 || width * height > 16_777_216) return null
   const parts: Buffer[] = []
-  for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) if (bytes.toString('ascii', at + 4, at + 8) === 'IDAT') parts.push(bytes.subarray(at + 8, at + 8 + bytes.readUInt32BE(at)))
+  let oriented = false
+  for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) {
+    const kind = bytes.toString('ascii', at + 4, at + 8)
+    if (kind === 'IDAT') parts.push(bytes.subarray(at + 8, at + 8 + bytes.readUInt32BE(at)))
+    if (kind === 'eXIf') oriented = true
+  }
   const stride = width * channels, length = (stride + 1) * height
   let raw: Buffer
-  try { raw = inflateSync(Buffer.concat(parts), { maxOutputLength: length }) } catch { throw new HttpError(502, 'ComfyUI returned unreadable mask pixels') }
-  if (raw.length !== length) throw new HttpError(502, 'ComfyUI returned a truncated mask')
-  const out = Buffer.alloc(width * height)
+  try { raw = inflateSync(Buffer.concat(parts), { maxOutputLength: length }) } catch { return null }
+  if (raw.length !== length) return null
+  const pixels = Buffer.alloc(stride * height)
   let previous = Buffer.alloc(stride), current = Buffer.alloc(stride)
   for (let y = 0; y < height; y++) {
     const offset = y * (stride + 1), filter = raw[offset]
-    if (filter > 4) throw new HttpError(502, 'ComfyUI returned an invalid mask filter')
+    if (filter > 4) return null
     for (let x = 0; x < stride; x++) {
       const a = x >= channels ? current[x - channels] : 0, b = previous[x], c = x >= channels ? previous[x - channels] : 0
       const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c)
       const prediction = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? (a + b) >> 1 : pa <= pb && pa <= pc ? a : pb <= pc ? b : c
       current[x] = (raw[offset + 1 + x] + prediction) & 255
     }
-    for (let x = 0; x < width; x++) out[y * width + x] = current[x * channels]
+    current.copy(pixels, y * stride)
     ;[previous, current] = [current, previous]
   }
-  return { width, height, values: out }
+  return { width, height, channels, pixels, oriented }
 }
 
-function crc(data: Buffer) {
-  let c = 0xffffffff
-  for (const byte of data) { c ^= byte; for (let i = 0; i < 8; i++) c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0) }
-  return (c ^ 0xffffffff) >>> 0
+/** Decode a non-interlaced 8-bit PNG (gray, RGB, gray+alpha or RGBA) to its first channel. */
+export function pngFirstChannel(bytes: Buffer) {
+  const png = pngPixels(bytes)
+  if (!png) throw new HttpError(502, 'ComfyUI returned an unsupported or unreadable mask PNG')
+  const values = Buffer.alloc(png.width * png.height)
+  for (let i = 0; i < values.length; i++) values[i] = png.pixels[i * png.channels]
+  return { width: png.width, height: png.height, values }
 }
+
 function chunk(kind: string, body: Buffer) {
   const payload = Buffer.concat([Buffer.from(kind, 'ascii'), body]), head = Buffer.alloc(4), tail = Buffer.alloc(4)
-  head.writeUInt32BE(body.length); tail.writeUInt32BE(crc(payload))
+  head.writeUInt32BE(body.length); tail.writeUInt32BE(crc32(payload))
   return Buffer.concat([head, payload, tail])
+}
+function rgbPng(width: number, height: number, rgb: Buffer, level = 9) {
+  const stride = width * 3, raw = Buffer.alloc((stride + 1) * height)
+  for (let y = 0; y < height; y++) rgb.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride)
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 2
+  return Buffer.concat([SIGNATURE, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level })), chunk('IEND', Buffer.alloc(0))])
 }
 /** The stored mask format: opaque 8-bit RGB, white edits and black preserves, no metadata. Half grey and up is white. */
 export function binaryMaskPng(width: number, height: number, values: Uint8Array) {
-  const stride = width * 3 + 1, raw = Buffer.alloc(stride * height)
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (values[y * width + x] >= 128) raw.fill(255, y * stride + 1 + x * 3, y * stride + 4 + x * 3)
-  const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(width); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 2
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))])
+  const rgb = Buffer.alloc(width * height * 3)
+  for (let i = 0; i < values.length; i++) if (values[i] >= 128) rgb.fill(255, i * 3, i * 3 + 3)
+  return rgbPng(width, height, rgb)
+}
+
+/**
+ * The removal result with every black-mask pixel copied from the source, byte for byte. Only for
+ * PNG sources this server can decode without orientation metadata; otherwise null, and the
+ * graph's own composite stands (identical but for float rounding).
+ */
+export function compositeRemoval(source: Buffer, mask: Buffer, output: Buffer) {
+  const s = pngPixels(source), m = pngPixels(mask), o = pngPixels(output)
+  if (!s || !m || !o || s.oriented || s.width !== o.width || s.height !== o.height || m.width !== o.width || m.height !== o.height) return null
+  const rgb = Buffer.alloc(o.width * o.height * 3)
+  const pick = (png: NonNullable<typeof s>, i: number, c: number) => png.pixels[i * png.channels + (png.channels >= 3 ? c : 0)]
+  for (let i = 0; i < o.width * o.height; i++) {
+    const keep = pick(m, i, 0) < 128
+    for (let c = 0; c < 3; c++) rgb[i * 3 + c] = keep ? pick(s, i, c) : pick(o, i, c)
+  }
+  return rgbPng(o.width, o.height, rgb, 6)
 }

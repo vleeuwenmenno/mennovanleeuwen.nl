@@ -93,25 +93,4 @@ export type RemoveImageInput = { operation: 'remove'; source_image_id: string; m
 /** Either edit of a masked area: redraw it from a prompt, or remove it. */
 export type MaskedEditInput = InpaintImageInput | RemoveImageInput
 
-/** A mask the agent made (make_image_mask) or listed (list_image_masks), as the chat shows it. */
-export type AgentMask = { mask_id: string; mask_url: string; source_image_id: string; source_url: string; width: number; height: number; target?: string; exclude?: string; coverage_percent?: number; status?: string; made_by?: string; warning?: string; hand_off?: boolean }
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-/** Only this server's private mask and source paths become pictures, never a model-supplied URL. */
-function agentMask(value: unknown): AgentMask | null {
-  if (!value || typeof value !== 'object') return null
-  const m = value as Record<string, unknown>
-  if (typeof m.mask_id !== 'string' || !UUID.test(m.mask_id) || m.mask_url !== `/api/agents/image-masks/${m.mask_id}`) return null
-  if (typeof m.source_url !== 'string' || !/^\/api\/agents\/(?:images\/[0-9a-f-]{36}|threads\/[0-9a-f-]{36}\/messages\/[0-9]{1,15}\/attachments\/[0-9])$/.test(m.source_url)) return null
-  if (typeof m.source_image_id !== 'string' || !Number.isInteger(m.width) || !Number.isInteger(m.height) || (m.width as number) < 1 || (m.height as number) < 1) return null
-  const text = (v: unknown) => typeof v === 'string' ? v.slice(0, 120) : undefined
-  return { mask_id: m.mask_id, mask_url: m.mask_url, source_image_id: m.source_image_id, source_url: m.source_url, width: m.width as number, height: m.height as number, target: text(m.target), exclude: text(m.exclude), coverage_percent: typeof m.coverage_percent === 'number' ? m.coverage_percent : undefined, status: text(m.status), made_by: text(m.made_by), warning: text(m.warning), hand_off: m.hand_off === true }
-}
-/** The masks in a make_image_mask result (also an empty or rejected one) or a list_image_masks result. */
-export function agentMasks(result?: string): AgentMask[] {
-  try {
-    const parsed = JSON.parse(result ?? '') as { mask?: unknown; masks?: unknown; warning?: unknown }
-    if (Array.isArray(parsed.masks)) return parsed.masks.map(agentMask).filter((m): m is AgentMask => !!m)
-    const one = agentMask(parsed.mask)
-    return one ? [{ ...one, ...(typeof parsed.warning === 'string' ? { warning: parsed.warning.slice(0, 200) } : {}) }] : []
-  } catch { return [] }
-}
+export { agentMasks, type AgentMask } from './agentMasks'

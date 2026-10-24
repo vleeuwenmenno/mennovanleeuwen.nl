@@ -1,7 +1,7 @@
 import { addHiresStage, refinementSize, refinementSampling } from './agentImageRefine.ts'
 import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentImageInpaint.ts'
 import { imageMask, saveAutoMask, type ImageMask } from './agentImageMasks.ts'
-import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskGraph, autoMaskOptions, binaryMaskPng, missingNodes, pngFirstChannel, removeGraph, segmenters, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
+import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskOptions, autoMaskPlans, binaryMaskPng, compositeRemoval, missingNodes, pngFirstChannel, removeGraph, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
 import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
@@ -227,7 +227,10 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   try { assertInpaintNodes(info) } catch (e) { inpaintError = (e as Error).message }
   // Automatic masks and LaMa removal need optional custom nodes; their absence only switches these off.
   let autoMaskError = '', removeError = ''
-  try { autoMaskGraph({ target: ['object'], exclude: ['other'], grow: 12, threshold: null, handOff: false }, 'source.png', info as SegmentNodeInfo) } catch (e) { autoMaskError = (e as Error).message }
+  try {
+    const { plans, problems } = autoMaskPlans({ target: ['object'], exclude: ['other'], grow: 12, threshold: null, handOff: false }, 'source.png', info as SegmentNodeInfo)
+    if (!plans.length) autoMaskError = missingNodes(info as SegmentNodeInfo, AUTO_MASK_NODES) || problems.join('; ')
+  } catch (e) { autoMaskError = (e as Error).message }
   try { removeGraph('source.png', 'mask.png', info as SegmentNodeInfo) } catch (e) { removeError = (e as Error).message }
   return { inpaint: !inpaintError, inpaintError, autoMask: !autoMaskError, autoMaskError, remove: !removeError, removeError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
@@ -635,7 +638,9 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         if (output.type !== 'output' || typeof output.filename !== 'string' || typeof output.subfolder !== 'string') throw new HttpError(502, 'ComfyUI returned an invalid image reference')
         progress?.push({ phase: 'saving' })
         const params = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder, type: 'output' })
-        const bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
+        let bytes = await readCapped(await request(user, s, `/view?${params}`, limit), 20 * 1024 * 1024)
+        // Removal keeps every black-mask pixel of a decodable PNG source byte for byte (the graph already composited).
+        if (parameters.operation === 'remove' && plan.source && plan.mask) bytes = compositeRemoval(plan.source.bytes, plan.mask.bytes, bytes) ?? bytes
         // SaveImage writes PNG. Reject arbitrary content from an incorrectly configured server.
         if (!bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new HttpError(502, 'ComfyUI did not return a PNG image')
         if ((parameters.operation === 'upscale' || parameters.operation === 'remove' || parameters.operation === 'refine' || parameters.hires) && (bytes.length < 33 || bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== workflow.width || bytes.readUInt32BE(20) !== workflow.height)) throw new HttpError(502, 'ComfyUI output dimensions do not match the requested size')
@@ -832,7 +837,8 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   if (missing) throw new HttpError(409, `Automatic masks are unavailable: ${missing}. Ask the user to paint the area with Edit selected area instead.`)
   const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
   // Built (and validated) for every available segmenter before anything is uploaded.
-  const graphs = segmenters(schemas as SegmentNodeInfo).map((segmenter) => autoMaskGraph(options, uploadName, schemas as SegmentNodeInfo, segmenter))
+  const { plans: graphs, problems } = autoMaskPlans(options, uploadName, schemas as SegmentNodeInfo)
+  if (!graphs.length) throw new HttpError(409, `Automatic masks are unavailable: ${problems.join('; ')}. Ask the user to paint the area with Edit selected area instead.`)
   if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
   checkRoom(user, 256 * 1024)
   active.add(user.id)
@@ -860,7 +866,7 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   const target = options.target.join(', '), exclude = options.exclude.join(', ')
   const saved = saveAutoMask(user, thread, source, binaryMaskPng(decoded.width, decoded.height, decoded.values), { target, exclude, grow: options.grow, threshold: options.threshold, verdict, phrases })
   const percent = percentOf(saved.coverage)
-  const mask = { mask_id: saved.id, mask_url: saved.url, source_image_id: source.id, source_url: source.url, width: saved.width, height: saved.height, target, ...(exclude ? { exclude } : {}), coverage_percent: percent, bbox: saved.bbox, ...(options.handOff ? { hand_off: true } : {}) }
+  const mask = { mask_id: saved.id, mask_url: saved.url, source_image_id: source.id, source_url: saved.source_url, width: saved.width, height: saved.height, target, ...(exclude ? { exclude } : {}), coverage_percent: percent, bbox: saved.bbox, ...(options.handOff ? { hand_off: true } : {}) }
   const missed = phrases.filter((p) => p.role === 'target' && p.coverage_percent === 0).map((p) => `“${p.phrase}”`)
   const unprotected = phrases.filter((p) => p.role === 'exclude' && p.coverage_percent === 0).map((p) => `“${p.phrase}”`)
   const notes = [

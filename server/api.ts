@@ -1,4 +1,4 @@
-import { saveImageMask, imageMask, discardImageMask } from './agentImageMasks.ts'
+import { saveImageMask, imageMask, discardImageMask, maskSource } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
@@ -343,6 +343,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     const maskUpload = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/image-masks$/.exec(path)
     if (maskUpload && method === 'POST') return json(res, 200, saveImageMask(requireUser(req), maskUpload[1], await readJson(req, 12 * 1024 * 1024))), true
+    // A mask's source picture by the mask ID, resolved now (also through surviving branch copies).
+    const maskSourceView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})\/source$/.exec(path)
+    if (maskSourceView && read) {
+      const source = maskSource(requireUser(req), maskSourceView[1])
+      res.writeHead(200, { 'Content-Type': source.mime, 'Content-Length': String(source.bytes.length), 'Cache-Control': 'private, max-age=3600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : source.bytes)
+      return true
+    }
     const maskView = /^\/api\/agents\/image-masks\/([0-9a-f-]{36})$/.exec(path)
     if (maskView && method === 'DELETE') { discardImageMask(requireUser(req), maskView[1]); return json(res, 200, { deleted: true }), true }
     if (maskView && read) {

@@ -1485,7 +1485,11 @@ kept person rides too (`"woman in a light blue shirt, red bicycle"`). Segmenter 
 model after running: each node in a graph holds its own copy, and three SAM3 copies ran a 16 GB
 GPU out of memory. The segmenter is ComfyUI-RMBG's `SAM3Segment`
 (SAM3 reads the words itself), or `SAM2Segment` (SAM2 with GroundingDINO) when SAM3 is absent or
-fails at run time, for example when GroundingDINO breaks on a newer transformers release. The
+fails at run time, for example when GroundingDINO breaks on a newer transformers release. Each
+segmenter's inputs come from the schema the backend advertises: inputs this app understands get its
+values, any other input gets the advertised default or first choice (newer RMBG releases require a
+SAM3 `model_name`, which is filled in this way), and a segmenter with a required input it cannot fill
+(a link) is skipped without blocking the other. The
 server reads the result back, makes it a clean binary mask at the source's size and keeps it as an
 owned mask, so its `mask_id` works with inpaint and remove unchanged. The result carries the
 `mask_id`, `coverage_percent`, a `bbox` in pixels and the mask and source links. Nothing found
@@ -1497,22 +1501,32 @@ image writes. When the nodes are missing it says so and the agent asks for a pai
 
 `generate_image` with `operation: "remove"`, `source_image_id` and `mask_id` erases the mask's white
 area with LaMa (ComfyUI-RMBG's `AILab_LamaRemover`: LoadImage + LoadImageMask (red) →
-AILab_LamaRemover → SaveImage), at the source's full size (at most 4096 pixels per side), with no
-prompt, model or sampler. Diffusion inpaint stays for "replace X with Y". `list_image_models`
+AILab_LamaRemover → ImageCompositeMasked through the original mask → SaveImage), at the source's
+full size (at most 4096 pixels per side), with no prompt, model or sampler. LaMa's own preprocessing
+blurs and grows the mask, so its output is composited back through the binary mask: the smoothing
+stays inside the white area and black pixels stay the source. For PNG sources without orientation
+metadata the server also copies every black-mask pixel from the source byte for byte; for JPEG and
+WebP the graph's composite stands, which can differ by one level from float rounding. Diffusion inpaint stays for "replace X with Y". `list_image_models`
 reports `automatic_masks` and `lama_remove`, and the catalog `autoMask` and `remove`, with the reason
 when either is unavailable. `view_generated_image` also takes a `mask_id` to check a mask next to its
 source with vision before an edit, when the agent is unsure (for example that it covers the person
 and their bike); the rule against vision right after generating is unchanged.
 
 Every `make_image_mask` attempt is kept, including empty and oversized ones, with its target,
-exclude, coverage and box, for as long as the thread (or a branch that shows it) exists; up to 40
-unused agent masks a thread, which count toward storage like painted ones. `list_image_masks` lists
+exclude, coverage and box, for as long as the thread (or a branch that shows it) exists. A thread
+keeps up to 40 agent masks: beyond that the oldest ones nothing refers to are pruned, and a mask a
+generation used or a result card in any thread or branch shows is never pruned or deleted, so the
+cap is exceeded when all of them are. They count toward storage like painted ones, their recorded
+details included. `list_image_masks` lists
 them with `made_by` (agent or user) and a status: used (a saved picture was made with it), ready
 (the newest for its source), rejected (empty, or oversized and replaced) or superseded. In the
 chat each mask shows as its picture with the selection tinted in the theme accent, what it
-selected, and **Edit mask**, which opens the mask editor preloaded with it. Saving there keeps a new
+selected, and **Edit mask**. The picture loads from `/api/agents/image-masks/<mask_id>/source`, which
+finds the owned source when shown, also an attachment whose original thread was deleted and only a
+branch copy remains; cards saved earlier load the same way. **Edit mask** which opens the mask editor preloaded with it. Saving there keeps a new
 mask and puts it in the message box ("Continue with my edited mask"), so the agent carries on with
-it when you send. When automatic masking fails twice, or you ask to fix the mask yourself, the
+it when you send. Cancelling while it saves, or opening another editor, drops that save and deletes
+its uploaded mask. When automatic masking fails twice, or you ask to fix the mask yourself, the
 agent calls `make_image_mask` with `hand_off`, the card offers **Open mask editor**, and the agent
 waits for your message. In the Agents terminal each mask is a line with its target, coverage,
 status and link.
@@ -1713,8 +1727,8 @@ Ask “Generate an illustration of a blue bird” in either Agents or the `agent
 The **Images** tool group controls discovery, generation, vision inspection and image learning/profile tools. When it is on, the agent's system prompt also gets Diffu's image-generation guidance (model families, prompting style, negatives, sampling and size); when it is off, that section is left out. Generation runs
 without an approval card in every mode except Plan, which cannot generate. To approve each image
 first, turn on **Ask before generating images** in Settings → Agents → Images (off by default);
-then Ask first, Auto and Edits allowed show the resolved settings for approval, Bypass still runs
-without a prompt, and non-interactive `agents -p` declines as usual. Both interactive and print output include a private image URL. `/open` opens the
+then every mode that can generate shows the resolved settings for approval, Bypass included (also
+for LaMa removal), and non-interactive `agents -p` declines as usual. Both interactive and print output include a private image URL. `/open` opens the
 thread in the app, where the image has a thumbnail, full-size view, **Open in Preview**,
 **Download** and **Save to Files…** (on the card, in its right-click menu, and in the
 full view). The link requires the owner's signed-in session; sharing a thread does not publish

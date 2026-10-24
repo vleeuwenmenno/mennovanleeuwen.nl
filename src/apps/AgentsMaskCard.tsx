@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { saveImageMask, type AgentMask } from '../data/agentImages'
+import { discardImageMask, saveImageMask, type AgentMask } from '../data/agentImages'
 import { AgentsMaskEditor } from './AgentsMaskEditor'
 import './AgentsMaskCard.css'
 
@@ -41,7 +41,13 @@ const STATUS: Record<string, string> = { used: 'Used', ready: 'Latest', rejected
  * Edit mask (Open mask editor when the agent handed it over), which opens the editor preloaded.
  */
 export function MaskCards({ masks, threadId, disabled, onSaved }: { masks: AgentMask[]; threadId: string | null; disabled: boolean; onSaved: (saved: SavedMask) => void }) {
-  const [editing, setEditing] = useState<AgentMask | null>(null)
+  // Like InpaintDialog: each editor opening is a session. A save that finishes after its editor was
+  // cancelled, replaced or unmounted is dropped and its uploaded mask deleted, never handed back.
+  const [editing, setEditing] = useState<{ mask: AgentMask; session: number } | null>(null)
+  const session = useRef(0)
+  useEffect(() => () => { session.current++ }, [])
+  const open = (mask: AgentMask) => setEditing({ mask, session: ++session.current })
+  const close = () => { session.current++; setEditing(null) }
   if (!masks.length) return null
   return <div className="agt-maskcards">
     {masks.map((mask) => {
@@ -60,15 +66,17 @@ export function MaskCards({ masks, threadId, disabled, onSaved }: { masks: Agent
           {facts && <span className="muted">{facts}</span>}
           {mask.warning && <span className="t-yellow">{mask.warning}</span>}
         </figcaption>
-        {threadId && <button type="button" className={`btn btn-small${mask.hand_off ? ' btn-primary' : ''}`} disabled={disabled} title="Fix the selection by hand: brush, erase, grow or shrink it, then save" onClick={() => setEditing(mask)}>{mask.hand_off ? 'Open mask editor' : 'Edit mask'}</button>}
+        {threadId && <button type="button" className={`btn btn-small${mask.hand_off ? ' btn-primary' : ''}`} disabled={disabled} title="Fix the selection by hand: brush, erase, grow or shrink it, then save" onClick={() => open(mask)}>{mask.hand_off ? 'Open mask editor' : 'Edit mask'}</button>}
       </figure>
     })}
-    {editing && threadId && <AgentsMaskEditor sourceUrl={editing.source_url} sourceName={editing.target ? `${editing.target}` : 'Picture'} width={editing.width} height={editing.height} initialMaskUrl={editing.mask_url} applyLabel="Save mask"
-      onCancel={() => setEditing(null)}
+    {editing && threadId && <AgentsMaskEditor key={editing.session} sourceUrl={editing.mask.source_url} sourceName={editing.mask.target ? `${editing.mask.target}` : 'Picture'} width={editing.mask.width} height={editing.mask.height} initialMaskUrl={editing.mask.mask_url} applyLabel="Save mask"
+      onCancel={close}
       onApply={async ({ mask }) => {
-        const saved = await saveImageMask(threadId, editing.source_image_id, mask)
-        setEditing(null)
-        onSaved({ mask_id: saved.id, source_image_id: editing.source_image_id, coverage: saved.coverage, from: editing })
+        const { mask: from, session: mine } = editing
+        const saved = await saveImageMask(threadId, from.source_image_id, mask)
+        if (session.current !== mine) { await discardImageMask(saved.id).catch(() => {}); return }
+        close()
+        onSaved({ mask_id: saved.id, source_image_id: from.source_image_id, coverage: saved.coverage, from })
       }} />}
   </div>
 }
