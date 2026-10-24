@@ -1466,7 +1466,7 @@ record source ID/name/original dimensions, resize policy and actual denoise/sett
 another reuses that source and settings with a fresh seed; it fails if the source was deleted.
 
 Sources are read only from the owner's persisted artifacts/attachments, never model-provided
-paths, URLs or base64. Supported sources are still PNG, JPEG and WebP, at most 8 MiB, 8192 pixels
+paths, URLs or base64. Supported sources are still PNG, JPEG and WebP, at most 20 MiB for generated artifacts or 8 MiB for attachments, 8192 pixels
 per side and 16 megapixels (attachment upload limits still apply). EXIF orientation is honored when sizing the source, matching ComfyUI's loader. Malformed EXIF
 and animated inputs are refused. Original bytes are held through
 approval and generation, and the original artifact is never changed. Uploads use unpredictable

@@ -11,6 +11,7 @@ import { asPage } from './as-page.ts'
 import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, imageProgressFraction, imageProgressLabel, type ImageAssetCatalog } from '../src/data/imageModels.ts'
 import { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } from '../server/comfyProgress.ts'
 import { createHash } from 'node:crypto'
+import { crc32 } from 'node:zlib'
 import type { Duplex } from 'node:stream'
 
 // CLI art helpers run without a browser; PNG decoding itself is checked in the browser.
@@ -1274,6 +1275,16 @@ try {
   database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(sourceId, sourceThread.id, 'source.png', png, Date.now())
   const attached = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Edit this picture', ?, ?)").run(editThread.id, JSON.stringify([{ kind: 'image', name: 'attached.png', mime: 'image/png', data: png.toString('base64'), size: png.length }]), Date.now()).lastInsertRowid)
   const attachmentId = `attachment:${attached}:0`
+  const extra = Buffer.alloc(9 * 1024 * 1024, 65); extra.write('Comment\0')
+  const length = Buffer.alloc(4); length.writeUInt32BE(extra.length)
+  const checksum = Buffer.alloc(4); checksum.writeUInt32BE(crc32(Buffer.concat([Buffer.from('tEXt'), extra])))
+  const largeSource = Buffer.concat([png.subarray(0, -12), length, Buffer.from('tEXt'), extra, checksum, png.subarray(-12)])
+  const largeId = randomUUID()
+  database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(largeId, sourceThread.id, 'large.png', largeSource, Date.now())
+  assert.equal(imageSource(admin, largeId).bytes.length, largeSource.length)
+  const largeAttachment = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', '', ?, ?)").run(editThread.id, JSON.stringify([{ kind: 'image', name: 'large.png', data: largeSource.toString('base64') }]), Date.now()).lastInsertRowid)
+  assert.throws(() => imageSource(admin, `attachment:${largeAttachment}:0`), /8 MiB/)
+  database().prepare('DELETE FROM agent_messages WHERE id = ?').run(largeAttachment)
   assert.deepEqual(sourceRaster(png), { width: 1, height: 1, mime: 'image/png' })
   assert.equal(listImageAttachments(admin, editThread.id, {}).attachments[0].source_image_id, attachmentId)
   assert.throws(() => listImageAttachments({ ...admin, id: 2 }, editThread.id, {}), /No such thread/)
