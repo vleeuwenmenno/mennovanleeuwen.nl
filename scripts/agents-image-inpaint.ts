@@ -1,7 +1,7 @@
 import { deflateSync } from 'node:zlib'
 // Pure graph/PNG fixtures, no HTTP, GPU or user data.
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assertInpaintNodes, inpaintGraph, validateInpaintMask, type InpaintNodeInfo, type InpaintGraphInput } from '../server/agentImageInpaint.ts'
@@ -58,23 +58,35 @@ try {
   }
   assert.ok(fixture)
   // Evaluate the actual graph's final output with deliberately changed decoded pixels.
-  // This CPU fixture uses native-size 256x256 inputs (no resampling ambiguity). The compositor
-  // follows official nodes_mask.py: generated*mask + destination*(1-mask).
+  // Crop coordinates follow official comfy/utils.py common_upscale. Nearest sampling here
+  // isolates coordinate alignment; this is not a numerical test of Pillow Lanczos edges.
+  // The production graph must select Lanczos for both paths. Composite follows nodes_mask.py.
+  for (const [sourceWidth, sourceHeight] of [[256,256], [512,512], [1024,512], [512,1024]]) {
   const pixelInput = structuredClone(fixture)
-  pixelInput.source.width = pixelInput.mask.width = 256
-  pixelInput.source.height = pixelInput.mask.height = 256
+  pixelInput.source.width = pixelInput.mask.width = sourceWidth
+  pixelInput.source.height = pixelInput.mask.height = sourceHeight
   pixelInput.graph['21'].inputs.width = pixelInput.graph['21'].inputs.height = 256
   const pixelGraph = inpaintGraph(pixelInput, info).graph
-  const sourcePixels = Uint8Array.from({ length: 256 * 256 * 3 }, (_, i) => (i * 17 + 23) % 256)
-  const generatedPixels = new Uint8Array(sourcePixels.length).fill(197)
-  const maskPixels = Uint8Array.from({ length: 256 * 256 }, (_, i) => i % 256 >= 128 ? 255 : 0)
+  const sourcePixels = Uint8Array.from({ length: sourceWidth * sourceHeight * 3 }, (_, i) => (i * 17 + 23) % 256)
+  const generatedPixels = new Uint8Array(256 * 256 * 3).fill(197)
+  const maskPixels = Uint8Array.from({ length: sourceWidth * sourceHeight }, (_, i) => i % sourceWidth >= sourceWidth / 2 ? 255 : 0)
   const evaluate = (reference: unknown): Uint8Array => {
     const [id] = reference as [string, number], node = pixelGraph[id], input = node.inputs
     switch (node.class_type) {
       case 'LoadImage': return sourcePixels
       case 'LoadImageMask': assert.equal(input.channel, 'red'); return maskPixels
       case 'MaskToImage': { const mask = evaluate(input.mask); return Uint8Array.from({ length: mask.length * 3 }, (_, i) => mask[Math.floor(i / 3)]) }
-      case 'ImageScale': assert.equal(input.width, 256); assert.equal(input.height, 256); return evaluate(input.image)
+      case 'ImageScale': {
+        assert.equal(input.width, 256); assert.equal(input.height, 256)
+        assert.equal(input.upscale_method, 'lanczos'); assert.equal(input.crop, 'center')
+        const pixels = evaluate(input.image), side = Math.min(sourceWidth, sourceHeight)
+        const left = (sourceWidth - side) / 2, top = (sourceHeight - side) / 2
+        return Uint8Array.from({ length: 256 * 256 * 3 }, (_, i) => {
+          const pixel = Math.floor(i / 3), x = left + Math.floor((pixel % 256 + .5) * side / 256)
+          const y = top + Math.floor((Math.floor(pixel / 256) + .5) * side / 256)
+          return pixels[(y * sourceWidth + x) * 3 + i % 3]
+        })
+      }
       case 'ImageToMask': { const pixels = evaluate(input.image); return Uint8Array.from({ length: pixels.length / 3 }, (_, i) => pixels[i * 3]) }
       case 'VAEDecode': return generatedPixels
       case 'ImageCompositeMasked': {
@@ -87,14 +99,22 @@ try {
     }
   }
   const composited = evaluate(['9', 0])
+  const workingSource = evaluate(['21',0]), workingMask = evaluate(['inpaint_mask',0])
   let unchanged = 0, edited = 0
   for (let i = 0; i < composited.length; i++) {
-    if (maskPixels[Math.floor(i / 3)] === 0) { assert.equal(composited[i], sourcePixels[i]); unchanged++ }
+    if (workingMask[Math.floor(i / 3)] === 0) { assert.equal(composited[i], workingSource[i]); unchanged++ }
     else { assert.equal(composited[i], generatedPixels[i]); edited++ }
   }
   assert.equal(unchanged, 98_304); assert.equal(edited, 98_304)
   assert.notDeepEqual(composited, generatedPixels, 'saving decoded pixels alone must fail preservation')
-  console.log('PASS pixel evaluator: every black-region RGB byte preserved; every white-region byte replaced')
+  }
+  const { sourceRaster } = await import('../server/agentImageSources.ts')
+  const oriented = sourceRaster(readFileSync(new URL('./fixtures/agent-image-sources/rotated.jpg',import.meta.url)))
+  assert.deepEqual([oriented.width,oriented.height],[32,48])
+  const orientedMask = encodePng({width:32,height:48,data:new Uint8Array(32*48*4).fill(255)})
+  validateInpaintMask(orientedMask,oriented)
+  assert.throws(()=>validateInpaintMask(orientedMask,{width:48,height:32}),/dimensions must match/)
+  console.log('PASS pixel evaluator: native, landscape/portrait crop and resize preserve every black RGB byte; EXIF-oriented mask dimensions enforced')
   for (const denoise of [NaN, Infinity, 0, 1.1]) assert.throws(() => inpaintGraph({ ...fixture, denoise }, info), /Denoise/)
   assert.throws(() => inpaintGraph({ ...fixture, mask: { ...fixture.mask, width: 2048 } }, info), /dimensions must match/)
   for (const [width, height] of [[8193, 1], [4096, 4097], [0, 400], [1.5, 400]]) assert.throws(() => inpaintGraph({ ...fixture, source: { ...fixture.source, width, height } }, info), /8192/)
