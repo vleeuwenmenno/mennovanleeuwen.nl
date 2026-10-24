@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assertInpaintNodes, inpaintGraph, validateInpaintMask, type InpaintNodeInfo, type InpaintGraphInput } from '../server/agentImageInpaint.ts'
+import { assertInpaintNodes, inpaintGraph, normalizeInpaintMask, validateInpaintMask, type InpaintNodeInfo, type InpaintGraphInput } from '../server/agentImageInpaint.ts'
 import { encodePng } from './perf/png.ts'
 
 const scratch = mkdtempSync(join(tmpdir(), 'agents-inpaint-fixtures-'))
@@ -155,6 +155,12 @@ try {
   for (const alpha of [0, 254]) assert.throws(() => validateInpaintMask(rgbaPng(alpha), { width: 2, height: 1 }), /fully opaque/)
   assert.throws(() => validateInpaintMask(rgbaPng(255, false), { width: 2, height: 1 }), /empty/)
   assert.throws(() => validateInpaintMask(Buffer.alloc(8 * 1024 * 1024 + 1), { width: 2, height: 2 }), /8 MiB/)
+  // A fingerprint-guarding browser nudges canvas pixels: near-black and near-white values round to a strict mask.
+  const nudged = encodePng({ width: 2, height: 2, data: Uint8Array.from([3, 1, 2, 250, 252, 254, 255, 255, 1, 0, 4, 255, 250, 251, 253, 254]) })
+  assert.throws(() => validateInpaintMask(nudged, { width: 2, height: 2 }))
+  const rounded = normalizeInpaintMask(nudged, { width: 2, height: 2 })
+  assert.deepEqual(validateInpaintMask(rounded, { width: 2, height: 2 }), { width: 2, height: 2, mime: 'image/png', coverage: 0.5, bbox: { x: 1, y: 0, width: 1, height: 2 } })
+  assert.throws(() => normalizeInpaintMask(nudged, { width: 3, height: 2 }), /dimensions must match/)
   assert.deepEqual(readdirSync(scratch), [], 'pure fixtures never opened a database')
   console.log('PASS inpaint: six real preset graphs/LoRAs, shared geometry, masked composite, no alpha inversion, preflight, bounds, immutable input, PNG contract')
 } finally { rmSync(scratch, { recursive: true, force: true }) }

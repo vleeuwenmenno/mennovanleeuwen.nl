@@ -1531,7 +1531,9 @@ agent calls `make_image_mask` with `hand_off`, the card offers **Open mask edito
 waits for your message. In the Agents terminal each mask is a line with its target, coverage,
 status and link.
 
-Opaque 8-bit RGB and RGBA PNG masks are accepted; RGBA alpha must be 255 for every pixel.
+Opaque 8-bit RGB and RGBA PNG masks are accepted. A mask saved from the editor is first rounded to
+pure black and white (white where the RGB average is at least 128), because browsers that guard
+against canvas fingerprinting, such as Brave, nudge the pixels the editor reads back.
 RGB channels must be equal and either black (0) or white (255); transparency is rejected.
 
 **Mask editor integration.** `src/apps/AgentsMaskEditor.tsx` is a reusable standalone modal.

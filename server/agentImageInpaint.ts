@@ -1,4 +1,4 @@
-import { inflateSync } from 'node:zlib'
+import { crc32, deflateSync, inflateSync } from 'node:zlib'
 import { HttpError } from './http.ts'
 import { sourceRaster } from './agentImageSources.ts'
 
@@ -95,6 +95,54 @@ export function validateInpaintMask(bytes: Buffer, source: Dimensions, allowEmpt
   }
   if (!nonempty && !allowEmpty) throw new HttpError(400, 'The mask is empty; select an area to edit')
   return { ...mask, coverage: white / (mask.width * mask.height), bbox: nonempty ? { x: left, y: top, width: right - left + 1, height: bottom - top + 1 } : null }
+}
+
+/**
+ * A mask painted in the browser, rounded to pure black and white before it is checked and stored.
+ * Browsers that guard against canvas fingerprinting (Brave, some Firefox and Safari settings) nudge
+ * the pixels the editor reads back, so an exported mask can hold a few near-black or near-white
+ * values. Each pixel becomes white when its RGB average is at least 128, else black, and opaque;
+ * the result is re-encoded as an 8-bit RGB PNG, so the stored mask keeps the strict contract.
+ */
+export function normalizeInpaintMask(bytes: Buffer, source: Dimensions): Buffer {
+  const mask = sourceRaster(bytes, 8 * 1024 * 1024)
+  if (mask.mime !== 'image/png' || bytes[24] !== 8 || ![2, 6].includes(bytes[25]) || bytes[26] !== 0 || bytes[27] !== 0 || bytes[28] !== 0) throw new HttpError(400, 'Use an opaque 8-bit RGB PNG mask: white edits, black preserves')
+  matching(source, mask)
+  const parts: Buffer[] = []
+  for (let at = 8; at + 12 <= bytes.length; at += bytes.readUInt32BE(at) + 12) {
+    if (bytes.toString('ascii', at + 4, at + 8) === 'IDAT') parts.push(bytes.subarray(at + 8, at + 8 + bytes.readUInt32BE(at)))
+  }
+  const channels = bytes[25] === 6 ? 4 : 3
+  const stride = mask.width * channels, length = (stride + 1) * mask.height
+  let raw: Buffer
+  try { raw = inflateSync(Buffer.concat(parts), { maxOutputLength: length }) } catch { throw new HttpError(400, 'Invalid PNG mask pixel data') }
+  if (raw.length !== length) throw new HttpError(400, 'Invalid PNG mask pixel length')
+  const outStride = mask.width * 3, out = Buffer.alloc((outStride + 1) * mask.height)
+  let previous = Buffer.alloc(stride), current = Buffer.alloc(stride)
+  for (let y = 0; y < mask.height; y++) {
+    const offset = y * (stride + 1), filter = raw[offset]
+    if (filter > 4) throw new HttpError(400, 'Invalid PNG mask filter')
+    for (let x = 0; x < stride; x++) {
+      const a = x >= channels ? current[x - channels] : 0, b = previous[x], c = x >= channels ? previous[x - channels] : 0
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c)
+      const prediction = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? Math.floor((a + b) / 2) : pa <= pb && pa <= pc ? a : pb <= pc ? b : c
+      current[x] = (raw[offset + 1 + x] + prediction) & 255
+    }
+    const row = y * (outStride + 1) + 1
+    for (let px = 0; px < mask.width; px++) {
+      const i = px * channels, value = current[i] + current[i + 1] + current[i + 2] >= 384 ? 255 : 0
+      out[row + px * 3] = out[row + px * 3 + 1] = out[row + px * 3 + 2] = value
+    }
+    ;[previous, current] = [current, previous]
+  }
+  const chunk = (type: string, body: Buffer) => {
+    const head = Buffer.alloc(4), tail = Buffer.alloc(4), data = Buffer.concat([Buffer.from(type, 'ascii'), body])
+    head.writeUInt32BE(body.length); tail.writeUInt32BE(crc32(data) >>> 0)
+    return Buffer.concat([head, data, tail])
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(mask.width, 0); header.writeUInt32BE(mask.height, 4); header.set([8, 2, 0, 0, 0], 8)
+  return Buffer.concat([bytes.subarray(0, 8), chunk('IHDR', header), chunk('IDAT', deflateSync(out, { level: 9 })), chunk('IEND', Buffer.alloc(0))])
 }
 
 export type InpaintGraphInput = {
