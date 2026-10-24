@@ -31,20 +31,32 @@ function settingsLine(settings: ImageGenerationSettings) {
 }
 const evidenceRecord = (row: Row, learning: Learning) => ({
   id: row.id, profileId: learning.profileId ?? null, artifactId: learning.artifactId,
+  operation: learning.settings.operation ?? 'generate',
+  ...(learning.settings.operation === 'upscale' ? { upscale_model: learning.settings.upscale_model } : {}),
   settingsLine: settingsLine(learning.settings), task: clipped(learning.task, 100), note: clipped(learning.note, 240),
   // Do not add an ellipsis to a quote: it must remain an exact saved-message substring.
   source: { ...learning.source, quote: learning.source.quote.slice(0, 160) }, updatedAt: row.updated_at ?? row.created_at,
 })
 
 /** Deterministic exact component matching. Task words rank relevance, never quality. */
-export function imageLearnings(user: User, thread: string, assets: ImageAssets, task = '', scope = imageBackendScope(user), profileId?: unknown, allModels = false) {
+export function imageLearnings(user: User, thread: string, assets: ImageAssets, task = '', scope = imageBackendScope(user), profileId?: unknown, allModels = false, operation?: string, upscaleModel?: string) {
   const owner = ownThread(user, thread)
   if (!imagePresetSpec(assets.preset).clipType) assets = { ...assets, clip: '', vae: '' }
   const profile = selectedImageProfile(user, thread, profileId)
   const all = rows(user)
   const words = new Set(task.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu)?.slice(0, 40) ?? [])
   const relevant = all.map((row) => ({ row, value: JSON.parse(row.image_learning) as Learning }))
-    .filter(({ value: l }) => l.settings.operation !== 'upscale' && l.scope === scope && (l.profileId ?? null) === (profile?.id ?? null) && (allModels || JSON.stringify(l.settings.loras ?? []) === JSON.stringify(assets.loras ?? []) && l.settings.preset === assets.preset && (['model', 'clip', 'vae'] as const).every((field) => !assets[field] || l.settings.operation !== 'upscale' && l.settings[field] === assets[field])))
+    .filter(({ value: l }) => {
+      if (l.scope !== scope || (l.profileId ?? null) !== (profile?.id ?? null)) return false
+      const recordedOperation = l.settings.operation ?? 'generate'
+      if (operation && recordedOperation !== operation) return false
+      if (upscaleModel && (l.settings.operation !== 'upscale' || l.settings.upscale_model !== upscaleModel)) return false
+      if (allModels) return true
+      if (l.settings.operation === 'upscale') return operation === 'upscale'
+      if (recordedOperation !== (operation ?? 'generate')) return false
+      const settings = l.settings
+      return JSON.stringify(settings.loras ?? []) === JSON.stringify(assets.loras ?? []) && settings.preset === assets.preset && (['model', 'clip', 'vae'] as const).every((field) => !assets[field] || settings[field] === assets[field])
+    })
     .map((item) => ({ ...item, score: [...words].filter((word) => item.value.task.toLowerCase().includes(word)).length }))
     .sort((a, b) => Number(a.value.source.kind === 'suggestion') - Number(b.value.source.kind === 'suggestion') || b.score - a.score || (b.row.updated_at ?? b.row.created_at) - (a.row.updated_at ?? a.row.created_at) || b.row.id - a.row.id)
   const notes: ReturnType<typeof evidenceRecord>[] = []
@@ -55,7 +67,7 @@ export function imageLearnings(user: User, thread: string, assets: ImageAssets, 
     bytes += size; notes.push(note)
   }
   // Internal receipt only. Refresh on settings/model/backend changes, updates/deletes, and each turn.
-  const receipt = privateDigest(JSON.stringify([scope, profile, owner.model, threadImageSettings(user, thread).effective, assets.preset, assets.model, assets.clip, assets.vae, assets.loras ?? [], all.map((r) => [r.id, r.image_learning])]))
+  const receipt = privateDigest(JSON.stringify([scope, profile, owner.model, threadImageSettings(user, thread).effective, assets.preset, assets.model, assets.clip, assets.vae, assets.loras ?? [], operation, upscaleModel, allModels, all.map((r) => [r.id, r.image_learning])]))
   const sources = database().prepare("SELECT id, role, tool_name, content FROM agent_messages WHERE thread_id = ? AND (role = 'user' OR (role = 'tool' AND tool_name = 'view_generated_image')) ORDER BY id DESC LIMIT 8").all(thread) as { id: number; role: string; tool_name: string | null; content: string }[]
   const feedbackSources = sources.flatMap((s) => {
     if (s.role === 'user') return [{ messageId: s.id, source: 'user_feedback', quote: s.content.slice(0, 200), imageId: null as string | null }]

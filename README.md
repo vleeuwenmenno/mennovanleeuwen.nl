@@ -1982,6 +1982,9 @@ reduced. **Upscale settings** records the source and model input dimensions. Ups
 no seed. **Upscale again** repeats the recorded
 operation from its original source rather than enlarging the enlarged result. Progress and Stop
 work like Generate another, and the terminal labels upscale results and settings explicitly.
+Upscale observations retain their operation and exact upscale model. `read_image_learnings` with
+`operation: "upscale"` retrieves those notes (optionally filtered by `upscale_model`);
+`all_models: true` can include all operations. Default diffusion evidence excludes upscale notes.
 
 **Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
 window, so it can be compacted. The thread's own model writes a structured summary of the

@@ -146,9 +146,23 @@ try {
   assert.equal(ev.some(e => e.type === 'imageGeneration'), true)
   assert.equal(ev.some(e => e.type === 'imageGenerationDone'), true)
   assert.equal(graphs.at(-1).output.class_type, 'SaveImage')
+  requestedTool = 'save_image_learning'
+  args = { image_id: result.image.id, source: 'suggestion', task: 'Explicitly requested upscale note', note: 'Synthetic observation, not a quality claim.' }
+  const saved = toolResult(await events(`/api/agents/threads/${t.id}/messages`, { text: 'Save this synthetic observation as requested' }))
+  assert.ok(saved.id, JSON.stringify(saved))
+  requestedTool = 'read_image_learnings'; args = { all_models: true }
+  const allNotes = toolResult(await events(`/api/agents/threads/${t.id}/messages`, { text: 'Read observations across operations' }))
+  assert.ok(allNotes.notes.some((n: any) => n.id === saved.id && n.operation === 'upscale' && n.upscale_model === name))
+  args = {}; assert.equal(toolResult(await events(`/api/agents/threads/${t.id}/messages`, { text: 'Read diffusion defaults only' })).notes.length, 0)
+  args = { operation: 'upscale', upscale_model: name }
+  assert.equal(toolResult(await events(`/api/agents/threads/${t.id}/messages`, { text: 'Read this upscale model observations' })).notes[0].id, saved.id)
+  args = { operation: 'upscale', upscale_model: 'Other/model.pth' }
+  assert.equal(toolResult(await events(`/api/agents/threads/${t.id}/messages`, { text: 'Read a different upscale model observations' })).notes.length, 0)
+  requestedTool = 'generate_image'; args = { operation: 'upscale', source_image_id: source, upscale_model: name, scale: 2 }
+  const beforeAgainChats = chats
   const again = toolResult(await events(`/api/agents/threads/${t.id}/images/${result.image.id}/again`))
   assert.equal(again.image.settings.source.id, source); assert.equal(again.image.settings.upscale_model, name)
-  assert.equal(again.image.width, 32); assert.equal(chats - beforeChats, 1, 'Again never invokes a chat model')
+  assert.equal(again.image.width, 32); assert.equal(chats - beforeAgainChats, 0, 'Again never invokes a chat model')
   assert.deepEqual(graphs.at(-1).upscale.inputs.image, ['source', 0])
   const meta = await json('GET', `${result.image.url}/metadata`); assert.ok(JSON.stringify(meta).includes(name.replaceAll('\\', '\\\\')))
   const u0 = uploads, s0 = submissions
