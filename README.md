@@ -1446,6 +1446,12 @@ Reset clears all strokes and Escape cancels. Undo stores at most 512 strokes / 3
 with a clear limit message instead of unbounded snapshots. Preview resolution is capped at
 1600 pixels per side; export retains source dimensions. No source is uploaded or persisted.
 The synthetic browser check is `node scripts/agents-mask-check.ts http://127.0.0.1:<dev-port>`.
+`server/agentImageInpaint.ts` supplies the pure graph composition and mask-format validation for
+integration. `assertInpaintNodes` checks the discovered schemas before uploads; `inpaintGraph`
+accepts a server-built img2img graph and source/mask references, retains its preset and LoRA
+chain, and adds matched mask resizing, latent noise masking and a final pixel composite.
+Only the working-size image is preserved outside the resized mask, not the original-resolution
+source. `node scripts/agents-image-inpaint.ts` checks all six preset graphs without a GPU.
 
 `generate_image` accepts `source_image_id` and optional `denoise` (0.1–1; default 0.65). Lower values
 preserve more source structure; higher values allow larger changes. This changes the **whole image**:
