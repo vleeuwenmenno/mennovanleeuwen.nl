@@ -4,7 +4,7 @@ import { database } from './db.ts'
 import { HttpError } from './http.ts'
 import { checkRoom } from './quota.ts'
 import { imageSource, type ImageSource } from './agentImageSources.ts'
-import { validateInpaintMask, type MaskStats } from './agentImageInpaint.ts'
+import { normalizeInpaintMask, validateInpaintMask, type MaskStats } from './agentImageInpaint.ts'
 
 const UUID = /^[0-9a-f-]{36}$/
 const MASK_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
@@ -66,8 +66,10 @@ export function saveImageMask(user: User, thread: string, input: { source_image_
   const source = imageSource(user, input.source_image_id)
   if (typeof input.data !== 'string' || input.data.length > Math.ceil(8 * 1024 * 1024 / 3) * 4) throw new HttpError(413, 'Mask must be at most 8 MiB')
   if (input.data.length % 4 || /[^A-Za-z0-9+/=]/.test(input.data)) throw new HttpError(400, 'Invalid base64 mask')
-  const bytes = Buffer.from(input.data, 'base64')
-  if (bytes.toString('base64') !== input.data) throw new HttpError(400, 'Invalid base64 mask')
+  const uploaded = Buffer.from(input.data, 'base64')
+  if (uploaded.toString('base64') !== input.data) throw new HttpError(400, 'Invalid base64 mask')
+  // Rounded to black and white first: fingerprint-guarding browsers nudge canvas pixels.
+  const bytes = normalizeInpaintMask(uploaded, source)
   const { width, height, coverage, bbox } = validateInpaintMask(bytes, source)
   pruneDrafts(user, thread)
   checkRoom(user, bytes.length)
