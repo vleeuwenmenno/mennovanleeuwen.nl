@@ -132,8 +132,15 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
     if (best.length !== 1) return { value: '', automatic: true, candidates: ranked, reason: best.length ? 'Several equally plausible matches. Choose one below; no model was picked arbitrarily.' : `No recognized match. ${guidance}`, error: best.length ? `Choose one of the recommended ${field} candidates.` : `No recommended ${field} is installed. ${guidance}` }
     return { value: best[0], automatic: true, candidates: ranked, reason: `Automatic · ${guidance}` }
   }
+  // A Krea2 file whose name or metadata says neither raw nor turbo matches neither Krea2 preset,
+  // which reads like a verdict on the file. It is not one: Diffu keeps the variant as a choice the
+  // user makes (inferKrea2Variant in app/src/lib/comfy/capabilities.ts returns undefined and its
+  // guidance says to choose), and a name hint never inspects weights. Say what is unknown, so the
+  // model reports a choice instead of inventing "that file is raw".
+  const unmarkedKrea = krea ? [...new Set(models)].filter((name) => family(name) === 'krea2') : []
+  const modelGuidance = `Use a ${IMAGE_PRESETS.find((p) => p.id === config.preset)!.title} model.${unmarkedKrea.length ? ` The raw/turbo variant of ${unmarkedKrea.join(', ')} is not in the name or the metadata, so it matches neither Krea2 preset on its own: the preset decides the recipe (Krea2 Raw 52 steps CFG 3.5, Krea2 Turbo 8 steps CFG 1), and the file is not "raw" or "turbo" by itself.` : ''}`
   const selection = {
-    model: resolve('model', models, modelScore, `Use a ${IMAGE_PRESETS.find((p) => p.id === config.preset)!.title} model.`),
+    model: resolve('model', models, modelScore, modelGuidance),
     clip: spec.clipType ? resolve('clip', catalog.clips, clipScore, krea ? 'Diffu recommends Qwen3-VL 4B.' : 'Diffu recommends Qwen 3 4B (not VL).') : { value: '', automatic: true, reason: 'Built into the checkpoint.', candidates: [] },
     vae: spec.clipType ? resolve('vae', catalog.vaes, vaeScore, krea ? 'Diffu requires a Qwen Image/Krea2 VAE; ae.safetensors is not suitable.' : 'Use a Z-Image VAE or the documented Flux 1 ae.safetensors fallback.') : { value: '', automatic: true, reason: 'Built into the checkpoint.', candidates: [] },
   } satisfies Record<ImageAssetField, ImageSelection>

@@ -41,6 +41,15 @@ const metadataCatalog: ImageAssetCatalog = { ...automaticCatalog, diffusionModel
 assert.equal(resolveImageAssets(autoKrea, metadataCatalog).effective.model, 'studio\\custom.safetensors')
 assert.equal(resolveImageAssets(autoKrea, { ...metadataCatalog, modelHints: [{ name: 'other/custom.safetensors', category: 'diffusionModels', baseModel: 'Krea 2 Turbo' }] }).effective.model, '')
 assert.equal(resolveImageAssets(autoKrea, { ...automaticCatalog, diffusionModels: ['Krea2/unknown-variant.safetensors'] }).effective.model, '')
+// An unmarked Krea2 variant is a choice, not a verdict: say the variant is unknown and that the
+// preset decides the recipe, instead of implying the file is the wrong kind.
+{
+  const unmarked = resolveImageAssets(autoKrea, { ...automaticCatalog, diffusionModels: ['Krea2/BSS-DesireX.safetensors'] })
+  assert.equal(unmarked.effective.model, '')
+  assert.match(unmarked.selection.model.reason, /variant of Krea2\/BSS-DesireX\.safetensors is not in the name/)
+  assert.match(unmarked.selection.model.reason, /the preset decides the recipe/)
+  assert.doesNotMatch(unmarked.selection.model.reason, /variant of .*Turbo\/custom/, 'a marked file is not called unknown')
+}
 assert.equal(resolveImageAssets(autoKrea, { ...automaticCatalog, vaes: ['other/ae.safetensors'] }).effective.vae, '')
 assert.equal(resolveImageAssets(autoKrea, { ...automaticCatalog, clips: [...automaticCatalog.clips, 'other/qwen3-vl-4b.safetensors'] }).effective.clip, '')
 assert.equal(recommendedImageSampling('krea2_raw', '', { samplers: ['dpmpp_2m'], schedulers: ['beta'] }).sampler, '')
@@ -416,6 +425,9 @@ try {
   // filters a generation, so it never needed the wording).
   assert.ok(imageGuidance.includes('CONTENT AND REFUSALS'))
   assert.ok(imageGuidance.includes('Adult content is allowed when the user asks for it'))
+  // The preset/checkpoint basics: the thread's `selected` recipe is the truth, a file name is a hint.
+  assert.ok(imageGuidance.includes('PRESET, CHECKPOINT AND RECIPE'))
+  assert.ok(imageGuidance.includes('Never say a checkpoint'))
   // The base prompt carries the same stance for threads without Images: no refusals of fiction,
   // art or mature themes, and one stated limit.
   const basePrompt = providerInputs.at(-1).messages[0].content as string

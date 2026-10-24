@@ -1374,6 +1374,18 @@ One clear family match is selected automatically. Equally plausible matches show
 of picking arbitrarily; a manual current choice is preserved. Missing or unknown assets show
 installation/selection guidance. Catalog/name hints do not verify the tensors in custom weights.
 
+**A preset is the recipe; the checkpoint only runs it.** Steps, CFG, sampler, scheduler, size,
+whether a negative prompt exists and which text encoder family is needed all come from the preset
+together with the thread's and account's settings, so one file serves more than one recipe: Krea2
+Raw (52 steps, CFG 3.5, euler / simple) and Krea2 Turbo (8 steps, CFG 1, euler_ancestral / beta) run
+the same Krea2 diffusion model, and Z-Image and Z-Image Turbo likewise. A Krea2 file whose name and
+metadata say neither raw nor turbo matches neither preset on its own; discovery says the variant is
+unknown and that the preset decides, rather than guessing. Diffu keeps exactly that as a user
+choice (`inferKrea2Variant`), so a file can be registered as turbo there. The agent's guidance
+follows the same line: what will actually run is the thread's `selected` settings from
+`list_image_models`, a file name is a hint, and a checkpoint is never called a turbo build or not
+one, nor credited with detail or handling that came from its name.
+
 Optional LoRA Manager family labels enrich at most one 50-item page (1 MiB, three seconds),
 matched by exact category and relative path. Plain ComfyUI falls back to conservative filename/
 folder hints. This does not download or scan an entire model library. Automatic intent is stored
