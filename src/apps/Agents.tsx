@@ -6,7 +6,7 @@ import { openSessionImages } from './AgentsSessionImages'
 import { generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type InpaintImageInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
 import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
 import { useIsMobile } from '../os/useIsMobile'
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
   TOOL_GROUPS,
@@ -1065,6 +1065,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  const ctxId = useId()
   useEffect(() => setCtxOpen(false), [thread?.id])
   const [openingImages, setOpeningImages] = useState(false)
   // A compaction under way (asked for, or by itself in the middle of a turn): shown in place of the reply.
@@ -1940,6 +1941,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         setFiles(combined)
         setError(null)
       }} />}
+      <div className="agt-bar">
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
         <button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
           ‹
@@ -1965,7 +1967,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {PERMISSION_LABEL[permission]}
         </button>
         </div>
-        {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
+        {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} panelId={ctxId} onToggle={() => setCtxOpen((o) => !o)} />}
         {thread && (
           <button
             className="agt-icon agt-more"
@@ -1986,8 +1988,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </button>
         )}
       </div>
+      </div>
 
-      {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} onClose={() => setCtxOpen(false)} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
+      {thread && ctxOpen && <ContextPanel panelId={ctxId} id={thread.id} version={messages.length} onClose={() => setCtxOpen(false)} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
 
       <div
         className="agt-scroll selectable"
@@ -2902,14 +2905,14 @@ function RenameBox({ thread, onSave, onCancel }: { thread: Thread; onSave: (titl
 const PART_COLORS = ['var(--magenta)', 'var(--muted)', 'var(--yellow)', 'var(--orange)', 'var(--blue)', 'var(--green)', 'var(--fg)', 'var(--cyan)']
 
 /** How full the model's context was after the last reply, as a small ring in the thread's top bar; opens and closes the breakdown. */
-function ContextMeter({ thread, models, open, onToggle }: { thread: Thread; models: ModelInfo[]; open: boolean; onToggle: () => void }) {
+function ContextMeter({ thread, models, open, panelId, onToggle }: { thread: Thread; models: ModelInfo[]; open: boolean; panelId: string; onToggle: () => void }) {
   const size = models.find((m) => m.name === thread.model)?.contextLength ?? null
   const used = thread.contextTokens
   const share = used !== null && size ? Math.min(1, used / size) : 0
   const C = 2 * Math.PI * 7
   const label = used !== null ? `${used.toLocaleString()}${size ? ` of ${size.toLocaleString()}` : ''} tokens in context (${share < 0.01 && used ? '<1' : Math.round(share * 100)}%)` : 'Context window'
   return (
-    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} aria-expanded={open} aria-controls="agt-ctx-panel" title={label} aria-label={label}>
+    <button type="button" className={`agt-ring ${open ? 'is-on' : ''} ${share > 0.8 ? 'is-full' : ''}`} onClick={onToggle} aria-expanded={open} aria-controls={open ? panelId : undefined} title={label} aria-label={label}>
       <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden>
         <circle cx="9" cy="9" r="7" className="agt-ring-track" />
         <circle cx="9" cy="9" r="7" className="agt-ring-fill" strokeDasharray={`${Math.max(share, used ? 0.03 : 0) * C} ${C}`} transform="rotate(-90 9 9)" />
@@ -2922,25 +2925,34 @@ function ContextMeter({ thread, models, open, onToggle }: { thread: Thread; mode
  * What the next message sends the model, part by part, against the window's size, with where it
  * compacts by itself (a mark on the bar) and the last compaction, if any. `onCompact`: Compact now.
  */
-function ContextPanel({ id, version, onCompact, onClose }: { id: string; version: number; onCompact?: () => void; onClose: () => void }) {
+function ContextPanel({ panelId, id, version, onCompact, onClose }: { panelId: string; id: string; version: number; onCompact?: () => void; onClose: () => void }) {
   const phone = useIsMobile()
   const [info, setInfo] = useState<ContextInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     getContext(id).then(setInfo, (e: Error) => setError(e.message))
   }, [id, version])
-  // Esc closes it; on a phone or touch screen a tap anywhere else does too (the ring toggles it itself).
+  // Esc closes it (when focus is in this window, or nowhere); on a phone or touch screen a tap anywhere
+  // else does too (the ring toggles it itself). Several Agents windows each have their own panel.
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.dlg-modal, .ctx-menu')) onClose() }
+    const panel = () => document.getElementById(panelId)
+    const key = (e: KeyboardEvent) => {
+      const focus = document.activeElement
+      const mine = !focus || focus === document.body || !!panel()?.closest('.agt')?.contains(focus)
+      if (e.key === 'Escape' && !e.defaultPrevented && mine && !document.querySelector('.dlg-modal, .ctx-menu')) onClose()
+    }
     const touch = phone || window.matchMedia('(pointer: coarse)').matches
-    const away = (e: PointerEvent) => { if (!(e.target as Element | null)?.closest?.('.agt-ctx-panel, .agt-ring, .dlg-modal, .ctx-menu')) onClose() }
+    const away = (e: PointerEvent) => {
+      const el = e.target as Element | null
+      if (!panel()?.contains(el) && el?.closest?.('.agt-ring')?.getAttribute('aria-controls') !== panelId && !el?.closest?.('.dlg-modal, .ctx-menu')) onClose()
+    }
     window.addEventListener('keydown', key)
     if (touch) document.addEventListener('pointerdown', away)
     return () => (window.removeEventListener('keydown', key), document.removeEventListener('pointerdown', away))
-  }, [phone, onClose])
+  }, [phone, onClose, panelId])
   const scale = info ? info.contextLength ?? Math.max(info.estimate, info.measured ?? 0) : 1
   return (
-    <div className="agt-ctx-panel" id="agt-ctx-panel" role="region" aria-label="Context window">
+    <div className="agt-ctx-panel" id={panelId} role="region" aria-label="Context window">
       <p className="agt-ctx-head">
         <span className="agt-ctx-title">
           <strong>Context window</strong>

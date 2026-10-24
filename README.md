@@ -1354,11 +1354,14 @@ image attachments for vision and, after sending, supported still-image sources f
 The **context-window ring** is in the thread's top bar, by the ⋯ menu, not next to Send, so a thumb
 aiming for Send cannot hit it. It stays usable while a reply is being written. It opens the
 breakdown of what fills the window (with *Compact now…*) under the top bar; the ring again, the ✕
-in the panel's corner, or Esc closes it, and on a phone or touch screen a tap anywhere outside it
-does too. The panel never takes more than 40% of the window's height and scrolls within itself. On
-a phone-sized window the top bar is two rows: back, title, ring and ⋯, then the chips (folder,
-Images, mail, permission); wider, it is one row where the folder chip's label shortens first.
-`pnpm check:agents-context-bar` covers this in a browser (scratch Vite server, mocked API).
+in the panel's corner (which stays at the top while the breakdown scrolls), or Esc closes it, also
+while it loads or shows an error, and on a phone or touch screen a tap anywhere outside it does too.
+The panel takes about a third of the window's height at most and scrolls within itself. The top bar
+follows the width of its own pane, not the screen: wide enough for the title to keep room it is one
+row, otherwise (a phone, or a narrow window with the sidebar open) the back button, title, ring and
+⋯ are the first row and the chips (folder, Images, mail, permission) the second, wrapping further
+for a long folder name or every chip on. `pnpm check:agents-context-bar` covers this in a browser
+(scratch Vite server, mocked API).
 Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
