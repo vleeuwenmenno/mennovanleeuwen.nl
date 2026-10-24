@@ -1706,6 +1706,7 @@ thread's) and `DELETE /api/agents/shares/:token`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, whether titles
 keep up to date (and how often they are checked), what a new thread starts with, whether and when long threads compact by themselves, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
+It opens on an *Overview*: one card per section with a line on how it is set up (ComfyUI not connected, Ollama Cloud missing a key and failed checks are marked), and a card opens its section; the sections are grouped (Models & threads, Safety, Tools, Sharing) in a list on the left when there is room, and in one dropdown on a phone.
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
 
