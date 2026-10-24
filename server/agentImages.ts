@@ -324,12 +324,14 @@ export function retainBranchedImages(user: User, thread: string) {
   for (const image of shared) if (image.survivor) db.prepare('UPDATE agent_images SET thread_id = ? WHERE id = ?').run(image.survivor, image.id)
 }
 
-/** Vision accepts only artifacts generated here or referenced by an owned branch's messages. */
+/** An explicit ID may come from any owned thread; omission still means the latest image here. */
 export function generatedImageForVision(user: User, thread: string, id?: unknown) {
-  const imageId = id ?? threadImageIds(user, thread)[0]?.id
+  ownImageThread(user, thread)
+  const imageId = id === undefined ? threadImageIds(user, thread)[0]?.id : id
   if (imageId === undefined) throw new HttpError(404, 'No generated image in this thread matches that request')
-  const image = imageInThread(user, thread, imageId)
-  const row = database().prepare('SELECT id, body FROM agent_images WHERE id = ?').get(image.id) as { id: string; body: Uint8Array }
+  if (typeof imageId !== 'string' || !/^[0-9a-f-]{36}$/.test(imageId)) throw new HttpError(400, 'Choose a generated image ID from one of your threads')
+  const row = database().prepare('SELECT i.id, i.body FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(imageId, user.id) as { id: string; body: Uint8Array } | undefined
+  if (!row) throw new HttpError(404, 'No generated image matches that request in your threads')
   if (row.body.byteLength > 8 * 1024 * 1024) throw new HttpError(413, 'This image exceeds the 8 MiB vision limit; generate a smaller image to inspect it')
   return { id: row.id, data: Buffer.from(row.body).toString('base64') }
 }

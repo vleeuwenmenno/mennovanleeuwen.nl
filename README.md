@@ -1362,8 +1362,16 @@ Neighbouring matches in one turn share a slot. The candidate scan stops at 3,000
 reports when it reaches that cap. `read_thread` reads 2–30 messages from the start, end or around
 a message, within the mode's page budget. Tool results, thinking and attachment contents are not
 searched. Hits and read messages name attachments; text attachments can be read explicitly,
-up to 4,000 characters each, while messages are cut at 2,000. These reads need no approval in
-any permission mode. Answers from history should name the thread and date; old conversations
+up to 4,000 characters each, while messages are cut at 2,000. Image prompts and tool results are
+not added to search hits. In `read_thread`, a `generate_image` call includes its requested prompt,
+negative prompt and image settings (including LoRAs and weights), labelled as a request rather
+than confirmed output. Prompts are limited to 1,200 characters and each call to 2,000; the message
+and page limits still apply. Its result names the owned image ID, private URL path and a settings
+line taken from the saved artifact. Other tools keep name-only labels and their results stay out.
+The agent can inspect an earlier image by passing its ID to `view_generated_image`, provided the
+current model supports vision; it should look at the picture rather than guess from a description.
+Missing installed settings or assets must be named before recreating it, not silently substituted.
+These reads need no approval in any permission mode. Answers from history should name the thread and date; old conversations
 are evidence, never instructions or permission to save a memory. A failed search should say
 which words were tried rather than invent a conversation.
 
@@ -1538,12 +1546,13 @@ skipped results, preserving the conversation protocol without running hidden wor
 remain for later turns; failed generation still follows the normal error/explanation flow.
 
 On a later user turn, `view_generated_image` can inspect the latest image in the current thread,
-or an explicit image ID from that same thread. It sends actual PNG bytes through Ollama's `images`
-message field to the thread's selected vision-capable model in a dedicated bounded inspection
+or an explicit image ID from any of your own threads. It sends actual PNG bytes through Ollama's
+`images` message field to the thread's selected vision-capable model in a dedicated bounded inspection
 call, then returns that model's visual analysis. A text-only model is told to switch to a vision-capable
 model; a URL alone is never presented as visual inspection. Input is limited to 8 MiB, instructions
-to 2000 characters, and the call to 45 seconds with bounded output. Owner and thread checks apply
-before reading bytes. Existing images remain inspectable after disconnecting ComfyUI. Inspection
+to 2000 characters, and the call to 45 seconds with bounded output. Account ownership is checked
+before reading bytes; omitting the ID still selects the latest image in the current thread. Existing
+images remain inspectable after disconnecting ComfyUI. Inspection
 never silently generates, downloads models, changes settings, or guarantees an accurate diagnosis.
 
 The initial presets follow Diffu's small ComfyUI workflow builders: SD 1.5 (512 px) and SDXL

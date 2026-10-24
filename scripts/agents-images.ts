@@ -5,7 +5,7 @@ import { messageMentions, mentionAt, mentionText } from '../src/data/agentMentio
 // Real Agents HTTP/streaming integration against mocked Ollama and ComfyUI. No GPU or real data.
 import assert from 'node:assert/strict'
 import { createServer, type ServerResponse } from 'node:http'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
 import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, imageProgressFraction, imageProgressLabel, type ImageAssetCatalog } from '../src/data/imageModels.ts'
@@ -822,6 +822,17 @@ try {
   generationArgs = { image_id: firstVisionImage.id }
   assert.equal(JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content).image_id, firstVisionImage.id)
   generationArgs = { image_id: tuned.id }
+  const crossThread = JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content)
+  assert.equal(crossThread.image_id, tuned.id)
+  assert.equal(crossThread.inspected, true)
+  assert.equal(visionRequests.at(-1).messages.at(-1).images[0], png.toString('base64'))
+  // Explicit IDs cross owned threads, but an omitted ID still chooses the current thread's latest.
+  generationArgs = {}
+  assert.equal(JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content).image_id, lastVisionImage.id)
+  const otherOwnerThread = await json('POST', '/api/agents/threads', { mode: 'quick', model: 'test-model' }, 1)
+  const otherOwnerImage = randomUUID()
+  database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)').run(otherOwnerImage, otherOwnerThread.id, 'other-owner.png', png, Date.now(), JSON.stringify(tuned.settings))
+  generationArgs = { image_id: otherOwnerImage }
   const beforeForeign = visionRequests.length
   assert.match(JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content).error, /No generated image/)
   assert.equal(visionRequests.length, beforeForeign)
@@ -845,6 +856,8 @@ try {
   await json('PUT', '/api/agents/images/settings', settings)
   const { generatedImageForVision } = await import('../server/agentImages.ts')
   assert.throws(() => generatedImageForVision({ id: 2 } as any, visionThread.id), /No such thread/)
+  assert.throws(() => generatedImageForVision({ id: 2 } as any, otherOwnerThread.id, lastVisionImage.id), /No generated image/)
+  assert.throws(() => generatedImageForVision({ id: 1 } as any, visionThread.id, null), /Choose a generated image ID/)
   database().prepare('UPDATE agent_images SET body = ? WHERE id = ?').run(Buffer.alloc(8 * 1024 * 1024 + 1), firstVisionImage.id)
   generationArgs = { image_id: firstVisionImage.id }
   assert.match(JSON.parse((await turn(visionThread.id)).messages.findLast((m: any) => m.toolName === 'view_generated_image').content).error, /8 MiB/)
@@ -869,7 +882,7 @@ try {
   await turn((await thread()).id)
   assert.equal(providerChats, errorChats + 3)
   behavior = 'ok'
-  console.log('PASS silent generation, complete tool batches and todos, exact pending dimensions, actual vision bytes, latest/current-thread ownership, unsupported models and payload limit')
+  console.log('PASS silent generation, complete tool batches and todos, exact pending dimensions, actual vision bytes, current-thread default and explicit owner-wide inspection, unsupported models and payload limit')
   // Durable learning uses actual artifacts and evidence, not agent-supplied settings.
   const { imageLearnings, saveImageLearning } = await import('../server/agentImageLearning.ts')
   const { imageBackendScope } = await import('../server/agentImages.ts')

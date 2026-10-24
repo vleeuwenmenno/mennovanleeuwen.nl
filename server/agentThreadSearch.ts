@@ -160,6 +160,56 @@ function search(userId: number, currentThread: string, args: Record<string, unkn
   return result
 }
 
+// Only generate_image arguments are conversation content here. Other tools retain name-only labels.
+const IMAGE_TEXT = { prompt: 1200, negative_prompt: 400, preset: 40, model: 160, clip: 160, vae: 160, sampler: 80, scheduler: 80 } as const
+const IMAGE_NUMBERS = ['steps', 'cfg', 'width', 'height', 'seed'] as const
+function imageFieldsSql(json: string, path: string) {
+  const texts = Object.entries(IMAGE_TEXT).map(([key, max]) => `CASE WHEN json_type(${json}, '${path}.${key}') = 'text' THEN substr(json_extract(${json}, '${path}.${key}'), 1, ${max + 1}) END AS ${key}`)
+  const numbers = IMAGE_NUMBERS.map((key) => `CASE WHEN json_type(${json}, '${path}.${key}') IN ('integer', 'real') THEN json_extract(${json}, '${path}.${key}') END AS ${key}`)
+  const loras = `(SELECT json_group_array(json_object('name', name, 'weight', weight)) FROM (SELECT substr(json_extract(l.value, '$.name'), 1, 161) AS name, CASE WHEN json_type(l.value, '$.weight') IN ('integer', 'real') THEN json_extract(l.value, '$.weight') END AS weight FROM json_each(CASE WHEN json_type(${json}, '${path}.loras') = 'array' THEN json_extract(${json}, '${path}.loras') ELSE '[]' END) l WHERE l.type = 'object' AND json_type(l.value, '$.name') = 'text' LIMIT 5)) AS loras`
+  return [...texts, ...numbers, loras, `json_type(${json}, '${path}.loras') = 'array' AS has_loras`].join(', ')
+}
+function imageArguments(row: Record<string, unknown>) {
+  const args: Record<string, unknown> = {}
+  for (const [key, max] of Object.entries(IMAGE_TEXT)) if (typeof row[key] === 'string') args[key] = cut(row[key], max)
+  for (const key of IMAGE_NUMBERS) if (typeof row[key] === 'number' && Number.isFinite(row[key])) args[key] = row[key]
+  const loras = JSON.parse(String(row.loras || '[]')) as { name: string; weight: unknown }[]
+  if (row.has_loras === 1) args.loras = loras.map((l) => ({ name: cut(l.name, 160), ...(typeof l.weight === 'number' && Number.isFinite(l.weight) ? { weight: l.weight } : {}) }))
+  return args
+}
+/** Keep valid JSON when quotes/backslashes make the encoded request longer than its text. */
+function boundedImageJson(args: Record<string, unknown>, max: number) {
+  const strings = () => [args, ...(args.loras as Record<string, unknown>[] ?? [])].flatMap((object) => Object.entries(object).filter((entry): entry is [string, string] => typeof entry[1] === 'string').map(([key, value]) => ({ object, key, value }))).sort((a, b) => b.value.length - a.value.length)
+  while (size(args) > max) {
+    const longest = strings()[0]
+    if (!longest || longest.value.length < 2) break
+    longest.object[longest.key] = cut(longest.value, Math.max(1, longest.value.length - (size(args) - max)))
+  }
+  return JSON.stringify(args)
+}
+function callText(userId: number, message: number) {
+  // Extract bounded allowlisted fields in SQL; do not bring unrelated tool arguments into context.
+  const calls = database().prepare(`SELECT substr(json_extract(c.value, '$.name'), 1, 80) AS name,
+    ${imageFieldsSql("CASE WHEN json_extract(c.value, '$.name') = 'generate_image' THEN c.value ELSE '{}' END", '$.arguments')}
+    FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id, json_each(COALESCE(m.tool_calls, '[]')) c
+    WHERE t.user_id = ? AND t.quick = 0 AND m.id = ? AND c.type = 'object' LIMIT 12`).all(userId, message)
+  return calls.filter((c) => typeof c.name === 'string').map((c) => c.name === 'generate_image' ? `Requested image (generate_image; arguments, not confirmed output):\n${boundedImageJson(imageArguments(c), 1900)}` : `(used ${String(c.name ?? '')})`).join('\n')
+}
+function imageResultText(userId: number, message: number) {
+  const image = database().prepare(`SELECT i.id, ${imageFieldsSql("COALESCE(i.metadata, '{}')", '$')}
+    FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id
+    JOIN agent_images i ON i.id = json_extract(CASE WHEN json_valid(m.content) THEN m.content ELSE '{}' END, '$.image.id')
+    JOIN agent_threads owner ON owner.id = i.thread_id AND owner.user_id = t.user_id
+    WHERE t.user_id = ? AND t.quick = 0 AND m.id = ? AND m.role = 'tool' AND m.tool_name = 'generate_image'`).get(userId, message)
+  if (!image) return 'generate_image: no saved image is available.'
+  const args = imageArguments(image)
+  delete args.prompt; delete args.negative_prompt
+  const loras = args.loras as { name: string; weight?: number }[] | undefined
+  const settings = Object.entries(args).filter(([key]) => key !== 'loras').map(([key, value]) => `${key}=${String(value).replace(/\s+/g, ' ')}`)
+  if (loras) settings.push(`LoRAs: ${loras.map((l) => `${l.name.replace(/\s+/g, ' ')} (${l.weight ?? 1})`).join(', ') || '(none)'}`)
+  return `Generated image (generate_image):\nImage: ${image.id}\nURL: /api/agents/images/${image.id}\nRecorded settings: ${cut(settings.join(' · ') || 'unavailable', 1700)}`
+}
+
 type ReadMessage = { message_id: number; from: string; date: string; content: string; attachments?: Attachment[] }
 export function readThread(userId: number, args: Record<string, unknown>, zone: string, pageChars: number) {
   try { return read(userId, args, zone, pageChars) } catch (e) { if (e instanceof HttpError) return { error: e.message }; throw e }
@@ -175,21 +225,20 @@ function read(userId: number, args: Record<string, unknown>, zone: string, pageC
     around = integer(args.around, 0, 1, Number.MAX_SAFE_INTEGER)
     if (!database().prepare('SELECT m.id FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND t.quick = 0 AND t.id = ? AND m.id = ?').get(userId, t.id, around)) return { error: 'No such message in this thread' }
   }
-  const base = "FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND t.quick = 0 AND t.id = ? AND m.role IN ('user', 'assistant', 'compact')"
+  const base = "FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND t.quick = 0 AND t.id = ? AND (m.role IN ('user', 'assistant', 'compact') OR (m.role = 'tool' AND m.tool_name = 'generate_image'))"
   let offset = 0
   if (around !== undefined) {
     const before = (database().prepare(`SELECT count(*) AS n ${base} AND m.id < ?`).get(userId, t.id, around) as { n: number }).n
     offset = Math.max(0, before - Math.floor(count / 2))
   }
-  const rows = database().prepare(`SELECT m.id, m.role, substr(m.content, 1, 2001) AS content, m.created_at,
-    (SELECT json_group_array(json_extract(c.value, '$.name')) FROM json_each(COALESCE(m.tool_calls, '[]')) c LIMIT 1) AS calls
-    ${base} ORDER BY m.id ${around === undefined && args.from === 'end' ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(userId, t.id, count, offset) as { id: number; role: string; content: string; created_at: number; calls: string }[]
+  const rows = database().prepare(`SELECT m.id, m.role, CASE WHEN m.role != 'tool' THEN substr(m.content, 1, 2001) ELSE '' END AS content, m.created_at
+    ${base} ORDER BY m.id ${around === undefined && args.from === 'end' ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(userId, t.id, count, offset) as { id: number; role: string; content: string; created_at: number }[]
   if (around === undefined && args.from === 'end') rows.reverse()
   const messages: ReadMessage[] = rows.map((r) => {
-    const calls = (JSON.parse(r.calls || '[]') as unknown[]).filter((s): s is string => typeof s === 'string').slice(0, 12).map((s) => cut(s, 80))
     const files = attachments(userId, r.id, withText)
-    const label = r.role === 'assistant' && calls.length ? `\n(used ${calls.join(', ')})` : ''
-    return { message_id: r.id, from: r.role === 'compact' ? 'summary' : r.role, date: date(r.created_at, zone), content: cut(r.content, 2000 - label.length) + label, ...(files.length ? { attachments: files } : {}) }
+    const label = r.role === 'assistant' ? callText(userId, r.id) : ''
+    const content = r.role === 'tool' ? imageResultText(userId, r.id) : label ? `${cut(r.content, Math.max(0, 1999 - label.length))}${r.content ? '\n' : ''}${label}` : r.content
+    return { message_id: r.id, from: r.role === 'compact' ? 'summary' : r.role, date: date(r.created_at, zone), content: cut(content, 2000), ...(files.length ? { attachments: files } : {}) }
   })
   const result = { note: NOTE, ...header(t, zone), messages, truncated: false }
   while (size(result) > pageChars) {
