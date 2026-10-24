@@ -2692,6 +2692,10 @@ home-indicator space is padding inside the window; the on-screen keyboard reduce
 height. Tap **Restore size** at the top right to return to the previous window layout. The
 window's saved geometry is retained, including when returning to a larger screen.
 
+With the on-screen keyboard open, windows end just above it, whether the browser lays the
+keyboard over the page (iOS) or shrinks the page (Android, newer iOS). Text fields are at least
+16px on touch screens, so iOS does not zoom the page in when one gets focus.
+
 ## Games
 
 The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is a games library: a shelf
