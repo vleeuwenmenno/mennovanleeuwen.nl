@@ -8,7 +8,7 @@ import { IMAGE_PRESETS } from './imageModels.ts'
 
 export type ObservationSource = 'user_feedback' | 'vision' | 'suggestion'
 export type ObservationHires = { base_width: number | null; base_height: number | null; width: number | null; height: number | null; denoise: number | null; seed: number | null; steps: number | null; cfg: number | null; sampler: string; scheduler: string; upscale_model: string }
-export type ObservationSettings = { operation?: 'generate' | 'upscale' | 'refine'; upscale_model?: string; denoise?: number | null; hires?: ObservationHires; preset: string; model: string; clip: string; vae: string; steps: number | null; cfg: number | null; sampler: string; scheduler: string; width: number | null; height: number | null; seed: number | null; loras: { name: string; weight: number }[] }
+export type ObservationSettings = { operation?: 'generate' | 'upscale' | 'refine' | 'inpaint'; mask?: { id: string; width: number | null; height: number | null }; upscale_model?: string; denoise?: number | null; hires?: ObservationHires; preset: string; model: string; clip: string; vae: string; steps: number | null; cfg: number | null; sampler: string; scheduler: string; width: number | null; height: number | null; seed: number | null; loras: { name: string; weight: number }[] }
 export type Observation = {
   id: number
   profileId: number | null
@@ -55,11 +55,13 @@ const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === '
 function readSettings(value: unknown): { settings: ObservationSettings | null; prompt: string; negativePrompt: string } {
   const s = obj(value)
   if (!s) return { settings: null, prompt: '', negativePrompt: '' }
+  const m = obj(s.mask)
+  const mask = m && UUID.test(str(m.id)) ? { id: str(m.id), width: num(m.width), height: num(m.height) } : undefined
   const h = obj(s.hires)
   const hires: ObservationHires | undefined = h ? { base_width: num(h.base_width), base_height: num(h.base_height), width: num(h.width), height: num(h.height), denoise: num(h.denoise), seed: num(h.seed), steps: num(h.steps), cfg: num(h.cfg), sampler: str(h.sampler), scheduler: str(h.scheduler), upscale_model: str(h.upscale_model) } : undefined
   const loras = Array.isArray(s.loras) ? s.loras.flatMap((l) => { const o = obj(l); return o && typeof o.name === 'string' ? [{ name: o.name, weight: num(o.weight) ?? 1 }] : [] }) : []
   return {
-    settings: { operation: s.operation === 'upscale' ? 'upscale' : s.operation === 'refine' ? 'refine' : 'generate', upscale_model: str(s.upscale_model), denoise: num(s.denoise), ...(hires ? { hires } : {}), preset: str(s.preset), model: str(s.model), clip: str(s.clip), vae: str(s.vae), steps: num(s.steps), cfg: num(s.cfg), sampler: str(s.sampler), scheduler: str(s.scheduler), width: num(s.width), height: num(s.height), seed: num(s.seed), loras },
+    settings: { ...(mask ? { mask } : {}), operation: s.operation === 'inpaint' ? 'inpaint' : s.operation === 'upscale' ? 'upscale' : s.operation === 'refine' ? 'refine' : 'generate', upscale_model: str(s.upscale_model), denoise: num(s.denoise), ...(hires ? { hires } : {}), preset: str(s.preset), model: str(s.model), clip: str(s.clip), vae: str(s.vae), steps: num(s.steps), cfg: num(s.cfg), sampler: str(s.sampler), scheduler: str(s.scheduler), width: num(s.width), height: num(s.height), seed: num(s.seed), loras },
     prompt: str(s.prompt),
     negativePrompt: str(s.negative_prompt),
   }
@@ -119,6 +121,8 @@ export function settingsLine(s: ObservationSettings | null): string {
   if (!s) return ''
   if (s.operation === 'upscale') return ['Upscale', s.upscale_model ? fileTitle(s.upscale_model) : 'Unknown upscale model', s.width !== null && s.height !== null && `${s.width} × ${s.height}`].filter(Boolean).join(' · ')
   return [
+    s.operation === 'inpaint' && 'Inpaint',
+    s.operation === 'inpaint' && s.denoise != null && `strength ${s.denoise}`,
     s.operation === 'refine' && 'Refine',
     s.operation === 'refine' && s.denoise != null && `strength ${s.denoise}`,
     s.preset && presetTitle(s.preset),
@@ -133,7 +137,7 @@ export function settingsLine(s: ObservationSettings | null): string {
 }
 
 /** What the model filter groups by: the workflow and the model file. */
-export const modelKey = (o: Observation) => (o.settings ? o.settings.operation === 'upscale' ? `upscale|${o.settings.upscale_model ?? ''}` : `${o.settings.hires ? 'hires|' : o.settings.operation === 'refine' ? 'refine|' : ''}${o.settings.preset}|${o.settings.model}${o.settings.hires ? `|${o.settings.hires.upscale_model}` : ''}` : '')
+export const modelKey = (o: Observation) => (o.settings ? o.settings.operation === 'upscale' ? `upscale|${o.settings.upscale_model ?? ''}` : `${o.settings.hires ? 'hires|' : o.settings.operation === 'inpaint' ? 'inpaint|' : o.settings.operation === 'refine' ? 'refine|' : ''}${o.settings.preset}|${o.settings.model}${o.settings.hires ? `|${o.settings.hires.upscale_model}` : ''}` : '')
 
 export type ObservationFilter = { profile: number | 'none' | 'all'; source: ObservationSource | 'all'; model: string; query: string }
 export const NO_FILTER: ObservationFilter = { profile: 'all', source: 'all', model: '', query: '' }

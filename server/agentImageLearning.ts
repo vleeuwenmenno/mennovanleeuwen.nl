@@ -27,7 +27,7 @@ function settingsLine(settings: ImageGenerationSettings) {
   const file = (value: string) => clipped(value.replace(/\s+/g, ' '), 160)
   if (settings.operation === 'upscale') return `Model upscale · ${file(settings.upscale_model)} · ${settings.width} × ${settings.height} · source ${settings.source.id}`
   const loras = (settings.loras ?? []).map((l) => `${file(l.name)} (${l.weight})`).join(', ') || '(none)'
-  return `${settings.operation === 'refine' ? 'Refinement · ' : settings.hires ? 'Hires · ' : ''}${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}${settings.source ? ` · ${settings.operation === 'refine' ? 'refine' : 'img2img'} ${settings.source.id} · denoise ${settings.denoise}` : ''}`
+  return `${settings.operation === 'inpaint' ? 'Inpaint · ' : settings.operation === 'refine' ? 'Refinement · ' : settings.hires ? 'Hires · ' : ''}${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}${settings.source ? ` · ${settings.operation === 'inpaint' ? 'inpaint' : settings.operation === 'refine' ? 'refine' : 'img2img'} ${settings.source.id} · denoise ${settings.denoise}` : ''}`
 }
 const evidenceRecord = (row: Row, learning: Learning) => ({
   id: row.id, profileId: learning.profileId ?? null, artifactId: learning.artifactId,
