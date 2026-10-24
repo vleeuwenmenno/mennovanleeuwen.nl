@@ -94,7 +94,7 @@ export function Thumbnails({ pictures, onRemove, onBroken }: { pictures: Picture
  * The full view: over the window the thumbnail is in (or the whole page outside one). It takes the
  * keys while open, so Escape and the arrows do not also reach the message box behind it.
  */
-function Lightbox({ pictures, start, anchor, onClose }: { pictures: Picture[]; start: number; anchor: HTMLElement | null; onClose: () => void }) {
+export function Lightbox({ pictures, start, anchor, onClose }: { pictures: Picture[]; start: number; anchor: HTMLElement | null; onClose: () => void }) {
   const wm = useWM()
   const [at, setAt] = useState(start)
   const [failed, setFailed] = useState(false)

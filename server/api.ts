@@ -1,6 +1,7 @@
 import { searchPastThreads } from './agents.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
+import { handleImageObservationsApi } from './agentImageObservations.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
@@ -395,6 +396,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/skills/remove' && method === 'POST') return await skillsRemove(requireUser(req), await readJson(req, 8192)), json(res, 200, { ok: true }), true
     const skillName = /^\/api\/agents\/skills\/([\w.-]{1,64})$/.exec(path)?.[1]
     if (skillName && read) return json(res, 200, await skillInfo(requireUser(req), skillName, url.searchParams)), true
+    if (path === '/api/agents/images/observations' && handleImageObservationsApi(req, res, requireUser(req), path)) return true
     if (path.startsWith('/api/agents/images') && (await handleImageApi(req, res, url, method, requireUser(req)))) return true
     if (path.startsWith('/api/agents/websearch') && (await handleWebSearchApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/agents/projects' && read) return json(res, 200, listProjects(requireUser(req))), true

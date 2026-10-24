@@ -1585,6 +1585,27 @@ server under **Memory → Images/Learnings**, scoped to the backend and componen
 LoRA list and weights). They are not published or sent elsewhere for storage; relevant notes are
 read by your configured agent during later image tasks.
 
+**The Observations overview** (**Settings → Apps → Agents → Images → Observations → Open…**, or
+**Overview with filters and profiles…** under Memory's **Images/Learnings**) shows them readably.
+Style profiles sit beside the list (above it, folded, on a phone): each with its name, full
+description, observation count, when it last changed and the threads that pin it; pick one to see
+only its observations. Each observation is a card: the picture as a thumbnail (tap for the full view;
+“Gone” when its thread was deleted), the task, a source badge (**Yours** for your feedback,
+**Vision** for a vision model's, **Agent’s own guess** for an unverified suggestion), its profile,
+the date and the note in two lines. Opening a card shows the evidence quote, a settings line
+(workflow · steps · CFG · sampler/scheduler · model file · LoRAs and weights), size and seed, and the
+prompt behind **Show prompt**. Filter by profile, source and model, search task and note; the count
+says how many the filter hides. Delete one card, or select several and delete them; the OS dialog
+asks first and says it removes the observation only, never the picture. With a keyboard: arrows,
+Home and End move between cards, Enter opens one, Delete deletes it. Memory's own list shows each
+observation as the same compact card instead of its stored text. A note in neither the structured
+form nor the stored text format (an old or hand-edited one) shows as stored, marked **Unreadable**.
+The overview reads `GET /api/agents/images/observations`: the newest 200 of the account's
+observations, parsed, and every profile; it is read-only, and deletes use the memory route.
+
+**Image learning and named style profiles:** profiles organize preferences and observations in the
+existing account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
+
 **Image learning and named style profiles:** a profile is the durable description of a look, shared
 across your threads and projects. The agent is told to create one when a look to keep first appears
 and update it as the look or feedback evolves, rather than accumulate per-image notes. Its description
@@ -1592,6 +1613,7 @@ should cover the look, prompting style and vocabulary, settings it tends to want
 list of images. A project-scoped memory note is for preferences specific to that project, with the
 usual permission to remember them. Profiles organise preferences and evidence in the existing
 account Memory store, under **Images/Profiles** and **Images/Learnings**. They are not a
+
 single global “best settings” ranking. Style profiles live in **Settings → Agents → Images → Style profiles** (every profile, whether you
 confirmed it or the agent suggested it, its observation count, and New / Edit / Reset / Delete) and
 in each thread's **Images** dialog, which pins one profile to that thread with a dropdown and offers

@@ -1,4 +1,5 @@
 import { api } from '../os/account'
+import type { ObservationsView } from './imageObservations'
 
 import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
@@ -41,3 +42,5 @@ export const getImageLoras = () => api<{ loras: ImageLoraHint[]; total: number; 
 export const saveImageLearningPreference = (saveImageLearnings: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { saveImageLearnings } })
 
 export const saveImageObservationApproval = (askBeforeSavingObservations: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeSavingObservations } })
+/** Read-only: the newest image observations, parsed, with every style profile. Delete with deleteMemory. */
+export const getImageObservations = () => api<ObservationsView>('/api/agents/images/observations')

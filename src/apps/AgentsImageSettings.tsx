@@ -3,6 +3,7 @@ import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApprova
 import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
+import { ObservationsDialog } from './AgentsObservations'
 
 export function AgentsImageSettings() {
   const observationApprovalHint = useId()
@@ -15,6 +16,9 @@ export function AgentsImageSettings() {
   const [notice, setNotice] = useState('')
   const [discovering, setDiscovering] = useState(false)
   const [catalogError, setCatalogError] = useState('')
+  const [observations, setObservations] = useState(false)
+  // Deletes in the overview change the profile counts: remount the list to read them again.
+  const [profilesRead, setProfilesRead] = useState(0)
   const discover = async () => {
     setDiscovering(true); setCatalogError('')
     try { setCatalog(await getImageCatalog()) } catch (e) { setCatalogError((e as Error).message) } finally { setDiscovering(false) }
@@ -71,6 +75,13 @@ export function AgentsImageSettings() {
             </span>
             <button type="button" role="switch" aria-checked={settings.askBeforeSavingObservations} aria-label="Ask before saving an observation" aria-describedby={observationApprovalHint} className={`set-toggle ${settings.askBeforeSavingObservations ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(async () => { setSettings({ ...settings, askBeforeSavingObservations: (await saveImageObservationApproval(!settings.askBeforeSavingObservations)).askBeforeSavingObservations }); setNotice('Saved') })} />
           </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Observations</strong>
+              <span className="muted set-row-wrap">Every saved observation with its picture, source and settings, next to the style profiles they belong to. Search, filter and delete them there.</span>
+            </span>
+            <button type="button" className="btn btn-small" onClick={() => setObservations(true)}>Open…</button>
+          </li>
         </ul>
         <ImageModelFields value={settings} catalog={catalog} onChange={(patch) => setSettings({ ...settings, ...patch })} disabled={busy} loading={discovering} error={catalogError} onRefresh={() => void discover()} />
         {catalogError && <p className="t-red copyable" role="alert">{catalogError}</p>}
@@ -79,9 +90,10 @@ export function AgentsImageSettings() {
     </form>}
     <section className="set-section image-group" aria-labelledby="image-profiles">
       <h4 className="set-subhead" id="image-profiles">Style profiles</h4>
-      <p className="muted set-help">Remembered style preferences. Pin one per thread from its Images dialog; inspect observations in Memory → Images.</p>
-      <ImageProfileManager />
+      <p className="muted set-help">Remembered style preferences. Pin one per thread from its Images dialog; inspect their observations under Observations above.</p>
+      <ImageProfileManager key={profilesRead} />
     </section>
+    {observations && <ObservationsDialog onClose={() => setObservations(false)} onChanged={() => setProfilesRead((n) => n + 1)} />}
     <p className="muted set-help image-about">Credentials are stored encrypted; internal addresses need an admin. Images count toward your storage quota and stay private to you. Stop drops your queued job, but one already running on ComfyUI may finish.</p>
   </>
 }

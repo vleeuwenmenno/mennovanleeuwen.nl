@@ -109,6 +109,8 @@ import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture, GeneratedPicture } from './AgentsImages'
+import { ObservationLine, ObservationsDialog } from './AgentsObservations'
+import { readObservation } from '../data/imageObservations'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
@@ -737,6 +739,7 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
   const [error, setError] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [observations, setObservations] = useState(false)
   const load = useCallback(() => listMemories().then(setItems, (e: Error) => setError(e.message)), [])
   useEffect(() => void load(), [load])
   const project = projects.find((p) => p.id === scope) ?? null
@@ -758,6 +761,10 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
     }
   }
   const forget = (m: Memory) => void deleteMemory(m.id).then(load, () => {})
+  // Image observations show as fields, not their stored text; profile memories name the profiles.
+  const profileNames = new Map((items ?? []).flatMap((m) => { const name = m.imageProfile && /^Image profile · (.+?) · (?:user|suggestion)\n/.exec(m.text)?.[1]; return name ? [[m.id, name] as const] : [] }))
+  const observation = (m: Memory) => readObservation({ id: m.id, threadId: m.threadId, createdAt: m.createdAt, updatedAt: m.updatedAt }, m.text)
+  const learnings = list.filter((m) => m.imageLearning).length
   const itemMenu = (e: React.MouseEvent, m: Memory) =>
     !e.shiftKey &&
     openContextMenu(
@@ -787,7 +794,16 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
           <MemoryForm key={m.id} memory={m} scope={m.projectId} projects={projects} categories={categories} onSave={(input) => void save(m, input)} onCancel={() => setEditing(null)} />
         ) : (
           <div key={m.id} className="agt-mem" onContextMenu={(e) => itemMenu(e, m)} onDoubleClick={() => { if (!m.imageLearning && !m.imageProfile) setEditing(m.id) }}>
-            <span className="agt-mem-text">{m.text}</span>
+            {m.imageLearning ? (
+              <div className="agt-mem-text">
+                {(() => {
+                  const o = observation(m)
+                  return <ObservationLine o={o} profile={o.profileId === null ? 'No profile' : profileNames.get(o.profileId) ?? `Profile ${o.profileId}`} />
+                })()}
+              </div>
+            ) : (
+              <span className="agt-mem-text">{m.text}</span>
+            )}
             <span className="agt-mem-actions">
               <button className="agt-icon agt-mini" disabled={m.imageLearning || m.imageProfile} onClick={() => setEditing(m.id)} title={m.imageLearning || m.imageProfile ? 'Structured image memory: edit profiles in Images; revise observations with image learning tools' : 'Edit'} aria-label="Edit">
                 <Icon name="edit" size={13} />
@@ -807,7 +823,14 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
             </span>
             {c.name} <span className="muted">{countIn(c)}</span>
           </summary>
-          <div className="agt-cat-body">{node(c, depth + 1)}</div>
+          <div className="agt-cat-body">
+            {c.path === 'Images/Learnings' && (
+              <button type="button" className="btn btn-small agt-mem-obs-open" onClick={() => setObservations(true)}>
+                Overview with filters and profiles…
+              </button>
+            )}
+            {node(c, depth + 1)}
+          </div>
         </details>
       ))}
     </Fragment>
@@ -844,9 +867,18 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         {editing === 'new' && <MemoryForm scope={scope} projects={projects} categories={categories} onSave={(input) => void save(null, input)} onCancel={() => setEditing(null)} />}
         {items && !mine.length && editing !== 'new' && <p className="muted">{project ? `Nothing remembered about ${project.name} yet.` : 'Nothing remembered yet. Ask the agent to remember something, or add it here.'}</p>}
         {items && mine.length > 0 && !list.length && <p className="muted">Nothing matches.</p>}
+        {query && learnings > 0 && (
+          <p className="muted agt-mem-obs-hint">
+            {learnings === list.length ? `All ${learnings} matches are image observations.` : `${learnings} of ${list.length} matches are image observations.`}{' '}
+            <button type="button" className="btn btn-small" onClick={() => setObservations(true)}>
+              Open the overview
+            </button>
+          </p>
+        )}
         <div className="agt-mem-tree">{node(tree, 0)}</div>
         {error && <p className="t-red copyable">{error}</p>}
       </div>
+      {observations && <ObservationsDialog onClose={() => setObservations(false)} onChanged={() => void load()} />}
     </>
   )
 }

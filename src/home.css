@@ -5377,6 +5377,71 @@ button.cal-day.is-picked:not(.is-today) {
 .image-profile-editor label > span { color: var(--muted); font-size: 11.5px; }
 .image-profile-editor :is(input, textarea) { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); font: inherit; }
 
+/* Image observations (src/apps/AgentsObservations.tsx): style profiles beside the cards when there
+   is room, above them (folded on a phone) when not. A card is the picture, the task, source ·
+   profile · date and the note in two lines; opening it shows the evidence, settings and prompt. */
+.agt-obs { display: grid; gap: 14px; min-width: 0; }
+@container (min-width: 760px) { .agt-obs { grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); align-items: start; } .agt-obs-side { position: sticky; top: 0; } }
+.agt-obs-side, .agt-obs-main { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.agt-obs-side .set-subhead { margin: 0; }
+.agt-obs-small { margin: 0; font-size: 11.5px; }
+.agt-obs-fold > summary { cursor: pointer; padding: 6px 0; color: var(--fg-bright); font-weight: 600; }
+.agt-obs-profiles, .agt-obs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+.agt-obs-profile { display: grid; gap: 4px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); }
+.agt-obs-profile.is-on { border-color: var(--accent); }
+.agt-obs-profile-pick, .agt-obs-toggle { display: grid; gap: 3px; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.agt-obs-profile-pick strong { color: var(--fg-bright); overflow-wrap: anywhere; }
+.agt-obs-profile-pick:hover strong, .agt-obs-toggle:hover .agt-obs-title { color: var(--accent); }
+.agt-obs-profile-desc { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agt-obs-threads { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 11.5px; min-width: 0; }
+.agt-obs-thread { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+.agt-obs-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; color: var(--muted); font-size: 11px; min-width: 0; }
+.agt-obs-meta > span:not(.agt-obs-badge, .image-origin) + span::before, .agt-obs-meta > .image-origin + span::before { content: '·'; margin-right: 8px; }
+.agt-obs-badge { padding: 0 6px; border: 1px solid currentColor; border-radius: 999px; line-height: 16px; }
+.agt-obs-badge.is-user_feedback { color: var(--green); }
+.agt-obs-badge.is-vision { color: var(--cyan); }
+.agt-obs-badge.is-suggestion { color: var(--yellow); }
+.agt-obs-badge.is-unknown { color: var(--red); }
+.agt-obs-filters { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.agt-obs-filters .agt-search { flex: 1 1 200px; margin: 0; }
+.agt-obs-filters .ui-select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.agt-obs-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+.agt-obs-grow { flex: 1; }
+.agt-obs-main > p { margin: 0; }
+.agt-obs-card { min-width: 0; border: 1px solid var(--line); }
+.agt-obs-card.is-selected { border-color: var(--accent); }
+.agt-obs-card .agt-obs-head { padding: 8px; }
+.agt-obs-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.agt-obs-toggle { flex: 1; align-self: stretch; align-content: start; }
+.agt-obs-toggle:focus-visible, .agt-obs-profile-pick:focus-visible, .agt-obs-thread:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agt-obs-title { color: var(--fg-bright); font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.agt-obs-note { font-size: 12px; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.agt-obs-check { flex: none; display: grid; place-items: center; width: 24px; height: 24px; cursor: pointer; }
+.agt-thumb.agt-obs-thumb, .agt-obs-thumb.is-empty { flex: none; width: 72px; height: 54px; }
+.agt-obs-thumb.is-empty { display: grid; place-items: center; border: 1px dashed var(--line-strong); border-radius: 6px; color: var(--muted); font-size: 11px; }
+.agt-obs-body { display: grid; gap: 8px; padding: 0 8px 8px; min-width: 0; }
+.agt-obs-line .agt-obs-body { padding: 6px 0 2px; }
+.agt-obs-detail { display: grid; gap: 6px; min-width: 0; }
+.agt-obs-detail > p { margin: 0; }
+.agt-obs-full-note { font-size: 12.5px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.agt-obs-quote { display: grid; gap: 2px; margin: 0; padding: 4px 10px; border-left: 2px solid var(--line-strong); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agt-obs-quote > .muted { font-size: 11px; }
+.agt-obs-settings { font-size: 12px; overflow-wrap: anywhere; }
+.agt-obs-prompt-toggle { justify-self: start; }
+.agt-obs-pre { margin: 0; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--line); background: var(--bg-dark); font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agt-obs-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.agt-mem-obs-open { margin: 4px 0 6px; }
+.agt-mem-obs-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
+@container (max-width: 420px) { .agt-thumb.agt-obs-thumb, .agt-obs-thumb.is-empty { width: 52px; height: 40px; } .agt-obs-filters .ui-select { flex: 1 1 140px; } }
+@media (max-width: 560px) { .agt-thumb.agt-obs-thumb, .agt-obs-thumb.is-empty { width: 52px; height: 40px; } }
+@media (pointer: coarse) {
+  .agt-obs-check { width: 44px; height: 44px; margin: -8px -6px -8px -8px; }
+  .agt-obs-toggle, .agt-obs-profile-pick { min-height: 44px; }
+  .agt-thumb.agt-obs-thumb, .agt-obs-thumb.is-empty { min-height: 44px; min-width: 52px; }
+  .agt-obs-thread { min-height: 44px; padding: 0 2px; }
+  .agt-obs .btn, .agt-mem-obs-open, .agt-mem-obs-hint .btn { min-height: 44px; }
+}
+
 /* Phones: full-width dialog, no folder tree, the list then the details; touch targets 40px+. */
 .image-dialog.is-mobile { width: 100%; max-height: calc(100dvh - var(--top, 0px) - 12px - env(safe-area-inset-bottom)); }
 .image-dialog-backdrop:has(.image-dialog.is-mobile) { padding: calc(var(--top, 0px) + 6px) 6px calc(6px + env(safe-area-inset-bottom)); }
