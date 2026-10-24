@@ -26,7 +26,7 @@ const clipped = (value: string, max: number) => value.length > max ? value.slice
 function settingsLine(settings: ImageGenerationSettings) {
   const file = (value: string) => clipped(value.replace(/\s+/g, ' '), 160)
   const loras = (settings.loras ?? []).map((l) => `${file(l.name)} (${l.weight})`).join(', ') || '(none)'
-  return `${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}`
+  return `${settings.preset} · ${settings.steps} steps · CFG ${settings.cfg} · ${settings.sampler}/${settings.scheduler} · model ${file(settings.model)}${settings.clip ? ` · encoder ${file(settings.clip)}` : ''}${settings.vae ? ` · VAE ${file(settings.vae)}` : ''} · LoRAs ${loras}${settings.source ? ` · img2img ${settings.source.id} · denoise ${settings.denoise}` : ''}`
 }
 const evidenceRecord = (row: Row, learning: Learning) => ({
   id: row.id, profileId: learning.profileId ?? null, artifactId: learning.artifactId,

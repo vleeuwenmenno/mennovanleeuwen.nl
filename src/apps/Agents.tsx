@@ -109,7 +109,7 @@ import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
-import { AttachedFiles, memoryPicture, sentPicture, ImageCard } from './AgentsImages'
+import { AttachedFiles, memoryPicture, sentPicture, ImageCard, Thumbnails } from './AgentsImages'
 import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
 import { ObservationLine, ObservationsDialog } from './AgentsObservations'
 import { readObservation } from '../data/imageObservations'
@@ -1986,7 +1986,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <MoneyThread currencies={threadCurrencies}>
-          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} />
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} onEditImage={(name, sourceId) => {
+            if (files.filter((f) => f.source !== 'Image-to-image source').length >= 10) { setError('Remove an attachment before selecting an image source (10 attachments maximum).'); return }
+            const reference = `The user selected “${name}” as the source for an image-to-image edit. source_image_id: ${sourceId}. Use this exact owned reference with generate_image, not a URL or a new text-to-image recreation. Apply only the change requested in the user's message; this is a whole-image edit, not masked inpainting.`
+            setFiles((current) => [...current.filter((f) => f.source !== 'Image-to-image source'), { name: `${name} (image source)`, source: 'Image-to-image source', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
+            setText((t) => t.startsWith('Edit this image: ') ? t : `Edit this image: ${t}`)
+            input.current?.focus()
+          }} />
         </MoneyThread>
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
@@ -2180,7 +2186,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, imagesOn, retry }: { /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, imagesOn, retry, onEditImage }: { onEditImage: (name: string, sourceId: string) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
     <ActionRow label={`${label} actions`}>{[...buttons, <MoreButton key="more" label={label} items={tidy([...own, { separator: true }, ...actions(m, true)])} />]}</ActionRow>
@@ -2211,6 +2217,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
             {!!m.attachments?.length && <AttachedFiles files={m.attachments} pictureOf={threadId ? sentPicture(threadId, m) : () => null} sent />}
           </div>
           {row(m, 'Your message', [
+            ...(imagesOn && threadId ? (m.attachments ?? []).flatMap((f, i) => f.kind === 'image' ? [{ label: `Edit image: ${f.name}`, disabled: answering, onSelect: () => onEditImage(f.name, `attachment:${m.id}:${i}`) }] : []) : []),
             ...(m.content ? [{ label: 'Copy', hint: 'Copy the message', onSelect: () => copy(m.content) }] : []),
             { label: 'Edit & resend…', hint: 'Take the thread back to this message and edit it to send again', onSelect: () => onRewind(m, true) },
             { label: 'Rewind to here…', hint: 'Remove this message and everything after it; it goes back into the message box', onSelect: () => onRewind(m, false) },
@@ -2249,7 +2256,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
           if (image || wait?.kind === 'image' && wait.width && wait.height) return (
             <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}>
-              <ImageCard retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} more={actions(results[j] ?? m, true)}
+              <ImageCard retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} edit={image && imagesOn ? { disabled: answering, onClick: () => onEditImage(image.name, image.id) } : undefined} more={actions(results[j] ?? m, true)}
                 again={image ? { disabled: answering || !imagesOn || !image.settings, hint: !image.settings ? 'This image has no recorded generation settings' : !imagesOn ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : 'Draw this image again with the same prompt and settings', onClick: () => onAgain(image.id) } : undefined} />
             </div>
           )
@@ -2378,6 +2385,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           </span>
           <span className="agt-tool-label">{summary?.title ?? toolLabel(call)}</span>
         </p>
+        {summary?.image && /^\/api\/agents\/(?:images\/[0-9a-f-]{36}|threads\/[0-9a-f-]{36}\/messages\/[0-9]+\/attachments\/[0-9])$/.test(summary.image.url) && <Thumbnails pictures={[{ name: summary.image.name, src: summary.image.url, source: 'Image-to-image source', size: summary.image.size, preview: true }]} />}
         {summary && (
           <dl className="agt-answers agt-ask-summary">
             {summary.rows.map(([label, value], i) => (

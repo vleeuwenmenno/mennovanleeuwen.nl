@@ -152,7 +152,7 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
 export const IMAGE_SAMPLERS = ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'] as const
 export const IMAGE_SCHEDULERS = ['simple', 'karras', 'normal', 'sgm_uniform', 'beta'] as const
 export type ImageSampling = { steps: number; cfg: number; sampler: string; scheduler: string }
-export type ImageGenerationSettings = ImageAssets & ImageSampling & { loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: 1; profile_id?: number | null; profile_reason?: string }
+export type ImageGenerationSettings = ImageAssets & ImageSampling & { loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: number; source?: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos-center-crop' }; profile_id?: number | null; profile_reason?: string }
 /** Diffu defaults.ts preferences, restricted to the KSampler workflows we actually build. */
 export function recommendedImageSampling(preset: ImagePreset, model: string, catalog?: { samplers?: string[]; schedulers?: string[]; modelHints?: ImageModelHint[] }): ImageSampling {
   const spec = imagePresetSpec(preset)

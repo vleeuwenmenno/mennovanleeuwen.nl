@@ -1,3 +1,4 @@
+import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition, throttleProgress } from './comfyProgress.ts'
 import { imagePresetSpec, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, type ImageLora, type ImageLoraHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings } from '../src/data/imageModels.ts'
@@ -179,7 +180,7 @@ const options = (info: NodeInfo, node: string, field: string): string[] => {
 }
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user)) {
@@ -189,7 +190,9 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   for (const node of IMAGE_NODES) {
     const cap = Math.min(NODE_INFO_LIMIT, remaining)
     try {
-      const bytes = await readCapped(await request(user, s, `/object_info/${node}`, limit), cap)
+      const response = await request(user, s, `/object_info/${node}`, limit, undefined, ['LoadImage', 'ImageScale', 'VAEEncode'].includes(node))
+      if (response.status === 404) { await response.body?.cancel(); continue }
+      const bytes = await readCapped(response, cap)
       remaining -= bytes.length
       let value: unknown
       try { value = JSON.parse(bytes.toString()) } catch { throw new HttpError(502, `ComfyUI returned invalid JSON for ${node}`) }
@@ -213,7 +216,7 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
   const modelHints = await imageModelHints(user, s, limit)
   const loras = [...new Set([...options(info, 'LoraLoader', 'lora_name'), ...options(info, 'LoraLoaderModelOnly', 'lora_name')])].sort()
   const loraHints = await imageLoraHints(user, s, limit, loras)
-  return { loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  return { img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
 }
 /** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
 async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
@@ -256,9 +259,10 @@ async function imageLoraHints(user: User, settings: ImageSettings, signal: Abort
     return hints.filter((h) => !duplicates.has(h.name))
   } catch { return [] }
 }
-export type ImageInput = { loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+export type ImageInput = { source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
-export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }) {
+export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }, sourceName?: string) {
+  if (!PRESETS.includes(s.preset)) throw new HttpError(400, 'Unsupported image workflow')
   if (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 6000) throw new HttpError(400, 'Supply an image prompt of 1–6000 characters')
   if (input.negative_prompt !== undefined && (typeof input.negative_prompt !== 'string' || input.negative_prompt.length > 6000)) throw new HttpError(400, 'Negative prompt must be at most 6000 characters')
   const dimension = (v: unknown) => {
@@ -278,6 +282,9 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   if (!IMAGE_SAMPLERS.includes(sampling.sampler as typeof IMAGE_SAMPLERS[number]) || !IMAGE_SCHEDULERS.includes(sampling.scheduler as typeof IMAGE_SCHEDULERS[number])) throw new HttpError(400, 'Choose a supported image sampler and scheduler')
   if (!s.model || (diffusion && (!s.clip || !s.vae))) throw new HttpError(409, 'Select the model and required text encoder/VAE in Agents → Images settings')
   if (!spec.negative && input.negative_prompt) throw new HttpError(400, 'This Turbo preset uses a positive prompt only')
+  const denoise = sourceName ? input.denoise === undefined ? 0.65 : input.denoise : 1
+  if (typeof denoise !== 'number' || !Number.isFinite(denoise) || denoise < 0.1 || denoise > 1) throw new HttpError(400, 'Denoise must be a finite number from 0.1 to 1')
+  if (!sourceName && input.denoise !== undefined) throw new HttpError(400, 'Denoise requires source_image_id')
   const graph: Graph = {}
   const node = (id: string, class_type: string, inputs: Record<string, unknown>) => (graph[id] = { class_type, inputs }, [id, 0])
   let model = diffusion ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
@@ -297,11 +304,12 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   }
   const positive = node('4', 'CLIPTextEncode', { clip, text: input.prompt.trim() })
   const negative = spec.zeroNegative ? node('5', 'ConditioningZeroOut', { conditioning: positive }) : node('5', 'CLIPTextEncode', { clip, text: input.negative_prompt ?? '' })
-  const latent = node('6', 'EmptyLatentImage', { width, height, batch_size: 1 })
-  const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise: 1 })
+  const pixels = sourceName ? node('21', 'ImageScale', { image: node('20', 'LoadImage', { image: sourceName }), upscale_method: 'lanczos', width, height, crop: 'center' }) : null
+  const latent = pixels ? node('6', 'VAEEncode', { pixels, vae }) : node('6', 'EmptyLatentImage', { width, height, batch_size: 1 })
+  const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
-  return { graph, width, height, seed, sampling, loras }
+  return { graph, width, height, seed, sampling, loras, denoise }
 }
 
 // Branches retain the artifact ID in the copied generate_image result, never a second PNG.
@@ -366,16 +374,17 @@ export function generatedImageForVision(user: User, thread: string, id?: unknown
 export function imageAgainInput(user: User, thread: string, id: string): ImageInput {
   const image = imageInThread(user, thread, id)
   if (!image.metadata) throw new HttpError(409, 'This image has no recorded generation settings')
-  const { denoise: _denoise, ...settings } = JSON.parse(image.metadata) as ImageGenerationSettings
+  const { source, denoise, ...settings } = JSON.parse(image.metadata) as ImageGenerationSettings
   let seed: number
   do { seed = randomInt(2 ** 48 - 1) } while (seed === settings.seed)
-  return { ...settings, loras: settings.loras ?? [], seed }
+  return { ...settings, loras: settings.loras ?? [], seed, ...(source ? { source_image_id: source.id, denoise } : {}) }
 }
 
-type ImagePlan = { settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
+type ImagePlan = { source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: ReturnType<typeof imageWorkflow>; parameters: ImageGenerationSettings }
 async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false): Promise<ImagePlan> {
-  const allowed = new Set(['profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
+  const allowed = new Set(['source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
+  const source = input.source_image_id === undefined ? undefined : imageSource(user, input.source_image_id)
   const profile = selectedImageProfile(user, thread, input.profile_id)
   if (input.profile_reason !== undefined && (typeof input.profile_reason !== 'string' || input.profile_reason.length > 200)) throw new HttpError(400, 'Profile reason must be up to 200 characters')
   const { effective, overrides: sessionOverrides } = threadImageSettings(user, thread)
@@ -383,7 +392,9 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   // The entire plan, including credentials, is captured before approval. Per-call overrides never persist.
   const preset = overrides.preset ?? effective.preset
   const configured = { ...imageSettings(user), ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
+  if (source) Object.assign(configured, sourceDimensions(source, input.width, input.height, preset === 'sd15' ? 512 : 1024))
   const catalog = await imageCatalog(user, signal, configured)
+  if (source && !catalog.img2img) throw new HttpError(409, 'ComfyUI needs LoadImage, ImageScale with lanczos/center, and VAEEncode for image-to-image')
   if (exact) {
     const spec = imagePresetSpec(preset)
     const required: [string, unknown, readonly string[]][] = [
@@ -400,23 +411,40 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   if (resolved.errors.length) throw new HttpError(409, resolved.errors.join(' '))
   const settings = { ...configured, ...resolved.effective }
   const defaults = recommendedImageSampling(settings.preset, settings.model, catalog)
-  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input }, catalog)
+  const uploadName = source ? `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}` : undefined
+  const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input, ...(source ? { width: configured.width, height: configured.height } : {}) }, catalog, uploadName)
   const spec = imagePresetSpec(settings.preset)
   if (!spec.clipType && (input.clip !== undefined && input.clip !== '' || input.vae !== undefined && input.vae !== '')) throw new HttpError(400, 'Checkpoint workflows use embedded encoder and VAE; separate component overrides are not supported')
   if (spec.clipType && !catalog.clipTypes.includes(spec.clipType)) throw new HttpError(409, 'ComfyUI does not support the required text encoder type')
   if (Object.values(workflow.graph).some((n) => !catalog.nodes.includes(n.class_type)) || !catalog.samplers.includes(workflow.sampling.sampler) || !catalog.schedulers.includes(workflow.sampling.scheduler)) throw new HttpError(409, 'ComfyUI is missing nodes or sampler options required by this preset')
-  const parameters: ImageGenerationSettings = { loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: 1 }
-  return { settings, workflow, parameters }
+  const parameters: ImageGenerationSettings = { loras: workflow.loras, profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
+  return { settings, workflow, parameters, source, uploadName }
 }
 export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false) {
   const plan = await planImageGeneration(user, thread, input, signal, exact)
   const p = plan.parameters
-  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise 1`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
-  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Generate image · review resolved settings', rows, body: p.prompt }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
+  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
+  return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: p.source ? 'Edit image · review resolved settings' : 'Generate image · review resolved settings', rows: [...(p.source ? [['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Resize', 'Lanczos resize with center crop; no stretching. Whole-image edit, no mask.']] as [string, string][] : []), ...rows], body: p.prompt, ...(p.source ? { image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } } : {}) }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
 }
 export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
   return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal, onProgress)
 }
+/** ComfyUI has no standard input-delete API. Unique input names are retained for queued/running jobs. */
+async function uploadSource(user: User, settings: ImageSettings, source: ImageSource, name: string, signal: AbortSignal) {
+  const form = new FormData()
+  form.set('image', new Blob([new Uint8Array(source.bytes)], { type: source.mime }), name)
+  form.set('type', 'input'); form.set('overwrite', 'false')
+  const response = await guardedFetch(user, `${settings.url}/upload/image`, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+    headers: settings.token ? { Authorization: `Bearer ${settings.token}` } : {}, body: form,
+  }).catch((error: unknown) => { if (signal.aborted || error instanceof HttpError) throw error; throw new HttpError(502, 'ComfyUI source upload did not answer') })
+  if (!response.ok) { await response.body?.cancel(); throw new HttpError(502, `ComfyUI source upload failed (${response.status})`) }
+  let uploaded: { name?: unknown; subfolder?: unknown; type?: unknown }
+  try { uploaded = JSON.parse((await readCapped(response, 16 * 1024)).toString()) } catch { throw new HttpError(502, 'ComfyUI returned an invalid source upload response') }
+  // Never use an untrusted backend filename/path in LoadImage. Our random name must be echoed exactly.
+  if (!uploaded || typeof uploaded !== 'object' || uploaded.name !== name || uploaded.subfolder !== '' || uploaded.type !== 'input') throw new HttpError(502, 'ComfyUI did not confirm the scoped source upload')
+}
+
 const active = new Set<number>()
 /** `onProgress` hears where this job is (throttled to 4 a second); only the caller's own job, never another's. */
 async function executeImagePlan(user: User, thread: string, plan: ImagePlan, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
@@ -436,6 +464,8 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
   const clientId = randomUUID()
   let socket: { close: () => void } | null = null
   try {
+    limit.throwIfAborted()
+    if (plan.source && plan.uploadName) await uploadSource(user, s, plan.source, plan.uploadName, limit)
     limit.throwIfAborted()
     if (progress) socket = await openComfySocket(user, s.url, s.token, clientId, limit, (message) => {
       if (applyComfyMessage(state, message, promptId, workflow.sampling.steps) && state.progress) progress.push(state.progress)

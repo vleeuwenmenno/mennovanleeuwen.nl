@@ -138,7 +138,7 @@ export type Question = {
 export type Form = { title: string; intro?: string; questions: Question[]; submit?: string }
 
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
-export type CallSummary = { title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
+export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
 export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 
@@ -542,7 +542,7 @@ export function toolLabel(call: ToolCall, result?: string): string {
     case 'save_image_profile': return 'Save suggested style profile'
     case 'generate_image':
       if (result?.includes('\"learning_review_required\":true')) return 'Review image learnings before generation'
-      return result ? 'Generated image' : `Generate image: ${s('prompt').slice(0, 120)}`
+      return result ? call.arguments?.source_image_id ? 'Edited image' : 'Generated image' : `${call.arguments?.source_image_id ? 'Edit image' : 'Generate image'}: ${s('prompt').slice(0, 120)}`
     case 'view_generated_image':
       return 'Inspect generated image with vision'
     case 'list_image_models':
