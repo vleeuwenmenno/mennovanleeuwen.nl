@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AMP_PRESETS, ampPrefs, ampPresetOf, FILES_SORTS, FILES_VIEWS, FILES_ZOOM_MAX, FILES_ZOOM_MIN, filesPrefs, pdfPrefs, previewPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
+import { NOTEBOOK_OPEN, setNotebookOpen, useNotebookPrefs } from '../data/notebookPrefs'
 import { useCalendarList, useLastCalendar, setLastCalendar } from '../data/calendar'
 import { useAccount } from '../os/account'
 import { IntegrationNotice } from '../os/IntegrationNotice'
@@ -229,6 +230,20 @@ export function AmpPane() {
 }
 
 // --- PDF and Preview -----------------------------------------------------------------------------
+
+export function NotebookPane() {
+  const prefs = useNotebookPrefs()
+  return (
+    <>
+      <ul className="set-list">
+        <Row title="Open notes in" hint="Last used keeps whichever you picked last. A new note always starts in Edit">
+          <Seg value={prefs.open} options={NOTEBOOK_OPEN} onChange={setNotebookOpen} label="Open notes in" />
+        </Row>
+      </ul>
+      <p className="muted set-help">Follows your account. Sticky notes on the desktop are not affected.</p>
+    </>
+  )
+}
 
 export function PdfPane() {
   const prefs = pdfPrefs.use()
