@@ -7,6 +7,7 @@ import type { ImageProgress } from './imageModels'
 import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 import { effortFor, type Effort } from './agentModelNames'
 import type { ThreadStats } from './agentStats'
+import { isHeifFile, isRawFile, stillPicture } from './stillPicture'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -312,7 +313,10 @@ export type AgentSettings = {
   autoCompact: boolean
   /** How full, in percent of the model's context window: one of COMPACT_AT */
   compactAt: number
-  /** Models starred in the model picker, in the order they were starred (Ctrl+1…9 picks the first nine) */
+  /**
+   * Where the model picker's stars were kept before they had a synced set of their own
+   * (src/data/agentFavourites.ts moves them over): read only, never changed any more.
+   */
   favoriteModels: string[]
 }
 /** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
@@ -345,6 +349,8 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
 export const useAgentSettings = settingsStore.use
 export const agentSettings = settingsStore.get
 export const setAgentSettings = (patch: Partial<AgentSettings>) => settingsStore.set((s) => ({ ...s, ...patch }))
+/** Called when newer agents settings arrive from the server or another tab. */
+export const onAgentSettingsRemote = settingsStore.onRemote
 
 /**
  * Whether "don't ask again" makes sense for a terminal command: never for commands that run other
@@ -781,9 +787,13 @@ export async function toAttachment(blob: Blob, name: string, source: string): Pr
     const text = read.text.length > 390_000 ? `${read.text.slice(0, 390_000)}\n\n[the rest of the PDF was left out: it is too long]` : read.text + note
     return { name, source, kind: 'text', mime: 'application/pdf', size: blob.size, text }
   }
-  if (/^image\/(png|jpe?g|webp|gif)$/.test(mime) || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
-    if (blob.size > MAX_IMAGE) throw new Error(`${name} is over 5 MB`)
-    return { name, source, kind: 'image', mime: mime || 'image/png', size: blob.size, data: base64(await blob.arrayBuffer()) }
+  // A camera raw goes as its embedded preview, a HEIC as a JPEG where the browser can decode it, and
+  // a multi-picture JPEG (iPhone gain or depth maps) as its primary picture (data/stillPicture.ts).
+  const converted = isRawFile(name, mime) || isHeifFile(name, mime)
+  if (converted || /^image\/(png|jpe?g|webp|gif)$/.test(mime) || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
+    const still = await stillPicture(blob, name, MAX_IMAGE)
+    if (still.size > MAX_IMAGE) throw new Error(`${name} is over 5 MB`)
+    return { name, source, kind: 'image', mime: converted ? 'image/jpeg' : still.type || mime || 'image/png', size: still.size, data: base64(await still.arrayBuffer()) }
   }
   if (blob.size > MAX_TEXT) throw new Error(`${name} is over 1 MB; text files, PDFs and pictures can be attached`)
   const text = await blob.text()
