@@ -856,8 +856,10 @@ export async function updateThread(user: User, id: string, body: { title?: strin
     .prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ?, workdir = ?, permission = ? WHERE id = ?')
     .run(title, archived, mode, model, tools, pinned, project, quick, workdir ? JSON.stringify(workdir) : null, permission, row.id)
   // Renamed by hand: the title is the user's from now on, which the automatic check leaves alone
-  // (Regenerate title hands it back), and the old one stays findable as an alias.
-  if (title !== row.title) setTitle(row, title, 'user')
+  // (Regenerate title hands it back), and the old one stays findable as an alias. Naming it what it
+  // is called already claims it too, so a title the model is still thinking about does not replace it.
+  const named = body.title !== undefined && String(body.title).trim() !== ''
+  if (title !== row.title || named) setTitle(row, title, 'user')
   return toThread(ownThread(user, row.id))
 }
 
@@ -873,6 +875,8 @@ export function deleteThread(user: User, id: string) {
   retainBranchedImages(user, row.id)
   retainImageMasks(user, row.id)
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
+  // A refinement or check still thinking finds the row gone, and writes nothing.
+  titleRevs.delete(row.id)
 }
 
 /** Stops every turn an account has running (banned or deleted, server/users.ts). */
