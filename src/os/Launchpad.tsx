@@ -49,7 +49,7 @@ const launcherDrag = (l: Launcher): DragItem =>
     ? { kind: 'file', path: l.file, name: l.file.split('/').pop()!, dir: false, launcher: { id: l.id, label: l.label, url: l.url, glyph: l.glyph, image: l.image, app: l.app } }
     : { kind: 'launcher', id: l.id, label: l.label, url: l.url, glyph: l.glyph, image: l.image, app: l.app, props: l.props }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'amp', 'photos', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'mail', 'tasks', 'contacts', 'agents', 'weather', 'git', 'changelog', 'contact', 'notes', 'keys', 'settings', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'amp', 'photos', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'mail', 'tasks', 'contacts', 'agents', 'weather', 'git', 'changelog', 'contact', 'notes', 'keys', 'settings', 'about', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -215,7 +215,7 @@ export function Launchpad() {
           { label: 'New terminal', run: () => wm.openNew('terminal') },
         ],
       },
-      { label: 'About', icon: ICONS.about, run: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+      { label: 'About', icon: ICONS.about, run: () => wm.open('about', { t: String(Date.now()) }) },
       {
         label: 'System',
         icon: ICONS.system,

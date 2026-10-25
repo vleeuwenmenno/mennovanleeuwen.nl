@@ -3462,6 +3462,22 @@ public GitHub API when that proxy is absent. Open it from All apps, Spotlight, t
 The terminal's `changelog` command ([`src/terminal/commands.ts`](src/terminal/commands.ts)) prints
 the same releases as scrollable coloured text (`changelog`, `changelog 3`, `changelog 1.80.0`).
 
+### About
+
+The **About** app ([`src/apps/About.tsx`](src/apps/About.tsx)) is the terminal's `fastfetch` laid
+out to read: the logo and wordmark on one side, and on the other what this build is and what the
+browser will say about the machine it runs on. MvL OS itself: the version, whether it is the latest
+release, the build with its commit and date, the host, how long this session has been open, who is
+signed in, the theme and dock mode, how many windows are open, and whether this is a `/play` page.
+Then the browser and its engine; the screen, pixel ratio, colour depth, viewport and pointer type;
+CPU cores, memory and how much storage the site uses; and the network (online or offline, kept
+current while the app is open), the connection, the language and the time zone with its offset.
+Whatever the browser does not tell a page says so plainly instead of guessing. **Copy summary**
+puts the same facts on the clipboard as a plain-text block, and the buttons below it open the
+Changelog, the source code and the releases on GitHub. It is also a phone-friendly read: one
+column, no horizontal scrolling. Open it from the MvL OS menu or the desktop's menu (*About this
+system*), All apps, Spotlight, or `open about` in the terminal.
+
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
 for its frame colours and tilt (`useFrame`), its own menu items (`useMenu`) and how a new one is
@@ -3540,10 +3556,11 @@ desktop scrolls along near the top bar and the dock); let go without moving, or 
 phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)), and for widgets part of their
 synced set; on a big screen notes stay wherever they were put.
 
-The MvL OS menu (top left) has *Hide notes and widgets* to put them all away and see the desktop
-itself (per browser; adding a note brings them back). On a phone, where the icons otherwise sit
-behind the notes, the desktop's icons then show as a grid of tiles: tap one to open it, long-press
-for its menu.
+The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
+(*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
+itself is Settings → Windows → *Notes and widgets* under *Right now* (per browser; adding a note
+brings them back). On a phone, where the icons otherwise sit behind the notes, the desktop's icons
+then show as a grid of tiles: tap one to open it, long-press for its menu.
 
 Dragging works with a finger too: hold a desktop icon (in the phone's grid) or a row in Files still
 for a moment and it lifts with a buzz; move the finger then and it drags, to
