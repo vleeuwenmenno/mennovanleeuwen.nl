@@ -16,6 +16,7 @@
     "check:frames": "node scripts/frame-stats-check.ts",
     "check:perf": "node scripts/perf/check.ts",
     "check:push": "node scripts/webpush-check.ts",
+    "check:data-perms": "node scripts/data-perms-check.ts",
     "check:markdown": "node scripts/markdown-check.ts",
     "check:emoji": "node scripts/emoji-check.ts",
     "check:visual": "node scripts/visual-check.ts",

@@ -988,6 +988,13 @@ Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of 
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
 (`node:sqlite`, no extra dependency) under `DATA_DIR` (default `./data`, a volume in compose).
 
+The database also holds plaintext user data (synced state, notes, agent conversations, notifications,
+tasks, account and photo metadata), so the server keeps it private on every start, for existing
+installs too: `DATA_DIR` is set to `0700`, and `mvlos.db` (with its WAL files) and `secret.key` to `0600`,
+whatever the umask. This matters for bind mounts and local runs, where other users on the machine could
+otherwise read them. Windows has no POSIX modes and is left alone. `pnpm check:data-perms` verifies it
+(fresh and pre-existing loose modes; CI runs it).
+
 Setup:
 
 1. Create a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with callback
