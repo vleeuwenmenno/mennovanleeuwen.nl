@@ -113,6 +113,7 @@ import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
+import { AlwaysChips, showProjectSkills } from './AgentsSkillRules'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture, ImageCard, Thumbnails } from './AgentsImages'
 import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
@@ -372,6 +373,7 @@ function AgentsApp({ win }: { win: WinState }) {
   const projectMenu = (p: Project): MenuItem[] => [
     { label: 'New thread in this project', onSelect: () => open(null, p.id) },
     { label: 'Project memory', onSelect: () => openMemory(p.id) },
+    { label: 'Always-on skills…', onSelect: () => (showProjectSkills(p.id), showAgentsSection('skills'), openSettings()) },
     { label: 'Rename…', onSelect: () => setRenamingProject(p.id) },
     { separator: true },
     { label: 'Delete project…', danger: true, onSelect: () => void removeProject(p) },
@@ -1088,6 +1090,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
+  // Always-on skills switched off with their chips before the thread exists.
+  const [draftSkillsOff, setDraftSkillsOff] = useState<string[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [mentionTools, setMentionTools] = useState<MentionTool[]>([])
   const [loras, setLoras] = useState<LoraDetail[] | null>(null)
@@ -1378,7 +1382,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     let target = thread
     try {
       if (!target) {
-        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, ...(draftModel ? { model: draftModel } : {}) })
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, skillsOff: draftSkillsOff, ...(draftModel ? { model: draftModel } : {}) })
         streamed.current = target.id
         setThread(target)
         onCreated(target)
@@ -1971,7 +1975,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     try {
       let target = thread
       if (!target) {
-        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, ...(draftModel ? { model: draftModel } : {}) })
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, skillsOff: draftSkillsOff, ...(draftModel ? { model: draftModel } : {}) })
         streamed.current = target.id
         setThread(target)
         onCreated(target)
@@ -2116,6 +2120,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           onDismiss={() => void updateThread(thread.id, { todos: null }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))}
         />
       )}
+      <AlwaysChips thread={thread} draft={{ projectId: draftProject, mode: draftMode, permission: draftPermission, off: draftSkillsOff, setOff: setDraftSkillsOff }} onThread={(t) => (setThread(t), onChanged())} onError={setError} />
       {thread && queue.length > 0 && <QueueList queue={queue} answering={answering} editing={editingQ?.id ?? null} onEdit={(q) => void startEdit(q)} onSend={(q) => void sendNow(q)} onRemove={removeQueue} />}
       <form
         ref={composerBox}

@@ -504,6 +504,42 @@ request). `skills add owner/repo` installs from GitHub, and `/name` starts one. 
 Agents app has the same work folders, permission modes, diff approvals and skills (Settings →
 Agents → Skills).
 
+**Always-on skills and rules** ([`src/data/agentSkillRules.ts`](src/data/agentSkillRules.ts),
+[`server/agentSkills.ts`](server/agentSkills.ts), [`src/apps/AgentsSkillRules.tsx`](src/apps/AgentsSkillRules.tsx))
+make a skill part of every conversation instead of something the agent reads when a task calls for
+it, for example `caveman-adhd` for terse answers all the time. Set up in Settings → Agents → Skills:
+
+- **Always on**, a switch on each enabled skill. The skill's whole SKILL.md goes into the system
+  prompt, between `<active_skill name="…">` tags, with an instruction to follow it in every reply.
+  This also works when the thread's Skills tool group is off.
+- **Applies to**: Agents threads (on by default), Spotlight quick answers and the terminal's
+  `agents` command.
+- **Per project**: turn a skill on or off for the threads in one project, whatever the global
+  setting is. The project's sidebar menu has *Always-on skills…*.
+- **Rules**: *When* [every thread · in project X · mode is Quick/Deep · permission is Ask
+  first/Auto/Edits allowed/Plan/Bypass · in quick answers/the terminal] *→* turn on skill Z, or add
+  an instruction text (in `<user_instruction>` tags). A stored rule can have several conditions,
+  and all of them must match. Rules are checked again on every message, so a thread switched to
+  Plan picks up a Plan rule from its next message on. Rules are only data: there are no scripts and
+  nothing runs.
+
+The order is: always-on skills (where they apply), then the project's additions and removals, then
+matching rules. A skill switched off in the list is never injected. Everything together is capped
+at 24 KB per prompt. Skills that don't fit are left out (the prompt names them), and Settings warns
+when the always-on skills add up to more than that. The context breakdown shows the always-on part
+as its own row.
+
+In a thread, the active ones show as chips above the message box. Tapping a chip turns that skill
+or instruction off for this thread only, and tapping it again turns it back on. This is stored with
+the thread (column `skills_off`), so it survives a reload, and a new thread can be set before its
+first message. Saying "stop caveman" still works through the skill's own rules.
+
+The config is saved with the account (state key `agentskills`) through
+`PUT /api/agents/skill-config`, which refuses anything invalid with a 400. Limits: 20 always-on
+skills, 20 rules, 2,000 characters per instruction, and conditions only from the fixed set above.
+When the config is read, invalid entries are dropped. `pnpm check:agents-skill-hooks` covers all of
+this.
+
 **How complete it is (2026-10-11).** Everything above works end to end against a scripted
 stand-in for Ollama and a mock Seafile. It has not yet run against real models, so the tool
 descriptions and system prompt are untuned. Known limits:

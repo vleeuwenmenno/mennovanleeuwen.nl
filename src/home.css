@@ -2144,6 +2144,79 @@ textarea.agt-q-input {
 .agt-chip-x:hover {
   color: var(--text);
 }
+/* Always-on skills over the message box: on chips are filled, off ones struck through. */
+.agt-always {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px 0;
+}
+.agt-always .agt-always-chip {
+  max-width: 100%;
+  min-width: 0;
+}
+.agt-always-chip.is-on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.agt-always-chip.is-off .agt-chip-label {
+  text-decoration: line-through;
+}
+@media (pointer: coarse) {
+  .agt-always .agt-always-chip {
+    min-height: 32px;
+    padding: 4px 12px;
+  }
+}
+/* Settings → Agents → Skills: the Always on switch, where they apply, and rules. */
+.agt-always-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.agt-always-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.agt-always-scope .set-check {
+  margin: 0;
+}
+.agt-rule {
+  align-items: stretch;
+  flex-direction: column;
+}
+.agt-rule-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.agt-rule-line .set-select {
+  min-width: 0;
+  max-width: 100%;
+}
+.agt-rule-add {
+  margin-bottom: 16px;
+}
+.agt-rule-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  resize: vertical;
+}
+.agt-rule-text:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
 /* Why a web read ran without asking (Auto's check, an allowed site): small, on the tool's row. */
 .agt-tool-checked {
   font-size: 11px;

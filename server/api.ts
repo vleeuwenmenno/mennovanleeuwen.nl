@@ -1,5 +1,6 @@
 import { saveImageMask, imageMask, discardImageMask, maskSource } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
+import { saveSkillConfig, skillConfig } from './agentSkills.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
 import { handleImageObservationsApi } from './agentImageObservations.ts'
@@ -428,6 +429,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
     if (path === '/api/agents/mention-tools' && read) { requireUser(req); return json(res, 200, mentionTools()), true }
+    if (path === '/api/agents/skill-config' && read) return json(res, 200, skillConfig(requireUser(req))), true
+    if (path === '/api/agents/skill-config' && method === 'PUT') return json(res, 200, saveSkillConfig(requireUser(req), await readJson(req, 64 * 1024))), true
     if (path === '/api/agents/skills' && read) return json(res, 200, await skillsList(requireUser(req), url.searchParams)), true
     if (path === '/api/agents/skills/install' && method === 'POST') return json(res, 200, await skillsInstall(requireUser(req), await readJson(req, 8192))), true
     if (path === '/api/agents/skills/remove' && method === 'POST') return await skillsRemove(requireUser(req), await readJson(req, 8192)), json(res, 200, { ok: true }), true
