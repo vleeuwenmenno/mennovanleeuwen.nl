@@ -129,7 +129,7 @@ import { MoneyThread } from '../os/MoneyAmount'
 import { ImageStudio } from './AgentsStudio'
 import { accountStorage } from '../os/accountSpace'
 import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
-import { modelName } from '../data/agentModelNames'
+import { makerOf, modelName } from '../data/agentModelNames'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
 // archived ones, and what the agent remembers), the conversation on the right with each tool call
@@ -1099,6 +1099,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [draftEffort, setDraftEffort] = useState<Effort | null>(null)
   const [picking, setPicking] = useState(false)
   const modelPill = useRef<HTMLButtonElement>(null)
+  const boxBar = useRef<HTMLDivElement>(null)
   const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
@@ -1925,8 +1926,32 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const shownModel = model || usualModel || ''
   const shownInfo = models.find((m) => m.name === shownModel)
   const pretty = shownModel ? modelName(shownModel, shownInfo?.label) : null
+  // The pill's compact forms: "DeepSeek V4.1 Flash" → "DS V4.1 Flash" (the maker's mark and the rest of the name).
+  const shortName = pretty ? `${makerOf(pretty.maker).mark}${pretty.name.startsWith(pretty.family) && pretty.name.length > pretty.family.length ? pretty.name.slice(pretty.family.length) : ` ${pretty.name}`}` : ''
   const efforts = shownInfo?.efforts ?? []
   const effort = effectiveEffort(shownInfo, effortPicked, mode)
+  // The pill shows as much of the name as the bar has room for: full + tag, full, short, mark only
+  // (data-level; CSS shows the matching form). Measured when the bar resizes or the name changes, never per frame.
+  const fitKey = `${pretty?.name}|${pretty?.variant}|${pretty?.maker}`
+  useLayoutEffect(() => {
+    const bar = boxBar.current
+    const pill = modelPill.current
+    if (!bar || !pill) return
+    const fit = () => {
+      const forms = ['.agt-model-name', '.agt-model-name', '.agt-model-short']
+      let level = 0
+      for (; level < 3; level++) {
+        pill.dataset.level = String(level)
+        const el = pill.querySelector<HTMLElement>(forms[level])
+        if (el && el.scrollWidth <= el.clientWidth + 1 && bar.scrollWidth <= bar.clientWidth + 1) break
+      }
+      pill.dataset.level = String(level)
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(bar)
+    return () => ro.disconnect()
+  }, [fitKey, !!effort, answering])
   const effortMenu = (e: React.MouseEvent) =>
     openMenuAt(
       e.currentTarget,
@@ -2243,7 +2268,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             rows={1}
             aria-label="Message"
           />
-          <div className="agt-box-bar">
+          <div className="agt-box-bar" ref={boxBar}>
             <button type="button" className="agt-icon" onClick={attachMenu} disabled={answering} aria-label="Attach files" title="Attach files">
               <Icon name="clip" />
             </button>
@@ -2264,11 +2289,14 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               className="agt-pill agt-model-pill"
               onClick={() => setPicking((o) => !o)}
               disabled={answering}
+              aria-label={pretty ? `Model: ${pretty.name}${pretty.variant ? ` ${pretty.variant}` : ''}` : 'Model'}
               title={pretty ? `${pretty.name}${pretty.variant ? ` ${pretty.variant}` : ''} (${shownModel})${model ? '' : ', the usual one'}` : 'Model'}
               aria-haspopup="dialog"
               aria-expanded={picking}
             >
               <span className="agt-model-name">{pretty ? pretty.name : 'Automatic'}</span>
+              {pretty && <span className="agt-model-short">{shortName}</span>}
+              {pretty && <span className="agt-model-mark" aria-hidden>{makerOf(pretty.maker).mark}</span>}
               {pretty?.variant && <span className="agt-model-variant">{pretty.variant}</span>}
               <Icon name="chevron" size={12} />
             </button>
