@@ -3,6 +3,7 @@
 // Notebook's autocomplete, and the ranking of search.
 
 import { emojiTyping, loadEmoji, lookup, replaceShortcodes, search, hasShortcode, emojiReady } from '../src/data/emoji/index.ts'
+import { clipLine, cols, markup, seg, width, wrap } from '../src/terminal/agents/text.ts'
 
 let failed = 0
 function eq(name: string, got: unknown, want: unknown) {
@@ -77,6 +78,16 @@ eq('type replace in code', emojiTyping('`:joy: ', 7), null)
 eq('type fenced block', emojiTyping('```js\nx :ro', 11), null)
 eq('type after fence', emojiTyping('```js\nx\n```\nhi :ro', 18), { kind: 'query', start: 15, query: 'ro' })
 eq('type next line fresh', emojiTyping('`open\nhi :ro', 12), { kind: 'query', start: 9, query: 'ro' })
+
+// terminal columns: emoji take 2, so wrapping and clipping do not overflow the VT's lines.
+eq('cols ascii', cols('abc'), 3)
+eq('cols emoji', [cols('🔥'), cols('a🤣b'), cols('日本')], [2, 4, 4])
+eq('width counts emoji', width([seg('hi '), seg('😂😂')]), 7)
+const wrapped = wrap([seg('🔥 '.repeat(12).trim())], 10)
+eq('wrap emoji within 10', wrapped.every((l) => width(l) <= 10), true)
+eq('wrap keeps all', wrapped.map((l) => markup(l)).join(' ').split('🔥').length - 1, 12)
+eq('clip emoji', width(clipLine([seg('😂'.repeat(10))], 9)) <= 9, true)
+eq('wrap long emoji word', wrap([seg('🔥'.repeat(20))], 9).every((l) => width(l) <= 9), true)
 
 if (failed) {
   console.log(`${failed} failed`)
