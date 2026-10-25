@@ -165,6 +165,8 @@ export function database(): DatabaseSync {
       created_at INTEGER NOT NULL
     );
   `)
+  // Added later: the id of the browser's save that made a synced state's version (server/state.ts).
+  if (!(db.prepare('PRAGMA table_info(state)').all() as { name: string }[]).some((c) => c.name === 'write_id')) db.exec('ALTER TABLE state ADD COLUMN write_id TEXT')
   // Added later: the scopes Google granted (editing needs calendar.events).
   if (!(db.prepare('PRAGMA table_info(google)').all() as { name: string }[]).some((c) => c.name === 'scopes')) db.exec('ALTER TABLE google ADD COLUMN scopes TEXT')
   // Added later: which tool groups a thread may use (JSON; null for all), and files attached to a message.

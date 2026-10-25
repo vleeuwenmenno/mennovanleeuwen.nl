@@ -23,8 +23,40 @@ import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } 
 // never reads it, and this tab writes and sends nothing once the browser is signed in as someone
 // else (accountGuard). An answer from the server that arrives after that is dropped.
 
-type Meta<T> = { value: T; /** server version this value is based on */ base: number; /** changed since */ dirty: boolean }
-type Remote = { value: unknown; updatedAt: number }
+type Meta<T> = {
+  value: T
+  /** server version this value is based on */
+  base: number
+  /** changed since */
+  dirty: boolean
+  /**
+   * Set when the page closed while a save was out (see pagehide): the write ids of the saves
+   * this value may have lost to, its own saves whose answers never came (the one out, the one
+   * sent on closing; more if the page came back and closed again before it was settled). The
+   * last one went out on top of the version before the one out, so if that got through, the
+   * server refused it. A server version made by any of them is this page's own (see reconcile).
+   */
+  final?: { ids: string[] }
+}
+
+const MAX_FINAL_IDS = 16
+const finalOf = (v: unknown): Meta<unknown>['final'] => {
+  const ids = (v as { ids?: unknown } | null)?.ids
+  return Array.isArray(ids) && ids.length && ids.every((i) => typeof i === 'string') ? { ids: ids as string[] } : undefined
+}
+/** Both marks' ids (the newest kept when there are too many). */
+const joinFinal = (a: Meta<unknown>['final'], b: Meta<unknown>['final']) => ({ ids: [...new Set([...(a?.ids ?? []), ...(b?.ids ?? [])])].slice(-MAX_FINAL_IDS) })
+/** `writeId`: the id of the save that made this version (none for versions saved before ids, or by the server itself). */
+type Remote = { value: unknown; updatedAt: number; writeId?: string }
+
+/** A new id for a save (server/state.ts keeps the one that made the current version). */
+const newWriteId = () => {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+  }
+}
 
 export type Synced<T> = {
   key: string
@@ -43,11 +75,17 @@ export type Synced<T> = {
 type Internal = Synced<unknown> & {
   meta: () => Meta<unknown>
   adopt: (r: Remote, dirty?: boolean, notify?: boolean) => void
-  pushed: (updatedAt: number, sent: unknown) => void
+  pushed: (updatedAt: number, sent: unknown, writeId: string) => void
   /** Whether the value is the server's copy at its base, as far as this tab knows. */
   sameAsServer: () => boolean
-  /** Marks the value saved (it already is, on the server). */
-  clean: () => void
+  /** The page is closing with save `out` still out and save `sent` sent now (write ids): kept with the value (Meta.final). */
+  closing: (out: string, sent: string) => void
+  /** Counts the times the value was replaced from elsewhere (see synced's `epoch`). */
+  epoch: () => number
+  /** Keeps the unsaved value as it is, on top of the server's version `updatedAt`. */
+  rebase: (updatedAt: number) => boolean
+  /** Marks the value saved (it already is, on the server); false (nothing written) if another tab's copy is stored. */
+  clean: () => boolean
   reset: () => void
   merge?: (local: unknown, remote: unknown) => unknown
   normalize: (v: unknown) => unknown
@@ -71,7 +109,8 @@ function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (
     const raw = accountStorage.get(storageKey(key))
     if (raw) {
       const m = JSON.parse(raw) as Meta<unknown>
-      return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty }
+      const final = finalOf(m.final)
+      return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty, ...(final ? { final } : {}) }
     }
     const legacy = legacyKey && accountStorage.get(legacyKey)
     if (legacy) return { value: normalize ? normalize(JSON.parse(legacy)) : (JSON.parse(legacy) as T), base: 0, dirty: true }
@@ -97,6 +136,22 @@ export function synced<T>(
   } = {},
 ): Synced<T> {
   let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
+  /**
+   * The stored copy as this tab last wrote or read it (raw). The writes main didn't have (the
+   * closing mark, a recovered value, marking a value saved without sending it) only go ahead
+   * when the stored copy is still exactly that: another tab's newer copy, whose storage event
+   * may not have arrived yet, is never written over by them (compare-and-set). Otherwise they
+   * do what main does.
+   */
+  let lastRaw: string | null = accountStorage.get(storageKey(key))
+  /** Writes `meta` only if the stored copy is still the one this tab last saw. */
+  const saveIfUnchanged = (): boolean => {
+    if (frozen() || !accountGuard() || accountStorage.get(storageKey(key)) !== lastRaw) return false
+    const raw = JSON.stringify(meta)
+    if (!accountStorage.set(storageKey(key), raw)) return false
+    lastRaw = raw
+    return true
+  }
   /** The server's copy at a version, as last sent or received here (a save of the same is skipped). */
   let known: { base: number; json: string } | null = null
   /** A copy marked saved is the server's at its base. */
@@ -112,6 +167,16 @@ export function synced<T>(
   }
   const emit = () => listeners.forEach((l) => l())
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
+  /**
+   * Bumped whenever the value is replaced by one from elsewhere (another tab's copy, the
+   * server's): a save sent before that is no part of the value now, so its write id never goes
+   * into this value's closing mark (see pagehide).
+   */
+  let epoch = 0
+  // Known gap, as on main: another tab whose storage event about a closing mark hasn't arrived
+  // yet writes its own copy over the stored one (an answer to an unrelated save, a pull), and the
+  // value that mark protected is gone. Taking the stored copy over instead was tried and could
+  // attach this tab's newer save to the older value.
   const save = () => {
     if (frozen() || !accountGuard()) return
     let others = false
@@ -132,7 +197,8 @@ export function synced<T>(
       } catch {
         /* not readable: written over */
       }
-    accountStorage.set(storageKey(key), JSON.stringify(meta))
+    const written = JSON.stringify(meta)
+    if (accountStorage.set(storageKey(key), written)) lastRaw = written
     // Another tab's changes came along: show them, as when they arrive by themselves.
     if (others) {
       emit()
@@ -176,6 +242,8 @@ export function synced<T>(
     ...(store as Synced<unknown>),
     meta: () => meta,
     adopt(r, dirty = false, notify = true) {
+      // Another version than this page's own (reconcile keeps the value when it is): the mark goes.
+      epoch++
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
       if (!dirty) known = { base: r.updatedAt, json: JSON.stringify(meta.value) }
       save()
@@ -183,27 +251,52 @@ export function synced<T>(
       if (notify) remoteListeners.forEach((l) => l(meta.value))
       emitSynced()
     },
-    pushed(updatedAt, sent) {
+    pushed(updatedAt, sent, writeId) {
       known = { base: updatedAt, json: JSON.stringify(sent) }
+      // The closing mark only goes with the answer to one of its own saves (the page came back
+      // from the back/forward cache), not with another tab's or another save's.
+      const final = meta.final && !meta.final.ids.includes(writeId) ? meta.final : undefined
       // Still dirty if it changed while the request was out.
-      meta = { ...meta, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
+      meta = { value: meta.value, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json, ...(final ? { final } : {}) }
       save()
       emitSynced()
       if (meta.dirty) schedulePush(key)
     },
     sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
+    closing(out, sent) {
+      // Closing again before an earlier mark was settled (back from the back/forward cache):
+      // its ids still count, the server may hold a version one of them made.
+      const was = meta
+      meta = { ...meta, final: joinFinal(meta.final, { ids: [out, sent] }) }
+      if (!saveIfUnchanged()) meta = was
+    },
+    rebase(updatedAt) {
+      const was = meta
+      meta = { value: meta.value, base: updatedAt, dirty: true }
+      if (saveIfUnchanged()) return true
+      meta = was
+      return false
+    },
     clean() {
+      const was = meta
       meta = { ...meta, dirty: false }
-      save()
+      if (!saveIfUnchanged()) {
+        meta = was
+        return false
+      }
       emitSynced()
+      return true
     },
     reset() {
       known = null
+      epoch++
       meta = { value: fallback, base: 0, dirty: false }
       accountStorage.remove(storageKey(key))
+      lastRaw = null
       emit()
     },
     merge: opts.merge as Internal['merge'],
+    epoch: () => epoch,
     normalize,
     yieldWhenNew: opts.yieldWhenNew,
     onIncoming: opts.onIncoming,
@@ -217,6 +310,8 @@ export function synced<T>(
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
+      lastRaw = accountStorage.get(storageKey(key))
+      epoch++
       learn()
       if (e.newValue !== null) opts.onIncoming?.(meta.value)
       emit()
@@ -268,6 +363,8 @@ const MAX_BACKOFF = 60_000
 type Pace = { sent: number[]; level: number; last: number; errors: number }
 const paces = new Map<string, Pace>()
 const inFlight = new Set<string>()
+/** The save out for a key: its write id, and the store's epoch when it was sent. */
+const outId = new Map<string, { id: string; epoch: number }>()
 /** Keys with a save asked for here that hasn't gone through yet (pagehide sends them). */
 const pending = new Set<string>()
 const paceOf = (key: string) => {
@@ -317,8 +414,8 @@ async function push(key: string) {
   // The one out now comes back first; this one stays pending and goes after it (see finally).
   if (inFlight.has(key)) return
   // Already the server's copy (a change made and undone, another tab's save): nothing to send.
-  if (s.sameAsServer()) {
-    if (s.meta().dirty) s.clean()
+  // (Unless another tab's copy is stored now and it can't be marked saved: then it is sent, as on main.)
+  if (s.sameAsServer() && (!s.meta().dirty || s.clean())) {
     pending.delete(key)
     return
   }
@@ -328,20 +425,23 @@ async function push(key: string) {
   const pace = paceOf(key)
   counted(key)
   inFlight.add(key)
+  const writeId = newWriteId()
+  outId.set(key, { id: writeId, epoch: s.epoch() })
   setStatus({ state: 'syncing', at: status.at })
   try {
-    const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
+    const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base, writeId } })
     // The browser was signed in as someone else while the request was out: not this tab's answer.
     if (frozen() || !accountGuard()) return
     pace.errors = 0
     if (r.conflict) reconcile(s, r)
-    else s.pushed(r.updatedAt, value)
+    else s.pushed(r.updatedAt, value, writeId)
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
     pace.errors = Math.min(pace.errors + 1, 16)
     setStatus({ state: 'error', at: status.at, error: (e as Error).message })
   } finally {
     inFlight.delete(key)
+    outId.delete(key)
     // Still unsaved (changed while it was out, or the save failed): saved next, unless something
     // already asked for that. A failed one waits (backoff, by its errors).
     if (!s.meta().dirty) pending.delete(key)
@@ -357,6 +457,17 @@ function reconcile(s: Internal, remote: Remote | undefined) {
   }
   if (remote.updatedAt > local.base) {
     s.onIncoming?.(remote.value)
+    // The page closed with a save out, and the server's version is one that a save of this page
+    // made (by its write id: nothing was saved since, here or elsewhere): the last save on closing
+    // was refused for being on top of the version before it. Kept, and saved on top. Stores that
+    // merge already keep it.
+    if (local.final && local.dirty && !s.merge && remote.writeId !== undefined && local.final.ids.includes(remote.writeId)) {
+      // Only if the stored copy is still the one this tab read (else as on main: below).
+      if (s.rebase(remote.updatedAt)) {
+        schedulePush(s.key, 0)
+        return
+      }
+    }
     // A copy never saved to the account (base 0) gives way to the account's, if the store says so.
     if (local.dirty && s.merge && !(s.yieldWhenNew && local.base === 0)) {
       // Both changed: keep both sides' edits and save the result on top of the server's version.
@@ -423,8 +534,14 @@ export function startSync() {
       // The server's copy, as far as this tab knows, unless a save is still out: then the server
       // may be about to hold that save's value instead (a change undone meanwhile), so send it.
       if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
+      // A save still out may get through before this one, which is then refused (it is on top of
+      // the version before): the next page load keeps this value if so (see reconcile).
+      const writeId = newWriteId()
+      const out = outId.get(key)
+      // Only a save of this value's own past (not one sent before the value was replaced).
+      if (out && out.epoch === s.epoch() && !s.merge) s.closing(out.id, writeId)
       const { value, base } = s.meta()
-      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base, writeId }) }).catch(() => {})
     }
   })
   // Back from the back/forward cache: the page runs on, so what it hadn't saved is saved now

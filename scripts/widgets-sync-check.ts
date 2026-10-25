@@ -102,7 +102,7 @@ Object.defineProperty(globalThis, 'location', { value: { pathname: '/', protocol
 
 // --- the stand-in server ------------------------------------------------------------------------
 
-const server = new Map<string, { value: unknown; updatedAt: number }>()
+const server = new Map<string, { value: unknown; updatedAt: number; writeId?: string }>()
 /** The keys saved to the stand-in server, in order. */
 const puts: string[] = []
 let clock = 1000
@@ -113,7 +113,7 @@ let cookieUser = 1
 /** Another device's save, made right before each of this one's (section 10). */
 let storming: (() => void) | null = null
 /** Saves of these keys take `ms` to answer, and the next `fail` of them fail (section 10). */
-const slowPut = new Map<string, { ms: number; fail: number }>()
+const slowPut = new Map<string, { ms: number; fail: number; late?: boolean; lose?: number }>()
 /** Every save as sent (key, then body), before the stand-in server answers it. */
 const sentBodies: string[] = []
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -129,7 +129,7 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
     if (key === 'loop:storm') storming?.()
     sentBodies.push(`${key} ${init.body}`)
     const slow = slowPut.get(key)
-    if (slow) {
+    if (slow && !slow.late) {
       await sleep(slow.ms)
       if (slow.fail > 0) {
         slow.fail--
@@ -138,12 +138,24 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
       }
     }
     puts.push(key)
-    const { value, base } = JSON.parse(init.body!) as { value: unknown; base: number }
+    const { value, base, writeId } = JSON.parse(init.body!) as { value: unknown; base: number; writeId?: string }
     const cur = server.get(key)
-    if (cur && cur.updatedAt > base) return json({ ...cur, conflict: true })
-    const entry = { value, updatedAt: ++clock }
+    // `late`: saved (or refused) at once, the answer arriving `ms` later.
+    const answer = async (body: unknown) => (slow?.late && (await sleep(slow.ms)), json(body))
+    if (cur && cur.updatedAt > base) {
+      puts.push(`${key}!conflict`)
+      return answer({ ...cur, conflict: true })
+    }
+    const entry = { value, updatedAt: ++clock, ...(writeId ? { writeId } : {}) }
     server.set(key, entry)
-    return json(entry)
+    // `lose`: saved, but the answer is lost on the way (a dropped connection).
+    if (slow?.lose) {
+      slow.lose--
+      await sleep(slow.ms)
+      puts.push(`${key}!lost`)
+      return json({ error: 'stand-in: answer lost' }, 502)
+    }
+    return answer(entry)
   }
   return json(server.get(key) ?? null)
 }
@@ -668,6 +680,222 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   syncPacing.failed('pace:err')
   syncPacing.counted('pace:err', 3e12)
   check('pacing: a failed save is tried again after a wait', syncPacing.backoff('pace:err', 3e12) > 0)
+}
+
+// --- 10b. closing marks between pages: another tab's late answer, closing again after a lost one ---
+{
+  /** A page of its own (a module instance with its own stores and pagehide), in tab `t`. */
+  let pages = 0
+  const page = async (t: Tab) => {
+    if (!tabs.includes(t)) tabs.push(t)
+    g.window = t
+    const m = (await import(`../src/os/synced.ts?page-${++pages}`)) as typeof import('../src/os/synced.ts')
+    g.window = main
+    as(t, () => m.startSync())
+    return m
+  }
+  const fire = (t: Tab, type: string, e: object = {}) => as(t, () => t.listeners.get(type)?.forEach((l) => l(e as never)))
+  const gone = (t: Tab) => fire(t, 'mvlos:forget')
+  ;(g.document as { visibilityState: string }).visibilityState = 'hidden'
+
+  // Not checked, a known gap (as on main): tab 2's answer to an unrelated save arriving after tab
+  // 1 closed with a mark but before tab 2 heard of it writes tab 2's copy over the stored one,
+  // and the edit the mark protected is gone (src/os/synced.ts, at save()).
+
+  // 1. Two tabs that don't hear of each other in time, each closing with a save out: the newer
+  // edit (tab 2's C, saved after tab 1's A) is the one kept, never tab 1's older B over it.
+  const T1 = new Tab()
+  const T2 = new Tab()
+  const m1 = await page(T1)
+  const m2 = await page(T2)
+  const s1 = as(T1, () => m1.synced<string>('r3:newer', ''))
+  const s2 = as(T2, () => m2.synced<string>('r3:newer', ''))
+  as(T1, () => s1.set('v1'))
+  await sleep(1500)
+  slowPut.set('r3:newer', { ms: 2500, fail: 0, late: true })
+  as(T1, () => s1.set('A')) // on the server at 800 ms, answered at 3300 ms
+  await sleep(1000)
+  held = true // the tabs hear nothing of each other from here
+  as(T1, () => s1.set('B'))
+  await as(T2, () => m2.pullAll()) // tab 2 takes A from the server
+  as(T2, () => s2.set('C')) // on the server at ~1800 ms (newer than A), answered later
+  await sleep(1200)
+  fire(T1, 'pagehide') // B and its mark (A's id)
+  gone(T1)
+  fire(T2, 'pagehide') // C and its mark (C's id)
+  gone(T2)
+  flush()
+  await sleep(3000)
+  slowPut.clear()
+  check('newer: the server has tab 2’s C', server.get('r3:newer')!.value === 'C', server.get('r3:newer'))
+  const T3 = new Tab()
+  const m3 = await page(T3)
+  const s3 = as(T3, () => m3.synced<string>('r3:newer', ''))
+  await m3.pullAll()
+  await sleep(1500)
+  check('newer: after reload C is kept, not overwritten by the older B', s3.get() === 'C' && server.get('r3:newer')!.value === 'C', { local: s3.get(), server: server.get('r3:newer'), meta: meta('r3:newer') })
+
+  // Tab 2 takes A and stores its edit C while tab 1 hasn't heard of it yet; tab 1 closes with A
+  // out: it doesn't write its older B (and a mark) over tab 2's stored C, so C stays everywhere.
+  {
+    const P1 = new Tab()
+    const P2 = new Tab()
+    const n1 = await page(P1)
+    const n2 = await page(P2)
+    const a1 = as(P1, () => n1.synced<string>('r4:cas', ''))
+    const a2 = as(P2, () => n2.synced<string>('r4:cas', ''))
+    as(P1, () => a1.set('v1'))
+    await sleep(1500)
+    slowPut.set('r4:cas', { ms: 2500, fail: 0, late: true })
+    as(P1, () => a1.set('A')) // on the server at 800 ms, answered at 3300 ms
+    await sleep(1000)
+    as(P1, () => a1.set('B')) // tab 2 hears of B
+    held = true // tab 1 (and tab 2) hear nothing of each other from here
+    await as(P2, () => n2.pullAll()) // tab 2 takes A
+    as(P2, () => a2.set('C')) // stored; saved on top of A at ~1800 ms
+    await sleep(1200)
+    fire(P1, 'pagehide')
+    check('cas: closing doesn’t write over another tab’s newer stored copy', meta('r4:cas')?.value === 'C' && !meta('r4:cas')?.final, meta('r4:cas'))
+    gone(P1)
+    flush()
+    await sleep(4000) // tab 2's answer for C comes; it keeps running
+    slowPut.clear()
+    check('cas: tab 2 still has C, and so does the server', a2.get() === 'C' && server.get('r4:cas')!.value === 'C', { local: a2.get(), server: server.get('r4:cas') })
+    gone(P2)
+    const P3 = new Tab()
+    const n3 = await page(P3)
+    const a3 = as(P3, () => n3.synced<string>('r4:cas', ''))
+    await n3.pullAll()
+    await sleep(1500)
+    check('cas: after reload C is kept', a3.get() === 'C' && server.get('r4:cas')!.value === 'C', { local: a3.get(), server: server.get('r4:cas') })
+  }
+
+  // A save sent before the value was replaced by another tab's never goes into that value's mark.
+  const T6 = new Tab()
+  const T7 = new Tab()
+  const m6 = await page(T6)
+  const m7 = await page(T7)
+  const s6 = as(T6, () => m6.synced<string>('r3:epoch', ''))
+  const s7 = as(T7, () => m7.synced<string>('r3:epoch', ''))
+  as(T6, () => s6.set('v1'))
+  await sleep(1500)
+  slowPut.set('r3:epoch', { ms: 2500, fail: 0, late: true })
+  as(T6, () => s6.set('A'))
+  await sleep(1000) // A is out
+  as(T7, () => s7.set('Z')) // tab 6 hears of it: its value is now tab 7's
+  fire(T6, 'pagehide')
+  check('epoch: no closing mark for a value that is another tab’s', s6.get() === 'Z' && !meta('r3:epoch')?.final, meta('r3:epoch'))
+  gone(T6)
+  gone(T7)
+  await sleep(2500)
+  slowPut.clear()
+
+  // 2. Closing, back from the back/forward cache, the answer to the save out lost, closing again
+  // while the retry is out: the server still holds that first save, which the mark must still know.
+  const T4 = new Tab()
+  const m4 = await page(T4)
+  const r = as(T4, () => m4.synced<string>('r2:retry', ''))
+  as(T4, () => r.set('v1'))
+  await sleep(1500)
+  slowPut.set('r2:retry', { ms: 1500, fail: 0, late: true, lose: 1 })
+  as(T4, () => r.set('A')) // on the server at 800 ms; its answer lost at 2300 ms
+  await sleep(1000)
+  as(T4, () => r.set('B'))
+  fire(T4, 'pagehide') // B sent on top of v1: refused
+  fire(T4, 'pageshow', { persisted: true })
+  await sleep(2700) // the retry of B is out (refused too, answered late)
+  const retried = sentBodies.filter((b) => b.startsWith('r2:retry ') && JSON.parse(b.slice(9)).value === 'B').length
+  fire(T4, 'pagehide')
+  gone(T4)
+  await sleep(2500)
+  slowPut.clear()
+  check(`retry: B was sent on closing, retried and sent on closing again (${retried + 1} times)`, retried >= 2 && server.get('r2:retry')!.value === 'A', { retried, server: server.get('r2:retry') })
+  const T5 = new Tab()
+  const m5 = await page(T5)
+  const r5 = as(T5, () => m5.synced<string>('r2:retry', ''))
+  await m5.pullAll()
+  await sleep(1500)
+  check('retry: after reload the edit is kept and saved', r5.get() === 'B' && server.get('r2:retry')!.value === 'B', { local: r5.get(), server: server.get('r2:retry') })
+  ;(g.document as { visibilityState: string }).visibilityState = 'visible'
+}
+
+// --- 11. the last save on closing, refused because a save still out got through first -------------
+// Last: the page here is torn down (nothing of it runs after), and a fresh one loads.
+{
+  type List = string[]
+  const union = (l: List, r: List) => [...new Set([...r, ...l])]
+  const sorted = (v: unknown) => (Array.isArray(v) ? [...(v as List)].sort() : [])
+  const plain = synced<string>('final:plain', '')
+  const other = synced<string>('final:other', '')
+  const aba = synced<string>('final:aba', '')
+  const old = synced<string>('final:old', '')
+  const norm = synced<List>('final:norm', [], { normalize: sorted })
+  const shared = synced<string>('final:tabs', '')
+  const merged = synced<List>('final:merged', [], { merge: union })
+  const plainKeys = ['final:plain', 'final:other', 'final:aba', 'final:old', 'final:norm', 'final:tabs']
+  const keys = [...plainKeys, 'final:merged']
+  for (const s of [plain, other, aba, old, shared]) s.set('v1')
+  norm.set(['v1'])
+  merged.set(['x'])
+  await sleep(1500)
+
+  // Another tab of this browser (a page of its own) saves X; the server has it at once, the answer
+  // comes 2.5 s later.
+  const tab2 = new Tab()
+  tabs.push(tab2)
+  g.window = tab2
+  const m3 = await import('../src/os/synced.ts?tab2-final')
+  g.window = main
+  const shared2 = as(tab2, () => m3.synced<string>('final:tabs', ''))
+  slowPut.set('final:tabs', { ms: 2500, fail: 0, late: true })
+  as(tab2, () => shared2.set('X'))
+  await sleep(1200) // X is on the server, its answer still out
+  // This page hears of X (a pull), then saves A everywhere: saved at once, answered 2 s later.
+  await pullAll()
+  for (const k of keys) slowPut.set(k, { ms: 2000, fail: 0, late: true })
+  for (const s of [plain, other, aba, old, shared]) s.set('A')
+  norm.set(['z', 'a']) // read back sorted: the server's copy is never the same JSON as what was sent
+  merged.set(['x', 'a'])
+  await sleep(1000) // the A saves are out, and on the server
+  for (const s of [plain, other, aba, old, shared]) s.set('B')
+  norm.set(['y', 'b'])
+  merged.set(['x', 'a', 'b'])
+  const closeFrom = puts.length
+  main.listeners.get('pagehide')?.forEach((l) => l({ key: null, newValue: null }))
+  // Gone: nothing of this page runs from here (its answers arrive and are dropped).
+  main.listeners.get('mvlos:forget')?.forEach((l) => l({ key: null, newValue: null }))
+  // The other tab's answer for X arrives (an unrelated save's), then that tab closes too, before
+  // it saves again.
+  await sleep(1500)
+  tab2.listeners.get('mvlos:forget')?.forEach((l) => l({ key: null, newValue: null }))
+  await sleep(1000)
+  slowPut.clear()
+  check('final save: the last saves on closing were refused (a save out got through first)', keys.every((k) => puts.slice(closeFrom).includes(`${k}!conflict`)), puts.slice(closeFrom))
+  check('final save: the server has the saves that were out', plainKeys.every((k) => JSON.stringify(sorted([server.get(k)!.value].flat())) === (k === 'final:norm' ? '["a","z"]' : '["A"]')), plainKeys.map((k) => server.get(k)))
+  check("final save: the other tab's answer to an unrelated save left the closing mark", !!meta('final:tabs')?.final, meta('final:tabs'))
+  // Meanwhile another device changes one of them, and another changes one and puts it back.
+  server.set('final:other', { value: 'C', updatedAt: ++clock, writeId: 'device-c' })
+  server.set('final:aba', { value: 'C', updatedAt: ++clock, writeId: 'device-c' })
+  server.set('final:aba', { value: 'A', updatedAt: ++clock, writeId: 'device-a' })
+  // And one rewritten by something that gives no write id (the server's own tools, an older release).
+  server.set('final:old', { value: 'A', updatedAt: ++clock })
+
+  // The page loads again.
+  const next = new Tab()
+  tabs.push(next)
+  g.window = next
+  const m2 = await import('../src/os/synced.ts?reload-final')
+  g.window = main
+  const [plain2, other2, aba2, old2, norm2, shared3, merged2] = as(next, () => [m2.synced<string>('final:plain', ''), m2.synced<string>('final:other', ''), m2.synced<string>('final:aba', ''), m2.synced<string>('final:old', ''), m2.synced<List>('final:norm', [], { normalize: sorted }), m2.synced<string>('final:tabs', ''), m2.synced<List>('final:merged', [], { merge: union })] as const)
+  await as(next, () => m2.pullAll())
+  await sleep(1500)
+  check('final save: after reload, a store without merge keeps the edit refused on closing', plain2.get() === 'B' && server.get('final:plain')!.value === 'B' && meta('final:plain')?.dirty === false && !('final' in meta('final:plain')!), { local: plain2.get(), server: server.get('final:plain'), meta: meta('final:plain') })
+  check('final save: but takes a change made elsewhere since', other2.get() === 'C' && server.get('final:other')!.value === 'C', { local: other2.get(), server: server.get('final:other') })
+  check('final save: and a change elsewhere that put back the same value (not the same save)', aba2.get() === 'A' && server.get('final:aba')!.value === 'A' && server.get('final:aba')!.writeId === 'device-a', { local: aba2.get(), server: server.get('final:aba') })
+  check('final save: a version without a write id is taken, as before ids', old2.get() === 'A' && server.get('final:old')!.value === 'A', { local: old2.get(), server: server.get('final:old') })
+  check('final save: a store whose value is read back normalized keeps it too', JSON.stringify(norm2.get()) === '["b","y"]' && JSON.stringify(sorted(server.get('final:norm')!.value)) === '["b","y"]', { local: norm2.get(), server: server.get('final:norm') })
+  check("final save: and one whose mark another tab's answer came by", shared3.get() === 'B' && server.get('final:tabs')!.value === 'B', { local: shared3.get(), server: server.get('final:tabs') })
+  check('final save: a store with merge merges as before', JSON.stringify([...merged2.get()].sort()) === '["a","b","x"]' && JSON.stringify([...(server.get('final:merged')!.value as List)].sort()) === '["a","b","x"]', { local: merged2.get(), server: server.get('final:merged') })
 }
 
 // Accounts (whose state a tab holds, switching account in another tab): scripts/sync-accounts-check.ts.

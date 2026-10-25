@@ -80,6 +80,21 @@ const realFetch = globalThis.fetch
   // The page of the session's own account goes through.
   check('server: account 2’s own page saves', (await put(sids[2], '2', ['account-2-own'])).status === 200 && JSON.stringify(await stateOf(2)).includes('account-2-own'))
   check('server: and sends notifications', (await req('/api/notifications', { sid: sids[2], held: '2', method: 'POST', json: { source: 'calendar.reminder', title: 'done' } })).status === 200)
+  // Write ids (src/os/synced.ts, Meta.final): kept with the version a save made, returned with it.
+  {
+    const save = (json: unknown) => req('/api/state/wid-check', { sid: sids[2], held: '2', method: 'PUT', json }).then((r) => r.json() as Promise<{ updatedAt: number; writeId?: string; conflict?: boolean }>)
+    const first = await save({ value: 'a', base: 0, writeId: 'save-1' })
+    check('server: a save answers with its write id', first.writeId === 'save-1')
+    const all = (await (await req('/api/state', { sid: sids[2], held: '2' })).json()) as Record<string, { writeId?: string }>
+    check('server: and a GET returns it with the version', all['wid-check']?.writeId === 'save-1')
+    const stale = await save({ value: 'b', base: 0, writeId: 'save-2' })
+    check('server: a refused save answers with the write id of the version that won', stale.conflict === true && stale.writeId === 'save-1')
+    const plain = await save({ value: 'c', base: first.updatedAt })
+    const after = (await (await req('/api/state', { sid: sids[2], held: '2' })).json()) as Record<string, { writeId?: string }>
+    check('server: a save without one (an older release) leaves the version without one', plain.writeId === undefined && after['wid-check']?.writeId === undefined)
+    const junk = await save({ value: 'd', base: plain.updatedAt, writeId: 'no spaces <allowed>' })
+    check('server: a malformed write id is not kept', junk.writeId === undefined)
+  }
   // The account id cookie: set for the session's account, cleared without a valid session.
   const setCookies = (r: Response) => r.headers.getSetCookie().join('\n')
   let r = await req('/api/me', { sid: sids[1] })
