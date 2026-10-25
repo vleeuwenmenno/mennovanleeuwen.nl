@@ -17,7 +17,7 @@
 // Exits 1 on any failure.
 
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { Server, check, finish, sleep } from './empires-harness.ts'
@@ -80,6 +80,22 @@ const realFetch = globalThis.fetch
   // The page of the session's own account goes through.
   check('server: account 2’s own page saves', (await put(sids[2], '2', ['account-2-own'])).status === 200 && JSON.stringify(await stateOf(2)).includes('account-2-own'))
   check('server: and sends notifications', (await req('/api/notifications', { sid: sids[2], held: '2', method: 'POST', json: { source: 'calendar.reminder', title: 'done' } })).status === 200)
+  // Browser caches: an account-scoped response must never be reusable by another session.
+  const threadId = '00000000-0000-4000-8000-000000000001'
+  database().prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?, ?)').run(threadId, 't', 'ask', 'm', now, now)
+  const attachments = JSON.stringify([{ kind: 'image', mime: 'image/png', name: 'a.png', data: Buffer.from('account-1-bytes').toString('base64') }])
+  const msg = Number(database().prepare('INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, ?, ?, ?, ?)').run(threadId, 'user', 'hi', attachments, now).lastInsertRowid)
+  const pic = `/api/agents/threads/${threadId}/messages/${msg}/attachments/0`
+  const own = await req(pic, { sid: sids[1], held: '1' })
+  check('cache: the owner’s agent attachment is served', own.status === 200 && (await own.text()) === 'account-1-bytes')
+  check('cache: and is never stored by the browser (private, no-store)', own.headers.get('cache-control') === 'private, no-store')
+  check('cache: account 2 can’t fetch it (404)', (await req(pic, { sid: sids[2], held: '2' })).status === 404)
+  check('cache: nor without a session (401)', (await req(pic)).status === 401)
+  // Source invariant: no auth-gated handler may let the browser reuse a response without asking.
+  const SERVER_DIR = fileURLToPath(new URL('../server/', import.meta.url))
+  const allowed = new Set(['shares.ts']) // token-addressed public share page, not account-scoped
+  const leaks = readdirSync(SERVER_DIR).filter((f) => f.endsWith('.ts') && !allowed.has(f)).filter((f) => /private,\s*max-age/.test(readFileSync(SERVER_DIR + f, 'utf8')))
+  check(`cache: no server file sets "private, max-age" (${leaks.join(', ') || 'none'})`, leaks.length === 0)
   // The account id cookie: set for the session's account, cleared without a valid session.
   const setCookies = (r: Response) => r.headers.getSetCookie().join('\n')
   let r = await req('/api/me', { sid: sids[1] })

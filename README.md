@@ -764,7 +764,11 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   places, push, the git app's last repository and drafts, what game windows keep (Empires'
   campaign and battle), Empires' multiplayer player, and high scores and Gladiator careers (synced:
   a visitor's are this browser's, a signed-in player's follow the account). A page only reads its
-  own account's space, so nothing of another account shows, even from a cache. What belongs to the
+  own account's space, so nothing of another account shows, even from a cache. Responses behind
+  a session (agent attachments, photos' originals, mail attachments, contact photos, mail icons,
+  Files thumbnails, link previews) are `private, no-store`, so the browser never replays one after
+  the account switches or the cookie goes; photo thumbnails are `private, no-cache` with an ETag, so
+  every reuse is checked by the server first. `pnpm check:sync-accounts` covers it. What belongs to the
   browser stays in plain keys: the theme, motion, sounds, the dock's look, the workspace on screen,
   window-drag keys, the photo viewer's panel, the media player's volume, the browser's own location
   for Weather, and games' settings.

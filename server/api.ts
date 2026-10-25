@@ -253,7 +253,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/transfer' && method === 'POST') return await transfer(requireUser(req), await readJson(req, 256 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/seafile/thumb' && read) {
       const t = await thumbnail(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('size'))
-      res.writeHead(200, { 'Content-Type': t.type, 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(head ? undefined : t.body)
+      res.writeHead(200, { 'Content-Type': t.type, 'Cache-Control': 'private, no-store', ...SECURITY }).end(head ? undefined : t.body)
       return true
     }
     if (path === '/api/seafile/trash' && read) {
@@ -292,7 +292,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/raw' && read) {
       const range = req.headers.range
       const r = await rangeRead(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
-      res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
+      res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
       return true
     }
     // A whole file, piped with whatever range the browser asks for (the music and video players).
@@ -304,7 +304,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined, gone.signal)
       if (r.status === 416) return res.writeHead(416, { ...(r.contentRange ? { 'Content-Range': r.contentRange } : {}), 'Cache-Control': 'no-store', ...SECURITY }).end(), true
       // Only media types pass: an HTML or SVG file served from this origin would run as the site.
-      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(r.type) ? r.type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
+      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(r.type) ? r.type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }
       if (r.length) headers['Content-Length'] = r.length
       if (r.contentRange) headers['Content-Range'] = r.contentRange
       res.writeHead(r.status, headers)
@@ -337,12 +337,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
     if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
-    // A picture sent with one of your messages: the thumbnails and the full view in the app. The
-    // address never changes what it shows (message ids are not reused), so the browser keeps it.
+    // A picture sent with one of your messages: the thumbnails and the full view in the app. Never
+    // stored by the browser: a stored copy could be replayed after the account switches.
     const agentPicture = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/messages\/(\d{1,15})\/attachments\/(\d{1,2})$/.exec(path)
     if (agentPicture && read) {
       const p = messagePicture(requireUser(req), agentPicture[1], agentPicture[2], agentPicture[3])
-      res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
+      res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
     }
     // The latest rough preview of a gpt_image picture being drawn (gone once it is done).
@@ -480,7 +480,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in user only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(JSON.stringify(res2))
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store', ...SECURITY }).end(JSON.stringify(res2))
       return true
     }
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true

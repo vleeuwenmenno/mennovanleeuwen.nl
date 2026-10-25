@@ -1123,8 +1123,8 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   if (op === 'thumb' && read) {
     const size: Size = q('size') === 'large' ? 'large' : q('size') === 'medium' ? 'medium' : 'small'
     const t = await source.thumb(user, id, size, typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'] : null)
-    // The address carries the file's version (?v=), so the browser may keep it for a week.
-    const cache = { 'Cache-Control': 'private, max-age=604800', ETag: t.etag }
+    // The browser may keep it, but must ask again each time: the answer comes after the session check, so another account never gets it from the cache.
+    const cache = { 'Cache-Control': 'private, no-cache', ETag: t.etag }
     if (t.status === 304) return res.writeHead(304, { ...cache, ...SECURITY }).end(), true
     if (!IMAGE_TYPES.test(t.type)) throw new HttpError(404, 'No thumbnail')
     res.writeHead(200, { 'Content-Type': t.type, 'Content-Length': String(t.body!.length), ...cache, ...SECURITY, ...UNTRUSTED }).end(method === 'HEAD' ? undefined : t.body)
@@ -1143,7 +1143,7 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
     const range = typeof req.headers.range === 'string' ? req.headers.range : undefined
     const r = await immichFile(user, `/assets/${uuid(id)}/original`, { range, signal: gone.signal })
     const type = r.headers.get('content-type') ?? ''
-    const headers: Record<string, string> = { 'Content-Type': IMAGE_TYPES.test(type) || /^video\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
+    const headers: Record<string, string> = { 'Content-Type': IMAGE_TYPES.test(type) || /^video\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }
     for (const h of ['content-length', 'content-range']) if (r.headers.get(h)) headers[h] = r.headers.get(h)!
     if (q('download')) {
       const filename = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.headers.get('content-disposition') ?? '')?.[1]
@@ -1160,7 +1160,7 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
     const range = typeof req.headers.range === 'string' ? req.headers.range : undefined
     const r = await immichFile(user, `/assets/${uuid(id)}/video/playback`, { range, signal: gone.signal })
     const type = r.headers.get('content-type') ?? ''
-    const headers: Record<string, string> = { 'Content-Type': /^video\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
+    const headers: Record<string, string> = { 'Content-Type': /^video\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }
     for (const h of ['content-length', 'content-range']) if (r.headers.get(h)) headers[h] = r.headers.get(h)!
     res.writeHead(r.status, headers)
     if (method === 'HEAD') return await r.body?.cancel().catch(() => {}), res.end(), true

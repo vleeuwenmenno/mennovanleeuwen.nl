@@ -888,7 +888,7 @@ async function pipeBlob(res: ServerResponse, blob: Response, name: string, type:
   const headers: Record<string, string> = {
     'Content-Type': show ? type.toLowerCase() : 'application/octet-stream',
     'Content-Disposition': `${show ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name || 'attachment')}`,
-    'Cache-Control': 'private, max-age=3600',
+    'Cache-Control': 'private, no-store',
     ...SECURITY,
     ...UNTRUSTED,
   }
