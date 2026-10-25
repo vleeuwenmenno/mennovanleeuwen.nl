@@ -128,11 +128,15 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   let plan: Awaited<ReturnType<typeof prepareImageGeneration>>
   try { plan = await prepareImageGeneration(user, thread, runInput(0), ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
-  const send = (e: Record<string, unknown>) => { if (!res.writableEnded) res.write(`${JSON.stringify(e)}\n`) }
+  // Commit point: planning only reads, running uploads, queues a job and saves. The session that
+  // asked must still be good after the planning, and again before each picture of a batch.
+  const live = bindResponse(res, user.id)
+  if (!live) return forget(user.id, ctl)
+  const send = (e: Record<string, unknown>) => { if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`) }
   try {
     for (let i = 0; i < batch; i++) {
       if (i > 0) plan = await prepareImageGeneration(user, thread, runInput(i), ctl.signal)
+      if (!live.check(true)) { ctl.abort(); break }
       send({ type: 'start', index: i, total: batch, width: plan.dimensions.width, height: plan.dimensions.height })
       const out = JSON.parse(await plan.run((progress) => send({ type: 'progress', index: i, progress })))
       send({ type: 'image', index: i, image: out.image })

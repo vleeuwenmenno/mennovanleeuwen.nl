@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { appSetting, database, decrypt, encrypt, nextUserId, sha256 } from './db.ts'
-import { cookies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
-import { endSession, track, type SessionBinding } from './liveSessions.ts'
+import { cookies, guardBodies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
+import { endSession, sessionStored, track, type SessionBinding } from './liveSessions.ts'
 
 // "Sign in with GitHub" (OAuth web flow). Any GitHub account may sign up while registration is
 // open and there is room (MAX_USERS, default 100; the admin can change both in Settings → Users).
@@ -104,9 +104,39 @@ export function bindConnection(req: IncomingMessage, userId: number, close: (why
  */
 export function bindResponse(res: ServerResponse, userId: number) {
   const live = res.req ? bindConnection(res.req, userId, () => res.destroy()) : null
-  if (!live) return void res.destroy()
+  if (!live) return void res.destroy(), null
   res.once('close', () => live.stop())
+  return live
 }
+
+/**
+ * The session each request was signed in with when `currentUser` accepted it. A request keeps
+ * its `User` for as long as the handler runs, which can be long: a client may send its body a few
+ * bytes at a time. The session can end meanwhile (signing out, expiry, a ban, a deletion), so what
+ * the request is allowed to do is decided again against this exact session (`stillSignedIn`).
+ */
+const authenticated = new WeakMap<IncomingMessage, SessionBinding>()
+
+/**
+ * Whether the session this request was authenticated with is still good: stored, unexpired, its
+ * account not banned. Always a database lookup. A request that was never signed in has nothing to
+ * lose, so it is true. Ask it at the commit point: after the slow part of a request (its body, a
+ * planning step) and right before something that costs, is saved or sends something private.
+ */
+export function stillSignedIn(req: IncomingMessage): boolean {
+  const was = authenticated.get(req)
+  return !was || (Date.now() < was.expiresAt && sessionStored(was.key, was.userId))
+}
+
+/** `stillSignedIn`, as the generic 401 of a request that is not signed in. */
+export function requireStillSignedIn(req: IncomingMessage) {
+  if (!stillSignedIn(req)) throw new HttpError(401, 'Not signed in')
+}
+
+// Every JSON body (server/http.ts readJson) and upload is checked once it has been read: the
+// handlers take their user before they await the body, so without this a slow body would carry a
+// signed-out session's authority past its end.
+guardBodies(requireStillSignedIn)
 
 /** The signed-in user for this request, or null. */
 export function currentUser(req: IncomingMessage): User | null {
@@ -114,13 +144,14 @@ export function currentUser(req: IncomingMessage): User | null {
   const sid = cookies(req)[SESSION_COOKIE]
   if (!sid) return null
   const row = database()
-    .prepare('SELECT u.id, u.github_id, u.login, u.name, u.avatar, u.github_token, u.github_scopes, u.last_seen_at, u.banned_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?')
-    .get(sha256(sid), Date.now()) as UserRow | undefined
+    .prepare('SELECT u.id, u.github_id, u.login, u.name, u.avatar, u.github_token, u.github_scopes, u.last_seen_at, u.banned_at, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?')
+    .get(sha256(sid), Date.now()) as (UserRow & { expires_at: number }) | undefined
   if (!row) return null
   // Checked on every request, so a ban signs someone out at once (their sessions go too).
   if (row.banned_at) return null
   const now = Date.now()
   if (!row.last_seen_at || now - row.last_seen_at > SEEN_EVERY) database().prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, row.id)
+  authenticated.set(req, { key: sha256(sid), userId: row.id, expiresAt: row.expires_at })
   return {
     id: row.id,
     githubId: row.github_id,

@@ -6,7 +6,7 @@ import { allows, normalizePrefs } from '../src/data/notifySources.ts'
 import { accounts, isAdmin, requireUser, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
-import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
+import { bodyRead, HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { parseInvite, type Invite } from './imip.ts'
 import { sanitizeHtml } from './mailhtml.ts'
 import { serveSenderIcon } from './mailicons.ts'
@@ -848,6 +848,7 @@ async function upload(acc: Linked, req: IncomingMessage, type: string | null): P
     if (size > s.maxSizeUpload) throw new HttpError(413, `Attachments can be at most ${Math.floor(s.maxSizeUpload / 1_000_000)} MB here`)
     chunks.push(chunk as Buffer)
   }
+  bodyRead(req)
   const res = await guardedFetch(acc.user, fill(s.uploadUrl, { accountId: s.accountId }), {
     method: 'POST',
     headers: { ...bearer(acc.token), 'Content-Type': contentType },

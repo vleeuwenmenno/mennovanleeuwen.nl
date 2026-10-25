@@ -44,6 +44,12 @@ export class HttpError extends Error {
   }
 }
 
+let bodyGuard: ((req: IncomingMessage) => void) | null = null
+/** Registers what runs on a request once its body has been read (server/auth.ts: the session must still be good). */
+export const guardBodies = (guard: (req: IncomingMessage) => void) => void (bodyGuard = guard)
+/** Called when a request's body has been read in full, before anything is done with it. Throws when the guard says no. */
+export const bodyRead = (req: IncomingMessage) => bodyGuard?.(req)
+
 /** Reads a JSON body of at most `limit` bytes. Only `application/json` is accepted, which also
  * means a cross-site form can't post here without a CORS preflight the server never answers. */
 export async function readJson<T>(req: IncomingMessage, limit = 512 * 1024): Promise<T> {
@@ -55,6 +61,7 @@ export async function readJson<T>(req: IncomingMessage, limit = 512 * 1024): Pro
     if (size > limit) throw new HttpError(413, 'Body too large')
     chunks.push(chunk as Buffer)
   }
+  bodyRead(req)
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T
   } catch {

@@ -9,7 +9,13 @@
 //      and the Empires socket of a session that signed out, ran out, was deleted behind the
 //      server's back, was signed out by an admin or banned get nothing more and can do nothing;
 //      another session of the same account, another account and guests carry on.
-//   4. Every NDJSON response the server opens is bound to its session.
+//   4. Every NDJSON response the server opens is bound to its session, and the result of binding
+//      is used (a response that could not be bound stops its handler).
+//   5. A request that was signed in when it arrived but whose session ended before it finished
+//      (logout, expiry, deleted behind the server's back, signed out by an admin, ban) while its
+//      body was still being sent: nothing runs for it. No model or ComfyUI call, no saved message,
+//      reply, image or Studio thread. A valid request, and a turn that had genuinely started, are
+//      untouched (an ordinary logout cuts the stream but the turn goes on; a ban stops it).
 //
 //   node scripts/session-streams-check.ts
 //
@@ -17,12 +23,39 @@
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { PROTOCOL } from '../src/apps/games/empires/protocol.ts'
 import { Server, check, finish, sleep, waitFor } from './empires-harness.ts'
 
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '999999' })
+// Stand-ins for the model provider (Ollama) and ComfyUI: every request that reaches them is counted,
+// and a turn whose text says HOLD waits until `release()`.
+const outbound = { chat: 0, comfy: 0 }
+let releaseHeld: (() => void)[] = []
+const release = () => (releaseHeld.splice(0).forEach((f) => f()), undefined)
+const stub = (who: 'chat' | 'comfy') => createServer(async (req, res) => {
+  let raw = ''
+  for await (const chunk of req) raw += chunk
+  const path = new URL(req.url!, 'http://stub').pathname
+  const send = (v: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(v))
+  if (who === 'comfy') return void (outbound.comfy++, res.writeHead(404).end())
+  if (path === '/api/tags') return void send({ models: [{ name: 'sess-model' }] })
+  if (path === '/api/show') return void send({ capabilities: ['completion', 'tools'], model_info: { 'x.context_length': 131072 } })
+  if (path !== '/api/chat') return void res.writeHead(404).end()
+  outbound.chat++
+  const body = JSON.parse(raw)
+  if (JSON.stringify(body.messages).includes('HOLD')) await new Promise<void>((r) => releaseHeld.push(r))
+  const done = JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, prompt_eval_count: 10, eval_count: 2 })
+  if (body.stream === false) return void send({ message: { role: 'assistant', content: '{"title":"Stub title"}' }, done: true })
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }).end(`${JSON.stringify({ message: { role: 'assistant', content: 'stub answer' }, done: false })}\n${done}\n`)
+})
+const chatStub = stub('chat')
+const comfyStub = stub('comfy')
+for (const st of [chatStub, comfyStub]) await new Promise<void>((r) => st.listen(0, '127.0.0.1', r))
+const stubUrl = (st: ReturnType<typeof stub>) => `http://127.0.0.1:${(st.address() as { port: number }).port}`
+// The held-request checks use accounts 101-120. Admins (GitHub id 998000+n) may reach the stand-ins on loopback; the others cannot, so for them only what is saved shows. An admin cannot be banned or signed out by another admin, so those two modes use plain accounts.
+const ADMINS = ['999999', ...Array.from({ length: 150 }, (_, i) => String(998000 + i + 1))].join(',')
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: ADMINS, OLLAMA_URL: stubUrl(chatStub), OLLAMA_API_KEY: 'stub-key', NOTIFY_WATCH: 'off' })
 // The checks seed the same database the server uses, and run the server's own modules in this process.
 process.env.DATA_DIR = server.data
 process.env.GITHUB_CLIENT_ID = 'x'
@@ -89,6 +122,17 @@ const stored = (sid: string) => !!database().prepare('SELECT 1 FROM sessions WHE
   check('bind: neither does no session', bindConnection({ headers: {} } as never, 1, () => {}) === null)
   const old = addSession(1, -1000)
   check('bind: nor an expired one', bindConnection(fake(old), 1, () => {}) === null)
+
+  // A response whose session is gone is destroyed and says so: the handler must not go on.
+  {
+    let destroyed = 0
+    const res = (sid: string) => ({ req: fake(sid), destroy: () => void destroyed++, once: () => {} }) as never
+    const live = addSession(1)
+    const bound = bindResponse(res(live), 1)
+    check('bind: a response of a good session is bound and returns its handle', !!bound && destroyed === 0 && (bound.stop(), true))
+    dropStored(live)
+    check('bind: a response whose session is gone is destroyed and returns null', bindResponse(res(live), 1) === null && destroyed === 1)
+  }
 
   // Expiry closes at the session's end, without polling.
   const soon = addSession(1, 400)
@@ -334,18 +378,173 @@ const stored = (sid: string) => !!database().prepare('SELECT 1 FROM sessions WHE
   guest.ws.close()
 }
 
+
+// --- 5. a request whose session ends while its body is still being sent --------------------------
+{
+  type Mode = 'logout' | 'expired' | 'deleted' | 'signout' | 'ban'
+  const MODES: Mode[] = ['logout', 'expired', 'deleted', 'signout', 'ban']
+  let next = 100
+  const adminSid = addSession(9)
+  const asHeaders = (sid: string, uid: number) => ({ Cookie: `mvlos_sid=${sid}`, Origin: server.origin, 'X-MvL-Account': String(uid), 'Content-Type': 'application/json' })
+  const call = (sid: string, uid: number, method: string, path: string, json?: unknown) => fetch(`${server.origin}${path}`, { method, headers: asHeaders(sid, uid), body: json === undefined ? undefined : JSON.stringify(json) })
+  /** An account with a key for the model, ComfyUI connected, one session (or two), and an Agents thread. */
+  type Account = { id: number; sid: string; other: string; thread: string; admin: boolean }
+  async function account(admin: boolean, lasts = 86400_000, tools: string[] = []): Promise<Account> {
+    const id = ++next
+    addUser(id, admin ? 998000 + id - 100 : id)
+    const sid = addSession(id, lasts)
+    const other = addSession(id)
+    database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?)').run(id, 'ollama', encrypt('stub-key'), Date.now())
+    database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?)').run(id, 'agents-comfyui', encrypt(JSON.stringify({ url: stubUrl(comfyStub), preset: 'sdxl' })), Date.now())
+    const made = await call(other, id, 'POST', '/api/agents/threads', { model: 'sess-model', tools, permission: 'default' })
+    if (made.status !== 200) throw new Error(`thread: ${made.status} ${await made.text()}`)
+    return { id, sid, other, thread: ((await made.json()) as { id: string }).id, admin }
+  }
+  /** A POST whose body stops halfway: `finish()` sends the rest. */
+  function held(sid: string, uid: number, path: string, body: unknown) {
+    const text = JSON.stringify(body)
+    const cut = Math.max(1, Math.floor(text.length / 2))
+    const out = { status: 0, text: '', ended: false }
+    const req = httpRequest({ host: new URL(server.origin).hostname, port: server.port, path, method: 'POST', headers: { ...asHeaders(sid, uid), 'Content-Length': Buffer.byteLength(text) } })
+    req.on('response', (res) => {
+      out.status = res.statusCode ?? 0
+      res.on('data', (d) => (out.text += d))
+      res.on('end', () => (out.ended = true))
+      res.on('error', () => (out.ended = true))
+    })
+    req.on('error', () => (out.ended = true))
+    req.on('close', () => (out.ended = true))
+    req.write(text.slice(0, cut))
+    return { out, finish: () => req.end(text.slice(cut)) }
+  }
+  const count = (sql: string, ...args: (string | number)[]) => (database().prepare(sql).get(...args) as { n: number }).n
+  const saved = (a: Account) => ({
+    messages: count('SELECT COUNT(*) AS n FROM agent_messages WHERE thread_id = ?', a.thread),
+    studio: count('SELECT COUNT(*) AS n FROM agent_threads WHERE user_id = ? AND quick = 2', a.id),
+    images: count('SELECT COUNT(*) AS n FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ?', a.id),
+  })
+  const revoke = async (mode: Mode, a: Account) => {
+    if (mode === 'logout') await call(a.sid, a.id, 'POST', '/api/auth/logout')
+    else if (mode === 'deleted') dropStored(a.sid)
+    else if (mode === 'signout') await call(adminSid, 9, 'POST', `/api/admin/users/${a.id}/signout`)
+    else if (mode === 'ban') await call(adminSid, 9, 'POST', `/api/admin/users/${a.id}/ban`, { reason: 'test' })
+  }
+  type Route = { name: string; tools?: string[]; admin?: boolean; path: (a: Account) => string; body: unknown; seed?: (a: Account) => void; modes?: Mode[] }
+  const ROUTES: Route[] = [
+    { name: 'message', path: (a) => `/api/agents/threads/${a.thread}/messages`, body: { text: 'a private question' } },
+    { name: 'retry', path: (a) => `/api/agents/threads/${a.thread}/retry`, body: { client: {} }, seed: (a) => database().prepare("INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, 'user', 'earlier question', ?)").run(a.thread, Date.now()) },
+    { name: 'inpaint', tools: ['images'], path: (a) => `/api/agents/threads/${a.thread}/inpaint`, body: { operation: 'inpaint' } },
+    { name: 'upscale', tools: ['images'], path: (a) => `/api/agents/threads/${a.thread}/upscale`, body: { operation: 'upscale' } },
+    { name: 'studio', admin: true, path: () => '/api/agents/images/studio/run', body: { input: { preset: 'sdxl', prompt: 'a lighthouse' }, batch: 1 } },
+    { name: 'studio (plain account)', path: () => '/api/agents/images/studio/run', body: { input: { preset: 'sdxl', prompt: 'a lighthouse' }, batch: 1 } },
+  ]
+  for (const route of ROUTES) {
+    for (const mode of MODES) {
+      // An admin can be neither banned nor signed out by an admin; those two modes use a plain account.
+      const admin = !!route.admin && mode !== 'signout' && mode !== 'ban'
+      if (route.admin && !admin) continue
+      const a = await account(admin, mode === 'expired' ? 1800 : 86400_000, route.tools)
+      route.seed?.(a)
+      const before = { ...saved(a), ...outbound }
+      const h = held(a.sid, a.id, route.path(a), route.body)
+      await sleep(300) // the server has taken the user from the cookie and waits for the rest of the body
+      if (mode === 'expired') await sleep(1700)
+      else await revoke(mode, a)
+      h.finish()
+      await waitFor(`${route.name} / ${mode}: the held request is answered`, () => h.out.ended, 4000)
+      await sleep(300)
+      const after = { ...saved(a), ...outbound }
+      check(`${route.name} / ${mode}: refused (401) and nothing streamed`, h.out.status === 401 && !h.out.text.includes('"type"'))
+      check(`${route.name} / ${mode}: nothing saved (messages, replies, Studio thread, images)`, after.messages === before.messages && after.studio === before.studio && after.images === before.images)
+      check(`${route.name} / ${mode}: no model call${route.admin || admin ? ' and no ComfyUI call' : ''}`, after.chat === before.chat && (!admin || after.comfy === before.comfy))
+    }
+  }
+
+  // A valid request is not disturbed by a slow body.
+  {
+    const a = await account(true)
+    const before = { ...saved(a), ...outbound }
+    const h = held(a.sid, a.id, `/api/agents/threads/${a.thread}/messages`, { text: 'a slow question' })
+    await sleep(500)
+    h.finish()
+    await waitFor('valid: a slow message is answered', () => h.out.ended && h.out.text.includes('"type":"done"'), 6000)
+    check('valid: its reply is saved and the model was called', saved(a).messages >= before.messages + 2 && outbound.chat > before.chat && h.out.status === 200)
+    const studio = await account(true)
+    const comfy = outbound.comfy
+    const run = held(studio.sid, studio.id, '/api/agents/images/studio/run', { input: { preset: 'sdxl', prompt: 'a lighthouse' }, batch: 1 })
+    await sleep(300)
+    run.finish()
+    await waitFor('valid: a slow Studio request is answered', () => run.out.ended, 6000)
+    check('valid: and it reached ComfyUI', outbound.comfy > comfy)
+  }
+
+  // A turn that genuinely started keeps the documented semantics.
+  {
+    const a = await account(false)
+    const assistants = (acct: Account) => count("SELECT COUNT(*) AS n FROM agent_messages WHERE thread_id = ? AND role = 'assistant'", acct.thread)
+    const stream = async (sid: string, uid: number, thread: string, text: string) => {
+      const st = { ended: false, status: 0 }
+      void fetch(`${server.origin}/api/agents/threads/${thread}/messages`, { method: 'POST', headers: asHeaders(sid, uid), body: JSON.stringify({ text }) })
+        .then(async (r) => {
+          st.status = r.status
+          const reader = r.body!.getReader()
+          while (!(await reader.read()).done);
+        })
+        .catch(() => {})
+        .finally(() => (st.ended = true))
+      return st
+    }
+    const chats = outbound.chat
+    const turn = await stream(a.sid, a.id, a.thread, 'HOLD logout')
+    await waitFor('started: the model is working', () => outbound.chat > chats)
+    await call(a.sid, a.id, 'POST', '/api/auth/logout')
+    await waitFor('started: signing out of the asking session cuts its stream', () => turn.ended, 2000)
+    release()
+    await waitFor('started: and the turn goes on, for the account’s other session (the reply is saved)', () => assistants(a) === 1, 4000)
+    const view = await call(a.other, a.id, 'GET', `/api/agents/threads/${a.thread}`)
+    check('started: the other session reads it', view.status === 200)
+
+    const b = await account(false)
+    const chatsB = outbound.chat
+    const turnB = await stream(b.sid, b.id, b.thread, 'HOLD ban')
+    await waitFor('started: (ban) the model is working', () => outbound.chat > chatsB)
+    await revoke('ban', b)
+    await waitFor('started: a ban cuts the stream', () => turnB.ended, 2000)
+    release()
+    await sleep(500)
+    check('started: and stops the turn, so no reply is saved', assistants(b) === 0)
+
+    // The body completes and the ban follows at once: whichever the server sees first, nothing is answered afterwards.
+    const c = await account(false)
+    const race = held(c.sid, c.id, `/api/agents/threads/${c.thread}/messages`, { text: 'HOLD race' })
+    await sleep(300)
+    race.finish()
+    await revoke('ban', c)
+    await waitFor('race: the request ends', () => race.out.ended, 4000)
+    release()
+    await sleep(500)
+    check('race: ban right behind the body: no reply saved', assistants(c) === 0)
+  }
+}
+
 // --- 4. every NDJSON response is bound ----------------------------------------------------------
 {
   const dir = fileURLToPath(new URL('../server/', import.meta.url))
   const unbound: string[] = []
+  const ignored: string[] = []
   for (const f of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
     const lines = readFileSync(dir + f, 'utf8').split('\n')
     lines.forEach((line, i) => {
-      if (line.includes('application/x-ndjson') && line.includes('writeHead') && !lines.slice(i + 1, i + 3).some((l) => l.includes('bindResponse('))) unbound.push(`${f}:${i + 1}`)
+      if (line.includes('application/x-ndjson') && line.includes('writeHead') && !lines.slice(i + 1, i + 8).some((l) => l.includes("bindResponse("))) unbound.push(`${f}:${i + 1}`)
+      // A bound response that fails to bind is destroyed, and the handler must not go on to do its work.
+      if (line.includes('bindResponse(') && !line.includes('export function') && !/if \(!bindResponse\(|= bindResponse\(/.test(line) && f !== 'auth.ts') ignored.push(`${f}:${i + 1}`)
     })
   }
   check(`wiring: every NDJSON response the server opens is bound to its session (${unbound.join(', ') || 'all'})`, unbound.length === 0)
+  check(`wiring: every handler stops when its response could not be bound (${ignored.join(', ') || 'all'})`, ignored.length === 0)
 }
 
 await server.dispose()
+chatStub.close()
+comfyStub.close()
 finish()

@@ -35,7 +35,7 @@ const byUser = new Map<number, Set<string>>() // account → session keys
 let sweeper: NodeJS.Timeout | null = null
 
 /** Whether the stored session is still there, unexpired, and its account not banned. */
-function storedValid(key: string, userId: number): boolean {
+export function sessionStored(key: string, userId: number): boolean {
   const row = database()
     .prepare('SELECT 1 AS ok FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.user_id = ? AND s.expires_at > ? AND u.banned_at IS NULL')
     .get(key, userId, Date.now()) as { ok: number } | undefined
@@ -59,7 +59,7 @@ function startSweep() {
 
 /** Looks up every tracked session once, and ends the ones that are gone. Runs on its own; exported for tests. */
 export function sweep() {
-  for (const [key, g] of [...groups]) if (Date.now() >= g.expiresAt || !storedValid(key, g.userId)) endSession(key, 'session ended')
+  for (const [key, g] of [...groups]) if (Date.now() >= g.expiresAt || !sessionStored(key, g.userId)) endSession(key, 'session ended')
 }
 
 function release(key: string, g: Group) {
@@ -99,7 +99,7 @@ export function track(binding: SessionBinding, close: (why: string) => void) {
       if (entry.ended) return false
       const now = Date.now()
       const stale = fresh || now - group.checkedAt >= RECHECK_MS
-      if (now >= group.expiresAt || (stale && !storedValid(binding.key, group.userId))) {
+      if (now >= group.expiresAt || (stale && !sessionStored(binding.key, group.userId))) {
         endSession(binding.key, 'session ended')
         return false
       }

@@ -816,10 +816,28 @@ that opened it (`sessions.id`, the hash of the cookie), not just to the account:
   is open) catches a session deleted behind the server's back.
 - A closed Agents stream doesn't stop the turn: it goes on like when a window is closed, and its
   answer reaches the account's live pages and devices (the hub above). Stop and signing out
-  everywhere stop it. Guests have no session and are untouched.
+  everywhere stop it. Guests have no session and are untouched. That is for work that
+  *had started* while the session was good.
+- **A request that is still arriving when its session ends does nothing.** A handler takes its
+  user from the cookie when the request comes in, and a client can send the body slowly. Every
+  JSON body (and the mail upload) is therefore checked once it has been read: the exact session
+  the request came in with must still be stored, unexpired, and its account not banned
+  (`stillSignedIn` in [`server/auth.ts`](server/auth.ts), run by `readJson`); otherwise the answer is
+  a plain 401 and nothing is done. The Agents streams (a message, Retry, Upscale and Refine,
+  Inpaint and Remove, Generate another, the Image Studio, joining a turn) then bind their response
+  to the session at the commit point, which is after the body and any planning, and right before
+  the first thing that is saved, called or sent. `bindResponse` returns nothing when the session
+  is gone and the handler stops there, so no model or ComfyUI call, no message, reply, image or
+  Studio thread, and no Retry deletion happens. The turn is marked running in that same tick, so a
+  ban a moment later finds it and stops it. A Studio batch asks again before each picture. A turn
+  that is not asked for by a request (a queued message, a queue held while it is edited) starts
+  only for an account that still exists and is not banned.
 
-`pnpm check:session-streams` covers it: the registry, a cut response, and the real server with
-two sessions of one account, another account, a guest, an admin's sign-out and a ban.
+`pnpm check:session-streams` covers it: the registry, a cut response, the real server with two
+sessions of one account, another account, a guest, an admin's sign-out and a ban, and requests
+held halfway through their body (a message, Retry, Inpaint, Upscale, the Studio) that are logged
+out, expired, deleted behind the server's back, signed out by an admin or banned before the rest
+arrives, next to a valid slow request and the documented behaviour of a turn that had started.
 
 A browser signing in for the first time takes the account's window layout
 instead of saving its own opening windows over it. Desktop widgets are not part of the window

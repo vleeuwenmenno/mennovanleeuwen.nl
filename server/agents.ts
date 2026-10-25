@@ -497,8 +497,12 @@ function deliver(user: User, thread: string, ask: Ask) {
   running.get(thread)?.abort()
 }
 
+/** Whether the account still exists and is not banned: a turn the account did not just ask for (a queued message, a held queue) starts only for one that does. */
+const accountActive = (userId: number) => !!database().prepare('SELECT 1 FROM users WHERE id = ? AND banned_at IS NULL').get(userId)
+
 /** Starts a chain of turns that no request streams (a window follows it): Send now on a thread at rest, or the queue going on. */
 function startChain(user: User, thread: string, ask: Ask) {
+  if (!accountActive(user.id)) throw new HttpError(401, 'Not signed in')
   checkTurnRoom(user)
   requireKey(user)
   void runChain(user, thread, ask, null, false)
@@ -513,7 +517,7 @@ function resumeHeld(thread: string) {
   if (lock) return void (h.timer = setTimeout(() => resumeHeld(thread), EDIT_HOLD - (Date.now() - lock.at) + 500))
   held.delete(thread)
   const list = queueOf(thread)
-  if (running.has(thread) || !list.length || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return
+  if (running.has(thread) || !list.length || !accountActive(h.user.id) || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return
   try {
     checkTurnRoom(h.user)
     requireKey(h.user)
@@ -528,6 +532,7 @@ function resumeHeld(thread: string) {
 function nextAsk(user: User, thread: string, outcome: Outcome): Ask | null {
   // On the way down nothing new starts: what waits stays queued for after the restart.
   if (isShuttingDown()) return null
+  if (!accountActive(user.id)) return sendNext.delete(thread), null
   const now = sendNext.get(thread)
   if (now) return sendNext.delete(thread), now
   if (outcome !== 'answered' || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return null
@@ -904,6 +909,8 @@ export function deleteThread(user: User, id: string) {
 /** Stops every turn an account has running (banned or deleted, server/users.ts). */
 export function stopTurnsOf(userId: number) {
   for (const [thread, u] of runningFor) if (u === userId) (sendNext.delete(thread), running.get(thread)?.abort())
+  // A queue held for an edit would start again, as that account, when the edit ends.
+  for (const [thread, h] of held) if (h.user.id === userId) (clearTimeout(h.timer), held.delete(thread))
   stopStudioOf(userId)
 }
 
@@ -3207,7 +3214,10 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   checkTurnRoom(user)
   requireKey(user)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
+  // The commit point: the session that asked must still be good now (it may have ended while the
+  // body was sent). Nothing is saved, called or attached before this, and the turn is marked
+  // running below in the same tick, so a ban finds it (stopTurnsOf).
+  if (!bindResponse(res, user.id)) return
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
@@ -3732,9 +3742,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
  */
 export function followThread(res: ServerResponse, user: User, id: string, terminal = false) {
   const row = ownThread(user, id)
-  if (terminal) attachTerminal(row.id, res)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
+  if (!bindResponse(res, user.id)) return
+  if (terminal) attachTerminal(row.id, res)
   const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
   const { thread, messages, pending: waiting } = getThread(user, row.id)
   const live = partial.get(row.id)
@@ -3850,9 +3860,10 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   else requireKey(user)
   const zone = zoneFor(body.client?.timeZone)
   const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again, upscale, inpaint }
-  if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
+  // Commit point: only a session that is still good deletes the old reply and asks again.
+  if (!bindResponse(res, user.id)) return
+  if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
   await runChain(user, row.id, ask, res, fromTerminal)
@@ -3900,7 +3911,7 @@ export async function upscaleImage(res: ServerResponse, user: User, id: string, 
   checkTurnRoom(user)
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'upscale' && input.operation !== 'refine') throw new HttpError(400, 'Choose an upscale or refine operation')
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
+  if (!bindResponse(res, user.id)) return
   await runChain(user, id, { text: input.operation === 'refine' ? 'Refine image' : 'Upscale image', files: [], zone: 'UTC', upscale: input }, res, false)
 }
 
@@ -3911,7 +3922,7 @@ export async function inpaintImage(res: ServerResponse, user: User, id: string, 
   checkTurnRoom(user)
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'inpaint' && input.operation !== 'remove') throw new HttpError(400, 'Choose an inpaint or remove operation')
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
+  if (!bindResponse(res, user.id)) return
   await runChain(user, id, { text: input.operation === 'remove' ? 'Remove masked area' : 'Inpaint image', files: [], zone: 'UTC', inpaint: input }, res, false)
 }
 
@@ -3922,7 +3933,7 @@ export async function generateAnother(res: ServerResponse, user: User, id: strin
   checkTurnRoom(user)
   imageAgainAllowed(user, id, image)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
-  bindResponse(res, user.id)
+  if (!bindResponse(res, user.id)) return
   await runChain(user, id, { text: 'Generate another', files: [], zone: 'UTC', again: image }, res, false)
 }
 
