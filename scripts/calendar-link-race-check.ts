@@ -104,7 +104,7 @@ function account() {
   const id = nextId++
   const sid = randomBytes(24).toString('hex')
   const now = Date.now()
-  database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, id, `race-${id}`, encrypt('none'), now, now)
+  database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, id, `race-${id}`, encrypt(''), now, now) // no GitHub token: deleting an account never sends anything to github.com
   database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + 86400_000)
   const call = (method: string, path: string, body?: unknown, cookie = '') =>
     fetch(`${server.origin}${path}`, { method, redirect: 'manual', headers: { Cookie: `mvlos_sid=${sid}${cookie}`, 'X-MVL-Account': String(id), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined })
@@ -181,6 +181,38 @@ for (const [kind, ep] of Object.entries(endpoints)) {
   const cr = await only
   const ct = await cr.text()
   check(`${kind}/CalDAV only: answered`, cr.status === 200 && /caldav:/.test(ct) && (kind === 'calendars' || ct.includes('CalDAV event')))
+
+  // Google absent when the request starts: it takes no part, however it is connected, relinked or
+  // disconnected while CalDAV discovery and the events are held. (For the calendar list the only
+  // CalDAV step is discovery; for events there is a second one, the events themselves.)
+  for (const later of ['connect', 'connect then relink', 'connect then disconnect'] as const) {
+    const g = account()
+    await g.addCaldav()
+    googleLog.length = 0
+    hold('PROPFIND')
+    const early = g.call('GET', ep.path)
+    await waitFor(() => gate.held > 0)
+    await g.consent(`G${g.id}`)
+    if (kind === 'events') {
+      // Discovery goes on to the held events step; Google is changed again while that waits.
+      const open = gate.release!
+      hold('REPORT')
+      open()
+      await waitFor(() => gate.held > 0)
+    }
+    if (later === 'connect then relink') await g.consent(`H${g.id}`)
+    else if (later === 'connect then disconnect') await g.call('DELETE', '/api/google')
+    await sleep(150)
+    check(`${kind}/absent at start, ${later} meanwhile: Google is not asked`, !googleLog.some((l) => l.startsWith('tok-G') || l.startsWith('tok-H')))
+    release()
+    const er = await early
+    const et = await er.text()
+    check(`${kind}/absent at start, ${later} meanwhile: answered with CalDAV only, nothing of Google`, er.status === 200 && !et.includes('tok-G') && !et.includes('tok-H') && /caldav:/.test(et))
+    if (later === 'connect') {
+      const after = await g.call('GET', ep.path)
+      check(`${kind}/...the next request uses the new link`, (await after.text()).includes(`tok-G${g.id}`))
+    }
+  }
 
   // Google connected while a CalDAV-only request waits: not failed.
   const late = account()

@@ -193,13 +193,17 @@ class StaleLink extends HttpError {
   }
 }
 /**
- * For a read that combines Google with other sources (server/calendars.ts): the generation of the
- * account's Google link when the read starts, or null when none is connected (nothing of Google can
- * then end up in the result). `assertGoogleLink` is called after every source has answered, just
+ * For a read that combines Google with other sources (server/calendars.ts, server/noteLinks.ts, the
+ * Agents app's note tools): the Google snapshot, taken before the read's first await: the generation
+ * of the account's Google link, or null when none is connected. The read uses the snapshot for all
+ * of it. Null means Google takes no part, whatever is connected by the time a later step runs (a link
+ * made meanwhile shows up in the next read); a number means every Google call is made under exactly
+ * that generation and nothing of Google outlives a change of it. `assertGoogleLink` is called after every source has answered, just
  * before the combined result is returned, and throws if the link changed, was removed or the
  * account was deleted meanwhile, so the whole result is dropped, completed Google parts included.
  */
-export const googleLinkGeneration = (user: User): number | null => (googleAccount(user) ? generationOf(user.id) : null)
+export type GoogleSnapshot = number | null
+export const googleLinkGeneration = (user: User): GoogleSnapshot => (googleAccount(user) ? generationOf(user.id) : null)
 export function assertGoogleLink(user: User, generation: number | null) {
   if (generation !== null) sameLink(user, generation)
 }
@@ -339,8 +343,8 @@ function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> 
 }
 
 /** The calendars in the account's list, shared ones included. */
-export function listCalendars(user: User): Promise<CalendarInfo[]> {
-  return calendarsAt(user, generationOf(user.id))
+export function listCalendars(user: User, expected?: number): Promise<CalendarInfo[]> {
+  return calendarsAt(user, expected ?? generationOf(user.id))
 }
 function calendarsAt(user: User, generation: number): Promise<CalendarInfo[]> {
   return cached(`${user.id}|calendars`, 5 * 60_000, async () => {
@@ -396,10 +400,10 @@ export const MAX_RANGE_DAYS = 400
  * Events between `range.from` and `range.to` (at most MAX_RANGE_DAYS apart), from the given
  * calendars (default: the ones shown in Google Calendar).
  */
-export async function listEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }, ref: (r: GoogleRef) => string): Promise<CalendarEvent[]> {
+export async function listEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }, ref: (r: GoogleRef) => string, expected?: number): Promise<CalendarEvent[]> {
   // One link generation for the whole read: every call below is made under it, and the result is
   // only handed out if it is still the account's link, so nothing of an earlier link is mixed in.
-  const generation = generationOf(user.id)
+  const generation = expected ?? generationOf(user.id)
   const calendars = await calendarsAt(user, generation)
   sameLink(user, generation)
   const pick = ids?.length ? calendars.filter((c) => ids.includes(c.id)) : calendars.filter((c) => c.selected)
@@ -622,9 +626,9 @@ export async function markGoogleNote(user: User, ref: GoogleRef, noteId: string,
 export type GoogleFound = { calendarId: string; calendar: string; id: string; title: string; start: string; end: string; allDay: boolean; cancelled: boolean; url?: string; attendees: Attendee[] }
 
 /** The event with this UID in one of your calendars that you can change (the main one first), or null. */
-export async function googleByUid(user: User, uid: string): Promise<GoogleFound | null> {
+export async function googleByUid(user: User, uid: string, expected?: number): Promise<GoogleFound | null> {
   if (!googleAccount(user) || !uid || uid.length > 1000) return null
-  const generation = generationOf(user.id)
+  const generation = expected ?? generationOf(user.id)
   const calendars = (await calendarsAt(user, generation)).filter((c) => c.access === 'owner' || c.access === 'writer').sort((a, b) => Number(b.primary) - Number(a.primary)).slice(0, 10)
   for (const cal of calendars) {
     const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${new URLSearchParams({ iCalUID: uid, showDeleted: 'true', maxResults: '5' })}`, {}, generation).catch(keepStale)

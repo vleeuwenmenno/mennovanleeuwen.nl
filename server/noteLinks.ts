@@ -1,7 +1,7 @@
 import type { User } from './auth.ts'
 import { caldavByUid, clearCaldavCache, getCaldavEvent, listCaldav, markCaldavNote } from './caldav.ts'
 import { allCalendars, allEvents, decodeRef, encodeRef, hiddenCalendars } from './calendars.ts'
-import { clearGoogleCache, googleByUid, googleEventInfo, markGoogleNote, type CalendarEvent } from './google.ts'
+import { assertGoogleLink, clearGoogleCache, googleByUid, googleEventInfo, googleLinkGeneration, markGoogleNote, type CalendarEvent, type GoogleSnapshot } from './google.ts'
 import { HttpError } from './http.ts'
 import { tellPages } from './notifier.ts'
 import { readState, writeState } from './state.ts'
@@ -130,7 +130,17 @@ export async function noteLinkApi(user: User, body: { ref?: unknown; link?: unkn
  * its next occurrence), in the calendar it was in first and then in the others. `gone` only when
  * every calendar answered and the event (or that occurrence) is not there any more.
  */
-export async function findLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh = false): Promise<{ event: CalendarEvent | null; gone: boolean }> {
+export async function findLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh = false, snapshot?: GoogleSnapshot): Promise<{ event: CalendarEvent | null; gone: boolean }> {
+  // One Google snapshot for the whole search, taken before any await (or the caller's, for a bigger
+  // read): Google is consulted only if it was connected then, only under that link, and a changed link
+  // fails the whole search rather than return what an earlier link answered.
+  const google = snapshot === undefined ? googleLinkGeneration(user) : snapshot
+  const found = await searchLinked(user, link, fresh, google)
+  assertGoogleLink(user, google)
+  return found
+}
+
+async function searchLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh: boolean, google: GoogleSnapshot): Promise<{ event: CalendarEvent | null; gone: boolean }> {
   // Asked for by a click: past the two-minute caches, to see a change made elsewhere just now.
   if (fresh) {
     clearCaldavCache(user)
@@ -141,7 +151,7 @@ export async function findLinked(user: User, link: { uid: string; calendarId?: s
   const base = Math.floor((isNaN(at) ? Date.now() : at) / DAY) * DAY
   const range = { from: new Date(base - 62 * DAY), to: new Date(base + 63 * DAY) }
   // A hidden calendar still answers for the calendar a link names (it may be a calendar the user hid since), but is not searched otherwise.
-  const { calendars, errors } = await allCalendars(user, true)
+  const { calendars, errors } = await allCalendars(user, true, google)
   const hidden = hiddenCalendars(user)
   let failed = errors.length > 0
   const pick = (events: CalendarEvent[]) => {
@@ -155,14 +165,14 @@ export async function findLinked(user: User, link: { uid: string; calendarId?: s
   const rest = calendars.filter((c) => c.id !== link.calendarId && !hidden.has(c.id)).map((c) => c.id)
   for (const ids of [first, rest]) {
     if (!ids.length) continue
-    const found = await allEvents(user, ids, range)
+    const found = await allEvents(user, ids, range, google)
     if (found.errors.length) failed = true
     const e = pick(found.events)
     if (e) return { event: e, gone: false }
   }
   if (failed) return { event: null, gone: false }
   // Not near when it was: is the event there at all? (A series still there without that occurrence: it was deleted.)
-  const there = (await caldavByUid(user, link.uid).catch(() => [1])).length > 0 || !!(await googleByUid(user, link.uid).catch(() => true))
+  const there = (await caldavByUid(user, link.uid).catch(() => [1])).length > 0 || (google !== null && !!(await googleByUid(user, link.uid, google).catch(() => true)))
   return { event: null, gone: !there || !!link.occurrence }
 }
 
