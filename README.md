@@ -1375,7 +1375,16 @@ allows nothing but its own styles and pictures. Remote images and CSS background
 until *Load images* (or the remote-content setting, see Mail settings below); tracking pixels
 stay out either way. Links open in a new tab without an opener or referrer, with the real address
 as their tooltip. Inline (`cid:`) pictures come along as `data:` URIs, or (big ones) through
-short-lived sealed links that need no cookie. Quoted text, in HTML and plain text alike, is folded
+short-lived sealed links that need no cookie. Each sealed picture link is bound to the session
+that opened the message and that exact linked Mail account: signing out, expiry, revocation, a ban,
+account removal, or unlinking/relinking stops it. Attachment downloads (including HEAD and ranges),
+uploads, and Mail changes keep that original session and provider authority through completion;
+revocation aborts pending provider requests and delivery before any further private bytes or writes.
+Mail sessions, mailbox/people caches, push lines and pollers use a persisted per-link identity plus
+the owner and provider credential record, so a deleted/reused account row cannot inherit another
+account's endpoints or private data. Same-account token replacement also invalidates held work.
+`pnpm check:mail-office-revocation` covers these races against local providers.
+Quoted text, in HTML and plain text alike, is folded
 away (or open, by setting). Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
 [`server/imip.ts`](server/imip.ts)) show as a card with what, when, where and the organiser, and
 are answered from it (see *How the apps work together*). Senders and recipients show as your
@@ -1604,7 +1613,11 @@ in OnlyOffice's editor in a window; read-only libraries and old formats open to 
 signs the editor's settings like Seahub does and takes OnlyOffice's saves at
 `/api/office/callback` ([`server/office.ts`](server/office.ts)): a sealed ticket says which file,
 OnlyOffice's signature is checked, and the new version goes into Seafile (its history keeps the old
-one). The document server must reach that callback: on a public site it does by itself; elsewhere
+one). Tickets also seal the exact persisted Seafile and OnlyOffice link identities. Replacing or
+removing either link cancels a pending save, including its document download and upload, and an
+old document can never save through the replacement account. Tickets survive a server restart
+only while both original links remain unchanged; legacy tickets without these claims require
+reopening the file. The document server must reach that callback: on a public site it does by itself; elsewhere
 set `OFFICE_CALLBACK_ORIGIN` to an address it can reach. **New Document**, **New Spreadsheet** and
 **New Presentation** make a blank file in Documents (or a folder picked with *New documents go here*)
 and open it; they are in Spotlight and All apps, and can go on the dock and the desktop.

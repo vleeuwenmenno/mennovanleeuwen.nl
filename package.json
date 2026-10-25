@@ -79,6 +79,7 @@
     "check:money": "node scripts/money-check.ts",
     "check:seafile-stream": "node scripts/seafile-stream.ts",
     "check:ics": "node scripts/ics-check.ts",
+    "check:mail-office-revocation": "node scripts/mail-office-revocation-check.ts",
     "check:mail": "node scripts/mail-check.ts",
     "check:mail-icons": "node scripts/mail-icons-check.ts",
     "check:egress": "node scripts/egress-check.ts",

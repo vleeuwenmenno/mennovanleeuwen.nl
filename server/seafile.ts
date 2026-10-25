@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { requireStillSignedIn, type User } from './auth.ts'
 import { requirePrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
-import { database, decrypt, encrypt, onUserGone } from './db.ts'
+import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 
 /** The most a Seahub answer may hold: listings, links and settings are small. */
@@ -76,14 +76,33 @@ function read<T>(user: User, name: string): T | null {
   }
 }
 
+// Ciphertexts contain a random nonce on every write, providing persisted per-link identity,
+// including same-credential relinks. Hash the sealed record, never expose credential material.
+export function integrationIdentity(user: User, name: 'seafile' | 'onlyoffice'): string | null {
+  const row = database().prepare('SELECT secret, created_at FROM integrations WHERE user_id = ? AND name = ?').get(user.id, name) as { secret: string; created_at: number } | undefined
+  return row ? sha256(JSON.stringify([user.id, name, row.secret, row.created_at])) : null
+}
+const officeChanged = new Set<(id: number) => void>()
+export function onOfficeLinkChanged(fn: (id: number) => void) {
+  officeChanged.add(fn)
+  return () => { officeChanged.delete(fn) }
+}
+const changedOffice = (id: number) => { for (const fn of officeChanged) fn(id) }
+onUserGone(changedOffice)
+
 function write(user: User, name: string, value: unknown) {
   requirePrivateRequest(user)
   database()
     .prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret')
     .run(user.id, name, encrypt(JSON.stringify(value)), Date.now())
+  if (name === OFFICE) changedOffice(user.id)
 }
 
-const remove = (user: User, name: string) => (requirePrivateRequest(user), database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, name))
+const remove = (user: User, name: string) => {
+  requirePrivateRequest(user)
+  database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, name)
+  if (name === OFFICE) changedOffice(user.id)
+}
 
 export function seafileInfo(user: User): SeafileInfo | null {
   const link = read<Link>(user, NAME)

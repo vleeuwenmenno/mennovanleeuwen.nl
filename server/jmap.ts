@@ -4,7 +4,7 @@ import { Readable } from 'node:stream'
 import { loadsRemote, readRemoteSettings, type RemoteSettings } from '../src/data/mailRemote.ts'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
 import { accounts, isAdmin, requireUser, type User } from './auth.ts'
-import { database, decrypt, encrypt, onUserGone } from './db.ts'
+import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { bodyRead, HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { parseInvite, type Invite } from './imip.ts'
@@ -12,6 +12,8 @@ import { sanitizeHtml } from './mailhtml.ts'
 import { serveSenderIcon } from './mailicons.ts'
 import { claimOnce, notify, registerWatcher, tellPages } from './notifier.ts'
 import { readState } from './state.ts'
+import { bindPrivateAccess, requirePrivateRequest, privateSessionBinding, privateSignal, runPrivateRequest, withProviderGuard, withoutPrivateRequest } from './privateRequest.ts'
+import type { SessionBinding } from './liveSessions.ts'
 
 // Mail over JMAP (RFC 8620, RFC 8621): Fastmail, Stalwart and other servers that speak it. An
 // account is a JMAP session URL (found from a host through /.well-known/jmap; Fastmail's is the
@@ -45,8 +47,8 @@ const EMAIL = /^[^\s@<>(),;:"\\]+@[^\s@<>(),;:"\\]+$/
 const TIMEOUT = 20_000
 
 export type MailAccountInfo = { id: number; label: string; username: string; url: string }
-type Linked = MailAccountInfo & { user: User; token: string }
-type Row = { id: number; user_id: number; label: string; session_url: string; username: string; token: string; push_state: string | null }
+type Linked = MailAccountInfo & { user: User; token: string; key: string }
+type Row = { link_id: string; id: number; user_id: number; label: string; session_url: string; username: string; token: string; push_state: string | null }
 
 // ---------------------------------------------------------------------------------------------
 // Accounts
@@ -64,6 +66,9 @@ function table() {
     push_state TEXT,
     created_at INTEGER NOT NULL
   )`)
+  const columns = database().prepare('PRAGMA table_info(jmap_accounts)').all() as { name: string }[]
+  if (!columns.some((c) => c.name === 'link_id')) database().exec("ALTER TABLE jmap_accounts ADD COLUMN link_id TEXT NOT NULL DEFAULT ''")
+  database().exec("UPDATE jmap_accounts SET link_id = lower(hex(randomblob(32))) WHERE link_id = ''")
   ready = true
   return database()
 }
@@ -76,7 +81,72 @@ export function listMail(user: User): MailAccountInfo[] {
 function linked(user: User, id: unknown): Linked {
   const row = table().prepare('SELECT * FROM jmap_accounts WHERE user_id = ? AND id = ?').get(user.id, Number(id)) as unknown as Row | undefined
   if (!row) throw new HttpError(404, 'No such mail account')
-  return { id: row.id, label: row.label, username: row.username, url: row.session_url, user, token: decrypt(row.token) }
+  // Rows from older callers receive their identity once, before any provider await.
+  if (!row.link_id) {
+    row.link_id = randomBytes(32).toString('hex')
+    table().prepare("UPDATE jmap_accounts SET link_id = ? WHERE id = ? AND user_id = ? AND link_id = ''").run(row.link_id, row.id, user.id)
+  }
+  return { key: rowKey(row), id: row.id, label: row.label, username: row.username, url: row.session_url, user, token: decrypt(row.token) }
+}
+
+// A DB row number is reusable. Each link has a durable random identity, with owner and the
+// sealed credential/provider record in its key. Replacement never inherits a cache or push line.
+const rowKey = (r: Row) => `${r.user_id}:${r.id}:${r.link_id}:${sha256(JSON.stringify([r.session_url, r.username, r.token]))}`
+const invalidators = new Map<string, Set<() => void>>()
+function onMailChanged(key: string, end: () => void) {
+  const listeners = invalidators.get(key) ?? new Set<() => void>()
+  invalidators.set(key, listeners.add(end))
+  return () => { listeners.delete(end); if (!listeners.size) invalidators.delete(key) }
+}
+function checkMailLink(acc: Linked) {
+  const row = table().prepare('SELECT * FROM jmap_accounts WHERE user_id = ? AND id = ?').get(acc.user.id, acc.id) as Row | undefined
+  if (!row || rowKey(row) !== acc.key || !userById(acc.user.id)) throw new HttpError(409, 'The mail account changed: try again')
+}
+function assertMail(acc: Linked) { requirePrivateRequest(acc.user); checkMailLink(acc) }
+function bindMailRequest(acc: Linked) {
+  bindPrivateAccess(() => checkMailLink(acc), (end) => onMailChanged(acc.key, end))
+}
+/** All account operations carry prepared link authority, including agent tools and pollers. */
+function mailOperation<A extends unknown[], T>(work: (acc: Linked, ...args: A) => Promise<T>) {
+  return (acc: Linked, ...args: A): Promise<T> => withProviderGuard(() => checkMailLink(acc), async () => {
+    assertMail(acc)
+    const result = await work(acc, ...args)
+    assertMail(acc)
+    return result
+  })
+}
+
+/** Retains provider cancellation until the body ends, including attachment and SSE streams. */
+async function mailFetch(acc: Linked, url: string, init: RequestInit): Promise<Response> {
+  const gone = new AbortController()
+  const stop = onMailChanged(acc.key, () => gone.abort(new HttpError(409, 'The mail account changed: try again')))
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  const signal = privateSignal(AbortSignal.any([gone.signal, ...(init.signal ? [init.signal] : [])]))!
+  const cancel = () => { void reader?.cancel(signal.reason).catch(() => {}); stop() }
+  signal.addEventListener('abort', cancel, { once: true })
+  const done = () => { stop(); signal.removeEventListener('abort', cancel) }
+  try {
+    return await withProviderGuard(() => checkMailLink(acc), async () => {
+      assertMail(acc)
+      const response = await guardedFetch(acc.user, url, { ...init, signal })
+      assertMail(acc)
+      if (!response.body) { done(); return response }
+      reader = response.body.getReader()
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            signal.throwIfAborted(); assertMail(acc)
+            const next = await reader!.read()
+            signal.throwIfAborted(); assertMail(acc)
+            if (next.done) { done(); controller.close() }
+            else controller.enqueue(next.value)
+          } catch (error) { gone.abort(error); done(); controller.error(error) }
+        },
+        async cancel(reason) { gone.abort(reason); done(); await reader!.cancel(reason).catch(() => {}) },
+      }, { highWaterMark: 0 })
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+    })
+  } catch (error) { gone.abort(error); done(); throw error }
 }
 
 /** A session URL from what was typed: a host means its /.well-known/jmap. */
@@ -103,29 +173,41 @@ export async function addMail(user: User, body: { url?: string; token?: string; 
   // Fastmail tokens all start with fmu1-: anything else is the wrong string (a saved password
   // autofilled, an app password), and Fastmail only answers that with a bare 401.
   if (/(^|\.)fastmail\.com$/.test(new URL(start).hostname) && !token.startsWith('fmu1-')) throw new HttpError(400, "That isn't a Fastmail API token: they start with fmu1-. Make one at Settings → Privacy & Security → Manage API tokens.")
-  const { session, url } = await readSession(user, start, token)
+  const links = () => JSON.stringify((table().prepare('SELECT * FROM jmap_accounts WHERE user_id = ? ORDER BY id').all(user.id) as Row[]).map(rowKey))
+  const before = links()
+  const check = () => {
+    if (!userById(user.id) || links() !== before) throw new HttpError(409, 'The mail accounts changed: try again')
+  }
+  const { session, url } = await withProviderGuard(check, () => readSession(user, start, token))
+  requirePrivateRequest(user)
+  check()
   const label = (body.label?.trim() || (/fastmail/.test(url) ? 'Fastmail' : new URL(url).host)).slice(0, 40)
   const db = table()
   const existing = db.prepare('SELECT id FROM jmap_accounts WHERE user_id = ? AND session_url = ? AND username = ?').get(user.id, url, session.username) as { id: number } | undefined
   if (existing) {
     // The same account again (a new token): keep it, with its place in the list.
-    db.prepare('UPDATE jmap_accounts SET label = ?, token = ? WHERE id = ?').run(label, encrypt(token), existing.id)
-    forget(existing.id)
+    const old = linked(user, existing.id)
+    db.prepare('UPDATE jmap_accounts SET label = ?, token = ?, link_id = ?, push_state = NULL WHERE id = ? AND user_id = ?').run(label, encrypt(token), randomBytes(32).toString('hex'), existing.id, user.id)
+    forget(old.key)
     return { id: existing.id, label, username: session.username, url }
   }
   const { n } = db.prepare('SELECT COUNT(*) AS n FROM jmap_accounts WHERE user_id = ?').get(user.id) as { n: number }
   if (n >= MAX_ACCOUNTS) throw new HttpError(400, `At most ${MAX_ACCOUNTS} mail accounts`)
-  const r = db.prepare('INSERT INTO jmap_accounts (user_id, label, session_url, username, token, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, label, url, session.username, encrypt(token), Date.now())
+  const r = db.prepare('INSERT INTO jmap_accounts (user_id, label, session_url, username, token, created_at, link_id) VALUES (?, ?, ?, ?, ?, ?, ?)').run(user.id, label, url, session.username, encrypt(token), Date.now(), randomBytes(32).toString('hex'))
   return { id: Number(r.lastInsertRowid), label, username: session.username, url }
 }
 
 export function removeMail(user: User, id: number) {
+  requirePrivateRequest(user)
+  const old = listMail(user).some((a) => a.id === id) ? linked(user, id) : null
   table().prepare('DELETE FROM jmap_accounts WHERE user_id = ? AND id = ?').run(user.id, id)
-  forget(id)
+  if (old) forget(old.key)
 }
 
 /** Drops what is kept in memory about an account (its session, mailboxes, push line). */
-function forget(id: number) {
+function forget(id: string) {
+  for (const end of invalidators.get(id) ?? []) end()
+  invalidators.delete(id)
   sessions.delete(id)
   metas.delete(id)
   people.delete(id)
@@ -133,7 +215,7 @@ function forget(id: number) {
 }
 
 onUserGone((userId) => {
-  for (const [id, l] of live) if (l.userId === userId) forget(id)
+  for (const id of new Set([...sessions.keys(), ...metas.keys(), ...people.keys(), ...live.keys(), ...invalidators.keys()])) if (id.startsWith(`${userId}:`)) forget(id)
   lastUse.delete(userId)
 })
 
@@ -153,7 +235,7 @@ type Session = {
   state: string
   at: number
 }
-const sessions = new Map<number, Session>()
+const sessions = new Map<string, Session>()
 const SESSION_TTL = 30 * 60_000
 
 const bearer = (token: string) => ({ Authorization: `Bearer ${token}`, 'User-Agent': 'mvlos' })
@@ -185,10 +267,11 @@ async function reasonOf(res: Response): Promise<string> {
 }
 
 /** Reads a session, following redirects (/.well-known/jmap points elsewhere) with the token kept, over https only. */
-async function readSession(user: User, start: string, token: string): Promise<{ session: Session; url: string }> {
+async function readSession(user: User, start: string, token: string, acc?: Linked): Promise<{ session: Session; url: string }> {
+  const fetchSession = (url: string, init: RequestInit) => acc ? mailFetch(acc, url, init) : guardedFetch(user, url, init)
   let at = start
   for (let hop = 0; hop < 4; hop++) {
-    const res = await guardedFetch(user, at, { headers: { ...bearer(token), Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) }).catch((e) => (rethrowEgress(e), null))
+    const res = await fetchSession(at, { headers: { ...bearer(token), Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) }).catch((e) => (rethrowEgress(e), null))
     if (!res) throw new HttpError(502, `${hostOf(at)} did not answer`)
     const location = res.headers.get('location')
     if (res.status >= 300 && res.status < 400 && location) {
@@ -247,13 +330,14 @@ const template = (v: string, base: string) => new URL(v.replace(/[{}]/g, (c) => 
 /** A URL template filled in, each value escaped. */
 const fill = (template: string, values: Record<string, string>) => template.replace(/\{(\w+)\}/g, (all, k: string) => (k in values ? encodeURIComponent(values[k]) : all))
 
-async function session(acc: Linked, fresh = false): Promise<Session> {
-  const known = sessions.get(acc.id)
+async function sessionInner(acc: Linked, fresh = false): Promise<Session> {
+  const known = sessions.get(acc.key)
   if (known && !fresh && Date.now() - known.at < SESSION_TTL) return known
-  const { session: s } = await readSession(acc.user, acc.url, acc.token).catch((e: HttpError) => {
+  const { session: s } = await readSession(acc.user, acc.url, acc.token, acc).catch((e: HttpError) => {
     throw new HttpError(e.status === 400 ? 502 : e.status, `${acc.label}: ${e.message}`)
   })
-  sessions.set(acc.id, s)
+  assertMail(acc)
+  sessions.set(acc.key, s)
   return s
 }
 
@@ -282,10 +366,10 @@ class Answers {
 }
 
 /** One JMAP request: the calls in order, later ones free to refer back to earlier answers. */
-async function jmap(acc: Linked, calls: Call[]): Promise<Answers> {
+async function jmapInner(acc: Linked, calls: Call[]): Promise<Answers> {
   const s = await session(acc)
   const using = [CORE, MAIL, ...(calls.some(([m]) => m.startsWith('EmailSubmission/') || m.startsWith('Identity/')) ? [SUBMISSION] : [])]
-  const res = await guardedFetch(acc.user, s.apiUrl, {
+  const res = await mailFetch(acc, s.apiUrl, {
     method: 'POST',
     headers: { ...bearer(acc.token), 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ using, methodCalls: calls.map(([m, args, id]) => [m, { accountId: s.accountId, ...args }, id]) }),
@@ -293,7 +377,7 @@ async function jmap(acc: Linked, calls: Call[]): Promise<Answers> {
   }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, `${acc.label} did not answer`)
   if (res.status === 401 || res.status === 403) {
-    sessions.delete(acc.id)
+    sessions.delete(acc.key)
     const why = await reasonOf(res)
     throw new HttpError(502, `${acc.label} refused the token${why ? ` (${why})` : ''}: link it again in Settings → Integrations → Mail`)
   }
@@ -306,7 +390,7 @@ async function jmap(acc: Linked, calls: Call[]): Promise<Answers> {
   }
   if (!res.ok) throw new HttpError(502, `${acc.label} answered ${res.status}: ${body.detail ?? body.type ?? ''}`.trim())
   // The session changed (new mailboxes' URLs, another account): read it again next time.
-  if (body.sessionState && s.state && body.sessionState !== s.state) sessions.delete(acc.id)
+  if (body.sessionState && s.state && body.sessionState !== s.state) sessions.delete(acc.key)
   return new Answers(Array.isArray(body.methodResponses) ? body.methodResponses : [])
 }
 
@@ -317,12 +401,12 @@ export type Mailbox = { id: string; name: string; parentId: string | null; role:
 export type Identity = { id: string; name: string; email: string; replyTo: Address[] | null; bcc: Address[] | null; textSignature: string }
 type Address = { name: string | null; email: string }
 type Meta = { at: number; mailboxes: Mailbox[]; identities: Identity[]; role: (r: string) => string | null }
-const metas = new Map<number, Meta>()
+const metas = new Map<string, Meta>()
 
 const MAILBOX_PROPS = ['id', 'name', 'parentId', 'role', 'sortOrder', 'totalEmails', 'unreadEmails', 'totalThreads', 'unreadThreads']
 
-async function meta(acc: Linked, fresh = false): Promise<Meta> {
-  const known = metas.get(acc.id)
+async function metaInner(acc: Linked, fresh = false): Promise<Meta> {
+  const known = metas.get(acc.key)
   if (known && !fresh && Date.now() - known.at < 60_000) return known
   const s = await session(acc)
   const r = await jmap(acc, [['Mailbox/get', { ids: null, properties: MAILBOX_PROPS }, 'm'], ...(s.submission ? ([['Identity/get', { ids: null }, 'i']] as Call[]) : [])])
@@ -339,7 +423,8 @@ async function meta(acc: Linked, fresh = false): Promise<Meta> {
   }))
   const identities: Identity[] = s.submission && !r.error('i') ? (r.get('i', 'Identity/get').list as Json[]).map((i) => ({ id: String(i.id), name: String(i.name ?? ''), email: String(i.email ?? ''), replyTo: i.replyTo ?? null, bcc: i.bcc ?? null, textSignature: String(i.textSignature ?? '') })) : []
   const m: Meta = { at: Date.now(), mailboxes, identities, role: (role) => mailboxes.find((b) => b.role === role)?.id ?? null }
-  metas.set(acc.id, m)
+  assertMail(acc)
+  metas.set(acc.key, m)
   return m
 }
 
@@ -411,7 +496,7 @@ export function parseSearch(q: string): Json | null {
 }
 
 /** A page of conversations: a mailbox's, or a search across every mailbox but Trash and Junk. */
-export async function listThreads(acc: Linked, opts: { mailbox?: string | null; q?: string | null; position?: number; limit?: number }) {
+async function listThreadsInner(acc: Linked, opts: { mailbox?: string | null; q?: string | null; position?: number; limit?: number }) {
   const m = await meta(acc)
   const search = opts.q ? parseSearch(opts.q) : null
   let filter: Json | null
@@ -477,11 +562,11 @@ const INLINE_TOTAL = 6_000_000
 
 /** A sealed, short-lived link to one of a message's inline parts: the message frame loads it without cookies. */
 function inlineLink(acc: Linked, part: { blobId: string; type: string }): string {
-  const sealed = encrypt(JSON.stringify({ u: acc.user.id, a: acc.id, b: part.blobId, t: part.type, e: Date.now() + 12 * 3600_000 }))
+  const sealed = encrypt(JSON.stringify({ k: acc.key, session: privateSessionBinding(), u: acc.user.id, a: acc.id, b: part.blobId, t: part.type, e: Date.now() + 12 * 3600_000 }))
   return `/api/mail/inline/${Buffer.from(sealed).toString('base64url')}`
 }
 
-async function render(acc: Linked, e: Json, images: boolean): Promise<Message> {
+async function renderInner(acc: Linked, e: Json, images: boolean): Promise<Message> {
   const values = (e.bodyValues ?? {}) as Record<string, { value?: string; isTruncated?: boolean }>
   const parts = (list: unknown): Json[] => (Array.isArray(list) ? list : [])
   const htmlParts = parts(e.htmlBody)
@@ -584,7 +669,7 @@ async function render(acc: Linked, e: Json, images: boolean): Promise<Message> {
 }
 
 /** A conversation, oldest first. `images`: message ids to show with remote images (Load images). */
-export async function getThread(acc: Linked, threadId: string, images: string[]): Promise<{ id: string; messages: Message[] }> {
+async function getThreadInner(acc: Linked, threadId: string, images: string[]): Promise<{ id: string; messages: Message[] }> {
   if (!ID.test(threadId)) throw new HttpError(400, 'Bad thread')
   const r = await jmap(acc, [
     ['Thread/get', { ids: [threadId] }, 't'],
@@ -600,7 +685,7 @@ export async function getThread(acc: Linked, threadId: string, images: string[])
 }
 
 /** One message again (with remote images, after Load images). */
-export async function getMessage(acc: Linked, emailId: string, images: boolean): Promise<Message> {
+async function getMessageInner(acc: Linked, emailId: string, images: boolean): Promise<Message> {
   if (!ID.test(emailId)) throw new HttpError(400, 'Bad message')
   const r = await jmap(acc, [['Email/get', { ids: [emailId], properties: MESSAGE_PROPS, ...BODY_ARGS }, 'g']])
   const e = (r.get('g', 'Email/get').list as Json[])[0]
@@ -620,7 +705,7 @@ const idList = (v: unknown, max = 500): string[] => (Array.isArray(v) ? [...new 
  * Flags and moves. `threadIds` reach every message of those conversations (in `from`, when that
  * is given: archiving a conversation from the Inbox leaves its Sent replies where they are).
  */
-export async function act(acc: Linked, body: { op?: unknown; emailIds?: unknown; threadIds?: unknown; to?: unknown; from?: unknown }) {
+async function actInner(acc: Linked, body: { op?: unknown; emailIds?: unknown; threadIds?: unknown; to?: unknown; from?: unknown }) {
   const op = body.op as Op
   if (!OPS.has(op)) throw new HttpError(400, 'Unknown action')
   const emailIds = idList(body.emailIds)
@@ -695,7 +780,7 @@ export async function act(acc: Linked, body: { op?: unknown; emailIds?: unknown;
     if (failed.length) throw new HttpError(502, `The mail server refused ${failed.length === 1 ? 'one change' : `${failed.length} changes`}: ${failed[0].description ?? failed[0].type}`)
     changed += Object.keys(set.updated ?? {}).length + (set.destroyed ?? []).length
   }
-  metas.delete(acc.id) // unread counts moved
+  metas.delete(acc.key) // unread counts moved
   tellPages(acc.user.id, 'mail', { account: acc.id })
   return { changed }
 }
@@ -765,7 +850,7 @@ function draftEmail(m: Meta, d: DraftInput): { email: Json; identity: Identity |
 }
 
 /** An old draft to replace: only if it really is a draft, so a save never deletes a received message. */
-async function oldDraft(acc: Linked, id: unknown): Promise<string | null> {
+async function oldDraftInner(acc: Linked, id: unknown): Promise<string | null> {
   if (typeof id !== 'string' || !ID.test(id)) return null
   const r = await jmap(acc, [['Email/get', { ids: [id], properties: ['keywords'] }, 'g']])
   const e = (r.get('g', 'Email/get').list as Json[])[0]
@@ -773,7 +858,7 @@ async function oldDraft(acc: Linked, id: unknown): Promise<string | null> {
 }
 
 /** Saves a draft (replacing the one before); answers its new id. */
-export async function saveDraft(acc: Linked, d: DraftInput): Promise<{ id: string }> {
+async function saveDraftInner(acc: Linked, d: DraftInput): Promise<{ id: string }> {
   const m = await meta(acc)
   const { email } = draftEmail(m, d)
   const old = await oldDraft(acc, d.id)
@@ -785,7 +870,7 @@ export async function saveDraft(acc: Linked, d: DraftInput): Promise<{ id: strin
   return { id: created.id }
 }
 
-export async function discardDraft(acc: Linked, id: unknown) {
+async function discardDraftInner(acc: Linked, id: unknown) {
   const old = await oldDraft(acc, id)
   if (!old) return
   const r = await jmap(acc, [['Email/set', { destroy: [old] }, 's']])
@@ -798,7 +883,7 @@ export async function discardDraft(acc: Linked, id: unknown) {
  * once the server has taken it, it moves to Sent and loses $draft (onSuccessUpdateEmail), and the
  * draft it came from goes. The answered message gets $answered ($forwarded for a forward).
  */
-export async function send(acc: Linked, d: DraftInput): Promise<{ id: string }> {
+async function sendInner(acc: Linked, d: DraftInput): Promise<{ id: string }> {
   const s = await session(acc)
   if (!s.submission) throw new HttpError(400, `${acc.label} does not allow sending with this token (it needs Submission access)`)
   const m = await meta(acc)
@@ -827,7 +912,7 @@ export async function send(acc: Linked, d: DraftInput): Promise<{ id: string }> 
     const why = sub.notCreated?.send
     throw new HttpError(502, `Not sent: ${why?.description ?? why?.type ?? 'the mail server refused it'}`)
   }
-  metas.delete(acc.id)
+  metas.delete(acc.key)
   tellPages(acc.user.id, 'mail', { account: acc.id })
   return { id: made.created.draft.id }
 }
@@ -836,7 +921,7 @@ export async function send(acc: Linked, d: DraftInput): Promise<{ id: string }> 
 // Blobs
 
 /** POST /api/mail/:id/upload: the request's bytes into the account's blob store. */
-async function upload(acc: Linked, req: IncomingMessage, type: string | null): Promise<{ blobId: string; type: string; size: number }> {
+async function uploadInner(acc: Linked, req: IncomingMessage, type: string | null): Promise<{ blobId: string; type: string; size: number }> {
   // A custom header means a cross-site form can't post here (it would need a preflight).
   if (req.headers['x-mail-upload'] !== '1') throw new HttpError(400, 'Upload with X-Mail-Upload: 1')
   const s = await session(acc)
@@ -849,7 +934,7 @@ async function upload(acc: Linked, req: IncomingMessage, type: string | null): P
     chunks.push(chunk as Buffer)
   }
   bodyRead(req)
-  const res = await guardedFetch(acc.user, fill(s.uploadUrl, { accountId: s.accountId }), {
+  const res = await mailFetch(acc, fill(s.uploadUrl, { accountId: s.accountId }), {
     method: 'POST',
     headers: { ...bearer(acc.token), 'Content-Type': contentType },
     body: Buffer.concat(chunks),
@@ -862,12 +947,12 @@ async function upload(acc: Linked, req: IncomingMessage, type: string | null): P
 }
 
 /** `range`: a byte range asked for by a player seeking in audio or video (passed on as it is). */
-async function fetchBlob(acc: Linked, blobId: string, name: string, type: string, range: string | null = null): Promise<Response> {
+async function fetchBlobInner(acc: Linked, blobId: string, name: string, type: string, range: string | null = null): Promise<Response> {
   if (!ID.test(blobId)) throw new HttpError(400, 'Bad attachment')
   const s = await session(acc)
   const headers: Record<string, string> = { ...bearer(acc.token) }
   if (range) headers.Range = range
-  const res = await guardedFetch(acc.user, fill(s.downloadUrl, { accountId: s.accountId, blobId, name: name || 'attachment', type: type || 'application/octet-stream' }), { headers, signal: AbortSignal.timeout(120_000) }).catch((e) => (rethrowEgress(e), null))
+  const res = await mailFetch(acc, fill(s.downloadUrl, { accountId: s.accountId, blobId, name: name || 'attachment', type: type || 'application/octet-stream' }), { headers, signal: AbortSignal.timeout(120_000) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, `${acc.label} did not answer`)
   if (res.status === 404) throw new HttpError(404, 'That attachment is gone')
   if (res.status === 416) throw new HttpError(416, 'Range not satisfiable')
@@ -875,7 +960,7 @@ async function fetchBlob(acc: Linked, blobId: string, name: string, type: string
   return res
 }
 
-async function blobText(acc: Linked, blobId: string, max: number): Promise<string> {
+async function blobTextInner(acc: Linked, blobId: string, max: number): Promise<string> {
   return (await readCapped(await fetchBlob(acc, blobId, 'invite.ics', 'text/calendar'), max)).toString('utf8')
 }
 
@@ -912,8 +997,8 @@ async function pipeBlob(res: ServerResponse, blob: Response, name: string, type:
 }
 
 /** GET /api/mail/inline/<sealed>: an inline picture for the message frame (no cookie there). */
-async function serveInline(res: ServerResponse, token: string, head: boolean) {
-  let claim: { u: number; a: number; b: string; t: string; e: number }
+async function serveInline(req: IncomingMessage, res: ServerResponse, token: string, head: boolean) {
+  let claim: { k: string; session: SessionBinding; u: number; a: number; b: string; t: string; e: number }
   try {
     claim = JSON.parse(decrypt(Buffer.from(token, 'base64url').toString('utf8')))
   } catch {
@@ -923,18 +1008,22 @@ async function serveInline(res: ServerResponse, token: string, head: boolean) {
   const user = userById(claim.u)
   if (!user) throw new HttpError(404, 'Not found')
   const acc = linked(user, claim.a)
-  await pipeBlob(res, await fetchBlob(acc, claim.b, 'image', claim.t), 'image', claim.t, true, head)
+  if (claim.k !== acc.key || !claim.session || claim.session.userId !== user.id) throw new HttpError(404, 'Not found')
+  await runPrivateRequest(req, res, user, async () => {
+    bindMailRequest(acc)
+    await pipeBlob(res, await fetchBlob(acc, claim.b, 'image', claim.t), 'image', claim.t, true, head)
+  }, claim.session)
 }
 
 // ---------------------------------------------------------------------------------------------
 // People: recent correspondents, for the recipient fields until Contacts takes over
 
 type Person = { name: string | null; email: string; count: number; last: string }
-const people = new Map<number, { at: number; list: Person[] }>()
+const people = new Map<string, { at: number; list: Person[] }>()
 
 /** Whom the account wrote to (Sent) and heard from (Inbox) lately, most often first. */
-async function correspondents(acc: Linked): Promise<Person[]> {
-  const known = people.get(acc.id)
+async function correspondentsInner(acc: Linked): Promise<Person[]> {
+  const known = people.get(acc.key)
   if (known && Date.now() - known.at < 10 * 60_000) return known.list
   const m = await meta(acc)
   const sent = m.role('sent')
@@ -962,11 +1051,12 @@ async function correspondents(acc: Linked): Promise<Person[]> {
   }
   const own = new Set(m.identities.map((i) => i.email.toLowerCase()))
   const list = [...map.values()].filter((p) => !own.has(p.email.toLowerCase()) && !/^(no-?reply|mailer-daemon|bounce)/i.test(p.email)).sort((a, b) => b.count - a.count || b.last.localeCompare(a.last))
-  people.set(acc.id, { at: Date.now(), list })
+  assertMail(acc)
+  people.set(acc.key, { at: Date.now(), list })
   return list
 }
 
-async function suggest(acc: Linked, q: string): Promise<{ name: string | null; email: string }[]> {
+async function suggestInner(acc: Linked, q: string): Promise<{ name: string | null; email: string }[]> {
   const needle = q.trim().toLowerCase()
   const list = await correspondents(acc)
   return list
@@ -985,10 +1075,10 @@ const USE_WINDOW = 30 * 60_000
 const POLL_MS = Number(process.env.MAIL_POLL_MS) || 2 * 60_000
 const WATCH_MS = Number(process.env.MAIL_WATCH_MS) || 60_000
 
-type Live = { accountId: number; userId: number; stopped: boolean; abort: AbortController | null; mode: 'stream' | 'poll'; failures: number; nextPoll: number; emailState: string | null; mailboxState: string | null; chain: Promise<void>; connected: boolean }
-const live = new Map<number, Live>()
+type Live = { key: string; accountId: number; userId: number; stopped: boolean; abort: AbortController | null; mode: 'stream' | 'poll'; failures: number; nextPoll: number; emailState: string | null; mailboxState: string | null; chain: Promise<void>; connected: boolean }
+const live = new Map<string, Live>()
 
-function stopLive(id: number) {
+function stopLive(id: string) {
   const l = live.get(id)
   if (!l) return
   l.stopped = true
@@ -1009,7 +1099,8 @@ function current(l: Live): Linked | null {
   const user = userById(l.userId)
   if (!user) return null
   try {
-    return linked(user, l.accountId)
+    const acc = linked(user, l.accountId)
+    return acc.key === l.key ? acc : null
   } catch {
     return null
   }
@@ -1031,6 +1122,7 @@ async function checkChanges(l: Live) {
     else {
       const r = await jmap(acc, [['Email/get', { ids: [] }, 'g']])
       l.emailState = String(r.get('g', 'Email/get').state ?? '')
+      assertMail(acc)
       table().prepare('UPDATE jmap_accounts SET push_state = ? WHERE id = ?').run(l.emailState, acc.id)
       return
     }
@@ -1053,15 +1145,16 @@ async function checkChanges(l: Live) {
     l.emailState = String(c.newState ?? l.emailState)
     if (!c.hasMoreChanges) break
   }
+  assertMail(acc)
   table().prepare('UPDATE jmap_accounts SET push_state = ? WHERE id = ?').run(l.emailState, acc.id)
   if (changed) {
-    metas.delete(acc.id)
+    metas.delete(acc.key)
     tellPages(acc.user.id, 'mail', { account: acc.id })
   }
   if (created.length) await announce(acc, created.slice(-100))
 }
 
-async function announce(acc: Linked, ids: string[]) {
+async function announceInner(acc: Linked, ids: string[]) {
   const prefs = normalizePrefs(readState(acc.user).notify?.value)
   if (!allows(prefs, 'mail.new')) return
   const r = await jmap(acc, [
@@ -1072,7 +1165,8 @@ async function announce(acc: Linked, ids: string[]) {
   const cutoff = Date.now() - 2 * 864e5
   const fresh = (r.get('g', 'Email/get').list as Json[])
     .filter((e) => inbox && e.mailboxIds?.[inbox] && !e.keywords?.$seen && !e.keywords?.$draft && Date.parse(e.receivedAt) > cutoff)
-    .filter((e) => claimOnce(acc.user, `mail:${acc.id}:${e.id}`))
+    .filter((e) => (assertMail(acc), claimOnce(acc.user, `mail:${acc.key}:${e.id}`)))
+  assertMail(acc)
   if (!fresh.length) return
   const who = (e: Json) => addresses(e.from)[0]?.name || addresses(e.from)[0]?.email || 'Someone'
   if (fresh.length > 3) {
@@ -1094,7 +1188,7 @@ async function announce(acc: Linked, ids: string[]) {
 async function stream(l: Live) {
   while (!l.stopped) {
     const acc = current(l)
-    if (!acc) return stopLive(l.accountId)
+    if (!acc) return stopLive(l.key)
     let s: Session
     try {
       s = await session(acc)
@@ -1118,7 +1212,7 @@ async function stream(l: Live) {
     }
     try {
       const url = fill(s.eventSourceUrl, { types: 'Email,Mailbox', closeafter: 'no', ping: '60' })
-      const res = await guardedFetch(acc.user, url, { headers: { ...bearer(acc.token), Accept: 'text/event-stream', 'Cache-Control': 'no-cache' }, signal: abort.signal })
+      const res = await mailFetch(acc, url, { headers: { ...bearer(acc.token), Accept: 'text/event-stream', 'Cache-Control': 'no-cache' }, signal: abort.signal })
       if (!res.ok || !res.body) throw new Error(`EventSource answered ${res.status}`)
       l.connected = true
       watch()
@@ -1148,7 +1242,8 @@ async function stream(l: Live) {
           if (!mine) continue
           if (mine.Email && mine.Email !== l.emailState) void queueCheck(l)
           else if (mine.Mailbox && mine.Mailbox !== l.mailboxState) {
-            metas.delete(acc.id)
+            assertMail(acc)
+            metas.delete(acc.key)
             tellPages(acc.user.id, 'mail', { account: acc.id })
           }
           if (mine.Mailbox) l.mailboxState = mine.Mailbox
@@ -1180,18 +1275,17 @@ function useful(user: User): boolean {
 export async function mailWatch() {
   const rows = table().prepare('SELECT id, user_id FROM jmap_accounts').all() as { id: number; user_id: number }[]
   const users = new Map(accounts().map((u) => [u.id, u]))
-  const wanted = new Set<number>()
+  const wanted = new Map<string, Linked>()
   for (const r of rows) {
     const user = users.get(r.user_id)
-    if (user && useful(user)) wanted.add(r.id)
+    if (user && useful(user)) { const acc = linked(user, r.id); wanted.set(acc.key, acc) }
   }
   for (const id of [...live.keys()]) if (!wanted.has(id)) stopLive(id)
-  for (const r of rows) {
-    if (!wanted.has(r.id)) continue
-    let l = live.get(r.id)
+  for (const [key, acc] of wanted) {
+    let l = live.get(key)
     if (!l) {
-      l = { accountId: r.id, userId: r.user_id, stopped: false, abort: null, mode: 'stream', failures: 0, nextPoll: 0, emailState: null, mailboxState: null, chain: Promise.resolve(), connected: false }
-      live.set(r.id, l)
+      l = { key, accountId: acc.id, userId: acc.user.id, stopped: false, abort: null, mode: 'stream', failures: 0, nextPoll: 0, emailState: null, mailboxState: null, chain: Promise.resolve(), connected: false }
+      live.set(key, l)
       const started = l
       void stream(started).catch((e) => console.error(`mail push (${started.accountId}):`, (e as Error).message))
     }
@@ -1215,7 +1309,7 @@ export const mailAccount = (user: User, id: unknown): Linked => linked(user, id)
 export const mailAccounts = (user: User): Linked[] => listMail(user).map((a) => linked(user, a.id))
 
 /** The addresses the account sends as: its identities and its username, lower case. */
-export async function ownAddresses(acc: Linked): Promise<string[]> {
+async function ownAddressesInner(acc: Linked): Promise<string[]> {
   const [m, s] = await Promise.all([meta(acc), session(acc)])
   return [...new Set([...m.identities.map((i) => i.email), s.username].filter((e) => EMAIL.test(e)).map((e) => e.toLowerCase()))]
 }
@@ -1223,7 +1317,7 @@ export async function ownAddresses(acc: Linked): Promise<string[]> {
 export type MessageFacts = { id: string; threadId: string; subject: string; from: Address[]; to: Address[]; cc: Address[]; receivedAt: string; preview: string; messageId: string | null; ics: string | null }
 
 /** What other apps need of a message: its people, a snippet, its Message-ID and its invitation's iCalendar text. */
-export async function messageFacts(acc: Linked, emailId: unknown): Promise<MessageFacts> {
+async function messageFactsInner(acc: Linked, emailId: unknown): Promise<MessageFacts> {
   if (typeof emailId !== 'string' || !ID.test(emailId)) throw new HttpError(400, 'Bad message')
   const r = await jmap(acc, [['Email/get', { ids: [emailId], properties: ['id', 'threadId', 'subject', 'from', 'to', 'cc', 'receivedAt', 'preview', 'messageId', 'textBody', 'attachments', 'bodyValues'], fetchTextBodyValues: true, maxBodyValueBytes: 256 * 1024 }, 'g']])
   const e = (r.get('g', 'Email/get').list as Json[])[0]
@@ -1236,7 +1330,7 @@ export async function messageFacts(acc: Linked, emailId: unknown): Promise<Messa
 }
 
 /** The latest conversations with any of these people (from, to or cc), outside Drafts, Trash and Junk. */
-export async function mailWith(acc: Linked, emails: string[], limit: number): Promise<ThreadRow[]> {
+async function mailWithInner(acc: Linked, emails: string[], limit: number): Promise<ThreadRow[]> {
   const people = emails.filter((e) => EMAIL.test(e)).slice(0, 20)
   if (!people.length) return []
   const m = await meta(acc)
@@ -1252,7 +1346,7 @@ export async function mailWith(acc: Linked, emails: string[], limit: number): Pr
 }
 
 /** The message with this Message-ID (without its angle brackets) in the account, or null. */
-export async function findByMessageId(acc: Linked, messageId: string): Promise<{ id: string; threadId: string } | null> {
+async function findByMessageIdInner(acc: Linked, messageId: string): Promise<{ id: string; threadId: string } | null> {
   if (!messageId || messageId.length > 998 || /[\s<>]/.test(messageId)) return null
   const r = await jmap(acc, [
     ['Email/query', { filter: { header: ['Message-ID', messageId] }, sort: [{ property: 'receivedAt', isAscending: false }], limit: 5 }, 'q'],
@@ -1269,7 +1363,7 @@ export async function findByMessageId(acc: Linked, messageId: string): Promise<{
 // fetched but the message itself, and nothing marked read).
 
 /** The account's mailboxes and the addresses it sends as, and whether its token may send. */
-export async function mailMeta(acc: Linked): Promise<{ mailboxes: Mailbox[]; identities: Identity[]; canSend: boolean }> {
+async function mailMetaInner(acc: Linked): Promise<{ mailboxes: Mailbox[]; identities: Identity[]; canSend: boolean }> {
   const [m, s] = await Promise.all([meta(acc), session(acc)])
   return { mailboxes: m.mailboxes, identities: m.identities, canSend: s.submission }
 }
@@ -1300,7 +1394,7 @@ export type PlainMessage = {
  * Messages by id, or every message of the given conversations (oldest first), with their text
  * parts when `bodies`. `missing` names the ids the account does not have.
  */
-export async function plainMessages(acc: Linked, target: { emailIds?: string[]; threadIds?: string[] }, bodies: boolean): Promise<{ messages: PlainMessage[]; missing: string[] }> {
+async function plainMessagesInner(acc: Linked, target: { emailIds?: string[]; threadIds?: string[] }, bodies: boolean): Promise<{ messages: PlainMessage[]; missing: string[] }> {
   const emailIds = idList(target.emailIds, 100)
   const threadIds = idList(target.threadIds, 50)
   const props = ['id', 'threadId', 'mailboxIds', 'keywords', 'from', 'to', 'cc', 'bcc', 'replyTo', 'subject', 'receivedAt', 'messageId', 'references', 'attachments', ...(bodies ? ['textBody', 'bodyValues'] : [])]
@@ -1365,7 +1459,7 @@ const base64Lines = (s: string) => Buffer.from(s, 'utf8').toString('base64').rep
  * Content-Type parameters, so the message is written here whole and brought in with
  * Email/import, then submitted like any other (and moved to Sent).
  */
-export async function sendItip(acc: Linked, opts: { from: string; to: Address; subject: string; text: string; ics: string; method: string }): Promise<{ id: string }> {
+async function sendItipInner(acc: Linked, opts: { from: string; to: Address; subject: string; text: string; ics: string; method: string }): Promise<{ id: string }> {
   const s = await session(acc)
   if (!s.submission) throw new HttpError(400, `${acc.label} does not allow sending with this token (it needs Submission access)`)
   if (!EMAIL.test(opts.to.email)) throw new HttpError(400, 'The organiser has no email address')
@@ -1399,7 +1493,7 @@ export async function sendItip(acc: Linked, opts: { from: string; to: Address; s
     `--${boundary}--`,
     '',
   ].join('\r\n')
-  const res = await guardedFetch(acc.user, fill(s.uploadUrl, { accountId: s.accountId }), { method: 'POST', headers: { ...bearer(acc.token), 'Content-Type': 'message/rfc822' }, body: Buffer.from(raw, 'utf8'), signal: AbortSignal.timeout(TIMEOUT) }).catch((e) => (rethrowEgress(e), null))
+  const res = await mailFetch(acc, fill(s.uploadUrl, { accountId: s.accountId }), { method: 'POST', headers: { ...bearer(acc.token), 'Content-Type': 'message/rfc822' }, body: Buffer.from(raw, 'utf8'), signal: AbortSignal.timeout(TIMEOUT) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, `${acc.label} did not answer`)
   const up = JSON.parse((await readCapped(res, 64 * 1024)).toString('utf8') || '{}') as Json
   if (!res.ok || typeof up.blobId !== 'string') throw new HttpError(502, `${acc.label} refused the upload (${res.status})`)
@@ -1412,7 +1506,7 @@ export async function sendItip(acc: Linked, opts: { from: string; to: Address; s
   if (!made.created?.reply) throw new HttpError(502, `The mail server refused the reply: ${made.notCreated?.reply?.description ?? made.notCreated?.reply?.type ?? 'error'}`)
   const sub = r.get('s', 'EmailSubmission/set')
   if (!sub.created?.send) throw new HttpError(502, `Not sent: ${sub.notCreated?.send?.description ?? sub.notCreated?.send?.type ?? 'the mail server refused it'}`)
-  metas.delete(acc.id)
+  metas.delete(acc.key)
   tellPages(acc.user.id, 'mail', { account: acc.id })
   return { id: made.created.reply.id }
 }
@@ -1428,7 +1522,7 @@ export async function handleMailApi(req: IncomingMessage, res: ServerResponse, u
   const read = method === 'GET' || head
   // Inline pictures in the message frame: a sealed link, not the session (the frame sends no cookie).
   const inline = /^\/api\/mail\/inline\/([\w-]{20,2000})$/.exec(path)
-  if (inline && read) return await serveInline(res, inline[1], head), true
+  if (inline && read) return await serveInline(req, res, inline[1], head), true
 
   const user = requireUser(req)
   lastUse.set(user.id, Date.now())
@@ -1436,7 +1530,7 @@ export async function handleMailApi(req: IncomingMessage, res: ServerResponse, u
   if (path === '/api/mail/accounts' && read) return json(res, 200, { accounts: listMail(user) }), true
   if (path === '/api/mail/accounts' && method === 'POST') {
     const info = await addMail(user, await readJson(req, 16 * 1024))
-    void mailWatch().catch(() => {})
+    void withoutPrivateRequest(() => mailWatch()).catch(() => {})
     return json(res, 200, info), true
   }
   // A sender's brand icon by domain (server/mailicons.ts): for the avatars in the list and reader.
@@ -1448,6 +1542,7 @@ export async function handleMailApi(req: IncomingMessage, res: ServerResponse, u
   const route = /^\/api\/mail\/(\d+)\/([a-z]+)(?:\/([A-Za-z0-9_-]{1,255}))?$/.exec(path)
   if (!route) throw new HttpError(404, 'Not found')
   const acc = linked(user, route[1])
+  bindMailRequest(acc)
   const [, , what, id] = route
   if (what === 'bootstrap' && read) {
     const [m, s] = await Promise.all([meta(acc, true), session(acc)])
@@ -1472,3 +1567,53 @@ export async function handleMailApi(req: IncomingMessage, res: ServerResponse, u
   if (what === 'suggest' && read) return json(res, 200, { people: await suggest(acc, (q('q') ?? '').slice(0, 100)) }), true
   throw new HttpError(404, 'Not found')
 }
+
+const session = mailOperation(sessionInner)
+
+const jmap = mailOperation(jmapInner)
+
+const meta = mailOperation(metaInner)
+
+export const listThreads = mailOperation(listThreadsInner)
+
+const render = mailOperation(renderInner)
+
+export const getThread = mailOperation(getThreadInner)
+
+export const getMessage = mailOperation(getMessageInner)
+
+export const act = mailOperation(actInner)
+
+const oldDraft = mailOperation(oldDraftInner)
+
+export const saveDraft = mailOperation(saveDraftInner)
+
+export const discardDraft = mailOperation(discardDraftInner)
+
+export const send = mailOperation(sendInner)
+
+const upload = mailOperation(uploadInner)
+
+const fetchBlob = mailOperation(fetchBlobInner)
+
+const blobText = mailOperation(blobTextInner)
+
+const correspondents = mailOperation(correspondentsInner)
+
+const suggest = mailOperation(suggestInner)
+
+const announce = mailOperation(announceInner)
+
+export const ownAddresses = mailOperation(ownAddressesInner)
+
+export const messageFacts = mailOperation(messageFactsInner)
+
+export const mailWith = mailOperation(mailWithInner)
+
+export const findByMessageId = mailOperation(findByMessageIdInner)
+
+export const mailMeta = mailOperation(mailMetaInner)
+
+export const plainMessages = mailOperation(plainMessagesInner)
+
+export const sendItip = mailOperation(sendItipInner)

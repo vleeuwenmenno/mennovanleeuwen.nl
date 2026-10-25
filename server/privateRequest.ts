@@ -2,13 +2,14 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { sessionBinding, type User } from './auth.ts'
 import { HttpError, SECURITY } from './http.ts'
-import { sessionStored, track } from './liveSessions.ts'
+import { sessionStored, track, type SessionBinding } from './liveSessions.ts'
 
 // Slow private handlers share one immutable request authority. Provider helpers use this scope
 // before side effects; the response checks it at headers, every write, and end (including HEAD/304).
 // Background work may retain it until its own completion, rather than silently becoming anonymous.
 type Scope = {
   req: IncomingMessage
+  binding: SessionBinding
   userId: number
   signal: AbortSignal
   check: () => void
@@ -18,13 +19,32 @@ type Scope = {
   retain: () => () => void
 }
 const requests = new AsyncLocalStorage<Scope>()
+const providerSignals = new AsyncLocalStorage<AbortSignal[]>()
 const providerGuards = new AsyncLocalStorage<(() => void)[]>()
 /** Preserve prepared provider authority across approval and every await in execution. */
 export function withProviderGuard<T>(check: () => void, work: () => T): T {
   return providerGuards.run([...(providerGuards.getStore() ?? []), check], work)
 }
+/** Keeps standalone provider jobs abortable for their entire awaited lifetime. */
+export async function withProviderLifetime<T>(check: () => void, subscribe: (end: () => void) => () => void, work: () => Promise<T>): Promise<T> {
+  const gone = new AbortController()
+  const guard = () => {
+    gone.signal.throwIfAborted()
+    try { check() } catch (error) { gone.abort(error); throw error }
+  }
+  const stop = subscribe(() => gone.abort(new HttpError(409, 'The linked account changed: try again')))
+  try {
+    return await providerSignals.run([...(providerSignals.getStore() ?? []), gone.signal], () => withProviderGuard(guard, async () => {
+      requirePrivateRequest()
+      const result = await work()
+      requirePrivateRequest()
+      return result
+    }))
+  } finally { stop() }
+}
+export const privateSessionBinding = () => requests.getStore()?.binding
 export const privateRequestAuthority = (): object | undefined => requests.getStore() ?? providerGuards.getStore()
-export const withoutPrivateRequest = <T>(work: () => T): T => requests.exit(() => providerGuards.exit(work))
+export const withoutPrivateRequest = <T>(work: () => T): T => requests.exit(() => providerGuards.exit(() => providerSignals.exit(work)))
 export const privateRequestActive = (req: IncomingMessage) => requests.getStore()?.req === req
 export function requirePrivateRequest(user?: Pick<User, 'id'>) {
   for (const check of providerGuards.getStore() ?? []) check()
@@ -34,8 +54,10 @@ export function requirePrivateRequest(user?: Pick<User, 'id'>) {
   scope.check()
 }
 export function privateSignal(signal?: AbortSignal | null): AbortSignal | undefined {
-  const own = requests.getStore()?.signal
-  return own && signal ? AbortSignal.any([own, signal]) : own ?? signal ?? undefined
+  const signals = [...(providerSignals.getStore() ?? [])]
+  if (requests.getStore()?.signal) signals.push(requests.getStore()!.signal)
+  if (signal) signals.push(signal)
+  return signals.length ? AbortSignal.any(signals) : undefined
 }
 export const retainPrivateRequest = () => requests.getStore()?.retain() ?? (() => {})
 
@@ -48,8 +70,8 @@ export function bindPrivateAccess(check: () => void, subscribe: (end: () => void
   scope.check()
 }
 
-export function runPrivateRequest<T>(req: IncomingMessage, res: ServerResponse, user: User, work: () => T): T {
-  const binding = sessionBinding(req)
+export function runPrivateRequest<T>(req: IncomingMessage, res: ServerResponse, user: User, work: () => T, original?: SessionBinding): T {
+  const binding = original ?? sessionBinding(req)
   if (!binding || binding.userId !== user.id) throw new HttpError(401, 'Not signed in')
   const gone = new AbortController()
   const writeHead = res.writeHead.bind(res), write = res.write.bind(res), end = res.end.bind(res)
@@ -57,7 +79,7 @@ export function runPrivateRequest<T>(req: IncomingMessage, res: ServerResponse, 
   let references = 1
   let disposed = false
   const scope: Scope = {
-    req, userId: user.id, signal: gone.signal, access: new Set(), cleanup: new Set(),
+    req, binding, userId: user.id, signal: gone.signal, access: new Set(), cleanup: new Set(),
     check() {
       if (invalid) throw invalid
       if (Date.now() >= binding.expiresAt || !sessionStored(binding.key, binding.userId)) {
