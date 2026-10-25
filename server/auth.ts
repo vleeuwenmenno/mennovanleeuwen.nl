@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { appSetting, database, decrypt, encrypt, nextUserId, sha256 } from './db.ts'
 import { cookies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
+import { endSession, track, type SessionBinding } from './liveSessions.ts'
 
 // "Sign in with GitHub" (OAuth web flow). Any GitHub account may sign up while registration is
 // open and there is room (MAX_USERS, default 100; the admin can change both in Settings → Users).
@@ -68,6 +69,43 @@ type UserRow = { id: number; github_id: number; login: string; name: string | nu
 export function sessionKey(req: IncomingMessage): string | null {
   const sid = cookies(req)[SESSION_COOKIE]
   return sid ? sha256(sid) : null
+}
+
+/**
+ * The stored session this request is signed in with (and who it is for), or null: what a
+ * long-lived connection is bound to, so that the session ending ends it (server/liveSessions.ts).
+ */
+export function sessionBinding(req: IncomingMessage): SessionBinding | null {
+  if (!authEnabled()) return null
+  const key = sessionKey(req)
+  if (!key) return null
+  const row = database()
+    .prepare('SELECT s.user_id, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ? AND u.banned_at IS NULL')
+    .get(key, Date.now()) as { user_id: number; expires_at: number } | undefined
+  return row ? { key, userId: row.user_id, expiresAt: row.expires_at } : null
+}
+
+/**
+ * Binds a connection that stays open (a stream, a socket) to the session of the request that
+ * opened it, for that account. `close` ends it when the session does: signing out, running out,
+ * a ban (server/liveSessions.ts). Null when the request has no such session. The caller asks
+ * `check()` before it sends something private or acts, and calls `stop()` when the connection
+ * ends by itself.
+ */
+export function bindConnection(req: IncomingMessage, userId: number, close: (why: string) => void) {
+  const binding = sessionBinding(req)
+  return binding && binding.userId === userId ? track(binding, close) : null
+}
+
+/**
+ * Ties a streamed response (NDJSON of an Agents turn, a joined turn, the Image Studio) to the
+ * session that asked for it: when that session ends the response is cut. What runs on the server
+ * (a turn) goes on, as when a window is closed; only what it would send to that session stops.
+ */
+export function bindResponse(res: ServerResponse, userId: number) {
+  const live = res.req ? bindConnection(res.req, userId, () => res.destroy()) : null
+  if (!live) return void res.destroy()
+  res.once('close', () => live.stop())
 }
 
 /** The signed-in user for this request, or null. */
@@ -238,6 +276,8 @@ export function logout(req: IncomingMessage, res: ServerResponse) {
     // Its push subscriptions go with it: this device no longer gets the account's messages.
     database().prepare('DELETE FROM push_subscriptions WHERE session_id = ?').run(sha256(sid))
     database().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid))
+    // Its open streams and sockets close now; the account's other sessions keep theirs.
+    endSession(sha256(sid))
   }
   json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SESSION_COOKIE, '', { maxAge: 0 }), setCookie(req, LOGIN_COOKIE, '', { maxAge: 0, readable: true }), setCookie(req, UID_COOKIE, '', { maxAge: 0, readable: true })] })
 }

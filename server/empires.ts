@@ -4,7 +4,7 @@ import type { IncomingMessage } from 'node:http'
 import { isIP } from 'node:net'
 import { dirname, join as joinPath, resolve } from 'node:path'
 import type { Duplex } from 'node:stream'
-import { currentUser } from './auth.ts'
+import { bindConnection, currentUser } from './auth.ts'
 import { database } from './db.ts'
 import { isPrivate } from './egress.ts'
 import { sameOrigin } from './http.ts'
@@ -789,7 +789,7 @@ function awayByAccount(account: number) {
   return best
 }
 
-function hello(ws: WsConnection, conn: { p: Player | null; account: number | null; login: string | null; ip: string }, token: unknown, stored: boolean) {
+function hello(ws: WsConnection, conn: Conn, token: unknown, stored: boolean) {
   const firstName = (p: Player) => (conn.login && !nameTaken(conn.login, p) ? conn.login : suggest(p))
   // Coming back within the grace period: the same player, name, lobby and seat, on this connection.
   // The browser's last token (from a closed tab) doesn't take over a tab still playing with it.
@@ -834,7 +834,10 @@ function hello(ws: WsConnection, conn: { p: Player | null; account: number | nul
   send(p, { t: 'ready', suggestion: firstName(p), login: conn.login })
 }
 
-function onMessage(ws: WsConnection, conn: { p: Player | null; account: number | null; login: string | null; ip: string }, text: string) {
+/** What a socket knows about who opened it: its player, the account and login it was signed in as when it connected, and the session it is bound to (null for a guest). */
+type Conn = { p: Player | null; account: number | null; login: string | null; ip: string; live: ReturnType<typeof bindConnection> }
+
+function onMessage(ws: WsConnection, conn: Conn, text: string) {
   let m: ClientMsg
   try {
     m = JSON.parse(text)
@@ -842,6 +845,10 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; account: number |
     return ws.close(1003, 'not json')
   }
   if (!m || typeof m !== 'object' || typeof m.t !== 'string') return ws.close(1003, 'bad message')
+  // Before anything is done for this socket its session must still be good. The orders and
+  // heartbeats of a battle (many a second) look the stored session up every few seconds at most;
+  // anything else (names, lobbies, seats, hello) looks it up every time.
+  if (conn.live && !conn.live.check(m.t !== 'cmd' && m.t !== 'hash' && m.t !== 'ping' && m.t !== 'loaded' && m.t !== 'vote')) return ws.close(1008, 'signed out')
 
   if (!conn.p) {
     if (m.t !== 'hello') return ws.close(1008, 'hello first')
@@ -905,11 +912,6 @@ const perIp = new Map<string, number>()
 /** Open WebSockets, said hello or not. */
 let sockets = 0
 
-/** Closes a signed-in account's game connections (signed out everywhere, banned or deleted). */
-export function closeGameSessions(account: number) {
-  for (const p of players.values()) if (p.account === account) p.ws?.close(1008, 'signed out')
-}
-
 /** Takes the WebSocket upgrade for MP_PATH; false for any other path (left for others, such as
  * Vite's hot reload in development). */
 export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
@@ -950,14 +952,25 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
   })
   let login: string | null = null
   let account: number | null = null
+  // A signed-in socket is bound to the stored session that opened it: signing out, the session
+  // running out or a ban closes it (server/liveSessions.ts), and it checks before acting.
+  let live: ReturnType<typeof bindConnection> = null
+  let user: ReturnType<typeof currentUser> = null
   try {
-    const user = currentUser(req)
-    login = user?.login ?? null
-    account = user?.id ?? null
+    user = currentUser(req)
   } catch {
     // No database or sign-in configured: everyone is a guest.
   }
-  const conn = { p: null as Player | null, account, login, ip }
+  if (user) {
+    login = user.login
+    account = user.id
+    live = bindConnection(req, user.id, (why) => ws.close(1008, why))
+    if (!live) {
+      ws.close(1008, 'signed out')
+      return true
+    }
+  }
+  const conn: Conn = { p: null, account, login, ip, live }
   const hello = setTimeout(() => !conn.p && ws.close(1008, 'hello first'), HELLO_MS)
   ws.onMessage = (text) => {
     // A message that breaks something closes this connection, not the server.
@@ -970,6 +983,7 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
   }
   ws.onClose = () => {
     clearTimeout(hello)
+    live?.stop()
     const p = conn.p
     if (p && p.ws === ws) {
       p.ws = null

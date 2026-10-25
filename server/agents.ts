@@ -13,7 +13,7 @@ import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, pre
 import { randomUUID } from 'node:crypto'
 import { expectedMs, icon as gptIcon, image as gptImage, listIcons, MAX_REFERENCE_BYTES, MAX_REFERENCES, openaiImagesReady, type Reference as GptReference, sniff as sniffImage, SLUG as ICON_SLUG } from './agentOpenAI.ts'
 import type { ServerResponse } from 'node:http'
-import { serverKey, type User } from './auth.ts'
+import { bindResponse, serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { search as codeSearch } from './search.ts'
@@ -3207,6 +3207,7 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   checkTurnRoom(user)
   requireKey(user)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
@@ -3733,6 +3734,7 @@ export function followThread(res: ServerResponse, user: User, id: string, termin
   const row = ownThread(user, id)
   if (terminal) attachTerminal(row.id, res)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
   const { thread, messages, pending: waiting } = getThread(user, row.id)
   const live = partial.get(row.id)
@@ -3850,6 +3852,7 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again, upscale, inpaint }
   if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
   await runChain(user, row.id, ask, res, fromTerminal)
@@ -3897,6 +3900,7 @@ export async function upscaleImage(res: ServerResponse, user: User, id: string, 
   checkTurnRoom(user)
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'upscale' && input.operation !== 'refine') throw new HttpError(400, 'Choose an upscale or refine operation')
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   await runChain(user, id, { text: input.operation === 'refine' ? 'Refine image' : 'Upscale image', files: [], zone: 'UTC', upscale: input }, res, false)
 }
 
@@ -3907,6 +3911,7 @@ export async function inpaintImage(res: ServerResponse, user: User, id: string, 
   checkTurnRoom(user)
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'inpaint' && input.operation !== 'remove') throw new HttpError(400, 'Choose an inpaint or remove operation')
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   await runChain(user, id, { text: input.operation === 'remove' ? 'Remove masked area' : 'Inpaint image', files: [], zone: 'UTC', inpaint: input }, res, false)
 }
 
@@ -3917,6 +3922,7 @@ export async function generateAnother(res: ServerResponse, user: User, id: strin
   checkTurnRoom(user)
   imageAgainAllowed(user, id, image)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   await runChain(user, id, { text: 'Generate another', files: [], zone: 'UTC', again: image }, res, false)
 }
 

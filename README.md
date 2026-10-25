@@ -800,6 +800,27 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
 
 `pnpm check:sync-accounts` checks this against the real server and with tabs in memory.
 
+**Open connections end with their session** ([`server/liveSessions.ts`](server/liveSessions.ts)).
+What stays open after one check at the start (the notification stream, the Empires socket, and the
+streamed answers of Agents: a turn, a joined turn, the Image Studio) is bound to the stored session
+that opened it (`sessions.id`, the hash of the cookie), not just to the account:
+
+- **Signing out** closes the streams and sockets of that session at once, and no other: the
+  account's other devices keep theirs. Signing out everywhere (the admin's Sign out), a ban and
+  deleting the account close every session's.
+- **A session that runs out** is closed at its expiry by one timer per session (not polling).
+  Before a connection is sent something private or acts it asks whether its session is still good:
+  the expiry in memory, and the stored session (still there, account not banned). Notifications
+  look it up every time; the Empires socket every time for names, lobbies and seats, and every few
+  seconds for the battle's orders and heartbeats. A slow sweep (once a minute, only while something
+  is open) catches a session deleted behind the server's back.
+- A closed Agents stream doesn't stop the turn: it goes on like when a window is closed, and its
+  answer reaches the account's live pages and devices (the hub above). Stop and signing out
+  everywhere stop it. Guests have no session and are untouched.
+
+`pnpm check:session-streams` covers it: the registry, a cut response, and the real server with
+two sessions of one account, another account, a guest, an admin's sign-out and a ban.
+
 A browser signing in for the first time takes the account's window layout
 instead of saving its own opening windows over it. Desktop widgets are not part of the window
 layout: they have a set of their own that follows the account (see *Widgets*).

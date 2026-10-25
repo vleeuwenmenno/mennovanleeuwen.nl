@@ -2,9 +2,8 @@ import { stopTurnsOf } from './agents.ts'
 import { isAdmin, type User } from './auth.ts'
 import { database, decrypt, userGone } from './db.ts'
 import { disconnectGoogle } from './google.ts'
-import { closeGameSessions } from './empires.ts'
 import { HttpError } from './http.ts'
-import { closeStreams } from './notifier.ts'
+import { endAccount } from './liveSessions.ts'
 import { unlinkSeafile } from './seafile.ts'
 
 // What happens to a whole account: signed out everywhere, banned (and let back in), deleted.
@@ -24,13 +23,12 @@ function userById(id: number): User {
   return { id: row.id, githubId: row.github_id, login: row.login, name: row.name, avatar: row.avatar, githubToken, githubScopes: [], admin: isAdmin(row.github_id) }
 }
 
-/** Ends every session the account has, and stops its running Agents turns. */
+/** Ends every session the account has, closes every stream and socket they opened, and stops its running Agents turns. */
 export function signOutEverywhere(id: number) {
   database().prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(id)
   database().prepare('DELETE FROM sessions WHERE user_id = ?').run(id)
+  endAccount(id)
   stopTurnsOf(id)
-  closeStreams(id)
-  closeGameSessions(id)
 }
 
 /** Keeps the account (and its spot) but signs it out and lets it no longer sign in. */

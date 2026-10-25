@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { User } from './auth.ts'
+import { bindResponse, type User } from './auth.ts'
 import { database } from './db.ts'
 import { HttpError, json, readJson, SECURITY } from './http.ts'
 import { checkRoom } from './quota.ts'
@@ -128,6 +128,7 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   let plan: Awaited<ReturnType<typeof prepareImageGeneration>>
   try { plan = await prepareImageGeneration(user, thread, runInput(0), ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  bindResponse(res, user.id)
   const send = (e: Record<string, unknown>) => { if (!res.writableEnded) res.write(`${JSON.stringify(e)}\n`) }
   try {
     for (let i = 0; i < batch; i++) {
