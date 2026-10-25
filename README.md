@@ -4901,7 +4901,7 @@ non-root user on port 8080 (`PORT` changes it). Its API routes live in
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
 `/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
 anonymous limit of 60 requests an hour), `/api/git/<owner>/<repo>/releases` (for the Changelog app,
-same cache and token), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+same cache and token; at most 500 answers are kept, failures for 5 seconds, and 6 requests to GitHub run at once, with a quick 503 beyond that), `/api/suggest` (Spotlight's web search suggestions: 1000 answers kept, failures for 30 seconds, 8 engine requests at once, an empty list beyond that; `pnpm check:public-cache` checks both caches' limits), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.
