@@ -1387,7 +1387,7 @@ asks about them or is changing them, so swapping the model or the LoRA is one sh
 than a tour of the settings, and nothing ends with an offer of further work. When a diagram, recipe,
 chart or comparison says it better, the model draws one with a `visual` block (see *Visual blocks*
 above; the prompt's short guide is [`src/data/visual/prompt.ts`](src/data/visual/prompt.ts)), making
-the icons it needs first with `generate_image` in icon mode and naming them `icon:<slug>`. The
+the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_icons`) and naming them `icon:<slug>`. The
 composer holds the mode, the model, which tools the thread may use and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
