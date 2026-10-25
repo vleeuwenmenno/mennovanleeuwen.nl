@@ -22,7 +22,7 @@ export function KeysNote({ win }: { win: WinState }) {
       if (!note || done) return
       const y = note.offsetTop + note.offsetHeight - 16
       const h = Math.min(400, viewH() - DOCK_SPACE - 14 - y)
-      if (h >= 160) wm.setGeometry(win.pid, { y, h })
+      if (h >= 160) wm.setGeometry(win.pid, { y, h }, { automatic: true })
       else if (final) {
         done = true
         wm.close(win.pid)

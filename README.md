@@ -3347,7 +3347,10 @@ nudges desktop widgets and notes into nearby available space when a smaller view
 UI scale crowds them together. The display layout accounts for measured content sizes, tape and
 resting note slants. It never saves these automatic offsets: returning to a larger screen restores
 its layout, and other devices keep their canonical placements. Dragging or resizing saves only
-the widget you changed, not its nudged neighbours. Phones keep their existing column layout.
+the widget you changed, not its nudged neighbours. This browser remembers which item was moved
+last, separately for each account, so the same item keeps priority after a reload. That priority
+never syncs, and a removed widget's priority does not transfer to a new placement. If browser
+storage is blocked, priority lasts for the current page only. Phones keep their existing column layout.
 Placement is deterministic and bounded; if no space fits, an item keeps its fitted position and
 can still overlap. Turn the option off to keep intentional overlaps.
 `pnpm check:ui-scale` checks scale geometry, overlay bounds, sidebar dragging, high-scale

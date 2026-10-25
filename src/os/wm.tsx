@@ -1,9 +1,9 @@
 import { arrangeDesktop } from './widgetLayout'
-import { avoidWidgetOverlap } from './widgetLayoutPrefs'
+import { avoidWidgetOverlap, desktopLayoutPriority } from './widgetLayoutPrefs'
 import { snapReserve } from './dockPrefs'
 import { viewH, viewW } from './uiScale'
 import { persistentProps } from './windowProps'
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
 import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
@@ -616,7 +616,8 @@ type WM = {
   focus: (pid: number) => void
   minimize: (pid: number) => void
   toggleMax: (pid: number) => void
-  setGeometry: (pid: number, geometry: GeometryPatch) => void
+  /** Automatic sizing does not claim local overlap priority. */
+  setGeometry: (pid: number, geometry: GeometryPatch, opts?: { automatic?: boolean }) => void
   /** A window changing what it shows itself (Preview going to the next picture): its title and saved layout follow. */
   setProps: (pid: number, props: WinState['props']) => void
   /** Puts the notes in this order in the phone layout's column (pids, top to bottom). */
@@ -945,14 +946,22 @@ export function WindowManagerProvider({
   // Projection only: persistence and remote reconciliation above always see state.windows.
   // A manual move/resize owns its displayed position; neighbours are only nudged in this view.
   const avoidOverlap = avoidWidgetOverlap.use()
-  const layoutPriority = useRef<number | undefined>(undefined)
+  const layoutPriority = desktopLayoutPriority.use()
+  // Watch only the resolved identity: replacing an entry can leave every window's geometry
+  // unchanged, while a pointer move should not add a second render for each placement save.
+  const priorityWidgetId = useSyncExternalStore(widgetPlaces.subscribe, () =>
+    layoutPriority?.startsWith('widget:') ? widgetPlaces.get().places[layoutPriority.slice(7)]?.id : undefined,
+  )
   const displayWindows = useMemo(() => {
     if (state.phone || !avoidOverlap) return state.windows
     const notes = state.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized)
       .sort((a, b) => (a.props.id ?? a.app).localeCompare(b.props.id ?? b.app) || a.pid - b.pid)
-    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), layoutPriority.current)
+    // Pids are session-local. Resolve the remembered entry only if it still exists; a removed
+    // widget's priority must not attach to a reused pid or to a new placement of the same widget.
+    const priorityPid = notes.find((w) => w.app === 'widget' ? !!priorityWidgetId && w.props.id === priorityWidgetId : layoutPriority === `note:${w.app}`)?.pid
+    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid)
     return state.windows.map((w) => positions.has(w.pid) ? { ...w, ...positions.get(w.pid)! } : w)
-  }, [state.windows, state.phone, avoidOverlap])
+  }, [state.windows, state.phone, avoidOverlap, layoutPriority, priorityWidgetId])
 
   const value = useMemo<WM>(() => {
     const visible = state.windows.filter((w) => !w.minimized && onScreen(state, w))
@@ -981,10 +990,13 @@ export function WindowManagerProvider({
       },
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
-      setGeometry: (pid, geometry) => {
+      setGeometry: (pid, geometry, { automatic = false } = {}) => {
         const shown = displayWindows.find((w) => w.pid === pid)
         if (shown && NOTE_APPS.has(shown.app) && !state.phone) {
-          layoutPriority.current = pid
+          if (!automatic) {
+            const entry = shown.app === 'widget' ? entriesOf(widgetPlaces.get(), shown.props.id ?? '')[0] : undefined
+            desktopLayoutPriority.set(shown.app === 'widget' ? (entry ? `widget:${entry.key}` : null) : `note:${shown.app}`)
+          }
           // Resizing a nudged note keeps its visible origin; only this note becomes canonical.
           geometry = { x: shown.x, y: shown.y, w: shown.w, h: shown.h, ...geometry }
         }
