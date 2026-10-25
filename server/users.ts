@@ -30,8 +30,7 @@ export function signOutEverywhere(id: number) {
   database().prepare('DELETE FROM sessions WHERE user_id = ?').run(id)
   stopTurnsOf(id)
   closeStreams(id)
-  const row = database().prepare('SELECT login FROM users WHERE id = ?').get(id) as { login: string } | undefined
-  if (row) closeGameSessions(row.login)
+  closeGameSessions(id)
 }
 
 /** Keeps the account (and its spot) but signs it out and lets it no longer sign in. */

@@ -82,7 +82,9 @@ type Player = {
   /** Empty until a name is claimed. */
   name: string
   key: string
-  /** The GitHub login of a signed-in player. */
+  /** The immutable account id of a signed-in player: what owns the player. Null for a guest. */
+  account: number | null
+  /** The GitHub login at the time, only for display and name suggestions (logins get renamed and recycled). */
   login: string | null
   ip: string
   ws: WsConnection | null
@@ -156,14 +158,15 @@ function clientIp(req: IncomingMessage) {
 // --- Names ------------------------------------------------------------------------------------------
 
 let loginsAt = 0
-let logins = new Map<string, string>()
-/** Name keys of every account's login, so a guest can't play as someone who has signed in here. */
+let logins = new Map<string, number>()
+/** Name keys of every account's login, with the account id that holds it, so a guest can't play as
+ * someone who has signed in here. Ownership is by id: a recycled login isn't its old holder's. */
 function reservedLogins() {
   if (Date.now() - loginsAt > 60_000) {
     loginsAt = Date.now()
     try {
-      const rows = database().prepare('SELECT login FROM users').all() as { login: string }[]
-      logins = new Map(rows.map((r) => [nameKey(r.login), r.login]))
+      const rows = database().prepare('SELECT id, login FROM users').all() as { id: number; login: string }[]
+      logins = new Map(rows.map((r) => [nameKey(r.login), r.id]))
     } catch {
       logins = new Map()
     }
@@ -176,7 +179,7 @@ function nameTaken(name: string, by: Player | null) {
   const holder = byName.get(key)
   if (holder && holder !== by) return 'Someone online already has that name'
   const owner = reservedLogins().get(key)
-  if (owner && owner.toLowerCase() !== by?.login?.toLowerCase()) return 'That name belongs to a signed-in player'
+  if (owner !== undefined && owner !== (by?.account ?? null)) return 'That name belongs to a signed-in player'
   return null
 }
 
@@ -267,7 +270,7 @@ function create(p: Player) {
   // A few each, counted by address and by account, so nobody fills the list on their own.
   const mine = [...lobbies.values()].filter((l) => {
     const host = players.get(l.host)
-    return host && host !== p && (host.ip === p.ip || (p.login && host.login === p.login))
+    return host && host !== p && (host.ip === p.ip || (p.account !== null && host.account === p.account))
   })
   if (mine.length >= LOBBIES_PER_HOST) return send(p, { t: 'error', why: 'You are already hosting battles elsewhere. Close one first.' })
   leave(p)
@@ -777,25 +780,24 @@ function setAway(p: Player, away: boolean) {
  * another device or browser (without its token): the one a battle is waiting for first, else the
  * one that left last. Never a connected one: that's them playing elsewhere, or in a second tab on
  * purpose. */
-function awayByLogin(login: string) {
-  const key = login.toLowerCase()
+function awayByAccount(account: number) {
   let best: Player | undefined
   for (const p of players.values()) {
-    if (p.ws || !p.name || p.login?.toLowerCase() !== key) continue
+    if (p.ws || !p.name || p.account !== account) continue
     if (!best || (battling(p) !== battling(best) ? battling(p) : p.leftAt > best.leftAt)) best = p
   }
   return best
 }
 
-function hello(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, token: unknown, stored: boolean) {
+function hello(ws: WsConnection, conn: { p: Player | null; account: number | null; login: string | null; ip: string }, token: unknown, stored: boolean) {
   const firstName = (p: Player) => (conn.login && !nameTaken(conn.login, p) ? conn.login : suggest(p))
   // Coming back within the grace period: the same player, name, lobby and seat, on this connection.
   // The browser's last token (from a closed tab) doesn't take over a tab still playing with it.
   // Signed in, the account finds its player too, from a browser that never had its token.
   // A token only brings back a player of the same account (or a guest's, for a guest): a browser
   // signed in as someone else since can't take over that seat with the token it kept.
-  const known = ownToken(token, conn.login)
-  const back = (known && !(stored && known.ws) ? known : undefined) ?? (conn.login ? awayByLogin(conn.login) : undefined)
+  const known = ownToken(token, conn.account)
+  const back = (known && !(stored && known.ws) ? known : undefined) ?? (conn.account !== null ? awayByAccount(conn.account) : undefined)
   if (back) {
     back.ws?.close(4000, 'replaced')
     back.ws = ws
@@ -824,7 +826,7 @@ function hello(ws: WsConnection, conn: { p: Player | null; login: string | null;
     return
   }
   const p: Player = {
-    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, grace: GRACE_MS, allowance: BURST, allowanceAt: Date.now(), lobby: null, rtt: 0,
+    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', account: conn.account, login: conn.login, ip: conn.ip, ws, leftAt: 0, grace: GRACE_MS, allowance: BURST, allowanceAt: Date.now(), lobby: null, rtt: 0,
   }
   players.set(p.id, p)
   byToken.set(p.token, p)
@@ -832,7 +834,7 @@ function hello(ws: WsConnection, conn: { p: Player | null; login: string | null;
   send(p, { t: 'ready', suggestion: firstName(p), login: conn.login })
 }
 
-function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, text: string) {
+function onMessage(ws: WsConnection, conn: { p: Player | null; account: number | null; login: string | null; ip: string }, text: string) {
   let m: ClientMsg
   try {
     m = JSON.parse(text)
@@ -904,9 +906,8 @@ const perIp = new Map<string, number>()
 let sockets = 0
 
 /** Closes a signed-in account's game connections (signed out everywhere, banned or deleted). */
-export function closeGameSessions(login: string) {
-  const key = login.toLowerCase()
-  for (const p of players.values()) if (p.login?.toLowerCase() === key) p.ws?.close(1008, 'signed out')
+export function closeGameSessions(account: number) {
+  for (const p of players.values()) if (p.account === account) p.ws?.close(1008, 'signed out')
 }
 
 /** Takes the WebSocket upgrade for MP_PATH; false for any other path (left for others, such as
@@ -948,12 +949,15 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
     else perIp.delete(ip)
   })
   let login: string | null = null
+  let account: number | null = null
   try {
-    login = currentUser(req)?.login ?? null
+    const user = currentUser(req)
+    login = user?.login ?? null
+    account = user?.id ?? null
   } catch {
     // No database or sign-in configured: everyone is a guest.
   }
-  const conn = { p: null as Player | null, login, ip }
+  const conn = { p: null as Player | null, account, login, ip }
   const hello = setTimeout(() => !conn.p && ws.close(1008, 'hello first'), HELLO_MS)
   ws.onMessage = (text) => {
     // A message that breaks something closes this connection, not the server.
@@ -986,16 +990,16 @@ setInterval(() => {
 
 /** Whether a battle is waiting for this browser's player (its last token) or this signed-in
  * account's, which stepped away from it: the menus offer to rejoin it. */
-/** The player with this token, if it is the same account's (both guests, or the same login). */
-function ownToken(token: unknown, login: string | null): Player | undefined {
+/** The player with this token, if it is the same account's (both guests, or the same account id). */
+function ownToken(token: unknown, account: number | null): Player | undefined {
   const p = typeof token === 'string' ? byToken.get(token) : undefined
-  return p && (p.login ?? null) === login ? p : undefined
+  return p && p.account === account ? p : undefined
 }
 
-export function empiresAway(token: unknown, login: string | null): { battle: boolean } {
-  const known = ownToken(token, login)
+export function empiresAway(token: unknown, account: number | null): { battle: boolean } {
+  const known = ownToken(token, account)
   const mine = (p: Player | undefined) => !!p && !p.ws && battling(p)
-  return { battle: mine(known) || (!!login && mine(awayByLogin(login))) }
+  return { battle: mine(known) || (account !== null && mine(awayByAccount(account))) }
 }
 
 /** For tests and a status line: how many are online, with names, and in lobbies. */
@@ -1013,9 +1017,10 @@ export const empiresOnline = () => ({ players: players.size, named: byName.size,
 
 /** Where the multiplayer state waits out a restart. */
 const STATE_FILE = joinPath(resolve(process.env.DATA_DIR ?? 'data'), 'empires-state.json')
-const STATE_VERSION = 1
+const STATE_VERSION = 2
+/** Version 1 kept signed-in players by GitHub login only. */
 
-type SavedPlayer = Pick<Player, 'id' | 'token' | 'name' | 'login' | 'ip' | 'lobby'>
+type SavedPlayer = Pick<Player, 'id' | 'token' | 'name' | 'account' | 'login' | 'ip' | 'lobby'>
 type SavedMatch = {
   info: MatchInfo
   lobby: string
@@ -1041,7 +1046,7 @@ export function saveEmpires(): number {
   const state: SavedState = {
     v: STATE_VERSION,
     at: Date.now(),
-    players: named.map((p) => ({ id: p.id, token: p.token, name: p.name, login: p.login, ip: p.ip, lobby: p.lobby })),
+    players: named.map((p) => ({ id: p.id, token: p.token, name: p.name, account: p.account, login: p.login, ip: p.ip, lobby: p.lobby })),
     lobbies: [...lobbies.values()],
     matches: [...matches.values()].map((m) => ({
       info: m.info,
@@ -1076,14 +1081,18 @@ function restoreEmpires() {
   rmSync(STATE_FILE, { force: true })
   try {
     const s = JSON.parse(raw) as SavedState
-    if (s?.v !== STATE_VERSION) throw new Error(`version ${String(s?.v)}`)
+    if (s?.v !== STATE_VERSION && s?.v !== 1) throw new Error(`version ${String(s?.v)}`)
     const age = Date.now() - Number(s.at)
     if (!(age >= 0 && age <= STATE_MAX_AGE_MS)) throw new Error(`saved ${Math.round(age / 1000)} s ago`)
     const now = Date.now()
     for (const sp of s.players) {
       if (typeof sp.id !== 'string' || typeof sp.token !== 'string' || typeof sp.name !== 'string' || !sp.name) continue
+      // Version 1 has no account id, and a login can have changed hands since: that player can't be
+      // tied to any account, so it comes back as a guest's (its token still finds it) and never to
+      // whoever holds the login now.
+      const account = s.v === 1 ? null : Number.isSafeInteger(sp.account) ? (sp.account as number) : null
       const p: Player = {
-        id: sp.id, token: sp.token, name: sp.name, key: nameKey(sp.name), login: sp.login ?? null, ip: String(sp.ip), ws: null, leftAt: now, grace: RESTART_GRACE_MS, allowance: BURST, allowanceAt: now, lobby: sp.lobby ?? null, rtt: 0,
+        id: sp.id, token: sp.token, name: sp.name, key: nameKey(sp.name), account, login: account === null ? null : (sp.login ?? null), ip: String(sp.ip), ws: null, leftAt: now, grace: RESTART_GRACE_MS, allowance: BURST, allowanceAt: now, lobby: sp.lobby ?? null, rtt: 0,
       }
       players.set(p.id, p)
       byToken.set(p.token, p)

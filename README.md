@@ -4614,7 +4614,8 @@ On phone-sized screens the game opens in fullscreen:
 
 The arcade's space RTS has online skirmishes: Main menu → Multiplayer → Skirmish. Anyone can play,
 signed in or not, under a typed or random name; names are unique among everyone online, and a
-signed-in user's GitHub login is theirs alone. The game remembers the last name you played under
+signed-in user's GitHub login is theirs alone (held by the account, not the name: if someone renames and
+another account takes the old login, it doesn't bring their player, seat or battle with it). The game remembers the last name you played under
 (in this browser, and with your account when signed in, so it follows you to other devices) and
 takes it by itself when you come back, straight to the list of battles; on a device that hasn't
 loaded the account's copy yet, it waits for it rather than asking. If someone online has the name

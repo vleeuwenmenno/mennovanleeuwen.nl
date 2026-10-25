@@ -175,7 +175,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // this account's, for the menus' "Rejoin battle" (server/empires.ts). Guests may ask too.
     if (path === '/api/empires/away' && method === 'POST') {
       const body = await readJson<{ token?: unknown }>(req, 1024)
-      return json(res, 200, empiresAway(body?.token, currentUser(req)?.login ?? null)), true
+      return json(res, 200, empiresAway(body?.token, currentUser(req)?.id ?? null)), true
     }
 
     if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
