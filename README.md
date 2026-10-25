@@ -1021,7 +1021,10 @@ application*) with the Calendar API enabled, the scopes `calendar.readonly` and 
 production*: in *Testing*, Google expires the access after seven days. The Calendar scopes are
 "sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
 screen and at most 100 accounts can connect (verification asks for the privacy page,
-`/privacy.html`). Accounts connected before
+`/privacy.html`). The consent in progress is tied to the account and session that started it (a sealed,
+HttpOnly, ten-minute cookie): finishing it while another account is signed in, from another session,
+after a sign-out, or with an altered or expired cookie is refused before any token is requested or
+stored (`pnpm check:google-oauth`). Accounts connected before
 the Calendar app stay read-only until connected again (Settings → Integrations → Calendars → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →

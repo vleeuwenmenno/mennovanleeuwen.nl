@@ -35,7 +35,7 @@ export async function startMockGoogle(port = 0, me = 'me@example.test'): Promise
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname.replace(/^\/calendar\/v3/, '')
     log.push(`${req.method} ${path}${url.searchParams.has('sendUpdates') ? ` sendUpdates=${url.searchParams.get('sendUpdates')}` : ''}`)
-    if (req.method === 'POST' && url.pathname === '/token') return send(res, 200, { access_token: GOOGLE_TOKEN, expires_in: 3600 })
+    if (req.method === 'POST' && url.pathname === '/token') return send(res, 200, { access_token: GOOGLE_TOKEN, expires_in: 3600, refresh_token: 'mock-refresh', scope: 'openid email', id_token: `x.${Buffer.from(JSON.stringify({ email: me })).toString('base64url')}.x` })
     if (req.headers.authorization !== `Bearer ${GOOGLE_TOKEN}`) return send(res, 401, { error: { code: 401 } })
     if (path === '/users/me/calendarList') return send(res, 200, { items: [...calendars.values()].map(({ events: _, ...c }) => ({ ...c, selected: true })) })
     const list = /^\/calendars\/([^/]+)\/events$/.exec(path)

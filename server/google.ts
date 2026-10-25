@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { User } from './auth.ts'
+import { currentUser, sessionKey, type User } from './auth.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { cookies, HttpError, publicOrigin, redirect, setCookie } from './http.ts'
@@ -35,10 +35,36 @@ export function googleAccount(user: User): { email: string; canWrite: boolean } 
   return row ? { email: row.email, canWrite: !!row.scopes?.split(' ').includes(WRITE_SCOPE) } : null
 }
 
+/** How long the consent screen may take before the sealed state is refused. */
+const STATE_TTL = 10 * 60_000
+
+/**
+ * The pending consent, sealed (AES-GCM, so it cannot be read or altered) into the state cookie: its
+ * random state, the account and the session that started it, and when it lapses. The callback only
+ * honours it for that same account and session, so consent started as one account can never be
+ * stored under another one signed in meanwhile (or after a sign-out and sign-in).
+ */
+function sealState(state: string, user: User, session: string): string {
+  return encrypt(JSON.stringify({ n: state, u: user.id, s: session, e: Date.now() + STATE_TTL }))
+}
+
+function openState(sealed: string | undefined, state: string, user: User, session: string | null): boolean {
+  if (!sealed || !session) return false
+  try {
+    const p = JSON.parse(decrypt(sealed)) as { n?: unknown; u?: unknown; s?: unknown; e?: unknown }
+    return p.n === state && p.u === user.id && p.s === session && typeof p.e === 'number' && p.e > Date.now()
+  } catch {
+    return false
+  }
+}
+
 const callbackUrl = (req: IncomingMessage) => `${publicOrigin(req)}/api/google/callback`
 
 export function startGoogle(req: IncomingMessage, res: ServerResponse) {
   if (!googleEnabled()) return redirect(res, '/?google=off')
+  const user = currentUser(req)
+  const session = sessionKey(req)
+  if (!user || !session) return redirect(res, '/?google=signin')
   const state = randomBytes(16).toString('base64url')
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
@@ -51,7 +77,7 @@ export function startGoogle(req: IncomingMessage, res: ServerResponse) {
     include_granted_scopes: 'true',
     state,
   })
-  redirect(res, `https://accounts.google.com/o/oauth2/v2/auth?${params}`, { 'Set-Cookie': setCookie(req, STATE_COOKIE, state, { maxAge: 600, path: '/api/google' }) })
+  redirect(res, `https://accounts.google.com/o/oauth2/v2/auth?${params}`, { 'Set-Cookie': setCookie(req, STATE_COOKIE, sealState(state, user, session), { maxAge: 600, path: '/api/google' }) })
 }
 
 async function tokenRequest(body: Record<string, string>) {
@@ -75,7 +101,7 @@ export async function finishGoogle(req: IncomingMessage, res: ServerResponse, ur
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
   if (url.searchParams.get('error')) return fail('denied')
-  if (!code || !state || state !== cookies(req)[STATE_COOKIE]) return fail('error')
+  if (!code || !state || !openState(cookies(req)[STATE_COOKIE], state, user, sessionKey(req))) return fail('error')
   let tokens
   try {
     tokens = await tokenRequest({ code, grant_type: 'authorization_code', redirect_uri: callbackUrl(req) })
