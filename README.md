@@ -1657,7 +1657,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted, and the sidebar folds to a rail. While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+suggestion), archived and deleted, and the sidebar folds to a rail or is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Past threads** lets the agent look back when you refer to an earlier conversation and the
 answer is not already in this thread or memory. The `threads` tool group is on by default,
