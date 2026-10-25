@@ -623,6 +623,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return modelDetailsLabel(a, result)
     case 'web_search':
       return `Searched the web for “${s('query')}”`
+    case 'find_image':
+      return `${result ? 'Found pictures of' : 'Finding pictures of'} “${s('query').slice(0, 80)}”`
     case 'web_fetch':
       return `Read ${s('url').replace(/^https?:\/\/(www\.)?/, '').slice(0, 80)}`
     case 'remember': {

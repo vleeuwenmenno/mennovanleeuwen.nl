@@ -44,6 +44,10 @@ type Internal = Synced<unknown> & {
   meta: () => Meta<unknown>
   adopt: (r: Remote, dirty?: boolean, notify?: boolean) => void
   pushed: (updatedAt: number, sent: unknown) => void
+  /** Whether the value is the server's copy at its base, as far as this tab knows. */
+  sameAsServer: () => boolean
+  /** Marks the value saved (it already is, on the server). */
+  clean: () => void
   reset: () => void
   merge?: (local: unknown, remote: unknown) => unknown
   normalize: (v: unknown) => unknown
@@ -93,6 +97,13 @@ export function synced<T>(
   } = {},
 ): Synced<T> {
   let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
+  /** The server's copy at a version, as last sent or received here (a save of the same is skipped). */
+  let known: { base: number; json: string } | null = null
+  /** A copy marked saved is the server's at its base. */
+  const learn = () => {
+    if (!meta.dirty && meta.base > 0) known = { base: meta.base, json: JSON.stringify(meta.value) }
+  }
+  learn()
   const listeners = new Set<() => void>()
   const remoteListeners = new Set<(v: T) => void>()
   const syncedListeners = new Set<() => void>()
@@ -113,7 +124,11 @@ export function synced<T>(
         const merged = opts.merge!(meta.value, theirs)
         others = JSON.stringify(merged) !== JSON.stringify(meta.value)
         const base = Math.max(meta.base, stored.base ?? 0)
-        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || !!stored.dirty || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
+        // Unsaved only for what is unsaved here, or what the stored copy brought that wasn't saved
+        // yet. Not for the stored copy's flag alone: that is often this tab's own earlier write
+        // (or another tab's copy of it), and taking it in again after every save kept both tabs
+        // saving the same value to the server forever.
+        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || (!!stored.dirty && others) || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
       } catch {
         /* not readable: written over */
       }
@@ -130,7 +145,8 @@ export function synced<T>(
     get: () => meta.value,
     set(next) {
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next
-      if (value === meta.value) return
+      // Nothing changed (the same value made again): nothing to save or send.
+      if (value === meta.value || JSON.stringify(value) === JSON.stringify(meta.value)) return
       meta = { ...meta, value, dirty: true }
       save()
       emit()
@@ -161,19 +177,28 @@ export function synced<T>(
     meta: () => meta,
     adopt(r, dirty = false, notify = true) {
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
+      if (!dirty) known = { base: r.updatedAt, json: JSON.stringify(meta.value) }
       save()
       emit()
       if (notify) remoteListeners.forEach((l) => l(meta.value))
       emitSynced()
     },
     pushed(updatedAt, sent) {
+      known = { base: updatedAt, json: JSON.stringify(sent) }
       // Still dirty if it changed while the request was out.
-      meta = { ...meta, base: updatedAt, dirty: meta.value !== sent }
+      meta = { ...meta, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
       save()
       emitSynced()
       if (meta.dirty) schedulePush(key)
     },
+    sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
+    clean() {
+      meta = { ...meta, dirty: false }
+      save()
+      emitSynced()
+    },
     reset() {
+      known = null
       meta = { value: fallback, base: 0, dirty: false }
       accountStorage.remove(storageKey(key))
       emit()
@@ -192,6 +217,7 @@ export function synced<T>(
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
+      learn()
       if (e.newValue !== null) opts.onIncoming?.(meta.value)
       emit()
       if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
@@ -230,34 +256,103 @@ export const useSyncStatus = () =>
     () => status,
   )
 
-function schedulePush(key: string) {
+// Every save goes through schedulePush. A store that keeps saving (more than BURST times within
+// BURST_WINDOW) is held back, twice as long with each save after that, up to a minute, until it
+// has been quiet for longer than it was held back: whatever goes wrong between tabs, devices and
+// merges, no store can keep the server busy. A failed save is tried again, also waiting twice as
+// long each time. One save per store is out at a time; a change made meanwhile goes out after
+// it, whatever its answer.
+const BURST = 10
+const BURST_WINDOW = 20_000
+const MAX_BACKOFF = 60_000
+type Pace = { sent: number[]; level: number; last: number; errors: number }
+const paces = new Map<string, Pace>()
+const inFlight = new Set<string>()
+/** Keys with a save asked for here that hasn't gone through yet (pagehide sends them). */
+const pending = new Set<string>()
+const paceOf = (key: string) => {
+  let p = paces.get(key)
+  if (!p) paces.set(key, (p = { sent: [], level: 0, last: 0, errors: 0 }))
+  return p
+}
+const penalty = (level: number) => Math.min(MAX_BACKOFF, 1000 * 2 ** level)
+
+/** How long `key` has to wait before its next save may go out. */
+function backoff(key: string, now = Date.now()): number {
+  const p = paceOf(key)
+  p.sent = p.sent.filter((t) => now - t < BURST_WINDOW)
+  // Quiet for longer than it was held back (and than the window): back to normal.
+  if (p.level > 0 && now - p.last > Math.max(BURST_WINDOW, 2 * penalty(p.level))) p.level = 0
+  const wait = Math.max(p.level > 0 ? penalty(p.level) : 0, p.errors > 0 ? penalty(p.errors) : 0)
+  return Math.max(0, wait - (now - p.last))
+}
+
+/** A save going out now: counted, and the store held back further if it keeps saving. */
+function counted(key: string, now = Date.now()) {
+  const p = paceOf(key)
+  p.sent.push(now)
+  p.last = now
+  if (p.level > 0 || p.sent.length > BURST) p.level = Math.min(p.level + 1, 16)
+}
+
+/** For scripts/widgets-sync-check.ts: the pacing above, with a clock of its own. */
+export const syncPacing = {
+  backoff,
+  counted,
+  failed: (key: string) => void (paceOf(key).errors += 1),
+  forget: (key: string) => void paces.delete(key),
+}
+
+function schedulePush(key: string, delay = PUSH_DELAY) {
   if (getAccount().status !== 'user' || frozen()) return
+  pending.add(key)
   clearTimeout(timers.get(key))
-  timers.set(key, setTimeout(() => push(key), PUSH_DELAY))
+  timers.set(key, setTimeout(() => void push(key), Math.max(delay, backoff(key))))
 }
 
 async function push(key: string) {
   timers.delete(key)
   const s = stores.get(key)
   if (!s || getAccount().status !== 'user' || frozen()) return
+  // The one out now comes back first; this one stays pending and goes after it (see finally).
+  if (inFlight.has(key)) return
+  // Already the server's copy (a change made and undone, another tab's save): nothing to send.
+  if (s.sameAsServer()) {
+    if (s.meta().dirty) s.clean()
+    pending.delete(key)
+    return
+  }
+  const wait = backoff(key)
+  if (wait > 0) return schedulePush(key, wait)
   const { value, base } = s.meta()
+  const pace = paceOf(key)
+  counted(key)
+  inFlight.add(key)
   setStatus({ state: 'syncing', at: status.at })
   try {
     const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
     // The browser was signed in as someone else while the request was out: not this tab's answer.
     if (frozen() || !accountGuard()) return
+    pace.errors = 0
     if (r.conflict) reconcile(s, r)
     else s.pushed(r.updatedAt, value)
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
+    pace.errors = Math.min(pace.errors + 1, 16)
     setStatus({ state: 'error', at: status.at, error: (e as Error).message })
+  } finally {
+    inFlight.delete(key)
+    // Still unsaved (changed while it was out, or the save failed): saved next, unless something
+    // already asked for that. A failed one waits (backoff, by its errors).
+    if (!s.meta().dirty) pending.delete(key)
+    else if (!timers.has(key) && !frozen() && accountGuard()) schedulePush(key)
   }
 }
 
 function reconcile(s: Internal, remote: Remote | undefined) {
   const local = s.meta()
   if (!remote) {
-    if (local.dirty) void push(s.key)
+    if (local.dirty) schedulePush(s.key, 0)
     return
   }
   if (remote.updatedAt > local.base) {
@@ -271,9 +366,9 @@ function reconcile(s: Internal, remote: Remote | undefined) {
       const differs = JSON.stringify(merged) !== JSON.stringify(theirs)
       // Nothing new to show when the merge kept this tab's own value.
       s.adopt({ value: merged, updatedAt: remote.updatedAt }, differs, merged !== local.value)
-      if (differs) void push(s.key)
+      if (differs) schedulePush(s.key, 0)
     } else s.adopt(remote)
-  } else if (local.dirty) void push(s.key)
+  } else if (local.dirty) schedulePush(s.key, 0)
 }
 
 /** Loads every synced key from the server and reconciles it with the local copy. */
@@ -317,12 +412,25 @@ export function startSync() {
   // Leaving: send pending saves right away.
   window.addEventListener('pagehide', () => {
     if (getAccount().status !== 'user' || frozen() || !accountGuard()) return
-    for (const [key, t] of timers) {
-      clearTimeout(t)
+    // Every save asked for and not through yet, with or without a timer (one waiting for a save
+    // still out has none). The timers go: a save coming back after this must not take one still
+    // listed as already asking for the next save.
+    const keys = new Set([...pending, ...timers.keys()])
+    for (const t of timers.values()) clearTimeout(t)
+    timers.clear()
+    for (const key of keys) {
       const s = stores.get(key)
-      if (!s) continue
+      // The server's copy, as far as this tab knows, unless a save is still out: then the server
+      // may be about to hold that save's value instead (a change undone meanwhile), so send it.
+      if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
       const { value, base } = s.meta()
       fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
     }
+  })
+  // Back from the back/forward cache: the page runs on, so what it hadn't saved is saved now
+  // (the last saves sent on leaving may not have made it).
+  window.addEventListener('pageshow', (e) => {
+    if (!(e as PageTransitionEvent).persisted) return
+    for (const key of pending) if (!timers.has(key) && stores.get(key)?.meta().dirty) schedulePush(key)
   })
 }

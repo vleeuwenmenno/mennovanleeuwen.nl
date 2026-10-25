@@ -238,8 +238,8 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   `layout.ts`; `direction` down or right, node shapes box, round, diamond and circle, `group` boxes
   nodes together), `grid` (rows × cols of slots, an arrow with `via` on it, the result with counts:
   a Minecraft recipe, cooking or smelting; several in `grids` for a chain; `pattern` and `key` as
-  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards`, `table` and
-  `scene` (a free drawing, below). A list of specs in one block draws them one under the other. The whole schema is the
+  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards`, `list` (below),
+  `table` and `scene` (a free drawing, below). A list of specs in one block draws them one under the other. The whole schema is the
   `VisualSpec` type in [`spec.ts`](src/data/visual/spec.ts).
 - **Forgiving.** Small models write it, so comments, trailing commas, single quotes, unquoted keys
   and missing commas are fine, fields have aliases (`edges`/`links`, `from`/`source`), a missing
@@ -269,9 +269,20 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   with its first letter. Up to 120,000 characters and 3,000 elements; a drawing with nothing safe
   left shows what was left out. It zooms like a flow, with *SVG* and *PNG* buttons that save it
   with the theme's background.
+- **Lists.** `{"type": "list", "items": [{"image": "image:<id>", "title": "Calbee Jagabee うすしお味",
+  "text": "…", "fields": {"Quantity": "Lots!"}, "note": "…"}]}` draws rows as a saved shopping list
+  does: a big rounded picture on the left (104 px, 72 px on a phone, where the text wraps beside
+  it), a bold numbered title (`"numbered": false` drops the numbers), a line of text, bold label
+  rows, a note in italics and thin lines between the rows. `fields` may also be pairs, `{label,
+  value}` or `"Label: value"` strings, and `quantity`, `price`, `where` on the item become rows too.
+  `"checked": false` adds a checkbox; ticking it only changes what is shown (the answer itself is
+  not edited, so a reload shows it as written). The old `"type": "list"` that meant cards still
+  reads, as a list.
 - **Pictures.** Any item can be `"icon:<slug>"` (the account's icon library,
-  `/api/agents/icons/<slug>`), an emoji (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with
-  `"4x Stick"` for a count. A missing icon falls back to the item's emoji, else its first letter in a
+  `/api/agents/icons/<slug>`), `"image:<id>"` (a real photo `find_image` kept, below), an emoji
+  (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with `"4x Stick"` for a count; cards,
+  tables, grids, lists and scenes (`<image href="image:<id>">`, inlined like icons) all take them.
+  A missing picture falls back to the item's icon, then its emoji, else its first letter in a
   tinted tile; grids list what each picture is under the slots, since a finger gets no tooltip.
 - **Theme, touch and phones.** Colours come from the theme's variables (a scene may also name its own; charts use the accent
   hues in a fixed order). A big flow fits the width (down to half size, then scrolls); Ctrl+wheel and
@@ -280,13 +291,70 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   and a *Table* view. *Spec* and *Copy* show and copy the JSON.
 - **Elsewhere.** The terminal's `agents` and shared answer links (`/s/<token>`) show a text
   version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars,
-  a scene as its title, caption and `(drawing: its labels)`.
+  a scene as its title, caption and `(drawing: its labels)`, a list as numbered lines with its
+  text, `Label: value` rows and `[ ]` for a checkbox.
 - **Cost.** The renderer is its own chunk (about 30 KB), loaded the first time a visual block shows;
   it draws once, and zooming only sets two styles. `pnpm check:visual` checks good and bad specs,
   the loose JSON, the text version, the layout, the scene sanitizer against a list of XSS tricks
   (handlers, `javascript:` and encoded links, `foreignObject`, outside `use`, CSS `url()` and
   `@import`, entities, CDATA, nested `<svg>`, animation) and that every example in the Agents
   prompt is valid.
+
+### Found pictures (find_image)
+
+For a list of real things (products, dishes, places, mods), the agent calls `find_image` with a
+query (and a page it already found, and 1 to 4 pictures), then shows each picture's id as
+`image:<id>` in a list ([`server/findImage.ts`](server/findImage.ts), in the *Web* tool group).
+Ollama's web search, the default, has no image search, so the server searches the web, reads the
+top five result pages and takes each page's own picture of its subject: JSON-LD `Product` images
+first, then `og:image`, `twitter:image`, `rel=image_src`, then a big `<img>` (by its `width`,
+`height` or `srcset`, and its alt text matching the query). Logos, icons, sprites, tiny pictures
+and SVG are passed over, and product pages (by their JSON-LD, `og:type` or address) rank higher.
+With SearXNG (`categories=images`) or Brave Search as the provider, their image search goes first
+and the pages are the fallback.
+
+The server downloads the picture, keeps it per account (`agent_found_images`, counted in the
+storage quota) and serves it at `GET /api/agents/images/<id>` to that account only, with its own
+type, `nosniff`, a sandboxing CSP and `private, no-cache` with an ETag (so a copy cached by the
+browser is not shown to whoever uses it after signing out): the browser never asks the other
+site. The same picture again (by address or by its bytes) reuses the kept one, and a page this
+account read for the same query in the last half hour is not read again (the cache is per account). Pictures unused for 90 days that no message or note
+mentions (in any case, and inside JSON escapes; tool calls and results of the last 90 days count
+too) are pruned (at most every six hours per account, after a new one is kept); reusing a picture
+counts as using it, and so does showing it (marked at most once a day).
+
+These are pages and pictures anyone can put in a search result, so:
+
+- Only public addresses, checked after DNS and again at every redirect (at most three), and
+  connected to exactly as checked (no DNS rebinding), through agents of our own that never use
+  `HTTP(S)_PROXY` (with `NODE_USE_ENV_PROXY` the global ones would let a proxy resolve the name
+  again; this holds for every pinned request in [`server/egress.ts`](server/egress.ts), ComfyUI's
+  WebSocket included); never an IP address in the link, a name
+  without a dot or a `.local`/`.internal` one, credentials in the address or an unusual port. This
+  holds for admins too.
+- No cookies or credentials are sent, only a plain User-Agent.
+- A page is read as text, at most 1.5 MB in 6 seconds, with the same bounded scans as link
+  previews; a picture is at most 5 MB in 8 seconds; the whole call 30 seconds, three at once per
+  account.
+- A picture must be PNG, JPEG, WebP or a still GIF both by its `Content-Type` and by its bytes
+  (SVG, HTML posing as a picture and animations are refused), 120 to 8000 px a side and not a
+  banner (over 4:1), and at most 16 million pixels (what the browser has to decode). A PNG with a
+  second header, or over 2.5 million pixels, is refused; one over 768 px is scaled down, and an APNG
+  is always flattened to its first frame (or refused when that fails). At most two PNGs are decoded
+  per call (about 150 ms each at the limit, on the main thread); the decoder
+  ([`server/pngResize.ts`](server/pngResize.ts)) takes the header only as the first chunk, checks
+  the pixel budget before inflating or allocating anything and inflates no more than that size
+  needs. Other formats are kept as they came, since the server has no decoder for them.
+- The `page` is read only when that exact address is one the user wrote or a search returned in
+  the thread; not the links of a page read (a hostile page could offer many and learn from which
+  one is picked). Anything else (an address the model made
+  up, which could carry something pasted in the chat) is left out, and the search still runs.
+
+`pnpm check:agents-find-image` runs it against a stand-in web of shops
+([`scripts/find-image-fake-net.ts`](scripts/find-image-fake-net.ts), preloaded only by checks):
+og:image, JSON-LD and `<img>` pages, logos skipped, private, metadata and redirect-to-private
+addresses refused before anything is sent, oversize, SVG and fake PNGs refused, the cache hit,
+SearXNG's image search, serving and pruning.
 
 ## Data snapshots
 
@@ -809,6 +877,18 @@ counters use their live copy's `updated` time as evidence of a restore, so a sta
 cannot undo an old-version restore. Old-version edits and restores cannot be distinguished.
 The first-layout exception ends when this browser receives or successfully pushes an account
 layout; later remote layouts do not replace window changes that have not been saved locally.
+
+Saving to the server stays quiet while nobody changes anything. A change is sent once, 800 ms
+after it was made; setting the same value again, or undoing a change before it went out, sends
+nothing. Merging another tab's copy only counts as unsaved for what that copy brought that this
+tab didn't have (its "unsaved" mark is often this tab's own earlier write). A store has one save
+out at a time; a change made meanwhile goes out after it, whether it worked or not, and closing
+the page sends it too. A store that has saved more than 10 times in 20 seconds waits before each
+next save, twice as long each time up to a minute, until it has been quiet for longer than that
+wait, so no conflict or merge between tabs and devices can keep the server busy. A failed save
+is tried again, also waiting twice as long each time, up to a minute. `pnpm check:widgets-sync` covers this in memory, and `pnpm check:sync-loop`
+(`scripts/sync-loop-e2e.ts`, port 5289 unless `PORT` is set) counts the saves of idle tabs and
+devices of different sizes in muted Chromium; it starts and stops its own server.
 
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).
@@ -1492,7 +1572,8 @@ for a long folder name or every chip on. `pnpm check:agents-context-bar` covers 
 Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
-stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
+stored encrypted, see [`server/websearch.ts`](server/websearch.ts)), Ollama's web fetch, `find_image`
+(real photos, see *Found pictures* below), your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
