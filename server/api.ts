@@ -5,6 +5,7 @@ import { handleImageApi } from './agentImages.ts'
 import { handleImageObservationsApi } from './agentImageObservations.ts'
 import { handleLoraPreviewApi } from './agentLoraPreview.ts'
 import { handleModelIntelApi } from './agentModelIntel.ts'
+import { handleStudioApi } from './agentImageStudio.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
@@ -427,6 +428,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/images/observations' && handleImageObservationsApi(req, res, requireUser(req), path)) return true
     if ((path === '/api/agents/images/lora-details' || path === '/api/agents/images/lora-preview') && (await handleLoraPreviewApi(req, res, url, requireUser(req)))) return true
     if (path === '/api/agents/images/model-details' && (await handleModelIntelApi(req, res, url, requireUser(req)))) return true
+    // The Image Studio (server/agentImageStudio.ts): manual generation, its history and uploads.
+    if (path.startsWith('/api/agents/images/studio') && (await handleStudioApi(req, res, url, method, requireUser(req)))) return true
     if (path.startsWith('/api/agents/images') && (await handleImageApi(req, res, url, method, requireUser(req)))) return true
     if (path.startsWith('/api/agents/websearch') && (await handleWebSearchApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/agents/projects' && read) return json(res, 200, listProjects(requireUser(req))), true

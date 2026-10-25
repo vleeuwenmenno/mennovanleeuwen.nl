@@ -3,7 +3,7 @@ import { api } from '../os/account'
 import type { ObservationsView } from './imageObservations'
 import type { Recommended } from './modelFamilies'
 
-import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint } from './imageModels'
+import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint, ImageProgress } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
 export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: boolean; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
 export type ImageCatalog = ImageAssetCatalog
@@ -111,3 +111,26 @@ export type RemoveImageInput = { operation: 'remove'; source_image_id: string; m
 export type MaskedEditInput = InpaintImageInput | RemoveImageInput
 
 export { agentMasks, type AgentMask } from './agentMasks'
+
+// --- the Image Studio (server/agentImageStudio.ts) ----------------------------------------------
+
+/** A picture in the Studio's history (or, with scope all, any of the account's), with its recorded settings. */
+export type StudioImage = Omit<GeneratedImage, 'settings'> & { created_at: number; studio: boolean; settings: ImageGenerationSettings | null }
+export const getStudio = () => api<{ thread: string; configured: boolean; batchMax: number }>('/api/agents/images/studio')
+export const getStudioImages = (scope: 'studio' | 'all' = 'studio', before?: string) => api<{ thread: string; images: StudioImage[]; next_before: string | null }>(`/api/agents/images/studio/images?${new URLSearchParams({ scope, limit: '30', ...(before ? { before } : {}) })}`)
+export const getStudioEmbeddings = () => api<{ embeddings: string[] }>('/api/agents/images/studio/embeddings')
+export const uploadStudioImage = (name: string, data: string) => api<StudioImage>('/api/agents/images/studio/upload', { method: 'POST', json: { name, data } })
+export const deleteStudioImage = (id: string) => api(`/api/agents/images/studio/images/${id}`, { method: 'DELETE' })
+/** model_details for the Studio's model, with the preset it runs (a raw/turbo file gets that variant's recipe). */
+export const getStudioModelDetails = (name: string, preset: ImagePreset, signal?: AbortSignal) => api<ModelDetails>(`/api/agents/images/model-details?${new URLSearchParams({ name, kind: 'checkpoint', preset })}`, { signal })
+/** One run's events: `start` (its size), `progress`, `image` (saved), then `done` (or `error`). */
+export type StudioEvent =
+  | { type: 'start'; index: number; total: number; width: number; height: number }
+  | { type: 'progress'; index: number; progress: ImageProgress }
+  | { type: 'image'; index: number; image: GeneratedImage }
+  | { type: 'done'; cancelled?: boolean }
+  | { type: 'error'; error: string }
+export async function runStudio(input: Record<string, unknown>, batch: number, onEvent: (e: StudioEvent) => void, signal: AbortSignal) {
+  const res = await fetch('/api/agents/images/studio/run', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input, batch }), signal })
+  await readEvents(res, onEvent as unknown as (e: TurnEvent) => void)
+}

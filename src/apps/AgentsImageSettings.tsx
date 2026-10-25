@@ -4,8 +4,10 @@ import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
 import { ObservationsDialog } from './AgentsObservations'
+import { useWM } from '../os/wm'
 
 export function AgentsImageSettings() {
+  const wm = useWM()
   const observationApprovalHint = useId()
   const [settings, setSettings] = useState<ImageSettings | null>(null)
   const [token, setToken] = useState('')
@@ -51,6 +53,7 @@ export function AgentsImageSettings() {
           <button type="button" className="btn btn-small" disabled={busy} onClick={() => void run(async () => { setSettings(await resetImageSettings()); setToken(''); setClearToken(false); setCatalog(null); setNotice('Disconnected') })}>Disconnect</button>
           {notice && <span className="muted image-notice" role="status">{notice}</span>}
         </div>
+        {settings.url && <p className="muted image-studio-link">Generate by hand, without an agent: <button type="button" className="btn btn-small" onClick={() => wm.open('agents', { tab: 'studio', t: String(Date.now()) })}>Open Image Studio</button></p>}
         {error && <p className="t-red copyable" role="alert">{error}</p>}
       </section>
       <section className="set-section image-group" aria-labelledby="image-defaults">

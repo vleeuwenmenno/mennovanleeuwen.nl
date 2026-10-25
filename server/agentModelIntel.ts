@@ -3,8 +3,8 @@ import type { User } from './auth.ts'
 import { database, privateDigest } from './db.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json } from './http.ts'
-import { imageBackendScope, imageCatalog, imageSettings, type ImageSettings } from './agentImages.ts'
-import { exampleConsensus, familyOf, isVpred, median, MODEL_FAMILIES, type Consensus, type ExampleMeta, type FamilyId, type Recommended } from '../src/data/modelFamilies.ts'
+import { imageBackendScope, imageCatalog, imageSettings, PRESETS, type ImageSettings } from './agentImages.ts'
+import { exampleConsensus, familyOf, isVpred, median, MODEL_FAMILIES, variantFor, type Consensus, type ExampleMeta, type FamilyId, type Recommended } from '../src/data/modelFamilies.ts'
 import { IMAGE_SAMPLERS, IMAGE_SCHEDULERS, imagePresetSpec, recommendedImageSampling, type ImagePreset } from '../src/data/imageModels.ts'
 
 // Model facts for the agent's model_details tool and the model browser: what LoRA Manager knows
@@ -164,7 +164,7 @@ export function managerIndex(user: User, s = imageSettings(user), timeout = 20_0
 }
 
 /** ComfyUI's own embedding names (optional endpoint), for the exact join. */
-async function installedEmbeddings(user: User, s: ImageSettings, signal: AbortSignal): Promise<string[]> {
+export async function installedEmbeddings(user: User, s: ImageSettings, signal: AbortSignal): Promise<string[]> {
   try {
     const res = await guardedFetch(user, `${s.url}/embeddings`, { redirect: 'manual', headers: s.token ? { Authorization: `Bearer ${s.token}` } : {}, signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]) })
     if (!res.ok) { await res.body?.cancel().catch(() => {}); return [] }
@@ -432,6 +432,9 @@ export async function civitaiFacts(s: CivitaiSettings, asset: { versionId: numbe
 
 // --- the recommendation ------------------------------------------------------------------------
 
+/** Shared with the Image Studio (src/data/modelFamilies.ts); re-exported for the checks. */
+export { variantFor }
+
 // About one megapixel: the base size SD 1.5/SDXL-family pages post (bigger pictures are usually
 // after a hires pass), and within this app's 1536 × 1024 limit.
 const MAX_SIDE = 1536, FIT_AREA = 1088 * 1024
@@ -457,17 +460,6 @@ const presetFor = (family: FamilyId | null, category: Category): ImagePreset | n
  * consensus when at least two images agree. Samplers and schedulers only when installed and
  * supported here. Turbo presets keep CFG 1.
  */
-/**
- * The variant a raw/turbo split runs as: the effective preset decides (one file can run either
- * recipe), so an ambiguous or differently named Krea 2 or Z-Image file follows the thread's preset.
- */
-export function variantFor(family: FamilyId | null, preset?: ImagePreset): FamilyId | null {
-  const krea = family === 'krea2' || family === 'krea2_raw' || family === 'krea2_turbo'
-  const zimage = family === 'z_image' || family === 'z_image_turbo'
-  if (krea && (preset === 'krea2_raw' || preset === 'krea2_turbo')) return preset
-  if (zimage && (preset === 'z_image' || preset === 'z_image_turbo')) return preset
-  return family
-}
 export function recommend(category: Category, family: FamilyId | null, consensus: Consensus | null, installed: { samplers: readonly string[]; schedulers: readonly string[] }, vpred: boolean): Recommended {
   const fam = family ? MODEL_FAMILIES[family] : null
   const preset = presetFor(family, category)
@@ -617,6 +609,9 @@ export async function handleModelIntelApi(req: IncomingMessage, res: ServerRespo
   if (req.method !== 'GET' || url.pathname !== '/api/agents/images/model-details') return false
   const args: Record<string, unknown> = {}
   for (const k of ['name', 'kind', 'query'] as const) { const v = url.searchParams.get(k); if (v !== null) args[k] = v }
-  json(res, 200, await modelDetails(user, args))
+  // The Image Studio says which preset it runs, so a raw/turbo file gets that variant's recipe.
+  const preset = url.searchParams.get('preset') as ImagePreset | null
+  const thread = preset && (PRESETS as readonly string[]).includes(preset) && typeof args.name === 'string' ? { model: args.name, preset } : undefined
+  json(res, 200, await modelDetails(user, args, undefined, thread))
   return true
 }
