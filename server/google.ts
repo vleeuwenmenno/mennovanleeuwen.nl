@@ -167,7 +167,7 @@ export async function disconnectGoogle(user: User) {
   const row = database().prepare('SELECT refresh_token FROM google WHERE user_id = ?').get(user.id) as { refresh_token: string } | undefined
   database().prepare('DELETE FROM google WHERE user_id = ?').run(user.id)
   if (row)
-    await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(decrypt(row.refresh_token))}`, { method: 'POST', signal: AbortSignal.timeout(8000) }).catch(() => {})
+    await fetch(`${process.env.GOOGLE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke'}?token=${encodeURIComponent(decrypt(row.refresh_token))}`, { method: 'POST', signal: AbortSignal.timeout(8000) }).catch(() => {})
 }
 
 /**
@@ -192,6 +192,18 @@ class StaleLink extends HttpError {
     super(409, 'Google Calendar was reconnected or disconnected meanwhile: try again')
   }
 }
+/**
+ * For a read that combines Google with other sources (server/calendars.ts): the generation of the
+ * account's Google link when the read starts, or null when none is connected (nothing of Google can
+ * then end up in the result). `assertGoogleLink` is called after every source has answered, just
+ * before the combined result is returned, and throws if the link changed, was removed or the
+ * account was deleted meanwhile, so the whole result is dropped, completed Google parts included.
+ */
+export const googleLinkGeneration = (user: User): number | null => (googleAccount(user) ? generationOf(user.id) : null)
+export function assertGoogleLink(user: User, generation: number | null) {
+  if (generation !== null) sameLink(user, generation)
+}
+
 /** For `.catch`: a failed call is treated as no answer, but a changed link still fails the whole read. */
 const keepStale = (e: unknown) => {
   if (e instanceof StaleLink) throw e

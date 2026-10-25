@@ -94,6 +94,7 @@
     "check:pim-links": "node scripts/pim-check.ts",
     "check:google-oauth": "node scripts/google-oauth-check.ts",
     "check:google-refresh": "node scripts/google-refresh-check.ts",
+    "check:calendar-link-race": "node scripts/calendar-link-race-check.ts",
     "check:note-links": "node scripts/note-links-check.ts",
     "check:window-props": "node scripts/window-props-check.ts",
     "check:sync-accounts": "node scripts/sync-accounts-check.ts",

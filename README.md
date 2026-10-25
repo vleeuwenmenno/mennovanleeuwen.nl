@@ -1142,7 +1142,7 @@ Without the OAuth settings, sign-in is simply off and everything else works as b
 
 **Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
-refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). Each link has a generation that moves on connect, disconnect and account removal: a refresh or consent still waiting on Google when that happens, or when the session that started the consent is signed out, stores nothing and returns no token. A calendar read (one call, or a list of events across calendars) carries the generation it started under and is checked after every answer, including the body, and again before its result is returned: if the link changed, all of it is dropped, never a partial result from the old account. A stored token is only replaced where its refresh token is still the one the refresh began with. It
+refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). Each link has a generation that moves on connect, disconnect and account removal: a refresh or consent still waiting on Google when that happens, or when the session that started the consent is signed out, stores nothing and returns no token. A calendar read (one call, or a list of events across calendars) carries the generation it started under and is checked after every answer, including the body, and again before its result is returned: if the link changed, all of it is dropped, never a partial result from the old account. The combined answers of Google and CalDAV (the calendar list and the events, `server/calendars.ts`) do the same: if a Google link was connected when the answer began and it was replaced, disconnected or deleted before the answer went out, the whole answer fails with a 409, CalDAV's part included; a CalDAV-only answer is never failed for it. A stored token is only replaced where its refresh token is still the one the refresh began with. It
 needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
 application*) with the Calendar API enabled, the scopes `calendar.readonly` and `calendar.events`
 (plus `openid` and `email`), and the redirect URI `https://<your site>/api/google/callback` (and
@@ -3249,7 +3249,7 @@ pnpm check:window-props  # One-shot requests (event, task, contact, day, import,
 ```
 
 [`scripts/google-mock.ts`](scripts/google-mock.ts) is the Google Calendar stand-in: the server
-talks to it instead of Google when `GOOGLE_API_URL` (and `GOOGLE_TOKEN_URL`) point there, which
+talks to it instead of Google when `GOOGLE_API_URL` (and `GOOGLE_TOKEN_URL`, `GOOGLE_REVOKE_URL`) point there, which
 only the checks do. Not yet tried against real Fastmail, Google or iCloud accounts: how Fastmail
 takes the iMIP message made with Email/import, and Google's `events/import` for an invitation from
 elsewhere, are as their documentation says.

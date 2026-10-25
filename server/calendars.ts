@@ -6,6 +6,8 @@ import {
   getGoogleEvent,
   googleAccount,
   googleKnownUids,
+  googleLinkGeneration,
+  assertGoogleLink,
   listCalendars,
   listEvents,
   moveGoogleEvent,
@@ -58,7 +60,11 @@ export function hiddenCalendars(user: User): Set<string> {
 
 /** Every connected calendar, except the hidden ones unless `withHidden` (the browser filters those itself; a note's link may still resolve in one). */
 export async function allCalendars(user: User, withHidden = false): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+  // The Google link this answer starts under: if it changes before the answer leaves (a relink, a
+  // disconnect, the account removed), all of it is dropped, Google's part that already came included.
+  const generation = googleLinkGeneration(user)
   const { calendars, errors } = await connectedCalendars(user)
+  assertGoogleLink(user, generation)
   if (withHidden) return { calendars, errors }
   const hidden = hiddenCalendars(user)
   return { calendars: hidden.size ? calendars.filter((c) => !hidden.has(c.id)) : calendars, errors }
@@ -95,6 +101,8 @@ async function connectedCalendars(user: User): Promise<{ calendars: AnyCalendar[
  * without the hidden ones; calendars asked for by id are taken as asked, the caller leaves out hidden ones).
  */
 export async function allEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+  // As in allCalendars: one Google link generation for the whole answer, checked once everything is in.
+  const generation = googleLinkGeneration(user)
   const hidden = ids ? null : hiddenCalendars(user)
   if (hidden?.size) {
     const { calendars } = await connectedCalendars(user)
@@ -137,6 +145,7 @@ export async function allEvents(user: User, ids: string[] | null, range: { from:
       ),
     ).then((l) => l.flat()),
   ])
+  assertGoogleLink(user, generation)
   return {
     events: [...google, ...caldav].sort((a, b) => a.start.localeCompare(b.start) || Number(b.allDay) - Number(a.allDay)),
     errors: [...new Set(errors)],
