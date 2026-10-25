@@ -129,6 +129,8 @@
 /* Flow and tree: a scrolling view over a scaled canvas. */
 .vis-diagram {
   position: relative;
+  /* The scaled picture never widens its column (a flex parent's min-width: auto would let it). */
+  contain: inline-size;
 }
 .vis-view {
   overflow: auto;
@@ -638,4 +640,43 @@
     min-width: 32px;
     min-height: 28px;
   }
+}
+
+/* Scenes: the model's drawing as a picture (an <img>, see svg.ts), scaled to fit like a flow. */
+.vis .vis-scene-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.vis .vis-scene-wait {
+  width: 100%;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vis .vis-caption {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+.vis .vis-scene-broken {
+  margin: 0;
+  color: var(--red);
+}
+/* A scene's buttons (Save as SVG or PNG and the zoom) sit under it, so they never cover the drawing. */
+.vis .vis-zoom.is-below {
+  position: static;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.vis .vis-zoom.is-below button:first-child + button {
+  margin-right: 8px;
+}
+.vis .vis-zoom button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
