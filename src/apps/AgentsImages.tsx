@@ -71,7 +71,7 @@ export function AttachedFiles({ files, pictureOf, onRemove, sent = false, more }
 }
 
 /** A row of thumbnails; clicking one opens the full view at it. `onRemove` adds an × to each (the message box). */
-export function Thumbnails({ pictures, onRemove, onBroken }: { pictures: Picture[]; onRemove?: (i: number) => void; /** One could not load: show it as a plain chip instead */ onBroken?: (i: number) => void }) {
+export function Thumbnails({ pictures, onRemove, onBroken, actions }: { pictures: Picture[]; onRemove?: (i: number) => void; /** One could not load: show it as a plain chip instead */ onBroken?: (i: number) => void; /** More buttons in the full view of picture i */ actions?: (i: number) => { label: string; onSelect: () => void }[] }) {
   const [open, setOpen] = useState<number | null>(null)
   const anchor = useRef<HTMLUListElement>(null)
   if (!pictures.length) return null
@@ -92,7 +92,7 @@ export function Thumbnails({ pictures, onRemove, onBroken }: { pictures: Picture
           </li>
         ))}
       </ul>
-      {open !== null && <Lightbox pictures={pictures} start={Math.min(open, pictures.length - 1)} anchor={anchor.current} onClose={() => setOpen(null)} />}
+      {open !== null && <Lightbox pictures={pictures} start={Math.min(open, pictures.length - 1)} anchor={anchor.current} onClose={() => setOpen(null)} actions={actions?.(Math.min(open, pictures.length - 1))} />}
     </>
   )
 }

@@ -1,4 +1,4 @@
-import { GptImageResult } from './AgentsGptImage'
+import { GptImageDrawing, GptImageResult } from './AgentsGptImage'
 import { InpaintDialog, type InpaintSource } from './AgentsInpaint'
 import { MaskCards, type SavedMask } from './AgentsMaskCard'
 import { PhotoPicker } from './photos/PhotoPicker'
@@ -107,7 +107,7 @@ import { hasCalendar, signIn, useAccount } from '../os/account'
 import { useMailAccounts } from '../data/mail'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
-import { ask, ask as confirmDialog, choose, tell } from '../os/Dialogs'
+import { ask, ask as confirmDialog, askText, choose, tell } from '../os/Dialogs'
 import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
@@ -1156,11 +1156,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     if (e.type === 'snapshot') {
       setThread(e.thread)
       setMessages(e.messages)
-      setApprovals(e.pending)
+      // A picture being drawn: its start on this window's clock, from how long it has been going.
+      setApprovals(e.pending.map((p) => (p.gpt ? { ...p, gpt: { ...p.gpt, startedAt: Date.now() - (p.gpt.elapsed ?? 0) } } : p)))
       setLive(e.live)
       found(e.messages)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
-    else if (e.type === 'imageGeneration') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'image', width: e.width, height: e.height }])
+    else if (e.type === 'imageGeneration') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'image', width: e.width, height: e.height, ...(e.gpt ? { gpt: { ...e.gpt, startedAt: Date.now() } } : {}) }])
+    else if (e.type === 'gptPreview') setApprovals((a) => a.map((x) => (x.callId === e.callId && x.gpt ? { ...x, gpt: { ...x.gpt, previews: e.previews } } : x)))
     else if (e.type === 'imageProgress') setApprovals((a) => a.map((x) => (x.callId === e.callId ? { ...x, progress: e.progress } : x)))
     else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary, check: e.check }])
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
@@ -1325,6 +1327,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // answering what it asked, or an edit saved) while one streams.
   const sending = useRef(false)
   const queueing = useRef(false)
+  // Edit on a gpt_image picture: what should change, then a message asking the agent to draw it
+  // again from that picture (its id goes along, so gpt_image gets it as a reference).
+  const editPicture = async (name: string, ref: string) => {
+    const change = await askText({ title: 'Edit picture', body: <>What should change in “{name}”?</>, label: 'What should change?', placeholder: 'Make the sky orange and the title bigger', confirm: 'Redraw', validate: (t) => (t.trim() ? null : 'Say what should change') })
+    if (change?.trim()) void send(`Change the picture “${name}” (${ref}): ${change.trim()}`)
+  }
   const send = async (asked?: string) => {
     const typed = (asked ?? text).trim()
     let attached = asked === undefined ? files : []
@@ -2050,7 +2058,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <MoneyThread currencies={threadCurrencies}>
-          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onInpaint={(input) => void again(input.source_image_id, input)} onRefine={(input) => void again(input.source_image_id, input)} onUpscale={(input) => void again(input.source_image_id, input)} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} onEditImage={(name, sourceId) => {
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onInpaint={(input) => void again(input.source_image_id, input)} onRefine={(input) => void again(input.source_image_id, input)} onUpscale={(input) => void again(input.source_image_id, input)} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} onEditPicture={tools.includes('gpt_images') ? (name, ref) => void editPicture(name, ref) : undefined} onEditImage={(name, sourceId) => {
             if (files.filter((f) => f.source !== 'Image-to-image source').length >= 10) { setError('Remove an attachment before selecting an image source (10 attachments maximum).'); return }
             const reference = `The user selected “${name}” as the source for an image-to-image edit. source_image_id: ${sourceId}. Use this exact owned reference with generate_image, not a URL or a new text-to-image recreation. Apply only the change requested in the user's message; this is a whole-image edit, not masked inpainting.`
             setFiles((current) => [...current.filter((f) => f.source !== 'Image-to-image source'), { name: `${name} (image source)`, source: 'Image-to-image source', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
@@ -2256,7 +2264,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onMaskSaved }: { onEditImage: (name: string, sourceId: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved }: { onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const [maskSource, setMaskSource] = useState<InpaintSource | null>(null)
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
@@ -2326,7 +2334,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><AnsweredForm tag={`${m.id}:${j}`} call={c} result={results[j].content} />{row(results[j], 'Answered question')}</div>
           const image = c.name === 'generate_image' ? generatedImage(results[j]?.content) : null
-          if (image || wait?.kind === 'image' && wait.width && wait.height) return (
+          if (image || c.name !== 'gpt_image' && wait?.kind === 'image' && wait.width && wait.height) return (
             <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}>
               <ImageCard inpaint={image && imagesOn && threadId ? { threadId, disabled: answering, onSubmit: onInpaint } : undefined} refine={image && imagesOn && threadId ? { threadId, disabled: answering, onSubmit: onRefine } : undefined} operation={c.arguments?.operation === 'remove' ? 'remove' : c.arguments?.operation === 'inpaint' ? 'inpaint' : c.arguments?.operation === 'upscale' ? 'upscale' : c.arguments?.operation === 'refine' ? 'refine' : 'generate'} upscale={image && imagesOn ? { disabled: answering, onSubmit: onUpscale } : undefined} retry={results[j] ? retryButton(results[j].id) : null} image={image ?? undefined} width={image?.width ?? wait!.width!} height={image?.height ?? wait!.height!} pending={!image} progress={wait?.progress} edit={image && imagesOn ? { disabled: answering, onClick: () => onEditImage(image.name, image.id) } : undefined} more={actions(results[j] ?? m, true)}
                 again={image ? { disabled: answering || !imagesOn || !image.settings, hint: !image.settings ? 'This image has no recorded generation settings' : !imagesOn ? 'Turn on Images in Tools first' : answering ? 'Wait for this thread to finish' : image.settings?.operation === 'upscale' ? 'Repeat the upscale from its original source and recorded settings' : image.settings?.operation === 'refine' ? 'Refine the original source again with a fresh seed' : 'Draw this image again with the same prompt and settings', onClick: () => onAgain(image.id) } : undefined} />
@@ -2334,7 +2342,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           )
           // Masks the agent made or listed show as tinted pictures, each with Edit mask.
           const masks = (c.name === 'make_image_mask' || c.name === 'list_image_masks') && results[j] ? agentMasks(results[j].content) : []
-          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
+          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
         })}
       </Fragment>,
     )

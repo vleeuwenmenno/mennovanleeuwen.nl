@@ -11,7 +11,7 @@ import { checkImageQuality, QualityRetry, type QualityVerdict, type VisionAsk } 
 import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageProgress } from '../src/data/imageModels.ts'
 import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, prepareImageGeneration, generatedImageForVision, imageAgainInput, retainBranchedImages, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
-import { icon as gptIcon, image as gptImage, listIcons, openaiImagesReady, SLUG as ICON_SLUG } from './agentOpenAI.ts'
+import { expectedMs, icon as gptIcon, image as gptImage, listIcons, MAX_REFERENCE_BYTES, MAX_REFERENCES, openaiImagesReady, type Reference as GptReference, sniff as sniffImage, SLUG as ICON_SLUG } from './agentOpenAI.ts'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
@@ -237,7 +237,8 @@ const storeGroups = (groups: ToolGroup[]) => JSON.stringify({ on: groups, seen: 
 // --- attachments -------------------------------------------------------------------------------
 
 /** A file sent with a message: text goes into the prompt, a picture to models that can see. */
-export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string }
+/** `ref`: a picture gpt_image made, as the model can pass it back in `references` (gpt:<ref>). */
+export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string; ref?: string }
 export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 
 function checkAttachments(v: unknown): Attachment[] {
@@ -304,8 +305,12 @@ const titling = new Set<string>()
 const checkingTitle = new Set<string>()
 
 /** A change waiting for the user: which reply asked for it (message and call index) and how to answer; `summary` says what it does where the call alone doesn't (a calendar change). */
-type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; /** A web read the automatic check would not clear: what it said */ check?: string; resolve: (answer: unknown) => void }
+type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn: its estimate and how many previews there are so far */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; /** A web read the automatic check would not clear: what it said */ check?: string; resolve: (answer: unknown) => void }
 export type PendingApproval = Omit<Pending, 'resolve'>
+/** `expected`: a typical drawing time (ms) for the estimate; `elapsed`: how long it has been drawing, when a window joins. */
+export type GptDrawing = { expected: number; startedAt: number; elapsed?: number; previews: number }
+/** The latest rough preview of each picture being drawn, by call, for GET …/gpt-preview/<callId>. */
+const gptPreviews = new Map<string, { thread: string; mime: string; bytes: Buffer }>()
 const pending = new Map<string, Pending[]>() // by thread
 /** Windows following a turn they did not start (opened again, another tab), by thread. */
 const followers = new Map<string, Set<{ send: (e: TurnEvent) => void; close: () => void }>>()
@@ -779,7 +784,7 @@ const messagesOf = (id: string) => (database().prepare('SELECT * FROM agent_mess
 
 export function getThread(user: User, id: string): { thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] } {
   const row = ownThread(user, id)
-  return { thread: toThread(row), messages: messagesOf(row.id), pending: (pending.get(row.id) ?? []).map(({ resolve: _, ...p }) => p) }
+  return { thread: toThread(row), messages: messagesOf(row.id), pending: (pending.get(row.id) ?? []).map(({ resolve: _, ...p }) => (p.gpt ? { ...p, gpt: { ...p.gpt, elapsed: Date.now() - p.gpt.startedAt } } : p)) }
 }
 
 /** The user's answer to a change the agent asked to make. */
@@ -1720,13 +1725,14 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   // OpenAI pictures and icons (server/agentOpenAI.ts): offered only once a provider is set up.
   if (openaiImagesReady(user))
     tools.push(
-      tool('gpt_image', "Make a picture with OpenAI's gpt-image, only when the user asks for one or a diagram, recipe or overview they asked for needs small symbols. mode=image: one picture, shown to the user under this call (it is not a link; never write base64 or a URL for it). mode=icon: a small square symbol with a transparent background in one consistent flat style, stored in the user's icon library under `slug` and drawn at 256 px; use icons for the parts of flow diagrams, crafting or cooking recipes, comparisons and other visualizations, and refer to one as icon:<slug> (for example icon:diamond_pickaxe). Call list_icons first and reuse an existing slug rather than drawing it again: asking for a slug that exists returns the stored icon without drawing (free), unless regenerate is true. Keep slugs and icon prompts generic and reusable (iron_ingot, water_bucket, server, user, database), not tied to this conversation. Each picture counts against the user's daily limit, so draw only what is needed and never several variants unasked.", {
-        mode: { type: 'string', enum: ['image', 'icon'], description: 'image (default) or icon' },
-        prompt: str('What to draw. For an icon: just the subject, like "a diamond pickaxe" (the house style is added for you). For an image: a full description, with any exact text in quotes'),
+      tool('gpt_image', "Make a picture with OpenAI's gpt-image, only when the user asks for one or a diagram, recipe or overview they asked for needs small symbols. mode=image: one picture, shown to the user under this call as it is drawn (it is not a link; never write base64 or a URL for it). mode=infographic: an explainer picture (how something works, a guide, a labelled overview), high quality and landscape by default. Write its prompt as a layout: 1) a title banner with the exact title; 2) the main scene or subject; 3) each labelled part: its name, a caption of a few words and an arrow to where it is; 4) a numbered strip of steps (\"How it works\": 1. … 2. … 3. …); 5) the style (match the game's or product's look, colours, flat or painted). Put every text to show in quotes, keep texts short, and spell names exactly. mode=icon: a small square symbol with a transparent background in one consistent flat style, stored in the user's icon library under `slug` and drawn at 256 px; use icons for the parts of flow diagrams, crafting or cooking recipes, comparisons and other visualizations, and refer to one as icon:<slug> (for example icon:diamond_pickaxe). Call list_icons first and reuse an existing slug rather than drawing it again: asking for a slug that exists returns the stored icon without drawing (free), unless regenerate is true. Keep slugs and icon prompts generic and reusable (iron_ingot, water_bucket, server, user, database), not tied to this conversation. references: pictures to draw from or change (a screenshot the user sent, a picture made earlier): the id of a picture in the user's message (attachment:<message>:<n>, in its attachment tag) or of an earlier gpt_image picture (gpt:<id>, in that call's result). To change an earlier picture, pass it in references and describe the whole picture with the change. Each picture counts against the user's daily limit, so draw only what is needed and never several variants unasked.", {
+        mode: { type: 'string', enum: ['image', 'infographic', 'icon'], description: 'image (default), infographic or icon' },
+        prompt: str('What to draw. For an icon: just the subject, like "a diamond pickaxe" (the house style is added for you). For an image: a full description, with any exact text in quotes. For an infographic: the layout described above'),
+        references: { type: 'array', maxItems: MAX_REFERENCES, items: { type: 'string' }, description: `Image and infographic modes: up to ${MAX_REFERENCES} picture ids to draw from, like attachment:12:0 or gpt:3f9a1c2b7d4e. Never a URL or a path` },
         slug: str('Icon mode: the library name, 1–64 of a-z, 0-9, _ and -, like diamond_pickaxe'),
         regenerate: { type: 'boolean', description: 'Icon mode: draw it again even though the slug exists (only when the user asks for a new look)' },
-        size: { type: 'string', enum: ['square', 'landscape', 'portrait'], description: 'Image mode: 1024×1024, 1536×1024 or 1024×1536 (default square)' },
-        quality: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Image mode: low for drafts, high for text, diagrams or close-ups (default medium)' },
+        size: { type: 'string', enum: ['square', 'landscape', 'portrait'], description: 'Image mode: 1024×1024, 1536×1024 or 1024×1536 (default square). Infographic: landscape (default) or portrait' },
+        quality: { type: 'string', enum: ['low', 'medium', 'high'], description: 'low for drafts, high for text, diagrams or close-ups (default medium; high for an infographic)' },
         transparent: { type: 'boolean', description: 'Image mode: a transparent background (a cut-out, a sticker)' },
       }, ['prompt']),
       tool('list_icons', "List the icons in the user's icon library: each slug (use it as icon:<slug>) and what it shows. Check it before drawing icons, and reuse what is there.", {}),
@@ -2048,10 +2054,44 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
 const setPermission = (thread: string, p: Permission) => database().prepare('UPDATE agent_threads SET permission = ? WHERE id = ?').run(p, thread)
 
 /**
- * gpt_image: an icon from (or into) the library, or a picture kept with the call's result like a
- * sent picture, so it is there when the thread is opened again (server/agentOpenAI.ts).
+ * The pictures gpt_image may draw from, by the ids the model sees: attachment:<message>:<n> (a
+ * picture in one of the user's messages, or one gpt_image made) and gpt:<ref> (a picture gpt_image
+ * made, by the ref in its result). Only this thread's, read from what is stored, never a URL.
  */
-async function runGptImage(user: User, args: Record<string, unknown>, signal: AbortSignal): Promise<{ output: string; file?: Attachment }> {
+function gptReferences(thread: string, raw: unknown): GptReference[] {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new HttpError(400, 'references is a list of picture ids, like attachment:12:0 or gpt:3f9a1c2b7d4e')
+  const ids = [...new Set(raw.map((v) => (typeof v === 'string' ? v.trim() : '')))]
+  if (ids.length > MAX_REFERENCES) throw new HttpError(400, `At most ${MAX_REFERENCES} references`)
+  let total = 0
+  return ids.map((id) => {
+    let file: Attachment | undefined
+    const at = /^attachment:([1-9][0-9]{0,14}):([0-9])$/.exec(id)
+    const ref = /^gpt:([0-9a-f]{8,32})$/.exec(id)
+    if (at) {
+      const row = database().prepare("SELECT attachments FROM agent_messages WHERE id = ? AND thread_id = ? AND (role = 'user' OR (role = 'tool' AND tool_name = 'gpt_image'))").get(Number(at[1]), thread) as { attachments: string | null } | undefined
+      file = row?.attachments ? (JSON.parse(row.attachments) as Attachment[])[Number(at[2])] : undefined
+    } else if (ref) {
+      const row = database().prepare("SELECT m.attachments FROM agent_messages m, json_each(m.attachments) a WHERE m.thread_id = ? AND m.role = 'tool' AND json_extract(a.value, '$.ref') = ? LIMIT 1").get(thread, id) as { attachments: string } | undefined
+      file = row ? (JSON.parse(row.attachments) as Attachment[]).find((f) => f.ref === id) : undefined
+    } else throw new HttpError(400, `${id || 'That'} is not a picture id: use attachment:<message>:<n> from an attachment tag or gpt:<id> from an earlier gpt_image result`)
+    if (!file || file.kind !== 'image' || typeof file.data !== 'string') throw new HttpError(404, `There is no picture ${id} in this thread`)
+    const bytes = Buffer.from(file.data, 'base64')
+    const mime = sniffImage(bytes)
+    if (!mime) throw new HttpError(400, `${id} is not a PNG, JPEG or WebP picture`)
+    if (bytes.length > MAX_REFERENCE_BYTES) throw new HttpError(413, `${id} is over ${MAX_REFERENCE_BYTES / 1024 / 1024} MB`)
+    if ((total += bytes.length) > 2 * MAX_REFERENCE_BYTES) throw new HttpError(413, `The references are over ${(2 * MAX_REFERENCE_BYTES) / 1024 / 1024} MB together`)
+    return { name: file.name, mime, bytes }
+  })
+}
+
+/**
+ * gpt_image: an icon from (or into) the library, or a picture (or infographic) kept with the call's
+ * result like a sent picture, so it is there when the thread is opened again (server/agentOpenAI.ts).
+ * `drawing` is told the picture's shape and typical time before it starts, and hands back where
+ * its rough previews go.
+ */
+async function runGptImage(user: User, thread: string, args: Record<string, unknown>, signal: AbortSignal, drawing?: (d: { width: number; height: number; expected: number }) => (p: { mime: string; bytes: Buffer }) => void): Promise<{ output: string; file?: Attachment }> {
   const prompt = typeof args.prompt === 'string' ? args.prompt.trim().slice(0, 4000) : ''
   if (args.mode === 'icon') {
     const slug = typeof args.slug === 'string' ? args.slug.trim() : ''
@@ -2059,14 +2099,29 @@ async function runGptImage(user: User, args: Record<string, unknown>, signal: Ab
     const made = await gptIcon(user, slug, prompt, args.regenerate === true, signal)
     return { output: JSON.stringify({ icon: { slug, reference: `icon:${slug}`, url: `/api/agents/icons/${slug}`, reused: made.reused, shows: made.prompt.slice(0, 160) }, message: made.reused ? `The icon ${slug} was already in the library, so nothing was drawn. Refer to it as icon:${slug}.` : `The icon was drawn, saved in the user's icon library and shown to the user. Refer to it as icon:${slug}.` }) }
   }
-  if (args.mode !== undefined && args.mode !== 'image') throw new HttpError(400, 'mode is image or icon')
+  if (args.mode !== undefined && args.mode !== 'image' && args.mode !== 'infographic') throw new HttpError(400, 'mode is image, infographic or icon')
   if (!prompt) throw new HttpError(400, 'Say what to draw in prompt')
-  const size = args.size === 'landscape' ? '1536x1024' : args.size === 'portrait' ? '1024x1536' : '1024x1024'
-  const quality = args.quality === 'low' || args.quality === 'high' ? args.quality : 'medium'
-  const made = await gptImage(user, { prompt, size, quality, background: args.transparent === true ? 'transparent' : 'auto' }, signal)
+  const infographic = args.mode === 'infographic'
+  // An infographic is landscape unless asked portrait, and high quality unless asked otherwise (its text must be legible).
+  const size = infographic ? (args.size === 'portrait' ? '1024x1536' : '1536x1024') : args.size === 'landscape' ? '1536x1024' : args.size === 'portrait' ? '1024x1536' : '1024x1024'
+  const quality = args.quality === 'low' || args.quality === 'high' || (args.quality === 'medium' && infographic) ? args.quality : infographic ? 'high' : 'medium'
+  const references = gptReferences(thread, args.references)
+  const [width, height] = size.split('x').map(Number)
+  const onPartial = drawing?.({ width, height, expected: expectedMs({ quality, size, references: references.length }) })
+  const asked = infographic ? `An infographic: a clear, well-organised explainer picture with legible, correctly spelled text.\n\n${prompt}` : prompt
+  const made = await gptImage(user, { prompt: asked, size, quality, background: args.transparent === true && !infographic ? 'transparent' : 'auto', references }, signal, onPartial)
   const name = `${prompt.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 40).toLowerCase() || 'picture'}.${made.ext}`
-  const file: Attachment = { name, source: 'Made with gpt-image', kind: 'image', mime: made.mime, size: made.bytes.length, data: made.bytes.toString('base64') }
-  return { file, output: JSON.stringify({ image: { name, mime: made.mime, size: made.bytes.length, ...(made.width ? { width: made.width, height: made.height } : {}) }, message: 'The picture was made and is shown to the user under this call. Do not write a link or base64 for it; say briefly what it shows if that helps.' }) }
+  const ref = `gpt:${randomUUID().replace(/-/g, '').slice(0, 12)}`
+  const file: Attachment = { name, source: 'Made with gpt-image', kind: 'image', mime: made.mime, size: made.bytes.length, data: made.bytes.toString('base64'), ref }
+  return { file, output: JSON.stringify({ image: { name, id: ref, mime: made.mime, size: made.bytes.length, ...(made.width ? { width: made.width, height: made.height } : {}), ...(references.length ? { references: references.length } : {}) }, message: `The ${infographic ? 'infographic' : 'picture'} was made and is shown to the user under this call. Do not write a link or base64 for it; say briefly what it shows if that helps. To change it later, pass references: ["${ref}"].` }) }
+}
+
+/** The latest rough preview of a picture being drawn in one of the user's threads. */
+export function gptPreview(user: User, thread: string, callId: string): { mime: string; bytes: Buffer } {
+  const row = ownThread(user, thread)
+  const p = gptPreviews.get(callId)
+  if (!p || p.thread !== row.id) throw new HttpError(404, 'No preview')
+  return p
 }
 
 /** Hard work in a work folder takes many steps: a coding job gets more rounds than a question. */
@@ -2713,12 +2768,13 @@ function chatHistory(thread: string, vision = true): ChatMessage[] {
     if (m.role === 'assistant')
       return { role: 'assistant', content: m.content, ...(current && m.thinking ? { thinking: m.thinking } : {}), ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((c) => ({ function: c })) } : {}) }
     const attached = files.get(m.id) ?? []
-    const texts = attached.map((a) =>
+    // Pictures carry their id, so gpt_image can draw from them (references).
+    const texts = attached.map((a, k) =>
       a.kind === 'text'
         ? `<attachment name="${a.name}" from="${a.source}">\n${a.text}\n</attachment>`
         : vision
-          ? `<attachment name="${a.name}" from="${a.source}">(the picture is attached)</attachment>`
-          : `<attachment name="${a.name}" from="${a.source}">(a picture; this model cannot see pictures, so say so if it matters)</attachment>`,
+          ? `<attachment name="${a.name}" from="${a.source}" id="attachment:${m.id}:${k}">(the picture is attached)</attachment>`
+          : `<attachment name="${a.name}" from="${a.source}" id="attachment:${m.id}:${k}">(a picture; this model cannot see pictures, so say so if it matters)</attachment>`,
     )
     const images = vision ? attached.filter((a) => a.kind === 'image').map((a) => a.data!) : []
     return { role: 'user', content: [m.content, ...texts].filter(Boolean).join('\n\n'), ...(images.length ? { images } : {}) }
@@ -3069,7 +3125,9 @@ function askForm(thread: string, messageId: number, index: number, form: Form, s
 }
 
 export type TurnEvent =
-  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number; gpt?: GptDrawing }
+  /** A gpt_image picture being drawn has a new rough preview (the count, for its address) */
+  | { type: 'gptPreview'; callId: string; previews: number }
   /** Where an image job is (throttled to 4 a second), for the thread that runs it */
   | { type: 'imageProgress'; callId: string; progress: ImageProgress }
   | { type: 'imageGenerationDone'; callId: string }
@@ -3559,13 +3617,31 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             return answerText(form, await askForm(row.id, assistant, index, form, ctl.signal, send))
           }
           if (c.name === 'gpt_image') {
+            // A picture (not an icon) shows as it is drawn: a placeholder the shape of the picture
+            // with an estimate, then each rough preview. Kept as a pending image job, so a window
+            // that opens the thread halfway sees it too.
+            let callId: string | null = null
+            const drawing = (d: { width: number; height: number; expected: number }) => {
+              callId = randomUUID()
+              generationPending.push(callId)
+              const gpt: GptDrawing = { expected: d.expected, startedAt: Date.now(), previews: 0 }
+              pending.set(row.id, [...(pending.get(row.id) ?? []), { callId, messageId: assistant, index, kind: 'image', width: d.width, height: d.height, gpt, resolve: () => {} }])
+              send({ type: 'imageGeneration', callId, messageId: assistant, index, width: d.width, height: d.height, gpt })
+              const id = callId
+              return (p: { mime: string; bytes: Buffer }) => {
+                gptPreviews.set(id, { thread: row.id, ...p })
+                send({ type: 'gptPreview', callId: id, previews: ++gpt.previews })
+              }
+            }
             try {
-              const made = await runGptImage(user, c.arguments ?? {}, ctl.signal)
+              const made = await runGptImage(user, row.id, c.arguments ?? {}, ctl.signal, drawing)
               if (made.file) callFiles[index] = [made.file]
               return made.output
             } catch (e) {
               if (ctl.signal.aborted) throw e
               return JSON.stringify({ error: (e as Error).message })
+            } finally {
+              if (callId) gptPreviews.delete(callId)
             }
           }
           if (c.name === 'list_icons') return JSON.stringify({ icons: listIcons(user).map((i) => ({ slug: i.slug, reference: `icon:${i.slug}`, shows: i.prompt.slice(0, 160) })) })

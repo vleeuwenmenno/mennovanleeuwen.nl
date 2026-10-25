@@ -1522,17 +1522,54 @@ come from, and the model (`gpt-image-2` by default):
   (`chatgpt.com/backend-api/codex`): its `/images/generations` route, or the Responses API with the
   `image_generation` tool where that route is missing. **Sign out** forgets the tokens.
 
-`gpt_image` makes one of two things:
+`gpt_image` makes one of three things:
 - A **picture** (square, landscape or portrait; low, medium or high quality; optionally transparent).
   It is kept with the tool's result like a sent picture, so it shows under the call (thumbnail, full
   view, Open in Preview, Download) and is still there when the thread is opened again. The model is
-  told it was shown, never given the bytes.
+  told it was shown, never given the bytes. The result gives it an id (`gpt:<12 hex>`, kept on the
+  attachment as `ref`) to draw from it again.
+- An **infographic** (`mode: "infographic"`): one picture like the explainers ChatGPT makes, high
+  quality and landscape (1536 × 1024) unless the model asks for medium, low or portrait. The tool
+  description teaches the model to write the prompt as a layout: a title banner, the scene, each
+  labelled part with a short caption and an arrow, a numbered "How it works" strip, the style, and
+  every text in quotes and short. It counts as one picture.
 - An **icon** (`mode: "icon"`): a small square symbol in one fixed flat style on a transparent
   background, drawn at low quality and stored at 256 px in the account's **icon library** under a
   slug (`a-z`, `0-9`, `_`, `-`, like `diamond_pickaxe`). Asking for a slug that exists returns the
   stored icon without drawing, unless the agent passes `regenerate`. The result gives the model the
   reference `icon:<slug>` to use in diagrams, recipes and other visualizations. The tool tells the
   model to check `list_icons` first, reuse slugs and keep names generic.
+
+**Drawing.** A picture or infographic shows while it is drawn: a dotted frame in the picture's
+shape (theme colours, breathing gently unless reduced motion is on) with "Drawing… 37%" under it.
+gpt-image says nothing about how far it is, so the percentage is an estimate from the time alone
+(`drawingPercent` in `AgentsGptImage.tsx`): steady up to 90% at a typical time for the quality and
+size (`expectedMs` in `server/agentOpenAI.ts`: 20 s low, 45 s medium, 90 s high, 1.3 times for the
+large sizes, 10 s more with references), then slower, never 100% before it is done. The Images API
+(and the Codex routes) are asked to stream two rough previews (`stream`, `partial_images: 2`;
+`image_generation.partial_image` / `image_edit.partial_image`, and
+`response.image_generation_call.partial_image` on the Responses API); each one fills the frame as it
+comes, served from memory at `GET /api/agents/threads/<id>/gpt-preview/<callId>` until the picture is
+done. The drawing is kept as a pending image job of the turn (with its estimate and how long it has
+run), so a window that opens the thread halfway shows it too, and the agents terminal UI says
+"Drawing picture…". Stop aborts the request to OpenAI; a stopped or failed picture is not counted.
+Where a route will not stream (the Codex direct route answering 400 to it), it is asked again
+without, remembered until the server restarts, and the window shows the frame and estimate only.
+
+**References.** `references` (up to 4 picture ids, 8 MB each, 16 MB together) lets the model draw
+from pictures in the thread: one the user sent (`attachment:<message>:<n>`, the id is in the
+picture's attachment tag the model reads) or an earlier gpt_image picture (`gpt:<id>` from its
+result, or `attachment:<message>:<n>` of the tool result). Only pictures of the same thread, read
+from what is stored; URLs and paths are refused. With an API key they go to `/v1/images/edits` as
+`image[]` parts; on Sign in with ChatGPT to the Responses API as `input_image` items, with the
+tool's `action` set to `edit`.
+
+**Edit.** Each made picture has **Edit…** under it and in its full view. It asks "What should
+change?" in an in-OS dialog and sends a normal message, `Change the picture "<name>" (gpt:<id>):
+<change>`, which the agent answers by drawing it again with that picture as a reference. A message
+rather than a direct call, so the agent still has the original prompt in view and can keep
+everything else the same, and the change is in the thread like any other request. It is offered
+while GPT images is on in the thread and the thread is not answering.
 
 `GET /api/agents/icons/<slug>` serves an icon of the signed-in account as a PNG (404 when there is
 none), and `GET /api/agents/icons` lists them. Settings shows the library: each icon with its slug
@@ -1544,7 +1581,7 @@ without asking in every mode except Plan. `OPENAI_URL`, `OPENAI_AUTH_URL` and `C
 point at stand-ins for testing.
 
 ```sh
-pnpm check:agents-openai-images   # API key, pictures kept with results, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback), against fakes
+pnpm check:agents-openai-images   # API key, pictures kept with results, streamed previews (served while drawing, joined halfway, Stop aborts), infographic defaults, references to the edits route and Responses input_image, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback, a route that will not stream), against fakes
 ```
 
 **Image generation.** In Settings → Apps → Agents → Images (also the app's settings),

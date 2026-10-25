@@ -12,7 +12,7 @@ import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -342,6 +342,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (agentPicture && read) {
       const p = messagePicture(requireUser(req), agentPicture[1], agentPicture[2], agentPicture[3])
       res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
+      return true
+    }
+    // The latest rough preview of a gpt_image picture being drawn (gone once it is done).
+    const drawingPreview = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/gpt-preview\/([0-9a-f-]{36})$/.exec(path)
+    if (drawingPreview && read) {
+      const p = gptPreview(requireUser(req), drawingPreview[1], drawingPreview[2])
+      res.writeHead(200, { 'Content-Type': p.mime, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.bytes)
       return true
     }
     const maskUpload = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/image-masks$/.exec(path)
