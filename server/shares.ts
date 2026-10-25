@@ -5,6 +5,7 @@ import { database } from './db.ts'
 import { HttpError, publicOrigin } from './http.ts'
 import { parseMarkdown, safeImage, type Block, type Inline } from '../src/data/markdown/parse.ts'
 import { highlight, knownLanguage } from '../src/data/markdown/highlight.ts'
+import { isVisualLang, visualBlockText } from '../src/data/visual/spec.ts'
 
 // Shared links for the Agents app: a whole thread, or one answer with the message it answers, as
 // a page anyone with the link can read (GET /s/<token>), without MvL OS and without an account.
@@ -289,6 +290,9 @@ function blockHtml(nodes: Block[], breaks: boolean, tight = false): string {
         case 'hr':
           return '<hr>'
         case 'code': {
+          // A visual block (src/data/visual/) as its text version; the page runs no script to draw it.
+          const visual = isVisualLang(b.lang) ? visualBlockText(b.text) : null
+          if (visual) return `<pre data-lang="visual"><code>${esc(visual.join('\n'))}</code></pre>`
           const lang = knownLanguage(b.lang) ? b.lang.toLowerCase() : ''
           const code = highlight(b.text, b.lang)
             .map((t) => (t.cls && /^[a-z]+$/.test(t.cls) ? `<span class="hl-${t.cls}">${esc(t.text)}</span>` : esc(t.text)))

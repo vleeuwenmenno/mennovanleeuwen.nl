@@ -403,6 +403,9 @@ const HUES: Record<AppId, string> = {
   trash: 'var(--muted)',
 }
 
+/** Is `id` an app with an icon (an `app:<id>` in a visual block, src/data/visual/)? */
+export const hasAppIcon = (id: string): id is AppId => Object.hasOwn(tiles, id)
+
 /** An app's icon: a tinted tile, or with `tone`, a flat square in the theme's colours. */
 export function AppIcon({ app, size = 48, tone = false }: { app: AppId; size?: number; tone?: boolean }) {
   const t = tiles[app]

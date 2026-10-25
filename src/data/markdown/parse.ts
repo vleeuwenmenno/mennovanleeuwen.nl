@@ -31,7 +31,8 @@ export type Block =
   | { type: 'paragraph'; children: Inline[] }
   | { type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; children: Inline[] }
   | { type: 'hr' }
-  | { type: 'code'; lang: string; text: string }
+  /** `open`: a fence that was never closed (an answer still streaming in, a note being written) */
+  | { type: 'code'; lang: string; text: string; open?: boolean }
   | { type: 'quote'; children: Block[] }
   | { type: 'list'; ordered: boolean; start: number; tight: boolean; items: ListItem[] }
   | { type: 'table'; align: Align[]; head: Inline[][]; rows: Inline[][][] }
@@ -80,6 +81,8 @@ type Node = {
   // Code blocks
   fence?: string
   fenceIndent?: number
+  /** Still open when the text ended: no closing fence came */
+  unclosed?: boolean
   lang?: string
   // Headings
   level?: number
@@ -497,6 +500,7 @@ class BlockParser {
   }
 
   finish() {
+    if (this.tip.kind === 'code' && this.tip.fence) this.tip.unclosed = true
     while (this.tip !== this.doc) this.finalize(this.tip)
     this.finalize(this.doc)
   }
@@ -1044,7 +1048,7 @@ function toBlocks(nodes: Node[], inline: InlineParser): Block[] {
         out.push({ type: 'hr' })
         break
       case 'code':
-        out.push({ type: 'code', lang: n.lang ?? '', text: n.lines.join('\n') })
+        out.push({ type: 'code', lang: n.lang ?? '', text: n.lines.join('\n'), ...(n.unclosed ? { open: true } : {}) })
         break
       case 'quote':
         out.push({ type: 'quote', children: toBlocks(n.children, inline) })

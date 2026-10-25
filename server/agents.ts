@@ -30,6 +30,7 @@ import { editedNote, trashedNote } from '../src/data/noteClock.ts'
 import { notify } from './notifier.ts'
 import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
+import { VISUAL_PROMPT } from '../src/data/visual/prompt.ts'
 import { imagePromptSection } from './agentImagePrompt.ts'
 import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
 import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
@@ -2521,6 +2522,8 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     dateLine(more.zone ?? zoneFor(null)),
     modeLine(mode),
     furiganaLine(user),
+    // How to draw ```visual blocks (src/data/visual/): static, so it stays in the cached prefix.
+    VISUAL_PROMPT,
     // Every thread, not just image ones: a request for fiction, art or a mature theme is ordinary
     // work in a personal desktop. Without this line models answer with refusals, warnings and
     // "as an AI" caveats the user did not ask for. The one limit is stated so the model has a

@@ -1,0 +1,641 @@
+/* Visual blocks (Visual.tsx). Colours only from the theme's variables, so light and dark themes and
+   accents follow. The rules start with .vis so the Markdown preview's own (lists, headings, pre)
+   don't reach in. */
+.vis {
+  position: relative;
+  margin: 0 0 0.9em;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 13px;
+  line-height: 1.35;
+  max-width: 100%;
+  min-width: 0;
+}
+.vis .vis-one + .vis-one {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.vis .vis-title {
+  margin: 0 0 8px;
+  padding-right: 96px;
+  color: var(--fg-bright);
+  font-size: 13px;
+  font-weight: 700;
+}
+.vis .vis-muted {
+  color: var(--muted);
+}
+.vis-pending {
+  color: var(--muted);
+  font-style: italic;
+}
+.vis-loading {
+  min-height: 60px;
+}
+
+/* The Spec and Copy buttons: top right, shown on hover (always on touch screens). */
+.vis .vis-tools {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.vis:hover .vis-tools,
+.vis .vis-tools:focus-within {
+  opacity: 1;
+}
+.vis .vis-tools button,
+.vis .vis-zoom button,
+.vis .vis-chart-toggle {
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.vis .vis-tools button:hover,
+.vis .vis-zoom button:hover,
+.vis .vis-chart-toggle:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent);
+}
+.vis .vis-tools button.is-done {
+  color: var(--green);
+}
+.vis .vis-source {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--bg-dark);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre;
+}
+
+/* An invalid spec: what is wrong, then the block as written. */
+.vis-error {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+.vis .vis-error-head {
+  margin: 0 0 4px;
+  color: var(--red);
+}
+.vis-error ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.vis-error code {
+  color: var(--orange);
+}
+
+/* Pictures: the icon library's, an emoji, or a letter in a tinted tile. */
+.vis-img {
+  display: block;
+  flex: none;
+  object-fit: contain;
+  image-rendering: auto;
+}
+.vis-emoji {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.vis-letter {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--hue) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hue) 50%, transparent);
+  color: var(--fg-bright);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Flow and tree: a scrolling view over a scaled canvas. */
+.vis-diagram {
+  position: relative;
+}
+.vis-view {
+  overflow: auto;
+  max-width: 100%;
+  touch-action: pan-x pan-y;
+  overscroll-behavior: contain;
+}
+.vis-view.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+.vis-sizer {
+  position: relative;
+  margin: 0 auto;
+}
+.vis-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+.vis-edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.vis-edge {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+.vis-edge.is-dashed {
+  stroke-dasharray: 5 4;
+}
+.vis-arrowhead {
+  fill: var(--muted);
+}
+.vis-edge-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  max-width: 140px;
+  padding: 0 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vis-group {
+  position: absolute;
+  border: 1px dashed var(--line-strong);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.vis-group > span {
+  position: absolute;
+  top: 2px;
+  left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.vis-node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-light);
+  color: var(--fg-bright);
+  text-align: center;
+}
+.vis-node.is-round {
+  border-radius: 999px;
+}
+.vis-node.is-circle {
+  border-radius: 50%;
+  padding: 6px;
+}
+.vis-node.is-diamond {
+  border: 0;
+  background: none;
+  padding: 6px 0;
+}
+.vis-node.is-diamond .vis-node-text {
+  max-width: 64%;
+}
+.vis-diamond {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+.vis-diamond polygon {
+  fill: var(--bg-light);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+.vis-node > :not(.vis-diamond) {
+  position: relative;
+}
+.vis-node-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.vis-node-label {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.vis-node-note {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vis .vis-zoom {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.vis-diagram:hover .vis-zoom,
+.vis .vis-zoom:focus-within {
+  opacity: 1;
+}
+
+/* Grids: slots, an arrow, the result; a legend of the pictures below. */
+.vis .vis-grids {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.vis .vis-recipe {
+  margin: 0;
+}
+.vis .vis-recipe figcaption {
+  margin-bottom: 6px;
+  color: var(--fg);
+  font-weight: 700;
+}
+.vis-recipe-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.vis-slots {
+  display: grid;
+  gap: 3px;
+  padding: 4px;
+  background: var(--bg-dark);
+  border: 1px solid var(--line);
+}
+.vis-slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-light);
+  border: 1px solid var(--line-strong);
+  overflow: hidden;
+}
+.vis-slot.is-empty {
+  background: color-mix(in srgb, var(--bg-light) 50%, transparent);
+  border-color: var(--line);
+}
+.vis-slot.is-result {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.vis-slot-text {
+  padding: 2px;
+  font-size: 9px;
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.vis-count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  color: var(--fg-bright);
+  font-size: 11px;
+  font-weight: 700;
+  text-shadow: 0 0 2px var(--bg), 0 0 2px var(--bg);
+}
+.vis-arrow {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  max-width: 140px;
+  text-align: center;
+}
+.vis-arrow svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+.vis-results {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.vis .vis-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--fg);
+  font-size: 12px;
+}
+.vis .vis-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.vis-swatch {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+/* Timeline: when, a dot on a line, what; one grid so the dots line up. */
+.vis .vis-timeline {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) 14px minmax(0, 1fr);
+  gap: 12px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.vis .vis-timeline.no-when {
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.vis .vis-timeline li {
+  display: contents;
+}
+.vis-when {
+  max-width: 12em;
+  color: var(--muted);
+  text-align: right;
+  font-size: 12px;
+  padding-top: 1px;
+  overflow-wrap: anywhere;
+}
+.vis-rail {
+  position: relative;
+}
+.vis-rail::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  bottom: -14px;
+  width: 2px;
+  background: var(--line-strong);
+}
+.vis-timeline li:last-child .vis-rail::before {
+  display: none;
+}
+.vis-dot {
+  position: absolute;
+  top: 4px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.vis-event {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.vis-event-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-bright);
+}
+@media (max-width: 719px) {
+  .vis-when {
+    max-width: 7em;
+  }
+}
+
+/* Cards and tables. */
+.vis .vis-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
+  gap: 8px;
+}
+.vis-card {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-light);
+  min-width: 0;
+}
+.vis-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-bright);
+}
+.vis-card-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.vis .vis-card p {
+  margin: 6px 0 0;
+  color: var(--fg);
+  font-size: 12px;
+}
+.vis .vis-card p.vis-muted {
+  color: var(--muted);
+}
+.vis-badge {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+}
+.vis-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.vis-tags span {
+  padding: 0 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.vis .vis-table {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.vis .vis-table table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+.vis .vis-table th,
+.vis .vis-table td {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  vertical-align: middle;
+}
+.vis .vis-table th {
+  color: var(--fg-bright);
+  background: var(--panel-2);
+  text-align: left;
+}
+.vis-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Charts: thin marks, recessive grid, the hover layer in HTML. */
+.vis-chart {
+  position: relative;
+}
+.vis .vis-chart-toggle {
+  display: block;
+  margin: 6px 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.vis:hover .vis-chart-toggle,
+.vis .vis-chart-toggle:focus-visible {
+  opacity: 1;
+}
+.vis-xy {
+  position: relative;
+  width: 100%;
+}
+.vis-chart-svg {
+  display: block;
+  overflow: visible;
+  touch-action: pan-y;
+}
+.vis-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.vis-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+.vis-tick {
+  fill: var(--muted);
+  font-family: var(--ui);
+  font-size: 11px;
+}
+.vis-axis-title {
+  fill: var(--fg);
+  font-family: var(--ui);
+  font-size: 11px;
+}
+.vis-band {
+  fill: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.vis-bar {
+  stroke: var(--bg);
+  stroke-width: 0;
+}
+.vis-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.vis-marker {
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+.vis-tip {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 8px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+.vis-tip strong {
+  color: var(--fg-bright);
+}
+.vis-tip span {
+  display: inline-flex;
+  align-items: center;
+}
+.vis-pie {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+.vis-pie svg {
+  flex: none;
+  touch-action: pan-y;
+}
+.vis-pie .vis-legend {
+  flex-direction: column;
+  margin: 0;
+}
+.vis-slice {
+  stroke: var(--bg);
+  stroke-width: 2;
+  cursor: default;
+}
+.vis-slice.is-hover {
+  opacity: 0.85;
+}
+.vis-pie-value {
+  fill: var(--fg-bright);
+  font-family: var(--ui);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* Touch: the buttons always show and are easier to hit. */
+@media (pointer: coarse) {
+  .vis .vis-tools,
+  .vis .vis-zoom,
+  .vis .vis-chart-toggle {
+    opacity: 1;
+  }
+  .vis .vis-tools button,
+  .vis .vis-zoom button,
+  .vis .vis-chart-toggle {
+    min-width: 32px;
+    min-height: 28px;
+  }
+}

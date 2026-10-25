@@ -1,9 +1,13 @@
-import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, Fragment, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { parseMarkdown, type Block, type Inline } from './parse.ts'
 import { highlight, knownLanguage } from './highlight.ts'
 import { useFurigana } from '../furigana.ts'
 import { joinText, moneyPieces } from '../money.ts'
 import { MoneyAmount } from '../../os/MoneyAmount.tsx'
+import { isVisualLang } from '../visual/lang.ts'
+
+/** Visual blocks' renderer, loaded the first time a ```visual block shows (src/data/visual/). */
+const VisualBlock = lazy(() => import('../visual/Visual.tsx'))
 
 // Markdown as React elements, for Zed's preview, Notebook, Spotlight and the Agents app's
 // answers. The parsing is in parse.ts (CommonMark with GitHub's tables, task lists and
@@ -108,6 +112,12 @@ function blocks(nodes: Block[], breaks: boolean, key: string, tight = false, mon
       case 'hr':
         return <hr key={k} />
       case 'code':
+        if (isVisualLang(b.lang))
+          return (
+            <Suspense key={k} fallback={<div className="vis vis-loading" style={{ minHeight: 60 }} />}>
+              <VisualBlock source={b.text} open={b.open} />
+            </Suspense>
+          )
         return <CodeBlock key={k} lang={b.lang} code={b.text} />
       case 'quote':
         return <blockquote key={k}>{blocks(b.children, breaks, k, false, money)}</blockquote>
