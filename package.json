@@ -64,6 +64,7 @@
     "check:agents-observations": "node scripts/agents-observations.ts",
     "check:agents-lora-preview": "node scripts/agents-lora-preview.ts",
     "check:agents-roles": "node scripts/agents-roles.ts",
+    "check:agents-find-image": "node scripts/agents-find-image.ts",
     "check:agents-skill-hooks": "node scripts/agents-skill-hooks.ts",
     "check:agents-openai-images": "node scripts/agents-openai-images.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",

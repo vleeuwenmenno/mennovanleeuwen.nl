@@ -19,12 +19,14 @@ export type SceneSvg = {
   /** Allowed presentation attributes from the model's root <svg> (fill, font-size...) */
   rootAttrs: [string, string][]
   viewBox: [number, number, number, number]
-  /** Icon library slugs the drawing places (icon:<slug>) */
+  /** What the drawing places: icon library slugs (icon:<slug>) and found pictures as image:<id> */
   icons: string[]
   /** Text of the drawing's labels, for the text version */
   labels: string[]
 }
 export type IconPlacement = { slug: string; x: number; y: number; width: number; height: number }
+/** The key a picture reference goes by: an icon's slug (icon:<slug>), a found picture's whole image:<id>. */
+export const pictureKey = (href: string) => (href.startsWith('icon:') ? href.slice(5) : href)
 
 export const SCENE_LIMITS = { chars: 120_000, elements: 3000, depth: 40, uses: 200, icons: 40, value: 20_000, text: 400, size: 4000 }
 
@@ -275,6 +277,7 @@ export function sanitizeSvg(src: string, opts: SanitizeOptions = {}): SanitizeRe
       if (lower === 'href' || lower === 'xlink:href') {
         if ((tag === 'use' || tag === 'linearGradient' || tag === 'radialGradient' || tag === 'pattern') && /^#[A-Za-z_][\w.-]{0,63}$/.test(value)) out.push(['href', value])
         else if (tag === 'image' && /^icon:[a-z0-9_-]{1,64}$/i.test(value)) out.push(['href', value.toLowerCase()])
+        else if (tag === 'image' && /^image:[A-Za-z0-9_-]{6,64}$/i.test(value)) out.push(['href', value.toLowerCase()])
         else if (tag === 'image' || tag === 'use') return null
         continue
       }
@@ -347,11 +350,11 @@ export function sanitizeSvg(src: string, opts: SanitizeOptions = {}): SanitizeRe
     if (tag === 'image') {
       const href = attrs.find(([n]) => n === 'href')?.[1]
       if (!href) {
-        dropped.add('image without icon:<slug>')
+        dropped.add('image without icon:<slug> or image:<id>')
         close()
         continue
       }
-      icons.add(href.slice(5))
+      icons.add(pictureKey(href))
     }
     const node: SvgNode = { tag, attrs, children: [] }
     p.node.children.push(node)
@@ -398,7 +401,7 @@ export function sanitizeSvg(src: string, opts: SanitizeOptions = {}): SanitizeRe
   for (const ic of opts.icons ?? []) {
     if (icons.size >= SCENE_LIMITS.icons && !icons.has(ic.slug)) break
     icons.add(ic.slug)
-    top.children.push({ tag: 'image', attrs: [['href', `icon:${ic.slug}`], ['x', String(ic.x)], ['y', String(ic.y)], ['width', String(ic.width)], ['height', String(ic.height)]], children: [] })
+    top.children.push({ tag: 'image', attrs: [['href', ic.slug.startsWith('image:') ? ic.slug : `icon:${ic.slug}`], ['x', String(ic.x)], ['y', String(ic.y)], ['width', String(ic.width)], ['height', String(ic.height)]], children: [] })
   }
   if (icons.size > SCENE_LIMITS.icons) warn(`At most ${SCENE_LIMITS.icons} different icons are shown`)
 
@@ -468,7 +471,7 @@ function styleColours(style: string, colours: ScenePalette): string {
 
 export type SerializeOptions = {
   colours: ScenePalette
-  /** Icon slug → data:image/... URL; missing (or null) draws a placeholder tile */
+  /** Icon slug (or image:<id>) → data:image/... URL; missing (or null) draws a placeholder tile */
   icons?: Map<string, string | null>
   font?: string
   /** A colour to fill the whole drawing with first (a saved file has no page behind it) */
@@ -494,14 +497,14 @@ export function serializeSvg(scene: SceneSvg, o: SerializeOptions): string {
   const node = (n: SvgNode | string, parent: string): string => {
     if (typeof n === 'string') return escText(parent === 'style' ? resolveColours(n, c, false) : n)
     if (n.tag === 'image') {
-      const slug = (n.attrs.find(([a]) => a === 'href')?.[1] ?? '').slice(5)
+      const slug = pictureKey(n.attrs.find(([a]) => a === 'href')?.[1] ?? '')
       const url = o.icons?.get(slug)
       const rest = n.attrs.filter(([a]) => a !== 'href')
       if (url && DATA_IMAGE.test(url)) return `<image${attr('href', url)}${attrs(rest)}/>`
       // A missing icon: a dashed tile with the first letter, where the picture would be.
       const g = (a: string, d: number) => num(n.attrs.find(([b]) => b === a)?.[1]) ?? d
       const [ix, iy, iw, ih] = [g('x', 0), g('y', 0), g('width', 32), g('height', g('width', 32))]
-      const letter = (slug.replace(/[_-]+/g, ' ').trim()[0] ?? '?').toUpperCase()
+      const letter = slug.startsWith('image:') ? '' : (slug.replace(/[_-]+/g, ' ').trim()[0] ?? '?').toUpperCase()
       const t = n.attrs.find(([a]) => a === 'transform')
       return `<g${t ? attr('transform', t[1]) : ''}><rect${attr('x', String(ix))}${attr('y', String(iy))}${attr('width', String(iw))}${attr('height', String(ih))}${attr('rx', String(Math.min(iw, ih) * 0.18))}${attr('fill', c.panel)}${attr('stroke', c.border)} stroke-dasharray="4 3"/><text${attr('x', String(ix + iw / 2))}${attr('y', String(iy + ih / 2))}${attr('fill', c.muted)}${attr('font-size', String(Math.max(8, Math.min(iw, ih) * 0.45)))} text-anchor="middle" dominant-baseline="central">${escText(letter)}</text></g>`
     }

@@ -687,6 +687,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.agt-hits.agt-found {
+  padding-left: 0;
+  list-style: none;
+}
+.agt-found li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.agt-found img {
+  flex: none;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: var(--bg-light);
+}
 .agt-wait {
   margin: 0;
 }

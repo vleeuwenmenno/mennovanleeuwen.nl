@@ -2466,6 +2466,8 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
   const failed = !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'error' in parsed
   const hits = call.name === 'web_search' && Array.isArray(parsed) ? (parsed as SearchHit[]) : null
   const events = call.name === 'calendar_list_events' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { events?: unknown }).events) ? (parsed as { events: CalendarHit[]; more?: number }) : null
+  // find_image's pictures, kept on this server (server/findImage.ts): only ids of that shape are shown.
+  const found = call.name === 'find_image' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { images?: unknown }).images) ? (parsed as { images: { reference?: string; title?: string; site?: string; page?: string }[] }).images.filter((i) => /^image:w[0-9a-f]{24}$/.test(i.reference ?? '')) : null
   const mails = call.name === 'mail_search' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { results?: unknown }).results) ? (parsed as { results: { account: string; conversations?: MailHit[] }[] }).results.flatMap((r) => r.conversations ?? []) : null
   if (approval)
     return (
@@ -2520,6 +2522,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           </span>
         )}
         {hits && <span className="muted"> · {hits.length} results</span>}
+        {found && <span className="muted"> · {found.length} {found.length === 1 ? 'picture' : 'pictures'}</span>}
         {events && (
           <span className="muted">
             {' '}
@@ -2547,6 +2550,22 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
                 <span>{h.title || h.url}</span>
               )}
               <span className="muted"> {h.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</span>
+            </li>
+          ))}
+        </ul>
+      ) : found?.length ? (
+        <ul className="agt-hits agt-found">
+          {found.map((f) => (
+            <li key={f.reference}>
+              <img src={`/api/agents/images/${f.reference!.slice(6)}`} alt={f.title ?? ''} width={48} height={48} loading="lazy" draggable={false} />
+              {f.page && /^https?:\/\//i.test(f.page) ? (
+                <a href={f.page} target="_blank" rel="noopener noreferrer">
+                  {f.title || f.site || f.page}
+                </a>
+              ) : (
+                <span>{f.title || f.site}</span>
+              )}
+              {f.site && <span className="muted"> {f.site}</span>}
             </li>
           ))}
         </ul>
