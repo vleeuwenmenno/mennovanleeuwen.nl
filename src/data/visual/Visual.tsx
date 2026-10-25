@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
-import { parseVisual, type Card, type Direction, type FlowEdge, type FlowNode, type Grid, type Series, type TimelineEvent, type TreeNode, type VItem, type Visual } from './spec.ts'
+import { parseVisual, type Card, type Direction, type FlowEdge, type FlowNode, type Grid, type ListRow, type Series, type TimelineEvent, type TreeNode, type VItem, type Visual } from './spec.ts'
 import { edgeMid, edgePath, layered } from './layout.ts'
 import { AppIcon, hasAppIcon } from '../../os/icons'
 import { useIsMobile } from '../../os/useIsMobile'
@@ -21,32 +21,37 @@ const hueOf = (s: string) => {
   return HUES[Math.abs(h) % 6]
 }
 
-/** Icon slugs that came back missing, so the same picture is not asked for again on every render. */
+/** Pictures (icon slugs, image:<id>) that came back missing, so they are not asked for again on every render. */
 const missing = new Set<string>()
 const labelOf = (it: VItem) => it.label || (it.icon ? it.icon.replace(/[_-]+/g, ' ') : it.app ?? '')
+/** Where a picture is served: a found picture (find_image) or an icon library one. */
+const pictureUrl = (key: string) => (key.startsWith('image:') ? `/api/agents/images/${encodeURIComponent(key.slice(6))}` : `/api/agents/icons/${encodeURIComponent(key)}`)
 
 /**
- * An item's picture: the icon library's (falling back to the emoji, then the first letter in a
- * tinted tile), an app's icon, or the emoji. `always` gives a letter tile even when the item asked
- * for no picture (a grid slot).
+ * An item's picture: a found picture (image:<id>), else the icon library's (falling back to the
+ * emoji, then the first letter in a tinted tile), an app's icon, or the emoji. `always` gives a
+ * letter tile even when the item asked for no picture (a grid slot). `photo` fills the square
+ * (cropped), for a list's pictures; elsewhere the whole picture fits inside.
  */
-function VIcon({ it, size, always = false }: { it: VItem; size: number; always?: boolean }) {
-  const [bad, setBad] = useState(() => !!it.icon && missing.has(it.icon))
-  useEffect(() => setBad(!!it.icon && missing.has(it.icon)), [it.icon])
+function VIcon({ it, size, always = false, photo = false }: { it: VItem; size: number; always?: boolean; photo?: boolean }) {
+  const keys = [it.image && `image:${it.image}`, it.icon].filter((k): k is string => !!k)
+  const first = () => keys.find((k) => !missing.has(k))
+  const [key, setKey] = useState(first)
+  useEffect(() => setKey(first()), [it.image, it.icon])
   const label = labelOf(it)
-  if (it.icon && !bad)
+  if (key)
     return (
       <img
-        className="vis-img"
-        src={`/api/agents/icons/${encodeURIComponent(it.icon)}`}
+        className={`vis-img ${key.startsWith('image:') ? 'is-photo' : ''} ${photo ? 'is-cover' : ''}`}
+        src={pictureUrl(key)}
         width={size}
         height={size}
         alt={label}
         loading="lazy"
         draggable={false}
         onError={() => {
-          missing.add(it.icon!)
-          setBad(true)
+          missing.add(key)
+          setKey(first())
         }}
       />
     )
@@ -57,7 +62,7 @@ function VIcon({ it, size, always = false }: { it: VItem; size: number; always?:
         {it.emoji}
       </span>
     )
-  if (!it.icon && !it.app && !always) return null
+  if (!it.icon && !it.image && !it.app && !always) return null
   const letter = [...label.trim()][0]?.toUpperCase() ?? '?'
   return (
     <span className="vis-letter" style={{ width: size, height: size, fontSize: Math.round(size * 0.5), ['--hue' as string]: hueOf(label) }} aria-hidden>
@@ -65,7 +70,7 @@ function VIcon({ it, size, always = false }: { it: VItem; size: number; always?:
     </span>
   )
 }
-const hasPicture = (it: VItem) => !!(it.icon || it.app || it.emoji)
+const hasPicture = (it: VItem) => !!(it.icon || it.image || it.app || it.emoji)
 
 /** Text width in px for the monospace UI face (0.6em a character, CJK a full em). */
 function textW(s: string, px = 13) {
@@ -496,6 +501,61 @@ function CardsView({ v }: { v: Extract<Visual, { type: 'cards' }> }) {
   )
 }
 
+/**
+ * A list: a picture on the left (a found photo, an icon or an emoji), a bold numbered title, a line
+ * of text, bold label rows and a note, with thin lines between the rows. A checkbox, when the spec
+ * gives `checked`, only changes what is shown here (the answer itself stays as written).
+ */
+function ListView({ v }: { v: Extract<Visual, { type: 'list' }> }) {
+  const mobile = useIsMobile()
+  const size = mobile ? 72 : 104
+  const [ticked, setTicked] = useState<Record<number, boolean>>({})
+  const anyPicture = v.items.some((it) => it.picture)
+  return (
+    <ol className={`vis-list ${anyPicture ? '' : 'no-pictures'}`}>
+      {v.items.map((it: ListRow, i) => {
+        const done = ticked[i] ?? it.checked
+        return (
+          <li key={i} className={done ? 'is-done' : ''}>
+            {anyPicture && <span className="vis-list-pic" style={{ width: size, height: size }}>{it.picture ? <VIcon it={it.picture} size={size} photo always /> : null}</span>}
+            <div className="vis-list-body">
+              <div className="vis-list-head">
+                {done !== undefined && (
+                  <input type="checkbox" className="vis-list-check" checked={done} onChange={(e) => setTicked({ ...ticked, [i]: e.currentTarget.checked })} aria-label={`${it.title || `Item ${i + 1}`} done`} />
+                )}
+                <strong className="vis-list-title">
+                  {v.numbered ? `${i + 1}. ` : ''}
+                  {it.title}
+                </strong>
+                {it.value && <span className="vis-badge">{it.value}</span>}
+              </div>
+              {it.text && <p className="vis-list-text">{it.text}</p>}
+              {it.fields.length > 0 && (
+                <dl className="vis-list-fields">
+                  {it.fields.map(([l, val], j) => (
+                    <div key={j}>
+                      <dt>{l}:</dt>
+                      <dd>{val}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {it.note && <p className="vis-list-note">{it.note}</p>}
+              {it.tags.length > 0 && (
+                <div className="vis-tags">
+                  {it.tags.map((t) => (
+                    <span key={t}>{t}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
 function Cell({ it }: { it: VItem | null }) {
   if (!it) return null
   return (
@@ -801,7 +861,7 @@ const iconData = new Map<string, Promise<string | null>>()
 function loadIcon(slug: string): Promise<string | null> {
   let p = iconData.get(slug)
   if (!p) {
-    p = fetch(`/api/agents/icons/${encodeURIComponent(slug)}`)
+    p = fetch(pictureUrl(slug))
       .then((r) => (r.ok ? r.blob() : null))
       .then(
         (b) =>
@@ -966,6 +1026,9 @@ function One({ v }: { v: Visual }) {
       break
     case 'table':
       body = <TableView v={v} />
+      break
+    case 'list':
+      body = <ListView v={v} />
       break
     case 'scene':
       body = <SceneView v={v} />
