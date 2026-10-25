@@ -142,6 +142,10 @@ function stopProxy() {
   return new Promise<void>((r) => proxy!.close(() => r()))
 }
 
+/** The served page carries a fresh CSP nonce per response; drop the attributes to compare the rest. */
+const stripNonce = (h: string) => h.replace(/ nonce="[^"]*"/g, '')
+const cspNonce = (headers: Got['headers']) => /'nonce-([^']+)'/.exec(String(headers['content-security-policy']))?.[1]
+
 async function serverChecks() {
   const raw = readFileSync(join(DIST, entry!))
   const br = await get(entry!, { 'Accept-Encoding': 'br, gzip' })
@@ -199,8 +203,21 @@ async function serverChecks() {
   check('/ is the page, compressed, no-cache', () => {
     assert.equal(page.headers['content-encoding'], 'br')
     assert.match(String(page.headers['content-type']), /^text\/html/)
-    assert.ok(brotliDecompressSync(page.body).equals(readFileSync(join(DIST, 'index.html'))))
+    const served = brotliDecompressSync(page.body).toString()
+    assert.equal(stripNonce(served), readFileSync(join(DIST, 'index.html'), 'utf8'))
     assert.equal(page.headers['cache-control'], 'no-cache')
+  })
+  const page2 = await get('/', { 'Accept-Encoding': 'br, gzip' })
+  check('/ carries a nonce that matches its CSP and is fresh per response', () => {
+    for (const p of [page, page2]) {
+      const served = brotliDecompressSync(p.body).toString()
+      const nonce = cspNonce(p.headers)
+      assert.ok(nonce, 'CSP header has a nonce')
+      const attrs = [...served.matchAll(/ nonce="([^"]*)"/g)].map((m) => m[1])
+      assert.ok(attrs.length > 0, 'page has nonce attributes')
+      assert.ok(attrs.every((a) => a === nonce), 'every nonce attribute equals the header nonce')
+    }
+    assert.notEqual(cspNonce(page.headers), cspNonce(page2.headers))
   })
   const worker = await get('/sw.js', { 'Accept-Encoding': 'gzip, deflate, br' })
   check('/sw.js compressed, no-cache', () => {
@@ -212,7 +229,12 @@ async function serverChecks() {
   const playRaw = await get('/play/empires')
   check('/play/<game> page: its own title, compressed or not', () => {
     assert.equal(play.headers['content-encoding'], 'gzip')
-    assert.ok(gunzipSync(play.body).equals(playRaw.body))
+    assert.equal(stripNonce(gunzipSync(play.body).toString()), stripNonce(playRaw.body.toString()))
+    for (const [headers, body] of [[play.headers, gunzipSync(play.body)], [playRaw.headers, playRaw.body]] as const) {
+      const nonce = cspNonce(headers)
+      assert.ok(nonce && [...body.toString().matchAll(/ nonce="([^"]*)"/g)].every((m) => m[1] === nonce), 'body nonce matches its CSP header')
+    }
+    assert.notEqual(cspNonce(play.headers), cspNonce(playRaw.headers), 'fresh nonce per response')
     assert.match(playRaw.body.toString(), /<title>Empires At War · MvL OS<\/title>/)
     assert.equal(Number(play.headers['content-length']), play.body.length)
     assert.equal(play.headers['vary'], 'Accept-Encoding')

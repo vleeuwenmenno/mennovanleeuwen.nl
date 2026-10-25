@@ -2,7 +2,7 @@
 # `pnpm dev` instead (instant reload); `docker compose up -d --build` is only for checking the
 # production image itself.
 # .env next to this file can set PORT (default 8080), GITHUB_TOKEN (optional, for `git log` in
-# the terminal) and the sign-in settings: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ADMIN_USERS, MAX_USERS,
+# the terminal) and the sign-in settings: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ADMIN_GITHUB_IDS, MAX_USERS,
 # PUBLIC_URL, SESSION_SECRET, GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET for Google Calendar and
 # UPDOWN_API_KEY (updown.io's read-only key) for the Status widget and OLLAMA_API_KEY for the
 # Agents app (see README; both are the admins' own: other users save theirs in Settings).
@@ -18,8 +18,9 @@ services:
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       # Anyone with a GitHub account can sign up, up to MAX_USERS accounts (the admin can change
-      # that and close sign-up in Settings → Users). ADMIN_USERS are comma-separated logins.
-      ADMIN_USERS: ${ADMIN_USERS:-vleeuwenmenno}
+      # that and close sign-up in Settings → Users). ADMIN_GITHUB_IDS are comma-separated numeric GitHub ids
+      # (not logins, which can be renamed); ADMIN_USERS is retired.
+      ADMIN_GITHUB_IDS: ${ADMIN_GITHUB_IDS:-46482143}
       MAX_USERS: ${MAX_USERS:-100}
       # The site's public address (https://mennovanleeuwen.nl). Set it: without it the server
       # trusts each request's Host and X-Forwarded-* headers for OAuth redirects and cookies.

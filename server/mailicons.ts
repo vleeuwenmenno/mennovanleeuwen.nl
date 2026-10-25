@@ -477,7 +477,7 @@ export async function senderIcon(raw: string, user?: number): Promise<Found | nu
 export async function serveSenderIcon(res: ServerResponse, raw: string, head: boolean, user: number) {
   const found = await senderIcon(raw, user)
   if (!found) {
-    res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : 'No icon')
+    res.writeHead(404, { 'Content-Type': 'text/plain', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : 'No icon')
     return
   }
   // Another site's bytes from this one: never a page here (an SVG opened directly runs nothing).
@@ -485,7 +485,7 @@ export async function serveSenderIcon(res: ServerResponse, raw: string, head: bo
     .writeHead(200, {
       'Content-Type': found.type,
       'Content-Length': String(found.bytes.length),
-      'Cache-Control': 'private, max-age=604800',
+      'Cache-Control': 'private, no-store',
       'Content-Disposition': 'inline; filename="icon"',
       ...SECURITY,
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox",

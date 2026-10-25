@@ -34,7 +34,7 @@ const ollama = createServer(async (req, res) => {
   res.end(JSON.stringify({ message, done: false }) + '\n' + JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, prompt_eval_count: 100, eval_count: 10 }) + '\n')
 })
 await new Promise<void>((resolve) => ollama.listen(0, '127.0.0.1', resolve))
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'threads-one,threads-two', NOTIFY_WATCH: 'off', OLLAMA_URL: `http://127.0.0.1:${(ollama.address() as { port: number }).port}`, OLLAMA_API_KEY: 'fake-key' })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1,2', NOTIFY_WATCH: 'off', OLLAMA_URL: `http://127.0.0.1:${(ollama.address() as { port: number }).port}`, OLLAMA_API_KEY: 'fake-key' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const { searchThreads, readThread } = await import('../server/agentThreadSearch.ts')

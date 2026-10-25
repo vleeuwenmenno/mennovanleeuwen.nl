@@ -6,6 +6,20 @@ export const SECURITY = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'SAMEORIGIN',
+  // Browsers ignore this over plain HTTP, so it only bites behind TLS. No includeSubDomains or preload: not every subdomain is known to be HTTPS.
+  'Strict-Transport-Security': 'max-age=31536000',
+  // Blocks injected script (inline, eval, other origins) and plugins; nothing else, because the app uses third-party fonts, public APIs, blob/data media and inline styles. Spread SECURITY first: UNTRUSTED and the share page's own policy replace it.
+  'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
+}
+
+/** The policy of the app's own HTML pages (index.html and its /cv and /play variants). Only the
+ * boot script and the modulepreload links carry the per-response nonce; 'strict-dynamic' lets that
+ * trusted script load the rest, so a script it adds on purpose (OnlyOffice's api.js from the
+ * document server the user configured) runs while an injected inline script or a bare
+ * <script src> in markup still does not. Browsers that don't know 'strict-dynamic' fall back to
+ * 'self'. A nonce is only good for the response that carried it: never cache these pages shared. */
+export function documentCsp(nonce: string) {
+  return `script-src 'nonce-${nonce}' 'strict-dynamic' 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`
 }
 
 /** For file bytes passed through from Seafile: never rendered as a page of this site, even when
@@ -30,6 +44,12 @@ export class HttpError extends Error {
   }
 }
 
+let bodyGuard: ((req: IncomingMessage) => void) | null = null
+/** Registers what runs on a request once its body has been read (server/auth.ts: the session must still be good). */
+export const guardBodies = (guard: (req: IncomingMessage) => void) => void (bodyGuard = guard)
+/** Called when a request's body has been read in full, before anything is done with it. Throws when the guard says no. */
+export const bodyRead = (req: IncomingMessage) => bodyGuard?.(req)
+
 /** Reads a JSON body of at most `limit` bytes. Only `application/json` is accepted, which also
  * means a cross-site form can't post here without a CORS preflight the server never answers. */
 export async function readJson<T>(req: IncomingMessage, limit = 512 * 1024): Promise<T> {
@@ -41,6 +61,7 @@ export async function readJson<T>(req: IncomingMessage, limit = 512 * 1024): Pro
     if (size > limit) throw new HttpError(413, 'Body too large')
     chunks.push(chunk as Buffer)
   }
+  bodyRead(req)
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T
   } catch {
@@ -77,6 +98,34 @@ export function publicOrigin(req: IncomingMessage): string {
 export function setCookie(req: IncomingMessage, name: string, value: string, opts: { maxAge: number; path?: string; readable?: boolean }) {
   const secure = publicOrigin(req).startsWith('https:') ? '; Secure' : ''
   return `${name}=${encodeURIComponent(value)}; Path=${opts.path ?? '/'}; Max-Age=${opts.maxAge}${opts.readable ? '' : '; HttpOnly'}; SameSite=Lax${secure}`
+}
+
+/** Bump to purge every browser's HTTP cache once more on its next load. */
+export const CACHE_PURGE_EPOCH = '1'
+export const CACHE_PURGE_COOKIE = 'mvlos_cache_purge'
+
+/**
+ * The one-time HTTP cache purge of the security release that made account-scoped media `no-store`:
+ * responses an older release let the browser keep for days could otherwise still be replayed
+ * to another account on the same browser. Until the marker cookie (HttpOnly, never readable by the
+ * page) holds this epoch, the response carries `Clear-Site-Data: "cache"` and sets the marker.
+ * Only "cache": never cookies, storage or service workers. Browsers that block cookies get the
+ * purge on every load, which is safe. Combine with other headers through `mergeHeaders`.
+ */
+export function cachePurge(req: IncomingMessage): Record<string, string | string[]> {
+  if (cookies(req)[CACHE_PURGE_COOKIE] === CACHE_PURGE_EPOCH) return {}
+  return {
+    'Clear-Site-Data': '"cache"',
+    'Set-Cookie': [setCookie(req, CACHE_PURGE_COOKIE, CACHE_PURGE_EPOCH, { maxAge: 400 * 86400 })],
+  }
+}
+
+/** `base` plus `extra`, with Set-Cookie lists joined rather than replaced. */
+export function mergeHeaders(base: Record<string, string | string[]>, extra: Record<string, string | string[]>): Record<string, string | string[]> {
+  const out = { ...base, ...extra }
+  const set = [base['Set-Cookie'] ?? [], extra['Set-Cookie'] ?? []].flat()
+  if (set.length) out['Set-Cookie'] = set
+  return out
 }
 
 /** State-changing requests must come from this site: a present Origin header has to match. */

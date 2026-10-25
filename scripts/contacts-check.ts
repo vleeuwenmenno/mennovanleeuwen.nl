@@ -162,7 +162,7 @@ const base = `http://127.0.0.1:${(dav.address() as { port: number }).port}`
 // --- The site, with a signed-in admin and an ordinary user ------------------------------------------
 
 const ADMIN = 'contacts-check'
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: ADMIN })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const now = Date.now()

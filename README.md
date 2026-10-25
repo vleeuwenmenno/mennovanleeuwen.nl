@@ -832,7 +832,18 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   places, push, the git app's last repository and drafts, what game windows keep (Empires'
   campaign and battle), Empires' multiplayer player, and high scores and Gladiator careers (synced:
   a visitor's are this browser's, a signed-in player's follow the account). A page only reads its
-  own account's space, so nothing of another account shows, even from a cache. What belongs to the
+  own account's space, so nothing of another account shows, even from a cache. Responses behind
+  a session (agent attachments, photos' originals, mail attachments, contact photos, mail icons,
+  Files thumbnails, link previews) are `private, no-store`, so the browser never replays one after
+  the account switches or the cookie goes; photo thumbnails are `private, no-cache` with an ETag, so
+  every reuse is checked by the server first. Copies stored by older releases (`private, max-age`
+  up to 7 days) are purged once per browser: the first app page or `/api/me` answer without the
+  `mvlos_cache_purge` marker cookie (HttpOnly, SameSite=Lax, Secure on HTTPS, 400 days) carries
+  `Clear-Site-Data: "cache"` and sets it ([`server/http.ts`](server/http.ts), `cachePurge`; bump
+  `CACHE_PURGE_EPOCH` to repeat it). Only `"cache"`: the other directives would sign people out or
+  wipe their local data and service worker. `/api/me` repeats it because a service worker may serve
+  the page itself. With cookies blocked the purge just repeats on each load, which is harmless.
+  `pnpm check:sync-accounts` covers it. What belongs to the
   browser stays in plain keys: the theme, motion, sounds, the dock's look, the workspace on screen,
   window-drag keys, the photo viewer's panel, the media player's volume, the browser's own location
   for Weather, and games' settings.
@@ -856,6 +867,45 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   spaces, and nothing new can cause it.)
 
 `pnpm check:sync-accounts` checks this against the real server and with tabs in memory.
+
+**Open connections end with their session** ([`server/liveSessions.ts`](server/liveSessions.ts)).
+What stays open after one check at the start (the notification stream, the Empires socket, and the
+streamed answers of Agents: a turn, a joined turn, the Image Studio) is bound to the stored session
+that opened it (`sessions.id`, the hash of the cookie), not just to the account:
+
+- **Signing out** closes the streams and sockets of that session at once, and no other: the
+  account's other devices keep theirs. Signing out everywhere (the admin's Sign out), a ban and
+  deleting the account close every session's.
+- **A session that runs out** is closed at its expiry by one timer per session (not polling).
+  Before a connection is sent something private or acts it asks whether its session is still good:
+  the expiry in memory, and the stored session (still there, account not banned). Notifications
+  look it up every time; the Empires socket every time for names, lobbies and seats, and every few
+  seconds for the battle's orders and heartbeats. A slow sweep (once a minute, only while something
+  is open) catches a session deleted behind the server's back.
+- A closed Agents stream doesn't stop the turn: it goes on like when a window is closed, and its
+  answer reaches the account's live pages and devices (the hub above). Stop and signing out
+  everywhere stop it. Guests have no session and are untouched. That is for work that
+  *had started* while the session was good.
+- **A request that is still arriving when its session ends does nothing.** A handler takes its
+  user from the cookie when the request comes in, and a client can send the body slowly. Every
+  JSON body (and the mail upload) is therefore checked once it has been read: the exact session
+  the request came in with must still be stored, unexpired, and its account not banned
+  (`stillSignedIn` in [`server/auth.ts`](server/auth.ts), run by `readJson`); otherwise the answer is
+  a plain 401 and nothing is done. The Agents streams (a message, Retry, Upscale and Refine,
+  Inpaint and Remove, Generate another, the Image Studio, joining a turn) then bind their response
+  to the session at the commit point, which is after the body and any planning, and right before
+  the first thing that is saved, called or sent. `bindResponse` returns nothing when the session
+  is gone and the handler stops there, so no model or ComfyUI call, no message, reply, image or
+  Studio thread, and no Retry deletion happens. The turn is marked running in that same tick, so a
+  ban a moment later finds it and stops it. A Studio batch asks again before each picture. A turn
+  that is not asked for by a request (a queued message, a queue held while it is edited) starts
+  only for an account that still exists and is not banned.
+
+`pnpm check:session-streams` covers it: the registry, a cut response, the real server with two
+sessions of one account, another account, a guest, an admin's sign-out and a ban, and requests
+held halfway through their body (a message, Retry, Inpaint, Upscale, the Studio) that are logged
+out, expired, deleted behind the server's back, signed out by an admin or banned before the rest
+arrives, next to a valid slow request and the documented behaviour of a turn that had started.
 
 A browser signing in for the first time takes the account's window layout
 instead of saving its own opening windows over it. Desktop widgets are not part of the window
@@ -1046,8 +1096,8 @@ Trash goes in the trash.
 
 Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
 (default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
-"Sign-up is closed") dialog instead; existing accounts and admins can always sign in. Logins in
-`ADMIN_USERS` (default `vleeuwenmenno`) are admins: Settings → Users lists the accounts (counts and
+"Sign-up is closed") dialog instead; existing accounts and admins can always sign in. GitHub accounts whose numeric id is in
+`ADMIN_GITHUB_IDS` (comma-separated, default `46482143`) are admins (the id never changes, a login can be renamed and taken by someone else; the old `ADMIN_USERS` is retired and grants nothing): Settings → Users lists the accounts (counts and
 sizes only, never their contents), bans, signs out and deletes them, and opens or closes sign-up.
 Keys set on the server (`OLLAMA_API_KEY`, `UPDOWN_API_KEY`, `OPENAI_API_KEY`) are only used for admins; everyone
 else saves their own in Settings → Integrations.
@@ -1064,17 +1114,26 @@ Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of 
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
 (`node:sqlite`, no extra dependency) under `DATA_DIR` (default `./data`, a volume in compose).
 
+The database also holds plaintext user data (synced state, notes, agent conversations, notifications,
+tasks, account and photo metadata), so the server keeps it private on every start, for existing
+installs too: `DATA_DIR` is set to `0700`, and `mvlos.db` (with its WAL files) and `secret.key` to `0600`,
+whatever the umask. This matters for bind mounts and local runs, where other users on the machine could
+otherwise read them. Windows has no POSIX modes and is left alone. `pnpm check:data-perms` verifies it
+(fresh and pre-existing loose modes; CI runs it).
+
 Setup:
 
 1. Create a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with callback
    URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
    `http://localhost:5173/api/auth/github/callback`.
-2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_USERS`
-   (comma-separated logins), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
+2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_GITHUB_IDS`
+   (comma-separated numeric GitHub ids; find yours at `https://api.github.com/users/<login>`), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
    address, e.g. `https://mennovanleeuwen.nl`; set it in production, since without it the server
    takes `Host` and `X-Forwarded-*` from each request, and logs a warning at startup), `SESSION_SECRET` (otherwise a random key is generated once into
    `DATA_DIR/secret.key`), `GITHUB_SCOPES` (what "Allow private" in Settings → Code hosts asks
-   for, default `read:user repo read:org`; sign-in itself only asks for `read:user`).
+   for, default `read:user repo read:org`; sign-in itself only asks for `read:user`). Which scopes a sign-in asks for can't be set from a link: Settings
+   makes a same-origin POST to `/api/auth/github/scope`, which sets a one-time, sealed, HttpOnly cookie (10 minutes, tied to that
+   account) used by the next `/api/auth/github/login` and cleared by it; `?repo=` on the login URL is ignored.
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
@@ -1088,7 +1147,10 @@ application*) with the Calendar API enabled, the scopes `calendar.readonly` and 
 production*: in *Testing*, Google expires the access after seven days. The Calendar scopes are
 "sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
 screen and at most 100 accounts can connect (verification asks for the privacy page,
-`/privacy.html`). Accounts connected before
+`/privacy.html`). The consent in progress is tied to the account and session that started it (a sealed,
+HttpOnly, ten-minute cookie, and a one-time entry in the server's memory, so a copied cookie cannot be replayed): finishing it while another account is signed in, from another session,
+after a sign-out, or with an altered or expired cookie is refused before any token is requested or
+stored (`pnpm check:google-oauth`). Accounts connected before
 the Calendar app stay read-only until connected again (Settings → Integrations → Calendars → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
@@ -2924,9 +2986,27 @@ minutes old, or with *Look for new photos*. Caps: 100,000 photos and 20,000 fold
 two walks at a time across the server. EXIF dates have no time zone, so a photo shows the time on
 the camera's clock; a file's date (no EXIF) and a video's creation time are shown in yours.
 Encrypted libraries are walked only while unlocked in Files, and their photos only show then;
+access is asked of Seafile for every request, never remembered: each Photos request (the months, a month,
+albums, the folder list, a thumbnail, details, the original, a ZIP when it is made and again when it
+is fetched, favourites, trash, undo and moves) first reads the account's library list, so a library
+that is revoked, deleted or locked disappears at once (404 for a photo, nothing in the lists), before
+any stored preview, ETag or 304, detail, file link or file name leaves and before the local index or
+Seafile is changed. A burst of requests shares listings (at most one runs and one waits per account,
+and a request is never answered with one that started before it arrived). When Seafile cannot be asked
+(it is down), nothing is shown on the strength of an earlier list: the months, a month, albums, photos
+and ZIPs answer 502 without a name or id, and the folder list is empty and marked unavailable, rather
+than guess. The last walk's status (the job in the status answer and in the answer to starting a walk) is
+checked against the same fresh list: a walk that touched a library the list does not name (revoked, deleted)
+mixes its counts, state and messages into the rest, so no part of it is shown (`job` is null) until the
+access is back, and the same goes while Seafile cannot be asked. Failures of the walk as a whole carry no
+raw error text. The index itself only describes photos; it is never what says who may see them.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
-ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
+ETag that the browser must revalidate after the current account and library-access checks (an
+encrypted library's, and Immich's, are instead sent `no-store` with no ETag). A locked library
+answers 423 for its thumbnails and details before anything else, so locking, or switching account
+in the same browser, never shows cached photos;
+the full photo comes straight from Seafile's file server with a
 short-lived link, as in Files. Videos Seafile made no thumbnail for show a frame the browser takes
 from them, as in Files. Linking another Seafile account starts the index over.
 
@@ -4733,7 +4813,8 @@ On phone-sized screens the game opens in fullscreen:
 
 The arcade's space RTS has online skirmishes: Main menu → Multiplayer → Skirmish. Anyone can play,
 signed in or not, under a typed or random name; names are unique among everyone online, and a
-signed-in user's GitHub login is theirs alone. The game remembers the last name you played under
+signed-in user's GitHub login is theirs alone (held by the account, not the name: if someone renames and
+another account takes the old login, it doesn't bring their player, seat or battle with it). The game remembers the last name you played under
 (in this browser, and with your account when signed in, so it follows you to other devices) and
 takes it by itself when you come back, straight to the list of battles; on a device that hasn't
 loaded the account's copy yet, it waits for it rather than asking. If someone online has the name
@@ -5012,10 +5093,35 @@ non-root user on port 8080 (`PORT` changes it). Its API routes live in
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
 `/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
 anonymous limit of 60 requests an hour), `/api/git/<owner>/<repo>/releases` (for the Changelog app,
-same cache and token), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+same cache and token; at most 500 answers are kept, failures for 5 seconds, and 6 requests to GitHub run at once, with a quick 503 beyond that), `/api/suggest` (Spotlight's web search suggestions: 1000 answers kept, failures for 30 seconds, 8 engine requests at once, an empty list beyond that; `pnpm check:public-cache` checks both caches' limits), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.
+
+Every answer carries baseline security headers (`SECURITY` in [`server/http.ts`](server/http.ts)):
+`nosniff`, `Referrer-Policy`, `X-Frame-Options: SAMEORIGIN`, `Strict-Transport-Security:
+max-age=31536000` (no `includeSubDomains` or `preload`, since not every subdomain is known to be
+HTTPS; browsers ignore it over plain HTTP) and a general `Content-Security-Policy: script-src 'self';
+object-src 'none'; base-uri 'none'; frame-ancestors 'self'`. That blocks injected script and plugins
+and nothing else: there is no `default-src`, `connect-src`, `img-src` or `style-src`, because the
+site uses third-party fonts, public APIs, blob and data media, inline styles and framed content.
+The app's own HTML pages (`/`, `/cv`, `/play/...` and the fallback for unknown paths) send a stricter
+script policy instead (`documentCsp` in `server/http.ts`): `script-src 'nonce-<random>'
+'strict-dynamic' 'self'`, with the same `object-src`, `base-uri` and `frame-ancestors`. The server
+puts a fresh nonce on every response, on the boot `<script>` and the `modulepreload` links, and
+builds and compresses that small page per request (still `Cache-Control: no-cache`, `Vary:
+Accept-Encoding`). `'strict-dynamic'` is what lets the boot script load the rest of the app and
+the Office app load `api.js` from the OnlyOffice document server each account configures, without
+allowing any other `https:` origin to run script: an inline script or a `<script src>` in markup,
+without the nonce, stays blocked. `'self'` is only a fallback for browsers that lack
+`'strict-dynamic'`. The nonce is never shared between responses; the service worker's cached copy
+of the page keeps its own nonce and header together.
+Routes that send untrusted bytes spread `UNTRUSTED` (`default-src 'none'; sandbox`) after `SECURITY`,
+and share pages send their own stricter policy, so both replace the general one: keep that order
+when adding a route. `pnpm build && pnpm check:headers` boots the server and checks the nonce policy
+on the page variants and encodings, `/api/me`, a share page and the merge order, then runs headless
+Chromium: the real page boots, and under the same policy a trusted script's dynamic script from
+another origin loads while inline and injected script is blocked.
 
 While it runs, the server also pings the Minecraft server every 30 seconds
 ([`server/minecraft.ts`](server/minecraft.ts)) and keeps 30 days of it in SQLite under `DATA_DIR`: online or
@@ -5052,7 +5158,7 @@ seed are never asked for there. The players chart also shows who was on in each 
 recorded visits): a mark on top of bars where someone joined, and their names, heads and join and
 leave times in the tooltip (tap a bar on a touch screen).
 
-Admins (`ADMIN_USERS`) also get a **Server console** in the Minecraft server window: say something
+Admins (`ADMIN_GITHUB_IDS`) also get a **Server console** in the Minecraft server window: say something
 in chat, message or kick a player from *On now*, list the whitelist and add or remove names, and
 run any command with its output in a scrollback (↑ for earlier ones). It goes through
 `POST /api/minecraft/rcon`, which only answers signed-in admins (everyone else gets 403, and

@@ -6,7 +6,7 @@ import { allows, normalizePrefs } from '../src/data/notifySources.ts'
 import { accounts, isAdmin, requireUser, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
-import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
+import { bodyRead, HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { parseInvite, type Invite } from './imip.ts'
 import { sanitizeHtml } from './mailhtml.ts'
 import { serveSenderIcon } from './mailicons.ts'
@@ -848,6 +848,7 @@ async function upload(acc: Linked, req: IncomingMessage, type: string | null): P
     if (size > s.maxSizeUpload) throw new HttpError(413, `Attachments can be at most ${Math.floor(s.maxSizeUpload / 1_000_000)} MB here`)
     chunks.push(chunk as Buffer)
   }
+  bodyRead(req)
   const res = await guardedFetch(acc.user, fill(s.uploadUrl, { accountId: s.accountId }), {
     method: 'POST',
     headers: { ...bearer(acc.token), 'Content-Type': contentType },
@@ -888,7 +889,7 @@ async function pipeBlob(res: ServerResponse, blob: Response, name: string, type:
   const headers: Record<string, string> = {
     'Content-Type': show ? type.toLowerCase() : 'application/octet-stream',
     'Content-Disposition': `${show ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name || 'attachment')}`,
-    'Cache-Control': 'private, max-age=3600',
+    'Cache-Control': 'private, no-store',
     ...SECURITY,
     ...UNTRUSTED,
   }
@@ -997,8 +998,8 @@ function stopLive(id: number) {
 
 /** An account that may sign in, enough of it for the requests made on its behalf (egress checks who is an admin). */
 function userById(id: number): User | null {
-  const row = database().prepare('SELECT id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(id) as { id: number; login: string; name: string | null; avatar: string | null } | undefined
-  return row ? { id: row.id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.login) } : null
+  const row = database().prepare('SELECT id, github_id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(id) as { id: number; github_id: number; login: string; name: string | null; avatar: string | null } | undefined
+  return row ? { id: row.id, githubId: row.github_id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.github_id) } : null
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms).unref())

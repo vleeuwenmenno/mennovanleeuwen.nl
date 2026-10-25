@@ -39,7 +39,7 @@ check(`the server exits cleanly on SIGTERM (code ${stopped.code}, ${Math.round(s
 await waitFor('players are told the server is restarting (close code 1012)', () => a.closeCode === 1012 && b.closeCode === 1012, 2000)
 check('the state is saved to DATA_DIR', existsSync(STATE))
 const saved = JSON.parse(readFileSync(STATE, 'utf8'))
-check(`the state file is versioned and small (${(readFileSync(STATE).length / 1024).toFixed(0)} KB)`, saved.v === 1 && saved.players.length === 2 && saved.lobbies.length === 1 && saved.matches.length === 1)
+check(`the state file is versioned and small (${(readFileSync(STATE).length / 1024).toFixed(0)} KB)`, saved.v === 2 && saved.players.length === 2 && saved.lobbies.length === 1 && saved.matches.length === 1)
 const savedAt = saved.matches[0].n
 // Kept for the stale-file checks at the end.
 const good = readFileSync(STATE, 'utf8')
@@ -104,8 +104,11 @@ const stale = await knownAfter(good.replace(/"at":\d+/, `"at":${Date.now() - 11 
 check('a state file older than 10 minutes is ignored (and deleted)', !stale.known && stale.deleted)
 const garbled = await knownAfter(good.slice(0, good.length / 2))
 check('a garbled state file is ignored (and deleted)', !garbled.known && garbled.deleted && server.log.includes('ignored the state'))
-const other = await knownAfter(good.replace('"v":1', '"v":99'))
+const other = await knownAfter(good.replace('"v":2', '"v":99'))
 check('a state file from another version is ignored (and deleted)', !other.known && other.deleted)
+// Version 1 kept signed-in players by login only: it still loads, but only as a guest's player.
+const old = await knownAfter(good.replace('"v":2', '"v":1').replace(/"account":\d+,/g, ''))
+check('a version 1 state file (no account ids) still loads, as guests', old.known && old.deleted)
 
 for (const p of [a, b]) p.ws.close()
 await server.dispose()

@@ -96,7 +96,7 @@ const OTHER = 'notes-other'
 const server = new Server({
   GITHUB_CLIENT_ID: 'x',
   GITHUB_CLIENT_SECRET: 'x',
-  ADMIN_USERS: `${LOGIN},${OTHER}`,
+  ADMIN_GITHUB_IDS: '1,2',
   NOTIFY_WATCH: 'off',
   GOOGLE_CLIENT_ID: 'x',
   GOOGLE_CLIENT_SECRET: 'x',

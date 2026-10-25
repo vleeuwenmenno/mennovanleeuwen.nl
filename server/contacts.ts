@@ -396,7 +396,7 @@ export async function handleContactsApi(req: IncomingMessage, res: ServerRespons
   }
   if (path === '/api/contacts/photo' && read) {
     const p = await contactPhoto(user, url.searchParams.get('id'))
-    res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(method === 'HEAD' ? undefined : p.bytes)
+    res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(method === 'HEAD' ? undefined : p.bytes)
     return true
   }
   return false

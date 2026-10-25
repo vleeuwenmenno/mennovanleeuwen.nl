@@ -44,7 +44,7 @@ await new Promise<void>((r) => ollama.listen(0, '127.0.0.1', r))
 const ollamaUrl = `http://127.0.0.1:${(ollama.address() as { port: number }).port}`
 
 const LOGIN = 'skills-check'
-const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake-key', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: LOGIN })
+const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake-key', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const sid = randomBytes(24).toString('hex')

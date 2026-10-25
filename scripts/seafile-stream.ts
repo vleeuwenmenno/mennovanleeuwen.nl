@@ -142,7 +142,7 @@ const base = `http://127.0.0.1:${(seafile.address() as { port: number }).port}`
 // --- The site, with a signed-in admin and Seafile linked ------------------------------------------
 
 const LOGIN = 'stream-check'
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: LOGIN })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
 // The account, its session and the Seafile link go straight into the scratch database (the link
 // encrypted with the scratch key, as Settings would store it), before the server opens it.
 process.env.DATA_DIR = server.data
