@@ -887,8 +887,9 @@ the page sends it too. That last save is refused if the save still out gets thro
 was made on top of the version before); a store that doesn't merge then keeps it on the next
 load, as long as the server's version is still one that a save of that page made and never
 heard back about (the one out, or any of them if the page came back from the back/forward cache
-and closed again), and saves it on top. Another tab of the browser that hasn't heard of that
-yet doesn't write its older copy over it.
+and closed again), and saves it on top. Only saves of the value's own past count: one sent
+before another tab's copy (or the server's) replaced the value doesn't. Another tab that writes
+its copy before hearing of the closing page's can still overwrite it, as before.
 Every save carries a random write id, which the server keeps with the version it made and
 returns with it (`writeId` in `/api/state`); that is how the next load tells: by the id, not by
 the value, so a change made elsewhere that put back the same value still counts as a change.
