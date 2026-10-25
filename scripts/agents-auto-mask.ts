@@ -52,6 +52,7 @@ function viewOf(graph: any, node: string) {
   return png(W, H, (x) => selected(x) ? 200 : 40)
 }
 const send = (res: ServerResponse, value: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
+const jpegUploads: Buffer[] = []
 let uploads: string[] = [], missing: string[] = [], chats = 0, failing = ''
 const graphs: any[] = []
 let args: Record<string, unknown> = {}, requestedTool = 'make_image_mask'
@@ -63,7 +64,8 @@ const comfy = createServer(async (req, res) => {
   if (path.startsWith('/api/lm/')) return res.writeHead(404).end()
   if (path === '/upload/image') {
     const filename = /filename="([^"]+)"/.exec(raw)?.[1]
-    assert.match(filename!, /^agents-(source|mask)-[0-9a-f-]{36}\.png$/)
+    assert.match(filename!, /^agents-(source|mask)-[0-9a-f-]{36}\.(png|jpg)$/)
+    if (filename!.endsWith('.jpg')) jpegUploads.push(Buffer.concat(chunks))
     uploads.push(filename!)
     return send(res, { name: filename, type: 'input', subfolder: '' })
   }
@@ -148,6 +150,18 @@ try {
   // Private pictures never stay in a shared browser's cache.
   for (const url of [made.mask.mask_url, made.mask.source_url]) assert.equal((await api('GET', url)).headers.get('cache-control'), 'private, no-store')
   // A broken SAM3 hands over to SAM2 within the same call, with one upload; the reason reaches the agent if both fail.
+  // An iPhone ProRAW-like DNG attached to a message is masked from its embedded JPEG preview, not refused.
+  {
+    const { dng, fixtureJpeg, resized } = await import('./rawFixtures.ts')
+    const raw = dng(true, { preview: resized(fixtureJpeg(), W, H), thumb: resized(fixtureJpeg(), 8, 6) })
+    const message = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Remove these people', ?, ?)").run(t.id, JSON.stringify([{ kind: 'image', name: 'IMG_2426.DNG', mime: 'image/x-adobe-dng', data: raw.toString('base64'), size: raw.length }]), Date.now()).lastInsertRowid)
+    const fromRaw = await call(t.id, 'make_image_mask', { source_image_id: `attachment:${message}:0`, target: 'person' })
+    assert.ok(fromRaw.mask, JSON.stringify(fromRaw))
+    assert.match(uploads.at(-1)!, /\.jpg$/)
+    const body = jpegUploads.at(-1)!
+    assert.ok(body.includes(Buffer.from([0xff, 0xd8, 0xff])) && !body.includes(Buffer.from('II*\0', 'latin1')))
+    console.log('PASS make_image_mask on a DNG attachment uses its embedded JPEG preview')
+  }
   const uploadsBefore = uploads.length, graphsBefore = graphs.length
   failing = 'SAM3Segment'
   const fallback = await call(t.id, 'make_image_mask', { source_image_id: source, target: 'cyclist', threshold: 0.25 })

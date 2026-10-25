@@ -1,6 +1,6 @@
 import { stopStudioOf } from './agentImageStudio.ts'
 import { imageMask, listImageMasks, retainImageMasks } from './agentImageMasks.ts'
-import { imageSource, listImageAttachments, aliasBranchedImageSources } from './agentImageSources.ts'
+import { imageSource, listImageAttachments, aliasBranchedImageSources, stillData, stillSource } from './agentImageSources.ts'
 import { imageFileSaveBlockers, prepareImageFileSave } from './agentImageFiles.ts'
 import { searchThreads, readThread } from './agentThreadSearch.ts'
 import { messageMentions } from '../src/data/agentMentions.ts'
@@ -306,8 +306,12 @@ function checkAttachments(v: unknown): Attachment[] {
       const data = String(a.data ?? '')
       if (!/^[A-Za-z0-9+/=]+$/.test(data)) throw new HttpError(400, `${name} is not a picture`)
       if (data.length > 7_000_000) throw new HttpError(413, `${name} is too big (over 5 MB)`)
-      total += data.length
-      return { name, source, kind: 'image', mime: String(a.mime ?? 'image/png').slice(0, 100), size: Math.floor((data.length * 3) / 4), data }
+      // A camera raw is kept as its embedded preview and a multi-picture JPEG as its primary picture
+      // (server/agentImageSources.ts stillSource), so every later reader gets one still JPEG.
+      let still: { data: string; mime: string }
+      try { still = stillData(data, String(a.mime ?? 'image/png').slice(0, 100)) } catch (e) { throw new HttpError(400, `${name}: ${(e as Error).message}`) }
+      total += still.data.length
+      return { name, source, kind: 'image', mime: still.mime, size: Math.floor((still.data.length * 3) / 4), data: still.data }
     }
     throw new HttpError(400, 'Attachments are text files or pictures')
   }).map((a) => {
@@ -2192,7 +2196,7 @@ function gptReferences(thread: string, raw: unknown): GptReference[] {
       file = row ? (JSON.parse(row.attachments) as Attachment[]).find((f) => f.ref === id) : undefined
     } else throw new HttpError(400, `${id || 'That'} is not a picture id: use attachment:<message>:<n> from an attachment tag or gpt:<id> from an earlier gpt_image result`)
     if (!file || file.kind !== 'image' || typeof file.data !== 'string') throw new HttpError(404, `There is no picture ${id} in this thread`)
-    const bytes = Buffer.from(file.data, 'base64')
+    const bytes = stillSource(Buffer.from(file.data, 'base64'))
     const mime = sniffImage(bytes)
     if (!mime) throw new HttpError(400, `${id} is not a PNG, JPEG or WebP picture`)
     if (bytes.length > MAX_REFERENCE_BYTES) throw new HttpError(413, `${id} is over ${MAX_REFERENCE_BYTES / 1024 / 1024} MB`)
@@ -2939,7 +2943,8 @@ function chatHistory(thread: string, vision = true, stamp: string | null = null)
           ? `<attachment name="${a.name}" from="${a.source}" id="attachment:${m.id}:${k}">(the picture is attached)</attachment>`
           : `<attachment name="${a.name}" from="${a.source}" id="attachment:${m.id}:${k}">(a picture; this model cannot see pictures, so say so if it matters)</attachment>`,
     )
-    const images = vision ? attached.filter((a) => a.kind === 'image').map((a) => a.data!) : []
+    // Pictures stored before raws and multi-picture JPEGs were converted on arrival go as one still JPEG too.
+    const images = vision ? attached.filter((a) => a.kind === 'image').map((a) => { try { return stillData(a.data!, a.mime).data } catch { return a.data! } }) : []
     return { role: 'user', content: [m.content, ...texts, stamp ? sentStamp(m.createdAt, stamp) : ''].filter(Boolean).join('\n\n'), ...(images.length ? { images } : {}) }
   })
     // A reply that only thought (no text, no calls) is left out: some models' servers (Mistral's)
@@ -4003,7 +4008,10 @@ export function messagePicture(user: User, id: string, messageId: string, index:
   const found = database().prepare('SELECT attachments FROM agent_messages WHERE id = ? AND thread_id = ?').get(Number(messageId), row.id) as { attachments: string | null } | undefined
   const file = found?.attachments ? (JSON.parse(found.attachments) as Attachment[])[Number(index)] : undefined
   if (!file || file.kind !== 'image' || !file.data) throw new HttpError(404, 'No such picture')
-  return { type: PICTURE_TYPES.has(file.mime) ? file.mime : 'application/octet-stream', body: Buffer.from(file.data, 'base64') }
+  // A raw kept from before conversion on arrival is shown as its preview, which every browser can draw.
+  let still: { data: string; mime: string } = { data: file.data, mime: file.mime }
+  try { still = stillData(file.data, file.mime) } catch { /* sent as it is */ }
+  return { type: PICTURE_TYPES.has(still.mime) ? still.mime : 'application/octet-stream', body: Buffer.from(still.data, 'base64') }
 }
 
 /**

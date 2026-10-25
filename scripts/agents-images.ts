@@ -1443,6 +1443,32 @@ try {
     assert.deepEqual(imageSource(admin, id).bytes, png)
     assert.throws(() => imageSource({ ...admin, id: 2 }, id), /No such source/)
   }
+  // Camera raws and multi-picture JPEGs stored as they came (before conversion on arrival) are read as one still JPEG,
+  // for sources and the thread's thumbnail alike.
+  {
+    const { dng, fixtureJpeg, multiPicture, resized } = await import('./rawFixtures.ts')
+    const still = resized(fixtureJpeg(), 960, 640), raw = dng(true, { orientation: 6, preview: still, thumb: fixtureJpeg() })
+    const rawMessage = Number(database().prepare("INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, 'user', 'Remove these people', ?, ?)").run(editThread.id, JSON.stringify([
+      { kind: 'image', name: 'IMG_2426.DNG', mime: 'image/x-adobe-dng', data: raw.toString('base64'), size: raw.length },
+      { kind: 'image', name: 'IMG_2427.JPG', mime: 'image/jpeg', data: multiPicture(fixtureJpeg(), fixtureJpeg()).toString('base64'), size: 0 },
+    ]), Date.now()).lastInsertRowid)
+    const rawSource = imageSource(admin, `attachment:${rawMessage}:0`)
+    assert.deepEqual([rawSource.width, rawSource.height, rawSource.mime], [640, 960, 'image/jpeg'])
+    assert.deepEqual(imageSource(admin, `attachment:${rawMessage}:1`).bytes, fixtureJpeg())
+    const thumb = await api('GET', `/api/agents/threads/${editThread.id}/messages/${rawMessage}/attachments/0`)
+    assert.equal(thumb.headers.get('content-type'), 'image/jpeg')
+    assert.deepEqual(Buffer.from(await thumb.arrayBuffer()).subarray(0, 2), Buffer.from([0xff, 0xd8]))
+    database().prepare('DELETE FROM agent_messages WHERE id = ?').run(rawMessage)
+    // Sent by a client that did not convert: kept as the preview JPEG on arrival.
+    const rawThread = await thread()
+    const sent = await api('POST', `/api/agents/threads/${rawThread.id}/messages`, { text: 'Look at this', attachments: [{ kind: 'image', name: 'IMG_2426.DNG', source: 'test', mime: 'image/x-adobe-dng', data: raw.toString('base64') }] })
+    assert.equal(sent.status, 200, await sent.clone().text()); await sent.text()
+    const kept = JSON.parse((database().prepare("SELECT attachments FROM agent_messages WHERE thread_id = ? AND role = 'user'").get(rawThread.id) as { attachments: string }).attachments)[0]
+    assert.equal(kept.mime, 'image/jpeg'); assert.equal(kept.name, 'IMG_2426.DNG')
+    assert.deepEqual(Buffer.from(kept.data, 'base64').subarray(0, 3), Buffer.from([0xff, 0xd8, 0xff]))
+    const noPreview = await api('POST', `/api/agents/threads/${rawThread.id}/messages`, { text: 'And this', attachments: [{ kind: 'image', name: 'empty.dng', source: 'test', mime: 'image/x-adobe-dng', data: Buffer.from('II*\0\x08\0\0\0\0\0\0\0', 'latin1').toString('base64') }] })
+    assert.equal(noPreview.status, 400); assert.match(await noPreview.text(), /empty\.dng: This raw file has no embedded preview/)
+  }
   for (const id of ['https://example.test/private.png', '/private/a.png', 'data:image/png;base64,a', `attachment:${attached}:9`]) assert.throws(() => imageSource(admin, id))
   assert.throws(() => sourceRaster(Buffer.from('<svg/>')), /valid still/)
   assert.throws(() => sourceRaster(Buffer.alloc(8 * 1024 * 1024 + 1)), /8 MiB/)
