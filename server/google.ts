@@ -20,7 +20,7 @@ const STATE_COOKIE = 'mvlos_google'
 const WRITE_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
 const SCOPES = `openid email https://www.googleapis.com/auth/calendar.readonly ${WRITE_SCOPE}`
 
-// Where Google's APIs are: GOOGLE_API_URL and GOOGLE_TOKEN_URL point them at a stand-in for
+// Where Google's APIs are: GOOGLE_API_URL, GOOGLE_TOKEN_URL and GOOGLE_STATE_TTL_MS point them at a stand-in for
 // the checks (scripts/pim-check.ts); nothing else sets them.
 const CALENDAR_API = process.env.GOOGLE_API_URL || 'https://www.googleapis.com/calendar/v3'
 const TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token'
@@ -36,7 +36,33 @@ export function googleAccount(user: User): { email: string; canWrite: boolean } 
 }
 
 /** How long the consent screen may take before the sealed state is refused. */
-const STATE_TTL = 10 * 60_000
+const STATE_TTL = Number(process.env.GOOGLE_STATE_TTL_MS) || 10 * 60_000
+/** At most this many consents wait at once; the oldest give way (this service runs as one process). */
+const MAX_PENDING = 1000
+
+/**
+ * Consents started and not yet finished, by their random state, with when each lapses. The callback
+ * takes its state out of here before anything else, so a state works once: a copied sealed cookie
+ * replayed afterwards, or after a refused attempt, finds nothing. A restart forgets them (the user
+ * connects again).
+ */
+const pending = new Map<string, number>()
+
+function registerPending(state: string) {
+  const now = Date.now()
+  for (const [k, e] of pending) {
+    if (e > now && pending.size < MAX_PENDING) break
+    pending.delete(k)
+  }
+  pending.set(state, now + STATE_TTL)
+}
+
+/** Takes the state out of the registry; whether it was there and still valid. */
+function consumePending(state: string): boolean {
+  const expires = pending.get(state)
+  pending.delete(state)
+  return expires !== undefined && expires > Date.now()
+}
 
 /**
  * The pending consent, sealed (AES-GCM, so it cannot be read or altered) into the state cookie: its
@@ -66,6 +92,7 @@ export function startGoogle(req: IncomingMessage, res: ServerResponse) {
   const session = sessionKey(req)
   if (!user || !session) return redirect(res, '/?google=signin')
   const state = randomBytes(16).toString('base64url')
+  registerPending(state)
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
     redirect_uri: callbackUrl(req),
@@ -96,12 +123,14 @@ async function tokenRequest(body: Record<string, string>) {
 export async function finishGoogle(req: IncomingMessage, res: ServerResponse, url: URL, user: User | null) {
   const clear = setCookie(req, STATE_COOKIE, '', { maxAge: 0, path: '/api/google' })
   const fail = (reason: string) => redirect(res, `/?google=${reason}`, { 'Set-Cookie': clear })
-  if (!user) return fail('signin')
-  if (!googleEnabled()) return fail('off')
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
+  // Consumed first, whatever the outcome below: a refused attempt cannot be retried later.
+  const live = state ? consumePending(state) : false
+  if (!user) return fail('signin')
+  if (!googleEnabled()) return fail('off')
   if (url.searchParams.get('error')) return fail('denied')
-  if (!code || !state || !openState(cookies(req)[STATE_COOKIE], state, user, sessionKey(req))) return fail('error')
+  if (!code || !state || !live || !openState(cookies(req)[STATE_COOKIE], state, user, sessionKey(req))) return fail('error')
   let tokens
   try {
     tokens = await tokenRequest({ code, grant_type: 'authorization_code', redirect_uri: callbackUrl(req) })

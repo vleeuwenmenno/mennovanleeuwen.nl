@@ -1022,7 +1022,7 @@ production*: in *Testing*, Google expires the access after seven days. The Calen
 "sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
 screen and at most 100 accounts can connect (verification asks for the privacy page,
 `/privacy.html`). The consent in progress is tied to the account and session that started it (a sealed,
-HttpOnly, ten-minute cookie): finishing it while another account is signed in, from another session,
+HttpOnly, ten-minute cookie, and a one-time entry in the server's memory, so a copied cookie cannot be replayed): finishing it while another account is signed in, from another session,
 after a sign-out, or with an altered or expired cookie is refused before any token is requested or
 stored (`pnpm check:google-oauth`). Accounts connected before
 the Calendar app stay read-only until connected again (Settings → Integrations → Calendars → *Allow editing*).
