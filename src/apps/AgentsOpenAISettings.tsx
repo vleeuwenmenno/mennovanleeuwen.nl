@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { ask } from '../os/Dialogs'
 import { Select } from '../os/Select'
 import { SecretInput } from '../os/SecretInput'
+import { loadAccount } from '../os/account'
+import { forgetAgentModels } from '../data/agents'
 import { cancelChatGPTSignIn, deleteIcon, finishChatGPTSignIn, getOpenAIImages, iconSrc, listIcons, regenerateIcon, removeOpenAIKey, saveOpenAIImages, setOpenAIKey, signOutChatGPT, startChatGPTSignIn, type IconInfo, type OpenAIImagesView, type OpenAIProvider } from '../data/openaiImages'
 
 // Settings → Agents → Images, the OpenAI part: where the GPT images tool gets its pictures (an
@@ -37,6 +39,9 @@ export function AgentsOpenAISettings() {
     } catch (e) {
       setError((e as Error).message)
     } finally {
+      // Signed in or out, a key added or gone: the Agents app's models and its start screen follow.
+      forgetAgentModels()
+      void loadAccount()
       setBusy(false)
     }
   }

@@ -1,5 +1,6 @@
 import { saveImageMask, imageMask, discardImageMask, maskSource } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
+import { saveSkillConfig, skillConfig } from './agentSkills.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
 import { handleImageObservationsApi } from './agentImageObservations.ts'
@@ -12,7 +13,8 @@ import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { chatProviderReady } from './agentChatGPT.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -110,7 +112,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
         caldav: user ? listCaldav(user) : [],
-        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
+        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null, openai: user ? chatProviderReady(user, 'chatgpt') || chatProviderReady(user, 'openai') : false },
         seafile: user ? seafileInfo(user) : null,
       }, fix.length ? { 'Set-Cookie': fix } : {})
       return true
@@ -344,6 +346,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
     }
+    // The latest rough preview of a gpt_image picture being drawn (gone once it is done).
+    const drawingPreview = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/gpt-preview\/([0-9a-f-]{36})$/.exec(path)
+    if (drawingPreview && read) {
+      const p = gptPreview(requireUser(req), drawingPreview[1], drawingPreview[2])
+      res.writeHead(200, { 'Content-Type': p.mime, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.bytes)
+      return true
+    }
     const maskUpload = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/image-masks$/.exec(path)
     if (maskUpload && method === 'POST') return json(res, 200, saveImageMask(requireUser(req), maskUpload[1], await readJson(req, 12 * 1024 * 1024))), true
     // A mask's source picture by the mask ID, resolved now (also through surviving branch copies).
@@ -421,6 +430,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
     if (path === '/api/agents/mention-tools' && read) { requireUser(req); return json(res, 200, mentionTools()), true }
+    if (path === '/api/agents/skill-config' && read) return json(res, 200, skillConfig(requireUser(req))), true
+    if (path === '/api/agents/skill-config' && method === 'PUT') return json(res, 200, saveSkillConfig(requireUser(req), await readJson(req, 64 * 1024))), true
     if (path === '/api/agents/skills' && read) return json(res, 200, await skillsList(requireUser(req), url.searchParams)), true
     if (path === '/api/agents/skills/install' && method === 'POST') return json(res, 200, await skillsInstall(requireUser(req), await readJson(req, 8192))), true
     if (path === '/api/agents/skills/remove' && method === 'POST') return await skillsRemove(requireUser(req), await readJson(req, 8192)), json(res, 200, { ok: true }), true

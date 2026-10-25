@@ -1,12 +1,14 @@
 // Checks visual blocks (src/data/visual/): `node scripts/visual-check.ts`. Good specs of every
 // type read and normalise as expected (loose JSON included), bad ones give errors that name the
 // field, the text version (terminal, shared pages) says what the picture shows, the layout keeps
-// nodes apart, and every example in the Agents prompt is itself a valid spec.
+// nodes apart, every example in the Agents prompt is itself a valid spec, and the scene kind's SVG
+// sanitizer (svg.ts) lets no script, handler, outside reference or loading CSS through.
 
 import { parseLoose, parseVisual, visualBlockText, validateVisual, type Visual, type VisualResult } from '../src/data/visual/spec.ts'
 import { layered } from '../src/data/visual/layout.ts'
 import { VISUAL_PROMPT } from '../src/data/visual/prompt.ts'
 import { parseMarkdown } from '../src/data/markdown/parse.ts'
+import { resolveColours, sanitizeSvg, serializeSvg, SCENE_LIMITS, SCENE_PALETTE, type ScenePalette } from '../src/data/visual/svg.ts'
 
 let failed = 0
 let passed = 0
@@ -159,6 +161,99 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
   check('aliases: "kind": "flowchart"', good('kind alias', '{"kind":"flowchart","links":[["a","b"]]}')[0]?.type === 'flow')
 }
 
+// --- scene: the SVG sanitizer -------------------------------------------------------------------
+{
+  const colours = Object.fromEntries(SCENE_PALETTE.map((k, i) => [k, `rgb(${i}, ${i}, ${i})`])) as ScenePalette
+  const out = (svg: string, icons?: Map<string, string | null>) => {
+    const r = sanitizeSvg(svg)
+    return r.ok ? serializeSvg(r.scene, { colours, icons }) : `ERROR ${r.message}`
+  }
+  /** What must never be in a sanitized drawing (the root's own xmlns aside). */
+  const DANGER = [/<script/i, /<foreignObject/i, /<iframe/i, /<a[\s>]/i, /<animate/i, /<set[\s>]/i, /<svg[^>]*<svg/is, /\son[a-z]+\s*=/i, /javascript:/i, /vbscript:/i, /https?:/i, /\/\/evil/i, /@import/i, /url\((?!#)/i, /data:(?!image\/png;base64,)/i, /<!ENTITY/i, /<!DOCTYPE/i, /<filter/i, /<mask/i, /xlink:href/i]
+  const safe = (name: string, svg: string, keep?: RegExp) => {
+    const o = out(svg)
+    const body = o.replace(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/, '<svg')
+    const hit = DANGER.find((d) => d.test(body))
+    check(`sanitize: ${name}: nothing dangerous left`, !hit, `${hit} in ${o}`)
+    if (keep) check(`sanitize: ${name}: the drawing is kept`, keep.test(o), o)
+    return o
+  }
+  const R = '<rect width="10" height="10"/>'
+  safe('onload on the root', `<svg onload="alert(1)" viewBox="0 0 10 10">${R}</svg>`, /<rect/)
+  safe('handlers in any case', `<svg viewBox="0 0 10 10"><rect ONLOAD="alert(1)" onClick='alert(1)' onmouseover=alert(1) width="5" height="5"/></svg>`, /<rect width="5" height="5"\/>/)
+  safe('a script element', `<svg viewBox="0 0 10 10"><script>alert(1)</script><script type="text/javascript"><![CDATA[ if (a<b) alert(1) ]]></script>${R}</svg>`, /<rect/)
+  safe('script, upper case and namespaced', `<svg viewBox="0 0 10 10"><SCRIPT>alert(1)</SCRIPT><svg:script>alert(1)</svg:script>${R}</svg>`, /<rect/)
+  safe('a javascript: link', `<svg viewBox="0 0 10 10"><a href="javascript:alert(1)"><text y="5">click</text></a><a xlink:href="javascript:alert(1)">${R}</a><rect width="2" height="2"/></svg>`, /<rect width="2"/)
+  safe('an encoded javascript: link', `<svg viewBox="0 0 10 10"><use href="&#x6A;ava&#x09;script:alert(1)"/><use href="java\nscript:alert(1)"/>${R}</svg>`, /<rect/)
+  safe('foreignObject', `<svg viewBox="0 0 10 10"><foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml"><img src="x" onerror="alert(1)"/></div></foreignObject>${R}</svg>`, /<rect/)
+  safe('use to an outside file', `<svg viewBox="0 0 10 10"><use href="http://evil.example/x.svg#a"/><use xlink:href="//evil.example/x.svg#a"/><use href="data:image/svg+xml,&lt;svg onload=alert(1)&gt;"/>${R}</svg>`, /<rect/)
+  safe('CSS url() in attributes', `<svg viewBox="0 0 10 10"><rect fill="url(http://evil.example/x)" stroke="url('//evil.example/y')" width="3" height="3"/><rect style="fill:url(http://evil.example/z);stroke:red" width="4" height="4"/></svg>`, /<rect width="3" height="3"\/><rect style="stroke:rgb\(7, 7, 7\)"/)
+  safe('a style element that loads', `<svg viewBox="0 0 10 10"><style>@import url(http://evil.example/a.css);</style><style>rect{fill:url(//evil.example/b)}</style><style>rect{fill:u\\72l(http://evil.example/c)}</style><style>rect { background: image-set("http://evil.example/d" 1x) }</style>${R}</svg>`, /<rect/)
+  const css = safe('a plain style element', `<svg viewBox="0 0 10 10"><style>.belt { fill: var(--accent); stroke: border } rect:hover{opacity:.5}</style><rect class="belt" width="10" height="10"/></svg>`)
+  check('sanitize: a plain style element is kept, its variables resolved', css.includes('<style>.belt{fill:rgb(0, 0, 0);stroke:border}rect:hover{opacity:.5}</style>'), css)
+  safe('a style element with a closing tag trick', `<svg viewBox="0 0 10 10"><style>rect{fill:red}</style><script>alert(1)</script></style>${R}</svg>`, /<rect/)
+  safe('entities from a DOCTYPE are never expanded', `<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY x "<script>alert(1)</script>"><!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;">]><svg viewBox="0 0 10 10"><text y="5">&x;&lol2;</text></svg>`, /<text y="5">&amp;x;&amp;lol2;<\/text>/)
+  safe('CDATA text is text', `<svg viewBox="0 0 10 10"><text y="5"><![CDATA[<script>alert(1)</script> & co]]></text></svg>`, /&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; co/)
+  safe('a nested svg', `<svg viewBox="0 0 10 10"><svg onload="alert(1)"><rect width="1" height="1"/></svg><g><svg><script>alert(1)</script></svg></g>${R}</svg>`, /<rect width="10"/)
+  safe('animation that sets an attribute', `<svg viewBox="0 0 10 10"><rect width="10" height="10"><animate attributeName="href" to="javascript:alert(1)"/><set attributeName="onmouseover" to="alert(1)"/></rect><animateTransform attributeName="transform"/></svg>`, /<rect width="10" height="10"\/>/)
+  safe('images other than icon:<slug>', `<svg viewBox="0 0 10 10"><image href="https://evil.example/x.png" width="5" height="5"/><image href="data:image/svg+xml;base64,PHN2Zz4=" width="5"/><image xlink:href="data:image/png;base64,AAAA"/>${R}</svg>`, /<rect/)
+  safe('a value that tries to close its quote', `<svg viewBox="0 0 10 10"><rect id='a"/><script>alert(1)</script>' fill='red" onload="alert(1)' class="x&quot; onload=&quot;alert(1)" width="10" height="10"/></svg>`, /<rect width="10" height="10"\/>/)
+  safe('tags split in odd places', `<svg viewBox="0 0 10 10"><scr<script>ipt>alert(1)</script><<script>script>alert(1)<</script>/script>${R}</svg>`)
+  safe('a comment holding a script', `<svg viewBox="0 0 10 10"><!-- <script>alert(1)</script> -->${R}</svg>`, /<rect/)
+  safe('xml:base, xmlns and other namespaces', `<svg xmlns:x="http://evil.example" xml:base="http://evil.example/" viewBox="0 0 10 10"><rect x:href="http://evil.example" xml:base="http://evil.example/" width="10" height="10"/></svg>`, /<rect width="10" height="10"\/>/)
+  safe('filter, mask, iframe, embed, object', `<svg viewBox="0 0 10 10"><filter id="f"><feImage href="http://evil.example/x"/></filter><mask id="m"/><iframe src="javascript:alert(1)"/><embed src="x"/><object data="x"/>${R}</svg>`, /<rect/)
+  const loop = out(`<svg viewBox="0 0 10 10"><g id="a"><use href="#a"/><rect width="1" height="1"/></g><g id="b"><use href="#a"/></g><use href="#b"/><use href="#missing"/><use href="#r"/><rect id="r" width="2" height="2"/></svg>`)
+  check('sanitize: a use of itself, of a use or of nothing is left out; a plain one kept', (loop.match(/<use/g) ?? []).length === 2 && loop.includes('<use href="#r"/>') && loop.includes('<g id="b"><use href="#a"/></g>'), loop)
+  const st = out(`<svg viewBox="0 0 10 10"><rect style="fill: blue; position: fixed; stroke-width: 2; behavior: url(x.htc)" width="1" height="1"/></svg>`)
+  check('sanitize: a style attribute keeps only allowed properties', st.includes('style="fill:rgb(12, 12, 12);stroke-width:2"'), st)
+  // Theme colours, icons, size.
+  const t = out(`<svg viewBox="0 0 100 50"><rect fill="accent" stroke="var(--fg)" width="5" height="5"/><circle fill="copper" stroke="var(--nope, #123456)" r="3"/><path stroke="Muted" d="M0 0L5 5"/></svg>`)
+  check('scene: palette names and var(--x) are the theme colours, others pass', t.includes('fill="rgb(0, 0, 0)" stroke="rgb(1, 1, 1)"') && t.includes('fill="copper" stroke="#123456"') && t.includes('stroke="rgb(3, 3, 3)"'), t)
+  check('scene: resolveColours leaves a gradient url alone', resolveColours('url(#g)', colours) === 'url(#g)')
+  check('scene: the root carries the size and the foreground as the default fill', /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 100 50" width="100" height="50" fill="rgb\(1, 1, 1\)"/.test(t), t.slice(0, 200))
+  const png = 'data:image/png;base64,iVBORw0KGgo='
+  const ic = out(`<svg viewBox="0 0 100 50"><image href="icon:Fluid_Tank" x="2" y="3" width="20" height="20"/><image href="icon:gone" x="40" y="3" width="20" height="20"/></svg>`, new Map([['fluid_tank', png], ['gone', null]]))
+  check('scene: an icon is inlined as a data: picture', ic.includes(`<image href="${png}" x="2" y="3" width="20" height="20"/>`), ic)
+  check('scene: a missing icon is a dashed tile with its letter', /<rect x="40" y="3" width="20" height="20"[^>]*stroke-dasharray="4 3"\/><text[^>]*>G<\/text>/.test(ic), ic)
+  const evilIcon = out(`<svg viewBox="0 0 10 10"><image href="icon:x" width="5" height="5"/></svg>`, new Map([['x', 'data:image/svg+xml,<svg onload=alert(1)>']]))
+  check('scene: an icon URL that is not a data: picture is not used', !evilIcon.includes('data:image/svg') && !/onload/.test(evilIcon), evilIcon)
+  const saved = sanitizeSvg('<svg viewBox="5 5 20 10"><circle r="2"/></svg>')
+  check('scene: a saved drawing has the background first', saved.ok && serializeSvg(saved.scene, { colours, background: colours.bg }).includes('font-size="14"><rect x="5" y="5" width="20" height="10" fill="rgb(4, 4, 4)"/><circle'), saved)
+  const bare = sanitizeSvg('<rect width="10" height="10"/>')
+  check('scene: shapes without an <svg> around them draw at 640 × 400', bare.ok && bare.scene.viewBox.join() === '0,0,640,400' && bare.warnings.length === 1, bare)
+  const sized = sanitizeSvg('<svg width="300" height="120"><rect width="10" height="10"/></svg>')
+  check('scene: width and height make the viewBox', sized.ok && sized.scene.viewBox.join() === '0,0,300,120', sized)
+  const unsafeOnly = sanitizeSvg('<svg viewBox="0 0 10 10"><script>alert(1)</script><foreignObject/></svg>')
+  check('scene: a drawing with only unsafe parts is an error that says what was left out', !unsafeOnly.ok && /Nothing safe to draw/.test(unsafeOnly.message) && /script/.test(unsafeOnly.message), unsafeOnly)
+  check('scene: an empty drawing is an error', !sanitizeSvg('<svg viewBox="0 0 10 10"><defs><rect id="a" width="1" height="1"/></defs></svg>').ok)
+  check('scene: too long is an error', !sanitizeSvg(`<svg>${'<rect/>'.repeat(SCENE_LIMITS.chars / 6 + 1)}</svg>`).ok)
+  const many = sanitizeSvg(`<svg viewBox="0 0 10 10">${'<rect width="1" height="1"/>'.repeat(SCENE_LIMITS.elements + 10)}</svg>`)
+  check('scene: past the element limit the rest is left out, with a warning', many.ok && many.scene.children.length === SCENE_LIMITS.elements && many.warnings.some((w) => /first/.test(w)), many.ok ? many.warnings : many)
+  const deep = sanitizeSvg(`<svg viewBox="0 0 10 10">${'<g>'.repeat(200)}<rect width="1" height="1"/>${'</g>'.repeat(200)}<rect width="2" height="2"/></svg>`)
+  check('scene: deep nesting is cut, not a stack overflow', deep.ok, deep)
+  const t0 = performance.now()
+  sanitizeSvg(`<svg viewBox="0 0 10 10">${'<path d="M0 0 L10 10 C 1 2 3 4 5 6" stroke="accent" fill="none"/>'.repeat(1500)}</svg>`)
+  const ms = performance.now() - t0
+  check('scene: a big drawing is sanitized in under 150 ms', ms < 150, `${Math.round(ms)} ms`)
+
+  // The spec around it.
+  const create = `{"type":"scene","title":"Spout over a belt","caption":"The threshold switch stops the belt.","svg":"<svg viewBox='0 0 300 120'><rect x='10' y='10' width='40' height='50' fill='panel' stroke='border'/><text x='30' y='80' text-anchor='middle'>Tank</text><path d='M50 30 H120' stroke='accent' stroke-dasharray='6 4'/><text x='200' y='80'>Belt</text></svg>","icons":[{"icon":"cog","x":250,"y":10,"size":24},{"icon":"Bad Slug!"}]}`
+  const [s] = good('scene', create)
+  if (s?.type === 'scene') {
+    check('scene: title, caption, viewBox', s.title === 'Spout over a belt' && s.caption === 'The threshold switch stops the belt.' && s.scene.viewBox.join() === '0,0,300,120', s)
+    check('scene: the icons list adds icon pictures', s.scene.icons.includes('cog'), s.scene.icons)
+  }
+  const r = parseVisual(create)
+  check('scene: a bad icon is a warning', r.ok && r.warnings.some((w) => w.path === 'icons[1]'), r.ok ? r.warnings : r)
+  check('scene: text version is the title, caption and labels', JSON.stringify(visualBlockText(create)) === JSON.stringify(['Spout over a belt', 'The threshold switch stops the belt.', '(drawing: Tank · Belt)']), visualBlockText(create))
+  check('scene: no labels is "(drawing)"', visualBlockText(`{"type":"scene","svg":"<rect width='4' height='4'/>"}`)?.at(-1) === '(drawing)')
+  check('scene: svg as a list of lines, type guessed', good('scene lines', `{"svg":["<svg viewBox='0 0 10 10'>","<circle r='4' cx='5' cy='5'/>","</svg>"]}`)[0]?.type === 'scene')
+  check('scene: a backtick string with new lines', good('scene backticks', '{type: "drawing", svg: `<svg viewBox="0 0 10 10">\n  <circle r="4" cx="5" cy="5"/>\n</svg>`}')[0]?.type === 'scene')
+  bad('scene without svg', '{"type":"scene","title":"x"}', 'svg', /Missing/)
+  bad('scene with only a script', `{"type":"scene","svg":"<script>alert(1)</script>"}`, 'svg', /Nothing safe/)
+  bad('scene svg not a string', '{"type":"scene","svg":42}', 'svg')
+}
+
 // --- text version --------------------------------------------------------------------------------
 {
   const flow = visualBlockText('{"type":"flow","title":"Bread","nodes":[{"id":"m","label":"Mix"},{"id":"b","label":"Bake"},{"id":"x","label":"Alone"}],"edges":[{"from":"m","to":"b","label":"1 h"}]}')
@@ -234,12 +329,12 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
     }
     examples.push(VISUAL_PROMPT.slice(i, j + 1))
   }
-  check('prompt: has examples of every type', ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'table'].every((t) => examples.some((e) => e.includes(`"type":"${t}"`))), examples.length)
+  check('prompt: has examples of every type', ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'table', 'scene'].every((t) => examples.some((e) => e.includes(`"type":"${t}"`))), examples.length)
   for (const e of examples) {
     const r = parseVisual(e)
     check(`prompt example is valid: ${e.slice(0, 50)}…`, r.ok && !r.warnings.length, r.ok ? r.warnings : r.errors)
   }
-  check('prompt: short (under 3000 characters)', VISUAL_PROMPT.length < 3000, VISUAL_PROMPT.length)
+  check('prompt: short (under 3600 characters)', VISUAL_PROMPT.length < 3600, VISUAL_PROMPT.length)
 }
 
 console.log(`${passed} passed, ${failed} failed`)

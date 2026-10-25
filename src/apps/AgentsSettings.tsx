@@ -18,6 +18,7 @@ import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
 import { writeFile } from '../terminal/fs'
 import { SharesSettings } from './AgentsShare'
+import { AlwaysOnSettings, AlwaysToggle } from './AgentsSkillRules'
 import { HOME } from '../terminal/vfs'
 import { SecretInput } from '../os/SecretInput'
 import { getImageSettings, getImageProfiles } from '../data/agentImages'
@@ -62,7 +63,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
   { id: 'images', label: 'Images', blurb: 'Pictures and diagram icons from OpenAI (an API key or Sign in with ChatGPT), and image generation with your own ComfyUI server.', icon: icon(<><rect x="3" y="3" width="18" height="18" /><path d="M3 17l6-6 4 4 3-3 5 5" /></>) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
-  { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
+  { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name. Skills can also be always on, per project, or turned on by rules.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
   { id: 'shares', label: 'Shared links', blurb: 'Threads and answers you shared: anyone with a link can read it, on a plain page, until it expires or you stop sharing.', icon: icon(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>) },
 ]
@@ -938,10 +939,15 @@ function SkillsSettings() {
                 Remove
               </button>
             )}
-            <Toggle on={s.enabled} onChange={(on) => (setSkillEnabled(s.name, on), setSkills((list) => list?.map((x) => (x.name === s.name ? { ...x, enabled: on } : x)) ?? null))} label={`Use ${s.name}`} />
+            <AlwaysToggle skill={s} />
+            <span className="agt-always-switch">
+              <span className="muted">Use</span>
+              <Toggle on={s.enabled} onChange={(on) => (setSkillEnabled(s.name, on), setSkills((list) => list?.map((x) => (x.name === s.name ? { ...x, enabled: on } : x)) ?? null))} label={`Use ${s.name}`} />
+            </span>
           </li>
         ))}
       </ul>
+      <AlwaysOnSettings skills={skills} />
       <h4 className="set-subhead">Install from GitHub</h4>
       <form className="set-form" onSubmit={install}>
         <label>

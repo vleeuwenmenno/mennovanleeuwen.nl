@@ -248,6 +248,9 @@ export function database(): DatabaseSync {
   if (!cols('agent_threads').includes('title_source')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_source TEXT')
   if (!cols('agent_threads').includes('title_history')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_history TEXT')
   if (!cols('agent_threads').includes('title_mark')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_mark INTEGER')
+  // Always-on skills and rule instructions switched off in one thread (its chips; JSON list of
+  // skill names and rule:<id>, src/data/agentSkillRules.ts).
+  if (!cols('agent_threads').includes('skills_off')) db.exec('ALTER TABLE agent_threads ADD COLUMN skills_off TEXT')
   // The thinking effort picked for a thread (server/agentChatGPT.ts EFFORTS); null follows the mode.
   if (!cols('agent_threads').includes('effort')) db.exec('ALTER TABLE agent_threads ADD COLUMN effort TEXT')
   // Shared links to a thread or one answer (server/shares.ts): a snapshot taken when shared, read

@@ -1619,6 +1619,15 @@ export class Session {
         if (job) this.imageProgress(e.callId, job.messageId, job.index, e.progress)
         break
       }
+      case 'gptPreview': {
+        const job = this.imageJobs.get(e.callId)
+        const c = job && this.liveCalls.find((x) => x.messageId === job.messageId && x.index === job.index)
+        if (c) {
+          c.detail = `Drawing picture… preview ${e.previews}`
+          this.draw()
+        }
+        break
+      }
       case 'imageGenerationDone':
         this.imageJobs.delete(e.callId)
         break
@@ -1643,7 +1652,7 @@ export class Session {
     this.imageJobs.set(callId, { messageId, index })
     const c = this.liveCalls.find((x) => x.messageId === messageId && x.index === index)
     if (!c) return
-    c.detail = (c.call.arguments?.operation === 'upscale' || c.call.arguments?.operation === 'refine' || c.call.arguments?.operation === 'inpaint') && (!progress || progress.phase === 'running') ? c.call.arguments.operation === 'inpaint' ? 'Inpainting image…' : c.call.arguments.operation === 'refine' ? 'Refining image…' : 'Upscaling image…' : imageProgressLabel(progress)
+    c.detail = c.call.name === 'gpt_image' ? 'Drawing picture…' : (c.call.arguments?.operation === 'upscale' || c.call.arguments?.operation === 'refine' || c.call.arguments?.operation === 'inpaint') && (!progress || progress.phase === 'running') ? c.call.arguments.operation === 'inpaint' ? 'Inpainting image…' : c.call.arguments.operation === 'refine' ? 'Refining image…' : 'Upscaling image…' : imageProgressLabel(progress)
     this.draw()
   }
 

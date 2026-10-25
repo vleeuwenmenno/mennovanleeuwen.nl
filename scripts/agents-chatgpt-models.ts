@@ -318,7 +318,31 @@ try {
   const r12 = await turn(o, 'ollama')
   check('an Ollama thread still runs on Ollama', !r12.error && r12.last?.content === 'OLLAMA')
 
-  // 11. Signed out: a ChatGPT thread says what to do.
+  // 11. Always-on skills reach ChatGPT threads too, in the developer message.
+  const saved = await call('PUT', '/api/agents/skill-config', { always: ['caveman-adhd'] })
+  check(`always-on skills can be switched on (${saved.status})`, saved.ok)
+  await turn(a, 'skills')
+  const dev = lastResponses().body.input?.[0]
+  check('an always-on skill is in a ChatGPT thread’s developer message', dev?.role === 'developer' && String(dev.content?.[0]?.text).includes('<active_skill name="caveman-adhd">'))
+  await call('PUT', '/api/agents/skill-config', { always: [] })
+
+  // 12. No Ollama key, but ChatGPT: the app is open to them, and a new thread runs on ChatGPT.
+  const sid2 = randomBytes(24).toString('hex')
+  database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (2, 2, ?, ?, ?, ?)').run('chat-only', encrypt('none'), now, now)
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 2, ?, ?)').run(sha256(sid2), now, now + 86400_000)
+  database().prepare("INSERT INTO integrations (user_id, name, secret, created_at) VALUES (2, 'openai-chatgpt', ?, ?)").run(encrypt(JSON.stringify({ access: validAccess, refresh: refreshToken, accountId: 'acct-chat-1', email: 'other@example.test', plan: 'plus', expires: Date.now() + 3600_000 })), now)
+  const as2 = async (method: string, path: string, body?: unknown) => fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid2}`, ...(await asPage(sid2)), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const me = (await (await as2('GET', '/api/me')).json()) as { integrations: { ollama: string | null; openai: boolean } }
+  check('without an Ollama key, /api/me says OpenAI is there', me.integrations.ollama === null && me.integrations.openai === true)
+  const t2 = (await (await as2('POST', '/api/agents/threads', { mode: 'quick', tools: [] })).json()) as { id: string; model: string }
+  check(`a new thread without a model picks a ChatGPT one (${t2.model})`, t2.model.startsWith('chatgpt/'))
+  const said = (await (await as2('POST', `/api/agents/threads/${t2.id}/messages`, { text: 'SCENARIO chatonly' })).text()).split('\n').filter(Boolean).map((l) => JSON.parse(l) as Ev)
+  check(`it answers without an Ollama key${said.find((e) => e.type === 'error')?.error ?? ''}`, !said.some((e) => e.type === 'error') && said.some((e) => e.type === 'delta' && e.content?.includes('chatonly')))
+  const o2 = (await (await as2('POST', '/api/agents/threads', { mode: 'quick', model: OLLAMA_MODEL })).json()) as { id: string }
+  const ollamaAsk = await as2('POST', `/api/agents/threads/${o2.id}/messages`, { text: 'hi' })
+  check(`an Ollama thread still asks for the key (${ollamaAsk.status})`, ollamaAsk.status === 409 && /Ollama API key/.test(await ollamaAsk.text()))
+
+  // 13. Signed out: a ChatGPT thread says what to do.
   database().prepare("DELETE FROM integrations WHERE user_id = 1 AND name = 'openai-chatgpt'").run()
   const r13 = await turn(a, 'signedout')
   check(`signed out, the thread says to sign in (${r13.error})`, /Sign in with ChatGPT/.test(r13.error ?? ''))

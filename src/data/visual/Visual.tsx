@@ -3,11 +3,15 @@ import { parseVisual, type Card, type Direction, type FlowEdge, type FlowNode, t
 import { edgeMid, edgePath, layered } from './layout.ts'
 import { AppIcon, hasAppIcon } from '../../os/icons'
 import { useIsMobile } from '../../os/useIsMobile'
+import { useTheme } from '../../os/theme'
+import { PALETTE_VARS, SCENE_LIMITS, SCENE_PALETTE, serializeSvg, type ScenePalette } from './svg.ts'
 import './visual.css'
 
 // Draws a ```visual block (spec.ts reads it). Loaded on demand by MarkdownPreview, so the
 // Markdown everywhere else costs nothing extra. Everything is HTML and a little SVG coloured
 // through the theme's CSS variables; nothing redraws per frame (zooming a flow sets two styles).
+// A scene (a model's own SVG, cleaned by svg.ts) is the one exception to "HTML we write": it shows
+// as an <img> of a data: URL, where no script runs and nothing outside loads.
 
 /** Categorical colours in a fixed order (never cycled past the series limit, spec.ts LIMITS.series). */
 const HUES = ['var(--blue)', 'var(--orange)', 'var(--green)', 'var(--magenta)', 'var(--cyan)', 'var(--yellow)', 'var(--red)', 'var(--fg)']
@@ -95,38 +99,12 @@ function nodeSize(n: Drawn) {
 }
 
 /**
- * A layered diagram that fits its box: scaled down to the width (not below half size), scrolling
- * past that. Ctrl+wheel and pinch zoom, a mouse drags it, buttons zoom and fit.
+ * A picture that fits its box: scaled down to the width (not below half size, scrolling past
+ * that), or up to `grow` times. Ctrl+wheel and pinch zoom, a mouse drags it, − ⤢ + buttons zoom and
+ * fit. The children are drawn at W × H and scaled with a transform; `sized` children (a picture)
+ * fill the scaled box instead, so they stay sharp.
  */
-function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[]; edges: FlowEdge[]; groups: { id: string; label: string }[]; dir: Direction; arrows: boolean }) {
-  const mobile = useIsMobile()
-  // A phone is narrow and tall: a diagram that runs sideways runs down there instead.
-  const dir: Direction = mobile && asked === 'right' ? 'down' : mobile && asked === 'left' ? 'up' : asked
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
-  const layout = useMemo(() => {
-    const sized = nodes.map((n) => ({ id: n.id, ...nodeSize(n) }))
-    return layered(sized, edges, dir, { rankGap: edges.some((e) => e.label) ? 56 : 44, nodeGap: 22 })
-  }, [nodes, edges, dir])
-  const groupBoxes = useMemo(
-    () =>
-      groups.flatMap((g) => {
-        const members = nodes.filter((n) => n.group === g.id).map((n) => layout.nodes.get(n.id)!)
-        if (!members.length) return []
-        const x0 = Math.min(...members.map((b) => b.x - b.w / 2)) - 10
-        const y0 = Math.min(...members.map((b) => b.y - b.h / 2)) - 22
-        const x1 = Math.max(...members.map((b) => b.x + b.w / 2)) + 10
-        const y1 = Math.max(...members.map((b) => b.y + b.h / 2)) + 10
-        return [{ ...g, x0, y0, x1, y1 }]
-      }),
-    [groups, nodes, layout],
-  )
-  // Room for the group labels above the top row and for self-loops.
-  const top = Math.max(0, ...groupBoxes.map((g) => -g.y0)) + PAD
-  const left = Math.max(0, ...groupBoxes.map((g) => -g.x0)) + PAD
-  const W = Math.ceil(Math.max(layout.width, ...groupBoxes.map((g) => g.x1)) + left + PAD + 20)
-  const H = Math.ceil(Math.max(layout.height, ...groupBoxes.map((g) => g.y1)) + top + PAD)
-  const maxH = mobile ? Math.round(window.innerHeight * 0.6) : 520
-
+function Zoomable({ W, H, maxH, grow = 1, sized = false, children, extra }: { W: number; H: number; maxH: number; grow?: number; sized?: boolean; children: ReactNode; /** More buttons; the row then sits under the picture rather than on it */ extra?: ReactNode }) {
   const view = useRef<HTMLDivElement>(null)
   const sizer = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLDivElement>(null)
@@ -142,8 +120,8 @@ function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[];
   }
   const fit = () => {
     const w = view.current?.clientWidth || W
-    let s = Math.min(1, w / W, maxH / H)
-    if (s < 0.5) s = Math.max(0.5, Math.min(1, w / W))
+    let s = Math.min(grow, w / W, maxH / H)
+    if (s < 0.5) s = Math.max(0.5, Math.min(grow, w / W))
     apply(s)
   }
   /** Zoom to `s`, keeping the point at (cx, cy) in the view where it is. */
@@ -173,7 +151,7 @@ function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[];
     })
     ro.observe(v)
     return () => ro.disconnect()
-  }, [W, H, maxH])
+  }, [W, H, maxH, grow])
 
   // Ctrl+wheel and pinch zoom (both need a listener that may cancel), mouse drag to pan.
   useEffect(() => {
@@ -238,6 +216,77 @@ function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[];
     view.current?.classList.remove('is-dragging')
   }
 
+  return (
+    <div className="vis-diagram">
+      <div className="vis-view" ref={view} style={{ maxHeight: maxH }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} data-no-touch-menu>
+        <div className="vis-sizer" ref={sizer} style={{ width: W, height: H }}>
+          {sized ? (
+            children
+          ) : (
+            <div className="vis-canvas" ref={canvas} style={{ width: W, height: H }}>
+              {children}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className={`vis-zoom ${extra ? 'is-below' : ''}`}>
+        {extra}
+        <button type="button" onClick={() => zoomTo(scale.current / 1.25)} title="Zoom out" aria-label="Zoom out">
+          −
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            zoomed.current = false
+            fit()
+          }}
+          title="Fit"
+          aria-label="Fit to the width"
+        >
+          ⤢
+        </button>
+        <button type="button" onClick={() => zoomTo(scale.current * 1.25)} title="Zoom in" aria-label="Zoom in">
+          +
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A layered diagram that fits its box: scaled down to the width (not below half size), scrolling
+ * past that. Ctrl+wheel and pinch zoom, a mouse drags it, buttons zoom and fit.
+ */
+function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[]; edges: FlowEdge[]; groups: { id: string; label: string }[]; dir: Direction; arrows: boolean }) {
+  const mobile = useIsMobile()
+  // A phone is narrow and tall: a diagram that runs sideways runs down there instead.
+  const dir: Direction = mobile && asked === 'right' ? 'down' : mobile && asked === 'left' ? 'up' : asked
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
+  const layout = useMemo(() => {
+    const sized = nodes.map((n) => ({ id: n.id, ...nodeSize(n) }))
+    return layered(sized, edges, dir, { rankGap: edges.some((e) => e.label) ? 56 : 44, nodeGap: 22 })
+  }, [nodes, edges, dir])
+  const groupBoxes = useMemo(
+    () =>
+      groups.flatMap((g) => {
+        const members = nodes.filter((n) => n.group === g.id).map((n) => layout.nodes.get(n.id)!)
+        if (!members.length) return []
+        const x0 = Math.min(...members.map((b) => b.x - b.w / 2)) - 10
+        const y0 = Math.min(...members.map((b) => b.y - b.h / 2)) - 22
+        const x1 = Math.max(...members.map((b) => b.x + b.w / 2)) + 10
+        const y1 = Math.max(...members.map((b) => b.y + b.h / 2)) + 10
+        return [{ ...g, x0, y0, x1, y1 }]
+      }),
+    [groups, nodes, layout],
+  )
+  // Room for the group labels above the top row and for self-loops.
+  const top = Math.max(0, ...groupBoxes.map((g) => -g.y0)) + PAD
+  const left = Math.max(0, ...groupBoxes.map((g) => -g.x0)) + PAD
+  const W = Math.ceil(Math.max(layout.width, ...groupBoxes.map((g) => g.x1)) + left + PAD + 20)
+  const H = Math.ceil(Math.max(layout.height, ...groupBoxes.map((g) => g.y1)) + top + PAD)
+  const maxH = mobile ? Math.round(window.innerHeight * 0.6) : 520
+
+
   const at = (id: string) => {
     const b = layout.nodes.get(id)!
     return { ...b, x: b.x + left, y: b.y + top }
@@ -245,10 +294,7 @@ function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[];
   const shift = (p: { x: number; y: number }) => ({ x: p.x + left, y: p.y + top })
   const byId = new Map(nodes.map((n) => [n.id, n]))
   return (
-    <div className="vis-diagram">
-      <div className="vis-view" ref={view} style={{ maxHeight: maxH }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} data-no-touch-menu>
-        <div className="vis-sizer" ref={sizer} style={{ width: W, height: H }}>
-          <div className="vis-canvas" ref={canvas} style={{ width: W, height: H }}>
+    <Zoomable W={W} H={H} maxH={maxH}>
             {groupBoxes.map((g) => (
               <div key={g.id} className="vis-group" style={{ left: g.x0 + left, top: g.y0 + top, width: g.x1 - g.x0, height: g.y1 - g.y0 }}>
                 <span>{g.label}</span>
@@ -302,29 +348,7 @@ function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[];
                   </div>
                 )
               })}
-          </div>
-        </div>
-      </div>
-      <div className="vis-zoom">
-        <button type="button" onClick={() => zoomTo(scale.current / 1.25)} title="Zoom out" aria-label="Zoom out">
-          −
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            zoomed.current = false
-            fit()
-          }}
-          title="Fit"
-          aria-label="Fit to the width"
-        >
-          ⤢
-        </button>
-        <button type="button" onClick={() => zoomTo(scale.current * 1.25)} title="Zoom in" aria-label="Zoom in">
-          +
-        </button>
-      </div>
-    </div>
+    </Zoomable>
   )
 }
 
@@ -767,6 +791,156 @@ function Pie({ v }: { v: Extract<Visual, { type: 'chart' }> }) {
   )
 }
 
+// --- scenes (a drawing in SVG) --------------------------------------------------------------------
+
+/**
+ * Icon pictures as data: URLs, for drawings: an <img> of an SVG loads nothing from outside, so
+ * every picture goes inside it. One request per slug; a miss is not kept, so a later drawing asks again.
+ */
+const iconData = new Map<string, Promise<string | null>>()
+function loadIcon(slug: string): Promise<string | null> {
+  let p = iconData.get(slug)
+  if (!p) {
+    p = fetch(`/api/agents/icons/${encodeURIComponent(slug)}`)
+      .then((r) => (r.ok ? r.blob() : null))
+      .then(
+        (b) =>
+          b && /^image\/(png|jpeg|webp|gif)$/.test(b.type)
+            ? new Promise<string | null>((done) => {
+                const fr = new FileReader()
+                fr.onload = () => done(typeof fr.result === 'string' ? fr.result : null)
+                fr.onerror = () => done(null)
+                fr.readAsDataURL(b)
+              })
+            : null,
+      )
+      .catch(() => null)
+      .then((url) => {
+        if (!url) iconData.delete(slug)
+        return url
+      })
+    iconData.set(slug, p)
+  }
+  return p
+}
+
+/** The theme's colours for the scene palette, as the page computes them right now. */
+function readPalette(host: HTMLElement): { colours: ScenePalette; font: string } {
+  const probe = document.createElement('span')
+  probe.style.display = 'none'
+  host.appendChild(probe)
+  const colours = {} as ScenePalette
+  for (const k of SCENE_PALETTE) {
+    probe.style.color = `var(${PALETTE_VARS[k]})`
+    colours[k] = getComputedStyle(probe).color
+  }
+  probe.style.fontFamily = 'var(--ui)'
+  const ui = getComputedStyle(probe).fontFamily
+  probe.remove()
+  return { colours, font: `${ui ? `${ui}, ` : ''}system-ui, sans-serif` }
+}
+
+const fileName = (title: string | undefined) => (title ?? 'drawing').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'drawing'
+function saveBlob(blob: Blob, name: string) {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+}
+
+function SceneView({ v }: { v: Extract<Visual, { type: 'scene' }> }) {
+  const theme = useTheme()
+  const mobile = useIsMobile()
+  const host = useRef<HTMLDivElement>(null)
+  const [look, setLook] = useState<{ colours: ScenePalette; font: string } | null>(null)
+  const [icons, setIcons] = useState<Map<string, string | null> | null>(v.scene.icons.length ? null : new Map())
+  const [broken, setBroken] = useState(false)
+  const [saving, setSaving] = useState<string | null>(null)
+  // The colours again whenever the theme or accent changes.
+  const themeKey = `${theme.mode}${theme.name}${theme.accent}`
+  useLayoutEffect(() => {
+    if (host.current) setLook(readPalette(host.current))
+  }, [themeKey])
+  useEffect(() => {
+    if (!v.scene.icons.length) return setIcons(new Map())
+    let live = true
+    // Wait for the pictures (at most a few seconds), so the drawing does not show tiles and then redraw.
+    const timeout = new Promise<null>((done) => setTimeout(() => done(null), 4000))
+    void Promise.all(v.scene.icons.map((slug) => Promise.race([loadIcon(slug), timeout]).then((url) => [slug, url] as const))).then((pairs) => live && setIcons(new Map(pairs)))
+    return () => {
+      live = false
+    }
+  }, [v])
+  const svg = useMemo(() => (look && icons ? serializeSvg(v.scene, { colours: look.colours, icons, font: look.font }) : null), [v, look, icons])
+  const src = useMemo(() => (svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : null), [svg])
+  useEffect(() => setBroken(false), [src])
+  const [, , vw, vh] = v.scene.viewBox
+  const k = Math.min(1, SCENE_LIMITS.size / Math.max(vw, vh))
+  const W = Math.max(1, Math.round(vw * k))
+  const H = Math.max(1, Math.round(vh * k))
+  const maxH = mobile ? Math.round(window.innerHeight * 0.6) : 560
+  // A small drawing grows to a readable width (up to twice its size), a large one fits.
+  const grow = Math.max(1, Math.min(2, 720 / W))
+
+  const save = async (kind: 'svg' | 'png') => {
+    if (!look || !icons) return
+    setSaving(kind)
+    try {
+      // Saved with the theme's background behind it, so it reads outside this page too.
+      const doc = serializeSvg(v.scene, { colours: look.colours, icons, font: look.font, background: look.colours.bg })
+      if (kind === 'svg') return saveBlob(new Blob([doc], { type: 'image/svg+xml' }), `${fileName(v.title)}.svg`)
+      const img = new Image()
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(doc)}`
+      await img.decode()
+      const s = Math.min(2, 4096 / Math.max(W, H))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(W * s)
+      canvas.height = Math.round(H * s)
+      canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise<Blob | null>((done) => canvas.toBlob(done, 'image/png'))
+      if (blob) saveBlob(blob, `${fileName(v.title)}.png`)
+    } catch {
+      /* nothing saved; the drawing itself still shows */
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  return (
+    <div className="vis-scene" ref={host}>
+      {broken ? (
+        <p className="vis-scene-broken">This drawing could not be shown. Its spec is under Spec.</p>
+      ) : src ? (
+        <Zoomable
+          W={W}
+          H={H}
+          maxH={maxH}
+          grow={grow}
+          sized
+          extra={
+            <>
+              <button type="button" onClick={() => void save('svg')} disabled={!!saving} title="Save as SVG">
+                SVG
+              </button>
+              <button type="button" onClick={() => void save('png')} disabled={!!saving} title="Save as PNG">
+                PNG
+              </button>
+            </>
+          }
+        >
+          <img className="vis-scene-img" src={src} alt={[v.title, v.caption, v.scene.labels.join(', ')].filter(Boolean).join(' — ') || 'Drawing'} draggable={false} onError={() => setBroken(true)} />
+        </Zoomable>
+      ) : (
+        <div className="vis-pending vis-scene-wait" style={{ aspectRatio: `${W} / ${H}`, maxHeight: maxH }}>
+          Drawing…
+        </div>
+      )}
+      {v.caption && <p className="vis-caption">{v.caption}</p>}
+    </div>
+  )
+}
+
 // --- the block -------------------------------------------------------------------------------------
 
 function One({ v }: { v: Visual }) {
@@ -792,6 +966,9 @@ function One({ v }: { v: Visual }) {
       break
     case 'table':
       body = <TableView v={v} />
+      break
+    case 'scene':
+      body = <SceneView v={v} />
       break
   }
   return (

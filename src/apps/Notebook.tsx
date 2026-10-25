@@ -3,11 +3,13 @@ import { createNote, NOTE_COLORS, noteTitle, purgeNote, restoreNote, trashNote, 
 import { timeAgo } from '../data/recents'
 import { signIn, useAccount } from '../os/account'
 import { openContextMenu } from '../os/ContextMenu'
+import { useEmojiTyping } from '../os/emojiTyping'
 import { useIsMobile } from '../os/useIsMobile'
 import { useSyncStatus } from '../os/synced'
 import { useWM, type WinState } from '../os/wm'
 import { closeStickies, noteMenu, openSticky, stickyOpen } from './Sticky'
 import { MarkdownPreview } from './Zed'
+import { openingView, rememberNotebookView } from '../data/notebookPrefs'
 
 // Every note in one place: search, write in Markdown, preview it, colour it, and put it on the
 // desktop as a sticky (or take it off again). Deleted notes wait in the trash. Other apps add a
@@ -48,7 +50,9 @@ export function Notebook({ win }: { win: WinState }) {
   const [q, setQ] = useState('')
   const [tab, setTab] = useState<'notes' | 'trash'>('notes')
   const [selected, setSelected] = useState<string | null>(win.props.id ?? null)
-  const [preview, setPreview] = useState(false)
+  const [preview, setPreview] = useState(() => openingView() === 'preview')
+  // By hand: also what "Last used" remembers.
+  const pick = (p: boolean) => { setPreview(p); rememberNotebookView(p ? 'preview' : 'edit') }
   const editor = useRef<HTMLTextAreaElement>(null)
   const chips = useNoteSlot('chips')
   const mark = useNoteSlot('mark')
@@ -71,6 +75,7 @@ export function Notebook({ win }: { win: WinState }) {
       .sort((a, b) => b.updated - a.updated)
   }, [live, q, tab])
   const note = live.find((n) => n.id === selected && (tab === 'trash' ? n.deleted : !n.deleted)) ?? notes[0]
+  const emoji = useEmojiTyping(editor, note?.text ?? '')
   const showingDetail = detail && !!note
   const back = () => {
     setDetail(false)
@@ -117,7 +122,7 @@ export function Notebook({ win }: { win: WinState }) {
             <li key={n.id}>
               <button
                 className={`nb-item ${n.id === note?.id ? 'is-active' : ''}`}
-                onClick={() => { setSelected(n.id); setDetail(true); setPreview(false) }}
+                onClick={() => { setSelected(n.id); setDetail(true); setPreview(openingView() === 'preview') }}
                 onDoubleClick={() => !mobile && tab === 'notes' && openSticky(wm, n.id)}
                 onContextMenu={(e) =>
                   openContextMenu(
@@ -166,10 +171,10 @@ export function Notebook({ win }: { win: WinState }) {
           <>
             <div className="nb-toolbar">
               <div className="nb-seg" role="group" aria-label="View">
-                <button className={!preview ? 'is-on' : ''} onClick={() => setPreview(false)}>
+                <button className={!preview ? 'is-on' : ''} onClick={() => pick(false)}>
                   Edit
                 </button>
-                <button className={preview ? 'is-on' : ''} onClick={() => setPreview(true)}>
+                <button className={preview ? 'is-on' : ''} onClick={() => pick(true)}>
                   Preview
                 </button>
               </div>
@@ -203,7 +208,7 @@ export function Notebook({ win }: { win: WinState }) {
             </div>
             {!note.deleted && chips?.(note, 'notebook')}
             {preview || note.deleted ? (
-              <article className="zed-preview nb-preview selectable" onDoubleClick={() => !note.deleted && setPreview(false)}>
+              <article className="zed-preview nb-preview selectable" onDoubleClick={() => !note.deleted && pick(false)}>
                 {note.text.trim() ? <MarkdownPreview text={note.text} /> : <p className="muted">Empty note.</p>}
               </article>
             ) : (
@@ -212,10 +217,13 @@ export function Notebook({ win }: { win: WinState }) {
                 className="nb-editor"
                 value={note.text}
                 placeholder={'# A title\n\nWrite in Markdown: **bold**, _italic_, `code`, - lists, [links](https://…)'}
-                onChange={(e) => updateNote(note.id, { text: e.target.value })}
+                onChange={(e) => emoji.change(e, (v) => updateNote(note.id, { text: v }))}
+                onKeyDown={(e) => void emoji.keyDown(e)}
+                onSelect={(e) => emoji.select(e.currentTarget)}
                 spellCheck
               />
             )}
+            {!preview && !note.deleted && emoji.popup}
             <footer className="nb-foot">
               <span className="muted">
                 {note.text.trim() ? note.text.trim().split(/\s+/).length : 0} words · edited {when(note.updated)}

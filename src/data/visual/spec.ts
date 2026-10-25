@@ -1,8 +1,9 @@
 // Visual blocks: a fenced ```visual block in Markdown holding a small JSON spec that renders as a
-// flow diagram, crafting grids, a tree, a timeline, a chart, cards or a table (Visual.tsx draws
-// them, the terminal and shared pages show visualText's lines). This file reads and checks the
-// spec and turns it into one normalised shape; it imports only lang.ts, so the server (server/shares.ts)
-// and the check script (scripts/visual-check.ts) use it as well.
+// flow diagram, crafting grids, a tree, a timeline, a chart, cards, a table or a free drawing
+// (Visual.tsx draws them, the terminal and shared pages show visualText's lines). This file reads
+// and checks the spec and turns it into one normalised shape; it imports only lang.ts and svg.ts
+// (the drawing's sanitizer), so the server (server/shares.ts) and the check script
+// (scripts/visual-check.ts) use it as well.
 //
 // The spec is written by models, small local ones included, so reading it is forgiving: comments,
 // trailing commas, single quotes, unquoted keys and missing commas are fine, most fields have
@@ -86,6 +87,25 @@ export type VisualSpec =
       /** Each cell an Item (so a cell can have an icon) or a number */
       rows: (Item | number | null)[][]
     }
+  | {
+      type: 'scene'
+      title?: string
+      /** Under the drawing */
+      caption?: string
+      /**
+       * The drawing as SVG (a list of strings is joined with newlines): an <svg viewBox="..."> or
+       * just its shapes. Only drawing elements and attributes are kept (svg.ts). Colours may be the
+       * theme's: "accent", "fg", "muted", "bg", "panel", "border" and the hues ("blue", "red"...),
+       * bare or as var(--accent). <image href="icon:<slug>"> places an icon library picture.
+       */
+      svg: string | string[]
+      /** The drawing's size when the svg has no viewBox */
+      width?: number
+      height?: number
+      viewBox?: string | number[]
+      /** Icon library pictures on top of the drawing */
+      icons?: { icon: string; x: number; y: number; size?: number; width?: number; height?: number }[]
+    }
 
 /** One grid: rows × cols of slots, an arrow (with `via` on it) and what comes out. */
 export type GridSpec = {
@@ -135,15 +155,18 @@ export type Visual =
   | { type: 'chart'; title?: string; chart: 'bar' | 'line' | 'pie'; labels: string[]; series: Series[]; unit?: string; x?: string; y?: string }
   | { type: 'cards'; title?: string; cards: Card[] }
   | { type: 'table'; title?: string; columns: string[]; rows: (VItem | null)[][] }
+  | { type: 'scene'; title?: string; caption?: string; scene: SceneSvg }
 
 export type VisualType = Visual['type']
-export const VISUAL_TYPES: VisualType[] = ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'table']
+export const VISUAL_TYPES: VisualType[] = ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'table', 'scene']
 
 export type VisualProblem = { path: string; message: string }
 export type VisualResult = { ok: true; visuals: Visual[]; warnings: VisualProblem[] } | { ok: false; errors: VisualProblem[]; warnings: VisualProblem[] }
 
 /** Limits that keep a spec cheap to lay out and draw; past them the rest is left out (a warning). */
 export const LIMITS = { visuals: 12, nodes: 150, edges: 300, gridSide: 12, grids: 24, results: 6, series: 8, points: 400, cards: 100, events: 200, treeNodes: 300, columns: 20, rows: 300, text: 200 }
+
+import { sanitizeSvg, type IconPlacement, type SceneSvg } from './svg.ts'
 
 // --- loose JSON -------------------------------------------------------------------------------
 
@@ -392,6 +415,7 @@ const SHAPES: Record<string, Shape> = { box: 'box', rect: 'box', square: 'box', 
 
 /** What the fields say a spec without a `type` is. */
 function guessType(o: Obj): VisualType | undefined {
+  if (o.svg || o.drawing) return 'scene'
   if (o.edges || o.links || o.connections || o.nodes) return 'flow'
   if (o.grids || o.recipes || o.slots || o.pattern || o.ingredients || o.grid) return 'grid'
   if (o.root || o.children || o.tree) return 'tree'
@@ -402,7 +426,7 @@ function guessType(o: Obj): VisualType | undefined {
   return undefined
 }
 
-const TYPE_ALIASES: Record<string, VisualType> = { flowchart: 'flow', diagram: 'flow', graph: 'flow', process: 'flow', recipe: 'grid', recipes: 'grid', crafting: 'grid', bar: 'chart', line: 'chart', pie: 'chart', card: 'cards', list: 'cards', timeline: 'timeline', events: 'timeline', table: 'table', tree: 'tree', mindmap: 'tree' }
+const TYPE_ALIASES: Record<string, VisualType> = { flowchart: 'flow', diagram: 'flow', graph: 'flow', process: 'flow', recipe: 'grid', recipes: 'grid', crafting: 'grid', bar: 'chart', line: 'chart', pie: 'chart', card: 'cards', list: 'cards', timeline: 'timeline', events: 'timeline', table: 'table', tree: 'tree', mindmap: 'tree', drawing: 'scene', svg: 'scene', picture: 'scene', illustration: 'scene', sketch: 'scene' }
 
 type Ctx = { errors: VisualProblem[]; warnings: VisualProblem[] }
 const warn = (c: Ctx, path: string, message: string) => void c.warnings.push({ path, message })
@@ -663,6 +687,33 @@ function readChart(o: Obj, c: Ctx, p: string): Visual | null {
   return { type: 'chart', title: text(o.title), chart, labels, series, ...(unit ? { unit: clip(unit, 12) } : {}), ...(x ? { x } : {}), ...(y ? { y } : {}) }
 }
 
+function readScene(o: Obj, c: Ctx, p: string): Visual | null {
+  const raw = pick(o, 'svg', 'drawing', 'markup', 'content', 'code')
+  const src = typeof raw === 'string' ? raw : Array.isArray(raw) && raw.every((l) => typeof l === 'string') ? raw.join('\n') : undefined
+  if (src === undefined || !src.trim()) return (err(c, `${p}svg`, raw === undefined ? 'Missing: the drawing, as "svg": "<svg viewBox=\'0 0 400 200\'>...</svg>"' : 'Should be the drawing as one string of SVG'), null)
+  const n = (v: unknown) => {
+    const x = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN
+    return Number.isFinite(x) && x > 0 ? x : undefined
+  }
+  const vbRaw = pick(o, 'viewBox', 'viewbox', 'view_box')
+  const viewBox = Array.isArray(vbRaw) ? vbRaw.join(' ') : typeof vbRaw === 'string' ? vbRaw : undefined
+  const icons: IconPlacement[] = []
+  ;(list(o.icons) ?? []).forEach((ic, i) => {
+    if (!isObj(ic)) return warn(c, `${p}icons[${i}]`, 'An icon is {"icon": "slug", "x": 10, "y": 10, "size": 32}')
+    const slug = typeof pick(ic, 'icon', 'slug', 'name') === 'string' ? iconSlug(String(pick(ic, 'icon', 'slug', 'name'))) : undefined
+    const x = Number(ic.x)
+    const y = Number(ic.y)
+    if (!slug || !Number.isFinite(x) || !Number.isFinite(y)) return warn(c, `${p}icons[${i}]`, 'An icon needs a slug, "x" and "y"; left out')
+    const size = n(ic.size) ?? 32
+    icons.push({ slug, x, y, width: n(ic.width) ?? size, height: n(ic.height) ?? n(ic.width) ?? size })
+  })
+  const r = sanitizeSvg(src, { width: n(o.width), height: n(o.height), viewBox, icons })
+  for (const m of r.warnings) warn(c, `${p}svg`, m)
+  if (!r.ok) return (err(c, `${p}svg`, r.message), null)
+  const caption = text(pick(o, 'caption', 'note', 'description', 'subtitle'))
+  return { type: 'scene', title: text(o.title), ...(caption ? { caption: clip(caption, 400) } : {}), scene: r.scene }
+}
+
 function readOne(raw: unknown, c: Ctx, p: string): Visual | null {
   if (!isObj(raw)) {
     err(c, p || '(spec)', 'A visual is a JSON object with a "type", such as {"type": "flow", ...}')
@@ -743,6 +794,8 @@ function readOne(raw: unknown, c: Ctx, p: string): Visual | null {
       if (!cards.length) return (err(c, `${p}cards`, 'There are no cards'), null)
       return { type: 'cards', title, cards }
     }
+    case 'scene':
+      return readScene(o, c, p)
     case 'table': {
       let columns = (list(pick(o, 'columns', 'headers', 'head', 'header')) ?? []).map((h) => (isObj(h) ? text(pick(h, 'label', 'name', 'title')) : text(h)) ?? '')
       const raw = list(pick(o, 'rows', 'data', 'body'))
@@ -864,6 +917,10 @@ export function visualText(v: Visual): string[] {
     case 'table':
       if (v.columns.some(Boolean)) out.push(v.columns.join(' | '))
       for (const r of v.rows) out.push(r.map(itemText).join(' | '))
+      break
+    case 'scene':
+      if (v.caption) out.push(v.caption)
+      out.push(v.scene.labels.length ? `(drawing: ${v.scene.labels.slice(0, 12).join(' · ')})` : '(drawing)')
       break
   }
   return out

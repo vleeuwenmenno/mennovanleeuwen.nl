@@ -261,11 +261,21 @@ async function freshTokens(user: User, force = false): Promise<Tokens> {
 
 // --- making a picture ----------------------------------------------------------------------------
 
-export type ImageRequest = { prompt: string; size: '1024x1024' | '1536x1024' | '1024x1536'; quality: 'low' | 'medium' | 'high' | 'auto'; background: 'transparent' | 'opaque' | 'auto'; format: 'png' | 'webp' }
+/** A picture the model passes along to draw from (a screenshot, an earlier picture), already checked to be the user's. */
+export type Reference = { name: string; mime: string; bytes: Buffer }
+export type ImageRequest = { prompt: string; size: '1024x1024' | '1536x1024' | '1024x1536'; quality: 'low' | 'medium' | 'high' | 'auto'; background: 'transparent' | 'opaque' | 'auto'; format: 'png' | 'webp'; references?: Reference[] }
 type Made = { bytes: Buffer; mime: string }
+/** Called with each rough preview while a picture is drawn (when the route streams them). */
+export type OnPartial = (preview: Made) => void
+
+/** How many rough previews to ask for while drawing (the API allows 0 to 3; each costs a little). */
+const PARTIALS = 2
+/** References: at most this many, each at most this big (OpenAI takes more; these keep requests and memory sane). */
+export const MAX_REFERENCES = 4
+export const MAX_REFERENCE_BYTES = 8 * 1024 * 1024
 
 const MIME: Record<string, string> = { png: 'image/png', webp: 'image/webp', jpeg: 'image/jpeg' }
-function sniff(bytes: Buffer): string | null {
+export function sniff(bytes: Buffer): string | null {
   if (isPng(bytes)) return 'image/png'
   if (bytes.length > 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
@@ -278,6 +288,22 @@ function picture(b64: unknown): Made {
   if (!mime) throw new HttpError(502, 'OpenAI sent something that is not a picture')
   if (bytes.length > 12 * 1024 * 1024) throw new HttpError(502, 'OpenAI sent a picture over 12 MB')
   return { bytes, mime }
+}
+/** A preview that does not decode is skipped, never fatal: the final picture is what counts. */
+function preview(b64: unknown, onPartial?: OnPartial) {
+  if (!onPartial) return
+  try {
+    onPartial(picture(b64))
+  } catch {}
+}
+
+/**
+ * Typical drawing time in ms, for the estimate the window shows while it waits: by quality, a bit
+ * longer for the large sizes and with references. Only an estimate; the window never shows 100%.
+ */
+export function expectedMs(r: Pick<ImageRequest, 'quality' | 'size'> & { references?: number }): number {
+  const base = r.quality === 'low' ? 20_000 : r.quality === 'high' ? 90_000 : 45_000
+  return Math.round(base * (r.size === '1024x1024' ? 1 : 1.3) + (r.references ? 10_000 : 0))
 }
 
 async function failure(res: Response, who: string): Promise<HttpError> {
@@ -293,15 +319,80 @@ async function failure(res: Response, who: string): Promise<HttpError> {
   return new HttpError(502, message ? `${who}: ${message}` : `${who} answered ${res.status}`)
 }
 
-const imagesBody = (model: string, r: ImageRequest) => ({ model, prompt: r.prompt, n: 1, size: r.size, quality: r.quality, background: r.background, output_format: r.format })
+type StreamEvent = { type?: string; b64_json?: string; partial_image_b64?: string; item?: { type?: string; result?: string }; response?: { output?: { type?: string; result?: string }[]; error?: { message?: string } }; error?: { message?: string } | string; message?: string }
 
-async function withApiKey(user: User, model: string, r: ImageRequest, signal: AbortSignal): Promise<Made> {
+/** A server-sent event stream, event by event, as it arrives (so previews show while the picture is drawn). */
+async function* events(res: Response): AsyncGenerator<StreamEvent> {
+  if (!res.body) return
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const parse = (block: string): StreamEvent | null => {
+    const data = block
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).replace(/^ /, ''))
+      .join('\n')
+    if (!data || data === '[DONE]') return null
+    try {
+      return JSON.parse(data) as StreamEvent
+    } catch {
+      return null
+    }
+  }
+  for (;;) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    // A picture comes as one big data line, so the buffer is cut at blank lines only.
+    let cut: RegExpExecArray | null
+    while ((cut = /\r?\n\r?\n/.exec(buffer))) {
+      const event = parse(buffer.slice(0, cut.index))
+      buffer = buffer.slice(cut.index + cut[0].length)
+      if (event) yield event
+    }
+    if (done) break
+  }
+  const last = parse(buffer)
+  if (last) yield last
+}
+const eventError = (e: StreamEvent) => (typeof e.error === 'string' ? e.error : e.error?.message) || e.response?.error?.message || e.message || 'the picture failed'
+const isStream = (res: Response) => (res.headers.get('content-type') ?? '').includes('text/event-stream')
+
+/** The Images API's answer: a stream (previews, then image_generation.completed / image_edit.completed) or plain JSON. */
+async function imagesAnswer(res: Response, who: string, onPartial?: OnPartial): Promise<Made> {
+  if (!isStream(res)) {
+    const body = (await res.json().catch(() => null)) as { data?: { b64_json?: string }[] } | null
+    return picture(body?.data?.[0]?.b64_json)
+  }
+  let found: string | undefined
+  for await (const e of events(res)) {
+    if (e.type?.endsWith('.partial_image')) preview(e.b64_json, onPartial)
+    else if (e.type?.endsWith('.completed')) found ??= e.b64_json
+    else if (e.type === 'error' || e.type?.endsWith('.failed')) throw new HttpError(502, `${who}: ${eventError(e)}`)
+  }
+  if (!found) throw new HttpError(502, `${who} finished without a picture`)
+  return picture(found)
+}
+
+const imagesBody = (model: string, r: ImageRequest, stream: boolean) => ({ model, prompt: r.prompt, n: 1, size: r.size, quality: r.quality, background: r.background, output_format: r.format, ...(stream ? { stream: true, partial_images: PARTIALS } : {}) })
+
+/** The edits route's form: the same fields, and each reference as image[] (OpenAI's multipart shape for several input pictures). */
+function editsForm(model: string, r: ImageRequest, stream: boolean): FormData {
+  const form = new FormData()
+  for (const [k, v] of Object.entries(imagesBody(model, r, stream))) form.append(k, String(v))
+  for (const ref of r.references ?? []) form.append('image[]', new Blob([new Uint8Array(ref.bytes)], { type: ref.mime }), ref.name.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'reference.png')
+  return form
+}
+
+async function withApiKey(user: User, model: string, r: ImageRequest, signal: AbortSignal, onPartial?: OnPartial): Promise<Made> {
   const key = apiKey(user)
   if (!key) throw new HttpError(409, 'Add an OpenAI API key in Settings → Agents → Images first')
-  const res = await fetch(`${OPENAI()}/v1/images/generations`, {
+  // References go to the edits route (several input pictures); a plain picture to generations.
+  const edit = !!r.references?.length
+  const res = await fetch(`${OPENAI()}/v1/images/${edit ? 'edits' : 'generations'}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(imagesBody(model, r)),
+    headers: { Authorization: `Bearer ${key}`, ...(edit ? {} : { 'Content-Type': 'application/json' }) },
+    body: edit ? editsForm(model, r, !!onPartial) : JSON.stringify(imagesBody(model, r, !!onPartial)),
     signal,
   }).catch((e: Error) => {
     if (signal.aborted) throw e
@@ -309,16 +400,22 @@ async function withApiKey(user: User, model: string, r: ImageRequest, signal: Ab
   })
   if (res.status === 401 || res.status === 403) throw new HttpError(409, 'OpenAI refused the API key: set it again in Settings → Agents → Images')
   if (!res.ok) throw await failure(res, 'OpenAI')
-  const body = (await res.json().catch(() => null)) as { data?: { b64_json?: string }[] } | null
-  return picture(body?.data?.[0]?.b64_json)
+  return imagesAnswer(res, 'OpenAI', onPartial)
 }
 
 function codexHeaders(t: Tokens, accept: string): Record<string, string> {
   return { Authorization: `Bearer ${t.access}`, 'Content-Type': 'application/json', Accept: accept, Originator: CODEX_ORIGINATOR, 'User-Agent': CODEX_USER_AGENT, ...(t.accountId ? { 'Chatgpt-Account-Id': t.accountId } : {}) }
 }
 
-/** The Codex backend's Responses API with the image_generation tool (CLIProxyAPI's codexBuildImagesResponsesRequest), read from its event stream. */
-async function codexResponses(t: Tokens, model: string, r: ImageRequest, signal: AbortSignal): Promise<Response> {
+const dataUrl = (ref: Reference) => `data:${ref.mime};base64,${ref.bytes.toString('base64')}`
+
+/**
+ * The Codex backend's Responses API with the image_generation tool (CLIProxyAPI's
+ * codexBuildImagesResponsesRequest), read from its event stream. References go along as
+ * input_image items in the message, and the tool is told to edit from them.
+ */
+async function codexResponses(t: Tokens, model: string, r: ImageRequest, signal: AbortSignal, stream: boolean): Promise<Response> {
+  const refs = r.references ?? []
   const body = {
     instructions: '',
     stream: true,
@@ -328,66 +425,84 @@ async function codexResponses(t: Tokens, model: string, r: ImageRequest, signal:
     model: CODEX_MAIN_MODEL,
     store: false,
     tool_choice: { type: 'image_generation' },
-    tools: [{ type: 'image_generation', action: 'generate', model, size: r.size, quality: r.quality, background: r.background, output_format: r.format }],
-    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: r.prompt }] }],
+    tools: [{ type: 'image_generation', action: refs.length ? 'edit' : 'generate', model, size: r.size, quality: r.quality, background: r.background, output_format: r.format, ...(stream ? { partial_images: PARTIALS } : {}) }],
+    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: r.prompt }, ...refs.map((ref) => ({ type: 'input_image', image_url: dataUrl(ref) }))] }],
   }
   return fetch(`${CODEX()}/responses`, { method: 'POST', headers: codexHeaders(t, 'text/event-stream'), body: JSON.stringify(body), signal })
 }
 
-function imageFromEvents(text: string): Made {
+/** The Responses stream: previews (response.image_generation_call.partial_image), then the finished call's picture. */
+async function imageFromEvents(res: Response, onPartial?: OnPartial): Promise<Made> {
   let found: string | undefined
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('data:')) continue
-    let event: { type?: string; item?: { type?: string; result?: string }; response?: { output?: { type?: string; result?: string }[]; error?: { message?: string } } }
-    try {
-      event = JSON.parse(line.slice(5).trim())
-    } catch {
-      continue
-    }
+  for await (const event of events(res)) {
+    if (event.type === 'response.image_generation_call.partial_image') preview(event.partial_image_b64, onPartial)
     if (event.type === 'response.output_item.done' && event.item?.type === 'image_generation_call' && event.item.result) found ??= event.item.result
     if (event.type === 'response.completed') found ??= event.response?.output?.find((o) => o.type === 'image_generation_call' && o.result)?.result
-    if (event.type === 'response.failed' || event.type === 'error') throw new HttpError(502, `ChatGPT: ${event.response?.error?.message || 'the picture failed'}`)
+    if (event.type === 'response.failed' || event.type === 'error') throw new HttpError(502, `ChatGPT: ${eventError(event)}`)
   }
   if (!found) throw new HttpError(502, 'ChatGPT finished without a picture')
   return picture(found)
 }
 
-async function withChatGPT(user: User, model: string, r: ImageRequest, signal: AbortSignal): Promise<Made> {
-  const attempt = async (t: Tokens) => {
-    // The direct images route first (what CLIProxyAPI uses for gpt-image models); the Responses
-    // API with the image_generation tool when this backend does not have it.
-    const direct = await fetch(`${CODEX()}/images/generations`, { method: 'POST', headers: codexHeaders(t, 'application/json'), body: JSON.stringify(imagesBody(model, r)), signal })
-    if (direct.status !== 404 && direct.status !== 405) return { res: direct, stream: false }
+/**
+ * Whether the Codex backend's direct images route takes stream/partial_images. Unknown until it
+ * answers once; a 400 to a streamed ask turns it off (for this process) and the ask goes again
+ * without, so a backend that does not stream still draws (with the estimate only).
+ */
+let codexDirectStreams: boolean | null = null
+
+async function withChatGPT(user: User, model: string, r: ImageRequest, signal: AbortSignal, onPartial?: OnPartial): Promise<Made> {
+  const attempt = async (t: Tokens): Promise<{ res: Response; kind: 'images' | 'responses' }> => {
+    // References: the Responses API, which takes input pictures. Otherwise the direct images route
+    // first (what CLIProxyAPI uses for gpt-image models), the Responses API where it is missing.
+    // A 400 to previews there too gets one more ask without them.
+    const viaResponses = async () => {
+      let res = await codexResponses(t, model, r, signal, !!onPartial)
+      if (onPartial && res.status === 400) {
+        await res.body?.cancel()
+        res = await codexResponses(t, model, r, signal, false)
+      }
+      return { res, kind: 'responses' as const }
+    }
+    if (r.references?.length) return viaResponses()
+    const ask = (stream: boolean) => fetch(`${CODEX()}/images/generations`, { method: 'POST', headers: codexHeaders(t, stream ? 'text/event-stream' : 'application/json'), body: JSON.stringify(imagesBody(model, r, stream)), signal })
+    const streamed = !!onPartial && codexDirectStreams !== false
+    let direct = await ask(streamed)
+    if (streamed && direct.status === 400) {
+      await direct.body?.cancel()
+      direct = await ask(false)
+      if (direct.ok) codexDirectStreams = false
+    } else if (streamed && direct.ok) codexDirectStreams = true
+    if (direct.status !== 404 && direct.status !== 405) return { res: direct, kind: 'images' }
     await direct.body?.cancel()
-    return { res: await codexResponses(t, model, r, signal), stream: true }
+    return viaResponses()
   }
   const call = (t: Tokens) =>
     attempt(t).catch((e: Error) => {
       if (signal.aborted) throw e
       throw new HttpError(502, 'ChatGPT did not answer')
     })
-  let { res, stream } = await call(await freshTokens(user))
+  let { res, kind } = await call(await freshTokens(user))
   if (res.status === 401) {
     await res.body?.cancel()
-    ;({ res, stream } = await call(await freshTokens(user, true)))
+    ;({ res, kind } = await call(await freshTokens(user, true)))
     if (res.status === 401) {
       await res.body?.cancel()
       throw new HttpError(409, 'ChatGPT refused the sign-in: sign in again in Settings → Agents → Images')
     }
   }
   if (!res.ok) throw await failure(res, 'ChatGPT')
-  if (stream) return imageFromEvents(await res.text())
-  const body = (await res.json().catch(() => null)) as { data?: { b64_json?: string }[] } | null
-  return picture(body?.data?.[0]?.b64_json)
+  return kind === 'responses' ? imageFromEvents(res, onPartial) : imagesAnswer(res, 'ChatGPT', onPartial)
 }
 
-/** One picture from the provider picked in Settings, counted against the daily cap. */
-async function makePicture(user: User, r: ImageRequest, signal: AbortSignal): Promise<Made> {
+/** One picture from the provider picked in Settings, counted against the daily cap once it is made. */
+async function makePicture(user: User, r: ImageRequest, signal: AbortSignal, onPartial?: OnPartial): Promise<Made> {
   const s = settings(user)
   if (s.provider === 'off') throw new HttpError(409, 'Pick an image provider in Settings → Agents → Images first')
   if (usedToday(user) >= perDay()) throw new HttpError(429, `The daily limit of ${perDay()} pictures is reached for this account; it frees up 24 hours after each one`)
+  if ((r.references?.length ?? 0) > MAX_REFERENCES) throw new HttpError(400, `At most ${MAX_REFERENCES} reference pictures`)
   const limit = AbortSignal.any([signal, AbortSignal.timeout(4 * 60_000)])
-  const made = await (s.provider === 'apikey' ? withApiKey(user, s.model, r, limit) : withChatGPT(user, s.model, r, limit)).catch((e: Error) => {
+  const made = await (s.provider === 'apikey' ? withApiKey(user, s.model, r, limit, onPartial) : withChatGPT(user, s.model, r, limit, onPartial)).catch((e: Error) => {
     if (limit.aborted && !signal.aborted) throw new HttpError(504, 'The picture took more than 4 minutes')
     throw e
   })
@@ -433,8 +548,8 @@ export async function icon(user: User, slug: string, subject: string, regenerate
 }
 
 /** A picture for a message: its bytes and type, to keep with the tool's result like a sent picture. */
-export async function image(user: User, r: Omit<ImageRequest, 'format'>, signal: AbortSignal) {
-  const made = await makePicture(user, { ...r, format: r.background === 'transparent' ? 'png' : 'webp' }, signal)
+export async function image(user: User, r: Omit<ImageRequest, 'format'>, signal: AbortSignal, onPartial?: OnPartial) {
+  const made = await makePicture(user, { ...r, format: r.background === 'transparent' ? 'png' : 'webp' }, signal, onPartial)
   checkRoom(user, Math.ceil((made.bytes.length * 4) / 3))
   const ext = Object.entries(MIME).find(([, m]) => m === made.mime)?.[0] ?? 'png'
   const dims = made.mime === 'image/png' ? pngSize(made.bytes) : null
