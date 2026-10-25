@@ -7,6 +7,8 @@
 //   - deleting the user drops a held refresh,
 //   - a consent exchange held at Google cannot store anything once its session is signed out
 //     (or the link changed meanwhile),
+//   - a delayed calendar body, or an aggregate read that was half done, after a relink, disconnect or
+//     removal returns nothing of the old link; a stale failure leaves the new link's pending read alone;
 //   - concurrent refreshes of one link still share a single request, and a finished stale job
 //     does not remove a newer link's job.
 //
@@ -31,7 +33,31 @@ const check = (what: string, test: boolean) => {
 const idToken = (email: string) => `x.${Buffer.from(JSON.stringify({ email })).toString('base64url')}.x`
 const held: { grant: string; value: string; release: () => void }[] = []
 let tokenCalls = 0
+/** Calendar API holds, by `<access token>|<list or calendar id>`: 'full' answers only when released, 'body' sends the headers and half the body at once. */
+const gates = new Map<string, 'full' | 'body'>()
+const apiHeld: { key: string; release: () => void }[] = []
+const apiCalls: string[] = []
+function api(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) {
+  const token = String(req.headers.authorization ?? '').replace('Bearer ', '')
+  const path = new URL(req.url!, 'http://x').pathname
+  const calendar = /^\/api\/calendars\/([^/]+)\/events/.exec(path)?.[1]
+  const key = `${token}|${calendar ?? 'list'}`
+  apiCalls.push(key)
+  const text = JSON.stringify(
+    calendar
+      ? { items: [{ id: `event-${token}-${calendar}`, summary: `private ${token} ${calendar}`, start: { dateTime: '2030-01-01T10:00:00Z' }, end: { dateTime: '2030-01-01T11:00:00Z' } }] }
+      : { items: ['cal1', 'cal2'].map((id) => ({ id, summary: `${id} of ${token}`, accessRole: 'owner' })) },
+  )
+  const mode = gates.get(key)
+  const head = { 'Content-Type': 'application/json' }
+  if (!mode) return res.writeHead(200, head).end(text)
+  if (mode === 'full') return void apiHeld.push({ key, release: () => res.writeHead(200, head).end(text) })
+  res.writeHead(200, head)
+  res.write(text.slice(0, 10))
+  apiHeld.push({ key, release: () => res.end(text.slice(10)) })
+}
 const fake = createServer((req, res) => {
+  if (req.url!.startsWith('/api/')) return api(req, res)
   let body = ''
   req.on('data', (c) => (body += c))
   req.on('end', () => {
@@ -51,7 +77,7 @@ const origin = `http://127.0.0.1:${(fake.address() as { port: number }).port}`
 Object.assign(process.env, { GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', GOOGLE_CLIENT_ID: 'x', GOOGLE_CLIENT_SECRET: 'x', GOOGLE_TOKEN_URL: `${origin}/token`, GOOGLE_API_URL: `${origin}/api`, PUBLIC_URL: 'http://localhost' })
 
 const { database, encrypt, decrypt, sha256, userGone } = await import('../server/db.ts')
-const { googleForTest, startGoogle, finishGoogle, disconnectGoogle } = await import('../server/google.ts')
+const { googleForTest, startGoogle, finishGoogle, disconnectGoogle, listCalendars, listEvents } = await import('../server/google.ts')
 const { currentUser } = await import('../server/auth.ts')
 const now = Date.now()
 database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (1, 1, ?, ?, ?, ?)').run('google-check', encrypt('none'), now, now)
@@ -183,6 +209,82 @@ check('after the stale job ended, the new link still has exactly one pending req
 held[1].release()
 const [n, j] = await Promise.all([newJob, joined])
 check('...and the new link gets its own token, shared', n.value === 'access-from-refresh-B' && j.value === 'access-from-refresh-B')
+
+// --- Reads of the calendar API itself -------------------------------------------------------------
+const waitApi = async (n: number) => {
+  for (let i = 0; i < 300 && apiHeld.length < n; i++) await new Promise((r) => setTimeout(r, 10))
+}
+const range = { from: new Date('2029-12-31T00:00:00Z'), to: new Date('2030-01-03T00:00:00Z') }
+const events = () => listEvents(user, null, range, (r) => JSON.stringify(r))
+const fresh = (email: string, refresh: string) => link(email, refresh, 3600_000)
+const reset = () => {
+  userGone(1) // drops the cached reads and moves the generation, as a removal does
+  gates.clear()
+  apiHeld.length = 0
+  apiCalls.length = 0
+}
+const tokenA = 'old-access-refresh-A'
+const tokenB = 'old-access-refresh-B'
+const leaks = (value: unknown) => JSON.stringify(value ?? null).includes(tokenA)
+
+// 9. Normal reads of one link work, and share their requests.
+reset()
+fresh('a@example.test', 'refresh-A')
+let list = await settled(listCalendars(user))
+check('a normal read lists the calendars', list.error === null && list.value?.length === 2)
+let ev = await settled(events())
+check('a normal aggregate returns every calendar\'s events', ev.error === null && ev.value?.length === 2 && ev.value.every((e) => e.title.includes(tokenA)))
+
+// 10. A delayed body of A's answer after a relink, a disconnect, a removal: nothing comes back.
+for (const how of ['relink to B', 'disconnect', 'removal']) {
+  reset()
+  fresh('a@example.test', 'refresh-A')
+  database().prepare('DELETE FROM sessions').run()
+  gates.set(`${tokenA}|list`, 'body')
+  const slow = settled(listCalendars(user))
+  await waitApi(1)
+  if (how === 'relink to B') check('relink completes', (await (await consent('B', false)).done) === '/?google=ok')
+  else if (how === 'disconnect') await disconnectGoogle(user)
+  else (userGone(1), database().prepare('DELETE FROM google WHERE user_id = 1').run())
+  apiHeld[0].release()
+  const out = await slow
+  check(`delayed body after ${how}: refused, nothing of A returned`, out.value === null && out.error !== null && !leaks(out.value))
+}
+
+// 11. An aggregate whose first calendar answered under A and second is still waiting when B links.
+reset()
+fresh('a@example.test', 'refresh-A')
+gates.set(`${tokenA}|cal2`, 'full')
+const agg = settled(events())
+await waitApi(1)
+check('the first calendar (A) answered, the second waits', apiCalls.includes(`${tokenA}|cal1`) && apiHeld[0].key === `${tokenA}|cal2`)
+await (await consent('B', false)).done
+apiHeld[0].release()
+const aggOut = await agg
+check('aggregate after relink: nothing of A returned, no partial result', aggOut.value === null && aggOut.error !== null && !leaks(aggOut.value))
+const bEvents = await settled(events())
+check('B then reads only B\'s own events', bEvents.error === null && bEvents.value?.length === 2 && bEvents.value.every((e) => e.title.includes('access-B')))
+
+// 12. A's stale failure does not evict B's pending cache job, and B's requests stay shared.
+reset()
+fresh('a@example.test', 'refresh-A')
+gates.set(`${tokenA}|list`, 'full')
+const aList = settled(listCalendars(user))
+await waitApi(1)
+await disconnectGoogle(user)
+fresh('b@example.test', 'refresh-B')
+gates.set(`${tokenB}|list`, 'full')
+const b1 = settled(listCalendars(user))
+await waitApi(2)
+apiHeld[0].release() // A answers: stale, fails
+const aOut = await aList
+const b2 = settled(listCalendars(user))
+await new Promise((r) => setTimeout(r, 100))
+check('A\'s stale read failed', aOut.value === null && aOut.error !== null)
+check('B\'s second request joined the pending one (one request to Google for B)', apiCalls.filter((k) => k === `${tokenB}|list`).length === 1)
+apiHeld[1].release()
+const [r1, r2] = await Promise.all([b1, b2])
+check('...and both get B\'s calendars', r1.value?.[0]?.name.includes(tokenB) === true && r2.value?.[0]?.name.includes(tokenB) === true)
 
 fake.close()
 rmSync(DATA, { recursive: true, force: true })

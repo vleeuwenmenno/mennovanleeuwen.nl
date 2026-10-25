@@ -182,6 +182,24 @@ const generationOf = (id: number) => generations.get(id) ?? 0
 function bump(id: number) {
   generations.set(id, generationOf(id) + 1)
   refreshing.delete(id)
+  // Reads started under the old link are no longer shared with, or served to, anyone.
+  clearGoogleCache({ id } as User)
+}
+
+/** Something that began under an earlier link of this account (before a relink, disconnect or removal). */
+class StaleLink extends HttpError {
+  constructor() {
+    super(409, 'Google Calendar was reconnected or disconnected meanwhile: try again')
+  }
+}
+/** For `.catch`: a failed call is treated as no answer, but a changed link still fails the whole read. */
+const keepStale = (e: unknown) => {
+  if (e instanceof StaleLink) throw e
+  return null
+}
+/** Throws when the account's Google link is no longer the one `generation` was read from. */
+function sameLink(user: User, generation: number) {
+  if (generationOf(user.id) !== generation) throw new StaleLink()
 }
 
 /** A valid access token, refreshed when it is about to expire. */
@@ -194,7 +212,7 @@ async function accessToken(user: User): Promise<string> {
   const generation = generationOf(user.id)
   const pending = refreshing.get(user.id)
   if (pending && pending.generation === generation) return pending.job
-  const stale = () => new HttpError(409, 'Google Calendar was reconnected or disconnected meanwhile: try again')
+  const stale = () => new StaleLink()
   const job: Promise<string> = tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(row.refresh_token) })
     .then((t) => {
       if (generationOf(user.id) !== generation) throw stale()
@@ -215,9 +233,16 @@ async function accessToken(user: User): Promise<string> {
   return job
 }
 
-async function calendarApi<T>(user: User, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-  const generation = generationOf(user.id)
+/**
+ * One call to Google. `expected` is the link generation the caller's whole read started under; the
+ * call is refused up front if it moved, and its answer is dropped, after every await (the headers,
+ * the body), if it moves while Google is answering.
+ */
+async function calendarApi<T>(user: User, path: string, init: { method?: string; body?: unknown } = {}, expected?: number): Promise<T> {
+  const generation = expected ?? generationOf(user.id)
+  sameLink(user, generation)
   const token = await accessToken(user)
+  sameLink(user, generation)
   const res = await fetch(`${CALENDAR_API}${path}`, {
     method: init.method ?? 'GET',
     headers: { Authorization: `Bearer ${token}`, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
@@ -226,18 +251,24 @@ async function calendarApi<T>(user: User, path: string, init: { method?: string;
   }).catch(() => null)
   if (!res) throw new HttpError(502, 'Google Calendar did not answer')
   // Asked with an earlier link's token: its answer (another Google account's calendar) is dropped.
-  if (generationOf(user.id) !== generation) {
+  const drop = async (): Promise<never> => {
     await res.body?.cancel().catch(() => {})
-    throw new HttpError(409, 'Google Calendar was reconnected or disconnected meanwhile: try again')
+    throw new StaleLink()
   }
+  if (generationOf(user.id) !== generation) return drop()
   if (res.status === 401) throw new HttpError(409, 'Google access was revoked; connect again')
   if (res.status === 403 && init.method && init.method !== 'GET') {
     const reason = ((await res.json().catch(() => null)) as { error?: { errors?: { reason?: string }[] } } | null)?.error?.errors?.[0]?.reason
+    sameLink(user, generation)
     throw new HttpError(403, reason === 'insufficientPermissions' ? 'Google only allowed reading: connect Google Calendar again (Settings → Integrations → Calendars) to edit' : 'Google refused: you cannot change this calendar')
   }
   if (res.status === 404 || res.status === 410) throw new HttpError(404, 'That event is gone from Google Calendar')
   if (!res.ok) throw new HttpError(502, `Google Calendar answered ${res.status}`)
-  return (res.status === 204 ? null : await res.json()) as T
+  if (res.status === 204) return null as T
+  const data = (await res.json()) as T
+  // The body may have taken a while: check again before any of it leaves this function.
+  sameLink(user, generation)
+  return data
 }
 
 /** `access` is Google's own role: owner (yours), writer (shared with you to edit), reader (shared to look at). */
@@ -286,15 +317,22 @@ function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> 
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>
   const value = load()
-  cache.set(key, { at: Date.now(), value })
-  value.catch(() => cache.delete(key))
+  // Only this call's own entry goes on failure: a newer one under the same key stays.
+  const entry = { at: Date.now(), value }
+  cache.set(key, entry)
+  value.catch(() => {
+    if (cache.get(key) === entry) cache.delete(key)
+  })
   return value
 }
 
 /** The calendars in the account's list, shared ones included. */
 export function listCalendars(user: User): Promise<CalendarInfo[]> {
+  return calendarsAt(user, generationOf(user.id))
+}
+function calendarsAt(user: User, generation: number): Promise<CalendarInfo[]> {
   return cached(`${user.id}|calendars`, 5 * 60_000, async () => {
-    const d = await calendarApi<{ items: { id: string; summary: string; summaryOverride?: string; backgroundColor?: string; primary?: boolean; selected?: boolean; accessRole?: string }[] }>(user, '/users/me/calendarList?minAccessRole=reader')
+    const d = await calendarApi<{ items: { id: string; summary: string; summaryOverride?: string; backgroundColor?: string; primary?: boolean; selected?: boolean; accessRole?: string }[] }>(user, '/users/me/calendarList?minAccessRole=reader', {}, generation)
     const canWrite = !!googleAccount(user)?.canWrite
     return d.items.map((c) => ({
       id: c.id,
@@ -347,7 +385,11 @@ export const MAX_RANGE_DAYS = 400
  * calendars (default: the ones shown in Google Calendar).
  */
 export async function listEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }, ref: (r: GoogleRef) => string): Promise<CalendarEvent[]> {
-  const calendars = await listCalendars(user)
+  // One link generation for the whole read: every call below is made under it, and the result is
+  // only handed out if it is still the account's link, so nothing of an earlier link is mixed in.
+  const generation = generationOf(user.id)
+  const calendars = await calendarsAt(user, generation)
+  sameLink(user, generation)
   const pick = ids?.length ? calendars.filter((c) => ids.includes(c.id)) : calendars.filter((c) => c.selected)
   const from = range.from
   const to = new Date(Math.min(range.to.getTime(), from.getTime() + MAX_RANGE_DAYS * 864e5))
@@ -361,7 +403,7 @@ export async function listEvents(user: User, ids: string[] | null, range: { from
         for (let i = 0; i < 4; i++) {
           const params = new URLSearchParams({ timeMin: from.toISOString(), timeMax: to.toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '2500' })
           if (page) params.set('pageToken', page)
-          const d = await calendarApi<{ items: GoogleEvent[]; nextPageToken?: string }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${params}`)
+          const d = await calendarApi<{ items: GoogleEvent[]; nextPageToken?: string }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${params}`, {}, generation)
           items.push(...d.items)
           page = d.nextPageToken
           if (!page) break
@@ -391,9 +433,14 @@ export async function listEvents(user: User, ids: string[] | null, range: { from
             ...(occurrenceOf(e) ? { occurrence: occurrenceOf(e) } : {}),
             ...(notesOf(e).length ? { notes: notesOf(e) } : {}),
           }))
-      }).catch(() => [] as CalendarEvent[]),
+      }).catch((e) => {
+        // A calendar that fails is left out, but a changed link fails the whole read.
+        if (e instanceof StaleLink) throw e
+        return [] as CalendarEvent[]
+      }),
     ),
   )
+  sameLink(user, generation)
   return lists.flat().sort((a, b) => a.start.localeCompare(b.start) || Number(b.allDay) - Number(a.allDay))
 }
 
@@ -439,15 +486,17 @@ export async function createGoogleEvent(user: User, calendar: string, input: Eve
 
 /** Which of these iCalendar UIDs a calendar already has (Google answers one UID at a time). */
 export async function googleKnownUids(user: User, calendar: string, uids: string[]): Promise<string[]> {
+  const generation = generationOf(user.id)
   const known: string[] = []
   const queue = uids.slice(0, 500)
   const worker = async () => {
     for (let uid = queue.shift(); uid; uid = queue.shift()) {
-      const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(calendar)}/events?${new URLSearchParams({ iCalUID: uid, maxResults: '1' })}`).catch(() => null)
+      const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(calendar)}/events?${new URLSearchParams({ iCalUID: uid, maxResults: '1' })}`, {}, generation).catch(keepStale)
       if (d?.items?.some((e) => e.status !== 'cancelled')) known.push(uid)
     }
   }
   await Promise.all(Array.from({ length: 5 }, worker))
+  sameLink(user, generation)
   return known
 }
 
@@ -563,9 +612,11 @@ export type GoogleFound = { calendarId: string; calendar: string; id: string; ti
 /** The event with this UID in one of your calendars that you can change (the main one first), or null. */
 export async function googleByUid(user: User, uid: string): Promise<GoogleFound | null> {
   if (!googleAccount(user) || !uid || uid.length > 1000) return null
-  const calendars = (await listCalendars(user)).filter((c) => c.access === 'owner' || c.access === 'writer').sort((a, b) => Number(b.primary) - Number(a.primary)).slice(0, 10)
+  const generation = generationOf(user.id)
+  const calendars = (await calendarsAt(user, generation)).filter((c) => c.access === 'owner' || c.access === 'writer').sort((a, b) => Number(b.primary) - Number(a.primary)).slice(0, 10)
   for (const cal of calendars) {
-    const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${new URLSearchParams({ iCalUID: uid, showDeleted: 'true', maxResults: '5' })}`).catch(() => null)
+    const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${new URLSearchParams({ iCalUID: uid, showDeleted: 'true', maxResults: '5' })}`, {}, generation).catch(keepStale)
+    sameLink(user, generation)
     const e = d?.items?.find((x) => !x.recurringEventId) ?? d?.items?.[0]
     if (!e) continue
     return {
