@@ -32,7 +32,11 @@ check('SECURITY carries the general CSP', SECURITY['Content-Security-Policy'] ==
 // The merge order every untrusted-bytes route uses: SECURITY first, UNTRUSTED after.
 check('UNTRUSTED replaces the general CSP when spread after SECURITY', ({ ...SECURITY, ...UNTRUSTED })['Content-Security-Policy'] === "default-src 'none'; sandbox")
 
-const port = 5290 + (process.pid % 9)
+// A free port, not a fixed one: another server may be on the usual ones.
+const probe = createServer()
+await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r))
+const port = (probe.address() as { port: number }).port
+await new Promise((r) => probe.close(r))
 const dir = mkdtempSync(join(tmpdir(), 'headers-check-'))
 const child = spawn('node', ['server/index.ts'], { env: { ...process.env, PORT: String(port), DATA_DIR: dir }, stdio: 'ignore' })
 try {
