@@ -1,3 +1,4 @@
+import { requirePrivateRequest, privateSignal } from './privateRequest.ts'
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { currentUser, sessionBinding, sessionKey, type User } from './auth.ts'
@@ -112,7 +113,7 @@ async function tokenRequest(body: Record<string, string>) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, ...body }),
-    signal: AbortSignal.timeout(10_000),
+    signal: privateSignal(AbortSignal.timeout(10_000)),
   }).catch(() => null)
   if (!res) throw new HttpError(502, 'Google did not answer')
   const data = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; refresh_token?: string; id_token?: string; scope?: string; error?: string }
@@ -260,16 +261,19 @@ async function accessToken(user: User): Promise<string> {
  * the body), if it moves while Google is answering.
  */
 async function calendarApi<T>(user: User, path: string, init: { method?: string; body?: unknown } = {}, expected?: number): Promise<T> {
+  requirePrivateRequest(user)
   const generation = expected ?? generationOf(user.id)
   sameLink(user, generation)
   const token = await accessToken(user)
   sameLink(user, generation)
+  requirePrivateRequest(user)
   const res = await fetch(`${CALENDAR_API}${path}`, {
     method: init.method ?? 'GET',
     headers: { Authorization: `Bearer ${token}`, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-    signal: AbortSignal.timeout(10_000),
+    signal: privateSignal(AbortSignal.timeout(10_000)),
   }).catch(() => null)
+  requirePrivateRequest(user)
   if (!res) throw new HttpError(502, 'Google Calendar did not answer')
   // Asked with an earlier link's token: its answer (another Google account's calendar) is dropped.
   const drop = async (): Promise<never> => {
@@ -408,6 +412,7 @@ export const MAX_RANGE_DAYS = 400
 export async function listEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }, ref: (r: GoogleRef) => string, expected?: number): Promise<CalendarEvent[]> {
   // One link generation for the whole read: every call below is made under it, and the result is
   // only handed out if it is still the account's link, so nothing of an earlier link is mixed in.
+  requirePrivateRequest(user)
   const generation = expected ?? generationOf(user.id)
   const calendars = await calendarsAt(user, generation)
   sameLink(user, generation)
@@ -633,6 +638,7 @@ export type GoogleFound = { calendarId: string; calendar: string; id: string; ti
 /** The event with this UID in one of your calendars that you can change (the main one first), or null. */
 export async function googleByUid(user: User, uid: string, expected?: number): Promise<GoogleFound | null> {
   if (!googleAccount(user) || !uid || uid.length > 1000) return null
+  requirePrivateRequest(user)
   const generation = expected ?? generationOf(user.id)
   const calendars = (await calendarsAt(user, generation)).filter((c) => c.access === 'owner' || c.access === 'writer').sort((a, b) => Number(b.primary) - Number(a.primary)).slice(0, 10)
   for (const cal of calendars) {

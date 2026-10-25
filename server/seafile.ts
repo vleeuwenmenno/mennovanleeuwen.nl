@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomBytes } from 'node:crypto'
-import type { User } from './auth.ts'
+import type { IncomingMessage } from 'node:http'
+import { requireStillSignedIn, type User } from './auth.ts'
+import { requirePrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 
@@ -41,10 +43,17 @@ function changedLink(id: number) {
   for (const fn of linkChanged) fn(id)
 }
 export function assertSeafileLink(user: User, generation = linkScope.getStore()?.generation) {
+  requirePrivateRequest(user)
   const scope = linkScope.getStore()
   if (generation !== undefined && ((scope && scope.id !== user.id) || seafileLinkGeneration(user) !== generation)) {
     throw new HttpError(409, 'Seafile was reconnected or disconnected meanwhile: try again')
   }
+}
+export function bindSeafileRequest(user: User) {
+  const generation = seafileLinkGeneration(user)
+  bindPrivateAccess(() => {
+    if (seafileLinkGeneration(user) !== generation) throw new HttpError(409, 'Seafile was reconnected or disconnected meanwhile: try again')
+  }, (end) => onSeafileLinkChanged((id) => { if (id === user.id) end() }))
 }
 export function withSeafileLink<T>(user: User, work: () => T): T {
   return linkScope.run({ id: user.id, generation: seafileLinkGeneration(user) }, work)
@@ -68,12 +77,13 @@ function read<T>(user: User, name: string): T | null {
 }
 
 function write(user: User, name: string, value: unknown) {
+  requirePrivateRequest(user)
   database()
     .prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret')
     .run(user.id, name, encrypt(JSON.stringify(value)), Date.now())
 }
 
-const remove = (user: User, name: string) => database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, name)
+const remove = (user: User, name: string) => (requirePrivateRequest(user), database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, name))
 
 export function seafileInfo(user: User): SeafileInfo | null {
   const link = read<Link>(user, NAME)
@@ -98,11 +108,13 @@ function normalizeUrl(input: string | undefined, what: string): string {
 
 /** A request to Seahub at the address `user` linked: public addresses only, for anyone but an admin (server/egress.ts). */
 async function call(user: User, base: string, path: string, init: RequestInit & { token?: string; timeout?: number } = {}): Promise<Response> {
+  requirePrivateRequest(user)
   const { token, timeout = 15_000, ...rest } = init
   const headers = new Headers(rest.headers)
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `Token ${token}`)
-  const res = await guardedFetch(user, `${base}${path}`, { ...rest, headers, redirect: 'manual', signal: rest.signal ? AbortSignal.any([rest.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) }).catch((e) => (rethrowEgress(e), null))
+  const res = await guardedFetch(user, `${base}${path}`, { ...rest, headers, redirect: 'manual', signal: privateSignal(rest.signal ? AbortSignal.any([rest.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout)) }).catch((e) => (rethrowEgress(e), null))
+  requirePrivateRequest(user)
   if (!res) throw new HttpError(502, 'Seafile did not answer')
   return res
 }
@@ -116,7 +128,8 @@ const errorOf = async (res: Response) => {
  * Signs in for a token. Answers { otp: true } when Seafile wants a 2FA code first: the form asks
  * for one and sends everything again with it.
  */
-export async function linkSeafile(user: User, body: { url?: string; username?: string; password?: string; otp?: string }): Promise<SeafileInfo | { otp: true }> {
+export async function linkSeafile(user: User, body: { url?: string; username?: string; password?: string; otp?: string }, req?: IncomingMessage): Promise<SeafileInfo | { otp: true }> {
+  if (req) requireStillSignedIn(req)
   const generation = seafileLinkGeneration(user)
   const url = normalizeUrl(body.url, 'Seafile')
   const username = body.username?.trim()
@@ -146,13 +159,15 @@ export async function linkSeafile(user: User, body: { url?: string; username?: s
     call(user, url, '/api2/server-info/').then((r) => (r.ok ? (r.json() as Promise<{ version?: string }>) : null)).catch(() => null),
   ])
 
-  // Linking again (a new password, or another account): sign the old device out first.
+  // Commit the replacement while the initiating session and link are still valid. Revoking
+  // the old device is cleanup after that commit, so a held revoke cannot destroy the kept
+  // credential of a sign-in that was never allowed to commit.
   const old = read<Link>(user, NAME)
-  assertSeafileLink(user, generation)
-  if (old) await revoke(user, old)
+  if (req) requireStillSignedIn(req)
   assertSeafileLink(user, generation)
   write(user, NAME, { url, username, token, name: account?.name || null, version: server?.version || null } satisfies Link)
   changedLink(user.id)
+  if (old) void revoke(user, old).catch(() => {})
   return seafileInfo(user)!
 }
 
@@ -285,7 +300,7 @@ export const unlocked = (user: User) =>
       .map(([k, until]) => [k.slice(k.indexOf(':') + 1), until]),
   )
 
-export const lock = (user: User, repo: unknown) => void unlockedUntil.delete(`${user.id}:${repoId(repo)}`)
+export const lock = (user: User, repo: unknown) => { requirePrivateRequest(user); unlockedUntil.delete(`${user.id}:${repoId(repo)}`) }
 
 /** A folder's contents, and whether the account may change things in it. */
 export async function listDir(user: User, repo: unknown, path: unknown, signal?: AbortSignal): Promise<{ perm: 'r' | 'rw'; entries: Entry[] }> {
@@ -324,6 +339,7 @@ export async function unlock(user: User, body: { repo?: string; password?: strin
     if (e instanceof HttpError && (e.status === 423 || e.status === 502)) throw new HttpError(400, 'Wrong password')
     throw e
   }
+  requirePrivateRequest(user)
   encryptedRepos.set(`${user.id}:${id}`, true)
   const until = Date.now() + Math.min(55, Math.max(5, Number(body.minutes) || 55)) * 60_000
   unlockedUntil.set(`${user.id}:${id}`, until)
@@ -458,7 +474,7 @@ export async function rangeRead(user: User, repo: unknown, path: unknown, range:
   const span = m[3] ? Number(m[3]) : Number(m[2]) - Number(m[1]) + 1
   if (!(span > 0) || span > MAX_RANGE) throw new HttpError(416, `Ranges go up to ${MAX_RANGE / 1024 / 1024} MB`)
   const { url } = await fileLink(user, repo, path, 'download')
-  const res = await guardedFetch(user, url, { headers: { Range: range! }, signal: AbortSignal.timeout(60_000) }).catch((e) => (rethrowEgress(e), null))
+  const res = await guardedFetch(user, url, { headers: { Range: range! }, signal: privateSignal(AbortSignal.timeout(60_000)) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
   if (res.status !== 206) {
     await res.body?.cancel().catch(() => {})
@@ -488,7 +504,7 @@ export async function streamFile(user: User, repo: unknown, path: unknown, range
   const m = range === undefined ? null : /^bytes=(?:(\d+)-(\d*)|-(\d+))$/.exec(range)
   if (range !== undefined && !m) throw new HttpError(416, 'Ask for one byte range')
   const { url } = await fileLink(user, repo, path, 'download')
-  const res = await guardedFetch(user, url, { headers: range ? { Range: range } : {}, signal }).catch((e) => (rethrowEgress(e), null))
+  const res = await guardedFetch(user, url, { headers: range ? { Range: range } : {}, signal: privateSignal(signal) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
   const type = res.headers.get('content-type') ?? ''
   const unsatisfiable = (contentRange: string | null): Stream => ({ status: 416, type, length: null, contentRange, body: null })

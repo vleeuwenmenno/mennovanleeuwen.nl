@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { User } from './auth.ts'
+import type { IncomingMessage } from 'node:http'
+import { requireStillSignedIn, type User } from './auth.ts'
+import { requirePrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
@@ -16,7 +18,7 @@ import { HttpError } from './http.ts'
 
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
 /** `user` is who linked it: the server only reaches public addresses for them (server/egress.ts). */
-type Account = CaldavInfo & { password: string; user: User }
+type Account = CaldavInfo & { password: string; user: User; generation: number }
 /** `shared`: someone else's calendar shared with you, or yours shared with others (CalendarServer's resourcetype marks, which Apple and Nextcloud send). */
 type Calendar = { href: string; name: string; color: string; writable: boolean; shared?: 'with-you' | 'by-you' }
 export type CaldavAttendee = { email: string; name?: string; status?: 'accepted' | 'declined' | 'tentative' | 'needs-action'; organizer?: boolean }
@@ -48,6 +50,20 @@ const linkChanges = new Set<(id: number) => void>()
 export const onCaldavLinkChanged = (fn: (id: number) => void) => void linkChanges.add(fn)
 const linkVersions = new Map<number, number>()
 export const caldavLinkVersion = (user: User): number => linkVersions.get(user.id) ?? 0
+export function assertCaldavLink(user: User, generation: number) {
+  requirePrivateRequest(user)
+  if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
+}
+export function bindCaldavRequest(user: User) {
+  const generation = caldavLinkVersion(user)
+  bindPrivateAccess(() => {
+    if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
+  }, (end) => {
+    const changed = (id: number) => { if (id === user.id) end() }
+    linkChanges.add(changed)
+    return () => { linkChanges.delete(changed) }
+  })
+}
 function changedLink(id: number) {
   linkVersions.set(id, (linkVersions.get(id) ?? 0) + 1)
   for (const fn of linkChanges) fn(id)
@@ -62,22 +78,25 @@ export function listCaldav(user: User): CaldavInfo[] {
 
 function accounts(user: User): Account[] {
   const rows = database().prepare('SELECT id, label, base_url, username, password FROM caldav WHERE user_id = ? ORDER BY id').all(user.id) as unknown as Row[]
-  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user }))
+  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user, generation: caldavLinkVersion(user) }))
 }
 
 /** Finds the account's calendars (proving the URL and password work), then stores it. */
-export async function addCaldav(user: User, body: { url?: string; username?: string; password?: string; label?: string }): Promise<CaldavInfo> {
+export async function addCaldav(user: User, body: { url?: string; username?: string; password?: string; label?: string }, req?: IncomingMessage): Promise<CaldavInfo> {
+  if (req) requireStillSignedIn(req)
   const url = normalizeUrl(body.url || FASTMAIL_URL)
   const username = body.username?.trim()
   const password = body.password?.trim()
   if (!username || !password) throw new HttpError(400, 'Username and app password are required')
-  const account: Account = { id: 0, label: '', url, username, password, user }
+  const account: Account = { id: 0, label: '', url, username, password, user, generation: caldavLinkVersion(user) }
   const found = await discover(account).catch((e: Error) => {
     throw new HttpError(400, e.message)
   })
   if (!found.length) throw new HttpError(400, 'Signed in, but found no calendars there')
   const label = (body.label?.trim() || (url.includes('fastmail') ? 'Fastmail' : new URL(url).host)).slice(0, 40)
   // The same account again (a new app password, read-write this time): keep it, and its calendars' ids.
+  if (req) requireStillSignedIn(req)
+  assertCaldavLink(user, account.generation)
   const existing = database().prepare('SELECT id FROM caldav WHERE user_id = ? AND base_url = ? AND username = ?').get(user.id, url, username) as { id: number } | undefined
   if (existing) {
     database().prepare('UPDATE caldav SET label = ?, password = ? WHERE id = ?').run(label, encrypt(password), existing.id)
@@ -114,12 +133,14 @@ function normalizeUrl(input: string): string {
 // WebDAV
 
 async function request(account: Account, method: string, url: string, init: { headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
+  assertCaldavLink(account.user, account.generation)
   const res = await guardedFetch(account.user, url, {
     method,
     headers: { Authorization: `Basic ${Buffer.from(`${account.username}:${account.password}`).toString('base64')}`, 'User-Agent': 'mvlos', ...init.headers },
     body: init.body,
-    signal: AbortSignal.timeout(12_000),
+    signal: privateSignal(AbortSignal.timeout(12_000)),
   }).catch((e) => (rethrowEgress(e), null))
+  assertCaldavLink(account.user, account.generation)
   if (!res) throw new HttpError(502, `${new URL(url).host} did not answer`)
   return res
 }
@@ -128,7 +149,9 @@ async function dav(account: Account, method: 'PROPFIND' | 'REPORT', url: string,
   const res = await request(account, method, url, { headers: { Depth: depth, 'Content-Type': 'application/xml; charset=utf-8' }, body })
   if (res.status === 401 || res.status === 403) throw new Error(`${new URL(url).host} refused the username or app password`)
   if (res.status !== 207 && !res.ok) throw new Error(`${new URL(url).host} answered ${res.status}`)
-  return (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  const text = (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  assertCaldavLink(account.user, account.generation)
+  return text
 }
 
 const unescapeXml = (s: string) =>

@@ -13,6 +13,8 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
+import { privateRequestActive, runPrivateRequest } from './privateRequest.ts'
+import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafile.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
@@ -21,7 +23,7 @@ import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, a
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
-import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
+import { bindCaldavRequest, addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, knownUids, updateEvent } from './calendars.ts'
 import { findLinked, noteLinkApi } from './noteLinks.ts'
 import { handleContactsApi } from './contacts.ts'
@@ -145,6 +147,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const refused = accountMismatch(req, held, required)
       if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
     }
+    // Install one request lifetime before any private provider/body await in these route groups.
+    // Recursive dispatch runs once inside the frozen session scope; nested helpers inherit it.
+    const privateProvider = path.startsWith('/api/calendar/') || path.startsWith('/api/caldav/') || path.startsWith('/api/seafile/') || path.startsWith('/api/photos/') || ['/api/caldav', '/api/integrations/seafile', '/api/integrations/immich', '/api/integrations/onlyoffice', '/api/office/check', '/api/office/config'].includes(path)
+    if (privateProvider && !privateRequestActive(req)) {
+      const user = requireUser(req)
+      return await runPrivateRequest(req, res, user, () => {
+        if (path.startsWith('/api/calendar/')) bindCaldavRequest(user)
+        const dispatch = () => handleApi(req, res)
+        if (!path.startsWith('/api/seafile/')) return dispatch()
+        return withSeafileLink(user, () => { bindSeafileRequest(user); assertSeafileLink(user); return dispatch() })
+      })
+    }
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
     // Settings → Code hosts: whether the next sign-in asks for private repositories (server/auth.ts).
     if (method === 'POST' && path === '/api/auth/github/scope') return chooseRepoScope(req, res, await readJson(req, 256)), true
@@ -199,7 +213,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (path === '/api/google' && method === 'DELETE') return await disconnectGoogle(requireUser(req)), json(res, 200, { ok: true }), true
-    if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024), req)), true
     const caldavId = /^\/api\/caldav\/(\d+)$/.exec(path)?.[1]
     if (caldavId && method === 'DELETE') return removeCaldav(requireUser(req), Number(caldavId)), json(res, 200, { ok: true }), true
     // The Contacts app (server/contacts.ts): the address book on this site and CardDAV ones.
@@ -253,7 +267,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     // Seafile, for the Files app (server/seafile.ts): link with { url, username, password, otp? }.
-    if (path === '/api/integrations/seafile' && method === 'POST') return json(res, 200, await linkSeafile(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/integrations/seafile' && method === 'POST') return json(res, 200, await linkSeafile(requireUser(req), await readJson(req, 8 * 1024), req)), true
     if (path === '/api/integrations/seafile' && method === 'DELETE') return await unlinkSeafile(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/onlyoffice' && method === 'PUT') return await setOffice(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, seafileInfo(requireUser(req))), true
     if (path === '/api/integrations/onlyoffice' && method === 'DELETE') return removeOffice(requireUser(req)), json(res, 200, seafileInfo(requireUser(req))), true

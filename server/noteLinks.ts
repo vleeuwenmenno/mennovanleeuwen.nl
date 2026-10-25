@@ -1,5 +1,5 @@
 import type { User } from './auth.ts'
-import { caldavByUid, clearCaldavCache, getCaldavEvent, listCaldav, markCaldavNote } from './caldav.ts'
+import { assertCaldavLink, caldavLinkVersion, caldavByUid, clearCaldavCache, getCaldavEvent, listCaldav, markCaldavNote } from './caldav.ts'
 import { allCalendars, allEvents, decodeRef, encodeRef, hiddenCalendars } from './calendars.ts'
 import { assertGoogleLink, clearGoogleCache, googleByUid, googleEventInfo, googleLinkGeneration, markGoogleNote, type CalendarEvent, type GoogleSnapshot } from './google.ts'
 import { HttpError } from './http.ts'
@@ -48,7 +48,9 @@ export async function eventInfo(user: User, rawRef: unknown): Promise<EventInfo>
     if (!g.uid) throw new HttpError(400, 'That event has no UID')
     return { ref: encodeRef(ref), source: 'google', calendarId: ref.c, ...g }
   }
+  const caldav = caldavLinkVersion(user)
   const e = await getCaldavEvent(user, ref)
+  assertCaldavLink(user, caldav)
   const self = listCaldav(user).find((a) => ref.c.startsWith(`caldav:${a.id}:`))?.username.toLowerCase()
   return {
     ref: encodeRef(ref),
@@ -130,17 +132,18 @@ export async function noteLinkApi(user: User, body: { ref?: unknown; link?: unkn
  * its next occurrence), in the calendar it was in first and then in the others. `gone` only when
  * every calendar answered and the event (or that occurrence) is not there any more.
  */
-export async function findLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh = false, snapshot?: GoogleSnapshot): Promise<{ event: CalendarEvent | null; gone: boolean }> {
+export async function findLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh = false, snapshot?: GoogleSnapshot, caldav = caldavLinkVersion(user)): Promise<{ event: CalendarEvent | null; gone: boolean }> {
   // One Google snapshot for the whole search, taken before any await (or the caller's, for a bigger
   // read): Google is consulted only if it was connected then, only under that link, and a changed link
   // fails the whole search rather than return what an earlier link answered.
   const google = snapshot === undefined ? googleLinkGeneration(user) : snapshot
-  const found = await searchLinked(user, link, fresh, google)
+  const found = await searchLinked(user, link, fresh, google, caldav)
   assertGoogleLink(user, google)
+  assertCaldavLink(user, caldav)
   return found
 }
 
-async function searchLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh: boolean, google: GoogleSnapshot): Promise<{ event: CalendarEvent | null; gone: boolean }> {
+async function searchLinked(user: User, link: { uid: string; calendarId?: string; occurrence?: string; start?: string }, fresh: boolean, google: GoogleSnapshot, caldav: number): Promise<{ event: CalendarEvent | null; gone: boolean }> {
   // Asked for by a click: past the two-minute caches, to see a change made elsewhere just now.
   if (fresh) {
     clearCaldavCache(user)
@@ -151,7 +154,7 @@ async function searchLinked(user: User, link: { uid: string; calendarId?: string
   const base = Math.floor((isNaN(at) ? Date.now() : at) / DAY) * DAY
   const range = { from: new Date(base - 62 * DAY), to: new Date(base + 63 * DAY) }
   // A hidden calendar still answers for the calendar a link names (it may be a calendar the user hid since), but is not searched otherwise.
-  const { calendars, errors } = await allCalendars(user, true, google)
+  const { calendars, errors } = await allCalendars(user, true, google, caldav)
   const hidden = hiddenCalendars(user)
   let failed = errors.length > 0
   const pick = (events: CalendarEvent[]) => {
@@ -165,7 +168,7 @@ async function searchLinked(user: User, link: { uid: string; calendarId?: string
   const rest = calendars.filter((c) => c.id !== link.calendarId && !hidden.has(c.id)).map((c) => c.id)
   for (const ids of [first, rest]) {
     if (!ids.length) continue
-    const found = await allEvents(user, ids, range, google)
+    const found = await allEvents(user, ids, range, google, caldav)
     if (found.errors.length) failed = true
     const e = pick(found.events)
     if (e) return { event: e, gone: false }

@@ -4,12 +4,13 @@ import { Readable } from 'node:stream'
 import { crc32 } from 'node:zlib'
 import { writeZip, type ZipInput } from '../src/data/zip.ts'
 import type { User } from './auth.ts'
+import { requirePrivateRequest, retainPrivateRequest } from './privateRequest.ts'
 import { bindResponse, requireStillSignedIn, requireUser } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
 import { HttpError, json as sendJson, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
-import { assertSeafileLink, onSeafileLinkChanged, seafileLinkGeneration, withSeafileLink, fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
+import { assertSeafileLink, bindSeafileRequest, onSeafileLinkChanged, seafileLinkGeneration, withSeafileLink, fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
 // Immich library, or both (the app switches between them; they are not merged).
@@ -155,6 +156,7 @@ type Row = {
  * indexed of the old one goes, chosen folders included. Answers whether Seafile is linked.
  */
 function seafileReady(user: User): boolean {
+  requirePrivateRequest(user)
   const info = seafileInfo(user)
   const account = info ? `${info.url}|${info.username}` : null
   const row = db().prepare('SELECT seafile FROM photo_accounts WHERE user_id = ?').get(user.id) as { seafile: string } | undefined
@@ -350,10 +352,13 @@ onUserGone((id) => {
 
 /** Starts a walk of the user's chosen folders, unless one is running already. */
 export function startScan(user: User): Promise<void> | void {
+  requirePrivateRequest(user)
   const current = jobs.get(user.id)
   if (current && (current.state === 'waiting' || current.state === 'listing' || current.state === 'reading')) return
   const job: Walk = { state: 'waiting', started: Date.now(), finished: null, folders: 0, files: 0, toRead: 0, read: 0, added: 0, removed: 0, skipped: [], errors: [], capped: false, repos: new Set() }
   jobs.set(user.id, job)
+  requirePrivateRequest(user)
+  const releaseRequest = retainPrivateRequest()
   const stop = new AbortController()
   cancels.set(user.id, stop)
   return withSeafileLink(user, async () => {
@@ -370,6 +375,7 @@ export function startScan(user: User): Promise<void> | void {
       // Whatever the failure said (a URL, a path) stays here: the walk as a whole only reports that it failed.
       job.errors.push({ repo: null, text: e instanceof HttpError ? e.message : 'The walk failed' })
     } finally {
+      releaseRequest()
       job.finished = Date.now()
       running--
       waiting.shift()?.()
@@ -489,6 +495,7 @@ async function scan(user: User, job: Walk, signal: AbortSignal) {
       }
     })
     await Promise.all(walkers)
+    assertSeafileLink(user)
     if (signal.aborted) return
 
     // Read the new and changed files' first bytes, a few at a time; the timeline fills as they come in.
@@ -517,6 +524,7 @@ async function scan(user: User, job: Walk, signal: AbortSignal) {
     })
     if (signal.aborted) return
 
+    assertSeafileLink(user)
     // What was not seen in the folders listed is gone; folders that failed or were skipped keep theirs.
     const kept = (path: string) => seen.has(path) || unchanged.some((u) => under(path, u)) || failed.some((u) => under(path, u))
     const drop = d.prepare('DELETE FROM photos WHERE id = ?')
@@ -719,6 +727,7 @@ const seafileSource: Source = {
     const rows = ids.map((id) => rowOf(user, id))
     const list = await libs(user)
     for (const repo of new Set(rows.map((r) => r.repo))) openLib(user, list, repo)
+    requirePrivateRequest(user)
     const set = db().prepare('UPDATE photos SET favourite = ? WHERE id = ? AND user_id = ?')
     for (const r of rows) set.run(on ? 1 : 0, r.id, user.id)
   },
@@ -830,6 +839,7 @@ const COLUMNS = ['id', 'user_id', 'repo', 'path', 'kind', 'size', 'mtime', 'file
 
 /** An index row back as it was (its id too, unless a new photo took it), unless a walk found the file again first. */
 function putBack(user: User, row: Row & { thumb: Uint8Array | null }) {
+  requirePrivateRequest(user)
   const values = COLUMNS.map((c) => (c === 'user_id' ? user.id : ((row as unknown as Record<string, unknown>)[c] ?? null))) as (string | number | Uint8Array | null)[]
   const d = db()
   const withId = d.prepare(`INSERT OR IGNORE INTO photos (${COLUMNS.join(', ')}) VALUES (${COLUMNS.map(() => '?').join(', ')})`).run(...values)
@@ -1049,6 +1059,7 @@ const UNDO_MS = 30 * 60_000
 const undos = new Map<string, { user: number; source: string; at: number; undo: Undo }>()
 const tokens = () => randomBytes(18).toString('base64url')
 function keepUndo(user: User, source: string, undo: Undo): string {
+  requirePrivateRequest(user)
   if (source === 'seafile') assertSeafileLink(user)
   for (const [k, u] of undos) if (Date.now() - u.at > UNDO_MS) undos.delete(k)
   const token = tokens()
@@ -1060,6 +1071,12 @@ function keepUndo(user: User, source: string, undo: Undo): string {
 // download with a short-lived token, so the file streams to disk instead of into the page.
 const zips = new Map<string, { user: number; source: string; ids: string[]; at: number }>()
 const ZIP_MS = 10 * 60_000
+
+/** Read-only capability counts for the revocation regression check; never an HTTP response. */
+export const photoCapabilitiesForTest = (user: Pick<User, 'id'>) => ({
+  undo: [...undos.values()].filter((v) => v.user === user.id).length,
+  zip: [...zips.values()].filter((v) => v.user === user.id).length,
+})
 
 onUserGone((id) => {
   for (const m of [undos, zips]) for (const [k, v] of m) if (v.user === id) m.delete(k)
@@ -1185,9 +1202,9 @@ function pipe(res: ServerResponse, body: ReadableStream<Uint8Array> | null) {
 /** Resolves true when it answered the request. */
 export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<boolean> {
   const user = requireUser(req)
-  const seafile = url.pathname !== '/api/integrations/immich' && !url.pathname.includes('/immich/')
+  const seafile = url.pathname === '/api/photos/zip' ? zips.get(url.searchParams.get('t') ?? '')?.source === 'seafile' : url.pathname !== '/api/integrations/immich' && !url.pathname.includes('/immich/')
   const run = () => handlePhotosRequest(req, res, url, method)
-  return seafile ? withSeafileLink(user, run) : run()
+  return seafile ? withSeafileLink(user, () => { bindSeafileRequest(user); return run() }) : run()
 }
 
 async function handlePhotosRequest(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<boolean> {
@@ -1245,6 +1262,7 @@ async function handlePhotosRequest(req: IncomingMessage, res: ServerResponse, ur
     const body = await readJson<{ undo?: string }>(req, 1024)
     const kept = undos.get(String(body.undo ?? ''))
     if (!kept || kept.user !== user.id || kept.source !== name || Date.now() - kept.at > UNDO_MS) throw new HttpError(404, 'Too late to undo here: restore them from the trash instead')
+    requirePrivateRequest(user)
     undos.delete(String(body.undo))
     return json(res, 200, await source.restore(user, kept.undo)), true
   }
@@ -1262,6 +1280,7 @@ async function handlePhotosRequest(req: IncomingMessage, res: ServerResponse, ur
     if (name === 'seafile') assertSeafileLink(user)
     const token = tokens()
     for (const [k, z] of zips) if (Date.now() - z.at > ZIP_MS) zips.delete(k)
+    requirePrivateRequest(user)
     zips.set(token, { user: user.id, source: name, ids, at: Date.now() })
     return json(res, 200, { url: `/api/photos/zip?t=${token}` }), true
   }

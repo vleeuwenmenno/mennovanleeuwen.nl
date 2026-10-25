@@ -5,6 +5,7 @@ import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { Readable } from 'node:stream'
 import type { User } from './auth.ts'
+import { requirePrivateRequest, privateSignal } from './privateRequest.ts'
 import { HttpError } from './http.ts'
 
 // Requests the server makes to addresses its users chose: their Gitea/Forgejo, CalDAV, Seafile,
@@ -214,13 +215,16 @@ export function rethrowEgress(e: unknown) {
 export async function guardedFetch(user: User | null, input: string | URL, init: RequestInit = {}): Promise<Response> {
   const follow = init.redirect !== 'manual'
   let url = new URL(input)
-  let opts: RequestInit = { ...init, redirect: 'manual' }
+  let opts: RequestInit = { ...init, signal: privateSignal(init.signal), redirect: 'manual' }
   for (let hop = 0; ; hop++) {
+    requirePrivateRequest(user ?? undefined)
     let res: Response
     if (user?.admin) {
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EgressError(400, 'Only web addresses')
       res = await fetch(url, opts)
     } else res = await fetchPinned(url, opts, await publicAddresses(url, opts.signal ?? undefined))
+    try { requirePrivateRequest(user ?? undefined) }
+    catch (error) { await res.body?.cancel().catch(() => {}); throw error }
     const location = res.headers.get('location')
     if (!follow || res.status < 300 || res.status >= 400 || !location) return res
     if (hop >= MAX_HOPS) throw new HttpError(502, `${url.host} redirected too often`)
@@ -240,6 +244,7 @@ export async function guardedFetch(user: User | null, input: string | URL, init:
  * with anything, Content-Length or not, for as long as it likes.
  */
 export async function readCapped(res: Response, max: number): Promise<Buffer> {
+  requirePrivateRequest()
   if (Number(res.headers.get('content-length')) > max) {
     await res.body?.cancel().catch(() => {})
     throw new HttpError(413, 'That is too big to read here')
@@ -249,6 +254,8 @@ export async function readCapped(res: Response, max: number): Promise<Buffer> {
   const reader = res.body?.getReader()
   while (reader) {
     const { done, value } = await reader.read()
+    try { requirePrivateRequest() }
+    catch (error) { await reader.cancel().catch(() => {}); throw error }
     if (done) break
     size += value.length
     if (size > max) {

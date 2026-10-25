@@ -1156,6 +1156,12 @@ after a sign-out, or with an altered or expired cookie is refused before any tok
 stored (`pnpm check:google-oauth`). Accounts connected before
 the Calendar app stay read-only until connected again (Settings → Integrations → Calendars → *Allow editing*).
 
+Linking Seafile or CalDAV keeps the exact initiating MvL OS session through authentication and
+discovery. If that session ends, no new credentials are committed and an existing good link stays
+unchanged. Another session signing out does not cancel the link. Seafile commits a replacement
+atomically before best-effort cleanup of the old device token, so a held cleanup cannot destroy
+the credentials of a replacement that was never allowed to commit.
+
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
 Integrations → Calendars → add an account with its server URL (Fastmail's is filled in), username and an app
 password, stored encrypted ([`server/caldav.ts`](server/caldav.ts)). Read-only is enough to look;
@@ -1199,7 +1205,11 @@ through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event
 text on the CalDAV server, written back with its ETag so other apps' properties stay. Calendar list and
 event responses recheck the exact MvL OS session that requested them after all providers answer;
 logout, expiry, a ban or account removal discards a held response, and revocation closes a response
-still being delivered. `pnpm check:calendar-link-race` covers the combined-provider races.
+still being delivered. The same request guard covers event lookup (`/api/calendar/find`), import
+UID checks and note backlinks. CalDAV reads also snapshot the linked-account generation before
+the first await: adding, replacing or removing a link discards a held aggregate, including completed
+provider parts. That snapshot follows nested note lookups, agent calendar/note tools and reminders.
+`pnpm check:calendar-link-race` and `pnpm check:revocation-boundaries` cover these races.
 
 **Mail** ([`src/apps/mail`](src/apps/mail), [`server/jmap.ts`](server/jmap.ts)) reads and writes mail
 over [JMAP](https://jmap.io) (RFC 8620 and 8621): Fastmail, Stalwart and other servers that speak
@@ -3097,6 +3107,16 @@ and prevents old work from restoring index rows. Disconnecting purges the old in
 immediately. Listings started for a new link never join work from the old link. ZIP downloads also
 remain bound to the requesting MvL OS session until completion. `pnpm check:revocation` covers these
 held-request races alongside consent and reminder invalidation.
+Photos mutations keep the initiating session through authorization and provider waits, and recheck
+it immediately before remote changes and local commits. This covers favourites, trash, undo, moves,
+albums, download tokens and index scans; an accepted scan stops if its initiating session ends,
+even after its HTTP request finished. A final error response alone is not the protection: a held
+authorization cannot cause a later delete, index update or unlock.
+Originals and video from Immich, Seafile thumbnails and original redirects, and Files' raw ranges,
+media and archive streams use the same request lifetime through delivery, including HEAD and 304.
+Session logout, removal, a ban, expiry or revocation aborts upstream and downstream work; Seafile
+disconnect/relink also cuts that link's reads. Headers and every emitted chunk are checked, so an
+aborted body cannot leak a private tail after revocation.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag that the browser must revalidate after the current account and library-access checks (an

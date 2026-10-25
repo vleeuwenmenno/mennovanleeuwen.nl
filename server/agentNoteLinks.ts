@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { User } from './auth.ts'
 import { calendarsOf, eventDay, eventId, refOf, whenText, type CallSummary, type Prepared } from './agentCalendar.ts'
 import { changeLinks, eventInfo, findLinked, liveNote, linkTo, markEvent, readNotes, writeNotes, type EventInfo, type NoteRow } from './noteLinks.ts'
+import { assertCaldavLink, caldavLinkVersion } from './caldav.ts'
 import { assertGoogleLink, googleLinkGeneration } from './google.ts'
 import { cleanNoteEvents, linkMatches, MAX_NOTE_EVENTS, meetingNoteText, sameOccurrence, textTitle } from '../src/data/noteEvents.ts'
 
@@ -91,10 +92,11 @@ export async function prepareNoteLinkCall(user: User, name: string, args: Record
         // answer is written (a lookup that fails for that reason falls back like any other failure,
         // so the whole answer is checked at the end).
         const google = googleLinkGeneration(user)
+        const caldav = caldavLinkVersion(user)
         const links = cleanNoteEvents(note.events) ?? []
         const events = await Promise.all(
           links.map(async (l) => {
-            const now = await findLinked(user, l, false, google).catch(() => ({ event: null, gone: false }))
+            const now = await findLinked(user, l, false, google, caldav).catch(() => ({ event: null, gone: false }))
             const e = now.event ?? l
             return {
               ...(now.event?.ref ? { id: eventId(now.event.ref) } : {}),
@@ -106,6 +108,7 @@ export async function prepareNoteLinkCall(user: User, name: string, args: Record
           }),
         )
         assertGoogleLink(user, google)
+        assertCaldavLink(user, caldav)
         return JSON.stringify({ note: { id: note.id, title: textTitle(note.text) }, events })
       },
     }

@@ -1,4 +1,5 @@
 import type { User } from './auth.ts'
+import { requirePrivateRequest, privateSignal } from './privateRequest.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
@@ -58,6 +59,7 @@ function normalizeUrl(input: string | undefined): string {
  * fetch would carry to any other host a redirect named.
  */
 async function call(user: User, base: string, key: string | null, path: string, init: RequestInit & { timeout?: number; signal?: AbortSignal; stream?: boolean } = {}): Promise<Response> {
+  requirePrivateRequest(user)
   const { timeout = 20_000, signal, stream, ...rest } = init
   const headers = new Headers(rest.headers)
   if (!headers.has('Accept')) headers.set('Accept', 'application/json')
@@ -67,9 +69,10 @@ async function call(user: User, base: string, key: string | null, path: string, 
   const timer = setTimeout(() => late.abort(new Error('timeout')), timeout)
   timer.unref()
   const signals = [late.signal, ...(signal ? [signal] : [])]
-  const res = await guardedFetch(user, `${base}/api${path}`, { ...rest, headers, redirect: 'manual', signal: AbortSignal.any(signals) })
+  const res = await guardedFetch(user, `${base}/api${path}`, { ...rest, headers, redirect: 'manual', signal: privateSignal(AbortSignal.any(signals)) })
     .catch((e) => (rethrowEgress(e), null))
     .finally(() => stream && clearTimeout(timer))
+  requirePrivateRequest(user)
   if (!res) throw new HttpError(502, 'Immich did not answer')
   if (res.status >= 300 && res.status < 400) {
     await res.body?.cancel().catch(() => {})
@@ -145,6 +148,7 @@ export async function linkImmich(user: User, body: { url?: string; key?: string 
   if (!timeline.ok) throw new HttpError(400, timeline.status === 403 ? 'The API key needs the timeline.read permission (or All)' : await errorOf(timeline))
   await timeline.body?.cancel().catch(() => {})
 
+  requirePrivateRequest(user)
   const link: Link = { url, key, name: account?.name || null, email: account?.email || null, version: name }
   database()
     .prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret')
@@ -153,4 +157,4 @@ export async function linkImmich(user: User, body: { url?: string; key?: string 
 }
 
 /** Forgets the key here. It stays valid on Immich until it is deleted there (Account settings → API keys). */
-export const unlinkImmich = (user: User) => void database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME)
+export const unlinkImmich = (user: User) => void (requirePrivateRequest(user), database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME))
