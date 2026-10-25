@@ -55,6 +55,7 @@
     "check:agents-image-inpaint": "node scripts/agents-image-inpaint.ts",
     "check:agents-inpaint": "node scripts/agents-inpaint.ts",
     "check:agents-refine": "node scripts/agents-refine.ts",
+    "check:agents-image-studio": "node scripts/agents-image-studio.ts",
     "check:agents-upscale": "node scripts/agents-upscale.ts",
     "check:agents-images": "node scripts/agents-images.ts && node scripts/agents-auto-mask.ts && node scripts/agents-model-intel.ts",
     "check:agents-model-intel": "node scripts/agents-model-intel.ts",

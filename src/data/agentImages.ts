@@ -3,7 +3,7 @@ import { api } from '../os/account'
 import type { ObservationsView } from './imageObservations'
 import type { Recommended } from './modelFamilies'
 
-import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint } from './imageModels'
+import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint, ImageProgress } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
 export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: boolean; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
 export type ImageCatalog = ImageAssetCatalog
@@ -11,10 +11,13 @@ export type GeneratedImage = { id: string; name: string; url: string; size: numb
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
 /** Saves only the approval choice; the rest of the saved settings stay as they are. */
 export const saveImageApproval = (askBeforeGenerate: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeGenerate } })
-export const saveImageSettings = ({ civitaiKey: _saved, prediction: _predictions, ...s }: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s })
+/** Said on window after the connection is saved or removed, so an open Image Studio reads it again. */
+export const IMAGE_SETTINGS_EVENT = 'mvlos:image-settings'
+const announced = <T,>(p: Promise<T>) => p.then((v) => (window.dispatchEvent(new Event(IMAGE_SETTINGS_EVENT)), v))
+export const saveImageSettings = ({ civitaiKey: _saved, prediction: _predictions, ...s }: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s }))
 /** Saves one of the model details and quality check switches, or the Civitai key (empty keeps it). */
 export const saveImageIntelSettings = (patch: { civitaiLookup?: boolean; qualityCheck?: boolean; civitaiKey?: string; clearCivitaiKey?: boolean; prediction?: { model: string; value: PredictionSetting } }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: patch })
-export const resetImageSettings = () => api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' })
+export const resetImageSettings = () => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' }))
 export const getImageCatalog = () => api<ImageCatalog>('/api/agents/images/catalog')
 
 export type ImageProfile = { id: number; name: string; description: string; origin: 'user' | 'suggestion' }
@@ -88,7 +91,7 @@ export async function refineImage(id: string, input: RefineImageInput, onEvent: 
   await readEvents(res, onEvent)
 }
 
-export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
+export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'checkpoint_vae' | 'clip_skip' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
 export async function saveImageMask(thread: string, source: string, mask: Blob) {
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -111,3 +114,26 @@ export type RemoveImageInput = { operation: 'remove'; source_image_id: string; m
 export type MaskedEditInput = InpaintImageInput | RemoveImageInput
 
 export { agentMasks, type AgentMask } from './agentMasks'
+
+// --- the Image Studio (server/agentImageStudio.ts) ----------------------------------------------
+
+/** A picture in the Studio's history (or, with scope all, any of the account's), with its recorded settings. */
+export type StudioImage = Omit<GeneratedImage, 'settings'> & { created_at: number; studio: boolean; settings: ImageGenerationSettings | null }
+export const getStudio = () => api<{ thread: string; configured: boolean; batchMax: number }>('/api/agents/images/studio')
+export const getStudioImages = (scope: 'studio' | 'all' = 'studio', before?: string) => api<{ thread: string; images: StudioImage[]; next_before: string | null }>(`/api/agents/images/studio/images?${new URLSearchParams({ scope, limit: '30', ...(before ? { before } : {}) })}`)
+export const getStudioEmbeddings = () => api<{ embeddings: string[] }>('/api/agents/images/studio/embeddings')
+export const uploadStudioImage = (name: string, data: string) => api<StudioImage>('/api/agents/images/studio/upload', { method: 'POST', json: { name, data } })
+export const deleteStudioImage = (id: string) => api(`/api/agents/images/studio/images/${id}`, { method: 'DELETE' })
+/** model_details for the Studio's model, with the preset it runs (a raw/turbo file gets that variant's recipe). */
+export const getStudioModelDetails = (name: string, preset: ImagePreset, signal?: AbortSignal) => api<ModelDetails>(`/api/agents/images/model-details?${new URLSearchParams({ name, kind: 'checkpoint', preset })}`, { signal })
+/** One run's events: `start` (its size), `progress`, `image` (saved), then `done` (or `error`). */
+export type StudioEvent =
+  | { type: 'start'; index: number; total: number; width: number; height: number }
+  | { type: 'progress'; index: number; progress: ImageProgress }
+  | { type: 'image'; index: number; image: GeneratedImage }
+  | { type: 'done'; cancelled?: boolean }
+  | { type: 'error'; error: string }
+export async function runStudio(input: Record<string, unknown>, batch: number, onEvent: (e: StudioEvent) => void, signal: AbortSignal) {
+  const res = await fetch('/api/agents/images/studio/run', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input, batch }), signal })
+  await readEvents(res, onEvent as unknown as (e: TurnEvent) => void)
+}

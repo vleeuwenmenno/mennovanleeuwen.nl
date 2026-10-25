@@ -120,6 +120,7 @@ import { readObservation } from '../data/imageObservations'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
+import { ImageStudio } from './AgentsStudio'
 import { accountStorage } from '../os/accountSpace'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
@@ -132,6 +133,12 @@ type Live = { content: string; thinking: string }
 export function Agents({ win }: { win: WinState }) {
   const account = useAccount()
   const wm = useWM()
+  // The Image Studio needs ComfyUI, not Ollama: without an Ollama key it opens on its own.
+  const [studioOnly, setStudioOnly] = useState(win.props.tab === 'studio')
+  // Opened for it again later (Settings → Images → Open Image Studio) on a window already showing the key screen.
+  useEffect(() => {
+    if (win.props.tab === 'studio') setStudioOnly(true)
+  }, [win.props.t, win.props.tab])
   if (account.status === 'loading') return <div className="nb-blank muted">Loading…</div>
   if (account.status !== 'user')
     return (
@@ -144,6 +151,12 @@ export function Agents({ win }: { win: WinState }) {
         )}
       </div>
     )
+  if (!account.integrations.ollama && studioOnly)
+    return (
+      <div className="studio-alone">
+        <ImageStudio threads={null} onBack={() => setStudioOnly(false)} onOpenThread={() => setStudioOnly(false)} onSettings={() => wm.open('settings', { section: 'agents', t: String(Date.now()) })} />
+      </div>
+    )
   if (!account.integrations.ollama)
     return (
       <div className="nb-blank">
@@ -151,13 +164,16 @@ export function Agents({ win }: { win: WinState }) {
         <button className="btn btn-primary" onClick={() => wm.open('settings', { section: 'integrations', t: String(Date.now()) })}>
           Open Settings → Integrations
         </button>
+        <button className="btn" onClick={() => setStudioOnly(true)} title="Generate pictures with your own ComfyUI; no Ollama key needed">
+          Open Image Studio
+        </button>
       </div>
     )
   return <AgentsApp win={win} />
 }
 
-/** What the main pane shows: a conversation, the settings, or the memory (the user's or a project's). */
-type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null }
+/** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), or the Image Studio. */
+type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'studio' }
 type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
 
 const FOLDED_PROJECTS = 'mvlos.agents.folded'
@@ -229,6 +245,7 @@ function AgentsApp({ win }: { win: WinState }) {
   useEffect(() => {
     const t = win.props.tab
     if (t === 'memory') setMain({ kind: 'memory', scope: null }), setPane('chat')
+    else if (t === 'studio') setMain({ kind: 'studio' }), setPane('chat')
     else if (t === 'archived') setArchived(true), setPane('list')
     else return
     wm.setProps(win.pid, { tab: '' })
@@ -429,6 +446,10 @@ function AgentsApp({ win }: { win: WinState }) {
     setMain({ kind: 'memory', scope })
     setPane('chat')
   }
+  const openStudio = () => {
+    setMain({ kind: 'studio' })
+    setPane('chat')
+  }
   const toggleArchived = () => {
     setArchived((a) => !a)
     fold(false)
@@ -465,6 +486,7 @@ function AgentsApp({ win }: { win: WinState }) {
         { separator: true },
         { label: 'Archived', checked: archived, onSelect: toggleArchived },
         { label: 'Memory', onSelect: () => openMemory(null) },
+        { label: 'Image Studio', onSelect: openStudio },
         { label: 'Settings…', onSelect: openSettings },
         ...(narrow ? [] : [{ separator: true as const }, { label: rail ? 'Show the sidebar' : 'Hide the sidebar', onSelect: () => fold(!rail) }]),
       ]),
@@ -522,6 +544,9 @@ function AgentsApp({ win }: { win: WinState }) {
           <button className={`agt-icon ${main.kind === 'memory' ? 'is-on' : ''}`} onClick={() => openMemory(null)} title="Memory" aria-label="Memory">
             <Icon name="memory" />
           </button>
+          <button className={`agt-icon ${main.kind === 'studio' ? 'is-on' : ''}`} onClick={openStudio} title="Image Studio" aria-label="Image Studio">
+            <Icon name="studio" />
+          </button>
           <button className={`agt-icon ${main.kind === 'settings' ? 'is-on' : ''}`} onClick={openSettings} title="Settings" aria-label="Settings">
             <Icon name="gear" />
           </button>
@@ -553,6 +578,12 @@ function AgentsApp({ win }: { win: WinState }) {
             )}
           </div>
           <div className="agt-list">
+            {!archived && (
+              <button className={`agt-item agt-studio-link ${main.kind === 'studio' ? 'is-active' : ''}`} onClick={openStudio} title="Generate pictures with your ComfyUI by hand, without an agent">
+                <Icon name="studio" />
+                <span className="agt-item-title">Image Studio</span>
+              </button>
+            )}
             {!archived && (
               <section>
                 <h4 className="agt-group agt-group-row">
@@ -664,6 +695,13 @@ function AgentsApp({ win }: { win: WinState }) {
       <section className="nb-main">
         {main.kind === 'settings' ? (
           <SettingsPane onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
+        ) : main.kind === 'studio' ? (
+          <ImageStudio
+            threads={threads}
+            onBack={() => (setMain({ kind: 'thread' }), setPane('list'))}
+            onOpenThread={(id) => (setArchived(false), open(id))}
+            onSettings={() => (openSettings(), showAgentsSection('images'))}
+          />
         ) : main.kind === 'memory' ? (
           <MemoryView scope={main.scope} projects={projects} onScope={(scope) => setMain({ kind: 'memory', scope })} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
         ) : (
@@ -2774,6 +2812,13 @@ const ICONS: Record<string, ReactNode> = {
     </>
   ),
   back: <path d="M15 5l-7 7 7 7" />,
+  studio: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="9" cy="10" r="2" />
+      <path d="M21 16l-5-5-9 9" />
+    </>
+  ),
   clip: <path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15 7" />,
   bolt: <path d="M13 2L5 14h6l-1 8 8-12h-6z" />,
   deep: (

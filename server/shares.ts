@@ -192,7 +192,8 @@ function itemsOf(rows: MessageRow[]): Item[] {
 export function createShare(req: IncomingMessage, user: User, threadId: string, body: { kind?: unknown; messageId?: unknown; expires?: unknown }): ShareInfo {
   prune()
   const db = database()
-  const thread = db.prepare('SELECT id, title, model FROM agent_threads WHERE id = ? AND user_id = ?').get(threadId, user.id) as { id: string; title: string; model: string } | undefined
+  // The Image Studio's hidden thread (quick = 2) is not a chat, so it is not shared.
+  const thread = db.prepare('SELECT id, title, model FROM agent_threads WHERE id = ? AND user_id = ? AND quick != 2').get(threadId, user.id) as { id: string; title: string; model: string } | undefined
   if (!thread) throw new HttpError(404, 'No such thread')
   if (body.kind !== undefined && body.kind !== 'thread' && body.kind !== 'response') throw new HttpError(400, 'kind is "thread" or "response"')
   const kind: ShareKind = body.kind === 'response' ? 'response' : 'thread'

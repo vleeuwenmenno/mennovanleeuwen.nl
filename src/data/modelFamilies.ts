@@ -5,7 +5,7 @@
 // Precedence, highest first: what the user asks for, then the Civitai example consensus, then these
 // family defaults. A family default is a starting point, not a verdict on a file.
 
-import type { ImagePreset } from './imageModels.ts'
+import { imagePresetSpec, type ImagePreset } from './imageModels.ts'
 
 export type FamilyId = 'illustrious' | 'noobai' | 'noobai_vpred' | 'pony' | 'sdxl' | 'sd15' | 'krea2_turbo' | 'krea2_raw' | 'krea2' | 'z_image_turbo' | 'z_image' | 'flux' | 'anima' | 'minimax_h3'
 export type FamilyDefaults = {
@@ -45,6 +45,18 @@ export const MODEL_FAMILIES: Record<FamilyId, FamilyDefaults> = {
   flux: f({ id: 'flux', label: 'Flux', preset: null, supported: false, sampler: 'euler', scheduler: 'simple', steps: 20, stepsRange: [20, 30], cfg: 1, cfgRange: [1, 1], clipSkip: 1, width: 1024, height: 1024, notes: 'Not a supported preset in this app (Flux uses its own guidance node).' }),
   anima: f({ id: 'anima', label: 'Anima', preset: null, supported: false, sampler: 'euler', scheduler: 'simple', steps: 30, stepsRange: [20, 40], cfg: 4, cfgRange: [3, 5], clipSkip: 1, width: 1024, height: 1024, notes: 'Not a supported preset in this app: Anima needs its own workflow.' }),
   minimax_h3: f({ id: 'minimax_h3', label: 'MiniMax H3', preset: null, supported: false, sampler: 'euler', scheduler: 'simple', steps: 30, stepsRange: [20, 40], cfg: 4, cfgRange: [3, 5], clipSkip: 1, width: 1024, height: 1024, notes: 'Not a supported preset in this app: MiniMax H3 is a video/audio family.' }),
+}
+
+/**
+ * The variant a raw/turbo split runs as: the effective preset decides (one file can run either
+ * recipe), so an ambiguous or differently named Krea 2 or Z-Image file follows the thread's preset.
+ */
+export function variantFor(family: FamilyId | null, preset?: ImagePreset): FamilyId | null {
+  const krea = family === 'krea2' || family === 'krea2_raw' || family === 'krea2_turbo'
+  const zimage = family === 'z_image' || family === 'z_image_turbo'
+  if (krea && (preset === 'krea2_raw' || preset === 'krea2_turbo')) return preset
+  if (zimage && (preset === 'z_image' || preset === 'z_image_turbo')) return preset
+  return family
 }
 
 const key = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -204,3 +216,93 @@ export type Recommended = {
 /** One line: "dpmpp_2m/karras · 20 steps · CFG 5 · clip skip 2 · 832 × 1216". */
 export const recommendedLine = (r: Pick<Recommended, 'sampler' | 'scheduler' | 'steps' | 'cfg' | 'clip_skip' | 'width' | 'height'>) => `${r.sampler}/${r.scheduler} · ${r.steps} steps · CFG ${r.cfg} · clip skip ${r.clip_skip} · ${r.width} × ${r.height}`
 export const recommendedSourceLabel = (r: Pick<Recommended, 'source' | 'agree'>) => r.source === 'civitai_examples' ? `Civitai examples${r.agree ? ` (${r.agree} agree)` : ''}` : r.source === 'family_default' ? 'Family default' : r.source === 'user_saved' ? 'Your saved settings' : 'No recommendation'
+
+// --- what each workflow takes (the Image Studio, server/agentImageStudio.ts) -----------------------
+//
+// Diffu's family rules (app/src/lib/comfy/capabilities.ts), restricted to the presets this app
+// builds. The Studio hides what a preset ignores, and the server drops it again before building the
+// graph, so a stale form or a hand-written request gets the graph the controls promise.
+
+export type PresetRules = {
+  /** A separate text encoder (diffusion-model workflows); checkpoints carry their own. */
+  encoder: boolean
+  /** VAE: a `builtin` checkpoint may swap in a custom one; `required` workflows always load their own. */
+  vae: 'builtin' | 'required'
+  /** A negative prompt is used. Without one CFG is fixed at 1. */
+  negative: boolean
+  /** CFG when the preset fixes it (Turbo: 1), else null. */
+  fixedCfg: number | null
+  /** Clip skip applies (SD 1.5 and SDXL checkpoints only). */
+  clipSkip: boolean
+  /** Textual-inversion embeddings work (CLIP text encoders only). */
+  embeddings: boolean
+  /** LoRAs patch the text encoder too; false means model-only (every diffusion-model workflow, so Krea2 always). */
+  loraClip: boolean
+  /** The raw/turbo pair this preset belongs to, for the Variant switch, or null. */
+  variants: readonly [ImagePreset, ImagePreset] | null
+  /** The prompt counter: CLIP tokens, or characters for the long-context encoders. */
+  counter: 'tokens' | 'chars'
+  /** The base edge the size buckets are built around. */
+  edge: number
+}
+export function presetRules(preset: ImagePreset): PresetRules {
+  const spec = imagePresetSpec(preset), diffusion = Boolean(spec.clipType)
+  const variants = preset.startsWith('krea2') ? (['krea2_raw', 'krea2_turbo'] as const) : preset.startsWith('z_image') ? (['z_image', 'z_image_turbo'] as const) : null
+  return { encoder: diffusion, vae: diffusion ? 'required' : 'builtin', negative: spec.negative, fixedCfg: spec.negative ? null : 1, clipSkip: !diffusion, embeddings: !diffusion, loraClip: !diffusion, variants, counter: diffusion ? 'chars' : 'tokens', edge: preset === 'sd15' ? 512 : 1024 }
+}
+/** Whether a preset is the turbo half of its pair. */
+export const isTurbo = (preset: ImagePreset) => preset === 'krea2_turbo' || preset === 'z_image_turbo'
+/** The family defaults a preset falls back on when a model has no recipe of its own. */
+export const presetFamily = (preset: ImagePreset): FamilyDefaults => MODEL_FAMILIES[preset]
+
+/** The request fields the rules touch. Everything else passes through unchanged. */
+type RuleFields = { preset?: unknown; negative_prompt?: unknown; cfg?: unknown; clip_skip?: unknown; clip?: unknown; vae?: unknown; checkpoint_vae?: unknown; hires?: unknown }
+const PRESET_IDS: readonly string[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo']
+/**
+ * A request as its preset runs it: no negative prompt (and CFG 1, the hires pass's too) where there
+ * are no negatives, no clip skip outside checkpoints, no encoder or workflow VAE for a checkpoint and
+ * no checkpoint VAE for a diffusion model. An unknown preset is left for the server to refuse.
+ */
+export function applyPresetRules<T extends RuleFields>(input: T): T {
+  if (typeof input.preset !== 'string' || !PRESET_IDS.includes(input.preset)) return input
+  const rules = presetRules(input.preset as ImagePreset)
+  const out: T = { ...input }
+  if (!rules.negative) delete out.negative_prompt
+  if (rules.fixedCfg !== null) {
+    out.cfg = rules.fixedCfg
+    if (out.hires && typeof out.hires === 'object' && !Array.isArray(out.hires)) out.hires = { ...out.hires, cfg: rules.fixedCfg }
+  }
+  if (!rules.clipSkip) delete out.clip_skip
+  if (rules.encoder) delete out.checkpoint_vae
+  else {
+    delete out.clip
+    delete out.vae
+  }
+  return out
+}
+
+/** Diffu's aspect buckets: 1:1 to 21:9, both ways, on the 64-pixel grid. */
+export const ASPECTS = [[1, 1], [5, 4], [4, 3], [3, 2], [16, 9], [21, 9], [4, 5], [3, 4], [2, 3], [9, 16], [9, 21]] as const
+/** The app's base-generation limits (imageWorkflow in server/agentImages.ts). */
+export const SIZE_LIMITS = { min: 256, max: 1536, step: 64, area: 1536 * 1024 } as const
+const snapSize = (v: number) => Math.min(SIZE_LIMITS.max, Math.max(SIZE_LIMITS.min, Math.round(v / SIZE_LIMITS.step) * SIZE_LIMITS.step))
+/** A size near `edge`² pixels at aspect w:h, on the grid and within the area limit. */
+export function bucketSize(edge: number, w: number, h: number) {
+  let width = snapSize(edge * Math.sqrt(w / h)), height = snapSize(edge * Math.sqrt(h / w))
+  while (width * height > SIZE_LIMITS.area) {
+    if (width >= height) width -= SIZE_LIMITS.step
+    else height -= SIZE_LIMITS.step
+  }
+  return { width, height }
+}
+export const sizeBuckets = (preset: ImagePreset) => ASPECTS.map(([w, h]) => ({ label: `${w}:${h}`, ...bucketSize(presetRules(preset).edge, w, h) }))
+
+/**
+ * About how many CLIP tokens a prompt takes: words split roughly like CLIP's BPE (a long word is
+ * several pieces) and each punctuation mark one. An estimate for the counter, not the tokenizer.
+ */
+export function promptTokens(text: string) {
+  let n = 0
+  for (const piece of text.toLowerCase().match(/[a-z]+|[0-9]|[^\sa-z0-9]/g) ?? []) n += /^[a-z]+$/.test(piece) ? Math.max(1, Math.ceil(piece.length / 7)) : 1
+  return n
+}

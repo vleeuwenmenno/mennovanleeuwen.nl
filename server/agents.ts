@@ -1,3 +1,4 @@
+import { stopStudioOf } from './agentImageStudio.ts'
 import { imageMask, listImageMasks, retainImageMasks } from './agentImageMasks.ts'
 import { imageSource, listImageAttachments, aliasBranchedImageSources } from './agentImageSources.ts'
 import { imageFileSaveBlockers, prepareImageFileSave } from './agentImageFiles.ts'
@@ -653,7 +654,8 @@ const threadId = (v: unknown) => {
 }
 
 function ownThread(user: User, id: string): ThreadRow {
-  const row = database().prepare('SELECT * FROM agent_threads WHERE id = ? AND user_id = ?').get(threadId(id), user.id) as ThreadRow | undefined
+  // The Image Studio's hidden thread (quick = 2, server/agentImageStudio.ts) is not a chat: no chat route reads or changes it.
+  const row = database().prepare('SELECT * FROM agent_threads WHERE id = ? AND user_id = ? AND quick != 2').get(threadId(id), user.id) as ThreadRow | undefined
   if (!row) throw new HttpError(404, 'No such thread')
   return row
 }
@@ -847,7 +849,8 @@ export async function updateThread(user: User, id: string, body: { title?: strin
   const tools = groups === null ? null : storeGroups((newFolder ? withFolderTools(groups, workdir) : groups) ?? groups)
   const pinned = body.pinned === undefined ? row.pinned : body.pinned ? 1 : 0
   const project = body.projectId === undefined ? row.project_id : projectRef(user, body.projectId)
-  const quick = body.quick === false ? 0 : row.quick
+  // Only a Spotlight answer (quick = 1) is taken into the app.
+  const quick = body.quick === false && row.quick === 1 ? 0 : row.quick
   const permission = body.permission === undefined ? permissionOf(row.permission) : permissionOf(body.permission)
   database()
     .prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ?, workdir = ?, permission = ? WHERE id = ?')
@@ -875,6 +878,7 @@ export function deleteThread(user: User, id: string) {
 /** Stops every turn an account has running (banned or deleted, server/users.ts). */
 export function stopTurnsOf(userId: number) {
   for (const [thread, u] of runningFor) if (u === userId) (sendNext.delete(thread), running.get(thread)?.abort())
+  stopStudioOf(userId)
 }
 
 /** Stop: the turn ends and the queue waits. A message sent now that had not started yet goes back to the queue's front. */
