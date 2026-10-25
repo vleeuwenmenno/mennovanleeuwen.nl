@@ -47,7 +47,8 @@ export const PERMISSIONS: Permission[] = ['default', 'auto', 'acceptEdits', 'pla
 export type Project = { id: number; name: string; sort: number; createdAt: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 /** A file sent with a message: text files as text, pictures as base64 (for models that can see). */
-export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string }
+/** `ref`: a picture gpt_image made, as the agent can draw from it again (gpt:<id>). */
+export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string; ref?: string }
 export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 /**
  * `checked` (tool results): why it ran without asking, such as a web read Auto's check cleared.
@@ -142,10 +143,18 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+/**
+ * A gpt_image picture being drawn: a typical time for it (ms), when it started (the server's clock;
+ * the window turns it into its own with `elapsed`, how long it had been drawing when the window
+ * heard of it) and how many rough previews there are so far.
+ */
+export type GptDrawing = { expected: number; startedAt: number; elapsed?: number; previews: number }
 
 export type TurnEvent =
-  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number; gpt?: GptDrawing }
+  /** A gpt_image picture being drawn has a new rough preview */
+  | { type: 'gptPreview'; callId: string; previews: number }
   /** Where an image job is (at most 4 a second) */
   | { type: 'imageProgress'; callId: string; progress: ImageProgress }
   | { type: 'imageGenerationDone'; callId: string }
