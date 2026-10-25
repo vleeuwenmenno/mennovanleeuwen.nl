@@ -29,7 +29,7 @@ export async function startServer(root: string): Promise<{ url: string; server: 
     cacheDir: join(tmpdir(), `mvlos-perf-vite-${createHash('sha1').update(root).digest('hex').slice(0, 8)}`),
     plugins: [react(), noApi()],
     define: { __APP_VERSION__: '"perf"', __APP_COMMIT__: '"perf"', __BUILD_TIME__: '"2026-01-01T00:00:00Z"' },
-    server: { host: '127.0.0.1', port: 0, hmr: false, watch: null },
+    server: { host: '127.0.0.1', port: Number(process.env.PERF_PORT ?? 0), strictPort: true, hmr: false, watch: null },
     logLevel: 'error',
     clearScreen: false,
   })

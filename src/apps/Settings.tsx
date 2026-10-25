@@ -1,3 +1,4 @@
+import { avoidWidgetOverlap } from '../os/widgetLayoutPrefs'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { isShown, setCalendarHidden, setCalendarShown, useAllCalendars, useCalendarChoice, useCalendarList, useHiddenCalendars } from '../data/calendar'
 import { useTasks } from '../data/tasks'
@@ -61,6 +62,7 @@ import { useMailAccounts } from '../data/mail'
 import { SecretInput } from '../os/SecretInput'
 import { performanceOverlayPref } from '../os/PerformanceOverlay'
 import { emojiTypingPref } from '../os/emojiTyping'
+import { stepUiScale, UI_SCALES, uiScalePref, uiScaleSupported } from '../os/uiScale'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
@@ -210,6 +212,7 @@ function Appearance() {
   const t = useTheme()
   const swing = useSwingPrefs()
   const performanceOverlay = performanceOverlayPref.use()
+  const avoidOverlap = avoidWidgetOverlap.use()
   const modes: [Mode, string][] = [
     ['auto', 'Auto'],
     ['light', 'Light'],
@@ -245,6 +248,14 @@ function Appearance() {
         </div>
         <p className="muted set-help">Auto follows your device's light or dark setting. Showing {t.label} now.</p>
       </SetGroup>
+      <UiScaleGroup />
+      <SetGroup title="Desktop widgets">
+        <label className="set-check">
+          <input type="checkbox" checked={avoidOverlap} onChange={(e) => avoidWidgetOverlap.set(e.target.checked)} />
+          Keep widgets from overlapping
+        </label>
+        <p className="muted set-help">Nudge widgets and notes into available space on this screen. Your saved layout on other devices stays the same. Crowded screens may still overlap. Saved in this browser; phones already stack in a column.</p>
+      </SetGroup>
       <SetGroup title="Accent color">
         <div className="set-swatches">
           <button className={`set-swatch-btn set-swatch-theme ${!t.accent ? 'is-on' : ''}`} style={{ ['--sw' as string]: t.palette.accent }} onClick={() => setAccent(null)} title="The theme's own accent">
@@ -276,6 +287,34 @@ function Appearance() {
         <p className="muted set-help">Shows page animation timing across the desktop, apps and games, including fullscreen. Follows the browser's refresh rate; game simulation and content updates may run at a different rate. Saved in this browser.</p>
       </SetGroup>
     </>
+  )
+}
+
+/** Settings → Appearance → UI scale (src/os/uiScale.ts): the whole OS bigger or smaller, on this device. */
+function UiScaleGroup() {
+  const scale = uiScalePref.use()
+  const supported = uiScaleSupported()
+  const pct = (v: number) => `${Math.round(v * 100)}%`
+  return (
+    <SetGroup title="UI scale">
+      <span className="set-stepper" role="group" aria-label="UI scale">
+        <button type="button" className="btn btn-small" aria-label="Smaller" disabled={!supported || scale <= UI_SCALES[0]} onClick={() => stepUiScale(-1)}>
+          −
+        </button>
+        <Select className="set-select" value={scale} onChange={(v) => uiScalePref.set(v)} disabled={!supported} aria-label="UI scale" options={UI_SCALES.map((v) => ({ value: v, label: pct(v) }))} />
+        <button type="button" className="btn btn-small" aria-label="Bigger" disabled={!supported || scale >= UI_SCALES[UI_SCALES.length - 1]} onClick={() => stepUiScale(1)}>
+          +
+        </button>
+        <button type="button" className="btn btn-small btn-ghost" disabled={!supported || scale === 1} onClick={() => stepUiScale(0)}>
+          Reset
+        </button>
+      </span>
+      <p className="muted set-help">
+        {supported
+          ? 'Everything in MvL OS bigger or smaller, like the browser\'s zoom: Ctrl + and Ctrl − change it, Ctrl 0 resets it (Cmd on a Mac). Games keep their own size. Saved on this device only, so a phone and a big screen can each have their own.'
+          : 'This browser is too old for it. The browser\'s own zoom still works.'}
+      </p>
+    </SetGroup>
   )
 }
 
@@ -2172,7 +2211,7 @@ function SyncPane() {
 const GROUPS: Group[] = [
   {
     panes: [
-      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy motion wiggle swing animation performance fps frame time counter', blurb: 'Light and dark mode, themes, the accent color, motion and frame timing.', render: () => <Appearance /> },
+      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy ui scale zoom size text size bigger smaller magnify widgets notes overlapping overlap collision spacing arrange desktop motion wiggle swing animation performance fps frame time counter', blurb: 'Light and dark mode, themes, the accent color, the UI scale, motion and frame timing.', render: () => <Appearance /> },
       { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
       { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
     ],

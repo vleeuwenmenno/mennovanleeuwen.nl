@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react'
 import { shortPlaceName, type Place } from '../../data/weather'
 import { reducedMotion } from './Sky'
+import { toUi } from '../../os/uiScale'
 
 // The precipitation radar: RainViewer's past frames (and nowcast frames when it publishes them)
 // over a quiet Esri canvas. Every frame of the loop is its own stacked layer of tiles, loaded up
@@ -347,14 +348,14 @@ export function RadarExplorer({ place }: { place: Place }) {
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || drag.current) return
-    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, dy: 0 }
+    drag.current = { id: e.pointerId, x: toUi(e.clientX), y: toUi(e.clientY), dx: 0, dy: 0 }
     e.currentTarget.setPointerCapture?.(e.pointerId)
   }
   const move = (e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current
     if (!d || d.id !== e.pointerId) return
-    d.dx = Math.round(e.clientX - d.x)
-    d.dy = Math.round(e.clientY - d.y)
+    d.dx = Math.round(toUi(e.clientX) - d.x)
+    d.dy = Math.round(toUi(e.clientY) - d.y)
     if (layerRef.current) layerRef.current.style.transform = `translate(${d.dx}px, ${d.dy}px)`
   }
   const up = (e: PointerEvent<HTMLDivElement>) => {

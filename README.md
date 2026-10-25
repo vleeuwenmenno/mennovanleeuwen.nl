@@ -38,6 +38,39 @@ bar, one monospace face, and colours from Omarchy's own theme palettes
 "auto" follows the OS. The sun/moon button in the bar toggles; right-click it (or the desktop)
 for every Omarchy theme and accent overrides. `theme list` / `theme <name>` in the terminal too.
 
+### UI scale
+
+Settings → Appearance → *UI scale* makes all of MvL OS bigger or smaller, like the browser's zoom:
+75, 80, 90, 100, 110, 125, 150, 175 or 200%. Ctrl + (or Ctrl =) and Ctrl − step through the
+same levels and Ctrl 0 goes back to 100% (Cmd on a Mac); the browser itself doesn't zoom as well.
+An app that zooms its own content with those keys keeps them while it has the focus: the terminal,
+PDFs and Files. The scale is kept per device (`localPref`, not synced), so a phone and a 4K desktop
+each keep their own, and it falls back to 100% when storage is blocked.
+
+Games keep their own size: their window content and anything they float over the page undo the
+scale (the window frame around them still scales). A game's own page (`/play/<id>`) isn't scaled
+at all, so the browser's zoom applies there. The phone layout follows the real screen width, not
+the scaled one, so 200% on a desktop stays a desktop and 75% on a phone stays a phone.
+
+How it works ([`src/os/uiScale.ts`](src/os/uiScale.ts)): CSS `zoom` on the root element, so the
+shell, apps, menus, dialogs, notifications and portals all scale together. With that, the browser
+keeps two kinds of numbers apart:
+
+- **Screen pixels:** pointer events (`clientX`), `getBoundingClientRect`, `window.innerWidth`, the
+  visual viewport and `elementFromPoint`. They don't change with the scale.
+- **Page pixels:** style lengths (`left`, `width`, transforms), `offsetWidth`, `clientWidth`,
+  `scrollTop`. One page pixel is `uiScale()` screen pixels.
+
+Code that puts something where the pointer or another element is (dragging, menus, popovers)
+converts with `toUi()`, `uiPoint()` or `uiRect()`, and sizes things to the page with `viewW()` and
+`viewH()` instead of `window.innerWidth`/`innerHeight`. A ratio of two screen-pixel numbers (where
+on a canvas the pointer is, as a share of its rect) needs no change. In CSS, `vw`, `vh` and the safe
+areas are screen units, so they are divided by `var(--ui-scale, 1)`. A game, or anything else that
+must keep the browser's own scale, gets the class `ui-native`. Browsers without the standardized
+`zoom` (Chrome and Edge before 128, Firefox before 126, older Safari) don't get the option;
+their native browser zoom shortcuts remain available. Desktop placements record the real screen
+class separately from scaled dimensions, so a desktop at 200% still restores desktop positions.
+
 ### Selecting text
 
 Like a desktop, the chrome can't be selected: dragging across title bars, the dock, menus,
@@ -3307,8 +3340,23 @@ accounts and data; it starts and stops its own server.
 A big screen puts a widget where it was put, moved along when its own screen is another size (a
 widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
 added on a phone gets the usual spot for a new widget there. Phones and big screens share the
-set; a phone only changes a widget's place in its column. Widgets stay through *Start over* and
-a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
+set; a phone only changes a widget's place in its column.
+
+Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser. It
+nudges desktop widgets and notes into nearby available space when a smaller viewport or larger
+UI scale crowds them together. The display layout accounts for measured content sizes, tape and
+resting note slants. It never saves these automatic offsets: returning to a larger screen restores
+its layout, and other devices keep their canonical placements. Dragging or resizing saves only
+the widget you changed, not its nudged neighbours. This browser remembers which item was moved
+last, separately for each account, so the same item keeps priority after a reload. That priority
+never syncs, and a removed widget's priority does not transfer to a new placement. If browser
+storage is blocked, priority lasts for the current page only. Phones keep their existing column layout.
+Placement is deterministic and bounded; if no space fits, an item keeps its fitted position and
+can still overlap. Turn the option off to keep intentional overlaps.
+`pnpm check:ui-scale` checks scale geometry, overlay bounds, sidebar dragging, high-scale
+placement persistence, and local collision handling without sync writes in muted Chromium.
+
+Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the set when that layout is loaded or arrives from the
 server or another tab (before a merge of the layouts could drop it) (unless the set already
 has newer entries, or had them and they were removed since). Migrated coordinates have an
@@ -4937,6 +4985,8 @@ pnpm check:perf --update             # after an intended change: new budgets and
 pnpm check:perf --json out.json      # everything measured, raw counters included
 pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/fixtures
 ```
+
+Set `PERF_PORT` to pin the isolated test server to a free port (otherwise it chooses one).
 
 **The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
 middle of the map, the camera panning across); six admirals on a huge map (Velkar Core), 40 craft

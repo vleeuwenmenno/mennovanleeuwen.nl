@@ -1,7 +1,7 @@
 .agt-mask {
   box-sizing: border-box;
-  width: min(960px, calc(100vw - 24px));
-  max-height: calc(100dvh - 24px);
+  width: min(960px, calc(calc(100vw / var(--ui-scale, 1)) - 24px));
+  max-height: calc(calc(100dvh / var(--ui-scale, 1)) - 24px);
   padding: 16px;
   overflow: auto;
   border: 1px solid var(--line-strong);
@@ -31,7 +31,7 @@
 .agt-mask-status[role='alert'] { color: var(--red, CanvasText); }
 .agt-mask footer { justify-content: flex-end; }
 @media (max-width: 600px) {
-  .agt-mask { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); padding: 10px; }
+  .agt-mask { width: calc(calc(100vw / var(--ui-scale, 1)) - 12px); max-height: calc(calc(100dvh / var(--ui-scale, 1)) - 12px); padding: 10px; }
   .agt-mask-tools label { order: 1; flex-basis: 100%; }
   .agt-mask-tools input { flex: 1; min-width: 70px; }
   .agt-mask footer button { flex: 1; }

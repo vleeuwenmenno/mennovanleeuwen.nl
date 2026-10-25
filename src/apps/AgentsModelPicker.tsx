@@ -5,6 +5,7 @@ import { tokenCount, type ModelInfo } from '../data/agents'
 import { MAKERS, makerOf, modelMatch, modelName, PROVIDER_NAMES, type MakerId, type ModelName } from '../data/agentModelNames'
 import { useIsMobile } from '../os/useIsMobile'
 import './AgentsModelPicker.css'
+import { toUi, uiRect, viewH, viewW } from '../os/uiScale'
 
 // The Agents composer's model picker: a rail of makers on the left (favourites first), a search
 // box, and the models as rows with their pretty name (src/data/agentModelNames.ts), the provider
@@ -103,14 +104,15 @@ export function ModelPicker({ models, value, usual, onPick, onClose, status, anc
   useLayoutEffect(() => {
     if (mobile || !anchor) return setPlace({})
     const fit = () => {
-      const r = anchor.getBoundingClientRect()
-      const vh = window.visualViewport?.height ?? window.innerHeight
-      const vw = window.innerWidth
+      // Page pixels (the UI scale, uiScale.ts), as the list is placed.
+      const r = uiRect(anchor)
+      const vh = toUi(window.visualViewport?.height ?? window.innerHeight)
+      const vw = viewW()
       const width = Math.min(540, vw - 16)
       const left = Math.max(8, Math.min(r.right - width, vw - width - 8))
       const above = r.top > vh - r.bottom
       const room = (above ? r.top : vh - r.bottom) - 14
-      setPlace({ left, width, maxHeight: Math.max(220, Math.min(480, room)), ...(above ? { bottom: window.innerHeight - r.top + 6 } : { top: r.bottom + 6 }) })
+      setPlace({ left, width, maxHeight: Math.max(220, Math.min(480, room)), ...(above ? { bottom: viewH() - r.top + 6 } : { top: r.bottom + 6 }) })
     }
     fit()
     window.addEventListener('resize', fit)

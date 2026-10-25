@@ -16,6 +16,7 @@ import { stopIosFocusZoom, trackVisualViewport } from './os/viewport'
 import { startSync } from './os/synced'
 import { startBrowserFiles } from './data/browserfs'
 import { initTheme } from './os/theme'
+import { initUiScale, installUiScaleKeys } from './os/uiScale'
 import { initFurigana } from './data/furigana'
 import { initHomeCurrency } from './data/currency'
 import { WindowManagerProvider } from './os/wm'
@@ -31,6 +32,10 @@ import { installApiGuard } from './os/accountSpace'
 const play = playMode()
 
 initTheme()
+// Settings → Appearance → UI scale, and Ctrl + / − / 0 for it (src/os/uiScale.ts). Not on a
+// game's own page: there the browser's zoom is the one to use.
+if (!play) initUiScale()
+if (!play) installUiScaleKeys()
 initFurigana()
 initHomeCurrency()
 if (!play) applyDockReserve()

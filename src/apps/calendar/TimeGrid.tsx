@@ -3,6 +3,7 @@ import { dayKey, type CalendarEvent } from '../../data/calendar'
 import { isTaskEvent, type TaskEvent } from './tasks'
 import { addDays, atMinutes, hhmm, layoutBars, layoutDay, minutesOf, moved, sameDay, SNAP, span, type Placed } from './time'
 import { EventMark } from './EventMark'
+import { toUi, uiRect } from '../../os/uiScale'
 
 // The day, 3-day and week views: all-day events in a lane on top, timed ones on a 24-hour grid.
 // With a mouse: drag on an empty spot to make an event there (into another day's column for one
@@ -100,7 +101,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
   const placed = useMemo(() => days.map((d) => layoutDay(shown, d)), [shown, days])
 
   const point = (el: HTMLElement | null, x: number, y: number) => {
-    const r = el!.getBoundingClientRect()
+    const r = uiRect(el!)
     return { col: clamp(Math.floor(((x - r.left) / r.width) * days.length), 0, days.length - 1), min: clamp((y - r.top) / PX, 0, 1440) }
   }
 
@@ -111,8 +112,8 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
     if (target.closest('button')) return
     const id = target.closest<HTMLElement>('[data-ev]')?.dataset.ev
     const e = id ? (byId.get(id) ?? null) : null
-    const p = point(allDay ? laneRef.current : colsRef.current, ev.clientX, ev.clientY)
-    startRef.current = { x: ev.clientX, y: ev.clientY }
+    const p = point(allDay ? laneRef.current : colsRef.current, toUi(ev.clientX), toUi(ev.clientY))
+    startRef.current = { x: toUi(ev.clientX), y: toUi(ev.clientY) }
     // Touch: a tap opens or makes; anything else is the page scrolling.
     if (ev.pointerType === 'touch' || (e && !e.editable)) return setDrag({ kind: 'tap', e, col: p.col, min: p.min, allDay })
     ev.preventDefault()
@@ -130,20 +131,20 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
   const move = (ev: ReactPointerEvent<HTMLDivElement>) => {
     const d = dragRef.current
     if (!d) return
-    const far = Math.hypot(ev.clientX - startRef.current.x, ev.clientY - startRef.current.y) > 4
+    const far = Math.hypot(toUi(ev.clientX) - startRef.current.x, toUi(ev.clientY) - startRef.current.y) > 4
     if (d.kind === 'tap') return far && setDrag(null)
     if (d.kind === 'create-day' || d.kind === 'move-day') {
-      const p = point(laneRef.current, ev.clientX, ev.clientY)
+      const p = point(laneRef.current, toUi(ev.clientX), toUi(ev.clientY))
       return setDrag(d.kind === 'create-day' ? { ...d, to: p.col } : { ...d, col: p.col, moved: d.moved || far })
     }
-    const p = point(colsRef.current, ev.clientX, ev.clientY)
+    const p = point(colsRef.current, toUi(ev.clientX), toUi(ev.clientY))
     if (d.kind === 'create') setDrag({ ...d, to: p.min, toCol: p.col, moved: d.moved || far })
     else if (d.kind === 'move') setDrag({ ...d, col: p.col, min: p.min, moved: d.moved || far })
     else setDrag({ ...d, col: p.col, min: p.min })
     // Near the top or bottom edge: scroll along.
-    const s = scrollRef.current!.getBoundingClientRect()
-    if (ev.clientY < s.top + 28) scrollRef.current!.scrollTop -= 14
-    else if (ev.clientY > s.bottom - 28) scrollRef.current!.scrollTop += 14
+    const s = uiRect(scrollRef.current!)
+    if (toUi(ev.clientY) < s.top + 28) scrollRef.current!.scrollTop -= 14
+    else if (toUi(ev.clientY) > s.bottom - 28) scrollRef.current!.scrollTop += 14
   }
 
   const up = () => {
@@ -175,7 +176,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
 
   const context = (allDay: boolean) => (ev: ReactMouseEvent<HTMLDivElement>) => {
     const id = (ev.target as HTMLElement).closest<HTMLElement>('[data-ev]')?.dataset.ev
-    const p = point(allDay ? laneRef.current : colsRef.current, ev.clientX, ev.clientY)
+    const p = point(allDay ? laneRef.current : colsRef.current, toUi(ev.clientX), toUi(ev.clientY))
     onMenu(ev, id ? (byId.get(id) ?? null) : null, allDay ? days[p.col] : atMinutes(days[p.col], Math.floor(p.min / 30) * 30), allDay)
   }
 

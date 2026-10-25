@@ -2,6 +2,7 @@ import { useLayoutEffect } from 'react'
 import { shortcuts } from '../data/shortcuts'
 import { useSpotlightPrefs } from '../data/spotlightPrefs'
 import { useWM, type WinState } from '../os/wm'
+import { viewH } from '../os/uiScale'
 
 const DOCK_SPACE = 96
 
@@ -20,8 +21,8 @@ export function KeysNote({ win }: { win: WinState }) {
       const note = document.querySelector<HTMLElement>('.window[data-app="notes"]')
       if (!note || done) return
       const y = note.offsetTop + note.offsetHeight - 16
-      const h = Math.min(400, window.innerHeight - DOCK_SPACE - 14 - y)
-      if (h >= 160) wm.setGeometry(win.pid, { y, h })
+      const h = Math.min(400, viewH() - DOCK_SPACE - 14 - y)
+      if (h >= 160) wm.setGeometry(win.pid, { y, h }, { automatic: true })
       else if (final) {
         done = true
         wm.close(win.pid)

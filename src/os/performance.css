@@ -1,7 +1,7 @@
 .performance-overlay {
   position: fixed;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(12px, env(safe-area-inset-bottom));
+  right: max(12px, calc(env(safe-area-inset-right) / var(--ui-scale, 1)));
+  bottom: max(12px, calc(env(safe-area-inset-bottom) / var(--ui-scale, 1)));
   z-index: 2147483647;
   display: grid;
   gap: 2px;

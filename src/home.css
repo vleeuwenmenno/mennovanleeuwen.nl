@@ -68,7 +68,7 @@
 .sticky-text {
   width: 100%;
   min-height: 120px;
-  max-height: 60vh;
+  max-height: calc(60vh / var(--ui-scale, 1));
   resize: none;
   border: 0;
   outline: 0;
@@ -2468,7 +2468,7 @@ textarea.agt-q-input {
 .agt-slash-split { display: flex; align-items: stretch; margin: 0 0 4px; border-bottom: 1px solid var(--line); }
 .agt-slash-split > .agt-slash { flex: 1; min-width: 0; margin: 0; border-bottom: 0; max-height: 18em; }
 .agt-slash-split > .agt-lora-pane { flex: none; width: min(420px, 55%); max-height: 18em; overflow-y: auto; border-left: 1px solid var(--line); }
-.agt-slash:has(> li > .agt-lora-pane) { max-height: min(60dvh, 30em); }
+.agt-slash:has(> li > .agt-lora-pane) { max-height: min(calc(60dvh / var(--ui-scale, 1)), 30em); }
 .agt-lora-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .agt-lora-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agt-lora-folder { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
@@ -5073,7 +5073,7 @@ button.cal-day.is-picked:not(.is-today) {
 }
 /* A read-only event's place and notes (EventEditor), as text to read and copy. */
 .ca-ro-text {
-  max-height: 40vh;
+  max-height: calc(40vh / var(--ui-scale, 1));
   overflow: auto;
   padding: 5px 0;
   color: var(--fg-bright);
@@ -5447,7 +5447,7 @@ button.cal-day.is-picked:not(.is-today) {
 .ca-import {
   display: grid;
   gap: 10px;
-  min-width: min(380px, 80vw);
+  min-width: min(380px, calc(80vw / var(--ui-scale, 1)));
 }
 .ca-import-list {
   display: grid;
@@ -5608,7 +5608,7 @@ button.cal-day.is-picked:not(.is-today) {
 /* Agents images: settings fields, compact model pickers, the model browser and style profiles.
    Dialogs sit above windows but below the OS menus (Select) and questions (ask) used inside them. */
 .image-dialog-backdrop { position: fixed; inset: 0; z-index: 9700; display: grid; place-items: center; padding: calc(var(--top, 0px) + 8px) 16px 16px; background: color-mix(in srgb, var(--bg-darker) 70%, transparent); }
-.image-dialog { display: flex; flex-direction: column; width: min(680px, 100%); max-height: calc(100dvh - var(--top, 0px) - 24px); border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); overflow: auto; outline: none; box-shadow: 0 16px 48px color-mix(in srgb, var(--bg-darker) 50%, transparent); }
+.image-dialog { display: flex; flex-direction: column; width: min(680px, 100%); max-height: calc(calc(100dvh / var(--ui-scale, 1)) - var(--top, 0px) - 24px); border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); overflow: auto; outline: none; box-shadow: 0 16px 48px color-mix(in srgb, var(--bg-darker) 50%, transparent); }
 .image-dialog.is-wide { width: min(1040px, 100%); }
 .image-dialog-head, .image-dialog-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
 .image-dialog-head { position: sticky; top: 0; z-index: 2; justify-content: space-between; border-bottom: 1px solid var(--line); background: var(--bg); }
@@ -5713,7 +5713,7 @@ button.cal-day.is-picked:not(.is-today) {
 .image-browser-tools { display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
 .image-browser-tools input, .image-numbers input { min-width: 0; padding: 7px 10px; border: 1px solid var(--line-strong); background: var(--bg-dark); color: var(--fg-bright); font: inherit; }
 .image-browser-tools input { flex: 1; }
-.image-browser-body { display: grid; grid-template-columns: 180px minmax(0, 1fr) 240px; grid-template-rows: minmax(0, 1fr); height: min(460px, 60dvh); min-height: 0; }
+.image-browser-body { display: grid; grid-template-columns: 180px minmax(0, 1fr) 240px; grid-template-rows: minmax(0, 1fr); height: min(460px, calc(60dvh / var(--ui-scale, 1))); min-height: 0; }
 .image-folders { overflow: auto; padding: 6px 0; border-right: 1px solid var(--line); }
 .image-folders ul, .image-model-list { list-style: none; margin: 0; padding: 0; }
 .image-folders button { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 30px; padding: 4px 10px; text-align: left; font-size: 12.5px; }
@@ -5846,13 +5846,13 @@ button.cal-day.is-picked:not(.is-today) {
 }
 
 /* Phones: full-width dialog, no folder tree, the list then the details; touch targets 40px+. */
-.image-dialog.is-mobile { width: 100%; max-height: calc(100dvh - var(--top, 0px) - 12px - env(safe-area-inset-bottom)); }
-.image-dialog-backdrop:has(.image-dialog.is-mobile) { padding: calc(var(--top, 0px) + 6px) 6px calc(6px + env(safe-area-inset-bottom)); }
+.image-dialog.is-mobile { width: 100%; max-height: calc(calc(100dvh / var(--ui-scale, 1)) - var(--top, 0px) - 12px - calc(env(safe-area-inset-bottom) / var(--ui-scale, 1))); }
+.image-dialog-backdrop:has(.image-dialog.is-mobile) { padding: calc(var(--top, 0px) + 6px) 6px calc(6px + calc(env(safe-area-inset-bottom) / var(--ui-scale, 1))); }
 .image-dialog.is-mobile .image-dialog-head, .image-dialog.is-mobile .image-dialog-foot, .image-dialog.is-mobile .image-browser-tools { padding: 8px 10px; }
 .image-dialog.is-mobile .image-dialog-hint { display: none; }
 .image-dialog.is-mobile .image-browser-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; height: auto; }
 .image-dialog.is-mobile .image-folders { display: none; }
-.image-dialog.is-mobile .image-browser-main { max-height: 46dvh; }
+.image-dialog.is-mobile .image-browser-main { max-height: calc(46dvh / var(--ui-scale, 1)); }
 .image-dialog.is-mobile .image-model-details { border-left: 0; border-top: 1px solid var(--line); }
 .image-dialog.is-mobile .image-presets, .image-dialog.is-mobile .image-numbers { grid-template-columns: minmax(0, 1fr); }
 .image-dialog.is-mobile .image-model-row { min-height: 48px; }
