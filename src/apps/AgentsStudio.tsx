@@ -192,15 +192,25 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   }
   // Read again when the Images settings are saved (a new URL or token: the catalog starts over) or
   // the tab comes back (rediscovering only when ComfyUI was just connected).
+  // One sequence for the status and the discovery it starts: an older answer (success or failure)
+  // is dropped, and a save's "start over" carries to whichever load answers last.
   const configured = useRef(false)
+  const loads = useRef(0)
+  const restart = useRef(false)
   useEffect(() => {
-    const load = (fresh: boolean) => getStudio().then((s) => {
-      setStudio(s)
-      setBootError('')
-      if (s.configured && (fresh || !configured.current)) { setCatalog(null); discover() }
-      if (!s.configured) (discovery.current++, setCatalog(null), setCatalogError(''), setDiscovering(false))
-      configured.current = s.configured
-    }, (e: Error) => setBootError(e.message))
+    const load = (fresh: boolean) => {
+      const n = ++loads.current
+      if (fresh) restart.current = true
+      return getStudio().then((s) => {
+        if (n !== loads.current) return
+        setStudio(s)
+        setBootError('')
+        if (s.configured && (restart.current || !configured.current)) { setCatalog(null); discover() }
+        if (!s.configured) (discovery.current++, setCatalog(null), setCatalogError(''), setDiscovering(false))
+        restart.current = false
+        configured.current = s.configured
+      }, (e: Error) => { if (n === loads.current) setBootError(e.message) })
+    }
     void load(false)
     const onVisible = () => { if (!document.hidden) void load(false) }
     const onSaved = () => void load(true)
@@ -451,20 +461,28 @@ function LoraSection({ form, catalog, onSet, assist }: { form: StudioForm; catal
   const [embeddings, setEmbeddings] = useState<string[] | null>(null)
   const [picking, setPicking] = useState<'lora' | 'embedding' | null>(null)
   const [error, setError] = useState('')
-  useEffect(() => { if (form.loras.length && !details) getLoraDetails().then((r) => setDetails(r.loras), () => setDetails([])) }, [form.loras.length])
+  // The connection these lists belong to: a save in Images settings starts a new one, and an
+  // answer for an earlier connection (still on its way) is dropped instead of filling the lists.
+  const connection = useRef(0)
+  const current = <T,>(write: (v: T) => void) => {
+    const n = connection.current
+    return (v: T) => { if (n === connection.current) write(v) }
+  }
+  const readDetails = () => getLoraDetails().then(current((r: { loras: LoraDetail[] }) => setDetails(r.loras)), current(() => setDetails([])))
+  useEffect(() => { if (form.loras.length && !details) void readDetails() }, [form.loras.length, details === null])
   // Another connection has other LoRAs and embeddings: read them again when next needed.
   useEffect(() => {
-    const forget = () => (setDetails(null), setEmbeddings(null))
+    const forget = () => (connection.current++, setDetails(null), setEmbeddings(null))
     window.addEventListener(IMAGE_SETTINGS_EVENT, forget)
     return () => window.removeEventListener(IMAGE_SETTINGS_EVENT, forget)
   }, [])
   const openPicker = (kind: 'lora' | 'embedding') => {
     setError('')
-    if (kind === 'lora' && !details) getLoraDetails().then((r) => setDetails(r.loras), () => setDetails([]))
+    if (kind === 'lora' && !details) void readDetails()
     // Only a non-empty list is kept; none (or a failure) is asked again the next time.
     if (kind === 'embedding' && !embeddings?.length) {
       setEmbeddings(null)
-      getStudioEmbeddings().then((r) => setEmbeddings(r.embeddings), (e: Error) => (setEmbeddings([]), setError(e.message)))
+      getStudioEmbeddings().then(current((r: { embeddings: string[] }) => setEmbeddings(r.embeddings)), current((e: Error) => (setEmbeddings([]), setError(e.message))))
     }
     setPicking(kind)
   }
@@ -630,7 +648,7 @@ function ActionSection({ problems, live, queue, paused, error, batch, onGenerate
     {!compact && live && <p className="muted" role="status">Running: {live.job.label}{live.total > 1 ? ` (${live.index + 1} of ${live.total})` : ''}</p>}
     {paused && queue.length > 0 && <p className="studio-reason muted" role="status">Queue paused. <button type="button" className="studio-link" onClick={resumeQueue}>Resume</button></p>}
     {(!compact || paused) && queue.length > 0 && <QueueList queue={queue} />}
-    {compact && queue.length > 0 && <p className="muted">{queue.length} queued</p>}
+    {compact && !paused && queue.length > 0 && <p className="muted">{queue.length} queued</p>}
     {error && <ErrorBox text={error} onDismiss={() => update({ error: '' })} />}
   </section>
 }

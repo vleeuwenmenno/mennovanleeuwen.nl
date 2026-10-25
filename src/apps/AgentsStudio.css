@@ -85,6 +85,8 @@
 .studio-bar { position: absolute; inset: auto 0 0; z-index: 3; padding: 8px 12px calc(8px + var(--sab, 0px)); border-top: 1px solid var(--line); background: var(--bg); }
 .studio-actions.is-compact { gap: 4px; }
 .studio-actions.is-compact .studio-reason { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A long paused queue scrolls inside the bar; Generate, Resume and the error stay in view. */
+.studio-actions.is-compact .studio-queue { max-height: min(30vh, calc(var(--vvh, 100dvh) * .3), 220px); overflow-y: auto; overscroll-behavior: contain; }
 .studio-drawer-backdrop { position: absolute; inset: 0; z-index: 4; background: color-mix(in srgb, var(--bg-darker, var(--bg)) 55%, transparent); }
 .studio-drawer { position: absolute; top: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; gap: 14px; width: min(400px, 92%); padding: 0 12px calc(16px + var(--sab, 0px)); overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); background: var(--bg); box-shadow: 0 8px 32px color-mix(in srgb, var(--bg-darker, var(--bg)) 50%, transparent); }
 .studio-drawer.is-params { left: 0; }
