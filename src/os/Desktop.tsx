@@ -634,7 +634,7 @@ export function Desktop() {
           { label: 'Files', onSelect: () => wm.openNew('files') },
           { label: 'Notebook', onSelect: () => wm.open('notebook') },
           ...(cvMode() ? [{ label: 'Activity', onSelect: () => wm.open('recents') }] : []),
-          { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+          { label: 'About this system', onSelect: () => wm.open('about', { t: String(Date.now()) }) },
         ],
       },
     ]

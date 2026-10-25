@@ -59,6 +59,7 @@ import { MailSettings } from './mail/MailSettings'
 import { useMailAccounts } from '../data/mail'
 import { SecretInput } from '../os/SecretInput'
 import { performanceOverlayPref } from '../os/PerformanceOverlay'
+import { notesHidden } from '../os/deskPrefs'
 import { emojiTypingPref } from '../os/emojiTyping'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
@@ -1890,6 +1891,7 @@ function DragKeySettings() {
 function WindowsSettings() {
   const { windows } = useStartupPrefs()
   const wm = useWM()
+  const hidden = notesHidden.use()
   return (
     <>
       <SetGroup title="When MvL OS opens">
@@ -1909,6 +1911,13 @@ function WindowsSettings() {
       <DragKeySettings />
       <SetGroup title="Right now">
         <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Notes and widgets</strong>
+              <span className="muted">{hidden ? 'Put away, so the desktop shows itself' : 'On the desktop, in every workspace'}</span>
+            </span>
+            <Toggle on={!hidden} onChange={(on) => notesHidden.set(!on)} label="Show notes and widgets on the desktop" />
+          </li>
           <li className="set-row">
             <span className="set-row-text">
               <strong>Start over</strong>

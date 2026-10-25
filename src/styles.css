@@ -10580,6 +10580,145 @@ kbd {
   min-height: 56px;
   padding: 14px 12px 14px 14px;
 }
+/* ---------- About app (src/apps/About.tsx) ----------
+   The terminal's fastfetch, laid out: a logo and wordmark on the left, the facts in small
+   sections on the right. One column on a phone, where the logo goes on top. Colours come from
+   the theme only. */
+
+.about {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+.about-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  gap: 28px;
+  padding: 20px 22px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.about-brand {
+  flex: 0 0 168px;
+  align-self: flex-start;
+}
+.about-mark {
+  color: var(--accent);
+  display: block;
+}
+.about-brand h2 {
+  margin: 10px 0 0;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: var(--fg-bright);
+}
+.about-brand p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+}
+.about-tagline {
+  margin-top: 10px !important;
+  line-height: 1.5;
+}
+.about-facts {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.about-section h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.about-rows {
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+.about-row {
+  display: flex;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.about-row dt {
+  flex: 0 0 104px;
+  color: var(--muted);
+}
+.about-row dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.about-row a {
+  color: var(--accent);
+}
+.about-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 22px 14px;
+  border-top: 1px solid var(--line);
+}
+.about-actions .btn {
+  min-height: 30px;
+}
+/* A phone: one column, the logo and wordmark in a row above the facts, and labels that do not
+   steal the width the values need. */
+.about.is-mobile .about-body {
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 14px 8px;
+}
+.about.is-mobile .about-brand {
+  flex: none;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 14px;
+  align-items: center;
+}
+.about.is-mobile .about-mark {
+  grid-row: span 2;
+  width: 48px;
+  height: 48px;
+}
+.about.is-mobile .about-brand h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.about.is-mobile .about-tagline {
+  grid-column: 1 / -1;
+  margin-top: 10px !important;
+}
+.about.is-mobile .about-row {
+  display: block;
+  padding: 7px 0;
+}
+.about.is-mobile .about-row dt {
+  flex: none;
+  font-size: 11px;
+}
+.about.is-mobile .about-actions {
+  padding: 10px 14px calc(12px + var(--sab));
+}
+.about.is-mobile .about-actions .btn {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-height: 40px;
+}
+
 /* ---------- Weather app (src/apps/Weather.tsx, src/apps/weather/) ---------- */
 
 /* Colours all come from the theme. The sky is mixed from the palette per condition, so it is

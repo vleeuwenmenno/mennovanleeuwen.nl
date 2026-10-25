@@ -7,10 +7,8 @@ import { dayKey, eventsOn, eventTime, fetchEvents, openEvent, startOfDay, useCal
 import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
 import { cvMode } from './cvMode'
 import { openContextMenu, type MenuItem } from './ContextMenu'
-import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
 import { useWM } from './wm'
-import { NOTE_APPS, notesHidden } from './deskPrefs'
 
 /** A top-bar button with a dropdown panel that closes on outside click or Escape. */
 function TopbarPopover({ label, className = '', title, children, menu }: { label: ReactNode; className?: string; title: string; children: (close: () => void) => ReactNode; /** Right-click */ menu?: () => MenuItem[] }) {
@@ -406,7 +404,8 @@ function compareVersions(a: string, b: string) {
   return 0
 }
 
-export function ReleaseStatus() {
+/** The latest release's version, `null` when it could not be checked, `undefined` while checking. */
+export function useLatestRelease(): string | null | undefined {
   const [latest, setLatest] = useState<string | null | undefined>(undefined)
   useEffect(() => {
     let live = true
@@ -415,12 +414,26 @@ export function ReleaseStatus() {
       live = false
     }
   }, [])
-  const dev = !/^\d+\.\d+\.\d+$/.test(VERSION)
-  if (latest === undefined) return <span className="muted">checking…</span>
-  if (latest === null) return <span className="muted">could not check</span>
-  if (dev) return <span>development build · latest release {latest}</span>
-  const cmp = compareVersions(VERSION, latest)
-  if (cmp >= 0) return <span className="t-green">up to date ✓</span>
+  return latest
+}
+
+/**
+ * The release check in words, for places that cannot show markup: the About app copies it into its
+ * plain-text summary. ReleaseStatus below says the same thing on screen.
+ */
+export function releaseText(latest: string | null | undefined): string {
+  if (latest === undefined) return 'checking…'
+  if (latest === null) return 'could not check'
+  if (!/^\d+\.\d+\.\d+$/.test(VERSION)) return `development build · latest release ${latest}`
+  return compareVersions(VERSION, latest) >= 0 ? 'up to date ✓' : `${latest} is out`
+}
+
+export function ReleaseStatus() {
+  const latest = useLatestRelease()
+  const text = releaseText(latest)
+  if (latest === null || latest === undefined) return <span className="muted">{text}</span>
+  // The one case with something to do about it keeps its own markup: the version in yellow and a reload.
+  if (!/^\d+\.\d+\.\d+$/.test(VERSION) || compareVersions(VERSION, latest) >= 0) return <span className={text === 'up to date ✓' ? 't-green' : undefined}>{text}</span>
   return (
     <span>
       <span className="t-yellow">{latest} is out</span>{' '}
@@ -470,8 +483,6 @@ function AccountBlock({ close }: { close: () => void }) {
 export function SystemMenu() {
   const wm = useWM()
   const built = new Date(BUILT)
-  const hidden = notesHidden.use()
-  const notes = wm.windows.some((w) => NOTE_APPS.has(w.app))
   return (
     <TopbarPopover
       className="tb-sys"
@@ -524,7 +535,7 @@ export function SystemMenu() {
             <button
               onClick={() => {
                 close()
-                wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) })
+                wm.open('about', { t: String(Date.now()) })
               }}
             >
               About this system
@@ -540,24 +551,11 @@ export function SystemMenu() {
             <button
               onClick={() => {
                 close()
-                toggleOverlay('launchpad')
+                wm.open('changelog', { t: String(Date.now()) })
               }}
             >
-              All apps
-            </button>
-            {(notes || hidden) && (
-              <button
-                onClick={() => {
-                  close()
-                  notesHidden.set(!hidden)
-                }}
-              >
-                {hidden ? 'Show notes and widgets' : 'Hide notes and widgets'}
-              </button>
-            )}
-            <a href={`https://github.com/${REPO}/releases`} target="_blank" rel="noopener noreferrer" onClick={close}>
               Release notes
-            </a>
+            </button>
             <span className="sys-sep" />
             <button
               onClick={() => {

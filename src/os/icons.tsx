@@ -306,6 +306,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  about: {
+    bg: 'linear-gradient(160deg, color-mix(in srgb, var(--accent) 70%, var(--bg-light)), var(--bg-darker))',
+    fg: 'var(--fg-bright)',
+    glyph: (
+      <>
+        <circle cx="24" cy="24" r="13" />
+        <path d="M24 22v9M24 17v.5" />
+      </>
+    ),
+  },
   git: {
     bg: 'linear-gradient(160deg,#f1784f,#b8452a)',
     fg: '#fff',
@@ -398,6 +408,7 @@ const HUES: Record<AppId, string> = {
   photos: 'var(--orange)',
   weather: 'var(--cyan)',
   changelog: 'var(--green)',
+  about: 'var(--accent)',
   git: 'var(--orange)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
