@@ -224,8 +224,8 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   `layout.ts`; `direction` down or right, node shapes box, round, diamond and circle, `group` boxes
   nodes together), `grid` (rows × cols of slots, an arrow with `via` on it, the result with counts:
   a Minecraft recipe, cooking or smelting; several in `grids` for a chain; `pattern` and `key` as
-  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards`, `table` and
-  `scene` (a free drawing, below). A list of specs in one block draws them one under the other. The whole schema is the
+  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards`, `list` (below),
+  `table` and `scene` (a free drawing, below). A list of specs in one block draws them one under the other. The whole schema is the
   `VisualSpec` type in [`spec.ts`](src/data/visual/spec.ts).
 - **Forgiving.** Small models write it, so comments, trailing commas, single quotes, unquoted keys
   and missing commas are fine, fields have aliases (`edges`/`links`, `from`/`source`), a missing
@@ -255,9 +255,20 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   with its first letter. Up to 120,000 characters and 3,000 elements; a drawing with nothing safe
   left shows what was left out. It zooms like a flow, with *SVG* and *PNG* buttons that save it
   with the theme's background.
+- **Lists.** `{"type": "list", "items": [{"image": "image:<id>", "title": "Calbee Jagabee うすしお味",
+  "text": "…", "fields": {"Quantity": "Lots!"}, "note": "…"}]}` draws rows as a saved shopping list
+  does: a big rounded picture on the left (104 px, 72 px on a phone, where the text wraps beside
+  it), a bold numbered title (`"numbered": false` drops the numbers), a line of text, bold label
+  rows, a note in italics and thin lines between the rows. `fields` may also be pairs, `{label,
+  value}` or `"Label: value"` strings, and `quantity`, `price`, `where` on the item become rows too.
+  `"checked": false` adds a checkbox; ticking it only changes what is shown (the answer itself is
+  not edited, so a reload shows it as written). The old `"type": "list"` that meant cards still
+  reads, as a list.
 - **Pictures.** Any item can be `"icon:<slug>"` (the account's icon library,
-  `/api/agents/icons/<slug>`), an emoji (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with
-  `"4x Stick"` for a count. A missing icon falls back to the item's emoji, else its first letter in a
+  `/api/agents/icons/<slug>`), `"image:<id>"` (a real photo `find_image` kept, below), an emoji
+  (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with `"4x Stick"` for a count; cards,
+  tables, grids, lists and scenes (`<image href="image:<id>">`, inlined like icons) all take them.
+  A missing picture falls back to the item's icon, then its emoji, else its first letter in a
   tinted tile; grids list what each picture is under the slots, since a finger gets no tooltip.
 - **Theme, touch and phones.** Colours come from the theme's variables (a scene may also name its own; charts use the accent
   hues in a fixed order). A big flow fits the width (down to half size, then scrolls); Ctrl+wheel and
@@ -266,13 +277,57 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   and a *Table* view. *Spec* and *Copy* show and copy the JSON.
 - **Elsewhere.** The terminal's `agents` and shared answer links (`/s/<token>`) show a text
   version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars,
-  a scene as its title, caption and `(drawing: its labels)`.
+  a scene as its title, caption and `(drawing: its labels)`, a list as numbered lines with its
+  text, `Label: value` rows and `[ ]` for a checkbox.
 - **Cost.** The renderer is its own chunk (about 30 KB), loaded the first time a visual block shows;
   it draws once, and zooming only sets two styles. `pnpm check:visual` checks good and bad specs,
   the loose JSON, the text version, the layout, the scene sanitizer against a list of XSS tricks
   (handlers, `javascript:` and encoded links, `foreignObject`, outside `use`, CSS `url()` and
   `@import`, entities, CDATA, nested `<svg>`, animation) and that every example in the Agents
   prompt is valid.
+
+### Found pictures (find_image)
+
+For a list of real things (products, dishes, places, mods), the agent calls `find_image` with a
+query (and a page it already found, and 1 to 4 pictures), then shows each picture's id as
+`image:<id>` in a list ([`server/findImage.ts`](server/findImage.ts), in the *Web* tool group).
+Ollama's web search, the default, has no image search, so the server searches the web, reads the
+top five result pages and takes each page's own picture of its subject: JSON-LD `Product` images
+first, then `og:image`, `twitter:image`, `rel=image_src`, then a big `<img>` (by its `width`,
+`height` or `srcset`, and its alt text matching the query). Logos, icons, sprites, tiny pictures
+and SVG are passed over, and product pages (by their JSON-LD, `og:type` or address) rank higher.
+With SearXNG (`categories=images`) or Brave Search as the provider, their image search goes first
+and the pages are the fallback.
+
+The server downloads the picture, keeps it per account (`agent_found_images`, counted in the
+storage quota) and serves it at `GET /api/agents/images/<id>` to that account only, with its own
+type, `nosniff`, a sandboxing CSP and a week's private cache: the browser never asks the other
+site. The same picture again (by address or by its bytes) reuses the kept one, and a page read in
+the last half hour is not read again. Pictures unused for 90 days that no message or note
+mentions are pruned (at most every six hours per account, after a new one is kept).
+
+These are pages and pictures anyone can put in a search result, so:
+
+- Only public addresses, checked after DNS and again at every redirect (at most three), and
+  connected to exactly as checked (no DNS rebinding); never an IP address in the link, a name
+  without a dot or a `.local`/`.internal` one, credentials in the address or an unusual port. This
+  holds for admins too.
+- No cookies or credentials are sent, only a plain User-Agent.
+- A page is read as text, at most 1.5 MB in 6 seconds, with the same bounded scans as link
+  previews; a picture is at most 5 MB in 8 seconds; the whole call 30 seconds, three at once per
+  account.
+- A picture must be PNG, JPEG, WebP or a still GIF both by its `Content-Type` and by its bytes
+  (SVG, HTML posing as a picture and animations are refused), 120 to 8000 px a side and not a
+  banner (over 4:1). A PNG over 768 px is scaled down (an APNG keeps its first frame); other
+  formats are kept as they came, since the server has no decoder for them.
+- A page the model wrote itself, in a thread holding private data, is not read (as with
+  `web_fetch`); the search still runs.
+
+`pnpm check:agents-find-image` runs it against a stand-in web of shops
+([`scripts/find-image-fake-net.ts`](scripts/find-image-fake-net.ts), preloaded only by checks):
+og:image, JSON-LD and `<img>` pages, logos skipped, private, metadata and redirect-to-private
+addresses refused before anything is sent, oversize, SVG and fake PNGs refused, the cache hit,
+SearXNG's image search, serving and pruning.
 
 ## Data snapshots
 
@@ -1435,7 +1490,8 @@ for a long folder name or every chip on. `pnpm check:agents-context-bar` covers 
 Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
-stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
+stored encrypted, see [`server/websearch.ts`](server/websearch.ts)), Ollama's web fetch, `find_image`
+(real photos, see *Found pictures* below), your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until

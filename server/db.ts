@@ -370,6 +370,25 @@ export function database(): DatabaseSync {
     at INTEGER NOT NULL
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS agent_image_usage_user ON agent_image_usage (user_id, at)')
+  // Real-world pictures the agents' find_image found (server/findImage.ts): downloaded once per
+  // account by the server and served from /api/agents/images/<id>, so the browser never asks
+  // the other site.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_found_images (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    page_url TEXT,
+    title TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    body BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    used_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, id)
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_found_images_source ON agent_found_images (user_id, source_url)')
   db.prepare('DELETE FROM agent_image_usage WHERE at < ?').run(Date.now() - 2 * 86400_000)
 
   // Added later: a compaction (server/agents.ts), saved as a message with role 'compact' whose

@@ -86,6 +86,8 @@ export function toolTitle(call: ToolCall): [string, string] {
       return ['Web Search', `"${s(call, 'query')}"`]
     case 'web_fetch':
       return ['Fetch', s(call, 'url')]
+    case 'find_image':
+      return ['Find Image', `"${s(call, 'query')}"`]
     case 'update_todos':
       return ['Update Todos', '']
     case 'ask_user':
@@ -267,6 +269,10 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
     case 'web_search': {
       const list = Array.isArray(json) ? (json as { title?: string; url?: string }[]) : []
       return ok([under(`${list.length} result${list.length === 1 ? '' : 's'}`), ...(verbose ? list.map((r) => clipLine([seg('     '), seg(r.title ?? '', 'bold'), seg(`  ${r.url ?? ''}`, 'muted')], w)) : [])])
+    }
+    case 'find_image': {
+      const list = Array.isArray(obj?.images) ? (obj.images as { site?: string; title?: string }[]) : []
+      return ok([under(`${list.length} picture${list.length === 1 ? '' : 's'}`), ...(verbose ? list.map((r) => clipLine([seg('     '), seg(r.title ?? '', 'bold'), seg(`  ${r.site ?? ''}`, 'muted')], w)) : [])])
     }
     case 'web_fetch': {
       const text = typeof obj?.content === 'string' ? obj.content : result

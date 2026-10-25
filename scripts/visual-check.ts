@@ -161,6 +161,44 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
   check('aliases: "kind": "flowchart"', good('kind alias', '{"kind":"flowchart","links":[["a","b"]]}')[0]?.type === 'flow')
 }
 
+// --- list, and found pictures (image:<id>) --------------------------------------------------------
+{
+  const ID = 'w0123456789abcdef01234567'
+  const [l] = good('list', JSON.stringify({ type: 'list', title: 'JP', items: [
+    { image: `image:${ID}`, title: 'Calbee Jagabee うすしお味', text: 'Potato sticks', fields: { Quantity: 'Lots!', Where: 'Konbini' }, note: 'Big bags' },
+    { image: '🍵', name: 'Matcha', fields: [['Quantity', 2]], checked: true, price: '¥980' },
+    { icon: 'iron_ingot', title: 'Iron', fields: [{ label: 'Use', value: 'Tools' }, 'Where: Mines'] },
+    'icon:stick Stick',
+    {},
+  ] }))
+  if (l?.type === 'list') {
+    check('list: numbered by default, the empty item left out', l.numbered && l.items.length === 4, l.items.length)
+    check('list: a found picture, the title as written, text, fields, note', l.items[0].picture?.image === ID && l.items[0].title === 'Calbee Jagabee うすしお味' && l.items[0].text === 'Potato sticks' && l.items[0].fields.map((f) => f.join('=')).join() === 'Quantity=Lots!,Where=Konbini' && l.items[0].note === 'Big bags', l.items[0])
+    check('list: an emoji picture, name as title, pairs, checked, price as a field', l.items[1].picture?.emoji === '🍵' && l.items[1].title === 'Matcha' && l.items[1].checked === true && l.items[1].fields.map((f) => f.join('=')).join() === 'Quantity=2,Price=¥980', l.items[1])
+    check('list: icon pictures, {label, value} and "Label: value" fields', l.items[2].picture?.icon === 'iron_ingot' && l.items[2].fields.map((f) => f.join('=')).join() === 'Use=Tools,Where=Mines', l.items[2])
+    check('list: a string item', l.items[3].title === 'Stick' && l.items[3].picture?.icon === 'stick', l.items[3])
+  }
+  const lt = visualBlockText(JSON.stringify({ type: 'list', items: [{ image: `image:${ID}`, title: 'Jagabee', text: 'Sticks', fields: { Quantity: 'Lots!' }, note: 'Big', checked: false }] }))
+  check('list: text version', lt?.join('\n') === '1. [ ] Jagabee\n   Sticks\n   Quantity: Lots!\n   Note: Big', lt)
+  check('list: "numbered": false', good('unnumbered', '{"type":"list","numbered":false,"items":["a"]}')[0]?.type === 'list' && visualBlockText('{"type":"list","numbered":false,"items":["a"]}')?.[0] === '• a')
+  check('list: guessed from items, and "shopping_list" is a list', good('list guessed', '{"items":[{"title":"a"}]}')[0]?.type === 'list' && good('list alias', '{"type":"shopping_list","items":["a"]}')[0]?.type === 'list')
+  check('list: the old "list" written with cards still reads', (() => {
+    const [x] = good('list with cards', '{"type":"list","cards":[{"label":"Iron","text":"Smelt"}]}')
+    return x?.type === 'list' && x.items[0].title === 'Iron' && x.items[0].text === 'Smelt'
+  })())
+  bad('list without items', '{"type":"list","title":"x"}', 'items')
+  bad('list of empty items', '{"type":"list","items":[{}]}', 'items', /no items/)
+  // image:<id> wherever icon:<slug> goes.
+  const [cards] = good('cards with a found picture', `{"type":"cards","cards":[{"label":"Jagabee","image":"image:${ID}","icon":"chips"}]}`)
+  check('cards: image:<id> beside an icon keeps both (the icon is the fallback)', cards?.type === 'cards' && cards.cards[0].image === ID && cards.cards[0].icon === 'chips', cards)
+  const [tab] = good('table with a found picture', `{"type":"table","columns":["Item"],"rows":[["image:${ID} Jagabee"]]}`)
+  check('table: "image:<id> Label" cells', tab?.type === 'table' && tab.rows[0][0]?.image === ID && tab.rows[0][0]?.label === 'Jagabee', tab)
+  const [grid] = good('grid with a found picture', `{"type":"grid","slots":["image:${ID}"],"result":"Chips"}`)
+  check('grid: image:<id> slots', grid?.type === 'grid' && grid.grids[0].slots[0]?.image === ID)
+  const [bogus] = good('a bad image id is no picture', '{"type":"list","items":[{"image":"image:../../x","title":"x"},{"image":"image:<id>","title":"y"}]}')
+  check('list: an image id outside [A-Za-z0-9_-]{6,64} is ignored', bogus?.type === 'list' && !bogus.items[0].picture && !bogus.items[1].picture, bogus)
+}
+
 // --- scene: the SVG sanitizer -------------------------------------------------------------------
 {
   const colours = Object.fromEntries(SCENE_PALETTE.map((k, i) => [k, `rgb(${i}, ${i}, ${i})`])) as ScenePalette
@@ -215,6 +253,14 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
   const ic = out(`<svg viewBox="0 0 100 50"><image href="icon:Fluid_Tank" x="2" y="3" width="20" height="20"/><image href="icon:gone" x="40" y="3" width="20" height="20"/></svg>`, new Map([['fluid_tank', png], ['gone', null]]))
   check('scene: an icon is inlined as a data: picture', ic.includes(`<image href="${png}" x="2" y="3" width="20" height="20"/>`), ic)
   check('scene: a missing icon is a dashed tile with its letter', /<rect x="40" y="3" width="20" height="20"[^>]*stroke-dasharray="4 3"\/><text[^>]*>G<\/text>/.test(ic), ic)
+  const found = sanitizeSvg(`<svg viewBox="0 0 100 50"><image href="image:w0123456789abcdef01234567" x="1" y="1" width="30" height="30"/><image href="image:bad/../x" width="5"/><image href="image:gone12" x="50" width="20" height="20"/></svg>`)
+  check('scene: <image href="image:<id>"> is a picture to inline, a bad id is dropped', found.ok && found.scene.icons.join() === 'image:w0123456789abcdef01234567,image:gone12', found)
+  if (found.ok) {
+    const s = serializeSvg(found.scene, { colours, icons: new Map([['image:w0123456789abcdef01234567', png], ['image:gone12', null]]) })
+    check('scene: a found picture is inlined, a missing one is a tile without a letter', s.includes(`<image href="${png}" x="1" y="1" width="30" height="30"/>`) && /<rect x="50" y="0" width="20" height="20"[^>]*stroke-dasharray="4 3"\/><text[^>]*><\/text>/.test(s), s)
+  }
+  const placed = parseVisual('{"type":"scene","svg":"<svg viewBox=\'0 0 50 50\'><rect width=\'5\' height=\'5\'/></svg>","icons":[{"icon":"image:w0123456789abcdef01234567","x":1,"y":2,"size":20}]}')
+  check('scene: an "icons" entry may be image:<id>', placed.ok && placed.visuals[0].type === 'scene' && placed.visuals[0].scene.icons.includes('image:w0123456789abcdef01234567'), placed)
   const evilIcon = out(`<svg viewBox="0 0 10 10"><image href="icon:x" width="5" height="5"/></svg>`, new Map([['x', 'data:image/svg+xml,<svg onload=alert(1)>']]))
   check('scene: an icon URL that is not a data: picture is not used', !evilIcon.includes('data:image/svg') && !/onload/.test(evilIcon), evilIcon)
   const saved = sanitizeSvg('<svg viewBox="5 5 20 10"><circle r="2"/></svg>')
@@ -329,12 +375,12 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
     }
     examples.push(VISUAL_PROMPT.slice(i, j + 1))
   }
-  check('prompt: has examples of every type', ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'table', 'scene'].every((t) => examples.some((e) => e.includes(`"type":"${t}"`))), examples.length)
+  check('prompt: has examples of every type', ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'list', 'table', 'scene'].every((t) => examples.some((e) => e.includes(`"type":"${t}"`))), examples.length)
   for (const e of examples) {
     const r = parseVisual(e)
     check(`prompt example is valid: ${e.slice(0, 50)}…`, r.ok && !r.warnings.length, r.ok ? r.warnings : r.errors)
   }
-  check('prompt: short (under 3600 characters)', VISUAL_PROMPT.length < 3600, VISUAL_PROMPT.length)
+  check('prompt: short (under 4000 characters)', VISUAL_PROMPT.length < 4000, VISUAL_PROMPT.length)
 }
 
 console.log(`${passed} passed, ${failed} failed`)

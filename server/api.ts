@@ -2,6 +2,7 @@ import { saveImageMask, imageMask, discardImageMask, maskSource } from './agentI
 import { searchPastThreads } from './agents.ts'
 import { handleImageProfileApi } from './agentImageProfiles.ts'
 import { handleImageApi } from './agentImages.ts'
+import { handleFoundImageApi } from './findImage.ts'
 import { handleImageObservationsApi } from './agentImageObservations.ts'
 import { handleLoraPreviewApi } from './agentLoraPreview.ts'
 import { handleModelIntelApi } from './agentModelIntel.ts'
@@ -433,6 +434,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path.startsWith('/api/agents/images/studio') && (await handleStudioApi(req, res, url, method, requireUser(req)))) return true
     // OpenAI pictures and the icon library (server/agentOpenAI.ts): the key, Sign in with ChatGPT, icons by slug.
     if ((path.startsWith('/api/agents/openai') || path.startsWith('/api/agents/icons')) && (await handleOpenAIApi(req, res, path, method, requireUser(req)))) return true
+    // Pictures find_image kept (server/findImage.ts): /api/agents/images/w…, the account's own only.
+    if (path.startsWith('/api/agents/images/w') && handleFoundImageApi(req, res, path, method, requireUser(req))) return true
     if (path.startsWith('/api/agents/images') && (await handleImageApi(req, res, url, method, requireUser(req)))) return true
     if (path.startsWith('/api/agents/websearch') && (await handleWebSearchApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/agents/projects' && read) return json(res, 200, listProjects(requireUser(req))), true

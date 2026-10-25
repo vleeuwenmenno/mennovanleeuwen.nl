@@ -1,5 +1,5 @@
 // Visual blocks: a fenced ```visual block in Markdown holding a small JSON spec that renders as a
-// flow diagram, crafting grids, a tree, a timeline, a chart, cards, a table or a free drawing
+// flow diagram, crafting grids, a tree, a timeline, a chart, cards, a list, a table or a free drawing
 // (Visual.tsx draws them, the terminal and shared pages show visualText's lines). This file reads
 // and checks the spec and turns it into one normalised shape; it imports only lang.ts and svg.ts
 // (the drawing's sanitizer), so the server (server/shares.ts) and the check script
@@ -18,9 +18,11 @@
  *
  * - `"Oak planks"`: a label. `"icon:oak_planks"`: a picture from the icon library (the label is
  *   the slug, made readable), `"icon:oak_planks Oak planks"` both. `"app:files"`: an MvL OS app's
- *   icon. An emoji, alone or before the label (`"🍞 Bread"`). `"4x Stick"` or `"Stick x4"`: a count.
+ *   icon. `"image:<id>"`: a real-world picture the agent found with find_image (served from
+ *   /api/agents/images/<id>). An emoji, alone or before the label (`"🍞 Bread"`). `"4x Stick"` or
+ *   `"Stick x4"`: a count.
  * - `{ "label": "Oak planks", "icon": "oak_planks", "emoji": "🪵", "count": 4, "note": "any wood" }`
- *   (`icon` may be a slug, `icon:<slug>`, `app:<id>` or an emoji; the emoji is the fallback when the
+ *   (`icon` may be a slug, `icon:<slug>`, `image:<id>`, `app:<id>` or an emoji; the emoji is the fallback when the
  *   picture is missing).
  *
  * `null`, `""`, `"."` or `"-"` is an empty slot in a grid or an empty table cell.
@@ -81,6 +83,14 @@ export type VisualSpec =
       cards: (string | (ItemObject & { text?: string; value?: string | number; tags?: string[] }))[]
     }
   | {
+      type: 'list'
+      title?: string
+      /** Numbers before the titles (default true) */
+      numbered?: boolean
+      /** Rows with a picture on the left: a shopping list, places to visit, mods to install */
+      items: (string | ListItemSpec)[]
+    }
+  | {
       type: 'table'
       title?: string
       columns: string[]
@@ -121,6 +131,23 @@ export type GridSpec = {
   result?: Item | Item[]
 }
 
+/** One row of a list: picture, bold title, a line of text, bold label rows, a note. */
+export type ListItemSpec = {
+  title?: string
+  /** `image:<id>` (find_image), `icon:<slug>`, an emoji or `app:<id>` */
+  image?: string
+  emoji?: string
+  /** One line under the title (`subtitle` or `description` also work) */
+  text?: string
+  /** Label → value rows, `{"Quantity": "Lots!"}`, or `[["Quantity", "Lots!"]]` */
+  fields?: Record<string, string | number> | [string, string | number][] | { label: string; value: string | number }[]
+  note?: string
+  /** Shows a checkbox (ticking it changes only what is shown, not the answer) */
+  checked?: boolean
+  /** A short badge after the title ("¥398") */
+  value?: string | number
+}
+
 export type TreeSpec = string | (ItemObject & { children?: TreeSpec[] })
 export type ItemObject = { label?: string; icon?: string; emoji?: string; count?: number; note?: string }
 export type Item = string | ItemObject
@@ -133,6 +160,8 @@ export type VItem = {
   icon?: string
   /** An MvL OS app id */
   app?: string
+  /** A found picture's id (find_image), served from /api/agents/images/<id> */
+  image?: string
   emoji?: string
   count?: number
   note?: string
@@ -146,6 +175,7 @@ export type TreeNode = VItem & { children: TreeNode[] }
 export type Series = { name: string; values: (number | null)[] }
 export type Card = VItem & { text?: string; value?: string; tags: string[] }
 export type TimelineEvent = VItem & { when?: string }
+export type ListRow = { title: string; picture?: VItem; text?: string; fields: [string, string][]; note?: string; checked?: boolean; value?: string; tags: string[] }
 
 export type Visual =
   | { type: 'flow'; title?: string; direction: Direction; nodes: FlowNode[]; edges: FlowEdge[]; groups: { id: string; label: string }[] }
@@ -154,17 +184,18 @@ export type Visual =
   | { type: 'timeline'; title?: string; events: TimelineEvent[] }
   | { type: 'chart'; title?: string; chart: 'bar' | 'line' | 'pie'; labels: string[]; series: Series[]; unit?: string; x?: string; y?: string }
   | { type: 'cards'; title?: string; cards: Card[] }
+  | { type: 'list'; title?: string; numbered: boolean; items: ListRow[] }
   | { type: 'table'; title?: string; columns: string[]; rows: (VItem | null)[][] }
   | { type: 'scene'; title?: string; caption?: string; scene: SceneSvg }
 
 export type VisualType = Visual['type']
-export const VISUAL_TYPES: VisualType[] = ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'table', 'scene']
+export const VISUAL_TYPES: VisualType[] = ['flow', 'grid', 'tree', 'timeline', 'chart', 'cards', 'list', 'table', 'scene']
 
 export type VisualProblem = { path: string; message: string }
 export type VisualResult = { ok: true; visuals: Visual[]; warnings: VisualProblem[] } | { ok: false; errors: VisualProblem[]; warnings: VisualProblem[] }
 
 /** Limits that keep a spec cheap to lay out and draw; past them the rest is left out (a warning). */
-export const LIMITS = { visuals: 12, nodes: 150, edges: 300, gridSide: 12, grids: 24, results: 6, series: 8, points: 400, cards: 100, events: 200, treeNodes: 300, columns: 20, rows: 300, text: 200 }
+export const LIMITS = { visuals: 12, nodes: 150, edges: 300, gridSide: 12, grids: 24, results: 6, series: 8, points: 400, cards: 100, items: 100, fields: 12, events: 200, treeNodes: 300, columns: 20, rows: 300, text: 200 }
 
 import { sanitizeSvg, type IconPlacement, type SceneSvg } from './svg.ts'
 
@@ -342,6 +373,13 @@ export const humanize = (slug: string) => {
   const t = slug.replace(/[_-]+/g, ' ').trim()
   return t ? t[0].toUpperCase() + t.slice(1) : slug
 }
+/** A found picture's id as image:<id> carries it (find_image's ids; generated pictures' too). */
+export const IMAGE_ID = /^[A-Za-z0-9_-]{6,64}$/
+/** "image:<id>" as its id, or undefined. */
+export function imageRef(raw: string): string | undefined {
+  const m = /^image:([A-Za-z0-9_-]{6,64})$/i.exec(raw.trim())
+  return m ? m[1] : undefined
+}
 const EMPTY = new Set(['', '.', '-', '_', 'empty', 'none', 'null'])
 
 /** Puts an icon field's value (slug, icon:slug, app:id or emoji) on `it`. */
@@ -349,6 +387,9 @@ function iconInto(it: VItem, raw: string) {
   const r = raw.trim()
   const e = EMOJI.exec(r)
   if (e && e[0].length === r.length) return void (it.emoji ??= r)
+  const img = imageRef(r)
+  if (img) return void (it.image = img)
+  if (/^image:/i.test(r)) return
   if (/^app:/i.test(r)) {
     const id = r.slice(4).trim().toLowerCase()
     if (/^[a-z][a-z0-9-]{0,30}$/.test(id)) it.app = id
@@ -376,12 +417,15 @@ export function readItem(v: unknown): VItem | null {
       it.count = Number(post[2])
       s = post[1].trim()
     }
-    const ref = /^(icon|app):([A-Za-z0-9_-]+)\s*(.*)$/i.exec(s)
+    const ref = /^(icon|app|image):([A-Za-z0-9_-]+)\s*(.*)$/i.exec(s)
     if (ref) {
-      if (ref[1].toLowerCase() === 'app') it.app = ref[2].toLowerCase()
-      else it.icon = iconSlug(ref[2])
+      const kind = ref[1].toLowerCase()
+      if (kind === 'app') it.app = ref[2].toLowerCase()
+      else if (kind === 'image') {
+        if (IMAGE_ID.test(ref[2])) it.image = ref[2]
+      } else it.icon = iconSlug(ref[2])
       s = ref[3].trim()
-      if (!s) s = humanize(ref[2].toLowerCase())
+      if (!s && kind !== 'image') s = humanize(ref[2].toLowerCase())
     }
     const e = EMOJI.exec(s)
     if (e) {
@@ -393,8 +437,11 @@ export function readItem(v: unknown): VItem | null {
   }
   if (isObj(v)) {
     const it: VItem = { label: text(pick(v, 'label', 'name', 'title', 'item', 'text')) ?? '' }
-    const icon = pick(v, 'icon', 'image', 'img')
+    const icon = pick(v, 'icon', 'image', 'img', 'picture', 'photo')
     if (typeof icon === 'string') iconInto(it, icon)
+    // An image next to an icon: the icon is the fallback picture.
+    const photo = pick(v, 'image', 'photo', 'picture')
+    if (typeof photo === 'string' && photo !== icon) iconInto(it, photo)
     const emoji = text(v.emoji)
     if (emoji) it.emoji = emoji
     const app = text(v.app)
@@ -422,11 +469,12 @@ function guessType(o: Obj): VisualType | undefined {
   if (o.events || o.timeline || o.milestones) return 'timeline'
   if (o.series || o.data || o.values) return 'chart'
   if (o.cards) return 'cards'
+  if (o.items || o.products) return 'list'
   if (o.columns || o.rows || o.headers) return 'table'
   return undefined
 }
 
-const TYPE_ALIASES: Record<string, VisualType> = { flowchart: 'flow', diagram: 'flow', graph: 'flow', process: 'flow', recipe: 'grid', recipes: 'grid', crafting: 'grid', bar: 'chart', line: 'chart', pie: 'chart', card: 'cards', list: 'cards', timeline: 'timeline', events: 'timeline', table: 'table', tree: 'tree', mindmap: 'tree', drawing: 'scene', svg: 'scene', picture: 'scene', illustration: 'scene', sketch: 'scene' }
+const TYPE_ALIASES: Record<string, VisualType> = { flowchart: 'flow', diagram: 'flow', graph: 'flow', process: 'flow', recipe: 'grid', recipes: 'grid', crafting: 'grid', bar: 'chart', line: 'chart', pie: 'chart', card: 'cards', list: 'list', checklist: 'list', shopping: 'list', shopping_list: 'list', shoppinglist: 'list', items: 'list', timeline: 'timeline', events: 'timeline', table: 'table', tree: 'tree', mindmap: 'tree', drawing: 'scene', svg: 'scene', picture: 'scene', illustration: 'scene', sketch: 'scene' }
 
 type Ctx = { errors: VisualProblem[]; warnings: VisualProblem[] }
 const warn = (c: Ctx, path: string, message: string) => void c.warnings.push({ path, message })
@@ -700,7 +748,10 @@ function readScene(o: Obj, c: Ctx, p: string): Visual | null {
   const icons: IconPlacement[] = []
   ;(list(o.icons) ?? []).forEach((ic, i) => {
     if (!isObj(ic)) return warn(c, `${p}icons[${i}]`, 'An icon is {"icon": "slug", "x": 10, "y": 10, "size": 32}')
-    const slug = typeof pick(ic, 'icon', 'slug', 'name') === 'string' ? iconSlug(String(pick(ic, 'icon', 'slug', 'name'))) : undefined
+    const named = pick(ic, 'icon', 'image', 'slug', 'name')
+    // A found picture (image:<id>) goes by its whole reference, an icon by its slug.
+    const found = typeof named === 'string' ? imageRef(named) : undefined
+    const slug = found ? `image:${found}` : typeof named === 'string' ? iconSlug(named) : undefined
     const x = Number(ic.x)
     const y = Number(ic.y)
     if (!slug || !Number.isFinite(x) || !Number.isFinite(y)) return warn(c, `${p}icons[${i}]`, 'An icon needs a slug, "x" and "y"; left out')
@@ -712,6 +763,69 @@ function readScene(o: Obj, c: Ctx, p: string): Visual | null {
   if (!r.ok) return (err(c, `${p}svg`, r.message), null)
   const caption = text(pick(o, 'caption', 'note', 'description', 'subtitle'))
   return { type: 'scene', title: text(o.title), ...(caption ? { caption: clip(caption, 400) } : {}), scene: r.scene }
+}
+
+/** A list row's picture: image:<id>, icon:<slug>, app:<id> or an emoji. */
+function pictureOf(r: Obj): VItem | undefined {
+  const it: VItem = { label: '' }
+  for (const k of ['icon', 'image', 'img', 'picture', 'photo', 'thumbnail']) {
+    const v = r[k]
+    if (typeof v === 'string' && v.trim()) iconInto(it, v)
+  }
+  const emoji = text(r.emoji)
+  if (emoji) it.emoji = emoji
+  return it.image || it.icon || it.app || it.emoji ? it : undefined
+}
+
+/** Label → value rows from an object, a list of pairs, a list of {label, value} or "Label: value" strings. */
+function readFields(v: unknown): [string, string][] {
+  const out: [string, string][] = []
+  const add = (k: unknown, val: unknown) => {
+    const label = text(k)
+    const value = typeof val === 'boolean' ? (val ? 'Yes' : 'No') : text(val)
+    if (label && value && out.length < LIMITS.fields) out.push([clip(label, 40), value])
+  }
+  if (isObj(v)) for (const [k, val] of Object.entries(v)) add(k, val)
+  else if (Array.isArray(v))
+    for (const f of v) {
+      if (Array.isArray(f)) add(f[0], f[1])
+      else if (isObj(f)) add(pick(f, 'label', 'name', 'key'), pick(f, 'value', 'text', 'val'))
+      else if (typeof f === 'string' && /^[^:]{1,40}:\s*\S/.test(f)) add(f.slice(0, f.indexOf(':')), f.slice(f.indexOf(':') + 1))
+    }
+  return out
+}
+
+function readList(o: Obj, c: Ctx, p: string): Visual | null {
+  const raw = list(pick(o, 'items', 'products', 'entries', 'cards', 'rows', 'list'))
+  if (!raw) return (err(c, `${p}items`, 'A list needs "items": [{"title": "...", "image": "image:<id>", "text": "..."}]'), null)
+  const items = capped(c, `${p}items`, raw, LIMITS.items)
+    .map((x, i): ListRow | null => {
+      if (typeof x === 'string' || typeof x === 'number') {
+        const it = readItem(x)
+        if (!it) return null
+        const { label, count, ...pic } = it
+        const has = pic.image || pic.icon || pic.app || pic.emoji
+        return { title: count !== undefined && count !== 1 ? `${count}× ${label}` : label, ...(has ? { picture: { ...pic, label } } : {}), fields: [], tags: [] }
+      }
+      if (!isObj(x)) return (warn(c, `${p}items[${i}]`, 'An item is {"title": "...", "text": "..."}; left out'), null)
+      const title = text(pick(x, 'title', 'label', 'name', 'item', 'product')) ?? ''
+      const picture = pictureOf(x)
+      const body = text(pick(x, 'text', 'subtitle', 'description', 'desc', 'summary', 'body'))
+      const fields = readFields(pick(x, 'fields', 'details', 'attributes', 'props', 'properties', 'info'))
+      // Common fields written on the item itself.
+      for (const [k, name] of [['quantity', 'Quantity'], ['qty', 'Quantity'], ['price', 'Price'], ['where', 'Where'], ['store', 'Store'], ['shop', 'Shop']] as const)
+        if (x[k] !== undefined && !fields.some(([l]) => l.toLowerCase() === name.toLowerCase())) fields.push(...readFields({ [name]: x[k] }))
+      const note = text(pick(x, 'note', 'notes', 'tip', 'comment'))
+      const checked = pick(x, 'checked', 'done', 'bought', 'got')
+      const value = text(pick(x, 'value', 'badge'))
+      const tags = (list(x.tags) ?? []).map((t) => text(t)).filter((t): t is string => !!t).slice(0, 8)
+      if (!title && !body && !picture && !fields.length) return (warn(c, `${p}items[${i}]`, 'Empty item left out'), null)
+      return { title, ...(picture ? { picture: { ...picture, label: title } } : {}), ...(body ? { text: body } : {}), fields, ...(note ? { note } : {}), ...(typeof checked === 'boolean' ? { checked } : {}), ...(value ? { value: clip(value, 30) } : {}), tags }
+    })
+    .filter((x): x is ListRow => !!x)
+  if (!items.length) return (err(c, `${p}items`, 'The list has no items'), null)
+  const numbered = pick(o, 'numbered', 'numbers', 'ordered')
+  return { type: 'list', title: text(o.title), numbered: numbered === undefined ? true : numbered !== false && numbered !== 'false', items }
 }
 
 function readOne(raw: unknown, c: Ctx, p: string): Visual | null {
@@ -796,6 +910,8 @@ function readOne(raw: unknown, c: Ctx, p: string): Visual | null {
     }
     case 'scene':
       return readScene(o, c, p)
+    case 'list':
+      return readList(o, c, p)
     case 'table': {
       let columns = (list(pick(o, 'columns', 'headers', 'head', 'header')) ?? []).map((h) => (isObj(h) ? text(pick(h, 'label', 'name', 'title')) : text(h)) ?? '')
       const raw = list(pick(o, 'rows', 'data', 'body'))
@@ -913,6 +1029,18 @@ export function visualText(v: Visual): string[] {
     }
     case 'cards':
       for (const c of v.cards) out.push(`• ${[itemText(c), c.value && `[${c.value}]`].filter(Boolean).join(' ')}${c.text || c.note ? ` — ${c.text ?? c.note}` : ''}${c.tags.length ? ` (${c.tags.join(', ')})` : ''}`)
+      break
+    case 'list':
+      v.items.forEach((it, i) => {
+        const box = it.checked === undefined ? '' : it.checked ? '[x] ' : '[ ] '
+        const head = [it.picture?.emoji, it.title].filter(Boolean).join(' ')
+        out.push(`${v.numbered ? `${i + 1}. ` : '• '}${box}${head}${it.value ? ` [${it.value}]` : ''}`)
+        const pad = v.numbered ? ' '.repeat(String(i + 1).length + 2) : '  '
+        if (it.text) out.push(`${pad}${it.text}`)
+        for (const [l, val] of it.fields) out.push(`${pad}${l}: ${val}`)
+        if (it.note) out.push(`${pad}Note: ${it.note}`)
+        if (it.tags.length) out.push(`${pad}(${it.tags.join(', ')})`)
+      })
       break
     case 'table':
       if (v.columns.some(Boolean)) out.push(v.columns.join(' | '))
