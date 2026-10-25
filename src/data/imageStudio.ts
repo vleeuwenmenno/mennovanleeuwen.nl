@@ -244,7 +244,7 @@ export function formFromSettings(form: StudioForm, recorded: ImageGenerationSett
 /** A source's size on the grid (Use its size): its own when it fits, else about edge² pixels at its shape. */
 export function sourceSize(source: { width: number; height: number }, edge: number) {
   let w = source.width, h = source.height
-  if (w > SIZE_LIMITS.max || h > SIZE_LIMITS.max || w * h > SIZE_LIMITS.area) {
+  if (w > SIZE_LIMITS.max || h > SIZE_LIMITS.max || w * h > SIZE_LIMITS.area || w < SIZE_LIMITS.min || h < SIZE_LIMITS.min) {
     const k = Math.sqrt((edge * edge) / (w * h))
     w *= k
     h *= k

@@ -133,6 +133,8 @@ type Live = { content: string; thinking: string }
 export function Agents({ win }: { win: WinState }) {
   const account = useAccount()
   const wm = useWM()
+  // The Image Studio needs ComfyUI, not Ollama: without an Ollama key it opens on its own.
+  const [studioOnly, setStudioOnly] = useState(win.props.tab === 'studio')
   if (account.status === 'loading') return <div className="nb-blank muted">Loading…</div>
   if (account.status !== 'user')
     return (
@@ -145,12 +147,23 @@ export function Agents({ win }: { win: WinState }) {
         )}
       </div>
     )
+  if (!account.integrations.ollama && studioOnly)
+    return (
+      <div className="nb agt is-chat">
+        <section className="nb-main">
+          <ImageStudio threads={[]} onBack={() => setStudioOnly(false)} onOpenThread={() => setStudioOnly(false)} onSettings={() => wm.open('settings', { section: 'agents', t: String(Date.now()) })} />
+        </section>
+      </div>
+    )
   if (!account.integrations.ollama)
     return (
       <div className="nb-blank">
         <p className="muted">Agents runs on Ollama Cloud. Add an API key from your Ollama account to start.</p>
         <button className="btn btn-primary" onClick={() => wm.open('settings', { section: 'integrations', t: String(Date.now()) })}>
           Open Settings → Integrations
+        </button>
+        <button className="btn" onClick={() => setStudioOnly(true)} title="Generate pictures with your own ComfyUI; no Ollama key needed">
+          Open Image Studio
         </button>
       </div>
     )

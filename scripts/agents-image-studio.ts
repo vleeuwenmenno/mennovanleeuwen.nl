@@ -85,6 +85,7 @@ const catalog: StudioCatalog = {
   const img2img = studioRunInput({ ...ready, source: { id: 'abc', name: 's.png', url: '/api/agents/images/abc', width: 800, height: 600 }, denoise: 0.6 })
   assert.equal(img2img.source_image_id, 'abc'); assert.equal(img2img.denoise, 0.6)
   assert.deepEqual(sourceSize({ width: 800, height: 600 }, 1024), { width: 832, height: 576 })
+  assert.deepEqual(sourceSize({ width: 48, height: 32 }, 1024), { width: 1280, height: 832 }, 'a small source scales up at its shape')
   assert.ok(sourceSize({ width: 4000, height: 3000 }, 1024).width * sourceSize({ width: 4000, height: 3000 }, 1024).height <= SIZE_LIMITS.area)
   // Recipes: the model's own when it is for this preset, else the family default; Turbo CFG 1.
   const civitai = studioRecipe('sdxl', 'SDXL/studio.safetensors', catalog, { preset: 'sdxl', sampler: 'euler_ancestral', scheduler: 'normal', steps: 30, cfg: 5.5, clip_skip: 2, width: 832, height: 1216, source: 'civitai_examples', agree: '4 of 5' })
