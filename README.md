@@ -317,17 +317,19 @@ The server downloads the picture, keeps it per account (`agent_found_images`, co
 storage quota) and serves it at `GET /api/agents/images/<id>` to that account only, with its own
 type, `nosniff`, a sandboxing CSP and `private, no-cache` with an ETag (so a copy cached by the
 browser is not shown to whoever uses it after signing out): the browser never asks the other
-site. The same picture again (by address or by its bytes) reuses the kept one, and a page read in
-the last half hour is not read again. Pictures unused for 90 days that no message or note
-mentions (in any case, and inside JSON escapes) are pruned (at most every six hours per account,
-after a new one is kept); reusing a picture counts as using it.
+site. The same picture again (by address or by its bytes) reuses the kept one, and a page this
+account read for the same query in the last half hour is not read again (the cache is per account). Pictures unused for 90 days that no message or note
+mentions (in any case, and inside JSON escapes; tool calls and results of the last 90 days count
+too) are pruned (at most every six hours per account, after a new one is kept); reusing a picture
+counts as using it, and so does showing it (marked at most once a day).
 
 These are pages and pictures anyone can put in a search result, so:
 
 - Only public addresses, checked after DNS and again at every redirect (at most three), and
   connected to exactly as checked (no DNS rebinding), through agents of our own that never use
   `HTTP(S)_PROXY` (with `NODE_USE_ENV_PROXY` the global ones would let a proxy resolve the name
-  again; this holds for every pinned request in [`server/egress.ts`](server/egress.ts)); never an IP address in the link, a name
+  again; this holds for every pinned request in [`server/egress.ts`](server/egress.ts), ComfyUI's
+  WebSocket included); never an IP address in the link, a name
   without a dot or a `.local`/`.internal` one, credentials in the address or an unusual port. This
   holds for admins too.
 - No cookies or credentials are sent, only a plain User-Agent.
@@ -336,13 +338,16 @@ These are pages and pictures anyone can put in a search result, so:
   account.
 - A picture must be PNG, JPEG, WebP or a still GIF both by its `Content-Type` and by its bytes
   (SVG, HTML posing as a picture and animations are refused), 120 to 8000 px a side and not a
-  banner (over 4:1). A PNG with a second header is refused. A PNG over 768 px and up to about
-  4.2 million pixels is scaled down (an APNG keeps its first frame); the decoder
+  banner (over 4:1), and at most 16 million pixels (what the browser has to decode). A PNG with a
+  second header, or over 2.5 million pixels, is refused; one over 768 px is scaled down, and an APNG
+  is always flattened to its first frame (or refused when that fails). At most two PNGs are decoded
+  per call (about 150 ms each at the limit, on the main thread); the decoder
   ([`server/pngResize.ts`](server/pngResize.ts)) takes the header only as the first chunk, checks
   the pixel budget before inflating or allocating anything and inflates no more than that size
   needs. Other formats are kept as they came, since the server has no decoder for them.
-- The `page` is read only when that exact address came from outside the model: the user's
-  messages, search results or a page read in the thread. Anything else (an address the model made
+- The `page` is read only when that exact address is one the user wrote or a search returned in
+  the thread; not the links of a page read (a hostile page could offer many and learn from which
+  one is picked). Anything else (an address the model made
   up, which could carry something pasted in the chat) is left out, and the search still runs.
 
 `pnpm check:agents-find-image` runs it against a stand-in web of shops

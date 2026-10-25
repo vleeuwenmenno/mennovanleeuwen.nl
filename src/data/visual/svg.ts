@@ -277,7 +277,7 @@ export function sanitizeSvg(src: string, opts: SanitizeOptions = {}): SanitizeRe
       if (lower === 'href' || lower === 'xlink:href') {
         if ((tag === 'use' || tag === 'linearGradient' || tag === 'radialGradient' || tag === 'pattern') && /^#[A-Za-z_][\w.-]{0,63}$/.test(value)) out.push(['href', value])
         else if (tag === 'image' && /^icon:[a-z0-9_-]{1,64}$/i.test(value)) out.push(['href', value.toLowerCase()])
-        else if (tag === 'image' && /^image:[A-Za-z0-9_-]{6,64}$/.test(value)) out.push(['href', value])
+        else if (tag === 'image' && /^image:[A-Za-z0-9_-]{6,64}$/i.test(value)) out.push(['href', value.toLowerCase()])
         else if (tag === 'image' || tag === 'use') return null
         continue
       }

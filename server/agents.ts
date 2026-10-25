@@ -1795,7 +1795,7 @@ function sameUrl(raw: string): string | null {
 }
 
 /** Addresses this thread got from outside the model. */
-function givenUrls(thread: string): Set<string> {
+function givenUrls(thread: string, pages = true): Set<string> {
   const given = new Set<string>()
   const add = (v: unknown) => {
     const u = typeof v === 'string' ? sameUrl(v) : null
@@ -1804,7 +1804,8 @@ function givenUrls(thread: string): Set<string> {
   const msgs = messagesOf(thread)
   msgs.forEach((m, i) => {
     if (m.role === 'user') for (const u of m.content.match(URL_IN_TEXT) ?? []) add(u)
-    if (m.role !== 'tool' || (m.toolName !== 'web_search' && m.toolName !== 'web_fetch')) return
+    // `pages` false: search results and the user's own words only, not the links of pages read.
+    if (m.role !== 'tool' || (m.toolName !== 'web_search' && (m.toolName !== 'web_fetch' || !pages))) return
     let out: unknown
     try {
       out = JSON.parse(m.content)
@@ -2380,13 +2381,14 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
       case 'find_image': {
         const query = argString(args, 'query')
         if (!query) throw new Error('A query is required')
-        // A page the model wrote itself could carry what is in the thread (a secret pasted in the
-        // chat included) to someone's server, and nothing here asks first. So the page is read only
-        // when that exact address came from outside the model: the user's messages, search results
-        // or a page read (givenUrls). Otherwise it is left out and the search still runs.
+        // find_image never asks first, so its page is read only when that exact address is one the
+        // user wrote or a search returned. Not an address the model wrote (it could carry anything
+        // in the thread, a secret pasted in the chat included), and not one of the links of a page
+        // read either (a hostile page could offer many and learn from which one is picked). Any
+        // other page is left out and the search still runs.
         const asked = typeof args.page === 'string' ? args.page.trim() : ''
         const given = asked ? sameUrl(asked) : null
-        const page = given && /^https?:\/\//i.test(asked) && givenUrls(thread).has(given) ? given : undefined
+        const page = given && /^https?:\/\//i.test(asked) && givenUrls(thread, false).has(given) ? given : undefined
         const found = await findImages(user, key, { query, page, count: Number(args.count) || 1 }, limit)
         const skipped = asked && !page ? ['The page was not read: use one from search results or the user\'s messages.'] : []
         return JSON.stringify({

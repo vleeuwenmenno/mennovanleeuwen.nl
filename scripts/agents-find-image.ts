@@ -44,6 +44,18 @@ function png(w: number, h: number): Buffer {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data.set([(x * 255) / w, (y * 255) / h, 120, 255], (y * w + x) * 4)
   return encodePng({ width: w, height: h, data })
 }
+/** An APNG: a PNG with an acTL chunk before its image data (`depth` 16 is one this decoder can't read). */
+function apng(w: number, h: number, depth = 8): Buffer {
+  const still = png(w, h)
+  if (depth !== 8) still[24] = depth
+  const body = Buffer.from([0, 0, 0, 2, 0, 0, 0, 0])
+  const head = Buffer.alloc(8)
+  head.writeUInt32BE(8, 0)
+  head.write('acTL', 4, 'ascii')
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), body])) >>> 0, 0)
+  return Buffer.concat([still.subarray(0, 33), head, body, crc, still.subarray(33)])
+}
 function jpeg(w: number, h: number): Buffer {
   const app0 = [0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]
   const sof = [0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]
@@ -133,7 +145,11 @@ function gif(w: number, h: number, frames: number): Buffer {
   await new Promise<void>((r) => target.listen(0, '127.0.0.1', r))
   const port = (target.address() as { port: number }).port
   // A name the proxy would resolve itself; the pinned address is the target's.
-  const code = `const { fetchPinned } = await import('./server/egress.ts'); const r = await fetchPinned(new URL('http://pinned.test:${port}/'), {}, [{ address: '127.0.0.1', family: 4 }]); console.log(await r.text())`
+  // fetchPinned, and the raw request ComfyUI's WebSocket makes (pinnedOptions, server/comfyProgress.ts).
+  const code = `const { fetchPinned, pinnedLookup, pinnedOptions } = await import('./server/egress.ts'); const { request } = await import('node:http')
+    const u = new URL('http://pinned.test:${port}/'); const r = await fetchPinned(u, {}, [{ address: '127.0.0.1', family: 4 }])
+    const raw = await new Promise((done) => request(u, pinnedOptions(u, pinnedLookup([{ address: '127.0.0.1', family: 4 }])), (res) => { let t = ''; res.on('data', (d) => (t += d)); res.on('end', () => done(t)) }).on('error', (e) => done(String(e))).end())
+    console.log(await r.text(), raw)`
   const out = await new Promise<string>((done) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: `http://127.0.0.1:${(proxy.address() as { port: number }).port}`, http_proxy: '', NO_PROXY: '', no_proxy: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
     let text = ''
@@ -141,7 +157,7 @@ function gif(w: number, h: number, frames: number): Buffer {
     child.stderr.on('data', (d) => (text += d))
     child.on('close', () => done(text.trim()))
   })
-  check(`egress: a pinned request with NODE_USE_ENV_PROXY goes to the pinned address, not the proxy (${out.slice(0, 80)}; proxy ${proxied}, direct ${direct})`, out === 'direct' && proxied === 0 && direct === 1)
+  check(`egress: pinned requests (fetchPinned, pinnedOptions) with NODE_USE_ENV_PROXY go to the pinned address, not the proxy (${out.slice(0, 80)}; proxy ${proxied}, direct ${direct})`, out === 'direct direct' && proxied === 0 && direct === 2)
   proxy.close()
   target.close()
 }
@@ -219,6 +235,7 @@ const ollama = createServer((req, res) => {
     const path = new URL(req.url ?? '/', 'http://x').pathname
     if (path === '/api/tags') return send(res, 200, { models: [{ name: MODEL }] })
     if (path === '/api/show') return send(res, 200, { capabilities: ['completion', 'tools'], model_info: { 'x.context_length': 32768 } })
+    if (path === '/api/web_fetch') return send(res, 200, { title: 'Links', content: 'Many links', links: ['https://shop-c.test/kyusoku'] })
     if (path === '/api/web_search') {
       const q = (JSON.parse(raw) as { query: string }).query
       return send(res, 200, { results: (SEARCH[q] ?? []).map((url) => ({ title: q, url, content: q })) })
@@ -234,7 +251,9 @@ const ollama = createServer((req, res) => {
     const at = body.messages.map((m) => m.role === 'user' && m.content.startsWith('SCENARIO ')).lastIndexOf(true)
     const scenario = body.messages[at]?.content.slice('SCENARIO '.length).split(/\s/)[0] ?? ''
     const round = body.messages.slice(at + 1).filter((m) => m.role === 'assistant').length
-    const message = round === 0 && CALLS[scenario] ? { role: 'assistant', content: '', tool_calls: [{ function: { name: 'find_image', arguments: CALLS[scenario] } }] } : { role: 'assistant', content: `DONE ${scenario}` }
+    // harvest: a page is read first (web_fetch), then find_image asks for one of its links.
+    const steps: Record<string, unknown>[] = scenario === 'harvest' ? [{ name: 'web_fetch', arguments: { url: 'https://hub.test/links' } }, { name: 'find_image', arguments: { query: 'nothing', page: 'https://shop-c.test/kyusoku' } }] : CALLS[scenario] ? [{ name: 'find_image', arguments: CALLS[scenario] }] : []
+    const message = steps[round] ? { role: 'assistant', content: '', tool_calls: [{ function: steps[round] }] } : { role: 'assistant', content: `DONE ${scenario}` }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
     res.write(`${JSON.stringify({ model: MODEL, message, done: false })}\n`)
     res.end(`${JSON.stringify({ model: MODEL, message: { role: 'assistant', content: '' }, done: true, prompt_eval_count: 10, eval_count: 5 })}\n`)
@@ -251,7 +270,7 @@ const server = new Server({
   OLLAMA_API_KEY: 'fake-ollama',
   GITHUB_CLIENT_ID: 'x',
   GITHUB_CLIENT_SECRET: 'x',
-  ADMIN_USERS: LOGIN,
+  ADMIN_USERS: `${LOGIN},find-image-other`,
   DATA_DIR: DATA,
   NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import ./scripts/find-image-fake-net.ts`,
   FIND_IMAGE_FAKE_WEB: webUrl,
@@ -262,10 +281,14 @@ const sid = randomBytes(24).toString('hex')
 const now = Date.now()
 database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (1, 1, ?, ?, ?, ?)').run(LOGIN, encrypt('none'), now, now)
 database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(sid), now, now + 86400_000)
+const sid2 = randomBytes(24).toString('hex')
+database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (2, 2, ?, ?, ?, ?)').run('find-image-other', encrypt('none'), now, now)
+database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 2, ?, ?)').run(sha256(sid2), now, now + 86400_000)
+let as = sid
 await server.start()
 
 const call = async (method: string, path: string, body?: unknown, cookie = true) =>
-  fetch(`${server.origin}${path}`, { method, headers: { ...(cookie ? { Cookie: `mvlos_sid=${sid}`, ...(await asPage(sid)) } : {}), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  fetch(`${server.origin}${path}`, { method, headers: { ...(cookie ? { Cookie: `mvlos_sid=${as}`, ...(await asPage(as)) } : {}), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 const api = async <T = Record<string, any>>(method: string, path: string, body?: unknown): Promise<T> => {
   const res = await call(method, path, body)
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)
@@ -342,10 +365,48 @@ try {
   const ex = await scenario('exfil', 'my password is hunter2')
   check('an exfiltrating page address is never requested', ex.images.length === 0 && !hits.slice(beforeExfil).some((h) => h.host === 'attacker.test') && /page was not read/.test((ex.skipped ?? []).join(' ')))
 
+  // 7b. Links of a page read are not enough for find_image's page (a hostile page offering many
+  //     links could learn from which one is picked); web_fetch still reads them.
+  const harvested = await scenario('harvest', 'read https://hub.test/links')
+  check(`a link from a page read is not taken as find_image's page (${JSON.stringify(harvested.skipped)})`, /page was not read/.test((harvested.skipped ?? []).join(' ')))
+
+  // 7c. The page cache is per account: another account reads the page again.
+  const beforeOther = hits.filter((h) => h.host === 'shop-a.test').length
+  as = sid2
+  const other = await scenario('jagabee')
+  const otherSees = (await call('GET', `/api/agents/images/${idOf(a.images[0].reference)}`)).status
+  as = sid
+  check('another account does not get this account\'s cached page', other.images.length === 1 && hits.filter((h) => h.host === 'shop-a.test').length === beforeOther + 1 && other.images[0].reference !== a.images[0].reference)
+  check(`nor can it see this account's picture (${otherSees})`, otherSees === 404)
+
   // 8. SearXNG as the provider: its image search goes first.
   await api('PUT', '/api/agents/websearch', { provider: 'searxng', searxng: { url: `${ollamaUrl}/searx` } })
   const m = await scenario('matcha')
   check(`SearXNG image search (categories=images) is used (${JSON.stringify(m).slice(0, 160)})`, m.images.length === 1 && m.images[0].site === 'tea.test' && m.images[0].width === 400)
+
+  // 8b. Pixel bombs and decode limits, through downloadImage itself (the stand-in web in this process).
+  ;(globalThis as Record<string, unknown>).__mvlFindImageNet = { resolve: async () => [{ address: '93.184.215.14', family: 4 }], request: (u: URL, init: RequestInit) => fetch(`${webUrl}/${u.host}${u.pathname}`, { ...init, redirect: 'manual' }) }
+  const { downloadImage } = await import('../server/findImage.ts')
+  const reason = (u: string, budget?: { left: number }) => downloadImage(u, AbortSignal.timeout(5000), budget).then((g) => `ok ${g.width}x${g.height} ${g.bytes.includes(Buffer.from('acTL')) ? 'animated' : 'still'}`, (e: Error) => e.message)
+  pages['bomb.test/big.jpg'] = (r) => send(r, 200, jpeg(4001, 4001), 'image/jpeg')
+  pages['bomb.test/big.webp'] = (r) => send(r, 200, webp(7999, 7999), 'image/webp')
+  pages['bomb.test/big.png'] = (r) => send(r, 200, png(1600, 1600), 'image/png')
+  pages['bomb.test/anim.png'] = (r) => send(r, 200, apng(300, 300), 'image/png')
+  pages['bomb.test/anim16.png'] = (r) => send(r, 200, apng(300, 300, 16), 'image/png')
+  pages['bomb.test/mid.png'] = (r) => send(r, 200, png(1000, 1000), 'image/png')
+  const jpg = await reason('https://bomb.test/big.jpg')
+  check(`a 16 MP+ JPEG is refused (${jpg})`, /too large/.test(jpg))
+  check('a 7999 × 7999 WebP is refused', /too large/.test(await reason('https://bomb.test/big.webp')))
+  const bigPng = await reason('https://bomb.test/big.png')
+  check(`a PNG over the decode budget is refused, not kept unscaled (${bigPng})`, /too large a PNG/.test(bigPng))
+  const anim = await reason('https://bomb.test/anim.png')
+  check(`a small APNG is flattened to a still PNG (${anim})`, anim === 'ok 300x300 still')
+  const anim16 = await reason('https://bomb.test/anim16.png')
+  check(`an APNG that can't be flattened is refused (${anim16})`, /animation/.test(anim16))
+  const budget = { left: 2 }
+  const runs = [await reason('https://bomb.test/mid.png', budget), await reason('https://bomb.test/mid.png', budget), await reason('https://bomb.test/mid.png', budget)]
+  check(`at most two PNG decodes per call (${runs.join(' | ')})`, runs[0] === 'ok 768x768 still' && runs[1] === 'ok 768x768 still' && /skipped/.test(runs[2]))
+  delete (globalThis as Record<string, unknown>).__mvlFindImageNet
 
   // 9. Reusing a picture by its bytes (another address, same picture) counts as using it.
   database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = 1').run(Date.now() - 100 * 86400_000)
@@ -358,15 +419,22 @@ try {
   const sameRow = database().prepare('SELECT used_at FROM agent_found_images WHERE user_id = 1 AND id = ?').get(idOf(a.images[0].reference)) as { used_at: number }
   check('the same bytes from another address reuse the kept picture and mark it used', same.images[0]?.reference === a.images[0].reference && Date.now() - sameRow.used_at < 60_000)
 
-  // 10. Pruning: unused for 90 days and mentioned nowhere goes; a mention keeps it, in any case
-  //     and inside JSON escapes (a synced note).
+  // 9b. Showing a picture counts as using it (once a day).
+  database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = 1').run(Date.now() - 100 * 86400_000)
+  await (await call('GET', `/api/agents/images/${idOf(m.images[0].reference)}`)).arrayBuffer()
+  const shown = database().prepare('SELECT used_at FROM agent_found_images WHERE user_id = 1 AND id = ?').get(idOf(m.images[0].reference)) as { used_at: number }
+  check('a GET marks the picture used', Date.now() - shown.used_at < 60_000)
+
+  // 10. Pruning: unused for 90 days and mentioned nowhere goes; a mention keeps it: in an answer
+  //     (any case), in a note (JSON escapes), in a recent tool result. Old tool results don't count.
   const { prune } = await import('../server/findImage.ts')
   database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = 1').run(Date.now() - 100 * 86400_000)
+  database().prepare("UPDATE agent_messages SET created_at = ? WHERE role = 'tool' AND content NOT LIKE ?").run(Date.now() - 100 * 86400_000, `%${idOf(c.images[0].reference)}%`)
   database().prepare("UPDATE agent_messages SET content = content || ? WHERE id = (SELECT MAX(id) FROM agent_messages WHERE role = 'assistant')").run(` ${a.images[0].reference.replace('image:', 'IMAGE:')}`)
   database().prepare('INSERT INTO state (user_id, key, value, updated_at) VALUES (1, ?, ?, ?)').run('notes', `{"text":"see \\u0069mage:${idOf(b.images[0].reference)}"}`, Date.now())
   prune({ id: 1 } as never, true)
   const left = (database().prepare('SELECT id FROM agent_found_images WHERE user_id = 1').all() as { id: string }[]).map((r) => r.id).sort()
-  check(`pruning keeps only what a thread or note mentions (${left.length} left)`, left.length === 2 && left.join() === [idOf(a.images[0].reference), idOf(b.images[0].reference)].sort().join())
+  check(`pruning keeps only what an answer, a note or a recent tool result mentions (${left.length} left)`, left.join() === [idOf(a.images[0].reference), idOf(b.images[0].reference), idOf(c.images[0].reference)].sort().join())
 } finally {
   await server.dispose()
   rmSync(DATA, { recursive: true, force: true })

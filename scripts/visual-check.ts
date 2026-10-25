@@ -259,6 +259,8 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
     const s = serializeSvg(found.scene, { colours, icons: new Map([['image:w0123456789abcdef01234567', png], ['image:gone12', null]]) })
     check('scene: a found picture is inlined, a missing one is a tile without a letter', s.includes(`<image href="${png}" x="1" y="1" width="30" height="30"/>`) && /<rect x="50" y="0" width="20" height="20"[^>]*stroke-dasharray="4 3"\/><text[^>]*><\/text>/.test(s), s)
   }
+  const upper = sanitizeSvg(`<svg viewBox="0 0 10 10"><image href="IMAGE:W0123456789ABCDEF01234567" width="5" height="5"/></svg>`)
+  check('scene: image:<id> is read in lower case, like list items (the picture route is lower case)', upper.ok && upper.scene.icons.join() === 'image:w0123456789abcdef01234567', upper)
   const placed = parseVisual('{"type":"scene","svg":"<svg viewBox=\'0 0 50 50\'><rect width=\'5\' height=\'5\'/></svg>","icons":[{"icon":"image:w0123456789abcdef01234567","x":1,"y":2,"size":20}]}')
   check('scene: an "icons" entry may be image:<id>', placed.ok && placed.visuals[0].type === 'scene' && placed.visuals[0].scene.icons.includes('image:w0123456789abcdef01234567'), placed)
   const evilIcon = out(`<svg viewBox="0 0 10 10"><image href="icon:x" width="5" height="5"/></svg>`, new Map([['x', 'data:image/svg+xml,<svg onload=alert(1)>']]))

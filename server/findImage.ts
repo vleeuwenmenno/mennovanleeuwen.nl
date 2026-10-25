@@ -44,7 +44,11 @@ const MIN_SIDE = 120
 const MAX_SIDE = 8000
 const SHRINK_TO = 768
 /** PNGs up to this many pixels are decoded to be scaled down; bigger ones are kept as they are. */
-const DECODE_PIXELS = 4_200_000
+const DECODE_PIXELS = 2_500_000
+/** At most this many pixels in any kept picture: what the browser has to decode (4 bytes a pixel). */
+const MAX_PIXELS = 16_000_000
+/** PNG decodes (each up to ~150 ms of the event loop at DECODE_PIXELS) per find_image call. */
+const DECODES_PER_CALL = 2
 const PRUNE_AFTER = 90 * 86400_000
 const UA = 'Mozilla/5.0 (compatible; mvlos find_image)'
 const WEB_PORTS = new Set(['', '80', '443', '8080', '8443'])
@@ -297,9 +301,9 @@ function titleOf(head: string): string | null {
 /** Pages that look like they are about one thing for sale, by their address. */
 const PRODUCTISH = /\/(products?|item|items|p|dp|shop|store|goods|catalog|detail)\b|[?&](product|item|sku)=/i
 
-/** A page's pictures, from a short-lived cache when it was read in the last half hour. */
+/** A page's pictures, from a short-lived cache when this account read it for this query in the last half hour. */
 const pageCache = new Map<string, { at: number; value: Promise<PageImages | null> }>()
-async function pageImages(raw: string, terms: string[], signal: AbortSignal): Promise<PageImages | null> {
+async function pageImages(user: User, raw: string, terms: string[], signal: AbortSignal): Promise<PageImages | null> {
   let url: URL
   try {
     url = new URL(raw)
@@ -307,7 +311,9 @@ async function pageImages(raw: string, terms: string[], signal: AbortSignal): Pr
     return null
   }
   url.hash = ''
-  const key = url.href
+  // Per account (a hit must not tell one account what another looked at) and per query (the
+  // candidates are scored against its words).
+  const key = `${user.id}\n${terms.join(' ')}\n${url.href}`
   const hit = pageCache.get(key)
   if (hit && Date.now() - hit.at < 30 * 60_000) return hit.value
   const value = (async () => {
@@ -403,15 +409,26 @@ export function refuseImage(i: Inspected | null): string | null {
   if (!i) return 'not a PNG, JPEG, WebP or GIF picture'
   if (i.animated && i.mime !== 'image/png') return 'an animation'
   if (i.width < MIN_SIDE || i.height < MIN_SIDE) return `too small (${i.width}×${i.height})`
-  if (i.width > MAX_SIDE || i.height > MAX_SIDE) return `too large (${i.width}×${i.height})`
+  if (i.width > MAX_SIDE || i.height > MAX_SIDE || i.width * i.height > MAX_PIXELS) return `too large (${i.width}×${i.height})`
+  // A PNG is served scaled down (or flattened, for an APNG), so it has to be one we can decode.
+  if (i.mime === 'image/png' && i.width * i.height > DECODE_PIXELS) return `too large a PNG to scale down (${i.width}×${i.height})`
   if (Math.max(i.width / i.height, i.height / i.width) > 4) return 'a banner or strip, not a picture of one thing'
   return null
 }
 
-/** A PNG scaled down to at most SHRINK_TO a side (also an APNG's first frame), or the bytes unchanged. */
-function shrinkPng(bytes: Buffer, i: Inspected): { bytes: Buffer; width: number; height: number } {
+/** The decodes a find_image call may still make. */
+export type DecodeBudget = { left: number }
+
+/**
+ * A PNG scaled down to at most SHRINK_TO a side, or the bytes unchanged when it is small already.
+ * An APNG is always flattened to its first frame, whatever its size, or refused. Decoding takes the
+ * event loop (bounded by DECODE_PIXELS), so a call gets only DECODES_PER_CALL of them.
+ */
+function shrinkPng(bytes: Buffer, i: Inspected, budget: DecodeBudget): { bytes: Buffer; width: number; height: number } {
   const same = { bytes, width: i.width, height: i.height }
-  if ((Math.max(i.width, i.height) <= SHRINK_TO && !i.animated) || i.width * i.height > DECODE_PIXELS) return same
+  if (Math.max(i.width, i.height) <= SHRINK_TO && !i.animated) return same
+  if (budget.left <= 0) throw new Error('skipped: enough PNGs scaled down in this search')
+  budget.left--
   try {
     const src = decodePng(bytes, DECODE_PIXELS)
     const k = Math.min(1, SHRINK_TO / Math.max(src.width, src.height))
@@ -442,13 +459,15 @@ function shrinkPng(bytes: Buffer, i: Inspected): { bytes: Buffer; width: number;
     const out = encodePng({ width: w, height: h, data })
     return out.length < bytes.length || i.animated || k < 1 ? { bytes: out, width: w, height: h } : same
   } catch {
-    // A PNG this reader can't decode (16-bit, interlaced) is kept as it came.
+    // A still PNG this reader can't decode (16-bit, interlaced) is kept as it came (it is within
+    // DECODE_PIXELS); an animation that can't be flattened is not kept.
+    if (i.animated) throw new Error('an animation that could not be flattened')
     return same
   }
 }
 
 /** Downloads and checks one picture; throws with the reason it is not usable. */
-export async function downloadImage(raw: string, signal: AbortSignal): Promise<{ bytes: Buffer; mime: Mime; width: number; height: number }> {
+export async function downloadImage(raw: string, signal: AbortSignal, budget: DecodeBudget = { left: DECODES_PER_CALL }): Promise<{ bytes: Buffer; mime: Mime; width: number; height: number }> {
   const { res } = await safeGet(new URL(raw), 'image/webp,image/png,image/jpeg,image/gif;q=0.8', AbortSignal.any([signal, AbortSignal.timeout(IMAGE_MS)]))
   const type = (res.headers.get('content-type') ?? '').toLowerCase().split(';')[0].trim()
   if (!res.ok) {
@@ -469,7 +488,7 @@ export async function downloadImage(raw: string, signal: AbortSignal): Promise<{
   const info = inspectImage(bytes)
   const why = refuseImage(info)
   if (why) throw new Error(why)
-  const shrunk = info!.mime === 'image/png' ? shrinkPng(bytes, info!) : { bytes, width: info!.width, height: info!.height }
+  const shrunk = info!.mime === 'image/png' ? shrinkPng(bytes, info!, budget) : { bytes, width: info!.width, height: info!.height }
   return { bytes: shrunk.bytes, mime: info!.mime, width: shrunk.width, height: shrunk.height }
 }
 
@@ -497,10 +516,10 @@ function keptFor(user: User, source: string): FoundImage | null {
 }
 
 /** Downloads (or reuses) one candidate and keeps it for the account. */
-async function keep(user: User, c: { url: string; page: string | null; title: string }, signal: AbortSignal): Promise<FoundImage> {
+async function keep(user: User, c: { url: string; page: string | null; title: string }, signal: AbortSignal, budget: DecodeBudget): Promise<FoundImage> {
   const have = keptFor(user, c.url)
   if (have) return have
-  const got = await downloadImage(c.url, signal)
+  const got = await downloadImage(c.url, signal, budget)
   const hash = createHash('sha256').update(got.bytes).digest('hex')
   // The same picture from another address: the one already kept.
   const same = database().prepare('SELECT id, source_url, page_url, title, width, height FROM agent_found_images WHERE user_id = ? AND hash = ? LIMIT 1').get(user.id, hash) as Row | undefined
@@ -540,6 +559,9 @@ export function prune(user: User, force = false) {
     for (const m of text.matchAll(/image:(w[0-9a-f]{24})/gi)) mentioned.add(m[1].toLowerCase())
   }
   for (const r of db.prepare("SELECT m.content AS t FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND m.role IN ('assistant', 'user')").iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
+  // Recent tool calls and results too (a picture passed to another tool, shown in a step).
+  for (const r of db.prepare("SELECT m.content || ' ' || IFNULL(m.tool_calls, '') AS t FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND m.role NOT IN ('assistant', 'user') AND m.created_at >= ?").iterate(user.id, now - PRUNE_AFTER) as Iterable<{ t: string }>) scan(r.t)
+  for (const r of db.prepare("SELECT tool_calls AS t FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND m.role = 'assistant' AND m.tool_calls IS NOT NULL").iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
   for (const r of db.prepare('SELECT value AS t FROM state WHERE user_id = ?').iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
   const drop = db.prepare('DELETE FROM agent_found_images WHERE user_id = ? AND id = ?')
   const touch = db.prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = ? AND id = ?')
@@ -576,10 +598,10 @@ async function providerImages(user: User, query: string, signal: AbortSignal): P
 }
 
 /** The best pictures of the top result pages (or of `pages` already known). */
-async function fromPages(pages: { url: string; title: string; bonus: number }[], terms: string[], signal: AbortSignal, notes: string[]): Promise<Pick[]> {
+async function fromPages(user: User, pages: { url: string; title: string; bonus: number }[], terms: string[], signal: AbortSignal, notes: string[]): Promise<Pick[]> {
   const read = await Promise.all(
     pages.map((p) =>
-      pageImages(p.url, terms, signal).then(
+      pageImages(user, p.url, terms, signal).then(
         (v) => ({ p, v }),
         (e: Error) => {
           notes.push(`${hostOf(p.url) ?? p.url}: ${e instanceof Blocked ? `refused (${e.message})` : e.message}`)
@@ -616,6 +638,7 @@ export async function findImages(user: User, ollamaKey: string, input: { query: 
   const terms = query.toLowerCase().split(/[\s,.;:/()"'-]+/).filter(Boolean)
   const images: FoundImage[] = []
   const tried = new Set<string>()
+  const budget: DecodeBudget = { left: DECODES_PER_CALL }
   /** Downloads picks, best first, until `count` are kept; a few at a time. */
   const take = async (picks: Pick[]) => {
     const order = picks.filter((p) => !tried.has(p.url)).sort((a, b) => b.score - a.score)
@@ -624,7 +647,7 @@ export async function findImages(user: User, ollamaKey: string, input: { query: 
       batch.forEach((p) => tried.add(p.url))
       const got = await Promise.all(
         batch.map((p) =>
-          keep(user, p, limit).catch((e: Error) => {
+          keep(user, p, limit, budget).catch((e: Error) => {
             if (e instanceof HttpError && e.status === 413) throw e
             notes.push(`${hostOf(p.url) ?? 'a picture'}: ${e instanceof Blocked ? `refused (${e.message})` : e.message}`)
             return null
@@ -635,7 +658,7 @@ export async function findImages(user: User, ollamaKey: string, input: { query: 
     }
   }
   try {
-    if (input.page) await take(await fromPages([{ url: input.page, title: query, bonus: 200 }], terms, limit, notes))
+    if (input.page) await take(await fromPages(user, [{ url: input.page, title: query, bonus: 200 }], terms, limit, notes))
     if (images.length < count) {
       const fromProvider = await providerImages(user, query, limit).catch((e: Error) => {
         notes.push(`image search: ${e.message}`)
@@ -646,7 +669,7 @@ export async function findImages(user: User, ollamaKey: string, input: { query: 
     if (images.length < count && !limit.aborted) {
       const { results } = await webSearch(user, ollamaKey, query, 6, limit)
       const pages = results.filter((r) => r.url !== input.page).slice(0, 5).map((r, i) => ({ url: r.url, title: r.title, bonus: (5 - i) * 3 }))
-      await take(await fromPages(pages, terms, limit, notes))
+      await take(await fromPages(user, pages, terms, limit, notes))
     }
   } finally {
     running.set(user.id, (running.get(user.id) ?? 1) - 1)
@@ -662,6 +685,10 @@ export function handleFoundImageApi(req: IncomingMessage, res: ServerResponse, p
   if (!m || (method !== 'GET' && method !== 'HEAD')) return false
   const row = database().prepare('SELECT mime, body FROM agent_found_images WHERE user_id = ? AND id = ?').get(user.id, m[1]) as { mime: string; body: Uint8Array } | undefined
   if (!row || !(MIMES as readonly string[]).includes(row.mime)) throw new HttpError(404, 'No such picture')
+  // Shown counts as used (at most one write a day), for pictures in places pruning can't read
+  // (files, shared answers, the browser's own storage).
+  const now = Date.now()
+  database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = ? AND id = ? AND used_at < ?').run(now, user.id, m[1], now - 86400_000)
   // A picture never changes under its id.
   const tag = `"${m[1]}"`
   // Asked again each time (a 304 when unchanged), so a cached copy is not shown after signing out.

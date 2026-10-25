@@ -22,8 +22,8 @@ const MAX_HOPS = 5
 // --use-env-proxy) the global agents send requests through HTTP(S)_PROXY, which then resolves the
 // host name itself and the pinned addresses would mean nothing. An Agent made without `proxyEnv`
 // never proxies.
-const pinnedHttp = new HttpAgent()
-const pinnedHttps = new HttpsAgent()
+export const pinnedHttp = new HttpAgent()
+export const pinnedHttps = new HttpsAgent()
 
 /** Thrown for an address that isn't allowed; callers that swallow network errors let this one through. */
 export class EgressError extends HttpError {}
@@ -178,6 +178,12 @@ export async function fetchPinned(url: URL, init: RequestInit, addresses: Lookup
     r.end(body ?? undefined)
   })
 }
+
+/**
+ * http(s).request options for a pinned raw request (a WebSocket upgrade): the `lookup` and an agent
+ * of our own, so an env proxy can't resolve the name again.
+ */
+export const pinnedOptions = (url: URL, lookup: ReturnType<typeof pinnedLookup>) => ({ lookup: lookup as never, agent: url.protocol === 'https:' ? pinnedHttps : pinnedHttp })
 
 /** A `lookup` for http.request that answers only `addresses`. */
 export const pinnedLookup = (addresses: LookupAddress[]) => (_host: string, opts: { all?: boolean }, done: (err: Error | null, address: string | LookupAddress[], family?: number) => void) =>

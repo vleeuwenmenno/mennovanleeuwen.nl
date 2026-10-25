@@ -5,7 +5,7 @@ import { request as httpsRequest } from 'node:https'
 import type { Duplex } from 'node:stream'
 import type { ImageProgress } from '../src/data/imageModels.ts'
 import type { User } from './auth.ts'
-import { guardedLookup } from './egress.ts'
+import { guardedLookup, pinnedOptions } from './egress.ts'
 
 // Live progress of one ComfyUI image job, for its owner's thread only. ComfyUI tells the client
 // that queued a prompt (by its client_id) what that prompt does over a WebSocket at /ws?clientId=…:
@@ -139,7 +139,8 @@ export async function openComfySocket(user: User, base: string, token: string, c
     const settle = (v: { close: () => void } | null) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v) } }
     const req = send(url, {
       headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      ...(lookup ? { lookup: lookup as never } : {}),
+      // Pinned: our own agents too, so an env proxy (NODE_USE_ENV_PROXY) can't resolve the name again.
+      ...(lookup ? pinnedOptions(url, lookup) : {}),
       signal,
     })
     const timer = setTimeout(() => { req.destroy(); settle(null) }, 5000)
