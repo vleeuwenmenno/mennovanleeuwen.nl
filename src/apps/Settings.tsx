@@ -37,6 +37,7 @@ import { DRAG_KEYS, dragKeyPref } from '../os/modDrag'
 import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
 import { tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from '../os/tabWorkspaces'
+import { openMaximizedPref, useTouchScreen } from '../os/windowPrefs'
 import { clearEntries, pruneEntries, useEntries } from '../os/notify'
 import { ACTIVITY_WINDOWS, CALENDAR_LEADS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
 import { disablePush, enablePush, pushState, sendTestPush, type PushState } from '../os/push'
@@ -1906,6 +1907,7 @@ function WindowsSettings() {
         </p>
       </SetGroup>
       <TabWorkspacesGroup lastWindows={windows === 'last'} />
+      <OpenMaximizedGroup />
       <DragKeySettings />
       <SetGroup title="Right now">
         <ul className="set-list">
@@ -1921,6 +1923,26 @@ function WindowsSettings() {
         </ul>
       </SetGroup>
     </>
+  )
+}
+
+/** Settings → Windows: phones and touch screens can open every new window maximized (os/windowPrefs.ts). */
+function OpenMaximizedGroup() {
+  const touch = useTouchScreen()
+  const on = openMaximizedPref.use()
+  if (!touch) return null
+  return (
+    <SetGroup title="Touch screens">
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Open new windows maximized</strong>
+            <span className="muted">Every app window opened from now on fills the screen. Windows already open, and the ones a session brings back, keep their size. Saved on this device.</span>
+          </span>
+          <Toggle on={on} onChange={(v) => openMaximizedPref.set(v)} label="Open new windows maximized" />
+        </li>
+      </ul>
+    </SetGroup>
   )
 }
 
@@ -2158,7 +2180,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred ctrl space shortcut keyboard all apps launchpad', blurb: 'What Spotlight shows when it opens, what it searches, what it remembers, and what Ctrl+Space opens.', render: () => <SpotlightSettings /> },
-      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page drag move resize modifier key ctrl alt hyprland corner mouse', blurb: 'What the desktop shows when MvL OS opens again, one workspace per browser tab, and dragging windows with a key.', render: () => <WindowsSettings /> },
+      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page drag move resize modifier key ctrl alt hyprland corner mouse maximized maximize full screen fullscreen phone mobile touch new windows', blurb: 'What the desktop shows when MvL OS opens again, one workspace per browser tab, opening windows maximized on touch screens, and dragging windows with a key.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
       { id: 'language', label: 'Language & region', hue: 'var(--magenta)', icon: svg(<><path d="M4 6h9M8.5 3v3M6 6c.5 3 3 5.5 6 6.5M12 6c-.5 3-3 5.5-6 6.5" /><path d="M13 20l3.5-8 3.5 8M14.3 17h4.4" /></>), keywords: 'language region emoji emojis shortcode shortcodes smiley discord slack autocomplete replace typing furigana ruby reading readings kanji japanese hiragana hover show hide size small medium large bigger currency home money exchange rate euro dollar yen', blurb: 'Furigana, the readings above Japanese characters, and your home currency.', render: () => <LanguagePane /> },
       { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },

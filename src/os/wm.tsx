@@ -6,6 +6,7 @@ import { synced } from './synced'
 import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
+import { opensMaximized } from './windowPrefs'
 import { newTab } from './powerState'
 import { rememberedWorkspace, moveTabWorkspace, startTabWorkspaces, stopTabWorkspaces, tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from './tabWorkspaces'
 
@@ -104,7 +105,9 @@ export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])
 export const INSTANCE_PROP: Partial<Record<AppId, string>> = { games: 'game' }
 
 type Action =
-  | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
+  /** `maximized`: a new window opens maximized (Settings → Windows, on touch screens); a window
+   * that was already open keeps its size. */
+  | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean; maximized?: boolean }
   | { type: 'close'; pid: number }
   | { type: 'focus'; pid: number }
   | { type: 'minimize'; pid: number }
@@ -371,7 +374,8 @@ function apply(state: State, action: Action): State {
         ...action.geometry,
         z,
         minimized: false,
-        maximized: false,
+        // Notes and widgets are part of the desktop, never maximized.
+        maximized: !!action.maximized && !NOTE_APPS.has(action.app),
         props: action.props ?? {},
         openedAt: Date.now(),
         // New windows open on the workspace on screen; notes and widgets belong to all of them.
@@ -899,9 +903,10 @@ export function WindowManagerProvider({
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
       takeOver(app, props)
-      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
-      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props) })
-      const action: Action = { type: 'open', app, props, geometry: placement(app, state.windows.length, props) }
+      const maximized = opensMaximized()
+      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length), maximized })
+      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props), maximized })
+      const action: Action = { type: 'open', app, props, geometry: placement(app, state.windows.length, props), maximized }
       // Its one window is in another tab (one workspace per tab).
       const there = reused(stateRef.current, app, props)
       if (there && isAway(stateRef.current, there)) return elsewhereNotice(there, () => dispatch(action))
@@ -912,8 +917,9 @@ export function WindowManagerProvider({
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
       if (SINGLE_INSTANCE.has(app)) takeOver(app, props)
-      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
-      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length, props) })
+      const maximized = opensMaximized()
+      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length), maximized })
+      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length, props), maximized })
     },
     [placement, state.windows.length, takeOver],
   )
