@@ -7,6 +7,7 @@ import { synced } from './synced'
 import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
+import { opensMaximized } from './windowPrefs'
 import { newTab } from './powerState'
 import { rememberedWorkspace, moveTabWorkspace, startTabWorkspaces, stopTabWorkspaces, tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from './tabWorkspaces'
 
@@ -105,7 +106,9 @@ export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])
 export const INSTANCE_PROP: Partial<Record<AppId, string>> = { games: 'game' }
 
 type Action =
-  | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
+  /** `maximized`: a new window opens maximized (Settings → Windows, on touch screens); a window
+   * that was already open keeps its size. */
+  | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean; maximized?: boolean }
   | { type: 'close'; pid: number }
   | { type: 'focus'; pid: number }
   | { type: 'minimize'; pid: number }
@@ -151,6 +154,10 @@ type State = {
   /** While this tab is still finding a workspace of its own, the windows opened meanwhile (a
    * /?open= link): they go along to the workspace it gets. Null once it has one, or shares. */
   unplaced: number[] | null
+  /** Where each widget goes in the stacking order when it shows (by widget id): the z it had in
+   * the saved layout this state was restored from (see widgetMark). A widget without one goes
+   * behind the windows. */
+  widgetZ: Record<string, number>
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
@@ -197,7 +204,7 @@ const isAway = (state: Pick<State, 'away'>, w: WinState) => {
 
 /** Opens the opening layout on an empty desk, as if nobody had touched it yet, on workspace `ws`. */
 function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[], ws = 1): State {
-  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null, ws, phone: isPhone(), edits: 0, away: [], unplaced: null }
+  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null, ws, phone: isPhone(), edits: 0, away: [], unplaced: null, widgetZ: {} }
   for (const w of layout) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
   return { ...s, touched: false, edits: 0 }
 }
@@ -211,6 +218,15 @@ export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maxim
 /** Whether a saved window shows on this page: everything does at /cv; elsewhere a CV app's window
  * only when it was opened away from /cv (see WinState.anywhere). */
 const belongsHere = (w: Pick<SavedWindow, 'app' | 'anywhere'>) => appHere(w.app) || !!w.anywhere
+
+/**
+ * A widget's place in the stacking order, kept in the window layout among the windows (which are
+ * saved back to front): only its id, no kind, so it is not a widget to move into the set
+ * (importLayoutWidgets skips it) and releases before it ignore it. Where the widget is and what it
+ * shows stay in the synced set of widgets (src/os/widgetPlaces.ts).
+ */
+const widgetMark = (id: string) => ({ app: 'widget', props: { id } }) as unknown as SavedWindow
+const markOf = (w: SavedWindow): string | null => (w.app === 'widget' && !w.props?.kind && typeof w.props?.id === 'string' ? w.props.id : null)
 
 /** Saved layouts from before widgets: a sticky was its own app. */
 function migrate(w: SavedWindow): SavedWindow {
@@ -240,7 +256,7 @@ function serialize(windows: WinState[]): SavedWindow[] {
   return windows
     .slice()
     .sort((a, b) => a.z - b.z)
-    .map((w) => ({
+    .map((w) => (w.app === 'widget' ? widgetMark(w.props.id ?? '') : {
       app: w.app,
       x: Math.round(w.want?.x ?? w.x),
       y: Math.round(w.want?.y ?? w.y),
@@ -260,23 +276,34 @@ function serialize(windows: WinState[]): SavedWindow[] {
 /** A state showing `saved`. Windows already open that match one (same app, same props) keep
  * their pid, so their app keeps running (a terminal keeps its history) and just moves. */
 function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State {
-  // Widgets aren't part of the layout (src/os/widgetPlaces.ts): the ones on the desktop stay.
+  // Widgets aren't part of the layout (src/os/widgetPlaces.ts): the ones on the desktop stay, and
+  // go back where the layout's marks put them among the windows (behind them without one).
   const widgets = current.filter((w) => w.app === 'widget')
-  saved = saved.filter((w) => w.app !== 'widget')
   const unused = current.filter((w) => w.app !== 'widget')
   const key = (w: { app: AppId; props: WinState['props'] }) => `${w.app}|${JSON.stringify(Object.entries(persistentProps(w.app, w.props)).sort())}`
   let pid = Math.max(100, ...current.map((w) => w.pid + 1))
+  // Back to front, windows and widget marks in one count.
   let z = 10
-  const windows: WinState[] = saved.map((w) => {
+  const widgetZ: Record<string, number> = {}
+  const zOf = new Map<SavedWindow, number>()
+  for (const w of saved) {
+    const id = markOf(w)
+    if (id !== null) widgetZ[id] ??= ++z
+    else if (w.app !== 'widget') zOf.set(w, ++z)
+  }
+  const top = z
+  const windows: WinState[] = saved.filter((w) => zOf.has(w)).map((w) => {
+    const at = zOf.get(w)!
     const i = unused.findIndex((u) => key(u) === key(w))
     const same = i >= 0 ? unused.splice(i, 1)[0] : null
     const want = { x: w.x, y: w.y, w: w.w, h: w.h }
     w = { ...w, ws: NOTE_APPS.has(w.app) ? undefined : Math.min(WORKSPACES, Math.max(1, Math.round(w.ws ?? 1))) }
-    return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: persistentProps(w.app, w.props), pid: pid++, z: ++z, openedAt: Date.now() }
+    return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: at } : { ...w, want, props: persistentProps(w.app, w.props), pid: pid++, z: at, openedAt: Date.now() }
   })
-  for (const w of widgets) windows.push({ ...w, z: ++z })
   const view = { ws, phone: isPhone() }
-  return { windows, nextPid: pid, topZ: z, touched: true, focused: topShown(view, windows)?.pid ?? null, ...view, edits: 0, away: [], unplaced: null }
+  const base: State = { windows, nextPid: pid, topZ: top, touched: true, focused: null, ...view, edits: 0, away: [], unplaced: null, widgetZ }
+  const s = stacked(base, windows, widgets)
+  return { ...s, focused: topShown(view, s.windows)?.pid ?? null }
 }
 
 function reducer(state: State, action: Action): State {
@@ -348,7 +375,8 @@ function apply(state: State, action: Action): State {
         ...action.geometry,
         z,
         minimized: false,
-        maximized: false,
+        // Notes and widgets are part of the desktop, never maximized.
+        maximized: !!action.maximized && !NOTE_APPS.has(action.app),
         props: action.props ?? {},
         openedAt: Date.now(),
         // New windows open on the workspace on screen; notes and widgets belong to all of them.
@@ -505,12 +533,43 @@ function widgetsShown(all: WidgetSet, phone: boolean, known: (kind: string) => b
     .map((p, i) => ({ id: p.id, kind: p.kind, g: widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))
 }
 
+/** The lowest z a window gets: the first one opened on an empty desk (fresh). Desktop icons being
+ * dragged (z-index 2) stay behind every window. */
+const LOWEST_Z = 11
+
+/**
+ * `state` showing `windows` and these widget windows (kept after them, in the order the phone's
+ * column goes by), each put in the stacking order: where the layout it was restored from had it
+ * (widgetZ), or else behind every window. A widget showing from the set (after a reload, or put
+ * there by another device or tab) is not the visitor's doing, so it doesn't come to the front;
+ * adding one or clicking it does.
+ */
+function stacked(state: State, windows: WinState[], widgets: WinState[]): State {
+  const placed = widgets.map((w) => ({ ...w, z: state.widgetZ[w.props.id ?? ''] ?? NaN }))
+  const behind = placed.filter((w) => Number.isNaN(w.z))
+  let all = [...windows, ...placed]
+  let topZ = state.topZ
+  let widgetZ = state.widgetZ
+  if (behind.length) {
+    const low = Math.min(topZ + 1, ...all.filter((w) => !Number.isNaN(w.z)).map((w) => w.z))
+    behind.forEach((w, i) => (w.z = low - behind.length + i))
+    // Short of room below: everything moves up, in the same order.
+    const lift = Math.max(0, LOWEST_Z - (low - behind.length))
+    if (lift) {
+      all = all.map((w) => ({ ...w, z: w.z + lift }))
+      topZ += lift
+      widgetZ = Object.fromEntries(Object.entries(widgetZ).map(([id, z]) => [id, z + lift]))
+    }
+  }
+  for (const w of all) topZ = Math.max(topZ, w.z)
+  return { ...state, windows: all, topZ, widgetZ }
+}
+
 /** `state` with exactly these widgets: windows keep their pid where the widget was already open. */
 function showWidgets(state: State, list: WidgetShown[]): State {
   const wanted = new Map(list.map((p) => [p.id, p]))
   const seen = new Set<string>()
   let changed = false
-  let z = state.topZ
   let pid = state.nextPid
   const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, viewW(), viewH(), p === undefined ? undefined : drawnHeights.get(p)))
   const windows: WinState[] = []
@@ -532,14 +591,15 @@ function showWidgets(state: State, list: WidgetShown[]): State {
       windows.push({ ...w, ...fit(p.g, w.pid), want: p.g, minimized: p.minimized, stack: p.stack, snap: undefined, maximized: false })
     }
   }
+  const added: WinState[] = []
   for (const p of list) {
     if (seen.has(p.id)) continue
     changed = true
-    windows.push({ pid: pid++, app: 'widget', ...fit(p.g), want: p.g, z: ++z, minimized: p.minimized, maximized: false, props: { kind: p.kind, id: p.id }, openedAt: Date.now(), stack: p.stack })
+    added.push({ pid: pid++, app: 'widget', ...fit(p.g), want: p.g, z: 0, minimized: p.minimized, maximized: false, props: { kind: p.kind, id: p.id }, openedAt: Date.now(), stack: p.stack })
   }
   if (!changed) return state
   const focused = windows.some((w) => w.pid === state.focused) ? state.focused : null
-  return { ...state, windows, nextPid: pid, topZ: z, focused }
+  return { ...stacked(state, windows, added), nextPid: pid, focused }
 }
 
 type WM = {
@@ -621,7 +681,8 @@ export function WindowManagerProvider({
     (saved: SavedWindow[] | null) => {
       const known = saved?.map(migrate).filter((w) => isApp(w.app)) ?? null
       importLayoutWidgets(known)
-      const rest = known?.filter((w) => w.app !== 'widget') ?? null
+      // Widgets themselves stay out; their marks (their place in the stacking order) stay in.
+      const rest = known?.filter((w) => w.app !== 'widget' || markOf(w) !== null) ?? null
       held.current = rest?.filter((w) => !belongsHere(w)) ?? []
       return rest?.filter(belongsHere) ?? null
     },
@@ -742,7 +803,8 @@ export function WindowManagerProvider({
     // when Last windows is chosen again (and other devices keep theirs).
     if (startupPrefs().windows !== 'last') return
     savedEdits.current = stateRef.current.edits
-    layoutStore().set([...held.current, ...serialize(stateRef.current.windows.filter((w) => w.app !== 'widget'))])
+    // Widgets as marks only: where each is in the stacking order (see widgetMark).
+    layoutStore().set([...held.current, ...serialize(stateRef.current.windows)])
   }, [])
   useEffect(() => {
     if (state.edits === savedEdits.current) return
@@ -842,9 +904,10 @@ export function WindowManagerProvider({
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
       takeOver(app, props)
-      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
-      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props) })
-      const action: Action = { type: 'open', app, props, geometry: placement(app, state.windows.length, props) }
+      const maximized = opensMaximized()
+      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length), maximized })
+      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props), maximized })
+      const action: Action = { type: 'open', app, props, geometry: placement(app, state.windows.length, props), maximized }
       // Its one window is in another tab (one workspace per tab).
       const there = reused(stateRef.current, app, props)
       if (there && isAway(stateRef.current, there)) return elsewhereNotice(there, () => dispatch(action))
@@ -855,8 +918,9 @@ export function WindowManagerProvider({
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
       if (SINGLE_INSTANCE.has(app)) takeOver(app, props)
-      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
-      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length, props) })
+      const maximized = opensMaximized()
+      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length), maximized })
+      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length, props), maximized })
     },
     [placement, state.windows.length, takeOver],
   )

@@ -130,6 +130,7 @@ import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
 import { ImageStudio } from './AgentsStudio'
 import { accountStorage } from '../os/accountSpace'
+import { localPref } from '../os/localPref'
 import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
 import { makerOf, modelName } from '../data/agentModelNames'
 
@@ -447,6 +448,41 @@ function AgentsApp({ win }: { win: WinState }) {
     }
   }
   const rail = collapsed && !narrow
+  const sideWidth = sideWidthPref.use()
+  // At most half the app, never under the minimum.
+  const sideMax = (w: number) => Math.max(SIDE_MIN, Math.floor(w / 2))
+  const setSideWidth = (w: number) => sideWidthPref.set(Math.min(Math.max(Math.round(w), SIDE_MIN), sideMax(root.current?.clientWidth ?? 2 * w)))
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const handle = e.currentTarget
+    handle.setPointerCapture(e.pointerId)
+    const left = root.current?.getBoundingClientRect().left ?? 0
+    const move = (ev: PointerEvent) => setSideWidth(ev.clientX - left)
+    const end = () => {
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', end)
+      handle.removeEventListener('pointercancel', end)
+      root.current?.classList.remove('is-resizing')
+    }
+    root.current?.classList.add('is-resizing')
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+  }
+  const resizeKey = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 48 : 16
+    const key: Record<string, () => void> = {
+      ArrowLeft: () => setSideWidth(sideWidth - step),
+      ArrowRight: () => setSideWidth(sideWidth + step),
+      Home: () => setSideWidth(SIDE_MIN),
+      End: () => setSideWidth(Infinity),
+      Enter: () => sideWidthPref.set(SIDE_DEFAULT),
+    }
+    if (!key[e.key]) return
+    e.preventDefault()
+    key[e.key]()
+  }
   const newThread = () => {
     setArchived(false)
     open(null)
@@ -541,7 +577,7 @@ function AgentsApp({ win }: { win: WinState }) {
   )
 
   return (
-    <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} onContextMenu={rootMenu}>
+    <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} style={rail || narrow ? undefined : ({ '--agt-side-w': `min(${sideWidth}px, 50%)` } as React.CSSProperties)} onContextMenu={rootMenu}>
       {rail ? (
         <nav className="agt-rail" aria-label="Agents" onContextMenu={sideMenu}>
           <button className="agt-icon" onClick={() => fold(false)} title="Show the sidebar" aria-label="Show the sidebar">
@@ -703,6 +739,21 @@ function AgentsApp({ win }: { win: WinState }) {
               <Icon name="gear" /> <span>Settings</span>
             </button>
           </div>
+          {!narrow && (
+            <div
+              className="agt-resize"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the sidebar"
+              aria-valuemin={SIDE_MIN}
+              aria-valuenow={sideWidth}
+              tabIndex={0}
+              title="Drag to resize, double-click to reset"
+              onPointerDown={startResize}
+              onDoubleClick={() => sideWidthPref.set(SIDE_DEFAULT)}
+              onKeyDown={resizeKey}
+            />
+          )}
         </aside>
       )}
       <section className="nb-main">
@@ -2891,6 +2942,13 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
 // --- the sidebar's pieces ---------------------------------------------------------------------
 
 const SIDEBAR_KEY = 'mvlos.agents.sidebar'
+const SIDE_DEFAULT = 270
+const SIDE_MIN = 180
+// Per browser, not synced: how wide the sidebar is. Anything unreadable falls back to the default.
+const sideWidthPref = localPref<number>('mvlos.agents.sidebarWidth', (raw) => {
+  const n = Number(raw)
+  return raw && Number.isFinite(n) && n >= SIDE_MIN ? Math.round(n) : SIDE_DEFAULT
+}, String)
 
 /** "now", "5m", "3h", "Tue", "12 Oct": as short as the one line allows. */
 function shortWhen(ms: number, now = Date.now()) {

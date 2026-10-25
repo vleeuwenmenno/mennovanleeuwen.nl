@@ -1688,7 +1688,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted, and the sidebar folds to a rail. While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+suggestion), archived and deleted, and the sidebar folds to a rail or is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Past threads** lets the agent look back when you refer to an earlier conversation and the
 answer is not already in this thread or memory. The `threads` tool group is on by default,
@@ -3350,6 +3350,13 @@ migration preference, not the original screen size. A missing sticky note stays 
 while its contents sync; arriving contents reveal it again. Only a user close or a known trash
 or purge removes its widget entry. Visitors keep their widgets in this browser;
 ones placed before signing in join the account's.
+Widgets stack with the windows: adding one or clicking it brings it in front, clicking a window
+brings that in front of it. That order survives a reload: the window layout keeps a mark for each
+widget (only its id) among the windows, so the stacking follows the account like the windows do.
+A widget that shows without a mark (one put there on a phone or by an older release, or arriving
+from the set before the layout) goes behind the windows instead of jumping in front; showing it
+saves nothing. `PORT=5294 pnpm check:widget-stacking` checks this signed out and signed in, in
+muted Chromium with a scratch account and data; it starts and stops its own server.
 
 ## Touch screens
 
@@ -3386,6 +3393,20 @@ The title bar, OS bar and dock disappear, with no window border, margin or shado
 home-indicator space is padding inside the window; the on-screen keyboard reduces its visible
 height. Tap **Restore size** at the top right to return to the previous window layout. The
 window's saved geometry is retained, including when returning to a larger screen.
+
+While a maximized window is on screen, on any screen size, the notes and widgets are hidden
+outright rather than left behind it ([`Shell.tsx`](src/os/Shell.tsx), `.desk-scroll.is-covered`).
+Their stacking order alone can't promise that: a widget shown later, or brought back with a
+restored session, lands above the window, and on iOS the window follows the visible area while the
+keyboard and its formatting bar slide in, so for a moment the desk behind it shows. They keep their
+place, and come back when the window is restored, minimized or closed.
+
+**Settings → Windows → Touch screens → Open new windows maximized** (only shown on a phone or a
+touch screen) makes every app window opened from then on start maximized
+([`src/os/windowPrefs.ts`](src/os/windowPrefs.ts)). Notes and widgets are not affected, an app
+whose window is already open just brings it forward as it is, and windows a session brings back
+keep their saved state. It is off by default and kept per device (`mvlos.windows.openMaximized`);
+with storage blocked it holds until the page closes.
 
 With the on-screen keyboard open, windows end just above it, whether the browser lays the
 keyboard over the page (iOS) or shrinks the page (Android, newer iOS). Text fields are at least

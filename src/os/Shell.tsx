@@ -686,6 +686,12 @@ export function Shell() {
     notesBefore.current = noteCount
   }, [noteCount])
 
+  // A maximized window on screen hides the notes and widgets altogether instead of counting on
+  // the stacking order: a widget shown or restored later gets a higher z than the window, and on
+  // iOS the window follows the visual viewport while the keyboard and its bar slide in, so for a
+  // moment the desk behind it shows. Nothing of the desk may peek out from behind it then.
+  const covered = wm.windows.some((w) => w.maximized && !w.minimized && !NOTE_APPS.has(w.app) && wm.shown(w))
+
   // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
@@ -810,7 +816,7 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''}`}>
+      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
           {wm.windows.map((w) => (

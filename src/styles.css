@@ -1673,6 +1673,12 @@ body.is-resizing iframe {
 .desk-scroll.is-notes-hidden .window.chrome-note {
   display: none;
 }
+/* A maximized window on screen (Shell.tsx): notes and widgets hide behind it whatever their
+   stacking order, also while a phone keyboard resizes the window. They keep their size, so the
+   phone's column doesn't jump when the window is restored. */
+.desk-scroll.is-covered .window.chrome-note {
+  visibility: hidden;
+}
 
 /* Desktop icons and windows: one layer that scrolls down on phones (see Shell). */
 .desk-scroll {
