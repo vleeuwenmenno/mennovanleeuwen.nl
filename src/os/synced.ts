@@ -30,12 +30,24 @@ type Meta<T> = {
   /** changed since */
   dirty: boolean
   /**
-   * Set when the page closed while a save was out (see pagehide): the write ids of that save
-   * (`out`) and of the last save sent on closing (`sent`). The last one went out on top of the
-   * version before `out`, so if `out` got through, the server refused it.
+   * Set when the page closed while a save was out (see pagehide): the write ids of the saves
+   * this value may have lost to, its own saves whose answers never came (the one out, the one
+   * sent on closing; more if the page came back and closed again before it was settled). The
+   * last one went out on top of the version before the one out, so if that got through, the
+   * server refused it. A server version made by any of them is this page's own (see reconcile).
    */
-  final?: { out: string; sent: string }
+  final?: { ids: string[] }
 }
+
+const MAX_FINAL_IDS = 16
+const finalOf = (v: unknown): Meta<unknown>['final'] => {
+  const ids = (v as { ids?: unknown } | null)?.ids
+  return Array.isArray(ids) && ids.length && ids.every((i) => typeof i === 'string') ? { ids: ids as string[] } : undefined
+}
+/** Both marks' ids (the newest kept when there are too many). */
+const joinFinal = (a: Meta<unknown>['final'], b: Meta<unknown>['final']) => ({ ids: [...new Set([...(a?.ids ?? []), ...(b?.ids ?? [])])].slice(-MAX_FINAL_IDS) })
+/** Whether mark `a` already holds every id of `b`. */
+const covers = (a: Meta<unknown>['final'], b: NonNullable<Meta<unknown>['final']>) => !!a && b.ids.every((i) => a.ids.includes(i))
 /** `writeId`: the id of the save that made this version (none for versions saved before ids, or by the server itself). */
 type Remote = { value: unknown; updatedAt: number; writeId?: string }
 
@@ -97,7 +109,7 @@ function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (
     const raw = accountStorage.get(storageKey(key))
     if (raw) {
       const m = JSON.parse(raw) as Meta<unknown>
-      const final = m.final && typeof m.final.out === 'string' && typeof m.final.sent === 'string' ? { out: m.final.out, sent: m.final.sent } : undefined
+      const final = finalOf(m.final)
       return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty, ...(final ? { final } : {}) }
     }
     const legacy = legacyKey && accountStorage.get(legacyKey)
@@ -141,20 +153,30 @@ export function synced<T>(
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
   /** Set by what settles the closing mark (Meta.final), so save() doesn't keep the stored one. */
   let settled = false
-  const save = () => {
+  /** `local`: saving a change made here (set), not an answer, a pull or another tab's copy. */
+  const save = (local = false) => {
     if (frozen() || !accountGuard()) return
-    // The closing mark another tab (or this one, before) wrote stays, unless this tab settled it:
-    // a save here that knows nothing of it (an answer to an unrelated save) mustn't drop it.
-    if (!opts.merge && !meta.final && !settled)
+    let others = false
+    // A closing mark another tab wrote (Meta.final) that this tab hasn't heard of yet (its storage
+    // event is still on its way) stays, unless this tab settled it. With it stays the value it
+    // protects: an answer to an unrelated save, or a pull, here would otherwise write this tab's
+    // older value over it. A change made here is newer than that value: it keeps the mark only.
+    if (!opts.merge && !settled)
       try {
         const stored = JSON.parse(accountStorage.get(storageKey(key)) ?? 'null') as Meta<unknown> | null
-        const f = stored?.final
-        if (f && typeof f.out === 'string' && typeof f.sent === 'string') meta = { ...meta, final: { out: f.out, sent: f.sent } }
+        const f = finalOf(stored?.final)
+        if (stored && f && !covers(meta.final, f)) {
+          if (local) meta = { ...meta, final: joinFinal(meta.final, f) }
+          else {
+            const value = normalize(stored.value)
+            others = JSON.stringify(value) !== JSON.stringify(meta.value)
+            meta = { value, base: stored.base ?? 0, dirty: !!stored.dirty, final: joinFinal(meta.final, f) }
+          }
+        }
       } catch {
         /* not readable */
       }
     settled = false
-    let others = false
     // Another tab's save this tab hasn't heard of yet: merged in first.
     const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
     if (raw !== null)
@@ -188,7 +210,7 @@ export function synced<T>(
       // Nothing changed (the same value made again): nothing to save or send.
       if (value === meta.value || JSON.stringify(value) === JSON.stringify(meta.value)) return
       meta = { ...meta, value, dirty: true }
-      save()
+      save(true)
       emit()
       emitSynced()
       schedulePush(key)
@@ -216,8 +238,9 @@ export function synced<T>(
     ...(store as Synced<unknown>),
     meta: () => meta,
     adopt(r, dirty = false, notify = true) {
-      // Another version than this page's own (reconcile keeps the value when it is): the mark goes.
-      settled = true
+      // Another version than this page's own (reconcile keeps the value when it is): the mark goes,
+      // if this tab knows of it (one it hasn't heard of yet, save() keeps).
+      settled = !!meta.final
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
       if (!dirty) known = { base: r.updatedAt, json: JSON.stringify(meta.value) }
       save()
@@ -229,7 +252,7 @@ export function synced<T>(
       known = { base: updatedAt, json: JSON.stringify(sent) }
       // The closing mark only goes with the answer to one of its own saves (the page came back
       // from the back/forward cache), not with another tab's or another save's.
-      const final = meta.final && writeId !== meta.final.out && writeId !== meta.final.sent ? meta.final : undefined
+      const final = meta.final && !meta.final.ids.includes(writeId) ? meta.final : undefined
       if (meta.final && !final) settled = true
       // Still dirty if it changed while the request was out.
       meta = { value: meta.value, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json, ...(final ? { final } : {}) }
@@ -239,11 +262,13 @@ export function synced<T>(
     },
     sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
     closing(out, sent) {
-      meta = { ...meta, final: { out, sent } }
+      // Closing again before an earlier mark was settled (back from the back/forward cache):
+      // its ids still count, the server may hold a version one of them made.
+      meta = { ...meta, final: joinFinal(meta.final, { ids: [out, sent] }) }
       save()
     },
     rebase(updatedAt) {
-      settled = true
+      settled = !!meta.final
       meta = { value: meta.value, base: updatedAt, dirty: true }
       save()
     },
@@ -418,11 +443,11 @@ function reconcile(s: Internal, remote: Remote | undefined) {
   }
   if (remote.updatedAt > local.base) {
     s.onIncoming?.(remote.value)
-    // The page closed with a save out, and the server's version is the one that save made (by
-    // its write id: nothing was saved since, here or elsewhere): the last save on closing was
-    // refused for being on top of the version before it. Kept, and saved on top. Stores that
+    // The page closed with a save out, and the server's version is one that a save of this page
+    // made (by its write id: nothing was saved since, here or elsewhere): the last save on closing
+    // was refused for being on top of the version before it. Kept, and saved on top. Stores that
     // merge already keep it.
-    if (local.final && local.dirty && !s.merge && remote.writeId !== undefined && remote.writeId === local.final.out) {
+    if (local.final && local.dirty && !s.merge && remote.writeId !== undefined && local.final.ids.includes(remote.writeId)) {
       s.rebase(remote.updatedAt)
       schedulePush(s.key, 0)
       return

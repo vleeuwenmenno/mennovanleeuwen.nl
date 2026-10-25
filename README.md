@@ -885,7 +885,10 @@ tab didn't have (its "unsaved" mark is often this tab's own earlier write). A st
 out at a time; a change made meanwhile goes out after it, whether it worked or not, and closing
 the page sends it too. That last save is refused if the save still out gets through first (it
 was made on top of the version before); a store that doesn't merge then keeps it on the next
-load, as long as the server's version is still the one the save out made, and saves it on top.
+load, as long as the server's version is still one that a save of that page made and never
+heard back about (the one out, or any of them if the page came back from the back/forward cache
+and closed again), and saves it on top. Another tab of the browser that hasn't heard of that
+yet doesn't write its older copy over it.
 Every save carries a random write id, which the server keeps with the version it made and
 returns with it (`writeId` in `/api/state`); that is how the next load tells: by the id, not by
 the value, so a change made elsewhere that put back the same value still counts as a change.

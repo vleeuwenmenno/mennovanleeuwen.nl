@@ -113,7 +113,7 @@ let cookieUser = 1
 /** Another device's save, made right before each of this one's (section 10). */
 let storming: (() => void) | null = null
 /** Saves of these keys take `ms` to answer, and the next `fail` of them fail (section 10). */
-const slowPut = new Map<string, { ms: number; fail: number; late?: boolean }>()
+const slowPut = new Map<string, { ms: number; fail: number; late?: boolean; lose?: number }>()
 /** Every save as sent (key, then body), before the stand-in server answers it. */
 const sentBodies: string[] = []
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -148,6 +148,13 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
     }
     const entry = { value, updatedAt: ++clock, ...(writeId ? { writeId } : {}) }
     server.set(key, entry)
+    // `lose`: saved, but the answer is lost on the way (a dropped connection).
+    if (slow?.lose) {
+      slow.lose--
+      await sleep(slow.ms)
+      puts.push(`${key}!lost`)
+      return json({ error: 'stand-in: answer lost' }, 502)
+    }
     return answer(entry)
   }
   return json(server.get(key) ?? null)
@@ -673,6 +680,83 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   syncPacing.failed('pace:err')
   syncPacing.counted('pace:err', 3e12)
   check('pacing: a failed save is tried again after a wait', syncPacing.backoff('pace:err', 3e12) > 0)
+}
+
+// --- 10b. closing marks between pages: another tab's late answer, closing again after a lost one ---
+{
+  /** A page of its own (a module instance with its own stores and pagehide), in tab `t`. */
+  let pages = 0
+  const page = async (t: Tab) => {
+    if (!tabs.includes(t)) tabs.push(t)
+    g.window = t
+    const m = (await import(`../src/os/synced.ts?page-${++pages}`)) as typeof import('../src/os/synced.ts')
+    g.window = main
+    as(t, () => m.startSync())
+    return m
+  }
+  const fire = (t: Tab, type: string, e: object = {}) => as(t, () => t.listeners.get(type)?.forEach((l) => l(e as never)))
+  const gone = (t: Tab) => fire(t, 'mvlos:forget')
+  ;(g.document as { visibilityState: string }).visibilityState = 'hidden'
+
+  // 1. Tab 2's answer to its save X comes after tab 1 closed with a mark, before tab 2 heard of it.
+  const T1 = new Tab()
+  const T2 = new Tab()
+  const m1 = await page(T1)
+  const m2 = await page(T2)
+  const s1 = as(T1, () => m1.synced<string>('r2:tabs', ''))
+  const s2 = as(T2, () => m2.synced<string>('r2:tabs', ''))
+  as(T1, () => s1.set('v1'))
+  await sleep(1500)
+  slowPut.set('r2:tabs', { ms: 2500, fail: 0, late: true })
+  as(T2, () => s2.set('X')) // on the server at 800 ms, answered at 3300 ms
+  await sleep(1200)
+  await as(T1, () => m1.pullAll()) // tab 1 hears of X
+  slowPut.set('r2:tabs', { ms: 2000, fail: 0, late: true })
+  held = true // tab 2 hears nothing of tab 1 from here until its answer is in
+  as(T1, () => s1.set('A'))
+  await sleep(1000)
+  as(T1, () => s1.set('B'))
+  fire(T1, 'pagehide')
+  gone(T1)
+  await sleep(1300) // tab 2's answer for X arrives
+  gone(T2) // and tab 2 closes before it saves again
+  flush()
+  await sleep(2500)
+  slowPut.clear()
+  check('tabs: the protected value is still in storage after the other tab’s late answer', meta('r2:tabs')?.value === 'B' && !!meta('r2:tabs')?.final, meta('r2:tabs'))
+  const m3 = await page(new Tab())
+  const s3 = as(tabs[tabs.length - 1], () => m3.synced<string>('r2:tabs', ''))
+  await m3.pullAll()
+  await sleep(1500)
+  check('tabs: after reload the edit is kept and saved', s3.get() === 'B' && server.get('r2:tabs')!.value === 'B', { local: s3.get(), server: server.get('r2:tabs') })
+
+  // 2. Closing, back from the back/forward cache, the answer to the save out lost, closing again
+  // while the retry is out: the server still holds that first save, which the mark must still know.
+  const T4 = new Tab()
+  const m4 = await page(T4)
+  const r = as(T4, () => m4.synced<string>('r2:retry', ''))
+  as(T4, () => r.set('v1'))
+  await sleep(1500)
+  slowPut.set('r2:retry', { ms: 1500, fail: 0, late: true, lose: 1 })
+  as(T4, () => r.set('A')) // on the server at 800 ms; its answer lost at 2300 ms
+  await sleep(1000)
+  as(T4, () => r.set('B'))
+  fire(T4, 'pagehide') // B sent on top of v1: refused
+  fire(T4, 'pageshow', { persisted: true })
+  await sleep(2700) // the retry of B is out (refused too, answered late)
+  const retried = sentBodies.filter((b) => b.startsWith('r2:retry ') && JSON.parse(b.slice(9)).value === 'B').length
+  fire(T4, 'pagehide')
+  gone(T4)
+  await sleep(2500)
+  slowPut.clear()
+  check(`retry: B was sent on closing, retried and sent on closing again (${retried + 1} times)`, retried >= 2 && server.get('r2:retry')!.value === 'A', { retried, server: server.get('r2:retry') })
+  const T5 = new Tab()
+  const m5 = await page(T5)
+  const r5 = as(T5, () => m5.synced<string>('r2:retry', ''))
+  await m5.pullAll()
+  await sleep(1500)
+  check('retry: after reload the edit is kept and saved', r5.get() === 'B' && server.get('r2:retry')!.value === 'B', { local: r5.get(), server: server.get('r2:retry') })
+  ;(g.document as { visibilityState: string }).visibilityState = 'visible'
 }
 
 // --- 11. the last save on closing, refused because a save still out got through first -------------
