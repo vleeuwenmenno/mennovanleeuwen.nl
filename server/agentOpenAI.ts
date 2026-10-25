@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { serverKey, type User } from './auth.ts'
+import { requireStillSignedIn, serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { checkRoom } from './quota.ts'
@@ -221,7 +221,8 @@ function storeTokens(user: User, answer: TokenAnswer, previous?: Tokens | null) 
  * Finishes a sign-in with the address the browser ended on (http://localhost:1455/auth/callback?code=…&state=…),
  * pasted back, or just its query. The state must be this account's sign-in's.
  */
-async function finishSignIn(user: User, body: { callback?: unknown }) {
+async function finishSignIn(user: User, body: { callback?: unknown }, req: IncomingMessage) {
+  requireStillSignedIn(req)
   const flow = flows.get(user.id)
   if (!flow || Date.now() - flow.at > FLOW_TTL) {
     flows.delete(user.id)
@@ -245,6 +246,7 @@ async function finishSignIn(user: User, body: { callback?: unknown }) {
   if (versionOf(user.id) !== version) throw STALE() // signed out or removed while OpenAI answered
   // storeTokens validates the answer and writes it without awaiting anything; only then is the old
   // credential's pending work cancelled, so a malformed answer leaves the previous sign-in intact.
+  requireStillSignedIn(req)
   const t = storeTokens(user, answer)
   invalidate(user.id) // a refresh of the previous account's tokens must not land on this one
   const s = settings(user)
@@ -598,7 +600,7 @@ export async function handleOpenAIApi(req: IncomingMessage, res: ServerResponse,
     return json(res, 200, openaiImagesView(user)), true
   }
   if (path === '/api/agents/openai/chatgpt/start' && method === 'POST') return json(res, 200, startSignIn(user, await readJson(req, 1024))), true
-  if (path === '/api/agents/openai/chatgpt/finish' && method === 'POST') return await finishSignIn(user, await readJson(req, 16 * 1024)), json(res, 200, openaiImagesView(user)), true
+  if (path === '/api/agents/openai/chatgpt/finish' && method === 'POST') return await finishSignIn(user, await readJson(req, 16 * 1024), req), json(res, 200, openaiImagesView(user)), true
   if (path === '/api/agents/openai/chatgpt/cancel' && method === 'POST') return flows.delete(user.id), json(res, 200, openaiImagesView(user)), true
   if (path === '/api/agents/openai/chatgpt' && method === 'DELETE') return signOut(user), json(res, 200, openaiImagesView(user)), true
   if (path === '/api/agents/icons' && read) return json(res, 200, { icons: listIcons(user) }), true

@@ -44,6 +44,15 @@ export const FASTMAIL_URL = 'https://caldav.fastmail.com/dav/'
 // ---------------------------------------------------------------------------------------------
 // Accounts
 
+const linkChanges = new Set<(id: number) => void>()
+export const onCaldavLinkChanged = (fn: (id: number) => void) => void linkChanges.add(fn)
+const linkVersions = new Map<number, number>()
+export const caldavLinkVersion = (user: User): number => linkVersions.get(user.id) ?? 0
+function changedLink(id: number) {
+  linkVersions.set(id, (linkVersions.get(id) ?? 0) + 1)
+  for (const fn of linkChanges) fn(id)
+}
+
 type Row = { id: number; label: string; base_url: string; username: string; password: string }
 
 export function listCaldav(user: User): CaldavInfo[] {
@@ -72,15 +81,18 @@ export async function addCaldav(user: User, body: { url?: string; username?: str
   const existing = database().prepare('SELECT id FROM caldav WHERE user_id = ? AND base_url = ? AND username = ?').get(user.id, url, username) as { id: number } | undefined
   if (existing) {
     database().prepare('UPDATE caldav SET label = ?, password = ? WHERE id = ?').run(label, encrypt(password), existing.id)
+    changedLink(user.id)
     clearCaldavCache(user)
     return { id: existing.id, label, url, username }
   }
   const r = database().prepare('INSERT INTO caldav (user_id, label, base_url, username, password, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, label, url, username, encrypt(password), Date.now())
+  changedLink(user.id)
   clearCaldavCache(user)
   return { id: Number(r.lastInsertRowid), label, url, username }
 }
 
 export function removeCaldav(user: User, id: number) {
+  changedLink(user.id)
   database().prepare('DELETE FROM caldav WHERE user_id = ? AND id = ?').run(user.id, id)
   clearCaldavCache(user)
 }
@@ -480,6 +492,7 @@ export const clearCaldavCache = (user: User) => {
 }
 
 onUserGone((id) => {
+  changedLink(id)
   for (const k of cache.keys()) if (k.startsWith(`${id}|`)) cache.delete(k)
 })
 

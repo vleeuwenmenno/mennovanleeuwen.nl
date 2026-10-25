@@ -177,10 +177,15 @@ export async function disconnectGoogle(user: User) {
  * is still the one the refresh started from, so even a missed bump cannot let an old result land on
  * a newer link.
  */
+const linkChanges = new Set<(id: number) => void>()
+export const onGoogleLinkChanged = (fn: (id: number) => void) => void linkChanges.add(fn)
 const generations = new Map<number, number>()
 const generationOf = (id: number) => generations.get(id) ?? 0
+/** Includes disconnected links, for caches that must detect every link mutation. */
+export const googleLinkVersion = (user: User): number => generationOf(user.id)
 function bump(id: number) {
   generations.set(id, generationOf(id) + 1)
+  for (const fn of linkChanges) fn(id)
   refreshing.delete(id)
   // Reads started under the old link are no longer shared with, or served to, anyone.
   clearGoogleCache({ id } as User)

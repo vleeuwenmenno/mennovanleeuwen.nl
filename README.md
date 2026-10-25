@@ -1196,7 +1196,10 @@ still finds it. The ids are synced with the account (`calendar-hidden`, [`src/da
 too ([`server/calendars.ts`](server/calendars.ts)). A CalDAV task list that the server never named (Fastmail's `DEFAULT_TASK_CALENDAR_…`) shows as *Tasks*.
 With no calendar linked the Calendar says so, with a button to Integrations, and keeps the file for when one is. `pnpm check:ics` covers the reader. Changes go
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
-text on the CalDAV server, written back with its ETag so other apps' properties stay.
+text on the CalDAV server, written back with its ETag so other apps' properties stay. Calendar list and
+event responses recheck the exact MvL OS session that requested them after all providers answer;
+logout, expiry, a ban or account removal discards a held response, and revocation closes a response
+still being delivered. `pnpm check:calendar-link-race` covers the combined-provider races.
 
 **Mail** ([`src/apps/mail`](src/apps/mail), [`server/jmap.ts`](server/jmap.ts)) reads and writes mail
 over [JMAP](https://jmap.io) (RFC 8620 and 8621): Fastmail, Stalwart and other servers that speak
@@ -1846,7 +1849,12 @@ come from, and the model (`gpt-image-2` by default):
   server. The tokens stay on the server, encrypted, and are refreshed there (before they expire,
   and once more when the backend refuses one). Pictures come from the ChatGPT Codex backend
   (`chatgpt.com/backend-api/codex`): its `/images/generations` route, or the Responses API with the
-  `image_generation` tool where that route is missing. **Sign out** forgets the tokens. A refresh (or a sign-in) still waiting on OpenAI when you sign out, sign in again or the account is removed is dropped: it stores nothing and returns no tokens, so an old account's tokens never replace a newer sign-in.
+  `image_generation` tool where that route is missing. **Sign out** forgets the tokens. A refresh (or
+  a sign-in) still waiting on OpenAI when you sign out, sign in again or the account is removed is
+  dropped: it stores nothing and returns no tokens, so an old account's tokens never replace a newer
+  sign-in. Finishing consent also rechecks the original MvL OS request session immediately before
+  saving: MvL OS logout, session expiry or revocation, a ban or account removal during the exchange
+  cannot add ChatGPT credentials or change the image provider.
 
 `gpt_image` makes one of three things:
 - A **picture** (square, landscape or portrait; low, medium or high quality; optionally transparent).
@@ -2973,6 +2981,11 @@ every so often (`registerWatcher()`): the Minecraft server (from its pinger), ne
 GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), calendar
 reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event) and due
 tasks (see Tasks above). The
+five-minute reminder cache belongs to the current Google and CalDAV links, including credential
+changes to an existing CalDAV account. Switching or disconnecting either link discards old events;
+a failed refresh cannot fall back to events from earlier links, and account removal discards pending
+reminders before they can be sent. `pnpm check:revocation` checks held reads and virtual-minute cache
+expiry against local provider stand-ins. The
 list of sources and the rules for the choices are one file both sides import
 ([`src/data/notifySources.ts`](src/data/notifySources.ts)), so Settings lists exactly what the
 server can send. Signed out, a visitor's pop-ups and list stay in that browser, from the page's
@@ -3077,6 +3090,13 @@ checked against the same fresh list: a walk that touched a library the list does
 mixes its counts, state and messages into the rest, so no part of it is shown (`job` is null) until the
 access is back, and the same goes while Seafile cannot be asked. Failures of the walk as a whole carry no
 raw error text. The index itself only describes photos; it is never what says who may see them.
+Every Seafile link has a generation, including reconnecting the same account. Held Photos requests
+are bound to that generation and recheck it before metadata, bytes, redirects or ETags leave. A link
+change cancels old scans and ZIP streams, clears pending library listings and undo/download tokens,
+and prevents old work from restoring index rows. Disconnecting purges the old index and folders
+immediately. Listings started for a new link never join work from the old link. ZIP downloads also
+remain bound to the requesting MvL OS session until completion. `pnpm check:revocation` covers these
+held-request races alongside consent and reminder invalidation.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag that the browser must revalidate after the current account and library-access checks (an

@@ -130,9 +130,9 @@ const waitFor = async (test: () => boolean, ms = 8000) => {
   return test()
 }
 
-type Change = 'relink' | 'disconnect' | 'deletion'
+type Change = 'relink' | 'disconnect' | 'deletion' | 'logout' | 'revoke' | 'expire' | 'ban'
 for (const [kind, ep] of Object.entries(endpoints)) {
-  for (const change of ['relink', 'disconnect', 'deletion'] as Change[]) {
+  for (const change of ['relink', 'disconnect', 'deletion', 'logout', 'revoke', 'expire', 'ban'] as Change[]) {
     const a = account()
     const name = `A${a.id}`
     const token = `tok-${name}`
@@ -146,6 +146,10 @@ for (const [kind, ep] of Object.entries(endpoints)) {
     check(`${kind}/${change}: Google answered and CalDAV is held`, ready)
     if (change === 'relink') await a.consent(`B${a.id}`)
     else if (change === 'disconnect') await a.call('DELETE', '/api/google')
+    else if (change === 'logout') await a.call('POST', '/api/auth/logout')
+    else if (change === 'revoke') database().prepare('DELETE FROM sessions WHERE user_id = ?').run(a.id)
+    else if (change === 'expire') database().prepare('UPDATE sessions SET expires_at = 0 WHERE user_id = ?').run(a.id)
+    else if (change === 'ban') database().prepare('UPDATE users SET banned_at = ? WHERE id = ?').run(Date.now(), a.id)
     else await a.call('DELETE', '/api/me')
     release()
     const res = await pending
@@ -212,6 +216,19 @@ for (const [kind, ep] of Object.entries(endpoints)) {
       const after = await g.call('GET', ep.path)
       check(`${kind}/...the next request uses the new link`, (await after.text()).includes(`tok-G${g.id}`))
     }
+  }
+
+  for (const change of ['logout', 'deletion'] as const) {
+    const removed = account()
+    await removed.addCaldav()
+    hold(ep.held)
+    const pending = removed.call('GET', ep.path)
+    check(`${kind}/CalDAV only ${change}: provider held`, await waitFor(() => gate.held > 0))
+    await removed.call(change === 'logout' ? 'POST' : 'DELETE', change === 'logout' ? '/api/auth/logout' : '/api/me')
+    release()
+    const res = await pending
+    const body = await res.text()
+    check(`${kind}/CalDAV only ${change}: no private payload`, res.status !== 200 && !body.includes('CalDAV event') && !body.includes('caldav:'))
   }
 
   // Google connected while a CalDAV-only request waits: not failed.

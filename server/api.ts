@@ -17,7 +17,7 @@ import { handleOpenAIApi } from './agentOpenAI.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
-import { accountMismatch, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
+import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
@@ -204,7 +204,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (caldavId && method === 'DELETE') return removeCaldav(requireUser(req), Number(caldavId)), json(res, 200, { ok: true }), true
     // The Contacts app (server/contacts.ts): the address book on this site and CardDAV ones.
     if (path.startsWith('/api/contacts') && (await handleContactsApi(req, res, url, method, requireUser(req)))) return true
-    if (path === '/api/calendar/calendars' && read) return json(res, 200, await allCalendars(requireUser(req), true)), true
+    if (path === '/api/calendar/calendars' && read) {
+      const user = requireUser(req)
+      const result = await allCalendars(user, true)
+      requireStillSignedIn(req)
+      const live = bindResponse(res, user.id)
+      if (live?.check(true)) json(res, 200, result)
+      return true
+    }
     if (path === '/api/calendar/events' && read) {
       // ?from=&to= (ISO dates or times) for a range, or ?days=N from the start of today.
       const ids = url.searchParams.get('calendars')
@@ -220,7 +227,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const user = requireUser(req)
       // The Calendar app's refresh button: past the server's cache of CalDAV calendars too.
       if (q('fresh') === '1') clearCaldavCache(user)
-      return json(res, 200, await allEvents(user, ids ? ids.split(',') : null, { from, to })), true
+      const result = await allEvents(user, ids ? ids.split(',') : null, { from, to })
+      requireStillSignedIn(req)
+      const live = bindResponse(res, user.id)
+      if (live?.check(true)) json(res, 200, result)
+      return true
     }
     // The Calendar app's changes: { calendar, event } to add, { ref, event, calendar?, all? } to change, { ref, all? } to delete.
     if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true

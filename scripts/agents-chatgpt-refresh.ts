@@ -10,7 +10,8 @@
 //
 // Exits 1 on any failure.
 
-import { createServer } from 'node:http'
+import { createServer, IncomingMessage } from 'node:http'
+import { Socket } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,11 +45,19 @@ const fake = createServer((req, res) => {
 await new Promise<void>((r) => fake.listen(0, '127.0.0.1', r))
 process.env.OPENAI_AUTH_URL = `http://127.0.0.1:${(fake.address() as { port: number }).port}`
 
-const { database, encrypt, decrypt, userGone } = await import('../server/db.ts')
+const { database, encrypt, decrypt, sha256, userGone } = await import('../server/db.ts')
 const { openaiChatAccess, chatgptSignInForTest: ops } = await import('../server/agentOpenAI.ts')
+process.env.GITHUB_CLIENT_ID = 'test'
+process.env.GITHUB_CLIENT_SECRET = 'test'
+const { currentUser } = await import('../server/auth.ts')
 const now = Date.now()
 const user = { id: 1, githubId: 1, login: 'refresh-check', name: null, avatar: null, githubToken: 'none', githubScopes: [], admin: false }
 database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (1, 1, ?, ?, ?, ?)').run(user.login, encrypt('none'), now, now)
+
+database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256('refresh-test'), now, now + 86400_000)
+const req = new IncomingMessage(new Socket())
+req.headers.cookie = 'mvlos_sid=refresh-test'
+currentUser(req)
 
 const seedA = () =>
   database().prepare("INSERT OR REPLACE INTO integrations (user_id, name, secret, created_at) VALUES (1, 'openai-chatgpt', ?, ?)").run(encrypt(JSON.stringify({ access: 'access-A', refresh: 'refresh-A', accountId: 'acct-a', email: 'a@example.test', plan: 'plus', expires: Date.now() - 1000 })), Date.now())
@@ -62,7 +71,7 @@ const waitHeld = async (n: number) => {
 }
 const relink = async (code = 'code-B') => {
   const url = new URL(ops.startSignIn(user, { acceptedRisk: true }).url)
-  await ops.finishSignIn(user, { callback: `?code=${code}&state=${url.searchParams.get('state')}` })
+  await ops.finishSignIn(user, { callback: `?code=${code}&state=${url.searchParams.get('state')}` }, req)
 }
 
 // 1. Disconnect only.

@@ -4,12 +4,12 @@ import { Readable } from 'node:stream'
 import { crc32 } from 'node:zlib'
 import { writeZip, type ZipInput } from '../src/data/zip.ts'
 import type { User } from './auth.ts'
-import { requireUser } from './auth.ts'
+import { bindResponse, requireStillSignedIn, requireUser } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
-import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
+import { HttpError, json as sendJson, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
-import { fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
+import { assertSeafileLink, onSeafileLinkChanged, seafileLinkGeneration, withSeafileLink, fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
 // Immich library, or both (the app switches between them; they are not merged).
@@ -26,6 +26,13 @@ import { fileLink, libraries, listDir, removeItems, repoId, restore as restoreTr
 // walked while unlocked, and their photos only show then.
 //
 // Immich indexes everything itself: its API is asked directly (server/immich.ts).
+
+function json(res: ServerResponse, code: number, body: unknown) {
+  requireStillSignedIn(res.req)
+  const user = requireUser(res.req)
+  assertSeafileLink(user)
+  return sendJson(res, code, body)
+}
 
 const MAX_FILES = 100_000
 const MAX_FOLDERS = 20_000
@@ -160,6 +167,7 @@ function seafileReady(user: User): boolean {
 }
 
 function requireSeafile(user: User) {
+  assertSeafileLink(user)
   if (!seafileReady(user)) throw new HttpError(409, 'Seafile is not linked')
 }
 
@@ -168,7 +176,7 @@ function requireSeafile(user: User) {
 // revoked, deleted or locked disappears from Photos at once, and when Seafile cannot answer nothing
 // is shown (the index holds only descriptive data, never who may see it).
 type Flight = { running?: Promise<Library[]>; next?: Promise<Library[]> }
-const flights = new Map<number, Flight>()
+const flights = new Map<string, Flight>()
 
 /**
  * One listing per request, without ever answering from before the request came in: a request waits
@@ -176,10 +184,13 @@ const flights = new Map<number, Flight>()
  * meanwhile shares. So at most one listing runs and one waits, however many thumbnails are asked at once.
  */
 function fetchLibs(user: User): Promise<Library[]> {
-  let f = flights.get(user.id)
-  if (!f) flights.set(user.id, (f = {}))
+  assertSeafileLink(user)
+  const key = `${user.id}:${seafileLinkGeneration(user)}`
+  let f = flights.get(key)
+  if (!f) flights.set(key, (f = {}))
   const flight = f
   const begin = () => {
+    assertSeafileLink(user)
     const p = libraries(user)
     const done = () => {
       if (flight.running === p) flight.running = undefined
@@ -201,7 +212,9 @@ function fetchLibs(user: User): Promise<Library[]> {
 /** The libraries this account has right now. Any failure is a generic 502: nothing of what is indexed may be shown on a guess. */
 async function libs(user: User): Promise<Library[]> {
   try {
-    return await fetchLibs(user)
+    const list = await fetchLibs(user)
+    assertSeafileLink(user)
+    return list
   } catch (e) {
     if (e instanceof HttpError && e.status === 409) throw e
     throw new HttpError(502, 'Seafile is not available, so no photos are shown')
@@ -332,22 +345,24 @@ let running = 0
 onUserGone((id) => {
   cancels.get(id)?.abort()
   jobs.delete(id)
-  flights.delete(id)
+  for (const key of flights.keys()) if (key.startsWith(`${id}:`)) flights.delete(key)
 })
 
 /** Starts a walk of the user's chosen folders, unless one is running already. */
-export function startScan(user: User): void {
+export function startScan(user: User): Promise<void> | void {
   const current = jobs.get(user.id)
   if (current && (current.state === 'waiting' || current.state === 'listing' || current.state === 'reading')) return
   const job: Walk = { state: 'waiting', started: Date.now(), finished: null, folders: 0, files: 0, toRead: 0, read: 0, added: 0, removed: 0, skipped: [], errors: [], capped: false, repos: new Set() }
   jobs.set(user.id, job)
   const stop = new AbortController()
   cancels.set(user.id, stop)
-  void (async () => {
+  return withSeafileLink(user, async () => {
     if (running >= MAX_JOBS) await new Promise<void>((r) => waiting.push(r))
     running++
     try {
       await scan(user, job, stop.signal)
+      assertSeafileLink(user)
+      if (stop.signal.aborted) return
       job.state = 'done'
       db().prepare('UPDATE photo_accounts SET scanned_at = ? WHERE user_id = ?').run(Date.now(), user.id)
     } catch (e) {
@@ -360,7 +375,7 @@ export function startScan(user: User): void {
       waiting.shift()?.()
       if (cancels.get(user.id) === stop) cancels.delete(user.id)
     }
-  })()
+  })
 }
 
 /**
@@ -439,6 +454,8 @@ async function scan(user: User, job: Walk, signal: AbortSignal) {
         busy++
         try {
           const listing = await listDir(user, lib.id, folder)
+          assertSeafileLink(user)
+          if (signal.aborted) return
           job.folders++
           for (const e of listing.entries) {
             const path = `${folder === '/' ? '' : folder}/${e.name}`
@@ -485,6 +502,8 @@ async function scan(user: User, job: Walk, signal: AbortSignal) {
     await pool(toRead, CONCURRENCY, async (f) => {
       if (signal.aborted) return
       const meta = await metaOf(user, lib.id, f.path, f.kind, f.size, signal).catch(() => null)
+      assertSeafileLink(user)
+      if (signal.aborted) return
       const m = meta ?? emptyMeta
       const taken = m.taken ?? f.mtime
       insert.run(
@@ -647,6 +666,7 @@ const seafileSource: Source = {
     if (tag && etag === tag) return { status: 304, type: '', body: null, etag: tag }
     if (row.thumb) return { status: 200, type: 'image/jpeg', body: Buffer.from(row.thumb), etag: tag }
     const t = await thumbnail(user, row.repo, row.path, SIZES[size])
+    assertSeafileLink(user)
     return { status: 200, type: t.type, body: t.body, etag: tag }
   },
   async info(user, id) {
@@ -712,6 +732,7 @@ const seafileSource: Source = {
     for (const g of byFolder(rows)) {
       try {
         await removeItems(user, { repo: g.repo, parent: g.parent, names: g.rows.map((r) => nameOf(r.path)) })
+        assertSeafileLink(user)
       } catch (e) {
         error = (e as Error).message
         break
@@ -751,6 +772,7 @@ const seafileSource: Source = {
       }
       for (const [commit, list] of byCommit) {
         const res = await restoreTrash(user, { repo: g.repo, commit, paths: list.map((r) => r.path) }).catch((e: Error) => ({ restored: [] as string[], failed: list.map((r) => ({ path: r.path, error: e.message })) }))
+        assertSeafileLink(user)
         const back = new Set(res.restored.map((p) => p.replace(/(.)\/+$/, '$1')))
         for (const r of list) {
           if (back.has(r.path)) {
@@ -1027,6 +1049,7 @@ const UNDO_MS = 30 * 60_000
 const undos = new Map<string, { user: number; source: string; at: number; undo: Undo }>()
 const tokens = () => randomBytes(18).toString('base64url')
 function keepUndo(user: User, source: string, undo: Undo): string {
+  if (source === 'seafile') assertSeafileLink(user)
   for (const [k, u] of undos) if (Date.now() - u.at > UNDO_MS) undos.delete(k)
   const token = tokens()
   undos.set(token, { user: user.id, source, at: Date.now(), undo })
@@ -1057,6 +1080,7 @@ async function moveSeafile(user: User, body: { ids?: unknown; to?: { repo?: stri
   let moved = 0
   for (const g of byFolder(moving)) {
     await transfer(user, { op: 'move', from: { repo: g.repo, parent: g.parent }, names: g.rows.map((r) => nameOf(r.path)), to: { repo: to.repo, parent: to.path } })
+    assertSeafileLink(user)
     const d = db()
     for (const r of g.rows) {
       if (kept) d.prepare('UPDATE OR REPLACE photos SET repo = ?, path = ? WHERE id = ? AND user_id = ?').run(to.repo, `${to.path === '/' ? '' : to.path}/${nameOf(r.path)}`, r.id, user.id)
@@ -1066,6 +1090,14 @@ async function moveSeafile(user: User, body: { ids?: unknown; to?: { repo?: stri
   }
   return { moved, kept }
 }
+
+onSeafileLinkChanged((id) => {
+  cancels.get(id)?.abort()
+  jobs.delete(id)
+  for (const key of flights.keys()) if (key.startsWith(`${id}:`)) flights.delete(key)
+  for (const m of [undos, zips]) for (const [key, value] of m) if (value.user === id && value.source === 'seafile') m.delete(key)
+  seafileReady({ id } as User)
+})
 
 /** Immich: adds photos to one of the account's albums. */
 async function addToAlbum(user: User, body: { album?: unknown; ids?: unknown }) {
@@ -1092,6 +1124,14 @@ async function sendZip(req: IncomingMessage, res: ServerResponse, token: string)
   const source = SOURCES[z.source]
   const gone = new AbortController()
   res.on('close', () => gone.abort())
+  requireStillSignedIn(req)
+  assertSeafileLink(user)
+  const generation = seafileLinkGeneration(user)
+  const live = bindResponse(res, user.id)
+  if (!live?.check(true)) return
+  const stopLink = onSeafileLinkChanged((id) => { if (id === user.id && z.source === 'seafile') res.destroy() })
+  res.once('close', stopLink)
+  // The generation check below also covers changes between ZIP entries.
   const inputs = z.ids.map((id) => source.file(user, id, gone.signal))
   const stamp = new Date().toISOString().slice(0, 10)
   res.writeHead(200, {
@@ -1101,7 +1141,13 @@ async function sendZip(req: IncomingMessage, res: ServerResponse, token: string)
     ...SECURITY,
     ...UNTRUSTED,
   })
-  const stream = Readable.from(writeZip(inputs, { crc: (data, c) => crc32(data, c) }))
+  const stream = Readable.from((async function* () {
+    for await (const chunk of writeZip(inputs, { crc: (data, c) => crc32(data, c) })) {
+      if (!live.check(true)) return
+      if (z.source === 'seafile') assertSeafileLink(user, generation)
+      yield chunk
+    }
+  })())
   stream.on('error', () => res.destroy())
   res.on('close', () => stream.destroy())
   stream.pipe(res)
@@ -1138,6 +1184,13 @@ function pipe(res: ServerResponse, body: ReadableStream<Uint8Array> | null) {
 
 /** Resolves true when it answered the request. */
 export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<boolean> {
+  const user = requireUser(req)
+  const seafile = url.pathname !== '/api/integrations/immich' && !url.pathname.includes('/immich/')
+  const run = () => handlePhotosRequest(req, res, url, method)
+  return seafile ? withSeafileLink(user, run) : run()
+}
+
+async function handlePhotosRequest(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<boolean> {
   const path = url.pathname
   const read = method === 'GET' || method === 'HEAD'
   const q = (k: string) => url.searchParams.get(k)
@@ -1206,6 +1259,7 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
     // Checked now, so a download never starts for someone else's photos.
     if (name === 'seafile') await guardZip(user, name, ids)
     else ids.forEach(uuid)
+    if (name === 'seafile') assertSeafileLink(user)
     const token = tokens()
     for (const [k, z] of zips) if (Date.now() - z.at > ZIP_MS) zips.delete(k)
     zips.set(token, { user: user.id, source: name, ids, at: Date.now() })
@@ -1216,6 +1270,10 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   if (op === 'thumb' && read) {
     const size: Size = q('size') === 'large' ? 'large' : q('size') === 'medium' ? 'medium' : 'small'
     const t = await source.thumb(user, id, size, typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'] : null)
+    requireStillSignedIn(req)
+    assertSeafileLink(user)
+    const live = bindResponse(res, user.id)
+    if (!live?.check(true)) return true
     // Revalidate ordinary Seafile thumbnails after the account and current library access checks.
     // Immich and encrypted-library thumbnails have no validator and are never stored.
     const cache: Record<string, string> = t.etag ? { 'Cache-Control': 'private, no-cache', ETag: t.etag } : { 'Cache-Control': 'private, no-store' }
@@ -1230,6 +1288,8 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
     if (name === 'seafile') {
       const { row } = await openRow(user, id)
       const { url: link } = await fileLink(user, row.repo, row.path, 'download')
+      requireStillSignedIn(req)
+      assertSeafileLink(user)
       return res.writeHead(302, { Location: link, 'Cache-Control': 'no-store', ...SECURITY }).end(), true
     }
     const gone = new AbortController()

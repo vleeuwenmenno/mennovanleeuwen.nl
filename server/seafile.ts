@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomBytes } from 'node:crypto'
 import type { User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
@@ -22,6 +23,33 @@ import { HttpError } from './http.ts'
 const NAME = 'seafile'
 const OFFICE = 'onlyoffice'
 const DEVICE_NAME = 'mennovanleeuwen.nl'
+
+// A link's lifetime is independent of its display identity: disconnect/reconnect to the same
+// account must also invalidate held requests. Photos scopes whole operations to this generation.
+const linkVersions = new Map<number, number>()
+const linkChanged = new Set<(id: number) => void>()
+const linkScope = new AsyncLocalStorage<{ id: number; generation: number }>()
+export const seafileLinkGeneration = (user: User): number => linkVersions.get(user.id) ?? 0
+export function onSeafileLinkChanged(fn: (id: number) => void) {
+  linkChanged.add(fn)
+  return () => { linkChanged.delete(fn) }
+}
+function changedLink(id: number) {
+  linkVersions.set(id, (linkVersions.get(id) ?? 0) + 1)
+  for (const key of encryptedRepos.keys()) if (key.startsWith(`${id}:`)) encryptedRepos.delete(key)
+  for (const key of unlockedUntil.keys()) if (key.startsWith(`${id}:`)) unlockedUntil.delete(key)
+  for (const fn of linkChanged) fn(id)
+}
+export function assertSeafileLink(user: User, generation = linkScope.getStore()?.generation) {
+  const scope = linkScope.getStore()
+  if (generation !== undefined && ((scope && scope.id !== user.id) || seafileLinkGeneration(user) !== generation)) {
+    throw new HttpError(409, 'Seafile was reconnected or disconnected meanwhile: try again')
+  }
+}
+export function withSeafileLink<T>(user: User, work: () => T): T {
+  return linkScope.run({ id: user.id, generation: seafileLinkGeneration(user) }, work)
+}
+onUserGone(changedLink)
 
 type Link = { url: string; username: string; token: string; name: string | null; version: string | null }
 type Office = { url: string; secret: string }
@@ -89,6 +117,7 @@ const errorOf = async (res: Response) => {
  * for one and sends everything again with it.
  */
 export async function linkSeafile(user: User, body: { url?: string; username?: string; password?: string; otp?: string }): Promise<SeafileInfo | { otp: true }> {
+  const generation = seafileLinkGeneration(user)
   const url = normalizeUrl(body.url, 'Seafile')
   const username = body.username?.trim()
   const password = body.password
@@ -119,8 +148,11 @@ export async function linkSeafile(user: User, body: { url?: string; username?: s
 
   // Linking again (a new password, or another account): sign the old device out first.
   const old = read<Link>(user, NAME)
+  assertSeafileLink(user, generation)
   if (old) await revoke(user, old)
+  assertSeafileLink(user, generation)
   write(user, NAME, { url, username, token, name: account?.name || null, version: server?.version || null } satisfies Link)
+  changedLink(user.id)
   return seafileInfo(user)!
 }
 
@@ -131,9 +163,10 @@ async function revoke(user: User, link: Link) {
 
 export async function unlinkSeafile(user: User) {
   const link = read<Link>(user, NAME)
-  if (link) await revoke(user, link)
   remove(user, NAME)
   remove(user, OFFICE)
+  changedLink(user.id)
+  if (link) await revoke(user, link)
 }
 
 /** The OnlyOffice document server Seafile uses: checked by loading its api.js, then stored. */
@@ -159,6 +192,7 @@ export const officeServer = (user: User): Office | null => (read<Link>(user, NAM
 export type Library = { id: string; name: string; type: 'mine' | 'shared' | 'group' | 'public'; owner: string | null; encrypted: boolean; permission: 'r' | 'rw'; size: number; mtime: number }
 
 function linked(user: User): Link {
+  assertSeafileLink(user)
   const link = read<Link>(user, NAME)
   if (!link) throw new HttpError(409, 'Seafile is not linked')
   return link
@@ -166,9 +200,14 @@ function linked(user: User): Link {
 
 /** A JSON request to Seahub's API as the linked account. */
 export async function seafile<T>(user: User, path: string, init: RequestInit = {}): Promise<T> {
+  const generation = seafileLinkGeneration(user)
   const link = linked(user)
   const res = await call(user, link.url, path, { ...init, token: link.token })
-  if (res.ok) return JSON.parse((await readCapped(res, MAX_JSON)).toString('utf8')) as T
+  if (res.ok) {
+    const value = JSON.parse((await readCapped(res, MAX_JSON)).toString('utf8')) as T
+    assertSeafileLink(user, generation)
+    return value
+  }
   const message = await errorOf(res)
   if (res.status === 401) throw new HttpError(409, 'Seafile no longer accepts the token: link it again in Settings')
   // An encrypted library that is not unlocked (or no longer: Seafile forgets after an hour).
@@ -400,7 +439,9 @@ export async function thumbnail(user: User, repo: unknown, path: unknown, size: 
   const res = await call(user, link.url, `/api2/repos/${id}/thumbnail/?p=${encodeURIComponent(p)}&size=${px}`, { token: link.token, timeout: 20_000 })
   const type = res.headers.get('content-type') ?? ''
   if (!res.ok || !type.startsWith('image/')) throw new HttpError(404, 'No thumbnail')
-  return { type, body: await readCapped(res, 16 * 1024 * 1024) }
+  const body = await readCapped(res, 16 * 1024 * 1024)
+  assertSeafileLink(user)
+  return { type, body }
 }
 
 /** The most one range read may ask for (a ZIP's table of contents is rarely more than a few MB). */
