@@ -5663,3 +5663,18 @@ button.cal-day.is-picked:not(.is-today) {
   stroke: currentColor;
   opacity: 0.6;
 }
+
+/* The emoji shortcode list (src/os/emojiTyping.tsx) above the Notebook editor; in the Agents
+   composer it sits in the box like the command list. */
+.emoji-pop-glyph {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-right: 4px;
+  font-size: 15px;
+  text-align: center;
+}
+.nb-editor ~ .emoji-pop {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  max-height: 11em;
+}

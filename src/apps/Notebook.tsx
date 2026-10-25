@@ -3,6 +3,7 @@ import { createNote, NOTE_COLORS, noteTitle, purgeNote, restoreNote, trashNote, 
 import { timeAgo } from '../data/recents'
 import { signIn, useAccount } from '../os/account'
 import { openContextMenu } from '../os/ContextMenu'
+import { useEmojiTyping } from '../os/emojiTyping'
 import { useIsMobile } from '../os/useIsMobile'
 import { useSyncStatus } from '../os/synced'
 import { useWM, type WinState } from '../os/wm'
@@ -71,6 +72,7 @@ export function Notebook({ win }: { win: WinState }) {
       .sort((a, b) => b.updated - a.updated)
   }, [live, q, tab])
   const note = live.find((n) => n.id === selected && (tab === 'trash' ? n.deleted : !n.deleted)) ?? notes[0]
+  const emoji = useEmojiTyping(editor, note?.text ?? '')
   const showingDetail = detail && !!note
   const back = () => {
     setDetail(false)
@@ -212,10 +214,13 @@ export function Notebook({ win }: { win: WinState }) {
                 className="nb-editor"
                 value={note.text}
                 placeholder={'# A title\n\nWrite in Markdown: **bold**, _italic_, `code`, - lists, [links](https://…)'}
-                onChange={(e) => updateNote(note.id, { text: e.target.value })}
+                onChange={(e) => emoji.change(e, (v) => updateNote(note.id, { text: v }))}
+                onKeyDown={(e) => void emoji.keyDown(e)}
+                onSelect={(e) => emoji.select(e.currentTarget)}
                 spellCheck
               />
             )}
+            {!preview && !note.deleted && emoji.popup}
             <footer className="nb-foot">
               <span className="muted">
                 {note.text.trim() ? note.text.trim().split(/\s+/).length : 0} words · edited {when(note.updated)}
