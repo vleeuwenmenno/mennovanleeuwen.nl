@@ -98,7 +98,7 @@ export function PhotoPicker({ limit, onAttach, onClose }: { limit: number; onAtt
   const matchingAlbums = albums.filter((entry) => entry.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
   return <ImageDialog title="Attach from Photos" onClose={close} wide>
     <div className="photo-picker-controls">
-      <p className="muted">Choose original images from your Photos libraries. PNG, JPEG, WebP or GIF; up to 5 MB each.</p>
+      <p className="muted">Choose original images from your Photos libraries. PNG, JPEG, WebP or GIF up to 5 MB each; camera raws (DNG, iPhone ProRAW) go as their embedded preview, and HEIC where this browser can read it.</p>
       {sources.length > 0 && <>
         <label>Library<Select value={source} options={sources.map((value) => ({ value, label: sourceName(value) }))} disabled={reading} onChange={(value) => { setSource(value); setAlbum(''); setSearch('') }} aria-label="Photo library" /></label>
         <label>Find album<input type="search" value={search} disabled={reading} placeholder="Search album names" onChange={(e) => setSearch(e.target.value)} /></label>

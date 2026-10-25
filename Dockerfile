@@ -46,6 +46,8 @@ COPY src/data/visual/spec.ts src/data/visual/svg.ts src/data/visual/lang.ts src/
 # Notes linked to calendar events: how a link is kept, and the meeting note's template; and the
 # counters note changes carry, so the agents' edits merge with the browser's.
 COPY src/data/noteEvents.ts src/data/noteClock.ts ./src/data/
+# Camera raws (their embedded preview) and multi-picture JPEGs as Agents image sources.
+COPY src/data/rawImage.ts ./src/data/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
 RUN mkdir -p /app/data && chown node:node /app/data
 ENV DATA_DIR=/app/data

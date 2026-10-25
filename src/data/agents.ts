@@ -7,6 +7,7 @@ import type { ImageProgress } from './imageModels'
 import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 import { effortFor, type Effort } from './agentModelNames'
 import type { ThreadStats } from './agentStats'
+import { isHeifFile, isRawFile, stillPicture } from './stillPicture'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -786,9 +787,13 @@ export async function toAttachment(blob: Blob, name: string, source: string): Pr
     const text = read.text.length > 390_000 ? `${read.text.slice(0, 390_000)}\n\n[the rest of the PDF was left out: it is too long]` : read.text + note
     return { name, source, kind: 'text', mime: 'application/pdf', size: blob.size, text }
   }
-  if (/^image\/(png|jpe?g|webp|gif)$/.test(mime) || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
-    if (blob.size > MAX_IMAGE) throw new Error(`${name} is over 5 MB`)
-    return { name, source, kind: 'image', mime: mime || 'image/png', size: blob.size, data: base64(await blob.arrayBuffer()) }
+  // A camera raw goes as its embedded preview, a HEIC as a JPEG where the browser can decode it, and
+  // a multi-picture JPEG (iPhone gain or depth maps) as its primary picture (data/stillPicture.ts).
+  const converted = isRawFile(name, mime) || isHeifFile(name, mime)
+  if (converted || /^image\/(png|jpe?g|webp|gif)$/.test(mime) || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
+    const still = await stillPicture(blob, name, MAX_IMAGE)
+    if (still.size > MAX_IMAGE) throw new Error(`${name} is over 5 MB`)
+    return { name, source, kind: 'image', mime: converted ? 'image/jpeg' : still.type || mime || 'image/png', size: still.size, data: base64(await still.arrayBuffer()) }
   }
   if (blob.size > MAX_TEXT) throw new Error(`${name} is over 1 MB; text files, PDFs and pictures can be attached`)
   const text = await blob.text()
