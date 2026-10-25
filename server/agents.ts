@@ -856,8 +856,10 @@ export async function updateThread(user: User, id: string, body: { title?: strin
     .prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ?, workdir = ?, permission = ? WHERE id = ?')
     .run(title, archived, mode, model, tools, pinned, project, quick, workdir ? JSON.stringify(workdir) : null, permission, row.id)
   // Renamed by hand: the title is the user's from now on, which the automatic check leaves alone
-  // (Regenerate title hands it back), and the old one stays findable as an alias.
-  if (title !== row.title) setTitle(row, title, 'user')
+  // (Regenerate title hands it back), and the old one stays findable as an alias. Naming it what it
+  // is called already claims it too, so a title the model is still thinking about does not replace it.
+  const named = body.title !== undefined && String(body.title).trim() !== ''
+  if (title !== row.title || named) setTitle(row, title, 'user')
   return toThread(ownThread(user, row.id))
 }
 
@@ -873,6 +875,8 @@ export function deleteThread(user: User, id: string) {
   retainBranchedImages(user, row.id)
   retainImageMasks(user, row.id)
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
+  // A refinement or check still thinking finds the row gone, and writes nothing.
+  titleRevs.delete(row.id)
 }
 
 /** Stops every turn an account has running (banned or deleted, server/users.ts). */
@@ -914,7 +918,7 @@ function agentSettings(user: User): AgentSettings {
   const skillsOff = Array.isArray(v.skillsOff) ? v.skillsOff.filter((x): x is string => typeof x === 'string').slice(0, 500) : []
   // On unless switched off: settings saved before the check existed have no say yet.
   const titleRefresh = v.titleRefresh !== false
-  const titleEvery = TITLE_EVERY.includes(Number(v.titleEvery)) ? Number(v.titleEvery) : 4
+  const titleEvery = TITLE_EVERY.includes(Number(v.titleEvery)) ? Number(v.titleEvery) : 3
   // Compacting by itself is on unless switched off, at 85% of the context window.
   const autoCompact = v.autoCompact !== false
   const compactAt = COMPACT_AT.includes(Number(v.compactAt)) ? Number(v.compactAt) : 85
@@ -952,7 +956,7 @@ export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
 
 const TITLE_PROMPT = [
   'You write the title of a chat thread, shown in one short line of a sidebar.',
-  'Answer with JSON: {"title": "…"}. The title is a noun phrase of 2 to 5 words, at most 40 characters, naming the subject itself, in the language of the conversation, capitalised like a headline.',
+  'Answer with the JSON only, no code fences or other text: {"title": "…"}. The title is a noun phrase of 2 to 5 words, at most 40 characters, naming the subject itself, in the language of the conversation, capitalised like a headline.',
   'Never describe the conversation, the request or the people in it ("The user wants…", "A title for…", "Question about…"): name what it is about.',
 ].join('\n')
 /** Worked examples, given as earlier turns: models follow these better than rules. */
@@ -969,17 +973,18 @@ const META_TITLE = /^(?:(?:the|this|a|an)\s+)?(?:user|owner|person|assistant|mod
 const META_OPENER = /^(?:the |this |a )?(?:user|owner|person|conversation|thread|chat|discussion|question|request|query|inquiry)(?:'s)?(?:\s+(?:is|are|was|wants|wanting|needs|asking|asks|requesting|requests|looking|trying|talking|seeking|question|questions|request))*\s+(?:about|regarding|on|of|for|to|into|how to|help with|what|whether|if)\s+/i
 const HELP_OPENER = /^(?:help|assistance|information|info|explanation)\s+(?:with|on|about|of)\s+/i
 
+/** Whether a candidate title has anything in it to read: a letter or a digit (not "```", "..." or "---"). */
+const hasWord = (t: string) => /[\p{L}\p{N}]/u.test(t)
+
 export function cleanTitle(raw: string): string | null {
-  let t =
-    raw
-      .replace(/<think>[\s\S]*?<\/think>/g, '')
-      .split('\n')
-      .map((l) => l.trim())
-      .find(Boolean) ?? ''
-  const trim = (x: string) => x.replace(/^["'“”‘’#*\-–\s]+|["'“”‘’.!?*\s]+$/g, '')
-  t = trim(trim(t).replace(/^(title|titel)\s*:\s*/i, ''))
+  let t = withoutWrapping(raw)
+    .split('\n')
+    .map((l) => l.trim())
+    .find(hasWord) ?? ''
+  const trim = (x: string) => x.replace(/^["'“”‘’`#*\-–\s]+|["'“”‘’`.!?*\s]+$/g, '')
+  t = trim(trim(t).replace(/^(title|titel)["']?\s*:\s*/i, ''))
   t = t.replace(META_OPENER, '').replace(HELP_OPENER, '')
-  if (!t) return null
+  if (!t || !hasWord(t)) return null
   t = t[0].toUpperCase() + t.slice(1)
   // One short line: cut at a word before 42 characters.
   if (t.length > 42) t = `${t.slice(0, 42).replace(/\s+\S*$/, '')}…`
@@ -1032,20 +1037,80 @@ async function askTitleModel(user: User, key: string, messages: { role: string; 
  * reasoning leaked into the answer, the title is usually its last line).
  */
 export function pickTitle(raw: string): string | null {
-  const ok = (t: string | null) => (t && !META_TITLE.test(t) && t.length <= 60 ? t : null)
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    const t = typeof parsed === 'string' ? parsed : (parsed as { title?: unknown })?.title
-    if (typeof t === 'string') return ok(cleanTitle(t))
-  } catch {
-    /* not JSON: look through the lines */
-  }
-  const lines = raw.replace(/<think>[\s\S]*?<\/think>/g, '').split('\n').map((l) => l.trim()).filter(Boolean)
+  const ok = (t: string | null) => (t && hasWord(t) && !META_TITLE.test(t) && t.length <= 60 ? t : null)
+  const parsed = modelJson(raw)
+  const t = typeof parsed === 'string' ? parsed : (parsed as { title?: unknown } | null | undefined)?.title
+  if (typeof t === 'string') return ok(cleanTitle(t))
+  // Not JSON: look through the lines.
+  const lines = withoutWrapping(raw).split('\n').map((l) => l.trim()).filter(Boolean)
   for (const line of lines.reverse()) {
     const t = ok(cleanTitle(line))
     if (t) return t
   }
   return null
+}
+
+/** A model's answer without its thinking and without the markdown code fences around (or in) it. */
+function withoutWrapping(raw: string): string {
+  return raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/```[\w-]*/g, '')
+}
+
+/**
+ * The JSON in a model's answer, however it came: the answer itself, or the first object inside
+ * surrounding text (a code fence, "Here is the title: {…}", reasoning that leaked). Undefined
+ * when there is none.
+ */
+export function modelJson(raw: string): unknown {
+  const text = withoutWrapping(raw).trim()
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    /* look for an object inside */
+  }
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    // The matching brace, minding strings, so a "}" in a title does not end it.
+    let depth = 0
+    let quoted = false
+    for (let i = start; i < text.length; i++) {
+      const c = text[i]
+      if (quoted) {
+        if (c === '\\') i++
+        else if (c === '"') quoted = false
+      } else if (c === '"') quoted = true
+      else if (c === '{') depth++
+      else if (c === '}' && --depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1)) as unknown
+        } catch {
+          break
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * The title a thread gets when the title model has none: the first line of the question that is
+ * prose, skipping code fences and what is in them, blank lines and lines of only symbols; else the
+ * attached files' names; else a plain stand-in. Never a code fence.
+ */
+export function fallbackTitle(text: string, files: string[] = []): string {
+  const short = (t: string) => (t.length > 60 ? `${t.slice(0, 57)}…` : t)
+  let fenced = false
+  for (const line of text.split('\n')) {
+    const l = line.trim()
+    if (/^(```|~~~)/.test(l)) {
+      fenced = !fenced
+      continue
+    }
+    if (fenced || !hasWord(l)) continue
+    const t = cleanTitle(l.replace(/`/g, '').replace(/\s+/g, ' '))
+    if (t) return short(t)
+  }
+  const names = files.filter(hasWord).join(', ')
+  if (names) return short(names)
+  return text.trim() ? 'Code snippet' : 'Untitled thread'
 }
 
 /** A new title to offer when renaming; nothing is saved. */
@@ -1056,17 +1121,18 @@ export async function suggestTitle(user: User, id: string): Promise<{ title: str
 
 // --- keeping titles up to date ----------------------------------------------------------------
 //
-// A thread's first title names how it started, and threads wander. Every few of the user's
-// messages (Settings: on by default, every 4), after the turn has answered, the title model gets the
-// current title and a short digest of the latest exchanges, and says whether the title still fits
-// or what fits better now. It is asked to keep the title unless the subject really changed, so a
-// title does not flip with each new detail. A title the user set by hand is never touched. Old
-// titles stay on the thread as aliases: the sidebar shows them on hover and its search finds them.
+// A thread's first title is a guess from the first message, made while the answer is still being
+// written; once that first answer is in, the title model names the thread again from question and
+// answer (refineFirstTitle). Threads wander too: every few of the user's messages (Settings: on by
+// default, every 3), after the turn has answered, the title model gets the current title, how the
+// thread started and a short digest of the latest exchanges, and says whether the title still names
+// the main subject or what does now. A title the user set by hand is never touched. Old titles stay
+// on the thread as aliases: the sidebar shows them on hover and its search finds them.
 
 const RETITLE_PROMPT = [
   'You keep the title of a chat thread up to date. The title is shown in one short line of a sidebar, so the user can find the thread again.',
-  'You get the current title and the latest messages. Answer with JSON: {"keep": true} when the title still fits what the conversation is about, or {"title": "…"} with a better title when the conversation has clearly moved on to another subject.',
-  'Keep the title in almost every case: when the talk stays on the same subject, goes deeper into it, asks a follow-up or a related question, or only the wording or details change. Change it only when the title would now mislead someone looking for this conversation.',
+  'You get the current title, how the conversation started and its latest messages. Answer with the JSON only, no code fences or other text: {"keep": true} to keep the title, or {"title": "…"} with a better one.',
+  'Keep the title when it still names the main subject of the conversation, also when the latest messages go deeper into it or ask a follow-up. Change it when it no longer names what the conversation is mainly about, or when it is vague, generic or not a real title (such as "New thread", "Question", "Help", a code fragment or punctuation).',
   'A new title is a noun phrase of 2 to 5 words, at most 40 characters, naming the subject itself, in the language of the conversation, capitalised like a headline. Never describe the conversation, the request or the people in it.',
 ].join('\n')
 
@@ -1099,6 +1165,7 @@ const lastMessageId = (thread: string) => (database().prepare('SELECT MAX(id) AS
  * automatic check counts from here.
  */
 function setTitle(row: ThreadRow, title: string, source: TitleSource) {
+  bumpTitle(row.id)
   const old = row.title
   const aliases = aliasesOf(row).filter((a) => a.title.toLowerCase() !== title.toLowerCase() && a.title.toLowerCase() !== old.toLowerCase())
   const history = old !== title && old !== NEW_TITLE ? [{ title: old, until: Date.now() }, ...aliases] : aliases
@@ -1107,14 +1174,23 @@ function setTitle(row: ThreadRow, title: string, source: TitleSource) {
     .run(title, source, history.length ? JSON.stringify(history.slice(0, MAX_ALIASES)) : null, lastMessageId(row.id), row.id)
 }
 
+/**
+ * Every title write counts up its thread's revision (in memory: what runs in the background does
+ * not outlive the server either). The background namers note it when they start and write only
+ * when it has not moved since, so a rename or Regenerate title in the meantime always wins, even
+ * when it gave the same title as before.
+ */
+const titleRevs = new Map<string, number>()
+const titleRev = (thread: string) => titleRevs.get(thread) ?? 0
+function bumpTitle(thread: string) {
+  titleRevs.set(thread, titleRev(thread) + 1)
+}
+/** A new thread's first title while the title model thinks of it, for refineFirstTitle to wait on. */
+const firstTitles = new Map<string, Promise<unknown>>()
+
 /** The check's answer: keep the title (null), or this one instead. Anything unclear keeps it. */
 export function pickRetitle(raw: string, current: string): string | null {
-  let parsed: { keep?: unknown; title?: unknown } | null = null
-  try {
-    parsed = JSON.parse(raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim()) as { keep?: unknown; title?: unknown }
-  } catch {
-    return null
-  }
+  const parsed = modelJson(raw) as { keep?: unknown; title?: unknown } | null | undefined
   if (!parsed || typeof parsed !== 'object' || parsed.keep === true || typeof parsed.title !== 'string') return null
   const title = pickTitle(JSON.stringify({ title: parsed.title }))
   return title && title.toLowerCase() !== current.toLowerCase() ? title : null
@@ -1136,16 +1212,20 @@ function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnE
     .get(thread, row.title_mark ?? 0) as { asks: number; chars: number }
   if (since.asks < settings.titleEvery && !(since.asks >= 2 && since.chars >= TITLE_GROWTH)) return
   checkingTitle.add(thread)
+  const rev = titleRev(thread)
+  const msgs = messagesOf(thread)
+  const first = msgs.find((m) => m.role === 'user' && (m.content.trim() || m.attachments?.length))
+  const start = first ? [clip(first.content.trim(), 600), ...(first.attachments ?? []).map((a) => `(attached: ${a.name})`)].filter(Boolean).join(' ') : ''
   const messages = [
     { role: 'system', content: RETITLE_PROMPT },
-    { role: 'user', content: `Current title: ${row.title}\n\nLatest messages:\n\n${recentDigest(messagesOf(thread))}` },
+    { role: 'user', content: `Current title: ${row.title}\n\n${start ? `How it started:\n\nUser: ${start}\n\n` : ''}Latest messages:\n\n${recentDigest(msgs)}` },
   ]
   const format = { type: 'object', properties: { keep: { type: 'boolean' }, title: { type: 'string' } } }
   void askTitleModel(user, key, messages, format, 0.2)
     .then((raw) => {
       // Renamed by hand, or regenerated, while the model thought: that wins.
       const now = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
-      if (!now || now.title !== row.title || now.title_source === 'user') return
+      if (!now || titleRev(thread) !== rev || now.title !== row.title || now.title_source === 'user') return
       const title = pickRetitle(raw, now.title)
       if (title) setTitle(now, title, 'auto')
       else database().prepare('UPDATE agent_threads SET title_mark = ? WHERE id = ?').run(lastMessageId(thread), thread)
@@ -1161,6 +1241,42 @@ function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnE
       // The turn's stream when it is still open (a queued message running), and windows following.
       if (after) (sinks.get(thread) ?? send)({ type: 'thread', thread: toThread(after) })
     })
+}
+
+/**
+ * After a thread's first answer: its title was made from the question alone, while the answer was
+ * still being written, so the title model names it once more from question and answer, and the
+ * title changes when that one is different. Only while the title is still that first automatic one
+ * (title_source 'first', which any other title write replaces), so after the first turn that
+ * answered, also when earlier ones failed or were stopped, and also after a restart. Not when
+ * Regenerate title or a check is busy with it (the next answered turn tries again), and nothing is
+ * written when the title changed in the meantime. Done once: afterwards the title is 'auto'.
+ */
+async function refineFirstTitle(user: User, key: string, thread: string, send: (e: TurnEvent) => void) {
+  await firstTitles.get(thread)?.catch(() => null)
+  const read = () => database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+  const row = read()
+  if (!row || row.quick || row.title_source !== 'first' || titling.has(thread) || checkingTitle.has(thread)) return
+  checkingTitle.add(thread)
+  const rev = titleRev(thread)
+  // Refined, or given up on: from now on the title is the automatic check's like any other.
+  const done = () => {
+    if (titleRev(thread) === rev) database().prepare("UPDATE agent_threads SET title_source = 'auto' WHERE id = ? AND title_source = 'first'").run(thread)
+  }
+  try {
+    const title = await makeTitle(user, key, thread)
+    // Renamed by hand, or regenerated, while the model thought: that wins.
+    const now = read()
+    if (title && now && titleRev(thread) === rev && now.title_source === 'first' && title.toLowerCase() !== now.title.toLowerCase()) setTitle(now, title, 'auto')
+    else done()
+  } catch (e) {
+    console.warn('agents: naming a thread after its first answer failed:', (e as Error).message)
+    done()
+  } finally {
+    checkingTitle.delete(thread)
+    const after = read()
+    if (after) (sinks.get(thread) ?? send)({ type: 'thread', thread: toThread(after) })
+  }
 }
 
 /**
@@ -3067,23 +3183,27 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     const mentionFile = await mentionContext(user, toThread(row), text, ctl.signal)
     const asked = addMessage(row.id, { role: 'user', content: text }, [...files, ...(skillFile ? [skillFile] : []), ...mentionFile])
     send({ type: 'message', message: asked })
-    // A new thread gets its title from the title model, alongside the answer; the first line of
-    // the question stands in if that fails.
+    // A new thread gets its title from the title model, alongside the answer; the first prose
+    // line of the question stands in if that fails. Once the answer is in, it is named again from
+    // both (refineFirstTitle), at the end of the first turn that answers: title_source 'first' marks
+    // a title that still waits for that.
     if (row.title === NEW_TITLE && !titling.has(row.id)) {
       titling.add(row.id)
-      const firstLine = (text || files.map((f) => f.name).join(', ')).split('\n')[0].replace(/\s+/g, ' ').trim()
-      makeTitle(user, key, row.id)
+      const fallback = fallbackTitle(text, files.map((f) => f.name))
+      const first = makeTitle(user, key, row.id)
         .catch(() => null)
         .then((title) => {
-          const t = title || (firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine)
           // The automatic check counts the user's messages from this first one on.
-          database().prepare("UPDATE agent_threads SET title = ?, title_source = 'auto', title_mark = ? WHERE id = ? AND title = ?").run(t, asked.id, row.id, NEW_TITLE)
+          const set = database().prepare("UPDATE agent_threads SET title = ?, title_source = 'first', title_mark = ? WHERE id = ? AND title = ?").run(title || fallback, asked.id, row.id, NEW_TITLE)
+          if (set.changes) bumpTitle(row.id)
         })
         .finally(() => {
           titling.delete(row.id)
+          firstTitles.delete(row.id)
           const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(row.id) as ThreadRow | undefined
           if (after) send({ type: 'thread', thread: toThread(after) })
         })
+      firstTitles.set(row.id, first)
     }
     send({ type: 'thread', thread: toThread(ownThread(user, row.id)) })
 
@@ -3415,8 +3535,10 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       if (wrapUp || imageCompleted) break
     }
     send({ type: 'done' })
-    // The title, checked now and then against what the thread talks about by now (in the background).
-    if (!imageCompleted) keepTitleFresh(user, key, row.id, send)
+    // The title (in the background): named again from the first answer, else checked now and then
+    // against what the thread talks about by now. Also after a turn that ended in an image.
+    if (titling.has(row.id) || ownThread(user, row.id).title_source === 'first') void refineFirstTitle(user, key, row.id, send)
+    else keepTitleFresh(user, key, row.id, send)
     return { outcome: 'answered' }
   } catch (e) {
     if (!ctl.signal.aborted) {

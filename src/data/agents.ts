@@ -291,7 +291,7 @@ export type AgentSettings = {
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 4, autoCompact: true, compactAt: 85 }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85 }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -307,7 +307,7 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       skillsFolder: s.skillsFolder && typeof s.skillsFolder.repo === 'string' && typeof s.skillsFolder.path === 'string' ? { repo: s.skillsFolder.repo, path: s.skillsFolder.path, label: String(s.skillsFolder.label ?? s.skillsFolder.path) } : null,
       skillsOff: Array.isArray(s.skillsOff) ? s.skillsOff.filter((x): x is string => typeof x === 'string') : [],
       titleRefresh: s.titleRefresh !== false,
-      titleEvery: TITLE_EVERY.includes(Number(s.titleEvery)) ? Number(s.titleEvery) : 4,
+      titleEvery: TITLE_EVERY.includes(Number(s.titleEvery)) ? Number(s.titleEvery) : 3,
       autoCompact: s.autoCompact !== false,
       compactAt: COMPACT_AT.includes(Number(s.compactAt)) ? Number(s.compactAt) : 85,
     }
