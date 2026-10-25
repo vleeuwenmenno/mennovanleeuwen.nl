@@ -211,7 +211,7 @@ export function TopBar() {
       { label: 'Show desktop', disabled: !mine.some((w) => !w.minimized), onSelect: () => mine.forEach((w) => wm.minimize(w.pid)) },
       { separator: true },
       { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
-      { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+      { label: 'About this system', onSelect: () => wm.open('about', { t: String(Date.now()) }) },
     ])
   }
 

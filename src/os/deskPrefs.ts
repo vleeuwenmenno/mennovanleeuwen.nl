@@ -1,6 +1,6 @@
 import { localPref } from './localPref'
 
-// Notes and widgets put away (the MvL OS menu's "Hide notes and widgets"), to see the desktop
+// Notes and widgets put away (Settings → Windows → "Notes and widgets"), to see the desktop
 // itself: on a phone, where the notes fill the screen, that shows the desktop icons as a grid
 // (Desktop.tsx). Per browser, since a phone and a desktop want different things.
 export const notesHidden = localPref<boolean>('mvlos.desk.notesHidden', (raw) => raw === 'true', String)

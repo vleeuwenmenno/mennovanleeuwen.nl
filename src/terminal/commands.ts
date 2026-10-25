@@ -101,7 +101,8 @@ const APPS: Record<string, AppId> = {
   activity: 'recents',
   cv: 'cv',
   resume: 'cv',
-  about: 'cv',
+  about: 'about',
+  system: 'about',
   contact: 'contact',
   mail: 'mail',
   email: 'mail',
@@ -172,6 +173,7 @@ const APP_NAMES: Record<AppId, string> = {
   weather: 'weather',
   changelog: 'changelog',
   git: 'git',
+  about: 'about',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

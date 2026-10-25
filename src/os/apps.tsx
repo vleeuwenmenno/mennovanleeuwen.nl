@@ -30,6 +30,7 @@ import { Photos } from '../apps/photos/Photos'
 import { TasksApp } from '../apps/tasks/Tasks'
 import { Weather } from '../apps/Weather'
 import { Changelog } from '../apps/Changelog'
+import { About } from '../apps/About'
 import { Git } from '../apps/git/Git'
 import type { MenuItem } from './ContextMenu'
 import { HANDLE } from './identity'
@@ -108,6 +109,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   settings: { title: 'Settings', dock: 'Settings', blurb: 'Appearance, dock, launchers, code hosts, apps and more', size: [860, 620], render: (w) => <Settings win={w} /> },
   photos: { title: 'Photos', dock: 'Photos', blurb: 'Your Seafile and Immich photos by the day they were taken', size: [1000, 680], render: (w) => <Photos win={w} /> },
   changelog: { title: 'Changelog', dock: 'Changelog', blurb: 'What changed in each MvL OS release', size: [720, 640], render: () => <Changelog /> },
+  about: { title: 'About', dock: 'About', blurb: 'This build, and what the browser says about the machine it is on', size: [720, 640], render: () => <About /> },
   weather: { title: 'Weather', dock: 'Weather', blurb: 'Hourly and 10-day forecast, for where you are or any city', size: [1080, 760], render: (w) => <Weather win={w} />, menu: settingsMenu('Weather', 'weather') },
   git: { title: 'Git', dock: 'Git', blurb: 'Your repositories: pull requests, issues, commits and diffs', size: [1040, 680], render: (w) => <Git win={w} /> },
   // Never rendered: the window manager opens Trash as a view in Files. Kept for the dock icon and name.
