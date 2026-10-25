@@ -1,3 +1,4 @@
+import { toUi } from '../os/uiScale'
 import { GptImageDrawing, GptImageResult } from './AgentsGptImage'
 import { InpaintDialog, type InpaintSource } from './AgentsInpaint'
 import { MaskCards, type SavedMask } from './AgentsMaskCard'
@@ -458,7 +459,7 @@ function AgentsApp({ win }: { win: WinState }) {
     const handle = e.currentTarget
     handle.setPointerCapture(e.pointerId)
     const left = root.current?.getBoundingClientRect().left ?? 0
-    const move = (ev: PointerEvent) => setSideWidth(ev.clientX - left)
+    const move = (ev: PointerEvent) => setSideWidth(toUi(ev.clientX - left))
     const end = () => {
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)

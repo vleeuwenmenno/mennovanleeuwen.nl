@@ -125,8 +125,8 @@ export function installUiScaleKeys() {
     if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey) return
     const dir = e.key === '=' || e.key === '+' ? 1 : e.key === '-' || e.key === '_' ? -1 : e.key === '0' ? 0 : null
     if (dir === null) return
-    e.preventDefault()
     if (!uiScaleSupported()) return
+    e.preventDefault()
     stepUiScale(dir)
   })
 }

@@ -47,7 +47,7 @@
   font: inherit;
 }
 .nel-list {
-  max-height: min(320px, 45vh);
+  max-height: min(320px, calc(45vh / var(--ui-scale, 1)));
   margin: 0;
   padding: 0;
   overflow-y: auto;

@@ -1,10 +1,12 @@
+import { arrangeDesktop } from './widgetLayout'
+import { avoidWidgetOverlap } from './widgetLayoutPrefs'
 import { snapReserve } from './dockPrefs'
 import { viewH, viewW } from './uiScale'
 import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
 import { opensMaximized } from './windowPrefs'
@@ -430,7 +432,7 @@ function apply(state: State, action: Action): State {
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
           const g = fresh ? fresh.geometry : (w.want ?? w)
-          if (NOTE_APPS.has(w.app) && !w.maximized) return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), ...fitNote(g, width, height, drawnHeights.get(w.pid)) }
+          if (NOTE_APPS.has(w.app) && !w.maximized) return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), ...fitNote(g, width, height, action.phone, drawnHeights.get(w.pid)) }
           const ww = Math.max(240, Math.min(g.w, width - 16))
           const hh = Math.max(160, Math.min(g.h, height - 140))
           return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), w: ww, h: hh, x: Math.min(Math.max(g.x, 8 - ww + 120), width - 120), y: Math.min(Math.max(g.y, 40), height - 80) }
@@ -471,11 +473,12 @@ export function stackOrder(windows: WinState[]): number[] {
     .map(({ w }) => w.pid)
 }
 /** How tall each note is drawn (pid → px): a long note runs on below its box (Window.tsx measures it). */
+const drawnWidths = new Map<number, number>()
 const drawnHeights = new Map<number, number>()
 export const drawnHeight = (pid: number) => drawnHeights.get(pid)
-export function setDrawnHeight(pid: number, h: number | null) {
-  if (h === null) drawnHeights.delete(pid)
-  else drawnHeights.set(pid, h)
+export function setDrawnSize(pid: number, size: { w: number; h: number } | null) {
+  if (size === null) { drawnWidths.delete(pid); drawnHeights.delete(pid) }
+  else { drawnWidths.set(pid, size.w); drawnHeights.set(pid, size.h) }
 }
 
 /** Room around a note: notes hang at a slant of up to 3.5°, which takes their corners ~12px out. */
@@ -487,8 +490,7 @@ const NOTE_TOP = 28 + NOTE_MARGIN
  * screen is smaller than the note. Phones scroll the desktop down, so there a note only has to
  * fit across and below the top bar.
  */
-export function fitNote(g: Geometry, width: number, height: number, drawn = g.h): Geometry {
-  const phone = width < 720
+export function fitNote(g: Geometry, width: number, height: number, phone: boolean, drawn = g.h): Geometry {
   const w = Math.max(160, Math.min(g.w, width - 2 * NOTE_MARGIN))
   const h = phone ? g.h : Math.max(140, Math.min(g.h, height - NOTE_TOP - NOTE_MARGIN))
   // Kept clear of the bottom by what shows, which can be more than its box.
@@ -514,7 +516,7 @@ const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round
  */
 function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
   if (phone || p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
-  if (p.vw < 720) return place(i)
+  if (placedOnPhone(p)) return place(i)
   const vw = viewW()
   const vh = viewH()
   const along = (v: number, size: number, from: number, to: number, lo: number) => {
@@ -571,7 +573,7 @@ function showWidgets(state: State, list: WidgetShown[]): State {
   const seen = new Set<string>()
   let changed = false
   let pid = state.nextPid
-  const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, viewW(), viewH(), p === undefined ? undefined : drawnHeights.get(p)))
+  const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, viewW(), viewH(), state.phone, p === undefined ? undefined : drawnHeights.get(p)))
   const windows: WinState[] = []
   for (const w of state.windows) {
     if (w.app !== 'widget') {
@@ -876,7 +878,7 @@ export function WindowManagerProvider({
       if (shown && sameGeometry(shown.g, g) && shown.minimized === w.minimized && shown.stack === w.stack) continue
       const entry = entriesOf(all, id)[0]
       const rec = entry?.place
-      const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh }
+      const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh, phone: state.phone }
       if (rec && state.phone) {
         // A phone only says where in its column; the place on a big screen stays.
         if (rec.stack === w.stack && !!rec.minimized === w.minimized) continue
@@ -940,12 +942,24 @@ export function WindowManagerProvider({
     }
   }, [relayout])
 
+  // Projection only: persistence and remote reconciliation above always see state.windows.
+  // A manual move/resize owns its displayed position; neighbours are only nudged in this view.
+  const avoidOverlap = avoidWidgetOverlap.use()
+  const layoutPriority = useRef<number | undefined>(undefined)
+  const displayWindows = useMemo(() => {
+    if (state.phone || !avoidOverlap) return state.windows
+    const notes = state.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized)
+      .sort((a, b) => (a.props.id ?? a.app).localeCompare(b.props.id ?? b.app) || a.pid - b.pid)
+    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), layoutPriority.current)
+    return state.windows.map((w) => positions.has(w.pid) ? { ...w, ...positions.get(w.pid)! } : w)
+  }, [state.windows, state.phone, avoidOverlap])
+
   const value = useMemo<WM>(() => {
     const visible = state.windows.filter((w) => !w.minimized && onScreen(state, w))
     const top = topShown(state, state.windows)
     const focused = visible.some((w) => w.pid === state.focused) ? state.focused : (top?.pid ?? null)
     return {
-      windows: state.windows,
+      windows: displayWindows,
       focusedPid: focused,
       open,
       openNew,
@@ -967,7 +981,15 @@ export function WindowManagerProvider({
       },
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
-      setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
+      setGeometry: (pid, geometry) => {
+        const shown = displayWindows.find((w) => w.pid === pid)
+        if (shown && NOTE_APPS.has(shown.app) && !state.phone) {
+          layoutPriority.current = pid
+          // Resizing a nudged note keeps its visible origin; only this note becomes canonical.
+          geometry = { x: shown.x, y: shown.y, w: shown.w, h: shown.h, ...geometry }
+        }
+        dispatch({ type: 'setGeometry', pid, geometry })
+      },
       setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
       restack: (pids) => dispatch({ type: 'restack', pids }),
       refit: () => dispatch({ type: 'viewport', width: viewW(), height: viewH(), phone: isPhone(), layout: relayout() }),
@@ -992,7 +1014,7 @@ export function WindowManagerProvider({
         layoutStore().set(null)
       },
     }
-  }, [state.windows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status])
+  }, [displayWindows, state.windows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -9,7 +9,7 @@ import { WindowMenuContext } from './windowMenu'
 import { useDropTarget } from './dnd'
 import { dragKeyHeld } from './modDrag'
 import { filesFor, SHOWS_FILE } from './appDrops'
-import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, stackOrder, useWM, workspaceOf, WORKSPACES, type Geometry, type SnapZone, type WinState } from './wm'
+import { drawnHeight, fitNote, setDrawnSize, SINGLE_INSTANCE, snapRect, stackOrder, useWM, workspaceOf, WORKSPACES, type Geometry, type SnapZone, type WinState } from './wm'
 import { toUi, viewH, viewW } from './uiScale'
 
 const TOP_BAR = 28
@@ -185,12 +185,13 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   useEffect(() => {
     const el = sectionRef.current
     if (chrome !== 'note' || !el) return
-    let last = 0
+    let last = { w: 0, h: 0 }
     const measure = () => {
       const h = Math.max(el.offsetHeight, ...[...el.children].map((c) => (c as HTMLElement).offsetTop + (c as HTMLElement).offsetHeight))
-      if (Math.abs(h - last) < 2) return
-      last = h
-      setDrawnHeight(win.pid, h)
+      const w = el.offsetWidth
+      if (Math.abs(h - last.h) < 2 && Math.abs(w - last.w) < 2) return
+      last = { w, h }
+      setDrawnSize(win.pid, last)
       wm.refit()
     }
     const ro = new ResizeObserver(measure)
@@ -198,7 +199,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     for (const c of el.children) ro.observe(c)
     return () => {
       ro.disconnect()
-      setDrawnHeight(win.pid, null)
+      setDrawnSize(win.pid, null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chrome, win.pid])
@@ -410,7 +411,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       // A note stays whole on the screen (fitNote); other windows may hang off it a little.
       const { x, y } =
         chrome === 'note'
-          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
+          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), phoneStack, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
           : { x: Math.min(Math.max(d.x + dx, -d.w + 120), viewW() - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), viewH() - 60) }
       wm.setGeometry(win.pid, { x, y })
       // Over a workspace number in the top bar: dropping there moves the window to it.

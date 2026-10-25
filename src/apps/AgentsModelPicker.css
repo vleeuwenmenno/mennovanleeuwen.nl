@@ -243,10 +243,10 @@
   left: 0;
   right: 0;
   bottom: 0;
-  max-height: min(78dvh, 640px);
+  max-height: min(calc(78dvh / var(--ui-scale, 1)), 640px);
   border-width: 1px 0 0;
   font-size: 14px;
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: calc(env(safe-area-inset-bottom) / var(--ui-scale, 1));
 }
 .amp.is-sheet .amp-body {
   flex-direction: column;

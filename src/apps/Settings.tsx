@@ -1,3 +1,4 @@
+import { avoidWidgetOverlap } from '../os/widgetLayoutPrefs'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { isShown, setCalendarHidden, setCalendarShown, useAllCalendars, useCalendarChoice, useCalendarList, useHiddenCalendars } from '../data/calendar'
 import { useTasks } from '../data/tasks'
@@ -211,6 +212,7 @@ function Appearance() {
   const t = useTheme()
   const swing = useSwingPrefs()
   const performanceOverlay = performanceOverlayPref.use()
+  const avoidOverlap = avoidWidgetOverlap.use()
   const modes: [Mode, string][] = [
     ['auto', 'Auto'],
     ['light', 'Light'],
@@ -247,6 +249,13 @@ function Appearance() {
         <p className="muted set-help">Auto follows your device's light or dark setting. Showing {t.label} now.</p>
       </SetGroup>
       <UiScaleGroup />
+      <SetGroup title="Desktop widgets">
+        <label className="set-check">
+          <input type="checkbox" checked={avoidOverlap} onChange={(e) => avoidWidgetOverlap.set(e.target.checked)} />
+          Keep widgets from overlapping
+        </label>
+        <p className="muted set-help">Nudge widgets and notes into available space on this screen. Your saved layout on other devices stays the same. Crowded screens may still overlap. Saved in this browser; phones already stack in a column.</p>
+      </SetGroup>
       <SetGroup title="Accent color">
         <div className="set-swatches">
           <button className={`set-swatch-btn set-swatch-theme ${!t.accent ? 'is-on' : ''}`} style={{ ['--sw' as string]: t.palette.accent }} onClick={() => setAccent(null)} title="The theme's own accent">
@@ -2202,7 +2211,7 @@ function SyncPane() {
 const GROUPS: Group[] = [
   {
     panes: [
-      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy ui scale zoom size text size bigger smaller magnify motion wiggle swing animation performance fps frame time counter', blurb: 'Light and dark mode, themes, the accent color, the UI scale, motion and frame timing.', render: () => <Appearance /> },
+      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy ui scale zoom size text size bigger smaller magnify widgets notes overlapping overlap collision spacing arrange desktop motion wiggle swing animation performance fps frame time counter', blurb: 'Light and dark mode, themes, the accent color, the UI scale, motion and frame timing.', render: () => <Appearance /> },
       { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
       { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
     ],
