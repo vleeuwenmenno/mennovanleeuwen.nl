@@ -62,10 +62,14 @@ function pump() {
   const width = Number(job.input.width) || 1024, height = Number(job.input.height) || 1024
   const ctl = (controller = new AbortController())
   let busy = false, made = 0
+  let held = false
   const failed = (message: string) => {
-    // Nothing made yet and the account's job slot is still taken: the job waits and tries again.
-    if (BUSY.test(message) && !made && (job.waits ?? 0) < MAX_WAITS) busy = true
-    else update({ error: message })
+    // Nothing made yet and the account's job slot is still taken: the job waits and tries again,
+    // and after the last try it stays at the front of a paused queue (Resume or remove it).
+    if (BUSY.test(message) && !made) {
+      if ((job.waits ?? 0) < MAX_WAITS) busy = true
+      else (held = true, update({ error: `${message}. The job waits in the queue: Resume to try again, or remove it.` }))
+    } else update({ error: message })
   }
   update({ live: { job, index: 0, total: job.batch, width, height }, queue, error: '' })
   void runStudio(job.input, job.batch, (e) => {
@@ -86,6 +90,10 @@ function pump() {
         retry = setTimeout(() => ((retry = null), pump()), 1000 * waits)
         return
       }
+      if (held) {
+        update({ live: null, queue: [{ ...job, waits: 0 }, ...runner.queue], paused: true })
+        return
+      }
       update({ live: null })
       pump()
     })
@@ -100,7 +108,7 @@ const cancelRun = () => {
   controller?.abort()
 }
 const resumeQueue = () => {
-  update({ paused: false })
+  update({ paused: false, error: '' })
   pump()
 }
 /** A deleted picture leaves this page's fresh results too, so a reopened Studio does not show it. */
@@ -175,26 +183,31 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   const [catalog, setCatalog] = useState<StudioCatalog | null>(null)
   const [catalogError, setCatalogError] = useState('')
   const [discovering, setDiscovering] = useState(false)
+  // Only the newest discovery's answer counts: a slow one for an earlier connection is dropped.
+  const discovery = useRef(0)
   const discover = () => {
+    const n = ++discovery.current
     setDiscovering(true); setCatalogError('')
-    getImageCatalog().then((c) => setCatalog(c as StudioCatalog), (e: Error) => setCatalogError(e.message)).finally(() => setDiscovering(false))
+    getImageCatalog().then((c) => { if (n === discovery.current) setCatalog(c as StudioCatalog) }, (e: Error) => { if (n === discovery.current) setCatalogError(e.message) }).finally(() => { if (n === discovery.current) setDiscovering(false) })
   }
-  // Read again when the Images settings are saved (or the tab comes back), so connecting ComfyUI elsewhere enables Generate.
+  // Read again when the Images settings are saved (a new URL or token: the catalog starts over) or
+  // the tab comes back (rediscovering only when ComfyUI was just connected).
   const configured = useRef(false)
   useEffect(() => {
-    const load = () => getStudio().then((s) => {
+    const load = (fresh: boolean) => getStudio().then((s) => {
       setStudio(s)
       setBootError('')
-      if (s.configured && !configured.current) discover()
-      if (!s.configured) setCatalog(null)
+      if (s.configured && (fresh || !configured.current)) { setCatalog(null); discover() }
+      if (!s.configured) (discovery.current++, setCatalog(null), setCatalogError(''), setDiscovering(false))
       configured.current = s.configured
     }, (e: Error) => setBootError(e.message))
-    void load()
-    const onVisible = () => { if (!document.hidden) void load() }
-    window.addEventListener(IMAGE_SETTINGS_EVENT, load)
+    void load(false)
+    const onVisible = () => { if (!document.hidden) void load(false) }
+    const onSaved = () => void load(true)
+    window.addEventListener(IMAGE_SETTINGS_EVENT, onSaved)
     document.addEventListener('visibilitychange', onVisible)
     return () => {
-      window.removeEventListener(IMAGE_SETTINGS_EVENT, load)
+      window.removeEventListener(IMAGE_SETTINGS_EVENT, onSaved)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
@@ -439,10 +452,20 @@ function LoraSection({ form, catalog, onSet, assist }: { form: StudioForm; catal
   const [picking, setPicking] = useState<'lora' | 'embedding' | null>(null)
   const [error, setError] = useState('')
   useEffect(() => { if (form.loras.length && !details) getLoraDetails().then((r) => setDetails(r.loras), () => setDetails([])) }, [form.loras.length])
+  // Another connection has other LoRAs and embeddings: read them again when next needed.
+  useEffect(() => {
+    const forget = () => (setDetails(null), setEmbeddings(null))
+    window.addEventListener(IMAGE_SETTINGS_EVENT, forget)
+    return () => window.removeEventListener(IMAGE_SETTINGS_EVENT, forget)
+  }, [])
   const openPicker = (kind: 'lora' | 'embedding') => {
     setError('')
     if (kind === 'lora' && !details) getLoraDetails().then((r) => setDetails(r.loras), () => setDetails([]))
-    if (kind === 'embedding' && !embeddings) getStudioEmbeddings().then((r) => setEmbeddings(r.embeddings), (e: Error) => (setEmbeddings([]), setError(e.message)))
+    // Only a non-empty list is kept; none (or a failure) is asked again the next time.
+    if (kind === 'embedding' && !embeddings?.length) {
+      setEmbeddings(null)
+      getStudioEmbeddings().then((r) => setEmbeddings(r.embeddings), (e: Error) => (setEmbeddings([]), setError(e.message)))
+    }
     setPicking(kind)
   }
   const insert = (word: string) => { if (!form.prompt.includes(word)) onSet({ prompt: form.prompt.trim() ? `${form.prompt.trim()}, ${word}` : word }) }
@@ -605,8 +628,8 @@ function ActionSection({ problems, live, queue, paused, error, batch, onGenerate
     {blocked && <p className="studio-reason muted" role="status">{problems[0]}{problems.length > 1 && !compact ? <> <button type="button" className="studio-link" onClick={() => copy(problems.join('\n'))}>Copy all {problems.length}</button></> : null}</p>}
     {!configured && <button type="button" className="btn btn-small" onClick={onSettings}>Open Images settings</button>}
     {!compact && live && <p className="muted" role="status">Running: {live.job.label}{live.total > 1 ? ` (${live.index + 1} of ${live.total})` : ''}</p>}
-    {paused && queue.length > 0 && <p className="studio-reason muted" role="status">Queue paused after Cancel. <button type="button" className="studio-link" onClick={resumeQueue}>Resume</button></p>}
-    {!compact && queue.length > 0 && <QueueList queue={queue} />}
+    {paused && queue.length > 0 && <p className="studio-reason muted" role="status">Queue paused. <button type="button" className="studio-link" onClick={resumeQueue}>Resume</button></p>}
+    {(!compact || paused) && queue.length > 0 && <QueueList queue={queue} />}
     {compact && queue.length > 0 && <p className="muted">{queue.length} queued</p>}
     {error && <ErrorBox text={error} onDismiss={() => update({ error: '' })} />}
   </section>

@@ -135,6 +135,10 @@ export function Agents({ win }: { win: WinState }) {
   const wm = useWM()
   // The Image Studio needs ComfyUI, not Ollama: without an Ollama key it opens on its own.
   const [studioOnly, setStudioOnly] = useState(win.props.tab === 'studio')
+  // Opened for it again later (Settings → Images → Open Image Studio) on a window already showing the key screen.
+  useEffect(() => {
+    if (win.props.tab === 'studio') setStudioOnly(true)
+  }, [win.props.t, win.props.tab])
   if (account.status === 'loading') return <div className="nb-blank muted">Loading…</div>
   if (account.status !== 'user')
     return (

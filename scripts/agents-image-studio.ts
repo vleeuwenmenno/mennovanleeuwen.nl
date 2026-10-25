@@ -261,8 +261,11 @@ try {
   assert.ok(history.images.every((i: any) => i.studio && i.url.startsWith('/api/agents/images/')))
   assert.equal(history.images.find((i: any) => i.id === upload.id).settings, null)
   assert.equal((await ok('GET', '/api/agents/images/studio/images?limit=2')).images.length, 2)
-  const paged = await ok('GET', `/api/agents/images/studio/images?limit=2&before=${history.images[1].id}`)
+  const first = await ok('GET', '/api/agents/images/studio/images?limit=2')
+  assert.match(first.next_before, /^\d+\.\d+$/)
+  const paged = await ok('GET', `/api/agents/images/studio/images?limit=2&before=${first.next_before}`)
   assert.equal(paged.images[0].id, history.images[2].id)
+  assert.equal((await call('GET', `/api/agents/images/studio/images?before=${history.images[1].id}`)).status, 400, 'cursors are next_before, not ids')
   assert.equal((await ok('GET', '/api/agents/images/studio/images', undefined, 1)).images.length, 0, 'another account sees none')
   assert.equal((await call('GET', `/api/agents/images/${upload.id}`, undefined, 1)).status, 404)
   assert.equal((await call('DELETE', `/api/agents/images/studio/images/${upload.id}`, undefined, 1)).status, 404)
@@ -270,6 +273,11 @@ try {
   assert.deepEqual((await ok('GET', '/api/agents/images/studio/embeddings')).embeddings, ['EasyNegative', 'good-hands'])
   await ok('DELETE', `/api/agents/images/studio/images/${history.images[0].id}`)
   assert.equal((await ok('GET', '/api/agents/images/studio/images')).images.length, 7)
+  // Deleting the picture a cursor points at keeps Show older working.
+  await ok('DELETE', `/api/agents/images/studio/images/${history.images[1].id}`)
+  const older = await ok('GET', `/api/agents/images/studio/images?limit=2&before=${first.next_before}`)
+  assert.equal(older.images[0].id, history.images[2].id)
+  assert.equal((await ok('GET', '/api/agents/images/studio/images')).images.length, 6)
   console.log('PASS Studio history and uploads: PNG uploads as sources, img2img graph, paging, owner-only pictures, deletes and embeddings')
 
   // The Studio thread is not a chat: chat routes do not see it, so it cannot be adopted, renamed, sent to or deleted there.
@@ -278,7 +286,8 @@ try {
   }
   const after = await ok('GET', '/api/agents/images/studio')
   assert.equal(after.thread, mine.thread, 'still the same Studio thread')
-  assert.equal((await ok('GET', '/api/agents/images/studio/images')).images.length, 7, 'its history is intact')
+  assert.equal((await ok('GET', '/api/agents/images/studio/images')).images.length, 6, 'its history is intact')
+  assert.equal((await call('POST', `/api/agents/threads/${mine.thread}/share`, {})).status, 404, 'not shared as a chat')
   const row = database().prepare('SELECT quick, title FROM agent_threads WHERE id = ?').get(mine.thread) as { quick: number; title: string }
   assert.deepEqual({ ...row }, { quick: 2, title: 'Image Studio' })
   console.log('PASS Studio thread: no chat route reads, adopts, renames, sends to or deletes it; history stays')

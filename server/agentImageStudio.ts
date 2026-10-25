@@ -19,7 +19,6 @@ import { applyPresetRules } from '../src/data/modelFamilies.ts'
 // (those read quick = 0 and quick = 1). Deleting the account deletes it with everything else.
 
 const STUDIO = 2
-const UUID = /^[0-9a-f-]{36}$/
 /** Uploaded sources: still PNGs (the Studio converts other pictures in the browser first). */
 const UPLOAD_MAX = 12 * 1024 * 1024
 /** One Generate press makes at most this many pictures, one after the other. */
@@ -47,22 +46,25 @@ function pngSize(head: Uint8Array | null) {
   return b && b.length >= 24 && b.toString('ascii', 12, 16) === 'IHDR' ? { width: b.readUInt32BE(16), height: b.readUInt32BE(20) } : { width: 0, height: 0 }
 }
 
-type ImageRow = { id: string; name: string; created_at: number; metadata: string | null; size: number; head: Uint8Array | null; studio: number }
+type ImageRow = { id: string; name: string; created_at: number; position: number; metadata: string | null; size: number; head: Uint8Array | null; studio: number }
+/** A page cursor: the last picture's time and row, compared directly, so deleting that picture keeps it working. */
+const CURSOR = /^(\d{1,16})\.(\d{1,16})$/
 /**
  * The Studio's pictures, newest first (`scope=all`: every generated picture of the account, for
- * picking an image-to-image source), with their recorded settings. Paged by `before` (an image id).
+ * picking an image-to-image source), with their recorded settings. Paged by `before`, the
+ * `next_before` of the page before.
  */
 export function studioImages(user: User, params: URLSearchParams) {
   const scope = params.get('scope') ?? 'studio'
   const limit = Number(params.get('limit') ?? 30)
   const before = params.get('before')
-  if (!['studio', 'all'].includes(scope) || !Number.isInteger(limit) || limit < 1 || limit > 60 || (before !== null && !UUID.test(before))) throw new HttpError(400, 'Use scope studio or all, a limit from 1 to 60 and an optional before image id')
+  const at = before === null ? null : CURSOR.exec(before)
+  if (!['studio', 'all'].includes(scope) || !Number.isInteger(limit) || limit < 1 || limit > 60 || (before !== null && !at)) throw new HttpError(400, 'Use scope studio or all, a limit from 1 to 60 and an optional before cursor (next_before)')
   const db = database(), thread = studioThread(user)
   const where = `t.user_id = ?${scope === 'studio' ? ' AND t.id = ?' : ''}`
   const args: (string | number)[] = scope === 'studio' ? [user.id, thread] : [user.id]
-  const cursor = before ? db.prepare(`SELECT i.created_at, i.rowid AS position FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE ${where} AND i.id = ?`).get(...args, before) as { created_at: number; position: number } | undefined : null
-  if (before && !cursor) throw new HttpError(400, 'That page cursor is not one of these images')
-  const rows = db.prepare(`SELECT i.id, i.name, i.created_at, i.metadata, length(i.body) AS size, substr(i.body, 1, 24) AS head, t.quick = ${STUDIO} AS studio
+  const cursor = at ? { created_at: Number(at[1]), position: Number(at[2]) } : null
+  const rows = db.prepare(`SELECT i.id, i.name, i.created_at, i.rowid AS position, i.metadata, length(i.body) AS size, substr(i.body, 1, 24) AS head, t.quick = ${STUDIO} AS studio
     FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE ${where}${cursor ? ' AND (i.created_at < ? OR (i.created_at = ? AND i.rowid < ?))' : ''}
     ORDER BY i.created_at DESC, i.rowid DESC LIMIT ?`).all(...args, ...(cursor ? [cursor.created_at, cursor.created_at, cursor.position] : []), limit + 1) as ImageRow[]
   const images = rows.slice(0, limit).map((r) => {
@@ -71,7 +73,8 @@ export function studioImages(user: User, params: URLSearchParams) {
     const recorded = settings && typeof settings.width === 'number' && typeof settings.height === 'number' ? { width: settings.width, height: settings.height } : pngSize(r.head)
     return { id: r.id, name: r.name, url: `/api/agents/images/${r.id}`, size: r.size, ...recorded, created_at: r.created_at, studio: !!r.studio, settings }
   })
-  return { thread, images, next_before: rows.length > limit ? images.at(-1)!.id : null }
+  const last = rows[limit - 1]
+  return { thread, images, next_before: rows.length > limit ? `${last.created_at}.${last.position}` : null }
 }
 
 /** A picture the owner brings in as an image-to-image source: kept in the Studio thread, no settings. */
