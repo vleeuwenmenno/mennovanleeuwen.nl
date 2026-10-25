@@ -2815,6 +2815,9 @@ minutes old, or with *Look for new photos*. Caps: 100,000 photos and 20,000 fold
 two walks at a time across the server. EXIF dates have no time zone, so a photo shows the time on
 the camera's clock; a file's date (no EXIF) and a video's creation time are shown in yours.
 Encrypted libraries are walked only while unlocked in Files, and their photos only show then;
+when Seafile cannot say which libraries are encrypted (it is down, and the server has no earlier
+list since it started), nothing is shown: the months, a month, albums and folder list refuse or stay
+empty (502) rather than guess. A list kept from before is used, and a library it does not name stays hidden;
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag that the browser must revalidate after the current account and library-access checks (an

@@ -458,6 +458,8 @@ async function seafileChecks() {
 
   await selectionChecks(vaultId)
 
+  await coldRestartChecks(vaultId)
+
   // Another account sees none of it.
   const other = await call(`/api/photos/seafile/info?id=${canonId}`, { as: 2 })
   check(`another account without Seafile: 409 (got ${other.status})`, other.status === 409)
@@ -465,7 +467,7 @@ async function seafileChecks() {
   const otherInfo = await call(`/api/photos/seafile/info?id=${canonId}`, { as: 2 })
   const otherThumb = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { as: 2 })
   const otherBuckets = await call('/api/photos/seafile/buckets?tz=0', { as: 2 })
-  check(`another account with Seafile: not this one's photos (info ${otherInfo.status}, thumbnail ${otherThumb.status}, ${otherBuckets.json?.length} months)`, otherInfo.status === 404 && otherThumb.status === 404 && otherBuckets.json?.length === 0)
+  check(`another account with Seafile: not this one's photos (info ${otherInfo.status}, thumbnail ${otherThumb.status}, ${otherBuckets.json?.length} months)`, otherInfo.status === 404 && otherThumb.status === 404 && (otherBuckets.json?.length ?? 0) === 0)
   const otherFav = await call('/api/photos/seafile/favourite', { method: 'PUT', body: { id: canonId, on: false }, as: 2 })
   check(`another account cannot unfavourite it (got ${otherFav.status})`, otherFav.status === 404 && JSON.stringify(await buckets('&fav=1')) === '{"2018-01":1}')
   const otherTrash = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [canonId] }, as: 2 })
@@ -479,6 +481,57 @@ async function seafileChecks() {
   linkSeafile(1, 'another@example.com')
   const fresh = (await call('/api/photos/status')).json
   check(`another Seafile account: no folders, no photos (got ${fresh.seafile.sources.length} folders, ${JSON.stringify(await buckets())})`, fresh.seafile.sources.length === 0 && JSON.stringify(await buckets()) === '{}')
+}
+
+/**
+ * Seafile cannot say which libraries are encrypted (the library listing is down) while the server
+ * has just started, so it holds no list: nothing from an encrypted library may leave, whatever
+ * the index holds, and the folders are not named either. A list kept from before stays usable.
+ */
+async function coldRestartChecks(vaultId: string) {
+  const row = database().prepare('SELECT file_id FROM photos WHERE id = ?').get(Number(vaultId)) as { file_id: string }
+  await server.stop()
+  sf.down = true
+  await server.start()
+  const routes = [
+    '/api/photos/seafile/buckets?tz=0',
+    '/api/photos/seafile/buckets?tz=0&fav=1',
+    '/api/photos/seafile/bucket?tz=0&key=2023-07',
+    `/api/photos/seafile/albums`,
+    `/api/photos/seafile/buckets?tz=0&album=${VAULT}`,
+    `/api/photos/seafile/bucket?tz=0&key=2023-07&album=${VAULT}`,
+    `/api/photos/seafile/thumb?id=${vaultId}&size=small`,
+    `/api/photos/seafile/info?id=${vaultId}`,
+    `/api/photos/seafile/original?id=${vaultId}`,
+    '/api/photos/suggest',
+  ]
+  const cold = await Promise.all(routes.map((r) => call(r)))
+  const zip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [vaultId] } })
+  const status = await call('/api/photos/status')
+  const all = [...cold, zip, status]
+  check(`cold start, library listing down: every metadata and file route refuses (got ${[...cold, zip].map((r) => r.status).join(', ')})`, [...cold, zip].every((r) => r.status >= 400))
+  check('cold start, library listing down: no filename, library id, photo id, file version or image bytes in any answer', all.every((r) => !/vault\.jpg|Vault/.test(r.text) && !r.text.includes(VAULT) && !r.text.includes(row.file_id.slice(0, 10)) && !(r.headers.get('content-type') ?? '').startsWith('image/') && !r.headers.get('etag')))
+  const sources = status.json?.seafile?.sources
+  check(`cold start, library listing down: status names no folder and says why (got ${status.status} ${status.text.slice(0, 160)})`, status.status === 200 && Array.isArray(sources) && sources.length === 0 && status.json.seafile.unavailable === true)
+
+  // Seafile back: a library listing is known again; the Vault is locked after the restart, the rest shows.
+  sf.down = false
+  const healthy = await buckets()
+  check(`Seafile back: plain libraries on the timeline, the locked Vault not (got ${JSON.stringify(healthy)})`, healthy['2023-07'] === 4)
+  const month = (await call('/api/photos/seafile/bucket?tz=0&key=2023-07')).json as unknown[][]
+  check(`Seafile back: the month lists no Vault photo (got ${month.length})`, month.length === 4 && month.every((i) => !String(i[6]).startsWith(VAULT) && i[0] !== vaultId))
+  check('Seafile back: status lists the folders again, the Vault locked', ((await call('/api/photos/status')).json.seafile.sources as { repo: string; locked: boolean }[]).some((x) => x.repo === VAULT && x.locked))
+
+  // Down again with the list kept from a moment ago: its answer stands, the Vault stays hidden.
+  sf.down = true
+  const kept = await call('/api/photos/seafile/bucket?tz=0&key=2023-07')
+  const keptMonths = await buckets()
+  check(`listing down again: the kept list still hides the Vault (got ${kept.status}, ${JSON.stringify(keptMonths)})`, kept.status === 200 && (kept.json as unknown[][]).length === 4 && keptMonths['2023-07'] === 4 && !kept.text.includes(VAULT))
+  const keptThumb = await call(`/api/photos/seafile/thumb?id=${vaultId}&size=small`)
+  check(`listing down again: the Vault's thumbnail still refused (got ${keptThumb.status})`, keptThumb.status >= 400 && !(keptThumb.headers.get('content-type') ?? '').startsWith('image/'))
+  const keptZip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [vaultId] } })
+  check(`listing down again: a ZIP with the Vault's photo refused before it starts, no file name (got ${keptZip.status} ${keptZip.text})`, keptZip.status === 423 && !/vault/i.test(keptZip.text))
+  sf.down = false
 }
 
 // --- Immich -----------------------------------------------------------------------------------------------

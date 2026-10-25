@@ -103,6 +103,8 @@ export type SeafileMock = {
   log: { method: string; path: string; range: string | null; token: string | null }[]
   /** Bytes the file server sent per file path */
   sent: Map<string, number>
+  /** Answer the library listing (and each library's details) with 503 */
+  down: boolean
   close: () => void
 }
 
@@ -135,6 +137,18 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
   const dirId = (l: SfLib, dir: string): string => sha1(JSON.stringify(list(l, dir)))
 
   let commits = 0
+  const out: SeafileMock = {
+    base: '',
+    server: null as unknown as Server,
+    libs,
+    log,
+    sent,
+    down: false,
+    close: () => {
+      out.server.closeAllConnections()
+      out.server.close()
+    },
+  }
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
@@ -149,6 +163,7 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
     const json = (status: number, body: unknown) => void res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
     if (path.startsWith('/api') && auth !== 'Token stand-in-token') return json(401, { detail: 'Invalid token' })
 
+    if (out.down && /^\/api\/v2\.1\/repos\//.test(path) && !path.includes('/set-password/')) return json(503, { detail: 'down' })
     if (path === '/api/v2.1/repos/') {
       return json(200, { repos: libs.map((l) => ({ repo_id: l.id, repo_name: l.name, type: 'mine', owner_email: 'me@example.com', encrypted: l.encrypted, permission: l.perm ?? 'rw', size: 0, last_modified: new Date().toISOString() })) })
     }
@@ -223,7 +238,7 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
     }
     // Uploads (a drop of Immich photos on Files, say): a link, then a multipart POST to it.
     m = /^\/api2\/repos\/([0-9a-f-]{36})\/upload-link\/$/.exec(path)
-    if (m && lib(m[1])) return json(200, `${base}/upload-api/${m[1]}`)
+    if (m && lib(m[1])) return json(200, `${out.base}/upload-api/${m[1]}`)
     m = /^\/upload-api\/([0-9a-f-]{36})$/.exec(path)
     // The browser posts there itself, from the site's origin (as to Seafile's file server).
     if (m) {
@@ -243,7 +258,7 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
     if (m && lib(m[1])) {
       const l = lib(m[1])!
       if (l.encrypted && !unlockedRepos.has(l.id)) return json(400, { error_msg: 'Library is encrypted.' })
-      return json(200, `${base}/files/${m[1]}${encodeURI(url.searchParams.get('p') ?? '')}`)
+      return json(200, `${out.base}/files/${m[1]}${encodeURI(url.searchParams.get('p') ?? '')}`)
     }
     m = /^\/api2\/repos\/([0-9a-f-]{36})\/thumbnail\/$/.exec(path)
     if (m && lib(m[1])) {
@@ -294,18 +309,9 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
     res.writeHead(404).end()
   })
   await new Promise<void>((r) => server.listen(port, '127.0.0.1', r))
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  return {
-    base,
-    server,
-    libs,
-    log,
-    sent,
-    close: () => {
-      server.closeAllConnections()
-      server.close()
-    },
-  }
+  out.base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  out.server = server
+  return out
 }
 
 // --- Immich ---------------------------------------------------------------------------------------------

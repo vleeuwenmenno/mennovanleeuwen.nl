@@ -73,7 +73,7 @@ export type Job = {
 
 export type PhotoFolder = { repo: string; path: string; library: string | null; name: string; encrypted: boolean; locked: boolean; count: number }
 export type ImmichInfo = { url: string; name: string | null; email: string | null; version: string }
-export type Status = { seafile: { sources: PhotoFolder[]; job: Job | null; scannedAt: number | null } | null; immich: ImmichInfo | null }
+export type Status = { seafile: { sources: PhotoFolder[]; /** Seafile could not say which libraries are locked: no folders are listed */ unavailable?: boolean; job: Job | null; scannedAt: number | null } | null; immich: ImmichInfo | null }
 
 /** The app's choices that follow the user between devices: the source shown (when both are set up) and the grid's zoom. */
 export const photosPrefs = synced<{ source: SourceId | null; zoom: number }>('photos', { source: null, zoom: 2 })
