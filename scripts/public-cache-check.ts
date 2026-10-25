@@ -97,6 +97,24 @@ const check = (what: string, test: boolean, detail?: unknown) => {
   check('slots free up afterwards', c6.inFlight() === 0 && (await c6.get('fresh', async () => ({ value: 'w', ok: true }), 'busy')) === 'w')
 }
 
+// --- a loader that throws synchronously
+{
+  const c7 = boundedCache<string>({ max: 10, ttlMs: 1000, failTtlMs: 100, maxInFlight: 2 })
+  const rejections: unknown[] = []
+  const onRejection = (e: unknown) => rejections.push(e)
+  process.on('unhandledRejection', onRejection)
+  const boom = (): Promise<{ value: string; ok: boolean }> => {
+    throw new TypeError('not a function')
+  }
+  const answers = await Promise.all(Array.from({ length: 8 }, (_, i) => c7.get(`k${i}`, boom, 'busy')))
+  await new Promise((r) => setTimeout(r, 10))
+  process.off('unhandledRejection', onRejection)
+  check('sync loader throw: answered busy, no exception', answers.every((a) => a === 'busy'), answers)
+  check('sync loader throw: slots return to zero', c7.inFlight() === 0, c7.inFlight())
+  check('sync loader throw: no unhandled rejection', rejections.length === 0, rejections)
+  check('cache still serves a valid load afterwards', (await c7.get('ok', async () => ({ value: 'v', ok: true }), 'busy')) === 'v')
+}
+
 // --- the two endpoints, with a fake fetch
 const realFetch = globalThis.fetch
 {
@@ -133,6 +151,17 @@ const realFetch = globalThis.fetch
   check('suggest: cache stays within its cap', suggestCacheStats().size <= 1000, suggestCacheStats())
   check('suggest: nothing left running', suggestCacheStats().inFlight === 0)
   check('github: cache stays within its cap', githubCacheStats().size <= 500, githubCacheStats())
+}
+{
+  // Inherited names are not engines: no fetch, no slot used, and real engines keep working.
+  let calls = 0
+  globalThis.fetch = (async () => (calls++, new Response('["q",["a"]]', { status: 200 }))) as typeof fetch
+  const names = ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'valueOf']
+  const outs = await Promise.all(names.flatMap((n) => Array.from({ length: 10 }, (_, i) => suggest(n, `synthetic ${i}`))))
+  check('suggest: prototype names are not engines', outs.every((o) => o.length === 0) && calls === 0, [calls])
+  check('suggest: prototype names use no slot', suggestCacheStats().inFlight === 0, suggestCacheStats())
+  check('suggest: a valid engine still answers afterwards', (await suggest('ddg', 'recovery check')).join() === 'a' && calls === 1)
+  check('github: still answers after the above', (await githubCommits('vleeuwenmenno/boltwarden/commits/abcdef0')).status === 200)
 }
 globalThis.fetch = realFetch
 process.exit(failed ? 1 : 0)

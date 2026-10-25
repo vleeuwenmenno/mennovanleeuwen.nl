@@ -5,11 +5,13 @@
 
 import { boundedCache } from './boundedcache.ts'
 
-const ENGINES: Record<string, (q: string) => string> = {
+const ENGINE_URLS: Record<string, (q: string) => string> = {
   ddg: (q) => `https://duckduckgo.com/ac/?type=list&q=${encodeURIComponent(q)}`,
   kagi: (q) => `https://kagi.com/api/autosuggest?q=${encodeURIComponent(q)}`,
   google: (q) => `https://suggestqueries.google.com/complete/search?client=firefox&q=${encodeURIComponent(q)}`,
 }
+// No prototype: inherited names like `__proto__` or `constructor` are not engines.
+const ENGINES: Record<string, (q: string) => string> = Object.assign(Object.create(null), ENGINE_URLS)
 
 const CACHE_MS = 5 * 60_000
 const cache = boundedCache<string[]>({ max: 1000, ttlMs: CACHE_MS, failTtlMs: 30_000, maxInFlight: 8 })
@@ -20,8 +22,8 @@ export const suggestCacheStats = () => ({ size: cache.size(), inFlight: cache.in
 /** Up to eight suggestions; an empty list when the engine is unknown or doesn't answer. */
 export function suggest(engine: string, raw: string): Promise<string[]> {
   const q = raw.trim().slice(0, 100)
-  const url = ENGINES[engine]
-  if (!url || q.length < 2) return Promise.resolve([])
+  const url = Object.hasOwn(ENGINES, engine) ? ENGINES[engine] : undefined
+  if (typeof url !== 'function' || q.length < 2) return Promise.resolve([])
   const key = `${engine}|${q.toLowerCase()}`
   // Every engine answers in the OpenSearch suggestions format: ["query", ["suggestion", ...], ...].
   return cache.get(

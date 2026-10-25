@@ -46,7 +46,13 @@ export function boundedCache<T>(opts: { max: number; ttlMs: number; failTtlMs: n
       if (running >= opts.maxInFlight) return Promise.resolve(busy)
       running++
       const entry: Entry<T> = { at: now(), ttl: opts.ttlMs, value: undefined as unknown as Promise<T> }
-      entry.value = load()
+      let loading: Promise<{ value: T; ok: boolean }>
+      try {
+        loading = load()
+      } catch (e) {
+        loading = Promise.reject(e) // a loader that throws before returning fails like one that rejects
+      }
+      entry.value = loading
         .then((r) => {
           entry.at = now()
           entry.ttl = r.ok ? opts.ttlMs : opts.failTtlMs
