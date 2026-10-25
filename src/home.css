@@ -5390,6 +5390,33 @@ button.cal-day.is-picked:not(.is-today) {
 .image-notice { align-self: center; font-size: 12px; }
 .image-about { margin-top: 4px; }
 
+/* Settings → Agents → Images, the OpenAI part (AgentsOpenAISettings.tsx) and the icon library. */
+.openai-risk { margin: 0; max-width: 640px; padding: 8px 10px; border-left: 3px solid var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); color: var(--fg); font-size: 12.5px; line-height: 1.45; }
+.openai-risk strong { color: var(--fg-bright); }
+.openai-signin { display: grid; gap: 8px; max-width: 640px; }
+.openai-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 12.5px; }
+.openai-steps code { font-family: var(--mono); }
+.openai-paste { width: 100%; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.icon-library { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.icon-library li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-dark); }
+.icon-library li.is-busy { opacity: .6; }
+.icon-library img { flex: none; width: 48px; height: 48px; object-fit: contain; }
+.icon-library-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.icon-library-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-library-text strong { color: var(--fg-bright); font-family: var(--mono); font-size: 12px; }
+.icon-library-text .muted { font-size: 11px; }
+.icon-library-actions { flex: none; display: flex; flex-direction: column; gap: 4px; }
+@media (max-width: 560px) { .icon-library { grid-template-columns: minmax(0, 1fr); } .icon-library-actions { flex-direction: row; } .icon-library li { flex-wrap: wrap; } }
+@media (pointer: coarse) { .icon-library .btn, .openai-signin .btn { min-height: 40px; } }
+
+/* A gpt_image call's picture or icon, under its tool card (AgentsGptImage.tsx). */
+.agt-gpt-picture { margin-top: 6px; }
+.agt-gpt-picture .agt-thumbs.is-one .agt-thumb { width: min(360px, 100%); height: auto; aspect-ratio: 1; }
+.agt-gpt-picture .agt-thumb img { object-fit: contain; }
+.agt-gpt-icon { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; }
+.agt-gpt-icon img { flex: none; width: 48px; height: 48px; object-fit: contain; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-dark); }
+.agt-gpt-icon code { font-family: var(--mono); color: var(--fg-bright); }
+
 /* One field: label + Auto | Manual on one line, then a compact picker row and the pick's reason. */
 .image-config-fields { display: grid; gap: 12px; min-width: 0; }
 .image-settings-form .image-config-fields { max-width: 640px; }

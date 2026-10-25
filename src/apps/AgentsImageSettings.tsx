@@ -44,7 +44,7 @@ export function AgentsImageSettings() {
     {!settings && !error && <p className="muted">Loading…</p>}
     {settings && <form className="set-form ws-form image-settings-form" onSubmit={save}>
       <section className="set-section image-group" aria-labelledby="image-connection">
-        <h4 className="set-subhead" id="image-connection">Connection</h4>
+        <h4 className="set-subhead" id="image-connection">ComfyUI connection</h4>
         <label><span>ComfyUI URL</span><input value={settings.url} onChange={(e) => { setSettings({ ...settings, url: e.target.value }); setCatalog(null) }} placeholder="https://comfy.example.com" spellCheck={false} autoComplete="off" disabled={busy} /></label>
         <label><span>Bearer token</span><SecretInput value={token} onChange={(e) => setToken(e.target.value)} placeholder={settings.token ? 'Saved; leave empty to keep' : 'Optional'} disabled={busy} /></label>
         {settings.token && <label className="image-check"><span>Remove saved token</span><input type="checkbox" checked={clearToken} onChange={(e) => setClearToken(e.target.checked)} disabled={busy} /></label>}

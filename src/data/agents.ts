@@ -68,11 +68,12 @@ export const compactionText = (c: Compaction | undefined) =>
 export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim())
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images' | 'threads'
+export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images' | 'gpt_images' | 'threads'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
   { id: 'threads', name: 'Past threads', detail: 'Look back through your earlier conversations, in every project' },
   { id: 'images', name: 'Images', detail: 'Generate and tune pictures, inspect output, and learn style profiles from feedback' },
+  { id: 'gpt_images', name: 'GPT images', detail: 'Pictures and small icons for diagrams with OpenAI gpt-image, once set up in Settings → Agents → Images' },
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },

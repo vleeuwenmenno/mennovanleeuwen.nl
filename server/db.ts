@@ -354,6 +354,24 @@ export function database(): DatabaseSync {
     PRIMARY KEY (list_id, uid)
   )`)
 
+  // The Agents app's icon library (server/agentOpenAI.ts): small PNGs by slug, per account, and
+  // when each OpenAI picture was made, for the daily cap.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_icons (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    body BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, slug)
+  )`)
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_image_usage (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    at INTEGER NOT NULL
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_image_usage_user ON agent_image_usage (user_id, at)')
+  db.prepare('DELETE FROM agent_image_usage WHERE at < ?').run(Date.now() - 2 * 86400_000)
+
   // Added later: a compaction (server/agents.ts), saved as a message with role 'compact' whose
   // content is the summary; this says how it came about (JSON {auto, reason?, instructions?, …}).
   if (!cols('agent_messages').includes('compact')) db.exec('ALTER TABLE agent_messages ADD COLUMN compact TEXT')
