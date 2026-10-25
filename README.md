@@ -207,6 +207,20 @@ often comes from a model, raw HTML shows as text, only http(s), mailto and relat
 links, and pictures load from https or `data:` images only. `pnpm check:markdown` runs the
 parser's tests. Footnotes are not supported.
 
+### Emoji shortcodes
+
+`:rofl:`, `:+1:`, `:fire:`, `:flag_jp:` and about 1,900 other Discord, Slack and GitHub names turn
+into their emoji ([`src/data/emoji/`](src/data/emoji)). Markdown shows them outside code (agent
+replies, notes, previews, the terminal's `agents` view), and unknown names stay as written. In the
+Agents message box and the Notebook editor, typing `:` and two letters opens a list of matching
+names (arrows, Tab or Enter pick, Escape closes, a tap picks it on touch), and a finished `:name:`
+followed by a space or punctuation is replaced at once. Code spans, fenced blocks, URLs and times
+like `12:30:45` are never touched. Settings → Language & region turns the typing part off (per
+browser); showing shortcodes in text is always on. The names are generated from emojibase's
+GitHub and iamcal shortcode lists (MIT; skin-tone variants left out) into `data.ts`, a separate
+chunk of about 17 kB gzipped that loads the first time a text or the box needs a name, so the
+main bundle only carries the small matching code. `pnpm check:emoji` runs its tests.
+
 ### Visual blocks
 
 A fenced block with the language `visual` holds a small JSON spec that draws as a picture in every
@@ -224,8 +238,8 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   `layout.ts`; `direction` down or right, node shapes box, round, diamond and circle, `group` boxes
   nodes together), `grid` (rows × cols of slots, an arrow with `via` on it, the result with counts:
   a Minecraft recipe, cooking or smelting; several in `grids` for a chain; `pattern` and `key` as
-  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards` and `table`.
-  A list of specs in one block draws them one under the other. The whole schema is the
+  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards`, `table` and
+  `scene` (a free drawing, below). A list of specs in one block draws them one under the other. The whole schema is the
   `VisualSpec` type in [`spec.ts`](src/data/visual/spec.ts).
 - **Forgiving.** Small models write it, so comments, trailing commas, single quotes, unquoted keys
   and missing commas are fine, fields have aliases (`edges`/`links`, `from`/`source`), a missing
@@ -234,20 +248,45 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   in which field (`edges[2].to`), with the block as written under it, never a blank. While an
   answer is still streaming in, an unfinished block shows *Drawing…*. `validateVisual` and
   `parseVisual` are exported for the server side too.
+- **Scenes.** `{"type": "scene", "title": "…", "caption": "…", "svg": "<svg viewBox='0 0 400 250'>…</svg>"}`
+  is a drawing the model writes itself as SVG, for what boxes and arrows can't show (a machine
+  setup, a room, a circuit). The SVG is untrusted, so [`svg.ts`](src/data/visual/svg.ts) reads it
+  with its own small XML reader and keeps only an allowlist: the elements `g`, `rect`, `circle`,
+  `ellipse`, `line`, `polyline`, `polygon`, `path`, `text`, `tspan`, `defs`, `linearGradient`,
+  `radialGradient`, `stop`, `marker`, `pattern`, `clipPath`, `use`, `title`, `desc`, `image` and
+  `style`, and only geometry, paint, text, marker, `id`, `class`, `transform` and `style`
+  attributes. Scripts, `foreignObject`, animation, links, nested `<svg>`, event handlers and a
+  DOCTYPE (its entities are never expanded) go with everything in them; `href` may only point at
+  `#id` in the drawing (a `use` not at itself or at another `use`), `url()` only at `#id`, and a
+  `<style>` or `style` keeps only rules of allowed properties, without `@import`, escapes or
+  outside URLs. A new document is then written from that tree (never the model's text), and shown
+  as an `<img>` of a `data:` URL, where no script runs and nothing outside loads even if the
+  sanitizer missed something. Colours `accent`, `fg`, `bright`, `muted`, `bg`, `panel`, `border`
+  and the theme's hues (`red` … `magenta`), bare or as `var(--accent)`, are the current theme's,
+  and the drawing is redrawn when the theme changes; other colours stay as written.
+  `<image href="icon:<slug>">` (or an `icons` list with x, y and size) places an icon library
+  picture, fetched and put inside the drawing as a `data:` PNG; a missing one is a dashed tile
+  with its first letter. Up to 120,000 characters and 3,000 elements; a drawing with nothing safe
+  left shows what was left out. It zooms like a flow, with *SVG* and *PNG* buttons that save it
+  with the theme's background.
 - **Pictures.** Any item can be `"icon:<slug>"` (the account's icon library,
   `/api/agents/icons/<slug>`), an emoji (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with
   `"4x Stick"` for a count. A missing icon falls back to the item's emoji, else its first letter in a
   tinted tile; grids list what each picture is under the slots, since a finger gets no tooltip.
-- **Theme, touch and phones.** Colours come only from the theme's variables (charts use the accent
+- **Theme, touch and phones.** Colours come from the theme's variables (a scene may also name its own; charts use the accent
   hues in a fixed order). A big flow fits the width (down to half size, then scrolls); Ctrl+wheel and
   pinch zoom it, a mouse drags it, and − ⤢ + buttons zoom and fit. On a phone a flow that runs
   sideways runs down instead. Charts have a hover (or tap) tooltip, a legend for two or more series
   and a *Table* view. *Spec* and *Copy* show and copy the JSON.
 - **Elsewhere.** The terminal's `agents` and shared answer links (`/s/<token>`) show a text
-  version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars.
-- **Cost.** The renderer is its own chunk (about 25 KB), loaded the first time a visual block shows;
+  version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars,
+  a scene as its title, caption and `(drawing: its labels)`.
+- **Cost.** The renderer is its own chunk (about 30 KB), loaded the first time a visual block shows;
   it draws once, and zooming only sets two styles. `pnpm check:visual` checks good and bad specs,
-  the loose JSON, the text version, the layout and that every example in the Agents prompt is valid.
+  the loose JSON, the text version, the layout, the scene sanitizer against a list of XSS tricks
+  (handlers, `javascript:` and encoded links, `foreignObject`, outside `use`, CSS `url()` and
+  `@import`, entities, CDATA, nested `<svg>`, animation) and that every example in the Agents
+  prompt is valid.
 
 ## Data snapshots
 
@@ -478,6 +517,42 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 request). `skills add owner/repo` installs from GitHub, and `/name` starts one. The
 Agents app has the same work folders, permission modes, diff approvals and skills (Settings →
 Agents → Skills).
+
+**Always-on skills and rules** ([`src/data/agentSkillRules.ts`](src/data/agentSkillRules.ts),
+[`server/agentSkills.ts`](server/agentSkills.ts), [`src/apps/AgentsSkillRules.tsx`](src/apps/AgentsSkillRules.tsx))
+make a skill part of every conversation instead of something the agent reads when a task calls for
+it, for example `caveman-adhd` for terse answers all the time. Set up in Settings → Agents → Skills:
+
+- **Always on**, a switch on each enabled skill. The skill's whole SKILL.md goes into the system
+  prompt, between `<active_skill name="…">` tags, with an instruction to follow it in every reply.
+  This also works when the thread's Skills tool group is off.
+- **Applies to**: Agents threads (on by default), Spotlight quick answers and the terminal's
+  `agents` command.
+- **Per project**: turn a skill on or off for the threads in one project, whatever the global
+  setting is. The project's sidebar menu has *Always-on skills…*.
+- **Rules**: *When* [every thread · in project X · mode is Quick/Deep · permission is Ask
+  first/Auto/Edits allowed/Plan/Bypass · in quick answers/the terminal] *→* turn on skill Z, or add
+  an instruction text (in `<user_instruction>` tags). A stored rule can have several conditions,
+  and all of them must match. Rules are checked again on every message, so a thread switched to
+  Plan picks up a Plan rule from its next message on. Rules are only data: there are no scripts and
+  nothing runs.
+
+The order is: always-on skills (where they apply), then the project's additions and removals, then
+matching rules. A skill switched off in the list is never injected. Everything together is capped
+at 24 KB per prompt. Skills that don't fit are left out (the prompt names them), and Settings warns
+when the always-on skills add up to more than that. The context breakdown shows the always-on part
+as its own row.
+
+In a thread, the active ones show as chips above the message box. Tapping a chip turns that skill
+or instruction off for this thread only, and tapping it again turns it back on. This is stored with
+the thread (column `skills_off`), so it survives a reload, and a new thread can be set before its
+first message. Saying "stop caveman" still works through the skill's own rules.
+
+The config is saved with the account (state key `agentskills`) through
+`PUT /api/agents/skill-config`, which refuses anything invalid with a 400. Limits: 20 always-on
+skills, 20 rules, 2,000 characters per instruction, and conditions only from the fixed set above.
+When the config is read, invalid entries are dropped. `pnpm check:agents-skill-hooks` covers all of
+this.
 
 **How complete it is (2026-10-11).** Everything above works end to end against a scripted
 stand-in for Ollama and a mock Seafile. It has not yet run against real models, so the tool
@@ -1504,17 +1579,54 @@ come from, and the model (`gpt-image-2` by default):
   (`chatgpt.com/backend-api/codex`): its `/images/generations` route, or the Responses API with the
   `image_generation` tool where that route is missing. **Sign out** forgets the tokens.
 
-`gpt_image` makes one of two things:
+`gpt_image` makes one of three things:
 - A **picture** (square, landscape or portrait; low, medium or high quality; optionally transparent).
   It is kept with the tool's result like a sent picture, so it shows under the call (thumbnail, full
   view, Open in Preview, Download) and is still there when the thread is opened again. The model is
-  told it was shown, never given the bytes.
+  told it was shown, never given the bytes. The result gives it an id (`gpt:<12 hex>`, kept on the
+  attachment as `ref`) to draw from it again.
+- An **infographic** (`mode: "infographic"`): one picture like the explainers ChatGPT makes, high
+  quality and landscape (1536 × 1024) unless the model asks for medium, low or portrait. The tool
+  description teaches the model to write the prompt as a layout: a title banner, the scene, each
+  labelled part with a short caption and an arrow, a numbered "How it works" strip, the style, and
+  every text in quotes and short. It counts as one picture.
 - An **icon** (`mode: "icon"`): a small square symbol in one fixed flat style on a transparent
   background, drawn at low quality and stored at 256 px in the account's **icon library** under a
   slug (`a-z`, `0-9`, `_`, `-`, like `diamond_pickaxe`). Asking for a slug that exists returns the
   stored icon without drawing, unless the agent passes `regenerate`. The result gives the model the
   reference `icon:<slug>` to use in diagrams, recipes and other visualizations. The tool tells the
   model to check `list_icons` first, reuse slugs and keep names generic.
+
+**Drawing.** A picture or infographic shows while it is drawn: a dotted frame in the picture's
+shape (theme colours, breathing gently unless reduced motion is on) with "Drawing… 37%" under it.
+gpt-image says nothing about how far it is, so the percentage is an estimate from the time alone
+(`drawingPercent` in `AgentsGptImage.tsx`): steady up to 90% at a typical time for the quality and
+size (`expectedMs` in `server/agentOpenAI.ts`: 20 s low, 45 s medium, 90 s high, 1.3 times for the
+large sizes, 10 s more with references), then slower, never 100% before it is done. The Images API
+(and the Codex routes) are asked to stream two rough previews (`stream`, `partial_images: 2`;
+`image_generation.partial_image` / `image_edit.partial_image`, and
+`response.image_generation_call.partial_image` on the Responses API); each one fills the frame as it
+comes, served from memory at `GET /api/agents/threads/<id>/gpt-preview/<callId>` until the picture is
+done. The drawing is kept as a pending image job of the turn (with its estimate and how long it has
+run), so a window that opens the thread halfway shows it too, and the agents terminal UI says
+"Drawing picture…". Stop aborts the request to OpenAI; a stopped or failed picture is not counted.
+Where a route will not stream (the Codex direct route answering 400 to it), it is asked again
+without, remembered until the server restarts, and the window shows the frame and estimate only.
+
+**References.** `references` (up to 4 picture ids, 8 MB each, 16 MB together) lets the model draw
+from pictures in the thread: one the user sent (`attachment:<message>:<n>`, the id is in the
+picture's attachment tag the model reads) or an earlier gpt_image picture (`gpt:<id>` from its
+result, or `attachment:<message>:<n>` of the tool result). Only pictures of the same thread, read
+from what is stored; URLs and paths are refused. With an API key they go to `/v1/images/edits` as
+`image[]` parts; on Sign in with ChatGPT to the Responses API as `input_image` items, with the
+tool's `action` set to `edit`.
+
+**Edit.** Each made picture has **Edit…** under it and in its full view. It asks "What should
+change?" in an in-OS dialog and sends a normal message, `Change the picture "<name>" (gpt:<id>):
+<change>`, which the agent answers by drawing it again with that picture as a reference. A message
+rather than a direct call, so the agent still has the original prompt in view and can keep
+everything else the same, and the change is in the thread like any other request. It is offered
+while GPT images is on in the thread and the thread is not answering.
 
 `GET /api/agents/icons/<slug>` serves an icon of the signed-in account as a PNG (404 when there is
 none), and `GET /api/agents/icons` lists them. Settings shows the library: each icon with its slug
@@ -1526,7 +1638,7 @@ without asking in every mode except Plan. `OPENAI_URL`, `OPENAI_AUTH_URL` and `C
 point at stand-ins for testing.
 
 ```sh
-pnpm check:agents-openai-images   # API key, pictures kept with results, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback), against fakes
+pnpm check:agents-openai-images   # API key, pictures kept with results, streamed previews (served while drawing, joined halfway, Stop aborts), infographic defaults, references to the edits route and Responses input_image, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback, a route that will not stream), against fakes
 ```
 
 **Image generation.** In Settings → Apps → Agents → Images (also the app's settings),

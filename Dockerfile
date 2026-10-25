@@ -27,7 +27,7 @@ ENV NODE_ENV=production PORT=8080 APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMI
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY --from=build /server-modules ./node_modules
-COPY src/data/agentMentions.ts src/data/imageModels.ts src/data/modelFamilies.ts src/data/imageObservations.ts src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts src/data/notifySources.ts src/data/gitTypes.ts ./src/data/
+COPY src/data/agentMentions.ts src/data/agentSkillRules.ts src/data/imageModels.ts src/data/modelFamilies.ts src/data/imageObservations.ts src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts src/data/notifySources.ts src/data/gitTypes.ts ./src/data/
 # Empires At War multiplayer: names and messages now, the battle itself for refereeing matches.
 COPY src/apps/games/empires ./src/apps/games/empires
 # Games by their direct link (/play/<game>): the game list, for each page's title and link preview.
@@ -41,8 +41,8 @@ COPY src/data/taskPrefs.ts ./src/data/
 COPY src/data/mailRemote.ts ./src/data/
 # Agents shared links (/s/<token>): the Markdown parser and code colours, to render the page.
 COPY src/data/markdown/parse.ts src/data/markdown/highlight.ts ./src/data/markdown/
-# Visual blocks: their text version on shared pages, and how the Agents prompt describes them.
-COPY src/data/visual/spec.ts src/data/visual/lang.ts src/data/visual/prompt.ts ./src/data/visual/
+# Visual blocks: their text version on shared pages (svg.ts reads scenes), and how the Agents prompt describes them.
+COPY src/data/visual/spec.ts src/data/visual/svg.ts src/data/visual/lang.ts src/data/visual/prompt.ts ./src/data/visual/
 # Notes linked to calendar events: how a link is kept, and the meeting note's template; and the
 # counters note changes carry, so the agents' edits merge with the browser's.
 COPY src/data/noteEvents.ts src/data/noteClock.ts ./src/data/

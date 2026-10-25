@@ -2144,6 +2144,79 @@ textarea.agt-q-input {
 .agt-chip-x:hover {
   color: var(--text);
 }
+/* Always-on skills over the message box: on chips are filled, off ones struck through. */
+.agt-always {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px 0;
+}
+.agt-always .agt-always-chip {
+  max-width: 100%;
+  min-width: 0;
+}
+.agt-always-chip.is-on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.agt-always-chip.is-off .agt-chip-label {
+  text-decoration: line-through;
+}
+@media (pointer: coarse) {
+  .agt-always .agt-always-chip {
+    min-height: 32px;
+    padding: 4px 12px;
+  }
+}
+/* Settings → Agents → Skills: the Always on switch, where they apply, and rules. */
+.agt-always-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.agt-always-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.agt-always-scope .set-check {
+  margin: 0;
+}
+.agt-rule {
+  align-items: stretch;
+  flex-direction: column;
+}
+.agt-rule-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.agt-rule-line .set-select {
+  min-width: 0;
+  max-width: 100%;
+}
+.agt-rule-add {
+  margin-bottom: 16px;
+}
+.agt-rule-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  resize: vertical;
+}
+.agt-rule-text:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
 /* Why a web read ran without asking (Auto's check, an allowed site): small, on the tool's row. */
 .agt-tool-checked {
   font-size: 11px;
@@ -5411,8 +5484,19 @@ button.cal-day.is-picked:not(.is-today) {
 
 /* A gpt_image call's picture or icon, under its tool card (AgentsGptImage.tsx). */
 .agt-gpt-picture { margin-top: 6px; }
-.agt-gpt-picture .agt-thumbs.is-one .agt-thumb { width: min(360px, 100%); height: auto; aspect-ratio: 1; }
-.agt-gpt-picture .agt-thumb img { object-fit: contain; }
+/* A made picture at the size its drawing had, in its own shape. */
+.agt-gpt-picture .agt-thumbs li { width: min(520px, 100%); }
+.agt-gpt-picture .agt-thumbs.is-one .agt-thumb { width: 100%; height: auto; }
+.agt-gpt-picture .agt-thumb img { height: auto; object-fit: contain; }
+/* gpt_image: the picture being drawn (a dotted frame the picture's shape, breathing gently), then its previews; Edit under the picture. */
+.agt-gpt-drawing { position: relative; width: min(100%, 520px); margin-top: 6px; overflow: hidden; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--bg-dark); }
+.agt-gpt-dots { position: absolute; inset: 0; background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 55%, transparent) 1.3px, transparent 1.8px); background-size: 14px 14px; opacity: 0.5; will-change: opacity; animation: agt-gpt-breathe 2.4s ease-in-out infinite alternate; }
+.agt-gpt-drawing > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.4s ease; }
+.agt-gpt-drawing > img.is-shown { opacity: 1; }
+@keyframes agt-gpt-breathe { from { opacity: 0.3; } to { opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) { .agt-gpt-dots { animation: none; } .agt-gpt-drawing > img { transition: none; } }
+.agt-gpt-edit { display: block; margin-top: 6px; }
+@media (pointer: coarse) { .agt-gpt-edit { min-height: 40px; padding-inline: 16px; } }
 .agt-gpt-icon { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; }
 .agt-gpt-icon img { flex: none; width: 48px; height: 48px; object-fit: contain; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-dark); }
 .agt-gpt-icon code { font-family: var(--mono); color: var(--fg-bright); }
@@ -5662,4 +5746,19 @@ button.cal-day.is-picked:not(.is-today) {
 .agt-ring:disabled .agt-ring-fill {
   stroke: currentColor;
   opacity: 0.6;
+}
+
+/* The emoji shortcode list (src/os/emojiTyping.tsx) above the Notebook editor; in the Agents
+   composer it sits in the box like the command list. */
+.emoji-pop-glyph {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-right: 4px;
+  font-size: 15px;
+  text-align: center;
+}
+.nb-editor ~ .emoji-pop {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  max-height: 11em;
 }
