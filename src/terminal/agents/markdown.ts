@@ -1,5 +1,6 @@
 import { furiganaMode } from '../../data/furigana'
 import { htmlRubyAt } from '../../data/markdown/parse'
+import { isVisualLang, visualBlockText } from '../../data/visual/spec'
 import { seg, width, wrap, type Line, type Seg } from './text'
 
 // Markdown as terminal lines, the way a CLI agent prints a reply: headings in bold, `code` in
@@ -99,6 +100,13 @@ export function markdown(text: string, max: number): Line[] {
       const code: string[] = []
       while (i + 1 < src.length && !src[i + 1].trimStart().startsWith(close)) code.push(src[++i])
       i++
+      // A visual block (src/data/visual/) as its text version: "a → b" lines, grids as [slots].
+      const visual = isVisualLang(fence[3]) ? visualBlockText(code.join('\n')) : null
+      if (visual) {
+        out.push([seg('  ◆ visual', 'muted')])
+        for (const v of visual) out.push(...(width([seg(v)]) + 2 <= max ? [[seg('  '), seg(v)]] : wrap([seg(v)], max, [seg('  ')], [seg('    ')])))
+        continue
+      }
       if (fence[3]) out.push([seg(`  ${fence[3]}`, 'muted')])
       for (const c of code) out.push(...wrap([seg(c.replace(/\t/g, '  '), 'green')], max, [seg('  ')]))
       continue

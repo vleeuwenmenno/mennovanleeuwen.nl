@@ -207,6 +207,48 @@ often comes from a model, raw HTML shows as text, only http(s), mailto and relat
 links, and pictures load from https or `data:` images only. `pnpm check:markdown` runs the
 parser's tests. Footnotes are not supported.
 
+### Visual blocks
+
+A fenced block with the language `visual` holds a small JSON spec that draws as a picture in every
+Markdown preview (Notebook, Zed, Spotlight, the Agents app's answers, READMEs and comments), so a
+model or a note can show a diagram instead of describing one ([`src/data/visual/`](src/data/visual)):
+
+````md
+```visual
+{"type": "grid", "pattern": ["PP", "PP"], "key": {"P": "icon:oak_planks Oak planks"},
+ "via": "Crafting grid", "result": "icon:crafting_table Crafting table"}
+```
+````
+
+- **Kinds.** `flow` (nodes and arrows with labels, laid out in ranks by our own layered layout in
+  `layout.ts`; `direction` down or right, node shapes box, round, diamond and circle, `group` boxes
+  nodes together), `grid` (rows × cols of slots, an arrow with `via` on it, the result with counts:
+  a Minecraft recipe, cooking or smelting; several in `grids` for a chain; `pattern` and `key` as
+  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards` and `table`.
+  A list of specs in one block draws them one under the other. The whole schema is the
+  `VisualSpec` type in [`spec.ts`](src/data/visual/spec.ts).
+- **Forgiving.** Small models write it, so comments, trailing commas, single quotes, unquoted keys
+  and missing commas are fine, fields have aliases (`edges`/`links`, `from`/`source`), a missing
+  `type` is guessed from the fields, edges may be strings (`"a -> b: label"`) and an edge to a name
+  that was never listed makes that node. A spec that leaves nothing to draw shows what is wrong and
+  in which field (`edges[2].to`), with the block as written under it, never a blank. While an
+  answer is still streaming in, an unfinished block shows *Drawing…*. `validateVisual` and
+  `parseVisual` are exported for the server side too.
+- **Pictures.** Any item can be `"icon:<slug>"` (the account's icon library,
+  `/api/agents/icons/<slug>`), an emoji (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with
+  `"4x Stick"` for a count. A missing icon falls back to the item's emoji, else its first letter in a
+  tinted tile; grids list what each picture is under the slots, since a finger gets no tooltip.
+- **Theme, touch and phones.** Colours come only from the theme's variables (charts use the accent
+  hues in a fixed order). A big flow fits the width (down to half size, then scrolls); Ctrl+wheel and
+  pinch zoom it, a mouse drags it, and − ⤢ + buttons zoom and fit. On a phone a flow that runs
+  sideways runs down instead. Charts have a hover (or tap) tooltip, a legend for two or more series
+  and a *Table* view. *Spec* and *Copy* show and copy the JSON.
+- **Elsewhere.** The terminal's `agents` and shared answer links (`/s/<token>`) show a text
+  version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars.
+- **Cost.** The renderer is its own chunk (about 25 KB), loaded the first time a visual block shows;
+  it draws once, and zooming only sets two styles. `pnpm check:visual` checks good and bad specs,
+  the loose JSON, the text version, the layout and that every example in the Agents prompt is valid.
+
 ## Data snapshots
 
 `pnpm data` (`scripts/fetch-data.ts`) writes two files the site reads at runtime:
@@ -1342,7 +1384,10 @@ with citations), on any of Ollama's cloud models that can call tools. Turns run 
 stream to the window, with the model's thinking folded under each reply; Stop ends one. Answers stay
 plain by default: a thread's model, workflow, sampling and file names are named only when the user
 asks about them or is changing them, so swapping the model or the LoRA is one short paragraph rather
-than a tour of the settings, and nothing ends with an offer of further work. The
+than a tour of the settings, and nothing ends with an offer of further work. When a diagram, recipe,
+chart or comparison says it better, the model draws one with a `visual` block (see *Visual blocks*
+above; the prompt's short guide is [`src/data/visual/prompt.ts`](src/data/visual/prompt.ts)), making
+the icons it needs first with `generate_image` in icon mode and naming them `icon:<slug>`. The
 composer holds the mode, the model, which tools the thread may use and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums

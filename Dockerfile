@@ -41,6 +41,8 @@ COPY src/data/taskPrefs.ts ./src/data/
 COPY src/data/mailRemote.ts ./src/data/
 # Agents shared links (/s/<token>): the Markdown parser and code colours, to render the page.
 COPY src/data/markdown/parse.ts src/data/markdown/highlight.ts ./src/data/markdown/
+# Visual blocks: their text version on shared pages, and how the Agents prompt describes them.
+COPY src/data/visual/spec.ts src/data/visual/lang.ts src/data/visual/prompt.ts ./src/data/visual/
 # Notes linked to calendar events: how a link is kept, and the meeting note's template; and the
 # counters note changes carry, so the agents' edits merge with the browser's.
 COPY src/data/noteEvents.ts src/data/noteClock.ts ./src/data/

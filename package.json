@@ -17,6 +17,7 @@
     "check:perf": "node scripts/perf/check.ts",
     "check:push": "node scripts/webpush-check.ts",
     "check:markdown": "node scripts/markdown-check.ts",
+    "check:visual": "node scripts/visual-check.ts",
     "icons:notify": "node scripts/notify-icons.ts",
     "check:empires": "node scripts/empires-sync.ts",
     "check:empires-ws": "node scripts/empires-ws.ts",
