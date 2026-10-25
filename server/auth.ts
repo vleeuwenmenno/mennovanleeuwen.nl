@@ -5,16 +5,24 @@ import { cookies, HttpError, json, publicOrigin, redirect, setCookie } from './h
 
 // "Sign in with GitHub" (OAuth web flow). Any GitHub account may sign up while registration is
 // open and there is room (MAX_USERS, default 100; the admin can change both in Settings → Users).
-// Logins in ADMIN_USERS (default: vleeuwenmenno) are admins: they always get in, may use the keys
-// set on the server, and manage the other users (server/admin.ts).
+// GitHub accounts whose numeric id is in ADMIN_GITHUB_IDS (default: 46482143) are admins: they always
+// get in, may use the keys set on the server, and manage the other users (server/admin.ts). The id
+// never changes, unlike a login, which can be renamed and later taken by someone else. The old
+// ADMIN_USERS (logins) is retired and grants nothing.
 //
 // Needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET from a GitHub OAuth app whose callback URL is
 // <site>/api/auth/github/callback. Without them, login is off and /api/me says so.
 
 const SESSION_COOKIE = 'mvlos_sid'
 const STATE_COOKIE = 'mvlos_oauth'
-/** Set once someone allows private repositories, so later sign-ins ask GitHub for the same scopes. */
-const REPO_COOKIE = 'mvlos_gh_repo'
+/**
+ * One-time choice of GitHub scopes, set by the signed-in account from Settings (POST
+ * /api/auth/github/scope) and used by the next login start. Sealed, HttpOnly, short-lived and tied to that account.
+ */
+const SCOPE_COOKIE = 'mvlos_gh_scope'
+/** The old sticky cookie (`?repo=1`); only cleared now. */
+const LEGACY_REPO_COOKIE = 'mvlos_gh_repo'
+const SCOPE_MINUTES = 10
 /** The signed-in login, readable by the page, so the desktop boots as that user before /api/me answers. */
 const LOGIN_COOKIE = 'mvlos_login'
 /**
@@ -32,8 +40,9 @@ const REPO_SCOPES = process.env.GITHUB_SCOPES ?? 'read:user repo read:org'
 const SEEN_EVERY = 5 * 60_000
 
 export const authEnabled = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET)
-const admins = () => (process.env.ADMIN_USERS ?? 'vleeuwenmenno').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
-export const isAdmin = (login: string) => admins().includes(login.toLowerCase())
+const admins = () => (process.env.ADMIN_GITHUB_IDS ?? '46482143').split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map(Number)
+/** Admin by GitHub's immutable numeric id (users.github_id), never by login. */
+export const isAdmin = (githubId: number) => admins().includes(githubId)
 
 /** How many accounts may exist: the admin's choice, else MAX_USERS, else 100. */
 export const maxUsers = () => Math.max(0, Math.floor(Number(appSetting('max_users') ?? process.env.MAX_USERS ?? 100))) || 0
@@ -51,9 +60,9 @@ const signInHandlers: ((userId: number) => void)[] = []
 /** Runs after every sign-in, with its new token (maybe with other scopes, or let into more organisations): server/search.ts forgets that user's cached lists. */
 export const onSignIn = (fn: (userId: number) => void) => void signInHandlers.push(fn)
 
-export type User = { id: number; login: string; name: string | null; avatar: string | null; githubToken: string; githubScopes: string[]; admin: boolean }
+export type User = { id: number; githubId: number; login: string; name: string | null; avatar: string | null; githubToken: string; githubScopes: string[]; admin: boolean }
 
-type UserRow = { id: number; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
+type UserRow = { id: number; github_id: number; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
 
 /** The stored key of this request's session (what sessions.id holds), or null without one. */
 export function sessionKey(req: IncomingMessage): string | null {
@@ -67,7 +76,7 @@ export function currentUser(req: IncomingMessage): User | null {
   const sid = cookies(req)[SESSION_COOKIE]
   if (!sid) return null
   const row = database()
-    .prepare('SELECT u.id, u.login, u.name, u.avatar, u.github_token, u.github_scopes, u.last_seen_at, u.banned_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?')
+    .prepare('SELECT u.id, u.github_id, u.login, u.name, u.avatar, u.github_token, u.github_scopes, u.last_seen_at, u.banned_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?')
     .get(sha256(sid), Date.now()) as UserRow | undefined
   if (!row) return null
   // Checked on every request, so a ban signs someone out at once (their sessions go too).
@@ -76,18 +85,19 @@ export function currentUser(req: IncomingMessage): User | null {
   if (!row.last_seen_at || now - row.last_seen_at > SEEN_EVERY) database().prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, row.id)
   return {
     id: row.id,
+    githubId: row.github_id,
     login: row.login,
     name: row.name,
     avatar: row.avatar,
     githubToken: decrypt(row.github_token),
     githubScopes: (row.github_scopes ?? '').split(/[\s,]+/).filter(Boolean),
-    admin: isAdmin(row.login),
+    admin: isAdmin(row.github_id),
   }
 }
 
 /** Every account that may sign in (not banned), for the notification hub's watchers (server/watchers.ts). */
 export function accounts(): User[] {
-  const rows = database().prepare('SELECT id, login, name, avatar, github_token, github_scopes FROM users WHERE banned_at IS NULL').all() as UserRow[]
+  const rows = database().prepare('SELECT id, github_id, login, name, avatar, github_token, github_scopes FROM users WHERE banned_at IS NULL').all() as UserRow[]
   return rows.map((r) => {
     let githubToken = ''
     try {
@@ -95,7 +105,7 @@ export function accounts(): User[] {
     } catch {
       /* sealed with another SESSION_SECRET */
     }
-    return { id: r.id, login: r.login, name: r.name, avatar: r.avatar, githubToken, githubScopes: (r.github_scopes ?? '').split(/[\s,]+/).filter(Boolean), admin: isAdmin(r.login) }
+    return { id: r.id, githubId: r.github_id, login: r.login, name: r.name, avatar: r.avatar, githubToken, githubScopes: (r.github_scopes ?? '').split(/[\s,]+/).filter(Boolean), admin: isAdmin(r.github_id) }
   })
 }
 
@@ -118,11 +128,34 @@ export function requireAdmin(req: IncomingMessage): User {
 /** The pages sign-in may come back to: the desktop, the CV page, and a game by its direct link (/play/<game>). Nothing else, so the link can't send anyone elsewhere. */
 const backTo = (path: string | null) => (path === '/cv' || (path && /^\/play(\/[a-z0-9-]{1,40})?$/.test(path)) ? path : '/')
 
-/** Off to GitHub. `?repo=1` also asks for private repositories (and remembers that), `?repo=0` stops asking. */
+/**
+ * The scope choice made by this request's signed-in account, if any and still valid. The cookie is
+ * one-time: whatever it holds, the caller clears it.
+ */
+function chosenRepoScope(req: IncomingMessage): boolean {
+  const sealed = cookies(req)[SCOPE_COOKIE]
+  if (!sealed) return false
+  try {
+    const { u, repo, exp } = JSON.parse(decrypt(sealed)) as { u: number; repo: boolean; exp: number }
+    const user = currentUser(req)
+    return !!user && user.id === u && Date.now() < exp && repo === true
+  } catch {
+    return false
+  }
+}
+
+/** Remembers, for the next sign-in of this account only, whether to ask GitHub for private repositories (Settings → Code hosts). */
+export function chooseRepoScope(req: IncomingMessage, res: ServerResponse, body: { repo?: unknown }) {
+  const user = requireUser(req)
+  if (typeof body.repo !== 'boolean') throw new HttpError(400, 'repo is true or false')
+  const sealed = encrypt(JSON.stringify({ u: user.id, repo: body.repo, exp: Date.now() + SCOPE_MINUTES * 60_000 }))
+  json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SCOPE_COOKIE, sealed, { maxAge: SCOPE_MINUTES * 60, path: '/api/auth' })] })
+}
+
+/** Off to GitHub. Asks for `read:user` only, unless the signed-in account just chose private repositories (chooseRepoScope); that choice is used once. */
 export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (!authEnabled()) return redirect(res, '/?auth=off')
-  const asked = url.searchParams.get('repo')
-  const repo = asked === null ? cookies(req)[REPO_COOKIE] === '1' : asked === '1'
+  const repo = chosenRepoScope(req)
   const state = randomBytes(16).toString('base64url')
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID!,
@@ -133,8 +166,8 @@ export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) 
   })
   // Where to come back to: the CV page or a game's direct link when signing in from there, else the desktop.
   const back = backTo(url.searchParams.get('back'))
-  const set = [setCookie(req, STATE_COOKIE, `${state} ${back}`, { maxAge: 600, path: '/api/auth' })]
-  if (asked !== null) set.push(setCookie(req, REPO_COOKIE, repo ? '1' : '', { maxAge: repo ? 365 * 86400 : 0, path: '/api/auth' }))
+  const set = [setCookie(req, STATE_COOKIE, `${state} ${back}`, { maxAge: 600, path: '/api/auth' }), setCookie(req, SCOPE_COOKIE, '', { maxAge: 0, path: '/api/auth' })]
+  if (cookies(req)[LEGACY_REPO_COOKIE] !== undefined) set.push(setCookie(req, LEGACY_REPO_COOKIE, '', { maxAge: 0, path: '/api/auth' }))
   redirect(res, `https://github.com/login/oauth/authorize?${params}`, { 'Set-Cookie': set })
 }
 
@@ -175,7 +208,7 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
   const db = database()
   const known = db.prepare('SELECT id, banned_at, ban_reason FROM users WHERE github_id = ?').get(me.id) as { id: number; banned_at: number | null; ban_reason: string | null } | undefined
   if (known?.banned_at) return redirect(res, `${home}?auth=banned${known.ban_reason ? `&reason=${encodeURIComponent(known.ban_reason.slice(0, 200))}` : ''}`, { 'Set-Cookie': clearState })
-  if (!known && !isAdmin(me.login)) {
+  if (!known && !isAdmin(me.id)) {
     if (!registrationOpen()) return fail('closed')
     if (userCount() >= maxUsers()) return fail('full')
   }

@@ -10,10 +10,10 @@ import { unlinkSeafile } from './seafile.ts'
 // What happens to a whole account: signed out everywhere, banned (and let back in), deleted.
 // Used by Settings → Account (deleting your own) and the admin's Settings → Users (server/admin.ts).
 
-type Row = { id: number; login: string; name: string | null; avatar: string | null; github_token: string }
+type Row = { id: number; github_id: number; login: string; name: string | null; avatar: string | null; github_token: string }
 
 function userById(id: number): User {
-  const row = database().prepare('SELECT id, login, name, avatar, github_token FROM users WHERE id = ?').get(id) as Row | undefined
+  const row = database().prepare('SELECT id, github_id, login, name, avatar, github_token FROM users WHERE id = ?').get(id) as Row | undefined
   if (!row) throw new HttpError(404, 'No such user')
   let githubToken = ''
   try {
@@ -21,7 +21,7 @@ function userById(id: number): User {
   } catch {
     /* sealed with another SESSION_SECRET: nothing to revoke */
   }
-  return { id: row.id, login: row.login, name: row.name, avatar: row.avatar, githubToken, githubScopes: [], admin: isAdmin(row.login) }
+  return { id: row.id, githubId: row.github_id, login: row.login, name: row.name, avatar: row.avatar, githubToken, githubScopes: [], admin: isAdmin(row.github_id) }
 }
 
 /** Ends every session the account has, and stops its running Agents turns. */

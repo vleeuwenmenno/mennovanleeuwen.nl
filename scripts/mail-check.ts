@@ -177,7 +177,7 @@ async function endToEnd() {
 
   let log = ''
   const child: ChildProcess = spawn(process.execPath, ['server/index.ts'], {
-    env: { ...process.env, PORT: String(port), DATA_DIR: data, MC_WATCH: 'off', NODE_ENV: 'test', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: LOGIN, MAIL_WATCH_MS: '1000', MAIL_POLL_MS: '1000' },
+    env: { ...process.env, PORT: String(port), DATA_DIR: data, MC_WATCH: 'off', NODE_ENV: 'test', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1', MAIL_WATCH_MS: '1000', MAIL_POLL_MS: '1000' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout!.on('data', (d) => (log += d))

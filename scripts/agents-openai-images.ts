@@ -218,7 +218,7 @@ const ollamaUrl = `http://127.0.0.1:${(ollama.address() as { port: number }).por
 // --- The site, with a signed-in account -------------------------------------------------------------
 
 const LOGIN = 'images-check'
-const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake-ollama', OPENAI_URL: fakeUrl, OPENAI_AUTH_URL: fakeUrl, CHATGPT_CODEX_URL: fakeUrl, OPENAI_API_KEY: '', OPENAI_IMAGES_PER_DAY: '20', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: LOGIN })
+const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake-ollama', OPENAI_URL: fakeUrl, OPENAI_AUTH_URL: fakeUrl, CHATGPT_CODEX_URL: fakeUrl, OPENAI_API_KEY: '', OPENAI_IMAGES_PER_DAY: '20', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
 process.env.DATA_DIR = server.data
 const { database, decrypt, encrypt, sha256 } = await import('../server/db.ts')
 const sid = randomBytes(24).toString('hex')

@@ -40,7 +40,7 @@ const realFetch = globalThis.fetch
 
 // --- 1. the real server -------------------------------------------------------------------------
 {
-  const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'nobody' })
+  const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '999999' })
   process.env.DATA_DIR = server.data
   const { database, encrypt, sha256 } = await import('../server/db.ts')
   const now = Date.now()
@@ -113,6 +113,49 @@ const realFetch = globalThis.fetch
   check('server: the notification stream without it is refused', (await req('/api/notifications/stream?page=x', { sid: sids[2] })).status === 409)
   check('server: reading the notification list without it is not', (await req('/api/notifications', { sid: sids[2] })).status === 200)
   check('server: the service worker renewing its push subscription (no header) is let through', (await req('/api/push/subscription', { sid: sids[2], method: 'POST', json: {} })).status === 400)
+
+  // Admin follows GitHub's immutable id (ADMIN_GITHUB_IDS), never the login.
+  const addUser = (id: number, githubId: number, login: string) => {
+    database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, githubId, login, encrypt('none'), now, now)
+    sids[id] = randomBytes(24).toString('hex')
+    database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sids[id]), id, now, now + 86400_000)
+  }
+  addUser(3, 999999, 'configured-owner')
+  addUser(4, 777, 'vleeuwenmenno')
+  check('admin: a login named like the old default owner, with another github id, is refused (403)', (await req('/api/admin/stats', { sid: sids[4], held: '4' })).status === 403)
+  check('admin: the configured github id is admin', (await req('/api/admin/stats', { sid: sids[3], held: '3' })).status === 200)
+  database().prepare("UPDATE users SET login = 'renamed-owner' WHERE id = 3").run()
+  check('admin: and stays admin after its login is renamed', (await req('/api/admin/stats', { sid: sids[3], held: '3' })).status === 200)
+  database().prepare("UPDATE users SET login = 'vleeuwenmenno' WHERE id = 3").run()
+  database().prepare("UPDATE users SET login = 'someone-new' WHERE id = 4").run()
+  check('admin: a login rename never changes who is admin', (await req('/api/admin/stats', { sid: sids[4], held: '4' })).status === 403)
+
+  // Sign-in scopes: a link can't pick them; the signed-in account's POST is used once, by that account.
+  const login = (opts: { sid?: string; cookie?: string; query?: string } = {}) =>
+    realFetch(`${server.origin}/api/auth/github/login${opts.query ?? ''}`, { redirect: 'manual', headers: { Cookie: [opts.sid ? `mvlos_sid=${opts.sid}` : '', opts.cookie ?? ''].filter(Boolean).join('; ') } })
+  const scopeOf = (r: Response) => new URL(r.headers.get('location')!).searchParams.get('scope')
+  let l = await login({ query: '?repo=1' })
+  check('scope: an anonymous login?repo=1 asks for read:user only', scopeOf(l) === 'read:user')
+  check('scope: and leaves no repo cookie behind', !l.headers.getSetCookie().some((c) => /mvlos_gh_(repo|scope)=[^;]/.test(c)))
+  l = await login({ sid: sids[2], query: '?repo=1' })
+  check('scope: even a signed-in login?repo=1 is ignored', scopeOf(l) === 'read:user')
+  const post = (sid: string, held: string, json: unknown = { repo: true }) => req('/api/auth/github/scope', { sid, held, method: 'POST', json })
+  check('scope: the POST needs the account header (409)', (await req('/api/auth/github/scope', { sid: sids[2], method: 'POST', json: { repo: true } })).status === 409)
+  check('scope: and a session (401)', (await req('/api/auth/github/scope', { held: 'visitor', method: 'POST', json: { repo: true } })).status === 401)
+  check('scope: and a boolean (400)', (await post(sids[2], '2', { repo: 'yes' })).status === 400)
+  const chosen = await post(sids[2], '2')
+  const scopeCookie = chosen.headers.getSetCookie().find((c) => c.startsWith('mvlos_gh_scope='))!
+  check('scope: the POST sets a short-lived HttpOnly cookie', chosen.status === 200 && /HttpOnly/.test(scopeCookie) && /Max-Age=600\b/.test(scopeCookie) && /Path=\/api\/auth/.test(scopeCookie))
+  const pair = scopeCookie.split(';')[0]
+  l = await login({ sid: sids[2], cookie: pair })
+  check('scope: the same account’s next login asks for repo', scopeOf(l)?.includes('repo') === true)
+  check('scope: and clears the cookie (one time)', l.headers.getSetCookie().some((c) => /^mvlos_gh_scope=;.*Max-Age=0/.test(c)))
+  l = await login({ sid: sids[1], cookie: pair })
+  check('scope: another account can’t inherit it', scopeOf(l) === 'read:user' && l.headers.getSetCookie().some((c) => /^mvlos_gh_scope=;.*Max-Age=0/.test(c)))
+  l = await login({ cookie: pair })
+  check('scope: nor a visitor', scopeOf(l) === 'read:user')
+  l = await login({ sid: sids[2], cookie: 'mvlos_gh_repo=1' })
+  check('scope: the old sticky cookie is ignored and cleared', scopeOf(l) === 'read:user' && l.headers.getSetCookie().some((c) => /^mvlos_gh_repo=;.*Max-Age=0/.test(c)))
 
   // Push: a subscription belongs to the session that sent it.
   const { liveSubscriptions } = await import('../server/webpush.ts')

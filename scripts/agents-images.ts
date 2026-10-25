@@ -354,7 +354,7 @@ const ollama = createServer((req, res) => {
 })
 const listen = async (s: ReturnType<typeof createServer>) => { await new Promise<void>((r) => s.listen(0, '127.0.0.1', r)); return `http://127.0.0.1:${(s.address() as { port: number }).port}` }
 const comfyUrl = await listen(comfy), ollamaUrl = await listen(ollama)
-const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'image-admin' })
+const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const sessions = [randomBytes(24).toString('hex'), randomBytes(24).toString('hex')]
@@ -646,7 +646,7 @@ try {
   await json('PUT', '/api/agents/images/settings', settings, 1)
   const denied = await api('GET', '/api/agents/images/catalog', undefined, 1)
   assert.equal(denied.status, 400)
-  const admin = { id: 1, admin: true, login: 'image-admin', name: null, avatar: null, githubToken: '', githubScopes: [] }
+  const admin = { id: 1, githubId: 1, admin: true, login: 'image-admin', name: null, avatar: null, githubToken: '', githubScopes: [] }
   await assert.rejects(generateImage({ ...admin, id: 2 }, t.id, { prompt: 'test' }, new AbortController().signal), /No such thread/)
   assert.throws(() => saveImageSettings(admin, { url: 'file:///etc/passwd' }))
   assert.throws(() => saveImageSettings(admin, { url: 'https://user:password@example.com' }))

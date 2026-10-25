@@ -970,8 +970,8 @@ Trash goes in the trash.
 
 Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
 (default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
-"Sign-up is closed") dialog instead; existing accounts and admins can always sign in. Logins in
-`ADMIN_USERS` (default `vleeuwenmenno`) are admins: Settings → Users lists the accounts (counts and
+"Sign-up is closed") dialog instead; existing accounts and admins can always sign in. GitHub accounts whose numeric id is in
+`ADMIN_GITHUB_IDS` (comma-separated, default `46482143`) are admins (the id never changes, a login can be renamed and taken by someone else; the old `ADMIN_USERS` is retired and grants nothing): Settings → Users lists the accounts (counts and
 sizes only, never their contents), bans, signs out and deletes them, and opens or closes sign-up.
 Keys set on the server (`OLLAMA_API_KEY`, `UPDOWN_API_KEY`, `OPENAI_API_KEY`) are only used for admins; everyone
 else saves their own in Settings → Integrations.
@@ -1000,12 +1000,14 @@ Setup:
 1. Create a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with callback
    URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
    `http://localhost:5173/api/auth/github/callback`.
-2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_USERS`
-   (comma-separated logins), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
+2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_GITHUB_IDS`
+   (comma-separated numeric GitHub ids; find yours at `https://api.github.com/users/<login>`), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
    address, e.g. `https://mennovanleeuwen.nl`; set it in production, since without it the server
    takes `Host` and `X-Forwarded-*` from each request, and logs a warning at startup), `SESSION_SECRET` (otherwise a random key is generated once into
    `DATA_DIR/secret.key`), `GITHUB_SCOPES` (what "Allow private" in Settings → Code hosts asks
-   for, default `read:user repo read:org`; sign-in itself only asks for `read:user`).
+   for, default `read:user repo read:org`; sign-in itself only asks for `read:user`). Which scopes a sign-in asks for can't be set from a link: Settings
+   makes a same-origin POST to `/api/auth/github/scope`, which sets a one-time, sealed, HttpOnly cookie (10 minutes, tied to that
+   account) used by the next `/api/auth/github/login` and cleared by it; `?repo=` on the login URL is ignored.
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
@@ -4943,7 +4945,7 @@ seed are never asked for there. The players chart also shows who was on in each 
 recorded visits): a mark on top of bars where someone joined, and their names, heads and join and
 leave times in the tooltip (tap a bar on a touch screen).
 
-Admins (`ADMIN_USERS`) also get a **Server console** in the Minecraft server window: say something
+Admins (`ADMIN_GITHUB_IDS`) also get a **Server console** in the Minecraft server window: say something
 in chat, message or kick a player from *On now*, list the whitelist and add or remove names, and
 run any command with its output in a scrollback (↑ for earlier ones). It goes through
 `POST /api/minecraft/rcon`, which only answers signed-in admins (everyone else gets 403, and

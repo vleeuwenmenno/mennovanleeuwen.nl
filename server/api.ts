@@ -15,7 +15,7 @@ import { fxRates } from './fx.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
-import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
+import { accountMismatch, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
@@ -144,6 +144,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
     }
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
+    // Settings → Code hosts: whether the next sign-in asks for private repositories (server/auth.ts).
+    if (method === 'POST' && path === '/api/auth/github/scope') return chooseRepoScope(req, res, await readJson(req, 256)), true
     // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
     if (method === 'DELETE' && path === '/api/me') {
       await deleteUser(requireUser(req).id)

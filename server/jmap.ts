@@ -997,8 +997,8 @@ function stopLive(id: number) {
 
 /** An account that may sign in, enough of it for the requests made on its behalf (egress checks who is an admin). */
 function userById(id: number): User | null {
-  const row = database().prepare('SELECT id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(id) as { id: number; login: string; name: string | null; avatar: string | null } | undefined
-  return row ? { id: row.id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.login) } : null
+  const row = database().prepare('SELECT id, github_id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(id) as { id: number; github_id: number; login: string; name: string | null; avatar: string | null } | undefined
+  return row ? { id: row.id, githubId: row.github_id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.github_id) } : null
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms).unref())
