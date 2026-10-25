@@ -83,10 +83,11 @@ globalThis.fetch = async (input, init) => {
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const { handleApi } = await import('../server/api.ts')
 const { accounts } = await import('../server/auth.ts')
-const { addMail, removeMail, mailAccount, mailMeta, plainMessages } = await import('../server/jmap.ts')
+const { addMail, removeMail, mailAccount, mailMeta, plainMessages, mailWatch } = await import('../server/jmap.ts')
 const { ban, deleteUser } = await import('../server/users.ts')
 const { sweep, liveCount } = await import('../server/liveSessions.ts')
 const { signJwt } = await import('../server/office.ts')
+const { listEntries } = await import('../server/notifier.ts')
 const active = new Set<Promise<unknown>>()
 const api = createServer((req, res) => {
   const work = handleApi(req, res).then((done) => { if (!done) res.writeHead(404).end() })
@@ -156,6 +157,24 @@ async function restartCallback(ticket: string) {
 }
 const only = process.env.REVOCATION_CASE
 try {
+  if (!only || only === 'notifications') {
+    const live = await startMockJmap({ token: 'live-token' })
+    allowed.add(live.origin)
+    const a = account()
+    const info = await addMail(a.user(), { url: live.sessionUrl, token: live.token })
+    try {
+      const g = hold((u) => u.origin === live.origin && u.pathname === '/jmap/eventsource/')
+      await mailWatch(); await arrived(g); release(g)
+      // Keep the mock's internal lookup IDs; its Email/get objects carry maximum-length JMAP IDs.
+      // Both deliveries run synchronously before the watcher can process either state event.
+      const first = live.deliver({ subject: 'long-message-one' }); first.id = 'A'.repeat(254) + 'B'
+      const second = live.deliver({ subject: 'long-message-two' }); second.id = 'A'.repeat(254) + 'C'
+      const until = Date.now() + 5000
+      while (listEntries(a.user()).filter((e) => e.source === 'mail.new').length < 2 && Date.now() < until) await new Promise((r) => setTimeout(r, 10))
+      const entries = listEntries(a.user()).filter((e) => e.source === 'mail.new')
+      check('notifications: distinct 255-character IDs both notify', entries.length === 2 && entries.some((e) => e.body?.includes('long-message-one')) && entries.some((e) => e.body?.includes('long-message-two')))
+    } finally { removeMail(a.user(), info.id); await live.close() }
+  }
   if (!only || only === 'cache') {
     // The exact ID-reuse exploit: discovery A finishes after unlink and after B is inserted.
     for (const sameOwner of [false, true]) {

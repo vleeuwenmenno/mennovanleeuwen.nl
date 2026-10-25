@@ -1165,7 +1165,7 @@ async function announceInner(acc: Linked, ids: string[]) {
   const cutoff = Date.now() - 2 * 864e5
   const fresh = (r.get('g', 'Email/get').list as Json[])
     .filter((e) => inbox && e.mailboxIds?.[inbox] && !e.keywords?.$seen && !e.keywords?.$draft && Date.parse(e.receivedAt) > cutoff)
-    .filter((e) => (assertMail(acc), claimOnce(acc.user, `mail:${acc.key}:${e.id}`)))
+    .filter((e) => (assertMail(acc), claimOnce(acc.user, `mail:${sha256(JSON.stringify([acc.key, e.id]))}`)))
   assertMail(acc)
   if (!fresh.length) return
   const who = (e: Json) => addresses(e.from)[0]?.name || addresses(e.from)[0]?.email || 'Someone'

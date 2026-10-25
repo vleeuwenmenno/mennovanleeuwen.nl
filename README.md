@@ -1383,6 +1383,8 @@ revocation aborts pending provider requests and delivery before any further priv
 Mail sessions, mailbox/people caches, push lines and pollers use a persisted per-link identity plus
 the owner and provider credential record, so a deleted/reused account row cannot inherit another
 account's endpoints or private data. Same-account token replacement also invalidates held work.
+Notification deduplication hashes the complete link/message identity, keeping distinct long
+JMAP message IDs separate.
 `pnpm check:mail-office-revocation` covers these races against local providers.
 Quoted text, in HTML and plain text alike, is folded
 away (or open, by setting). Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
