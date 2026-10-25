@@ -1679,8 +1679,12 @@ come from patterns in [`src/data/agentModelNames.ts`](src/data/agentModelNames.t
 is DeepSeek's "DeepSeek V4.1 Flash" with `1017`, `glm-5.3-flash` Z.ai's "GLM 5.3 Flash", `kimi-*`
 Moonshot AI, `minimax-*` MiniMax, `mistral-*`/`devstral-*` Mistral, `nemotron-*` NVIDIA, `gemma*`
 Google, `gpt-oss` and `gpt-*` OpenAI, `qwen*` Alibaba, `llama*` Meta; anything else is *Other*
-under its raw id. Makers are drawn as letter marks in the text colour, not logos. Stars are kept
-with the account (the synced agents settings' `favoriteModels`), and Ctrl+1…9 picks the first nine
+under its raw id. Makers are drawn as letter marks in the text colour, not logos. Stars follow the account
+across devices and tabs, as a set of their own merged model by model
+([`src/data/agentFavourites.ts`](src/data/agentFavourites.ts), key `agents:favourites`): stars and
+unstars made on two devices at once are both kept, and an older tab saving the agents settings no
+longer wipes them (the settings' old `favoriteModels` list is moved over once; `pnpm
+check:agents-favourites` covers it). Ctrl+1…9 picks the first nine
 favourites while the picker or the composer has focus (Alt+1…9 stays the workspaces'). Arrow keys
 and Enter pick from the list, Esc closes it. The picker opens on ★ Favourites when there are any
 (else All models). The closed pill shows the full name and tag when the composer's bottom row has

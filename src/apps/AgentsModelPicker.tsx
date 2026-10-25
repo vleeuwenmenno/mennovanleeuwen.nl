@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { agentSettings, setAgentSettings, tokenCount, useAgentSettings, type ModelInfo } from '../data/agents'
+import { favouriteNames, toggleFavourite, useFavouriteNames } from '../data/agentFavourites'
+import { tokenCount, type ModelInfo } from '../data/agents'
 import { MAKERS, makerOf, modelMatch, modelName, PROVIDER_NAMES, type MakerId, type ModelName } from '../data/agentModelNames'
 import { useIsMobile } from '../os/useIsMobile'
 import './AgentsModelPicker.css'
@@ -8,7 +9,7 @@ import './AgentsModelPicker.css'
 // The Agents composer's model picker: a rail of makers on the left (favourites first), a search
 // box, and the models as rows with their pretty name (src/data/agentModelNames.ts), the provider
 // under it (Ollama Cloud, ChatGPT, OpenAI API), what they can do and a star. Starred models are
-// synced with the account (the agents settings' favoriteModels); Ctrl+1…9 picks the first nine
+// synced with the account (src/data/agentFavourites.ts); Ctrl+1…9 picks the first nine
 // while the picker or the composer has focus (Alt+1…9 stays the workspaces'). On a phone it is a
 // sheet from the bottom, and the rail a row of chips.
 
@@ -23,7 +24,7 @@ export function namedModels(models: ModelInfo[]): Row[] {
 }
 
 /** The favourites that are offered now, in the order they were starred: Ctrl+1…9 picks these. */
-export function favouriteModels(models: ModelInfo[], favs = agentSettings().favoriteModels): ModelInfo[] {
+export function favouriteModels(models: ModelInfo[], favs = favouriteNames()): ModelInfo[] {
   return favs.flatMap((f) => models.filter((m) => m.name === f))
 }
 
@@ -32,11 +33,6 @@ export function favouriteKey(e: { ctrlKey: boolean; altKey: boolean; metaKey: bo
   if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return null
   const d = /^Digit([1-9])$/.exec(e.code)
   return d ? Number(d[1]) - 1 : null
-}
-
-const toggleFavourite = (name: string) => {
-  const favs = agentSettings().favoriteModels
-  setAgentSettings({ favoriteModels: favs.includes(name) ? favs.filter((f) => f !== name) : [...favs, name] })
 }
 
 /** A maker's letter mark, drawn in the text colour (no logos). */
@@ -90,8 +86,7 @@ type Props = {
 
 export function ModelPicker({ models, value, usual, onPick, onClose, status, anchor }: Props) {
   const mobile = useIsMobile()
-  const settings = useAgentSettings()
-  const favs = settings.favoriteModels
+  const favs = useFavouriteNames()
   const rows = useMemo(() => namedModels(models), [models])
   const favRows = useMemo(() => favs.flatMap((f) => rows.filter((r) => r.info.name === f)), [favs, rows])
   const makers = useMemo(() => MAKERS.filter((m) => rows.some((r) => r.n.maker === m.id)), [rows])
