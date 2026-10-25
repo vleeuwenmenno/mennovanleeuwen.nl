@@ -525,7 +525,10 @@ function inheritedRefinementInput(user: User, id: string, input: ImageInput): Im
   }
   if (!inherited && (typeof input.prompt !== 'string' || !input.prompt.trim())) throw new HttpError(409, 'This source has no recorded diffusion settings. Supply a prompt and configure compatible image components before refining.')
   const keys = ['preset', 'model', 'clip', 'vae', 'checkpoint_vae', 'seed', 'loras', 'prompt', 'negative_prompt', 'steps', 'cfg', 'sampler', 'scheduler', 'clip_skip'] as const
-  return { ...Object.fromEntries(inherited ? keys.filter(k => inherited[k] !== undefined).map(k => [k, inherited![k]]) : []), ...input, denoise: input.denoise ?? 0.2 }
+  const out: ImageInput = { ...Object.fromEntries(inherited ? keys.filter(k => inherited[k] !== undefined).map(k => [k, inherited![k]]) : []), ...input, denoise: input.denoise ?? 0.2 }
+  // A checkpoint's custom VAE does not carry over to a refinement that switches to a diffusion workflow.
+  if (input.checkpoint_vae === undefined && PRESETS.includes(out.preset as Preset) && imagePresetSpec(out.preset as Preset).clipType) delete out.checkpoint_vae
+  return out
 }
 
 async function validateRefinementCapabilities(user: User, settings: ImageSettings, graph: ImageGraph, catalog: Awaited<ReturnType<typeof imageCatalog>>, signal: AbortSignal, source?: ImageSource) {
