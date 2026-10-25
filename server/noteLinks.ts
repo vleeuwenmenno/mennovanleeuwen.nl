@@ -1,4 +1,5 @@
 import type { User } from './auth.ts'
+import { requirePrivateRequest } from './privateRequest.ts'
 import { assertCaldavLink, caldavLinkVersion, caldavByUid, clearCaldavCache, getCaldavEvent, listCaldav, markCaldavNote } from './caldav.ts'
 import { allCalendars, allEvents, decodeRef, encodeRef, hiddenCalendars } from './calendars.ts'
 import { assertGoogleLink, clearGoogleCache, googleByUid, googleEventInfo, googleLinkGeneration, markGoogleNote, type CalendarEvent, type GoogleSnapshot } from './google.ts'
@@ -191,6 +192,7 @@ export const readNotes = (user: User): NoteRow[] => {
 
 /** Changes the notes on the server; open pages fetch them again, and merge them in by id. */
 export function writeNotes(user: User, change: (all: NoteRow[]) => NoteRow[]) {
+  requirePrivateRequest(user)
   writeState(user, 'notes', { value: change(readNotes(user)) })
   tellPages(user.id, 'state', { key: 'notes' })
 }

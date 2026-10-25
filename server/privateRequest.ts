@@ -18,10 +18,16 @@ type Scope = {
   retain: () => () => void
 }
 const requests = new AsyncLocalStorage<Scope>()
-export const privateRequestAuthority = (): object | undefined => requests.getStore()
-export const withoutPrivateRequest = <T>(work: () => T): T => requests.exit(work)
+const providerGuards = new AsyncLocalStorage<(() => void)[]>()
+/** Preserve prepared provider authority across approval and every await in execution. */
+export function withProviderGuard<T>(check: () => void, work: () => T): T {
+  return providerGuards.run([...(providerGuards.getStore() ?? []), check], work)
+}
+export const privateRequestAuthority = (): object | undefined => requests.getStore() ?? providerGuards.getStore()
+export const withoutPrivateRequest = <T>(work: () => T): T => requests.exit(() => providerGuards.exit(work))
 export const privateRequestActive = (req: IncomingMessage) => requests.getStore()?.req === req
 export function requirePrivateRequest(user?: Pick<User, 'id'>) {
+  for (const check of providerGuards.getStore() ?? []) check()
   const scope = requests.getStore()
   if (!scope) return // autonomous provider jobs have no initiating HTTP session
   if (user && scope.userId !== user.id) throw new HttpError(401, 'Not signed in')

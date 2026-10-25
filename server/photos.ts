@@ -1224,7 +1224,7 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   const user = requireUser(req)
   const seafile = url.pathname === '/api/photos/zip' ? zips.get(url.searchParams.get('t') ?? '')?.source === 'seafile' : url.pathname !== '/api/integrations/immich' && !url.pathname.includes('/immich/')
   const run = () => handlePhotosRequest(req, res, url, method)
-  if (url.pathname !== '/api/integrations/immich' && !seafile) bindImmichRequest(user)
+  if (url.pathname !== '/api/integrations/immich' && (!seafile || url.pathname === '/api/photos/status' || url.pathname === '/api/photos/sources')) bindImmichRequest(user)
   return seafile ? withSeafileLink(user, () => { bindSeafileRequest(user); return run() }) : run()
 }
 

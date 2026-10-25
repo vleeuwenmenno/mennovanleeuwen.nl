@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { User } from './auth.ts'
-import { calendarsOf, eventDay, eventId, refOf, whenText, type CallSummary, type Prepared } from './agentCalendar.ts'
+import { protectPreparedCalendar, calendarsOf, eventDay, eventId, refOf, whenText, type CallSummary, type Prepared } from './agentCalendar.ts'
 import { changeLinks, eventInfo, findLinked, liveNote, linkTo, markEvent, readNotes, writeNotes, type EventInfo, type NoteRow } from './noteLinks.ts'
 import { assertCaldavLink, caldavLinkVersion } from './caldav.ts'
 import { assertGoogleLink, googleLinkGeneration } from './google.ts'
@@ -88,7 +88,7 @@ export async function prepareNoteLinkCall(user: User, name: string, args: Record
   const prepared = await prepareNoteLinkCallInner(user, name, args, zone)
   assertGoogleLink(user, google)
   assertCaldavLink(user, caldav)
-  return prepared
+  return protectPreparedCalendar(user, google, caldav, prepared)
 }
 
 async function prepareNoteLinkCallInner(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared> {

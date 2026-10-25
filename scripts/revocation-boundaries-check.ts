@@ -157,7 +157,7 @@ function account() {
     const r = database().prepare("INSERT INTO photos (user_id, repo, path, kind, size, mtime, file_id, taken_at, taken_src, lat, lon, thumb) VALUES (?, ?, '/private-photo.jpg', 'image', ?, ?, 'file-version', ?, 'exif', 52.37, 4.89, ?)").run(id, REPO, secretBytes.length, Date.now(), Date.now(), thumb ? secretBytes : null)
     return String(r.lastInsertRowid)
   }
-  const immich = () => database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?)').run(id, 'immich', encrypt(JSON.stringify({ url: provider, key: 'mock-key', name: 'Mock', email: 'mock@example.test', version: '3.0.0' })), now)
+  const immich = () => database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?)').run(id, 'immich', encrypt(JSON.stringify({ url: provider, key: 'mock-key', name: 'private-immich-name', email: 'private-email@example.test', version: '3.0.0' })), now)
   return { id, sid, call, user, google, caldav, seafile, seedPhoto, immich }
 }
 async function arrived(g: NonNullable<typeof gate>) {
@@ -216,7 +216,7 @@ async function mediaChange(a: Account, kind: Change, media: string) {
     await a.call('/api/integrations/immich', kind === 'disconnect' ? 'DELETE' : 'POST', kind === 'relink' ? { url: provider, key: 'mock-key-B' } : undefined)
   } else await change(a, kind)
 }
-const privateData = (bytes: Buffer) => bytes.includes(secretBytes) || /private-photo|private-library|private-title|private-location|52\.37/.test(bytes.toString())
+const privateData = (bytes: Buffer) => bytes.includes(secretBytes) || /private-photo|private-library|private-title|private-location|private-immich|private-email|52\.37/.test(bytes.toString())
 const settle = <T>(p: Promise<T>) => p.then((value) => ({ value, error: null as unknown }), (error: unknown) => ({ value: null, error }))
 const mutationLog = () => providerLog.filter((r) => /batch-delete|batch-move|revert-dirents|set-password|\/api\/assets$|\/albums\//.test(r.path) && !['GET', 'HEAD'].includes(r.method))
 function seedEvent(lead = 11) {
@@ -244,6 +244,14 @@ try {
         if (!valid && g.signals.length) check(`media/${media}/${method}/${kind}: upstream aborted`, g.signals.every((s) => s.aborted))
       }
     }
+  }
+  for (const kind of ['disconnect', 'relink'] as Change[]) {
+    const a = account(); await a.seafile(); a.seedPhoto(); a.immich()
+    const g = hold((u) => u.pathname === '/api/v2.1/repos/')
+    const pending = a.call('/api/photos/status'); await arrived(g)
+    await mediaChange(a, kind, 'im-original'); release(g)
+    const res = await pending; const body = await collect(res); await drain()
+    check(`status/Immich/${kind}: no stale account metadata while Seafile waits`, res.status >= 400 && !privateData(body.bytes))
   }
   // After headers and a harmless prefix have been delivered: keep partial bytes on errors.
   for (const media of ['sf-stream', 'im-original', 'im-video']) {
@@ -294,6 +302,19 @@ try {
     else await a.call('/api/caldav', 'POST', { url: mutation === 'add' ? `${dav.origin}/dav/` : dav.origin, username: USER, password: PASSWORD })
     release(g); const result = await pending
     check(`CalDAV/GET-body/${tool}/${mutation}: no private prepared summary`, result.error !== null && result.value === null)
+    await deleteUser(a.id)
+  }
+  for (const tool of ['make_meeting_note', 'calendar_delete_event', 'notes_for_event']) for (const mutation of ['none', 'remove', 'relink', 'add']) {
+    const a = account(); const at = seedEvent(); const cal = await a.caldav(); const user = a.user()
+    const events = await allEvents(user, null, { from: new Date(at - 864e5), to: new Date(at + 864e5) })
+    const ref = events.events.find((e) => e.uid === 'private-event')!.ref!
+    const prepared = tool === 'calendar_delete_event' ? await prepareCalendarCall(user, tool, { event_id: eventId(ref) }, 'UTC') : await prepareNoteLinkCall(user, tool, { event_id: eventId(ref) }, 'UTC')
+    if (mutation === 'remove') removeCaldav(user, cal)
+    else if (mutation !== 'none') await a.call('/api/caldav', 'POST', { url: mutation === 'add' ? `${dav.origin}/dav/` : dav.origin, username: USER, password: PASSWORD })
+    const before = JSON.stringify(database().prepare('SELECT * FROM state WHERE user_id = ?').all(a.id))
+    const writesBefore = dav.log.filter((l) => /^(PUT|DELETE) /.test(l)).length
+    const result = await settle(prepared.run())
+    check(`approval/${tool}/${mutation}: original provider authority preserved`, mutation === 'none' ? result.error === null && result.value !== null : result.error !== null && result.value === null && before === JSON.stringify(database().prepare('SELECT * FROM state WHERE user_id = ?').all(a.id)) && writesBefore === dav.log.filter((l) => /^(PUT|DELETE) /.test(l)).length)
     await deleteUser(a.id)
   }
   // Competing sessions must not inherit the canceled request's in-flight promise.

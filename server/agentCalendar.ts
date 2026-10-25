@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { User } from './auth.ts'
+import { withProviderGuard } from './privateRequest.ts'
 import { assertCaldavLink, caldavLinkVersion, listCaldav } from './caldav.ts'
 import { allCalendars, allEvents, cleanInput, createEvent, decodeRef, deleteEvent, encodeRef, getEvent, updateEvent, type AnyCalendar, type EventInput, type EventNow, type Ref } from './calendars.ts'
 import { assertGoogleLink, googleLinkGeneration, googleAccount, MAX_RANGE_DAYS, type GoogleSnapshot } from './google.ts'
@@ -316,13 +317,29 @@ const calendarName = (c: AnyCalendar) => `${c.name} (${c.source})`
  * event as it is, the new times), so a mistake goes back to the model before the user is asked,
  * and the user sees exactly what will happen. Throws what the model should be told.
  */
+/** A prepared action keeps the same provider authority while approval waits and execution runs. */
+export function protectPreparedCalendar(user: User, google: GoogleSnapshot, caldav: number, prepared: Prepared): Prepared {
+  const check = () => {
+    assertGoogleLink(user, google)
+    // Use the raw version here: assertCaldavLink also checks active provider guards.
+    if (caldavLinkVersion(user) !== caldav) throw new Error('Calendar links changed: prepare this action again')
+  }
+  check()
+  return { ...prepared, run: () => withProviderGuard(check, async () => {
+    check()
+    const result = await prepared.run()
+    check()
+    return result
+  }) }
+}
+
 export async function prepareCalendarCall(user: User, name: string, args: Record<string, unknown>, userZone: string): Promise<Prepared> {
   const google = googleLinkGeneration(user)
   const caldav = caldavLinkVersion(user)
   const prepared = await prepareCalendarCallInner(user, name, args, userZone)
   assertGoogleLink(user, google)
   assertCaldavLink(user, caldav)
-  return prepared
+  return protectPreparedCalendar(user, google, caldav, prepared)
 }
 
 async function prepareCalendarCallInner(user: User, name: string, args: Record<string, unknown>, userZone: string): Promise<Prepared> {

@@ -1210,7 +1210,10 @@ UID checks and note backlinks. CalDAV reads also snapshot the linked-account gen
 the first await: adding, replacing or removing a link discards a held aggregate, including completed
 provider parts. That snapshot follows nested note lookups, agent calendar/note tools and reminders.
 Agent preparations also validate the snapshot after reading a full CalDAV event body, before
-returning a private title, location or change summary.
+returning a private title, location or change summary. Prepared actions retain those same snapshots
+through approval and execution, checking before provider calls, local note writes and returned
+results. Reconnecting a calendar requires preparing the action again; approving an old meeting-note
+action cannot write its captured event into notes after revocation.
 `pnpm check:calendar-link-race` and `pnpm check:revocation-boundaries` cover these races.
 
 **Mail** ([`src/apps/mail`](src/apps/mail), [`server/jmap.ts`](server/jmap.ts)) reads and writes mail
@@ -3121,7 +3124,8 @@ authorization cannot cause a later delete, index update or unlock.
 Originals and video from Immich, Seafile thumbnails and original redirects, and Files' raw ranges,
 media and archive streams use the same request lifetime through delivery, including HEAD and 304.
 Session logout, removal, a ban, expiry or revocation aborts upstream and downstream work; Seafile
-or Immich disconnect/relink also cuts that link's reads. Headers and every emitted chunk are checked, so an
+or Immich disconnect/relink also cuts that link's reads. The combined Photos status response is
+also bound to both provider links while it waits. Headers and every emitted chunk are checked, so an
 aborted body cannot leak a private tail after revocation.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
