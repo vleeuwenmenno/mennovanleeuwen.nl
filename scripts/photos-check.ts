@@ -383,7 +383,7 @@ async function seafileChecks() {
   const canonId = idOf(PHOTOS, '/canon.jpg')
   const thumbsAsked = () => sf.log.filter((l) => l.path.includes('/thumbnail/')).length
   const t1 = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small&v=1`)
-  check(`thumbnail: 200 image/png, ETag, kept by the browser (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')} ${t1.headers.get('cache-control')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png' && !!t1.headers.get('etag') && /max-age=\d{5,}/.test(t1.headers.get('cache-control') ?? '') && t1.bytes[1] === 0x50)
+  check(`thumbnail: 200 image/png, ETag, private revalidation (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')} ${t1.headers.get('cache-control')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png' && !!t1.headers.get('etag') && t1.headers.get('cache-control') === 'private, no-cache' && t1.bytes[1] === 0x50)
   check(`thumbnail: asked Seafile at 256 px (got ${sf.log.findLast((l) => l.path.includes('/thumbnail/'))?.path})`, !!sf.log.findLast((l) => l.path.includes('/thumbnail/'))?.path.includes('size=256'))
   const before = thumbsAsked()
   const t2 = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small&v=1`, { headers: { 'If-None-Match': t1.headers.get('etag')! } })
