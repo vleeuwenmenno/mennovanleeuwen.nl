@@ -318,7 +318,7 @@ storage quota) and serves it at `GET /api/agents/images/<id>` to that account on
 type, `nosniff`, a sandboxing CSP and `private, no-cache` with an ETag (so a copy cached by the
 browser is not shown to whoever uses it after signing out): the browser never asks the other
 site. The same picture again (by address or by its bytes) reuses the kept one, and a page this
-account read for the same query in the last half hour is not read again (the cache is per account). Pictures unused for 90 days that no message or note
+account read for the same query in the last half hour is not read again (the cache is per account and bounded: at most 200 pages and 16 MB, the oldest going first). Pictures unused for 90 days that no message or note
 mentions (in any case, and inside JSON escapes; tool calls and results of the last 90 days count
 too) are pruned (at most every six hours per account, after a new one is kept); reusing a picture
 counts as using it, and so does showing it (marked at most once a day).
@@ -1771,7 +1771,7 @@ come from, and the model (`gpt-image-2` by default):
   server. The tokens stay on the server, encrypted, and are refreshed there (before they expire,
   and once more when the backend refuses one). Pictures come from the ChatGPT Codex backend
   (`chatgpt.com/backend-api/codex`): its `/images/generations` route, or the Responses API with the
-  `image_generation` tool where that route is missing. **Sign out** forgets the tokens.
+  `image_generation` tool where that route is missing. **Sign out** forgets the tokens. A refresh (or a sign-in) still waiting on OpenAI when you sign out, sign in again or the account is removed is dropped: it stores nothing and returns no tokens, so an old account's tokens never replace a newer sign-in.
 
 `gpt_image` makes one of three things:
 - A **picture** (square, landscape or portrait; low, medium or high quality; optionally transparent).

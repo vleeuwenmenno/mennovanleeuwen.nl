@@ -138,7 +138,21 @@ const FLOW_TTL = 15 * 60_000
 onUserGone((id) => {
   flows.delete(id)
   refreshing.delete(id)
+  invalidate(id)
 })
+
+/**
+ * The version of an account's stored ChatGPT credential. It moves on sign-out, a new sign-in and
+ * account removal, so work that started under an older version (a refresh in flight, a sign-in
+ * waiting on OpenAI) can neither store nor hand out its tokens.
+ */
+const credentialVersion = new Map<number, number>()
+const versionOf = (id: number) => credentialVersion.get(id) ?? 0
+function invalidate(id: number) {
+  credentialVersion.set(id, versionOf(id) + 1)
+  refreshing.delete(id)
+}
+const STALE = () => new HttpError(409, 'The ChatGPT sign-in changed while this was running: try again')
 
 const b64url = (b: Buffer) => b.toString('base64url')
 
@@ -226,7 +240,10 @@ async function finishSignIn(user: User, body: { callback?: unknown }) {
   if (!code) throw new HttpError(400, 'That address has no code in it: paste the whole address from the address bar, starting with http://localhost:1455')
   if (query.get('state') !== flow.state) throw new HttpError(400, 'That address belongs to another sign-in: start again')
   flows.delete(user.id)
+  const version = versionOf(user.id)
   const answer = await tokenRequest({ grant_type: 'authorization_code', client_id: CODEX_CLIENT_ID, code, redirect_uri: CODEX_REDIRECT, code_verifier: flow.verifier })
+  if (versionOf(user.id) !== version) throw STALE() // signed out or removed while OpenAI answered
+  invalidate(user.id) // a refresh of the previous account's tokens must not land on this one
   const t = storeTokens(user, answer)
   const s = settings(user)
   if (s.provider === 'off') write(user, SETTINGS, { ...s, provider: 'chatgpt' })
@@ -234,6 +251,7 @@ async function finishSignIn(user: User, body: { callback?: unknown }) {
 }
 
 function signOut(user: User) {
+  invalidate(user.id)
   forget(user, TOKENS)
   flows.delete(user.id)
   const s = settings(user)
@@ -241,21 +259,29 @@ function signOut(user: User) {
 }
 
 /** One refresh at a time per account: two pictures at once must not both spend the refresh token. */
-const refreshing = new Map<number, Promise<Tokens>>()
+const refreshing = new Map<number, { version: number; job: Promise<Tokens> }>()
 async function freshTokens(user: User, force = false): Promise<Tokens> {
   const t = tokens(user)
   if (!t) throw new HttpError(409, 'Sign in with ChatGPT first, in Settings → Agents → Images')
   if (!force && t.expires - Date.now() > 5 * 60_000) return t
+  const version = versionOf(user.id)
   const running = refreshing.get(user.id)
-  if (running) return running
+  if (running && running.version === version) return running.job
   const job = tokenRequest({ client_id: CODEX_CLIENT_ID, grant_type: 'refresh_token', refresh_token: t.refresh, scope: 'openid profile email' })
-    .then((answer) => storeTokens(user, answer, t))
+    .then((answer) => {
+      // Only the credential this refresh started from may be replaced; anything newer wins.
+      if (versionOf(user.id) !== version) throw STALE()
+      return storeTokens(user, answer, t)
+    })
     .catch((e: Error) => {
+      if (versionOf(user.id) !== version) throw STALE()
       if (e instanceof HttpError && e.status === 400) throw new HttpError(409, 'The ChatGPT sign-in has expired: sign in again in Settings → Agents → Images')
       throw e
     })
-    .finally(() => refreshing.delete(user.id))
-  refreshing.set(user.id, job)
+    .finally(() => {
+      if (refreshing.get(user.id)?.job === job) refreshing.delete(user.id)
+    })
+  refreshing.set(user.id, { version, job })
   return job
 }
 
@@ -605,3 +631,6 @@ export async function handleOpenAIApi(req: IncomingMessage, res: ServerResponse,
 
 /** What the chat provider needs from the sign-in and the key, without handing out the stored secrets anywhere else. */
 export const openaiChatAccess = { openaiUrl: OPENAI, codexUrl: CODEX, apiKey, signedIn: (user: User) => !!tokens(user), freshTokens, codexHeaders }
+
+/** The sign-in steps, for the refresh-race check (scripts/agents-chatgpt-refresh.ts) only. */
+export const chatgptSignInForTest = { startSignIn, finishSignIn, signOut }
