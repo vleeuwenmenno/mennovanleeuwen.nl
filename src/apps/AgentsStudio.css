@@ -101,3 +101,5 @@
 
 /* The Studio's entry at the top of the Agents sidebar (Agents.tsx). */
 .agt-studio-link { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 6px; }
+/* Without an Ollama key the Agents window shows the Studio alone (Agents.tsx). */
+.studio-alone { display: flex; flex-direction: column; height: 100%; min-height: 0; }

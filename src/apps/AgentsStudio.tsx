@@ -120,7 +120,7 @@ function ErrorBox({ text, onDismiss }: { text: string; onDismiss?: () => void })
 
 // --- the Studio --------------------------------------------------------------------------------
 
-export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist }: { threads: Thread[]; onBack: () => void; onOpenThread: (id: string | null) => void; onSettings: () => void; assist?: (field: StudioField) => ReactNode }) {
+export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist }: { /** The threads Send to chat offers; null when chat is unavailable (no Ollama key). */ threads: Thread[] | null; onBack: () => void; onOpenThread: (id: string | null) => void; onSettings: () => void; assist?: (field: StudioField) => ReactNode }) {
   const form = studioForm.use()
   const run = useRunner()
   const mobile = useIsMobile()
@@ -188,7 +188,8 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   useEffect(() => {
     if (!recipe || !model) return
     const current = form.recipe
-    if (current && current.model === model && current.preset === form.preset) return
+    // Back on the model the settings are for: nothing to ask any more.
+    if (current && current.model === model && current.preset === form.preset) return setOffer(null)
     // An untouched form takes the new model's settings; an edited one asks first.
     if (!form.edited) studioForm.set((f) => applyRecipe(f, recipe, model))
     else setOffer({ ...recipe, key: recipeKey })
@@ -622,16 +623,16 @@ function AdvancedSection({ form, catalog, lastSeed, recipe, onSet, onRecipe, ass
 
 // --- the result's actions --------------------------------------------------------------------------
 
-function ResultActions({ image, threads, disabled, onUse, onSend, onDialog, onDelete }: { image: StudioImage; threads: Thread[]; disabled: boolean; onUse: () => void; onSend: (thread: string | null) => void; onDialog: (kind: 'refine' | 'inpaint' | 'upscale') => void; onDelete: () => void }) {
+function ResultActions({ image, threads, disabled, onUse, onSend, onDialog, onDelete }: { image: StudioImage; threads: Thread[] | null; disabled: boolean; onUse: () => void; onSend: (thread: string | null) => void; onDialog: (kind: 'refine' | 'inpaint' | 'upscale') => void; onDelete: () => void }) {
   const restorable = !!image.settings && image.settings.operation !== 'upscale' && image.settings.operation !== 'remove'
   const chat = (e: React.MouseEvent<HTMLButtonElement>) => openMenuAt(e.currentTarget, [
     { label: 'New thread', onSelect: () => onSend(null) },
-    ...(threads.length ? [{ separator: true as const }] : []),
-    ...threads.filter((t) => !t.archived).slice(0, 8).map((t) => ({ label: t.title, onSelect: () => onSend(t.id) })),
+    ...(threads?.length ? [{ separator: true as const }] : []),
+    ...(threads ?? []).filter((t) => !t.archived).slice(0, 8).map((t) => ({ label: t.title, onSelect: () => onSend(t.id) })),
   ])
   return <div className="studio-result-actions" role="group" aria-label="Picture actions">
     <button type="button" className="btn btn-small" disabled={!restorable || disabled} title={restorable ? 'Put this picture’s settings back in the form' : 'This picture has no generation settings'} onClick={onUse}>Use these settings</button>
-    <button type="button" className="btn btn-small" disabled={disabled} onClick={chat} aria-haspopup="menu">Send to chat…</button>
+    {threads && <button type="button" className="btn btn-small" disabled={disabled} onClick={chat} aria-haspopup="menu">Send to chat…</button>}
     <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onDialog('refine')}>Refine…</button>
     <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onDialog('inpaint')}>Edit area…</button>
     <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onDialog('upscale')}>Upscale…</button>

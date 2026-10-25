@@ -149,10 +149,8 @@ export function Agents({ win }: { win: WinState }) {
     )
   if (!account.integrations.ollama && studioOnly)
     return (
-      <div className="nb agt is-chat">
-        <section className="nb-main">
-          <ImageStudio threads={[]} onBack={() => setStudioOnly(false)} onOpenThread={() => setStudioOnly(false)} onSettings={() => wm.open('settings', { section: 'agents', t: String(Date.now()) })} />
-        </section>
+      <div className="studio-alone">
+        <ImageStudio threads={null} onBack={() => setStudioOnly(false)} onOpenThread={() => setStudioOnly(false)} onSettings={() => wm.open('settings', { section: 'agents', t: String(Date.now()) })} />
       </div>
     )
   if (!account.integrations.ollama)
