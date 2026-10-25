@@ -83,9 +83,9 @@ type Internal = Synced<unknown> & {
   /** Counts the times the value was replaced from elsewhere (see synced's `epoch`). */
   epoch: () => number
   /** Keeps the unsaved value as it is, on top of the server's version `updatedAt`. */
-  rebase: (updatedAt: number) => void
-  /** Marks the value saved (it already is, on the server). */
-  clean: () => void
+  rebase: (updatedAt: number) => boolean
+  /** Marks the value saved (it already is, on the server); false (nothing written) if another tab's copy is stored. */
+  clean: () => boolean
   reset: () => void
   merge?: (local: unknown, remote: unknown) => unknown
   normalize: (v: unknown) => unknown
@@ -136,6 +136,22 @@ export function synced<T>(
   } = {},
 ): Synced<T> {
   let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
+  /**
+   * The stored copy as this tab last wrote or read it (raw). The writes main didn't have (the
+   * closing mark, a recovered value, marking a value saved without sending it) only go ahead
+   * when the stored copy is still exactly that: another tab's newer copy, whose storage event
+   * may not have arrived yet, is never written over by them (compare-and-set). Otherwise they
+   * do what main does.
+   */
+  let lastRaw: string | null = accountStorage.get(storageKey(key))
+  /** Writes `meta` only if the stored copy is still the one this tab last saw. */
+  const saveIfUnchanged = (): boolean => {
+    if (frozen() || !accountGuard() || accountStorage.get(storageKey(key)) !== lastRaw) return false
+    const raw = JSON.stringify(meta)
+    if (!accountStorage.set(storageKey(key), raw)) return false
+    lastRaw = raw
+    return true
+  }
   /** The server's copy at a version, as last sent or received here (a save of the same is skipped). */
   let known: { base: number; json: string } | null = null
   /** A copy marked saved is the server's at its base. */
@@ -181,7 +197,8 @@ export function synced<T>(
       } catch {
         /* not readable: written over */
       }
-    accountStorage.set(storageKey(key), JSON.stringify(meta))
+    const written = JSON.stringify(meta)
+    if (accountStorage.set(storageKey(key), written)) lastRaw = written
     // Another tab's changes came along: show them, as when they arrive by themselves.
     if (others) {
       emit()
@@ -249,23 +266,33 @@ export function synced<T>(
     closing(out, sent) {
       // Closing again before an earlier mark was settled (back from the back/forward cache):
       // its ids still count, the server may hold a version one of them made.
+      const was = meta
       meta = { ...meta, final: joinFinal(meta.final, { ids: [out, sent] }) }
-      save()
+      if (!saveIfUnchanged()) meta = was
     },
     rebase(updatedAt) {
+      const was = meta
       meta = { value: meta.value, base: updatedAt, dirty: true }
-      save()
+      if (saveIfUnchanged()) return true
+      meta = was
+      return false
     },
     clean() {
+      const was = meta
       meta = { ...meta, dirty: false }
-      save()
+      if (!saveIfUnchanged()) {
+        meta = was
+        return false
+      }
       emitSynced()
+      return true
     },
     reset() {
       known = null
       epoch++
       meta = { value: fallback, base: 0, dirty: false }
       accountStorage.remove(storageKey(key))
+      lastRaw = null
       emit()
     },
     merge: opts.merge as Internal['merge'],
@@ -283,6 +310,7 @@ export function synced<T>(
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
+      lastRaw = accountStorage.get(storageKey(key))
       epoch++
       learn()
       if (e.newValue !== null) opts.onIncoming?.(meta.value)
@@ -386,8 +414,8 @@ async function push(key: string) {
   // The one out now comes back first; this one stays pending and goes after it (see finally).
   if (inFlight.has(key)) return
   // Already the server's copy (a change made and undone, another tab's save): nothing to send.
-  if (s.sameAsServer()) {
-    if (s.meta().dirty) s.clean()
+  // (Unless another tab's copy is stored now and it can't be marked saved: then it is sent, as on main.)
+  if (s.sameAsServer() && (!s.meta().dirty || s.clean())) {
     pending.delete(key)
     return
   }
@@ -434,9 +462,11 @@ function reconcile(s: Internal, remote: Remote | undefined) {
     // was refused for being on top of the version before it. Kept, and saved on top. Stores that
     // merge already keep it.
     if (local.final && local.dirty && !s.merge && remote.writeId !== undefined && local.final.ids.includes(remote.writeId)) {
-      s.rebase(remote.updatedAt)
-      schedulePush(s.key, 0)
-      return
+      // Only if the stored copy is still the one this tab read (else as on main: below).
+      if (s.rebase(remote.updatedAt)) {
+        schedulePush(s.key, 0)
+        return
+      }
     }
     // A copy never saved to the account (base 0) gives way to the account's, if the store says so.
     if (local.dirty && s.merge && !(s.yieldWhenNew && local.base === 0)) {

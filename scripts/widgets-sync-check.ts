@@ -735,6 +735,41 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   await sleep(1500)
   check('newer: after reload C is kept, not overwritten by the older B', s3.get() === 'C' && server.get('r3:newer')!.value === 'C', { local: s3.get(), server: server.get('r3:newer'), meta: meta('r3:newer') })
 
+  // Tab 2 takes A and stores its edit C while tab 1 hasn't heard of it yet; tab 1 closes with A
+  // out: it doesn't write its older B (and a mark) over tab 2's stored C, so C stays everywhere.
+  {
+    const P1 = new Tab()
+    const P2 = new Tab()
+    const n1 = await page(P1)
+    const n2 = await page(P2)
+    const a1 = as(P1, () => n1.synced<string>('r4:cas', ''))
+    const a2 = as(P2, () => n2.synced<string>('r4:cas', ''))
+    as(P1, () => a1.set('v1'))
+    await sleep(1500)
+    slowPut.set('r4:cas', { ms: 2500, fail: 0, late: true })
+    as(P1, () => a1.set('A')) // on the server at 800 ms, answered at 3300 ms
+    await sleep(1000)
+    as(P1, () => a1.set('B')) // tab 2 hears of B
+    held = true // tab 1 (and tab 2) hear nothing of each other from here
+    await as(P2, () => n2.pullAll()) // tab 2 takes A
+    as(P2, () => a2.set('C')) // stored; saved on top of A at ~1800 ms
+    await sleep(1200)
+    fire(P1, 'pagehide')
+    check('cas: closing doesn’t write over another tab’s newer stored copy', meta('r4:cas')?.value === 'C' && !meta('r4:cas')?.final, meta('r4:cas'))
+    gone(P1)
+    flush()
+    await sleep(4000) // tab 2's answer for C comes; it keeps running
+    slowPut.clear()
+    check('cas: tab 2 still has C, and so does the server', a2.get() === 'C' && server.get('r4:cas')!.value === 'C', { local: a2.get(), server: server.get('r4:cas') })
+    gone(P2)
+    const P3 = new Tab()
+    const n3 = await page(P3)
+    const a3 = as(P3, () => n3.synced<string>('r4:cas', ''))
+    await n3.pullAll()
+    await sleep(1500)
+    check('cas: after reload C is kept', a3.get() === 'C' && server.get('r4:cas')!.value === 'C', { local: a3.get(), server: server.get('r4:cas') })
+  }
+
   // A save sent before the value was replaced by another tab's never goes into that value's mark.
   const T6 = new Tab()
   const T7 = new Tab()
