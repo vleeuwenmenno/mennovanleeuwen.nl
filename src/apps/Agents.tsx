@@ -577,7 +577,7 @@ function AgentsApp({ win }: { win: WinState }) {
   )
 
   return (
-    <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} style={rail || narrow ? undefined : ({ '--agt-side-w': `${sideWidth}px` } as React.CSSProperties)} onContextMenu={rootMenu}>
+    <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} style={rail || narrow ? undefined : ({ '--agt-side-w': `min(${sideWidth}px, 50%)` } as React.CSSProperties)} onContextMenu={rootMenu}>
       {rail ? (
         <nav className="agt-rail" aria-label="Agents" onContextMenu={sideMenu}>
           <button className="agt-icon" onClick={() => fold(false)} title="Show the sidebar" aria-label="Show the sidebar">
