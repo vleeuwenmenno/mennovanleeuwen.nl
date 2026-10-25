@@ -1,4 +1,5 @@
 import { snapReserve } from './dockPrefs'
+import { viewH, viewW } from './uiScale'
 import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
@@ -61,7 +62,7 @@ const GAP = 10 // Omarchy's gaps_out; windows next to each other get the same ga
 const BAR = 28
 
 /** Where a snapped window goes, for the current viewport. */
-export function snapRect(zone: SnapZone, vw = window.innerWidth, vh = window.innerHeight): Geometry {
+export function snapRect(zone: SnapZone, vw = viewW(), vh = viewH()): Geometry {
   const x0 = GAP
   const y0 = BAR + GAP
   const w = vw - 2 * GAP
@@ -112,7 +113,7 @@ type Action =
   | { type: 'setGeometry'; pid: number; geometry: GeometryPatch }
   | { type: 'setProps'; pid: number; props: WinState['props'] }
   | { type: 'restack'; pids: number[] }
-  | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
+  | { type: 'viewport'; width: number; height: number; phone: boolean; layout: { app: AppId; geometry: Geometry }[] }
   | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[]; ws?: number }
   | { type: 'restore'; windows: SavedWindow[] }
   | { type: 'workspace'; n: number }
@@ -395,7 +396,7 @@ function apply(state: State, action: Action): State {
       const { width, height } = action
       return {
         ...state,
-        phone: width < 720,
+        phone: action.phone,
         windows: state.windows.map((w) => {
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
@@ -486,8 +487,8 @@ const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round
 function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
   if (phone || p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
   if (p.vw < 720) return place(i)
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+  const vw = viewW()
+  const vh = viewH()
   const along = (v: number, size: number, from: number, to: number, lo: number) => {
     if (from === to) return v
     const was = from - size - lo - NOTE_MARGIN
@@ -511,7 +512,7 @@ function showWidgets(state: State, list: WidgetShown[]): State {
   let changed = false
   let z = state.topZ
   let pid = state.nextPid
-  const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, window.innerWidth, window.innerHeight, p === undefined ? undefined : drawnHeights.get(p)))
+  const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, viewW(), viewH(), p === undefined ? undefined : drawnHeights.get(p)))
   const windows: WinState[] = []
   for (const w of state.windows) {
     if (w.app !== 'widget') {
@@ -801,8 +802,8 @@ export function WindowManagerProvider({
     lastWidgets.current = now
     if (!before) return
     const all = widgetPlaces.get()
-    const vw = window.innerWidth
-    const vh = window.innerHeight
+    const vw = viewW()
+    const vh = viewH()
     const put: Record<string, WidgetPlace> = {}
     const remove: string[] = []
     for (const [id, w] of now) {
@@ -864,7 +865,7 @@ export function WindowManagerProvider({
     let t: ReturnType<typeof setTimeout>
     const onResize = () => {
       clearTimeout(t)
-      t = setTimeout(() => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }), 120)
+      t = setTimeout(() => dispatch({ type: 'viewport', width: viewW(), height: viewH(), phone: isPhone(), layout: relayout() }), 120)
     }
     // The first layout can run before the viewport has its final size (embedded previews, slow paints).
     onResize()
@@ -905,7 +906,7 @@ export function WindowManagerProvider({
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
       setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
       restack: (pids) => dispatch({ type: 'restack', pids }),
-      refit: () => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }),
+      refit: () => dispatch({ type: 'viewport', width: viewW(), height: viewH(), phone: isPhone(), layout: relayout() }),
       workspace: state.ws,
       setWorkspace: (n) => {
         // Another tab has it, and a page can't bring another browser tab forward: say so instead.

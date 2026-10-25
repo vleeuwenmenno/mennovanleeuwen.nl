@@ -153,7 +153,7 @@ function GameWindow({ win, game }: { win: WinState; game: (typeof GAMES)[number]
   if (!session) return null
   const Game = game.component
   return (
-    <div className={`games-play ${full.on ? 'is-page-full' : ''} ${bar.shown ? 'is-bar' : ''}`}>
+    <div className={`games-play ui-native ${full.on ? 'is-page-full' : ''} ${bar.shown ? 'is-bar' : ''}`}>
       {/* The bar hides itself to leave the game the whole window: a mouse brings it back at the
           top edge, a finger with the handle hanging under it. */}
       <div className="games-hot" onPointerEnter={(e) => e.pointerType === 'mouse' && bar.show()} aria-hidden />

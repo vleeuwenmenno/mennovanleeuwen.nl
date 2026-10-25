@@ -8,6 +8,7 @@ import { isSf, libraryName, parseSf } from '../data/seafile'
 import { folderOf, nameOf } from '../data/media'
 import { useWM, type WinState } from '../os/wm'
 import { prettyPath } from '../terminal/vfs'
+import { toUi, uiRect } from '../os/uiScale'
 
 // PDF, after macOS Preview's PDF view, on Mozilla's pdf.js (loaded when a PDF opens): the pages
 // one under the other in their own scrolling area, drawn as they come into view, with text you
@@ -174,8 +175,8 @@ export function PdfViewer({ win }: { win: WinState }) {
     const onWheel = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
       e.preventDefault()
-      const r = el.getBoundingClientRect()
-      zoomTo(scale * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0025)), e.clientX - r.left, e.clientY - r.top)
+      const r = uiRect(el)
+      zoomTo(scale * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0025)), toUi(e.clientX) - r.left, toUi(e.clientY) - r.top)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)

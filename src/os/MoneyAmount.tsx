@@ -4,6 +4,7 @@ import type { MoneyHit } from '../data/money'
 import { useHomeCurrency } from '../data/currency'
 import { CURRENCY_SIGN, cachedRates, formatCurrency, formatNumber, loadRates, rateSource, type Rates } from './smartcalc'
 import { openSpotlight } from './overlays'
+import { toUi, uiRect } from './uiScale'
 
 // An amount of money in an Agents reply (found by src/data/money.ts, drawn by MarkdownPreview with
 // `money`): a dotted underline that opens what it is in other currencies. The exchange rates are
@@ -87,13 +88,14 @@ function MoneyPopover({ anchor, hit, onClose }: { anchor: RefObject<HTMLButtonEl
     const a = anchor.current
     const el = box.current
     if (!a || !el) return
-    const r = a.getBoundingClientRect()
+    // In page pixels (the UI scale, uiScale.ts), as the box is placed.
+    const r = uiRect(a)
     // Scrolled out of its window: nothing to point at any more.
     const vv = window.visualViewport
-    const top = vv?.offsetTop ?? 0
-    const left = vv?.offsetLeft ?? 0
-    const vw = vv?.width ?? window.innerWidth
-    const vh = vv?.height ?? window.innerHeight
+    const top = toUi(vv?.offsetTop ?? 0)
+    const left = toUi(vv?.offsetLeft ?? 0)
+    const vw = toUi(vv?.width ?? window.innerWidth)
+    const vh = toUi(vv?.height ?? window.innerHeight)
     const width = Math.min(320, vw - 16)
     const h = el.offsetHeight
     let x = Math.min(Math.max(left + 8, r.left), left + vw - width - 8)

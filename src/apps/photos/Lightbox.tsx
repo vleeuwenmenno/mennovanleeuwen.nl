@@ -4,6 +4,7 @@ import { coordinates, duration, exposureText, fullDate, getInfo, originalUrl, se
 import { formatSize } from '../../terminal/vfs'
 import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
 import { useWM } from '../../os/wm'
+import { toUi, uiRect } from '../../os/uiScale'
 
 // One photo at a time, over the timeline. The large thumbnail shows at once and the original
 // replaces it when it has loaded (when the browser can show it: HEIC and TIFF stay the large
@@ -150,10 +151,10 @@ export function Lightbox({
     const my = (h * (s - 1)) / 2
     return { s, x: Math.max(-mx, Math.min(mx, v.x)), y: Math.max(-my, Math.min(my, v.y)) }
   }
-  /** Zooms to `s` keeping the point under (cx, cy) (client coordinates) where it is. */
+  /** Zooms to `s` keeping the point under (cx, cy) (page pixels: toUi of client coordinates) where it is. */
   const zoomTo = (s: number, cx?: number, cy?: number) =>
     setView((v) => {
-      const rect = stage.current?.getBoundingClientRect()
+      const rect = uiRect(stage.current)
       if (!rect) return v
       const px = (cx ?? rect.left + rect.width / 2) - rect.left - rect.width / 2
       const py = (cy ?? rect.top + rect.height / 2) - rect.top - rect.height / 2
@@ -168,9 +169,9 @@ export function Lightbox({
       e.preventDefault()
       const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002))
       setView((v) => {
-        const rect = el.getBoundingClientRect()
-        const px = e.clientX - rect.left - rect.width / 2
-        const py = e.clientY - rect.top - rect.height / 2
+        const rect = uiRect(el)
+        const px = toUi(e.clientX) - rect.left - rect.width / 2
+        const py = toUi(e.clientY) - rect.top - rect.height / 2
         const next = Math.max(1, Math.min(MAX, v.s * factor))
         return clamp({ s: next, x: px - ((px - v.x) * next) / v.s, y: py - ((py - v.y) * next) / v.s })
       })
@@ -185,36 +186,36 @@ export function Lightbox({
   const onPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('button')) return
     e.currentTarget.setPointerCapture(e.pointerId)
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    pointers.current.set(e.pointerId, { x: toUi(e.clientX), y: toUi(e.clientY) })
     const pts = [...pointers.current.values()]
     if (pts.length === 2) {
       gesture.current = { kind: 'pinch', x: 0, y: 0, view, dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), mid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 } }
       setSwipe({ x: 0, y: 0 })
-    } else gesture.current = { kind: view.s > 1 ? 'pan' : 'swipe', x: e.clientX, y: e.clientY, view, dist: 0, mid: { x: 0, y: 0 } }
+    } else gesture.current = { kind: view.s > 1 ? 'pan' : 'swipe', x: toUi(e.clientX), y: toUi(e.clientY), view, dist: 0, mid: { x: 0, y: 0 } }
   }
   const onPointerMove = (e: React.PointerEvent) => {
     if (!pointers.current.has(e.pointerId)) return
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    pointers.current.set(e.pointerId, { x: toUi(e.clientX), y: toUi(e.clientY) })
     const g = gesture.current
     if (!g) return
     if (g.kind === 'pinch') {
       const pts = [...pointers.current.values()]
       if (pts.length < 2) return
       const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
-      const rect = stage.current!.getBoundingClientRect()
+      const rect = uiRect(stage.current!)
       const px = g.mid.x - rect.left - rect.width / 2
       const py = g.mid.y - rect.top - rect.height / 2
       const next = Math.max(1, Math.min(MAX, (g.view.s * d) / g.dist))
       setView(clamp({ s: next, x: px - ((px - g.view.x) * next) / g.view.s, y: py - ((py - g.view.y) * next) / g.view.s }))
-    } else if (g.kind === 'pan') setView(clamp({ s: g.view.s, x: g.view.x + e.clientX - g.x, y: g.view.y + e.clientY - g.y }))
-    else setSwipe({ x: e.clientX - g.x, y: Math.max(0, e.clientY - g.y) })
+    } else if (g.kind === 'pan') setView(clamp({ s: g.view.s, x: g.view.x + toUi(e.clientX) - g.x, y: g.view.y + toUi(e.clientY) - g.y }))
+    else setSwipe({ x: toUi(e.clientX) - g.x, y: Math.max(0, toUi(e.clientY) - g.y) })
   }
   const onPointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId)
     const g = gesture.current
     if (g?.kind === 'swipe' && pointers.current.size === 0) {
-      const dx = e.clientX - g.x
-      const dy = e.clientY - g.y
+      const dx = toUi(e.clientX) - g.x
+      const dy = toUi(e.clientY) - g.y
       if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1)
       else if (dy > 90 && e.pointerType !== 'mouse') onClose()
     }
@@ -287,7 +288,7 @@ export function Lightbox({
         </button>
       </div>
       <div className="ph-lb-main">
-        <div className="ph-lb-stage" ref={stage} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={(e) => (view.s > 1 ? setView(FIT) : zoomTo(2.5, e.clientX, e.clientY))} onContextMenu={(e) => openContextMenu(e, menu(item.id))} data-no-touch-menu>
+        <div className="ph-lb-stage" ref={stage} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={(e) => (view.s > 1 ? setView(FIT) : zoomTo(2.5, toUi(e.clientX), toUi(e.clientY)))} onContextMenu={(e) => openContextMenu(e, menu(item.id))} data-no-touch-menu>
           <img
             key={item.id}
             className="ph-lb-img"

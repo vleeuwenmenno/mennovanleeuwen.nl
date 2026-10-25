@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { openLink, openMailto } from '../data/links'
 import { notify } from './notify'
+import { toUi, uiScale } from './uiScale'
 
 export type MenuItem =
   | { separator: true }
@@ -370,7 +371,7 @@ export function openMenuAt(anchor: Element, items: MenuItem[], place: 'below' | 
 
 function MenuList({ items, x, y, altX, up, altY, onClose }: { items: MenuItem[]; x: number; y: number; altX?: number; up?: boolean; altY?: number; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ x: number; y: number; maxH?: number }>({ x, y })
+  const [pos, setPos] = useState<{ x: number; y: number; maxH?: number }>(() => ({ x: toUi(x), y: toUi(y) }))
   const [openSub, setOpenSub] = useState<number | null>(null)
   const [subPos, setSubPos] = useState({ x: 0, y: 0, altX: 0 })
 
@@ -386,15 +387,18 @@ function MenuList({ items, x, y, altX, up, altY, onClose }: { items: MenuItem[];
     const vw = vv?.width ?? window.innerWidth
     const vh = vv?.height ?? window.innerHeight
     const maxH = vh - 16
+    // Worked out in screen pixels, like the pointer; the menu's own sizes and its place are page
+    // pixels (the UI scale, uiScale.ts).
+    const s = uiScale()
     // Layout sizes, not the bounding box: the entry animation starts the menu scaled down, which
     // would measure it short and let it run off the bottom.
-    const width = el.offsetWidth
-    const h = Math.min(el.scrollHeight + (el.offsetHeight - el.clientHeight), maxH)
+    const width = el.offsetWidth * s
+    const h = Math.min((el.scrollHeight + (el.offsetHeight - el.clientHeight)) * s, maxH)
     const nx = x + width > left + vw - 8 ? Math.max(left + 8, (altX ?? x) - width) : x
     let ny = up ? y - h : y
     if (ny < top + 8) ny = top + 8
     else if (ny + h > top + vh - 8) ny = altY !== undefined && altY - h >= top + 8 ? altY - h : Math.max(top + 8, top + vh - h - 8)
-    setPos({ x: nx, y: ny, maxH })
+    setPos({ x: nx / s, y: ny / s, maxH: maxH / s })
   }, [x, y, altX, up, altY])
 
   // The submenu is a sibling, not a child: the menu's entry animation uses a transform, which

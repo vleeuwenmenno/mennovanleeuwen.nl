@@ -23,6 +23,7 @@ import {
 } from './topbarPrefs'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { useWM, workspaceOf, WORKSPACES, type WinState } from './wm'
+import { toUi, uiScale } from './uiScale'
 
 const DRAG_SLOP = 6
 
@@ -222,7 +223,7 @@ export function TopBar() {
       if (index === drag.current?.index) continue
       const before = prev.get(index)
       if (before === undefined) continue
-      const dx = before - el.getBoundingClientRect().left
+      const dx = toUi(before - el.getBoundingClientRect().left)
       if (!dx) continue
       el.style.transition = 'none'
       el.style.transform = `translateX(${dx}px)`
@@ -253,7 +254,7 @@ export function TopBar() {
       const el = items.current.get(d.index)
       if (!el) return
       const r = el.getBoundingClientRect()
-      const naturalCenter = r.left + r.width / 2 - dxRef.current
+      const naturalCenter = r.left + r.width / 2 - dxRef.current * uiScale()
       const from = d.index
       const slot = orderRef.current[from]
       const others = orderRef.current.filter((_, i) => i !== from)
@@ -278,7 +279,7 @@ export function TopBar() {
         orderRef.current = arranged
         setOrder(arranged)
       }
-      dxRef.current = ev.clientX - naturalCenter
+      dxRef.current = toUi(ev.clientX - naturalCenter)
       setDragging({ index: d.index, dx: dxRef.current })
       void newIndex
     }

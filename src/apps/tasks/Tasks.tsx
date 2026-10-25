@@ -30,6 +30,7 @@ import { parseQuick } from './quickAdd'
 import { TaskEditor } from './TaskEditor'
 import { ListSheet, SettingsSheet } from './TaskSheets'
 import './tasks.css'
+import { toUi, uiRect } from '../../os/uiScale'
 
 // The Tasks app, laid out like Apple's Reminders: smart lists (Today, Scheduled, All, Priority,
 // Completed) and your lists in the sidebar, grouped by where they live (each CalDAV account, and
@@ -566,7 +567,7 @@ function TaskRows({ rows, lists, now, selected, leaving, showList, reorder, onSe
   // Where a dragged task would land: before the top-level task whose middle is below the pointer.
   const indexAt = (y: number) => {
     const els = top.map((r) => boxRef.current?.querySelector<HTMLElement>(`[data-task="${CSS.escape(r.task.id)}"]`))
-    const i = els.findIndex((el) => el && y < el.getBoundingClientRect().top + el.offsetHeight / 2)
+    const i = els.findIndex((el) => el && y < uiRect(el).top + el.offsetHeight / 2)
     return i < 0 ? top.length : i
   }
   const down = (ev: ReactPointerEvent<HTMLElement>, t: Task) => {
@@ -574,9 +575,9 @@ function TaskRows({ rows, lists, now, selected, leaving, showList, reorder, onSe
     ev.preventDefault()
     ev.stopPropagation()
     ev.currentTarget.setPointerCapture(ev.pointerId)
-    setDrag({ id: t.id, y0: ev.clientY, dy: 0, to: top.findIndex((r) => r.task.id === t.id) })
+    setDrag({ id: t.id, y0: toUi(ev.clientY), dy: 0, to: top.findIndex((r) => r.task.id === t.id) })
   }
-  const move = (ev: ReactPointerEvent<HTMLElement>) => drag && setDrag({ ...drag, dy: ev.clientY - drag.y0, to: indexAt(ev.clientY) })
+  const move = (ev: ReactPointerEvent<HTMLElement>) => drag && setDrag({ ...drag, dy: toUi(ev.clientY) - drag.y0, to: indexAt(toUi(ev.clientY)) })
   const up = () => {
     const d = drag
     setDrag(null)

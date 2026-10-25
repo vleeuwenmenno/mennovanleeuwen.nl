@@ -1,4 +1,5 @@
 import { synced } from './synced'
+import { viewH, viewW } from './uiScale'
 
 // Which widgets are on the desktop and where (src/widgets). Kept apart from the window layout
 // (wm.tsx) so they follow the account as a set merged entry by entry, like notes: two devices
@@ -174,8 +175,8 @@ type LayoutWindow = { app?: unknown; x?: unknown; y?: unknown; w?: unknown; h?: 
  */
 export function importLayoutWidgets(saved: unknown): boolean {
   if (!Array.isArray(saved)) return false
-  const vw = typeof window === 'undefined' ? 0 : window.innerWidth
-  const vh = typeof window === 'undefined' ? 0 : window.innerHeight
+  const vw = typeof window === 'undefined' ? 0 : viewW()
+  const vh = typeof window === 'undefined' ? 0 : viewH()
   const found: Omit<WidgetPlace, 'at'>[] = []
   for (const w of saved as LayoutWindow[]) {
     if (!w || typeof w !== 'object') continue

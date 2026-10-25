@@ -10,6 +10,7 @@ import { useDropTarget } from './dnd'
 import { dragKeyHeld } from './modDrag'
 import { filesFor, SHOWS_FILE } from './appDrops'
 import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, stackOrder, useWM, workspaceOf, WORKSPACES, type Geometry, type SnapZone, type WinState } from './wm'
+import { toUi, viewH, viewW } from './uiScale'
 
 const TOP_BAR = 28
 const MIN_W = 280
@@ -111,8 +112,8 @@ function withShown(order: number[], shown: number[]): number[] {
 
 /** Which snap zone the pointer is in: sides halve, corners quarter, the top edge maximizes. */
 function zoneAt(x: number, y: number): Target {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+  const vw = viewW()
+  const vh = viewH()
   const left = x <= EDGE
   const right = x >= vw - EDGE
   const nearTop = y <= TOP_BAR + CORNER
@@ -151,7 +152,7 @@ function workspaceAt(x: number, y: number): number | null {
 }
 const clearWorkspaceDrop = () => document.querySelectorAll('.ws[data-drop]').forEach((el) => el.removeAttribute('data-drop'))
 
-const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
+const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: viewW() - 20, h: viewH() - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
 
 export function Window({ win, title, chrome = 'default', className = '', style, menuItems = [], closeLabel = 'Close', resizableWidth = false, children }: Props) {
   const wm = useWM()
@@ -214,10 +215,10 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     e.preventDefault()
     wm.focus(win.pid)
     const el = e.currentTarget as HTMLElement
-    const d: Drag = { mode, edge, startX: e.clientX, startY: e.clientY, x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop }
+    const d: Drag = { mode, edge, startX: toUi(e.clientX), startY: toUi(e.clientY), x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop }
     drag.current = d
     if (mode === 'stack' && e.pointerType === 'touch') {
-      const hold: NonNullable<Drag['hold']> = { timer: null, armed: false, given: false, y: e.clientY, at: e.clientY }
+      const hold: NonNullable<Drag['hold']> = { timer: null, armed: false, given: false, y: toUi(e.clientY), at: toUi(e.clientY) }
       d.hold = hold
       hold.timer = setTimeout(() => {
         hold.timer = null
@@ -269,7 +270,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       const L = lift.current
       if (!L) return
       const top = TOP_BAR + 70
-      const bottom = window.innerHeight - 130
+      const bottom = viewH() - 130
       const v = L.y < top ? -Math.min(18, (top - L.y) / 4) : L.y > bottom ? Math.min(18, (L.y - bottom) / 4) : 0
       if (v) {
         const before = L.scroller.scrollTop
@@ -364,11 +365,14 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   const onMove = (e: Ptr) => {
     const d = drag.current
     if (!d) return
-    const dx = e.clientX - d.startX
-    const dy = e.clientY - d.startY
+    // Page pixels (the UI scale, uiScale.ts), as the window's geometry is.
+    const px = toUi(e.clientX)
+    const py = toUi(e.clientY)
+    const dx = px - d.startX
+    const dy = py - d.startY
     if (d.mode === 'stack' && d.hold) {
-      d.hold.y = e.clientY
-      if (d.hold.armed) return liftMove(e.clientY)
+      d.hold.y = py
+      if (d.hold.armed) return liftMove(py)
       // Moving before the hold is up: a scroll. Let the page have the finger.
       if (!d.hold.given && Math.hypot(dx, dy) > HOLD_SLOP) {
         d.hold.given = true
@@ -382,8 +386,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       if (!d.moved) {
         d.moved = true
         cancelTouchMenu()
-        liftStart(d.startY, d.scroll, e.clientY)
-      } else liftMove(e.clientY)
+        liftStart(d.startY, d.scroll, py)
+      } else liftMove(py)
     } else if (d.mode === 'move') {
       if (!d.moved && Math.hypot(dx, dy) < 4) return
       if (chrome === 'note') d.moved ? swing.move(e.clientX) : swing.start(e.clientX)
@@ -406,8 +410,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       // A note stays whole on the screen (fitNote); other windows may hang off it a little.
       const { x, y } =
         chrome === 'note'
-          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, window.innerWidth, window.innerHeight, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
-          : { x: Math.min(Math.max(d.x + dx, -d.w + 120), window.innerWidth - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), window.innerHeight - 60) }
+          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
+          : { x: Math.min(Math.max(d.x + dx, -d.w + 120), viewW() - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), viewH() - 60) }
       wm.setGeometry(win.pid, { x, y })
       // Over a workspace number in the top bar: dropping there moves the window to it.
       wsTarget.current = chrome === 'default' && wm.workspaces ? workspaceAt(e.clientX, e.clientY) : null
@@ -415,7 +419,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         target.current = null
         setSnapPreview(null)
       } else if (canSnap) {
-        target.current = zoneAt(e.clientX, e.clientY)
+        target.current = zoneAt(px, py)
         setSnapPreview(target.current === 'max' ? maxRect() : target.current ? snapRect(target.current) : null)
       }
     } else {
@@ -443,7 +447,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     drag.current = null
     if (d?.hold?.timer) clearTimeout(d.hold.timer)
     // Let go of a lifted note that never moved: it was a long press, so it gets its menu.
-    const pressed = !!d?.hold?.armed && e.type === 'pointerup' && Math.abs(e.clientY - d.hold.at) <= HOLD_SLOP
+    const pressed = !!d?.hold?.armed && e.type === 'pointerup' && Math.abs(toUi(e.clientY) - d.hold.at) <= HOLD_SLOP
     // A cancelled gesture (the browser took the finger) puts the note back where it was.
     if (d?.mode === 'stack') liftEnd(e.type === 'pointerup')
     if (pressed) {
@@ -514,7 +518,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     const ours = (ev: PointerEvent) => ev.isTrusted && ev.pointerId === press.id
     const take = () => {
       press.taken = true
-      drag.current = { mode, edge, startX: press.x, startY: press.y, x: win.x, y: win.y, w: win.w, h: win.h, moved: false }
+      drag.current = { mode, edge, startX: toUi(press.x), startY: toUi(press.y), x: win.x, y: win.y, w: win.w, h: win.h, moved: false }
       try {
         el.setPointerCapture(press.id)
       } catch {
@@ -586,8 +590,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     const base = win.snap && win.restore ? win.restore : geometry()
     wm.setGeometry(win.pid, {
       ...base,
-      x: Math.round(Math.max(8, (window.innerWidth - base.w) / 2)),
-      y: Math.round(Math.max(TOP_BAR + 8, TOP_BAR + (window.innerHeight - TOP_BAR - base.h) / 2 - 30)),
+      x: Math.round(Math.max(8, (viewW() - base.w) / 2)),
+      y: Math.round(Math.max(TOP_BAR + 8, TOP_BAR + (viewH() - TOP_BAR - base.h) / 2 - 30)),
       snap: undefined,
       restore: undefined,
       maximized: false,

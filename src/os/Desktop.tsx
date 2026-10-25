@@ -27,6 +27,7 @@ import { useSwing } from './swing'
 import { useWM, type AppId } from './wm'
 import { notesHidden } from './deskPrefs'
 import { useIsMobile } from './useIsMobile'
+import { toUi, uiPoint, viewH, viewW } from './uiScale'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
 // empty space, drag icons around (they snap to a grid), double-click or Enter to open, F2 to
@@ -89,12 +90,12 @@ const LEFT = 14
 const DOCK_SPACE = 100
 
 function gridSize() {
-  return { cols: Math.max(1, Math.floor((window.innerWidth - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((window.innerHeight - TOP - DOCK_SPACE) / CELL_H)) }
+  return { cols: Math.max(1, Math.floor((viewW() - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((viewH() - TOP - DOCK_SPACE) / CELL_H)) }
 }
 
 // Columns count from the right edge (col 0 is rightmost), like macOS, so icons keep their place
 // relative to that edge when the window resizes and the default column stays clear of windows.
-const rightX = () => window.innerWidth - LEFT - CELL_W
+const rightX = () => viewW() - LEFT - CELL_W
 const toPx = (p: IconPos) => ({ x: rightX() - p.col * CELL_W, y: TOP + p.row * CELL_H })
 const key = (p: IconPos) => `${p.col},${p.row}`
 
@@ -336,7 +337,7 @@ export function Desktop() {
     if (additive && !selected.has(icon.id)) setSelected(new Set(ids))
     // The grabbed icon first: it tops the pile and lands nearest the drop.
     ids = [icon.id, ...ids.filter((id) => id !== icon.id)]
-    drag.current = { kind: 'icons', startX: e.clientX, startY: e.clientY, ids, moved: false, clickedId: icon.id, additive }
+    drag.current = { kind: 'icons', startX: toUi(e.clientX), startY: toUi(e.clientY), ids, moved: false, clickedId: icon.id, additive }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
 
@@ -346,15 +347,17 @@ export function Desktop() {
     setRenaming(null)
     const base = e.shiftKey || e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
     setSelected(base)
-    drag.current = { kind: 'marquee', startX: e.clientX, startY: e.clientY, base }
+    drag.current = { kind: 'marquee', startX: toUi(e.clientX), startY: toUi(e.clientY), base }
     surface.current?.setPointerCapture(e.pointerId)
   }
 
   function onPointerMove(e: ReactPointerEvent) {
     const d = drag.current
     if (!d) return
-    const dx = e.clientX - d.startX
-    const dy = e.clientY - d.startY
+    // Page pixels, as the icons are placed in (the UI scale, uiScale.ts).
+    const { x: px, y: py } = uiPoint(e)
+    const dx = px - d.startX
+    const dy = py - d.startY
     if (d.kind === 'icons') {
       if (!d.moved && Math.hypot(dx, dy) < 4) return
       if (!d.moved) {
@@ -371,7 +374,7 @@ export function Desktop() {
       setOffset({ dx, dy })
       d.out?.move(e.clientX, e.clientY, keysOf(e))
     } else {
-      const rect = { x: Math.min(d.startX, e.clientX), y: Math.min(d.startY, e.clientY), w: Math.abs(dx), h: Math.abs(dy) }
+      const rect = { x: Math.min(d.startX, px), y: Math.min(d.startY, py), w: Math.abs(dx), h: Math.abs(dy) }
       setMarquee(rect)
       const hit = new Set(d.base)
       for (const i of visible) {
@@ -653,7 +656,7 @@ export function Desktop() {
       onContextMenu={(e) => {
         if (e.target !== surface.current) return
         setSelected(new Set())
-        openContextMenu(e, desktopMenu({ x: e.clientX, y: e.clientY }))
+        openContextMenu(e, desktopMenu(uiPoint(e)))
       }}
     >
       {visible.map((icon) => {

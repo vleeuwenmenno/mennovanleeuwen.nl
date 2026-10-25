@@ -15,6 +15,7 @@ import { Terminal } from './Terminal'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
 import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
+import { toUi } from '../os/uiScale'
 
 // The Markdown preview moved to its own module; other apps still import it from here.
 export { MarkdownPreview }
@@ -195,10 +196,10 @@ export function Zed({ win }: { win: WinState }) {
   /** Dragging the panel's top edge: taller or shorter, leaving the editor some room. */
   const resizeDock = (e: React.PointerEvent) => {
     e.preventDefault()
-    const startY = e.clientY
+    const startY = toUi(e.clientY)
     const startH = dockH
     const room = (rootEl.current?.querySelector('.zed-main')?.clientHeight ?? 600) - 120
-    const move = (ev: PointerEvent) => setDockH(Math.round(Math.max(100, Math.min(room, startH - (ev.clientY - startY)))))
+    const move = (ev: PointerEvent) => setDockH(Math.round(Math.max(100, Math.min(room, startH - (toUi(ev.clientY) - startY)))))
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)

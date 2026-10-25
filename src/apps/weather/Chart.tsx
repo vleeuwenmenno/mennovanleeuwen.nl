@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
+import { toUi, uiRect } from '../../os/uiScale'
 
 // One interactive time chart for every Weather detail: lines, areas and bars over a shared time
 // axis, a crosshair that follows the pointer (mouse hover, touch or pen drag), a scrubber handle
@@ -119,7 +120,7 @@ export function InteractiveChart({ series, labels, tick, index, onIndex, axis, f
   const indexAt = (clientX: number) => {
     const el = box.current
     if (!el || n === 0) return 0
-    const px = clientX - el.getBoundingClientRect().left - PAD_L
+    const px = clientX - uiRect(el).left - PAD_L
     const raw = hasBars ? Math.floor(px / step) : Math.round(px / step)
     return Math.min(n - 1, Math.max(0, raw))
   }
@@ -137,10 +138,10 @@ export function InteractiveChart({ series, labels, tick, index, onIndex, axis, f
     dragging.current = true
     showTip(true)
     e.currentTarget.setPointerCapture?.(e.pointerId)
-    push(indexAt(e.clientX))
+    push(indexAt(toUi(e.clientX)))
   }
   const move = (e: PointerEvent<HTMLDivElement>) => {
-    if (dragging.current || e.pointerType === 'mouse') push(indexAt(e.clientX))
+    if (dragging.current || e.pointerType === 'mouse') push(indexAt(toUi(e.clientX)))
   }
   const up = (e: PointerEvent<HTMLDivElement>) => {
     dragging.current = false

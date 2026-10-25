@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEv
 import { createPortal } from 'react-dom'
 import { addContact, displayName, initials, openContact, searchLoaded, useContactByEmail, useContacts, type Contact } from '../../data/contacts'
 import './contacts.css'
+import { uiRect, viewH, viewW } from '../../os/uiScale'
 
 // People, for any app: an avatar (the contact's photo, or initials), a chip with a person's name
 // that opens their card, and a field to pick people with (Mail's To/Cc/Bcc, Calendar's guests).
@@ -151,11 +152,11 @@ export function PersonChip({ email, name, onRemove, invalid, compact, badge, tit
 
 /** Who a chip is: photo, name, organisation and address, with Open or Add to contacts. */
 function HoverCard({ anchor, email, name, contact, onEnter, onLeave }: { anchor: HTMLElement; email: string; name?: string; contact: Contact | null; onEnter: () => void; onLeave: () => void }) {
-  const r = anchor.getBoundingClientRect()
-  const below = r.bottom + 160 < window.innerHeight
+  const r = uiRect(anchor)
+  const below = r.bottom + 160 < viewH()
   const [busy, setBusy] = useState(false)
   return createPortal(
-    <div className="pp-hover" style={{ left: Math.max(8, Math.min(r.left, window.innerWidth - 268)), ...(below ? { top: r.bottom + 6 } : { bottom: window.innerHeight - r.top + 6 }) }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+    <div className="pp-hover" style={{ left: Math.max(8, Math.min(r.left, viewW() - 268)), ...(below ? { top: r.bottom + 6 } : { bottom: viewH() - r.top + 6 }) }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
       <Avatar contact={contact} email={email} name={name} size={44} />
       <div className="pp-hover-text">
         <strong>{contact ? displayName(contact) : name || email}</strong>
@@ -404,9 +405,9 @@ export function PeoplePicker({
 }
 
 function Suggestions({ anchor, id, items, active, expanded, moreLabel, onHover, onPick, onBack }: { anchor: HTMLElement; id: string; items: Suggestion[]; active: number; expanded: Contact | null; moreLabel: string; onHover: (i: number) => void; onPick: (s: Suggestion) => void; onBack: () => void }) {
-  const [rect, setRect] = useState(() => anchor.getBoundingClientRect())
+  const [rect, setRect] = useState(() => uiRect(anchor))
   useLayoutEffect(() => {
-    const update = () => setRect(anchor.getBoundingClientRect())
+    const update = () => setRect(uiRect(anchor))
     update()
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
@@ -423,7 +424,7 @@ function Suggestions({ anchor, id, items, active, expanded, moreLabel, onHover, 
     list.current?.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' })
   }, [active])
   // Below the field, or above it when there is no room.
-  const room = window.innerHeight - rect.bottom
+  const room = viewH() - rect.bottom
   const up = room < 220 && rect.top > room
   const row = (s: Suggestion): ReactNode => {
     if (s.kind === 'group')
@@ -479,7 +480,7 @@ function Suggestions({ anchor, id, items, active, expanded, moreLabel, onHover, 
       id={id}
       role="listbox"
       className="pp-suggestions"
-      style={{ left: rect.left, width: Math.max(rect.width, 260), ...(up ? { bottom: window.innerHeight - rect.top + 2 } : { top: rect.bottom + 2 }) }}
+      style={{ left: rect.left, width: Math.max(rect.width, 260), ...(up ? { bottom: viewH() - rect.top + 2 } : { top: rect.bottom + 2 }) }}
       onMouseDown={(e) => e.preventDefault()}
     >
       {expanded && (

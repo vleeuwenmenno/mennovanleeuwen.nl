@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { uiRect } from '../os/uiScale'
 
 // The D51 steam locomotive from the classic `sl`, driving right to left across the terminal.
 // Like the original, it cannot be interrupted: the prompt comes back when the train has left.
@@ -76,7 +77,7 @@ export function SlTrain({ onDone }: { onDone?: () => void }) {
       doneRef.current?.()
       return
     }
-    const charW = (probe.current?.getBoundingClientRect().width ?? 80) / 10
+    const charW = (uiRect(probe.current)?.width ?? 80) / 10
     const width = Math.ceil((box.current?.clientWidth ?? 600) / charW)
     setCols(width)
     const total = width + TRAIN_WIDTH

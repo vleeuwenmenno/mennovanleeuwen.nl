@@ -38,6 +38,37 @@ bar, one monospace face, and colours from Omarchy's own theme palettes
 "auto" follows the OS. The sun/moon button in the bar toggles; right-click it (or the desktop)
 for every Omarchy theme and accent overrides. `theme list` / `theme <name>` in the terminal too.
 
+### UI scale
+
+Settings → Appearance → *UI scale* makes all of MvL OS bigger or smaller, like the browser's zoom:
+75, 80, 90, 100, 110, 125, 150, 175 or 200%. Ctrl + (or Ctrl =) and Ctrl − step through the
+same levels and Ctrl 0 goes back to 100% (Cmd on a Mac); the browser itself doesn't zoom as well.
+An app that zooms its own content with those keys keeps them while it has the focus: the terminal,
+PDFs and Files. The scale is kept per device (`localPref`, not synced), so a phone and a 4K desktop
+each keep their own, and it falls back to 100% when storage is blocked.
+
+Games keep their own size: their window content and anything they float over the page undo the
+scale (the window frame around them still scales). A game's own page (`/play/<id>`) isn't scaled
+at all, so the browser's zoom applies there. The phone layout follows the real screen width, not
+the scaled one, so 200% on a desktop stays a desktop and 75% on a phone stays a phone.
+
+How it works ([`src/os/uiScale.ts`](src/os/uiScale.ts)): CSS `zoom` on the root element, so the
+shell, apps, menus, dialogs, notifications and portals all scale together. With that, the browser
+keeps two kinds of numbers apart:
+
+- **Screen pixels:** pointer events (`clientX`), `getBoundingClientRect`, `window.innerWidth`, the
+  visual viewport and `elementFromPoint`. They don't change with the scale.
+- **Page pixels:** style lengths (`left`, `width`, transforms), `offsetWidth`, `clientWidth`,
+  `scrollTop`. One page pixel is `uiScale()` screen pixels.
+
+Code that puts something where the pointer or another element is (dragging, menus, popovers)
+converts with `toUi()`, `uiPoint()` or `uiRect()`, and sizes things to the page with `viewW()` and
+`viewH()` instead of `window.innerWidth`/`innerHeight`. A ratio of two screen-pixel numbers (where
+on a canvas the pointer is, as a share of its rect) needs no change. In CSS, `vw`, `vh` and the safe
+areas are screen units, so they are divided by `var(--ui-scale, 1)`. A game, or anything else that
+must keep the browser's own scale, gets the class `ui-native`. Browsers without the standardized
+`zoom` (Chrome and Edge before 128, Firefox before 126, older Safari) don't get the option.
+
 ### Selecting text
 
 Like a desktop, the chrome can't be selected: dragging across title bars, the dock, menus,
