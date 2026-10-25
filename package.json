@@ -99,6 +99,7 @@
     "check:session-streams": "node scripts/session-streams-check.ts",
     "check:widgets-sync": "node scripts/widgets-sync-check.ts",
     "check:sync-loop": "node scripts/sync-loop-e2e.ts",
+    "check:agents-favourites": "node scripts/agents-favourites-e2e.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "empires:tournament": "node scripts/empires-tournament.ts",

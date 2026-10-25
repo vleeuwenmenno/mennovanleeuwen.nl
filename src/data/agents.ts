@@ -312,7 +312,10 @@ export type AgentSettings = {
   autoCompact: boolean
   /** How full, in percent of the model's context window: one of COMPACT_AT */
   compactAt: number
-  /** Models starred in the model picker, in the order they were starred (Ctrl+1…9 picks the first nine) */
+  /**
+   * Where the model picker's stars were kept before they had a synced set of their own
+   * (src/data/agentFavourites.ts moves them over): read only, never changed any more.
+   */
   favoriteModels: string[]
 }
 /** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
@@ -345,6 +348,8 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
 export const useAgentSettings = settingsStore.use
 export const agentSettings = settingsStore.get
 export const setAgentSettings = (patch: Partial<AgentSettings>) => settingsStore.set((s) => ({ ...s, ...patch }))
+/** Called when newer agents settings arrive from the server or another tab. */
+export const onAgentSettingsRemote = settingsStore.onRemote
 
 /**
  * Whether "don't ask again" makes sense for a terminal command: never for commands that run other
