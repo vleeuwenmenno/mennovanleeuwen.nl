@@ -44,7 +44,7 @@ const MIN_SIDE = 120
 const MAX_SIDE = 8000
 const SHRINK_TO = 768
 /** PNGs up to this many pixels are decoded to be scaled down; bigger ones are kept as they are. */
-const DECODE_PIXELS = 8_000_000
+const DECODE_PIXELS = 4_200_000
 const PRUNE_AFTER = 90 * 86400_000
 const UA = 'Mozilla/5.0 (compatible; mvlos find_image)'
 const WEB_PORTS = new Set(['', '80', '443', '8080', '8443'])
@@ -333,13 +333,15 @@ export type Inspected = { mime: Mime; width: number; height: number; animated: b
 /** What a picture is by its bytes: PNG, JPEG, WebP or GIF with its size, or null for anything else. */
 export function inspectImage(b: Buffer): Inspected | null {
   if (isPng(b) && b.toString('ascii', 12, 16) === 'IHDR') {
-    // An APNG has an acTL chunk before its first IDAT.
+    // An APNG has an acTL chunk before its first IDAT. A second IHDR (a size other than the one
+    // checked) makes it no PNG we keep.
     let animated = false
     for (let at = 8; at + 8 <= b.length; ) {
       const len = b.readUInt32BE(at)
       const type = b.toString('ascii', at + 4, at + 8)
+      if (type === 'IHDR' && at !== 8) return null
       if (type === 'acTL') animated = true
-      if (type === 'IDAT' || type === 'IEND') break
+      if (type === 'IEND') break
       at += 12 + len
     }
     return { mime: 'image/png', width: b.readUInt32BE(16), height: b.readUInt32BE(20), animated }
@@ -411,7 +413,7 @@ function shrinkPng(bytes: Buffer, i: Inspected): { bytes: Buffer; width: number;
   const same = { bytes, width: i.width, height: i.height }
   if ((Math.max(i.width, i.height) <= SHRINK_TO && !i.animated) || i.width * i.height > DECODE_PIXELS) return same
   try {
-    const src = decodePng(bytes)
+    const src = decodePng(bytes, DECODE_PIXELS)
     const k = Math.min(1, SHRINK_TO / Math.max(src.width, src.height))
     const w = Math.max(1, Math.round(src.width * k))
     const h = Math.max(1, Math.round(src.height * k))
@@ -502,7 +504,10 @@ async function keep(user: User, c: { url: string; page: string | null; title: st
   const hash = createHash('sha256').update(got.bytes).digest('hex')
   // The same picture from another address: the one already kept.
   const same = database().prepare('SELECT id, source_url, page_url, title, width, height FROM agent_found_images WHERE user_id = ? AND hash = ? LIMIT 1').get(user.id, hash) as Row | undefined
-  if (same) return asFound(same, true)
+  if (same) {
+    database().prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = ? AND id = ?').run(Date.now(), user.id, same.id)
+    return asFound(same, true)
+  }
   const title = c.title.slice(0, 200)
   checkRoom(user, got.bytes.length + c.url.length + (c.page?.length ?? 0) + title.length)
   const id = `w${randomBytes(12).toString('hex')}`
@@ -528,11 +533,14 @@ export function prune(user: User, force = false) {
   const old = db.prepare('SELECT id FROM agent_found_images WHERE user_id = ? AND used_at < ? LIMIT 500').all(user.id, now - PRUNE_AFTER) as { id: string }[]
   if (!old.length) return
   const mentioned = new Set<string>()
-  const scan = (text: string) => {
-    for (const m of text.matchAll(/image:(w[0-9a-f]{24})/g)) mentioned.add(m[1])
+  // As the visual parser reads references: any case, and inside JSON (synced notes) also with
+  // \uXXXX escapes. So every row is read, not only what a LIKE would match.
+  const scan = (raw: string) => {
+    const text = raw.includes('\\u') ? raw.replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16))) : raw
+    for (const m of text.matchAll(/image:(w[0-9a-f]{24})/gi)) mentioned.add(m[1].toLowerCase())
   }
-  for (const r of db.prepare("SELECT m.content AS t FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND m.role IN ('assistant', 'user') AND m.content LIKE '%image:w%'").iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
-  for (const r of db.prepare("SELECT value AS t FROM state WHERE user_id = ? AND value LIKE '%image:w%'").iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
+  for (const r of db.prepare("SELECT m.content AS t FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ? AND m.role IN ('assistant', 'user')").iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
+  for (const r of db.prepare('SELECT value AS t FROM state WHERE user_id = ?').iterate(user.id) as Iterable<{ t: string }>) scan(r.t)
   const drop = db.prepare('DELETE FROM agent_found_images WHERE user_id = ? AND id = ?')
   const touch = db.prepare('UPDATE agent_found_images SET used_at = ? WHERE user_id = ? AND id = ?')
   for (const { id } of old) (mentioned.has(id) ? touch.run(now, user.id, id) : drop.run(user.id, id))
@@ -656,7 +664,8 @@ export function handleFoundImageApi(req: IncomingMessage, res: ServerResponse, p
   if (!row || !(MIMES as readonly string[]).includes(row.mime)) throw new HttpError(404, 'No such picture')
   // A picture never changes under its id.
   const tag = `"${m[1]}"`
-  const headers = { ETag: tag, 'Cache-Control': 'private, max-age=604800, immutable', ...SECURITY, ...UNTRUSTED }
+  // Asked again each time (a 304 when unchanged), so a cached copy is not shown after signing out.
+  const headers = { ETag: tag, 'Cache-Control': 'private, no-cache', ...SECURITY, ...UNTRUSTED }
   if (req.headers['if-none-match'] === tag) return res.writeHead(304, headers).end(), true
   const body = Buffer.from(row.body)
   res.writeHead(200, { 'Content-Type': row.mime, 'Content-Length': String(body.length), ...headers }).end(method === 'HEAD' ? undefined : body)

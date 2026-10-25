@@ -378,7 +378,8 @@ export const IMAGE_ID = /^[A-Za-z0-9_-]{6,64}$/
 /** "image:<id>" as its id, or undefined. */
 export function imageRef(raw: string): string | undefined {
   const m = /^image:([A-Za-z0-9_-]{6,64})$/i.exec(raw.trim())
-  return m ? m[1] : undefined
+  // Ids are lower case (find_image's hex, generated pictures' UUIDs): IMAGE:W… is the same picture.
+  return m ? m[1].toLowerCase() : undefined
 }
 const EMPTY = new Set(['', '.', '-', '_', 'empty', 'none', 'null'])
 
@@ -422,7 +423,7 @@ export function readItem(v: unknown): VItem | null {
       const kind = ref[1].toLowerCase()
       if (kind === 'app') it.app = ref[2].toLowerCase()
       else if (kind === 'image') {
-        if (IMAGE_ID.test(ref[2])) it.image = ref[2]
+        if (IMAGE_ID.test(ref[2])) it.image = ref[2].toLowerCase()
       } else it.icon = iconSlug(ref[2])
       s = ref[3].trim()
       if (!s && kind !== 'image') s = humanize(ref[2].toLowerCase())

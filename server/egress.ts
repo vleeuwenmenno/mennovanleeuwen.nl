@@ -1,7 +1,7 @@
 import type { LookupAddress } from 'node:dns'
 import { Resolver } from 'node:dns/promises'
-import { request as httpRequest, type IncomingMessage } from 'node:http'
-import { request as httpsRequest } from 'node:https'
+import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from 'node:http'
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { Readable } from 'node:stream'
 import type { User } from './auth.ts'
@@ -17,6 +17,13 @@ import { HttpError } from './http.ts'
 // answer changes between the check and the request (DNS rebinding) cannot slip through to them.
 
 const MAX_HOPS = 5
+
+// Agents of our own for pinned requests, never the global ones: with NODE_USE_ENV_PROXY (or
+// --use-env-proxy) the global agents send requests through HTTP(S)_PROXY, which then resolves the
+// host name itself and the pinned addresses would mean nothing. An Agent made without `proxyEnv`
+// never proxies.
+const pinnedHttp = new HttpAgent()
+const pinnedHttps = new HttpsAgent()
 
 /** Thrown for an address that isn't allowed; callers that swallow network errors let this one through. */
 export class EgressError extends HttpError {}
@@ -157,8 +164,9 @@ export async function fetchPinned(url: URL, init: RequestInit, addresses: Lookup
   if (body) headers['content-length'] = String(body.length)
   const pinned = pinnedLookup(addresses)
   return new Promise<Response>((resolve, reject) => {
-    const send = url.protocol === 'https:' ? httpsRequest : httpRequest
-    const r = send(url, { method: req.method, headers, lookup: pinned as never, signal: init.signal ?? undefined }, (res: IncomingMessage) => {
+    const https = url.protocol === 'https:'
+    const send = https ? httpsRequest : httpRequest
+    const r = send(url, { method: req.method, headers, lookup: pinned as never, agent: https ? pinnedHttps : pinnedHttp, signal: init.signal ?? undefined }, (res: IncomingMessage) => {
       const h = new Headers()
       for (let i = 0; i + 1 < res.rawHeaders.length; i += 2) h.append(res.rawHeaders[i], res.rawHeaders[i + 1])
       const status = res.statusCode && res.statusCode >= 200 ? res.statusCode : 502

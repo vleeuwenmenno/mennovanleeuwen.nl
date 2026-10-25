@@ -315,15 +315,19 @@ and the pages are the fallback.
 
 The server downloads the picture, keeps it per account (`agent_found_images`, counted in the
 storage quota) and serves it at `GET /api/agents/images/<id>` to that account only, with its own
-type, `nosniff`, a sandboxing CSP and a week's private cache: the browser never asks the other
+type, `nosniff`, a sandboxing CSP and `private, no-cache` with an ETag (so a copy cached by the
+browser is not shown to whoever uses it after signing out): the browser never asks the other
 site. The same picture again (by address or by its bytes) reuses the kept one, and a page read in
 the last half hour is not read again. Pictures unused for 90 days that no message or note
-mentions are pruned (at most every six hours per account, after a new one is kept).
+mentions (in any case, and inside JSON escapes) are pruned (at most every six hours per account,
+after a new one is kept); reusing a picture counts as using it.
 
 These are pages and pictures anyone can put in a search result, so:
 
 - Only public addresses, checked after DNS and again at every redirect (at most three), and
-  connected to exactly as checked (no DNS rebinding); never an IP address in the link, a name
+  connected to exactly as checked (no DNS rebinding), through agents of our own that never use
+  `HTTP(S)_PROXY` (with `NODE_USE_ENV_PROXY` the global ones would let a proxy resolve the name
+  again; this holds for every pinned request in [`server/egress.ts`](server/egress.ts)); never an IP address in the link, a name
   without a dot or a `.local`/`.internal` one, credentials in the address or an unusual port. This
   holds for admins too.
 - No cookies or credentials are sent, only a plain User-Agent.
@@ -332,10 +336,14 @@ These are pages and pictures anyone can put in a search result, so:
   account.
 - A picture must be PNG, JPEG, WebP or a still GIF both by its `Content-Type` and by its bytes
   (SVG, HTML posing as a picture and animations are refused), 120 to 8000 px a side and not a
-  banner (over 4:1). A PNG over 768 px is scaled down (an APNG keeps its first frame); other
-  formats are kept as they came, since the server has no decoder for them.
-- A page the model wrote itself, in a thread holding private data, is not read (as with
-  `web_fetch`); the search still runs.
+  banner (over 4:1). A PNG with a second header is refused. A PNG over 768 px and up to about
+  4.2 million pixels is scaled down (an APNG keeps its first frame); the decoder
+  ([`server/pngResize.ts`](server/pngResize.ts)) takes the header only as the first chunk, checks
+  the pixel budget before inflating or allocating anything and inflates no more than that size
+  needs. Other formats are kept as they came, since the server has no decoder for them.
+- The `page` is read only when that exact address came from outside the model: the user's
+  messages, search results or a page read in the thread. Anything else (an address the model made
+  up, which could carry something pasted in the chat) is left out, and the search still runs.
 
 `pnpm check:agents-find-image` runs it against a stand-in web of shops
 ([`scripts/find-image-fake-net.ts`](scripts/find-image-fake-net.ts), preloaded only by checks):
