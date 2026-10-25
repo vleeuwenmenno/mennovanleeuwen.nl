@@ -113,7 +113,7 @@ let cookieUser = 1
 /** Another device's save, made right before each of this one's (section 10). */
 let storming: (() => void) | null = null
 /** Saves of these keys take `ms` to answer, and the next `fail` of them fail (section 10). */
-const slowPut = new Map<string, { ms: number; fail: number }>()
+const slowPut = new Map<string, { ms: number; fail: number; late?: boolean }>()
 /** Every save as sent (key, then body), before the stand-in server answers it. */
 const sentBodies: string[] = []
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -129,7 +129,7 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
     if (key === 'loop:storm') storming?.()
     sentBodies.push(`${key} ${init.body}`)
     const slow = slowPut.get(key)
-    if (slow) {
+    if (slow && !slow.late) {
       await sleep(slow.ms)
       if (slow.fail > 0) {
         slow.fail--
@@ -140,10 +140,15 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
     puts.push(key)
     const { value, base } = JSON.parse(init.body!) as { value: unknown; base: number }
     const cur = server.get(key)
-    if (cur && cur.updatedAt > base) return json({ ...cur, conflict: true })
+    // `late`: saved (or refused) at once, the answer arriving `ms` later.
+    const answer = async (body: unknown) => (slow?.late && (await sleep(slow.ms)), json(body))
+    if (cur && cur.updatedAt > base) {
+      puts.push(`${key}!conflict`)
+      return answer({ ...cur, conflict: true })
+    }
     const entry = { value, updatedAt: ++clock }
     server.set(key, entry)
-    return json(entry)
+    return answer(entry)
   }
   return json(server.get(key) ?? null)
 }
@@ -668,6 +673,50 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   syncPacing.failed('pace:err')
   syncPacing.counted('pace:err', 3e12)
   check('pacing: a failed save is tried again after a wait', syncPacing.backoff('pace:err', 3e12) > 0)
+}
+
+// --- 11. the last save on closing, refused because a save still out got through first -------------
+// Last: the page here is torn down (nothing of it runs after), and a fresh one loads.
+{
+  type List = string[]
+  const union = (l: List, r: List) => [...new Set([...r, ...l])]
+  const plain = synced<string>('final:plain', '')
+  const other = synced<string>('final:other', '')
+  const merged = synced<List>('final:merged', [], { merge: union })
+  plain.set('v1')
+  other.set('v1')
+  merged.set(['x'])
+  await sleep(1500)
+  // Saved by the server at once, answered 2 s later.
+  for (const k of ['final:plain', 'final:other', 'final:merged']) slowPut.set(k, { ms: 2000, fail: 0, late: true })
+  plain.set('A')
+  other.set('A')
+  merged.set(['x', 'a'])
+  await sleep(1000) // the A saves are out, and on the server
+  plain.set('B')
+  other.set('B')
+  merged.set(['x', 'a', 'b'])
+  const closeFrom = puts.length
+  main.listeners.get('pagehide')?.forEach((l) => l({ key: null, newValue: null }))
+  // Gone: nothing of this page runs from here (its answers arrive and are dropped).
+  main.listeners.get('mvlos:forget')?.forEach((l) => l({ key: null, newValue: null }))
+  await sleep(2500)
+  slowPut.clear()
+  check('final save: the last saves on closing were refused (a save out got through first)', ['final:plain', 'final:other', 'final:merged'].every((k) => puts.slice(closeFrom).includes(`${k}!conflict`)), puts.slice(closeFrom))
+  check('final save: the server has the saves that were out', server.get('final:plain')!.value === 'A' && server.get('final:other')!.value === 'A')
+  // Meanwhile another device changes one of them.
+  server.set('final:other', { value: 'C', updatedAt: ++clock })
+
+  // The page loads again.
+  const next = new Tab()
+  tabs.push(next)
+  const m2 = await import('../src/os/synced.ts?reload-final')
+  const [plain2, other2, merged2] = as(next, () => [m2.synced<string>('final:plain', ''), m2.synced<string>('final:other', ''), m2.synced<List>('final:merged', [], { merge: union })] as const)
+  await as(next, () => m2.pullAll())
+  await sleep(1500)
+  check('final save: after reload, a store without merge keeps the edit refused on closing', plain2.get() === 'B' && server.get('final:plain')!.value === 'B' && meta('final:plain')?.dirty === false && !('final' in meta('final:plain')!), { local: plain2.get(), server: server.get('final:plain'), meta: meta('final:plain') })
+  check('final save: but takes a change made elsewhere since', other2.get() === 'C' && server.get('final:other')!.value === 'C', { local: other2.get(), server: server.get('final:other') })
+  check('final save: a store with merge merges as before', JSON.stringify([...merged2.get()].sort()) === '["a","b","x"]' && JSON.stringify([...(server.get('final:merged')!.value as List)].sort()) === '["a","b","x"]', { local: merged2.get(), server: server.get('final:merged') })
 }
 
 // Accounts (whose state a tab holds, switching account in another tab): scripts/sync-accounts-check.ts.

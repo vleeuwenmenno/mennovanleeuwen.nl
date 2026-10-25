@@ -883,7 +883,9 @@ after it was made; setting the same value again, or undoing a change before it w
 nothing. Merging another tab's copy only counts as unsaved for what that copy brought that this
 tab didn't have (its "unsaved" mark is often this tab's own earlier write). A store has one save
 out at a time; a change made meanwhile goes out after it, whether it worked or not, and closing
-the page sends it too. A store that has saved more than 10 times in 20 seconds waits before each
+the page sends it too. That last save is refused if the save still out gets through first (it
+was made on top of the version before); a store that doesn't merge then keeps it on the next
+load, as long as the server still has what the save out sent, and saves it on top. A store that has saved more than 10 times in 20 seconds waits before each
 next save, twice as long each time up to a minute, until it has been quiet for longer than that
 wait, so no conflict or merge between tabs and devices can keep the server busy. A failed save
 is tried again, also waiting twice as long each time, up to a minute. `pnpm check:widgets-sync` covers this in memory, and `pnpm check:sync-loop`

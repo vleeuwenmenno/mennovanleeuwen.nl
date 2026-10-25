@@ -23,7 +23,19 @@ import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } 
 // never reads it, and this tab writes and sends nothing once the browser is signed in as someone
 // else (accountGuard). An answer from the server that arrives after that is dropped.
 
-type Meta<T> = { value: T; /** server version this value is based on */ base: number; /** changed since */ dirty: boolean }
+type Meta<T> = {
+  value: T
+  /** server version this value is based on */
+  base: number
+  /** changed since */
+  dirty: boolean
+  /**
+   * Set when the page closed while a save was out (see pagehide): what that save sent (`out`)
+   * and what the last save on closing sent (`sent`), both as JSON. The last one went out on top
+   * of the version before `out`, so if `out` got through, the server refused it.
+   */
+  final?: { out: string; sent: string }
+}
 type Remote = { value: unknown; updatedAt: number }
 
 export type Synced<T> = {
@@ -46,6 +58,10 @@ type Internal = Synced<unknown> & {
   pushed: (updatedAt: number, sent: unknown) => void
   /** Whether the value is the server's copy at its base, as far as this tab knows. */
   sameAsServer: () => boolean
+  /** The page is closing with a save out that sent `out` (JSON): kept with the value (Meta.final). */
+  closing: (out: string) => void
+  /** Keeps the unsaved value as it is, on top of the server's version `updatedAt`. */
+  rebase: (updatedAt: number) => void
   /** Marks the value saved (it already is, on the server). */
   clean: () => void
   reset: () => void
@@ -71,7 +87,8 @@ function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (
     const raw = accountStorage.get(storageKey(key))
     if (raw) {
       const m = JSON.parse(raw) as Meta<unknown>
-      return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty }
+      const final = m.final && typeof m.final.out === 'string' && typeof m.final.sent === 'string' ? { out: m.final.out, sent: m.final.sent } : undefined
+      return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty, ...(final ? { final } : {}) }
     }
     const legacy = legacyKey && accountStorage.get(legacyKey)
     if (legacy) return { value: normalize ? normalize(JSON.parse(legacy)) : (JSON.parse(legacy) as T), base: 0, dirty: true }
@@ -186,12 +203,20 @@ export function synced<T>(
     pushed(updatedAt, sent) {
       known = { base: updatedAt, json: JSON.stringify(sent) }
       // Still dirty if it changed while the request was out.
-      meta = { ...meta, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
+      meta = { value: meta.value, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
       save()
       emitSynced()
       if (meta.dirty) schedulePush(key)
     },
     sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
+    closing(out) {
+      meta = { ...meta, final: { out, sent: JSON.stringify(meta.value) } }
+      save()
+    },
+    rebase(updatedAt) {
+      meta = { value: meta.value, base: updatedAt, dirty: true }
+      save()
+    },
     clean() {
       meta = { ...meta, dirty: false }
       save()
@@ -268,6 +293,8 @@ const MAX_BACKOFF = 60_000
 type Pace = { sent: number[]; level: number; last: number; errors: number }
 const paces = new Map<string, Pace>()
 const inFlight = new Set<string>()
+/** What the save out for a key sent (JSON). */
+const outJson = new Map<string, string>()
 /** Keys with a save asked for here that hasn't gone through yet (pagehide sends them). */
 const pending = new Set<string>()
 const paceOf = (key: string) => {
@@ -328,6 +355,7 @@ async function push(key: string) {
   const pace = paceOf(key)
   counted(key)
   inFlight.add(key)
+  outJson.set(key, JSON.stringify(value))
   setStatus({ state: 'syncing', at: status.at })
   try {
     const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
@@ -342,6 +370,7 @@ async function push(key: string) {
     setStatus({ state: 'error', at: status.at, error: (e as Error).message })
   } finally {
     inFlight.delete(key)
+    outJson.delete(key)
     // Still unsaved (changed while it was out, or the save failed): saved next, unless something
     // already asked for that. A failed one waits (backoff, by its errors).
     if (!s.meta().dirty) pending.delete(key)
@@ -357,6 +386,14 @@ function reconcile(s: Internal, remote: Remote | undefined) {
   }
   if (remote.updatedAt > local.base) {
     s.onIncoming?.(remote.value)
+    // The page closed with a save out, and the server has what that save sent: the last save on
+    // closing (or a change since) was refused for being on top of the version before it, not
+    // because of a change elsewhere. Kept, and saved on top. Stores that merge already keep it.
+    if (local.final && local.dirty && !s.merge && JSON.stringify(s.normalize(remote.value)) === local.final.out) {
+      s.rebase(remote.updatedAt)
+      schedulePush(s.key, 0)
+      return
+    }
     // A copy never saved to the account (base 0) gives way to the account's, if the store says so.
     if (local.dirty && s.merge && !(s.yieldWhenNew && local.base === 0)) {
       // Both changed: keep both sides' edits and save the result on top of the server's version.
@@ -423,6 +460,10 @@ export function startSync() {
       // The server's copy, as far as this tab knows, unless a save is still out: then the server
       // may be about to hold that save's value instead (a change undone meanwhile), so send it.
       if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
+      // A save still out may get through before this one, which is then refused (it is on top of
+      // the version before): the next page load keeps this value if so (see reconcile).
+      const out = outJson.get(key)
+      if (out !== undefined && !s.merge) s.closing(out)
       const { value, base } = s.meta()
       fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
     }
