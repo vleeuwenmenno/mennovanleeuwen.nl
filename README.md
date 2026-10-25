@@ -207,6 +207,20 @@ often comes from a model, raw HTML shows as text, only http(s), mailto and relat
 links, and pictures load from https or `data:` images only. `pnpm check:markdown` runs the
 parser's tests. Footnotes are not supported.
 
+### Emoji shortcodes
+
+`:rofl:`, `:+1:`, `:fire:`, `:flag_jp:` and about 1,900 other Discord, Slack and GitHub names turn
+into their emoji ([`src/data/emoji/`](src/data/emoji)). Markdown shows them outside code (agent
+replies, notes, previews, the terminal's `agents` view), and unknown names stay as written. In the
+Agents message box and the Notebook editor, typing `:` and two letters opens a list of matching
+names (arrows, Tab or Enter pick, Escape closes, a tap picks it on touch), and a finished `:name:`
+followed by a space or punctuation is replaced at once. Code spans, fenced blocks, URLs and times
+like `12:30:45` are never touched. Settings → Language & region turns the typing part off (per
+browser); showing shortcodes in text is always on. The names are generated from emojibase's
+GitHub and iamcal shortcode lists (MIT; skin-tone variants left out) into `data.ts`, a separate
+chunk of about 17 kB gzipped that loads the first time a text or the box needs a name, so the
+main bundle only carries the small matching code. `pnpm check:emoji` runs its tests.
+
 ### Visual blocks
 
 A fenced block with the language `visual` holds a small JSON spec that draws as a picture in every

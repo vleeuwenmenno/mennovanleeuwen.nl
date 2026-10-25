@@ -101,6 +101,7 @@ import { libraryName, parseSf } from '../data/seafile'
 import { readBytes } from '../data/fileOps'
 import { useDropTarget, type Drag as DropDrag } from '../os/dnd'
 import { notify } from '../os/notify'
+import { useEmojiTyping } from '../os/emojiTyping'
 import { pickFiles, pickFolder } from '../os/FolderPicker'
 import { Select } from '../os/Select'
 import { hasCalendar, signIn, useAccount } from '../os/account'
@@ -1120,6 +1121,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
+  const emoji = useEmojiTyping(input, text)
 
   // A thread created by the first message keeps streaming into this view: don't reload it then.
   const streamed = useRef<string | null>(null)
@@ -2134,6 +2136,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {(files.length > 0 || reading > 0) && (
             <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
+          {emoji.popup}
           {showSuggestions && (() => {
             // LoRAs get a detail pane for the highlighted one: beside the list, or on a phone under its row
             // (a first tap there shows it, a second inserts it, or Use in the detail).
@@ -2160,9 +2163,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           <textarea
             ref={input}
             value={text}
-            onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart) }}
-            onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+            onChange={(e) => emoji.change(e, (v, c) => { setText(v); setCaret(c) })}
+            onSelect={(e) => { setCaret(e.currentTarget.selectionStart); emoji.select(e.currentTarget) }}
             onKeyDown={(e) => {
+              if (emoji.keyDown(e)) return
               if (showSuggestions && !e.nativeEvent.isComposing) {
                 if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSuggestionsDismissed(true); return }
                 if (suggestions.length && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); setSuggestionIndex((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length); return }

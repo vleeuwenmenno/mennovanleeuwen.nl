@@ -1,10 +1,11 @@
-import { createContext, Fragment, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, Fragment, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { parseMarkdown, type Block, type Inline } from './parse.ts'
 import { highlight, knownLanguage } from './highlight.ts'
 import { useFurigana } from '../furigana.ts'
 import { joinText, moneyPieces } from '../money.ts'
 import { MoneyAmount } from '../../os/MoneyAmount.tsx'
 import { isVisualLang } from '../visual/lang.ts'
+import { emojiReady, hasShortcode, loadEmoji, onEmojiLoaded, replaceShortcodes } from '../emoji/index.ts'
 
 /** Visual blocks' renderer, loaded the first time a ```visual block shows (src/data/visual/). */
 const VisualBlock = lazy(() => import('../visual/Visual.tsx'))
@@ -65,7 +66,7 @@ function inlines(nodes: Inline[], key: string, money = false): ReactNode[] {
     const k = `${key}.${i}`
     switch (n.type) {
       case 'text':
-        return money ? <Fragment key={k}>{moneyText(n.text, k)}</Fragment> : n.text
+        return money ? <Fragment key={k}>{moneyText(replaceShortcodes(n.text), k)}</Fragment> : replaceShortcodes(n.text)
       // A plain line break is a space in a paragraph; with `breaks` the paragraph keeps it (pre-wrap).
       case 'soft':
         return '\n'
@@ -251,6 +252,12 @@ export function MarkdownPreview({
   resolveUrl?: (url: string, image: boolean) => string
 }) {
   const tree = useMemo(() => parseMarkdown(text), [text])
+  // :shortcode: names load as their own chunk the first time a text has one; the text redraws when they arrive.
+  const wantsEmoji = useMemo(() => hasShortcode(text), [text])
+  useSyncExternalStore(onEmojiLoaded, () => !wantsEmoji || emojiReady(), () => true)
+  useEffect(() => {
+    if (wantsEmoji) void loadEmoji()
+  }, [wantsEmoji])
   const out = <>{blocks(tree, breaks, 'b', false, money)}</>
   return resolveUrl ? <ResolveUrl.Provider value={resolveUrl}>{out}</ResolveUrl.Provider> : out
 }
