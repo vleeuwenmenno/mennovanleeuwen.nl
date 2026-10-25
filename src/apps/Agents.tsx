@@ -78,6 +78,9 @@ import {
   type Memory,
   type Mode,
   type ModelInfo,
+  type Effort,
+  EFFORT_NAMES,
+  effectiveEffort,
   type CallSummary,
   type PendingApproval,
   type TurnEvent,
@@ -125,6 +128,8 @@ import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
 import { ImageStudio } from './AgentsStudio'
 import { accountStorage } from '../os/accountSpace'
+import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
+import { modelName } from '../data/agentModelNames'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
 // archived ones, and what the agent remembers), the conversation on the right with each tool call
@@ -154,16 +159,18 @@ export function Agents({ win }: { win: WinState }) {
         )}
       </div>
     )
-  if (!account.integrations.ollama && studioOnly)
+  // Without an Ollama key, a ChatGPT sign-in or an OpenAI key is enough: those threads run on OpenAI's models.
+  const canChat = !!account.integrations.ollama || !!account.integrations.openai
+  if (!canChat && studioOnly)
     return (
       <div className="studio-alone">
         <ImageStudio threads={null} onBack={() => setStudioOnly(false)} onOpenThread={() => setStudioOnly(false)} onSettings={() => wm.open('settings', { section: 'agents', t: String(Date.now()) })} />
       </div>
     )
-  if (!account.integrations.ollama)
+  if (!canChat)
     return (
       <div className="nb-blank">
-        <p className="muted">Agents runs on Ollama Cloud. Add an API key from your Ollama account to start.</p>
+        <p className="muted">Agents runs on Ollama Cloud. Add an API key from your Ollama account to start, or sign in with ChatGPT (or add an OpenAI API key) in Settings → Agents → Images to use OpenAI's models.</p>
         <button className="btn btn-primary" onClick={() => wm.open('settings', { section: 'integrations', t: String(Date.now()) })}>
           Open Settings → Integrations
         </button>
@@ -1088,6 +1095,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const { accounts: mailAccounts } = useMailAccounts()
   const pcFiles = useRef<HTMLInputElement>(null)
   const [draftModel, setDraftModel] = useState<string | null>(null)
+  // The thinking effort a new thread starts with (null: as the mode has it).
+  const [draftEffort, setDraftEffort] = useState<Effort | null>(null)
+  const [picking, setPicking] = useState(false)
+  const modelPill = useRef<HTMLButtonElement>(null)
   const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
@@ -1294,6 +1305,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     if (thread) updateThread(thread.id, { model: name }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))
     else setDraftModel(name)
   }
+  const effortPicked = thread ? (thread.effort ?? null) : draftEffort
+  const setEffort = (e: Effort | null) => {
+    if (thread) updateThread(thread.id, { effort: e }).then((t) => setThread(t), (err: Error) => setError(err.message))
+    else setDraftEffort(e)
+  }
 
   // The work folder (a Seafile folder its file tools work in) and how changes are allowed.
   const workdir = thread ? thread.workdir : draftWorkdir
@@ -1384,7 +1400,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     let target = thread
     try {
       if (!target) {
-        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, skillsOff: draftSkillsOff, ...(draftModel ? { model: draftModel } : {}) })
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, skillsOff: draftSkillsOff, ...(draftModel ? { model: draftModel } : {}), ...(draftEffort ? { effort: draftEffort } : {}) })
         streamed.current = target.id
         setThread(target)
         onCreated(target)
@@ -1904,20 +1920,28 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       (['quick', 'deep'] as Mode[]).map((m) => ({ label: m === 'quick' ? 'Quick' : 'Deep research', hint: MODE_HELP[m], checked: mode === m, onSelect: () => setMode(m) })),
       'above',
     )
-  const modelMenu = (e: React.MouseEvent) =>
+  // The model: the picker (AgentsModelPicker.tsx), its pretty name on the pill, and the thinking
+  // effort beside it for models that take one.
+  const shownModel = model || usualModel || ''
+  const shownInfo = models.find((m) => m.name === shownModel)
+  const pretty = shownModel ? modelName(shownModel, shownInfo?.label) : null
+  const efforts = shownInfo?.efforts ?? []
+  const effort = effectiveEffort(shownInfo, effortPicked, mode)
+  const effortMenu = (e: React.MouseEvent) =>
     openMenuAt(
       e.currentTarget,
       [
-        ...(thread ? [] : [{ label: 'The usual one', hint: usualModel ? `${usualModel}, as set in Settings` : 'Picked for the mode (Settings can choose)', checked: !model, onSelect: () => setDraftModel(null) }]),
-        ...modelOptions.map((m) => ({
-          label: m.name,
-          checked: m.name === model,
-          shortcut: [m.vision ? 'sees' : '', m.contextLength ? tokenCount(m.contextLength) : ''].filter(Boolean).join(' · '),
-          onSelect: () => setModel(m.name),
-        })),
+        { label: `As the mode (${EFFORT_NAMES[effectiveEffort(shownInfo, null, mode) ?? 'low']})`, hint: mode === 'deep' ? 'Deep research thinks harder' : 'Quick thinks briefly', checked: !effortPicked, onSelect: () => setEffort(null) },
+        { separator: true },
+        ...efforts.map((x) => ({ label: EFFORT_NAMES[x], checked: !!effortPicked && x === effort, onSelect: () => setEffort(x) })),
       ],
       'above',
     )
+  const pickFavourite = (i: number) => {
+    const m = favouriteModels(modelOptions)[i]
+    if (m) setModel(m.name)
+    return !!m
+  }
 
   // Attachments: from Seafile (the desktop's own picker, or dragged from Files) or this computer.
   const addFiles = async (load: () => Promise<Attachment>[]) => {
@@ -1977,7 +2001,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     try {
       let target = thread
       if (!target) {
-        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, skillsOff: draftSkillsOff, ...(draftModel ? { model: draftModel } : {}) })
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, skillsOff: draftSkillsOff, ...(draftModel ? { model: draftModel } : {}), ...(draftEffort ? { effort: draftEffort } : {}) })
         streamed.current = target.id
         setThread(target)
         onCreated(target)
@@ -2132,7 +2156,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           void send()
         }}
       >
-        <div className="agt-box" onClick={(e) => e.target === e.currentTarget && input.current?.focus()}>
+        <div
+          className="agt-box"
+          onClick={(e) => e.target === e.currentTarget && input.current?.focus()}
+          onKeyDown={(e) => {
+            // Ctrl+1…9: the first nine favourite models (Alt+1…9 is the workspaces').
+            const fav = favouriteKey(e)
+            if (fav !== null && !answering && pickFavourite(fav)) e.preventDefault()
+          }}
+        >
           {(files.length > 0 || reading > 0) && (
             <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
@@ -2226,10 +2258,42 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               <span className="agt-count">{tools.length}</span>
             </button>
             <span className="agt-grow" />
-            <button type="button" className="agt-pill agt-model-pill" onClick={modelMenu} disabled={answering} title="Model">
-              <span className="agt-model-name">{model || usualModel || 'Automatic'}</span>
+            <button
+              ref={modelPill}
+              type="button"
+              className="agt-pill agt-model-pill"
+              onClick={() => setPicking((o) => !o)}
+              disabled={answering}
+              title={pretty ? `${pretty.name}${pretty.variant ? ` ${pretty.variant}` : ''} (${shownModel})${model ? '' : ', the usual one'}` : 'Model'}
+              aria-haspopup="dialog"
+              aria-expanded={picking}
+            >
+              <span className="agt-model-name">{pretty ? pretty.name : 'Automatic'}</span>
+              {pretty?.variant && <span className="agt-model-variant">{pretty.variant}</span>}
               <Icon name="chevron" size={12} />
             </button>
+            {efforts.length > 0 && effort && (
+              <button type="button" className="agt-pill agt-effort-pill" onClick={effortMenu} disabled={answering} title={`Thinking effort: ${EFFORT_NAMES[effort]}${effortPicked ? '' : ' (as the mode has it)'}`} aria-label={`Thinking effort: ${EFFORT_NAMES[effort]}`}>
+                <span className="agt-pill-label">{EFFORT_NAMES[effort]}</span>
+                <span className="agt-effort-short" aria-hidden>{EFFORT_NAMES[effort].slice(0, 1)}</span>
+                <Icon name="chevron" size={12} />
+              </button>
+            )}
+            {picking && (
+              <ModelPicker
+                models={modelOptions}
+                value={model}
+                usual={thread ? null : { hint: usualModel ? `${modelName(usualModel, models.find((m) => m.name === usualModel)?.label).name}, as set in Settings` : 'Picked for the mode (Settings can choose)' }}
+                anchor={modelPill.current}
+                onClose={() => setPicking(false)}
+                onPick={(name) => {
+                  setPicking(false)
+                  if (name === null) setDraftModel(null)
+                  else setModel(name)
+                  requestAnimationFrame(() => input.current?.focus())
+                }}
+              />
+            )}
             {answering && (
               <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
                 <Icon name="stop" size={14} />
@@ -2256,7 +2320,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             )}
           </div>
         </div>
-        {visionless && <p className="agt-warn">{model} can't see pictures: pick a model that sees, or the pictures go as names only.</p>}
+        {visionless && <p className="agt-warn">{pretty?.name ?? model} can't see pictures: pick a model that sees, or the pictures go as names only.</p>}
         <input
           ref={pcFiles}
           type="file"

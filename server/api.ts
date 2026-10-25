@@ -14,7 +14,8 @@ import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { chatProviderReady } from './agentChatGPT.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -112,7 +113,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
         caldav: user ? listCaldav(user) : [],
-        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
+        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null, openai: user ? chatProviderReady(user, 'chatgpt') || chatProviderReady(user, 'openai') : false },
         seafile: user ? seafileInfo(user) : null,
       }, fix.length ? { 'Set-Cookie': fix } : {})
       return true
@@ -332,7 +333,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/ollama' && method === 'PUT') return await setOllamaKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/ollama' && method === 'DELETE') return removeOllamaKey(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
-    if (path === '/api/agents/models' && read) return requireUser(req), json(res, 200, await agentModels()), true
+    if (path === '/api/agents/models' && read) return json(res, 200, await allModels(requireUser(req))), true
     if (path === '/api/agents/threads/search' && method === 'POST') return json(res, 200, searchPastThreads(requireUser(req), await readJson(req, 2048))), true
     if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true

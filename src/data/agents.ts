@@ -5,6 +5,7 @@ import { parseSkillConfig, type SkillConfig } from './agentSkillRules'
 import { getNote } from './notes'
 import type { ImageProgress } from './imageModels'
 import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
+import { effortFor, type Effort } from './agentModelNames'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -12,7 +13,7 @@ import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[] }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[]; /** The thinking effort picked for this thread (null: as the mode has it) */ effort?: Effort | null }
 /**
  * A title a thread had until `until`, newest first on the thread: the title model changed it when
  * the conversation moved on, or the user renamed it. Shown as "also known as", and found by search.
@@ -114,7 +115,17 @@ export function toolState(g: (typeof TOOL_GROUPS)[number], on: boolean, blocked:
 const LEGACY_TOOLS: ToolGroup[] = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory']
 /** About the user (projectId null) or one project, filed under a category path like "People/Friends". */
 export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null; imageLearning?: boolean; imageProfile?: boolean }
-export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null }
+export { EFFORTS, EFFORT_NAMES, type Effort } from './agentModelNames'
+/**
+ * A model a thread can run on: Ollama Cloud's, or OpenAI's (ids prefixed chatgpt/ or openai/).
+ * `label` is the provider's own name for it; `efforts` the thinking levels it takes (none: it cannot be set).
+ */
+export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider?: 'ollama' | 'chatgpt' | 'openai'; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
+/**
+ * The effort a thread runs with: its own pick when the model takes it (else the nearest the model
+ * has), or what the mode means (quick low, deep high; Ollama's on/off models: on).
+ */
+export const effectiveEffort = (m: ModelInfo | undefined, picked: Effort | null | undefined, mode: Mode): Effort | null => effortFor(m?.efforts, picked, mode)
 
 /**
  * A form from the agent's ask_user. Each question has a type the window draws (and any other type
@@ -180,7 +191,7 @@ export type TurnEvent =
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 export const listThreads = (archived: boolean) => api<Thread[]>(`/api/agents/threads${archived ? '?archived=1' : ''}`)
-export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean; workdir?: Workdir | null; permission?: Permission; skillsOff?: string[] }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
+export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean; workdir?: Workdir | null; permission?: Permission; skillsOff?: string[]; effort?: Effort | null }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
 export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}`)
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
@@ -208,7 +219,7 @@ export const mailReadsLeft = (t: Pick<Thread, 'mailReadsUntil'> | null | undefin
 /** What the terminal printed for a terminal tool call. */
 export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
 /** `todos: null` dismisses the thread's plan (for the agent too). */
-export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission' | 'skillsOff'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
+export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission' | 'skillsOff' | 'effort'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
 
@@ -298,12 +309,14 @@ export type AgentSettings = {
   autoCompact: boolean
   /** How full, in percent of the model's context window: one of COMPACT_AT */
   compactAt: number
+  /** Models starred in the model picker, in the order they were starred (Ctrl+1…9 picks the first nine) */
+  favoriteModels: string[]
 }
 /** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85 }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, favoriteModels: [] }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -322,6 +335,7 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       titleEvery: TITLE_EVERY.includes(Number(s.titleEvery)) ? Number(s.titleEvery) : 3,
       autoCompact: s.autoCompact !== false,
       compactAt: COMPACT_AT.includes(Number(s.compactAt)) ? Number(s.compactAt) : 85,
+      favoriteModels: Array.isArray(s.favoriteModels) ? [...new Set(s.favoriteModels.filter((x): x is string => typeof x === 'string' && x.length <= 80))].slice(0, 50) : [],
     }
   },
 })
@@ -416,7 +430,9 @@ export const orderProjects = (ids: number[]) => api<Project[]>('/api/agents/proj
 export const deleteProject = (id: number) => api(`/api/agents/projects/${id}`, { method: 'DELETE' })
 
 let modelList: Promise<ModelInfo[]> | null = null
-/** Ollama's cloud models that can use tools; asked once per page. */
+/** Asks for the model list again next time (after signing in with ChatGPT or out, or a new OpenAI key). */
+export const forgetAgentModels = () => void (modelList = null)
+/** The models a thread can run on (Ollama Cloud's that can use tools, and OpenAI's once set up); asked once per page. */
 export function agentModels(): Promise<ModelInfo[]> {
   modelList ??= api<ModelInfo[]>('/api/agents/models').catch((e) => {
     modelList = null

@@ -1,0 +1,299 @@
+/* The Agents composer's model picker (AgentsModelPicker.tsx): fixed over everything like a menu,
+   a maker rail on the left, the models on the right. Colours only from the theme's variables. */
+.amp {
+  position: fixed;
+  z-index: 300000;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--fg);
+  border: var(--border, 1px) solid var(--accent);
+  box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.45);
+  font-size: 12.5px;
+  outline: 0;
+  animation: ctx-in 0.08s ease-out;
+}
+.amp-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.amp-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 13px;
+}
+.amp-close {
+  width: 36px;
+  height: 36px;
+  color: var(--muted);
+}
+.amp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.amp-rail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.amp-rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 34px;
+  height: 34px;
+  color: var(--muted);
+}
+.amp-rail-item:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.amp-rail-item.is-on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.amp-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid currentColor;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.amp-mark.is-long {
+  font-size: 8px;
+}
+.amp-mark.is-glyph {
+  border-color: transparent;
+}
+.amp-list {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+.amp-heading {
+  padding: 8px 8px 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.amp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 5px 6px 5px 8px;
+  cursor: pointer;
+}
+.amp-row.is-active {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.amp-row.is-current .amp-row-name {
+  color: var(--accent);
+}
+.amp-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.amp-row-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-bright);
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.amp-variant {
+  flex: none;
+  padding: 0 4px;
+  margin-left: 6px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+}
+.amp-row-name .amp-variant {
+  margin-left: 0;
+}
+.amp-row-sub {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.amp-raw {
+  opacity: 0.75;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.amp-badges {
+  flex: none;
+  display: flex;
+  gap: 3px;
+}
+.amp-badge {
+  padding: 0 4px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+.amp-kbd {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 16px;
+}
+.amp-star {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  opacity: 0.55;
+}
+.amp-row:hover .amp-star,
+.amp-row.is-active .amp-star,
+.amp-star:focus-visible {
+  opacity: 1;
+}
+.amp-star.is-on {
+  color: var(--yellow);
+  opacity: 1;
+}
+.amp-empty {
+  padding: 16px 10px;
+}
+.amp-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.amp-foot-model {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  color: var(--fg-bright);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.amp-foot-hint {
+  flex: none;
+}
+
+/* Narrow (a small window): the badges give way to the name. */
+@media (max-width: 560px) {
+  .amp-badges .amp-badge:not(:first-child) {
+    display: none;
+  }
+}
+
+/* A phone: a sheet from the bottom, the rail a row of chips that scrolls sideways. */
+.amp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 299999;
+  background: color-mix(in srgb, var(--bg-dark) 55%, transparent);
+}
+.amp.is-sheet {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: min(78dvh, 640px);
+  border-width: 1px 0 0;
+  font-size: 14px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.amp.is-sheet .amp-body {
+  flex-direction: column;
+}
+.amp.is-sheet .amp-rail {
+  flex-direction: row;
+  padding: 6px 8px;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.amp.is-sheet .amp-rail-item {
+  width: auto;
+  height: 34px;
+  padding: 0 10px 0 6px;
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.amp.is-sheet .amp-rail-item.is-on {
+  border-color: var(--accent);
+}
+.amp-rail-name {
+  font-size: 12.5px;
+}
+.amp.is-sheet .amp-row {
+  min-height: 52px;
+}
+.amp.is-sheet .amp-star {
+  width: 40px;
+  height: 40px;
+}
+.amp.is-sheet .amp-kbd,
+.amp.is-sheet .amp-foot-hint {
+  display: none;
+}
+@media (pointer: coarse) {
+  .amp-row {
+    min-height: 48px;
+  }
+  .amp-star {
+    width: 40px;
+    height: 40px;
+    opacity: 1;
+  }
+  .amp-rail-item {
+    width: 40px;
+    height: 40px;
+  }
+}

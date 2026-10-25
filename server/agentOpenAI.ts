@@ -600,3 +600,8 @@ export async function handleOpenAIApi(req: IncomingMessage, res: ServerResponse,
   }
   return false
 }
+
+// --- for chat on OpenAI's models (server/agentChatGPT.ts) ------------------------------------------
+
+/** What the chat provider needs from the sign-in and the key, without handing out the stored secrets anywhere else. */
+export const openaiChatAccess = { openaiUrl: OPENAI, codexUrl: CODEX, apiKey, signedIn: (user: User) => !!tokens(user), freshTokens, codexHeaders }

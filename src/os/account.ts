@@ -27,7 +27,8 @@ export type Account = {
   /** CalDAV accounts (Fastmail, Nextcloud...) for calendars */
   caldav: CaldavInfo[]
   /** Third-party services with a key on the server: saved in Settings, set on the server, or none */
-  integrations: { updown: 'settings' | 'server' | null; ollama: 'settings' | 'server' | null }
+  /** `openai`: signed in with ChatGPT or an OpenAI API key, so Agents can run on OpenAI's models */
+  integrations: { updown: 'settings' | 'server' | null; ollama: 'settings' | 'server' | null; openai?: boolean }
   seafile: SeafileInfo | null
 }
 
@@ -96,8 +97,8 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
-    const next: Account = { status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null }
+    const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean }; seafile?: SeafileInfo | null }>('/api/me')
+    const next: Account = { status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
     // This tab took its account from the browser's cookie as it loaded (src/os/accountSpace.ts).
     // The server says otherwise (the session ran out, or the cookie was from before it was kept):
     // its answer has put the cookie right, so start again as that account, keeping this one's

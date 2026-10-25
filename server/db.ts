@@ -251,6 +251,8 @@ export function database(): DatabaseSync {
   // Always-on skills and rule instructions switched off in one thread (its chips; JSON list of
   // skill names and rule:<id>, src/data/agentSkillRules.ts).
   if (!cols('agent_threads').includes('skills_off')) db.exec('ALTER TABLE agent_threads ADD COLUMN skills_off TEXT')
+  // The thinking effort picked for a thread (server/agentChatGPT.ts EFFORTS); null follows the mode.
+  if (!cols('agent_threads').includes('effort')) db.exec('ALTER TABLE agent_threads ADD COLUMN effort TEXT')
   // Shared links to a thread or one answer (server/shares.ts): a snapshot taken when shared, read
   // by anyone with the token until it expires or is revoked. They go with their thread and account.
   db.exec(`CREATE TABLE IF NOT EXISTS agent_shares (

@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_READS_EVENT, removeSite, removeSkill, setMailReads, setSkillEnabled, type AllowedSite, type MailReadsMode, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
+import { makerOf, modelName, PROVIDER_NAMES } from '../data/agentModelNames'
+import { namedModels } from './AgentsModelPicker'
 import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
@@ -142,21 +144,36 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
   }
   const open = (app: 'agents' | 'zed' | 'settings', props: Record<string, string>) => wm.open(app, { ...props, t: String(Date.now()) })
 
-  /** A model picker: "Automatic" (with what that is now) or one of Ollama's models that can use tools. */
-  const modelSelect = (value: string | null, fallback: string | undefined, onChange: (v: string | null) => void, label: string) => (
-    <Select
-      className="set-select"
-      value={value ?? ''}
-      onChange={(v) => onChange(v || null)}
-      aria-label={label}
-      disabled={!models.length}
-      options={[
-        { value: '', label: `Automatic${fallback ? ` (${fallback})` : ''}` },
-        ...(value && !models.some((m) => m.name === value) ? [{ value, label: value, note: 'not offered now' }] : []),
-        ...models.map((m) => ({ value: m.name, label: m.name, note: [m.contextLength ? tokenCount(m.contextLength) : '', m.vision ? 'sees pictures' : ''].filter(Boolean).join(' · ') || undefined })),
-      ]}
-    />
-  )
+  /**
+   * A model picker: "Automatic" (with what that is now) or one of the models, by pretty name and
+   * maker (src/data/agentModelNames.ts). Titles and the safety check run on Ollama only.
+   */
+  const modelSelect = (value: string | null, fallback: string | undefined, onChange: (v: string | null) => void, label: string, ollamaOnly = false) => {
+    const offered = namedModels(ollamaOnly ? models.filter((m) => (m.provider ?? 'ollama') === 'ollama') : models)
+    const named = (raw: string) => {
+      const n = modelName(raw, models.find((m) => m.name === raw)?.label)
+      return `${n.name}${n.variant ? ` ${n.variant}` : ''}`
+    }
+    return (
+      <Select
+        className="set-select"
+        value={value ?? ''}
+        onChange={(v) => onChange(v || null)}
+        aria-label={label}
+        disabled={!models.length}
+        options={[
+          { value: '', label: `Automatic${fallback ? ` (${named(fallback)})` : ''}` },
+          ...(value && !offered.some((r) => r.info.name === value) ? [{ value, label: named(value), hint: value, note: 'not offered now' }] : []),
+          ...offered.map(({ info: m, n }) => ({
+            value: m.name,
+            label: `${n.name}${n.variant ? ` ${n.variant}` : ''}`,
+            hint: `${makerOf(n.maker).name} · ${PROVIDER_NAMES[n.provider]} · ${m.name}`,
+            note: [m.contextLength ? tokenCount(m.contextLength) : '', m.vision ? 'sees' : ''].filter(Boolean).join(' · ') || undefined,
+          })),
+        ]}
+      />
+    )
+  }
 
   const status = !prompt
     ? 'Reading…'
@@ -234,17 +251,17 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
             <strong>Thread titles</strong>
             <span className="muted">Names new threads and suggests names when renaming</span>
           </span>
-          {modelSelect(settings.titleModel, auto?.title, (titleModel) => setAgentSettings({ titleModel }), 'Model for thread titles')}
+          {modelSelect(settings.titleModel, auto?.title, (titleModel) => setAgentSettings({ titleModel }), 'Model for thread titles', true)}
         </li>
         <li className="set-row">
           <span className="set-row-text">
             <strong>Safety check</strong>
             <span className="muted">In Auto, looks at web addresses the agent built itself and says whether they are safe to read. It sees only the address and the addresses the thread was given, never your memories or files</span>
           </span>
-          {modelSelect(settings.checkModel, auto?.check, (checkModel) => setAgentSettings({ checkModel }), 'Model for the safety check')}
+          {modelSelect(settings.checkModel, auto?.check, (checkModel) => setAgentSettings({ checkModel }), 'Model for the safety check', true)}
         </li>
       </ul>
-      <p className="muted set-help">Ollama Cloud's models that can use tools, with their context window. A thread keeps the model it started with; change it in the thread's composer.</p>
+      <p className="muted set-help">Ollama Cloud's models that can use tools, and OpenAI's once you sign in with ChatGPT or add an OpenAI API key (Images below), by name and maker, with their context window. Titles and the safety check always run on Ollama. A thread keeps the model it started with; change it, and its thinking effort, in the thread's composer.</p>
 
       <h4 className="set-subhead">Thread titles</h4>
       <ul className="set-list">
@@ -463,7 +480,8 @@ function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: S
     const bad = reads.find((r) => r && 'error' in r) as { error: string } | undefined
     return bad ? { id, summary: `Couldn't check: ${bad.error}`, tone: 'error' } : null
   }
-  const model = (chosen: string | null, fallback?: string) => chosen ?? (fallback ? `Automatic (${fallback})` : 'Automatic')
+  const pretty = (raw: string) => { const n = modelName(raw, models.find((m) => m.name === raw)?.label); return `${n.name}${n.variant ? ` ${n.variant}` : ''}` }
+  const model = (chosen: string | null, fallback?: string) => (chosen ? pretty(chosen) : fallback ? `Automatic (${pretty(fallback)})` : 'Automatic')
   const openai = useRead(getOpenAIImages)
   const gpt = openai && 'value' in openai && openai.value.ready ? `OpenAI pictures via ${openai.value.provider === 'chatgpt' ? 'ChatGPT' : 'API key'}` : ''
   const preset = images && 'value' in images ? IMAGE_PRESETS.find((p) => p.id === images.value.preset)?.title : undefined
