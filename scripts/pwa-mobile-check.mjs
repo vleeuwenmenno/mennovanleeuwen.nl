@@ -36,13 +36,16 @@ try {
   await page.send('Emulation.setTouchEmulationEnabled', { enabled: true })
   await page.send('Page.navigate', { url: `http://127.0.0.1:${port}/` })
   await page.waitFor(`document.readyState === 'complete'`)
-  for (let i = 0; i < 40; i++) {
-    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-    await sleep(150)
-    if (await page.eval(`!document.querySelector('.boot')`)) break
+  const skipBoot = async () => {
+    for (let i = 0; i < 40; i++) {
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      await sleep(150)
+      if (await page.eval(`!document.querySelector('.boot')`)) break
+    }
+    await page.waitFor(`!!document.querySelector('.topbar') && !document.querySelector('.boot')`)
+    await sleep(300)
   }
-  await page.waitFor(`!!document.querySelector('.topbar') && !document.querySelector('.boot')`)
-  await sleep(300)
+  await skipBoot()
   await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: 'notebook' }))`)
   await page.waitFor(`!!document.querySelector('.notebook')`)
   assert.equal(await page.eval(`getComputedStyle(document.querySelector('.notebook .nb-main')).display`), 'none')
@@ -56,9 +59,17 @@ try {
   })()`)
   await page.clickText('.nb-back')
   await page.clickText('.nb-item', 'Mobile test')
-  assert.equal(await page.eval(`document.querySelector('.nb-editor').value`), '# Mobile test\n\nSaved text')
+  // A note opens in Preview by default (Settings → Notebook); either view shows what was saved.
+  assert.ok(await page.eval(`(document.querySelector('.nb-editor')?.value ?? document.querySelector('.notebook').innerText).includes('Saved text')`))
   console.log('PASS Notes list, create, edit, back, reopen')
 
+  // The service worker taking over the first visit reloads the page once: let that happen, and
+  // skip the boot console it brings, before going on (the window layout brings Notes back).
+  await page.waitFor(`!!navigator.serviceWorker.controller`)
+  await sleep(1500)
+  await skipBoot()
+  await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: 'notebook' }))`)
+  await page.waitFor(`!!document.querySelector('[data-app="notebook"]')`)
   await sleep(400) // Let the window entrance animation settle before tapping a title-bar control.
   await page.clickText('[data-app="notebook"] .ctl-max')
   await page.waitFor(`document.querySelector('[data-app="notebook"]').classList.contains('is-max')`)
@@ -69,6 +80,18 @@ try {
   })()`)
   assert.deepEqual(await bounds(), { x: 0, y: 0, w: 390, h: 844, border: '0px', radius: '0px', shadow: 'none' })
   assert.equal(await page.eval(`getComputedStyle(document.querySelector('.topbar')).visibility`), 'hidden')
+  // Notes and widgets never show over or around a maximized window, whatever their z-index, and
+  // also while an iOS keyboard (and its bar) shrinks the visible area.
+  const notesShowing = () => page.eval(`[...document.querySelectorAll('.window.chrome-note')].filter((e) => getComputedStyle(e).visibility !== 'hidden').length`)
+  assert.ok(await page.eval(`document.querySelectorAll('.window.chrome-note').length > 0`), 'the opening layout has notes or widgets')
+  await page.eval(`document.querySelectorAll('.window.chrome-note').forEach((e) => (e.style.zIndex = '999999'))`)
+  assert.equal(await notesShowing(), 0)
+  await page.eval(`(() => { const r = document.documentElement; r.style.setProperty('--vvh', '420px'); r.style.setProperty('--vvt', '120px'); r.classList.add('keyboard-open') })()`)
+  const kb = await bounds()
+  assert.deepEqual([kb.y, kb.h], [120, 420])
+  assert.equal(await notesShowing(), 0)
+  await page.eval(`(() => { const r = document.documentElement; r.style.setProperty('--vvh', '844px'); r.style.setProperty('--vvt', '0px'); r.classList.remove('keyboard-open') })()`)
+  console.log('PASS Notes and widgets hidden behind a maximized window, keyboard open too')
   await page.send('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 1, mobile: false })
   await sleep(300)
   assert.deepEqual(await bounds(), { x: 0, y: 0, w: 844, h: 390, border: '0px', radius: '0px', shadow: 'none' })
@@ -78,6 +101,16 @@ try {
   assert.equal(await page.eval(`document.querySelector('[data-app="notebook"]').classList.contains('is-max')`), false)
   assert.equal(await page.eval(`getComputedStyle(document.querySelector('.topbar')).visibility`), 'visible')
   console.log('PASS Maximize edges, chrome, landscape rotation, restore')
+  assert.ok(await notesShowing() > 0, 'notes come back after restore')
+
+  // Settings → Windows → Open new windows maximized (per device, os/windowPrefs.ts).
+  await page.eval(`(() => { localStorage.setItem('mvlos.windows.openMaximized', '1'); window.dispatchEvent(new StorageEvent('storage', { key: 'mvlos.windows.openMaximized' })) })()`)
+  await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: 'terminal' }))`)
+  await page.waitFor(`!!document.querySelector('[data-app="terminal"]')`)
+  assert.equal(await page.eval(`document.querySelector('[data-app="terminal"]').classList.contains('is-max')`), true)
+  assert.equal(await notesShowing(), 0)
+  await page.eval(`localStorage.removeItem('mvlos.windows.openMaximized')`)
+  console.log('PASS Open new windows maximized')
 
   await page.waitFor(`!!navigator.serviceWorker.controller`)
   assert.equal(await page.eval(`(async () => {
