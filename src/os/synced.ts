@@ -256,26 +256,56 @@ export const useSyncStatus = () =>
     () => status,
   )
 
-// Every save goes through schedulePush, which holds a store back once it has saved more than a
-// few times in a short while (doubling the wait each time, up to a minute): whatever goes wrong
-// between tabs, devices and merges, no store can keep the server busy. One save per store is out
-// at a time; a change made meanwhile is saved after it.
-const BURST = 6
-const BURST_WINDOW = 15_000
+// Every save goes through schedulePush. A store that keeps saving (more than BURST times within
+// BURST_WINDOW) is held back, twice as long with each save after that, up to a minute, until it
+// has been quiet for longer than it was held back: whatever goes wrong between tabs, devices and
+// merges, no store can keep the server busy. A failed save is tried again, also waiting twice as
+// long each time. One save per store is out at a time; a change made meanwhile goes out after
+// it, whatever its answer.
+const BURST = 10
+const BURST_WINDOW = 20_000
 const MAX_BACKOFF = 60_000
-const pushTimes = new Map<string, number[]>()
+type Pace = { sent: number[]; level: number; last: number; errors: number }
+const paces = new Map<string, Pace>()
 const inFlight = new Set<string>()
+/** Keys with a save asked for here that hasn't gone through yet (pagehide sends them). */
+const pending = new Set<string>()
+const paceOf = (key: string) => {
+  let p = paces.get(key)
+  if (!p) paces.set(key, (p = { sent: [], level: 0, last: 0, errors: 0 }))
+  return p
+}
+const penalty = (level: number) => Math.min(MAX_BACKOFF, 1000 * 2 ** level)
 
 /** How long `key` has to wait before its next save may go out. */
 function backoff(key: string, now = Date.now()): number {
-  const recent = (pushTimes.get(key) ?? []).filter((t) => now - t < BURST_WINDOW)
-  pushTimes.set(key, recent)
-  if (recent.length < BURST) return 0
-  return Math.min(MAX_BACKOFF, 1000 * 2 ** (recent.length - BURST))
+  const p = paceOf(key)
+  p.sent = p.sent.filter((t) => now - t < BURST_WINDOW)
+  // Quiet for longer than it was held back (and than the window): back to normal.
+  if (p.level > 0 && now - p.last > Math.max(BURST_WINDOW, 2 * penalty(p.level))) p.level = 0
+  const wait = Math.max(p.level > 0 ? penalty(p.level) : 0, p.errors > 0 ? penalty(p.errors) : 0)
+  return Math.max(0, wait - (now - p.last))
+}
+
+/** A save going out now: counted, and the store held back further if it keeps saving. */
+function counted(key: string, now = Date.now()) {
+  const p = paceOf(key)
+  p.sent.push(now)
+  p.last = now
+  if (p.level > 0 || p.sent.length > BURST) p.level = Math.min(p.level + 1, 16)
+}
+
+/** For scripts/widgets-sync-check.ts: the pacing above, with a clock of its own. */
+export const syncPacing = {
+  backoff,
+  counted,
+  failed: (key: string) => void (paceOf(key).errors += 1),
+  forget: (key: string) => void paces.delete(key),
 }
 
 function schedulePush(key: string, delay = PUSH_DELAY) {
   if (getAccount().status !== 'user' || frozen()) return
+  pending.add(key)
   clearTimeout(timers.get(key))
   timers.set(key, setTimeout(() => void push(key), Math.max(delay, backoff(key))))
 }
@@ -284,30 +314,38 @@ async function push(key: string) {
   timers.delete(key)
   const s = stores.get(key)
   if (!s || getAccount().status !== 'user' || frozen()) return
-  // The one out now comes back first; then this one (pushed() schedules it if still unsaved).
+  // The one out now comes back first; this one stays pending and goes after it (see finally).
   if (inFlight.has(key)) return
   // Already the server's copy (a change made and undone, another tab's save): nothing to send.
   if (s.sameAsServer()) {
     if (s.meta().dirty) s.clean()
+    pending.delete(key)
     return
   }
   const wait = backoff(key)
   if (wait > 0) return schedulePush(key, wait)
   const { value, base } = s.meta()
-  pushTimes.get(key)!.push(Date.now())
+  const pace = paceOf(key)
+  counted(key)
   inFlight.add(key)
   setStatus({ state: 'syncing', at: status.at })
   try {
     const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
     // The browser was signed in as someone else while the request was out: not this tab's answer.
     if (frozen() || !accountGuard()) return
+    pace.errors = 0
     if (r.conflict) reconcile(s, r)
     else s.pushed(r.updatedAt, value)
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
+    pace.errors = Math.min(pace.errors + 1, 16)
     setStatus({ state: 'error', at: status.at, error: (e as Error).message })
   } finally {
     inFlight.delete(key)
+    // Still unsaved (changed while it was out, or the save failed): saved next, unless something
+    // already asked for that. A failed one waits (backoff, by its errors).
+    if (!s.meta().dirty) pending.delete(key)
+    else if (!timers.has(key) && !frozen() && accountGuard()) schedulePush(key)
   }
 }
 
@@ -374,10 +412,12 @@ export function startSync() {
   // Leaving: send pending saves right away.
   window.addEventListener('pagehide', () => {
     if (getAccount().status !== 'user' || frozen() || !accountGuard()) return
-    for (const [key, t] of timers) {
-      clearTimeout(t)
+    for (const t of timers.values()) clearTimeout(t)
+    // Every save asked for and not through yet, with or without a timer (one waiting for a save
+    // still out has none).
+    for (const key of new Set([...pending, ...timers.keys()])) {
       const s = stores.get(key)
-      if (!s) continue
+      if (!s || !s.meta().dirty || s.sameAsServer()) continue
       const { value, base } = s.meta()
       fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
     }

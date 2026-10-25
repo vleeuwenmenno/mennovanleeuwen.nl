@@ -112,6 +112,10 @@ const requests: string[] = []
 let cookieUser = 1
 /** Another device's save, made right before each of this one's (section 10). */
 let storming: (() => void) | null = null
+/** Saves of these keys take `ms` to answer, and the next `fail` of them fail (section 10). */
+const slowPut = new Map<string, { ms: number; fail: number }>()
+/** Every save as sent (key, then body), before the stand-in server answers it. */
+const sentBodies: string[] = []
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 g.fetch = async (path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}) => {
   if (path === '/api/me') return json({ authEnabled: true, user: { id: cookieUser, login: 'check', name: null, avatar: null, admin: false, githubScopes: [] }, forges: [] })
@@ -123,6 +127,16 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
   const key = decodeURIComponent(path.replace('/api/state/', ''))
   if (init.method === 'PUT') {
     if (key === 'loop:storm') storming?.()
+    sentBodies.push(`${key} ${init.body}`)
+    const slow = slowPut.get(key)
+    if (slow) {
+      await sleep(slow.ms)
+      if (slow.fail > 0) {
+        slow.fail--
+        puts.push(`${key}!failed`)
+        return json({ error: 'stand-in failure' }, 500)
+      }
+    }
     puts.push(key)
     const { value, base } = JSON.parse(init.body!) as { value: unknown; base: number }
     const cur = server.get(key)
@@ -570,7 +584,59 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   await sleep(8000)
   storming = null
   const stormy = savesOf('loop:storm', from)
-  check(`loop: conflict after conflict is rate-limited (${stormy} saves in 8 s)`, stormy >= 2 && stormy <= 10)
+  check(`loop: conflict after conflict is rate-limited (${stormy} saves in 8 s)`, stormy >= 2 && stormy <= 16)
+
+  // A change made while a save is out, and that save fails: the change still goes out (after a wait).
+  // A hidden tab: no pull comes along to save it instead.
+  ;(g.document as { visibilityState: string }).visibilityState = 'hidden'
+  slowPut.set('loop:flight', { ms: 1500, fail: 1 })
+  const f = synced<string>('loop:flight', '')
+  f.set('A')
+  await sleep(1000) // A is out (sent at 800 ms, answered at 2300 ms)
+  f.set('B') // its timer runs out at 1800 ms, while A is still out
+  await sleep(6500)
+  ;(g.document as { visibilityState: string }).visibilityState = 'visible'
+  check('in flight: a change made meanwhile is saved after the save out fails', (server.get('loop:flight')?.value as string) === 'B' && !meta('loop:flight')!.dirty, { server: server.get('loop:flight'), puts: puts.filter((k) => k.startsWith('loop:flight')) })
+
+  // The same, with the page closing while A is out: pagehide sends B, though its timer is gone.
+  slowPut.set('loop:hide', { ms: 2000, fail: 0 })
+  const h = synced<string>('loop:hide', '')
+  h.set('A')
+  await sleep(1000)
+  h.set('B')
+  await sleep(1200) // B's timer has run out and given way to A
+  const hideFrom = sentBodies.length
+  main.listeners.get('pagehide')?.forEach((l) => l({ key: null, newValue: null }))
+  const hidden = sentBodies.slice(hideFrom)
+  check('pagehide: a change waiting for a save still out is sent', hidden.some((b) => b.startsWith('loop:hide ') && JSON.parse(b.slice(9)).value === 'B'), hidden)
+  await sleep(2500)
+  slowPut.clear()
+
+  // The pacing over a long stretch, on a clock of its own: a store that saves again as soon as it
+  // may (as after conflict on conflict) gets ever longer waits, and none after a quiet spell.
+  const { syncPacing } = await import('../src/os/synced.ts')
+  let t = 1e12
+  let n90 = 0
+  const sends: number[] = []
+  while (t < 1e12 + 300_000) {
+    const wait = syncPacing.backoff('pace:loop', t)
+    if (wait > 0) t += wait
+    syncPacing.counted('pace:loop', t)
+    sends.push(t)
+    if (t < 1e12 + 90_000) n90++
+    t += 50
+  }
+  const gaps = sends.slice(1).map((s, i) => s - sends[i])
+  check(`pacing: a store saving nonstop sends a burst, then ever fewer (${n90} saves in 90 s, ${sends.length} in 5 min)`, n90 <= 18 && sends.length <= 22, gaps)
+  check('pacing: its waits double up to a minute', Math.max(...gaps) === 60_000 && gaps.slice(-3).every((g) => g === 60_000))
+  check('pacing: quiet for long enough, it saves at once again', syncPacing.backoff('pace:loop', t + 130_000) === 0)
+  // Saving at a person's pace (a change every 2 s) is never held back.
+  let typing = 0
+  for (let i = 0; i < 60; i++) typing += syncPacing.backoff('pace:typing', 2e12 + i * 2000) > 0 ? 1 : (syncPacing.counted('pace:typing', 2e12 + i * 2000), 0)
+  check(`pacing: a change every 2 s is never held back (${typing} held)`, typing === 0)
+  syncPacing.failed('pace:err')
+  syncPacing.counted('pace:err', 3e12)
+  check('pacing: a failed save is tried again after a wait', syncPacing.backoff('pace:err', 3e12) > 0)
 }
 
 // Accounts (whose state a tab holds, switching account in another tab): scripts/sync-accounts-check.ts.
