@@ -4913,10 +4913,23 @@ HTTPS; browsers ignore it over plain HTTP) and a general `Content-Security-Polic
 object-src 'none'; base-uri 'none'; frame-ancestors 'self'`. That blocks injected script and plugins
 and nothing else: there is no `default-src`, `connect-src`, `img-src` or `style-src`, because the
 site uses third-party fonts, public APIs, blob and data media, inline styles and framed content.
+The app's own HTML pages (`/`, `/cv`, `/play/...` and the fallback for unknown paths) send a stricter
+script policy instead (`documentCsp` in `server/http.ts`): `script-src 'nonce-<random>'
+'strict-dynamic' 'self'`, with the same `object-src`, `base-uri` and `frame-ancestors`. The server
+puts a fresh nonce on every response, on the boot `<script>` and the `modulepreload` links, and
+builds and compresses that small page per request (still `Cache-Control: no-cache`, `Vary:
+Accept-Encoding`). `'strict-dynamic'` is what lets the boot script load the rest of the app and
+the Office app load `api.js` from the OnlyOffice document server each account configures, without
+allowing any other `https:` origin to run script: an inline script or a `<script src>` in markup,
+without the nonce, stays blocked. `'self'` is only a fallback for browsers that lack
+`'strict-dynamic'`. The nonce is never shared between responses; the service worker's cached copy
+of the page keeps its own nonce and header together.
 Routes that send untrusted bytes spread `UNTRUSTED` (`default-src 'none'; sandbox`) after `SECURITY`,
 and share pages send their own stricter policy, so both replace the general one: keep that order
-when adding a route. `pnpm build && pnpm check:headers` boots the server and checks `/`, `/api/me`,
-a share page and the merge order.
+when adding a route. `pnpm build && pnpm check:headers` boots the server and checks the nonce policy
+on the page variants and encodings, `/api/me`, a share page and the merge order, then runs headless
+Chromium: the real page boots, and under the same policy a trusted script's dynamic script from
+another origin loads while inline and injected script is blocked.
 
 While it runs, the server also pings the Minecraft server every 30 seconds
 ([`server/minecraft.ts`](server/minecraft.ts)) and keeps 30 days of it in SQLite under `DATA_DIR`: online or

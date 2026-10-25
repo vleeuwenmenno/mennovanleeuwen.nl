@@ -12,6 +12,16 @@ export const SECURITY = {
   'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
 }
 
+/** The policy of the app's own HTML pages (index.html and its /cv and /play variants). Only the
+ * boot script and the modulepreload links carry the per-response nonce; 'strict-dynamic' lets that
+ * trusted script load the rest, so a script it adds on purpose (OnlyOffice's api.js from the
+ * document server the user configured) runs while an injected inline script or a bare
+ * <script src> in markup still does not. Browsers that don't know 'strict-dynamic' fall back to
+ * 'self'. A nonce is only good for the response that carried it: never cache these pages shared. */
+export function documentCsp(nonce: string) {
+  return `script-src 'nonce-${nonce}' 'strict-dynamic' 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`
+}
+
 /** For file bytes passed through from Seafile: never rendered as a page of this site, even when
  * opened directly (a shared library's HTML or SVG would otherwise run with the user's session). */
 export const UNTRUSTED = {
