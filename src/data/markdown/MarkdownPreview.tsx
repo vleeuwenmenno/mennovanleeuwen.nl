@@ -184,12 +184,16 @@ function blocks(nodes: Block[], breaks: boolean, key: string, tight = false, mon
   })
 }
 
+/** Lines after which a code block also has a Copy button at its foot. */
+const LONG_CODE_LINES = 15
+
 /** A fenced code block, coloured when its language is known, with a button that copies it. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
   const tokens = useMemo(() => highlight(code, lang), [code, lang])
+  const long = useMemo(() => code.split('\n').length > LONG_CODE_LINES, [code])
   const copy = () =>
     void navigator.clipboard?.writeText(code).then(
       () => {
@@ -209,6 +213,12 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
       <button type="button" className={`md-copy ${copied ? 'is-done' : ''}`} onClick={copy} title="Copy the code" aria-label={copied ? 'Copied' : 'Copy the code'}>
         {copied ? 'Copied' : 'Copy'}
       </button>
+      {/* A long block gets a second button at its foot, so copying needs no scroll back up. */}
+      {long && (
+        <button type="button" className={`md-copy md-copy-end ${copied ? 'is-done' : ''}`} onClick={copy} title="Copy the code" aria-label={copied ? 'Copied' : 'Copy the code'}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      )}
     </div>
   )
 }

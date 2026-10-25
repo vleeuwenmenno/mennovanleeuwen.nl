@@ -7930,6 +7930,11 @@ ruby > rt {
   opacity: 0;
   transition: opacity 0.12s;
 }
+/* At the foot of a long block, clear of the pre's horizontal scrollbar. */
+.md-copy.md-copy-end {
+  top: auto;
+  bottom: 14px;
+}
 .md-code:hover .md-copy,
 .md-copy:focus-visible,
 .md-copy.is-done {
