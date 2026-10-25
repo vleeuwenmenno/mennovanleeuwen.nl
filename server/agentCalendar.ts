@@ -317,6 +317,15 @@ const calendarName = (c: AnyCalendar) => `${c.name} (${c.source})`
  * and the user sees exactly what will happen. Throws what the model should be told.
  */
 export async function prepareCalendarCall(user: User, name: string, args: Record<string, unknown>, userZone: string): Promise<Prepared> {
+  const google = googleLinkGeneration(user)
+  const caldav = caldavLinkVersion(user)
+  const prepared = await prepareCalendarCallInner(user, name, args, userZone)
+  assertGoogleLink(user, google)
+  assertCaldavLink(user, caldav)
+  return prepared
+}
+
+async function prepareCalendarCallInner(user: User, name: string, args: Record<string, unknown>, userZone: string): Promise<Prepared> {
   const text = (k: string) => (typeof args[k] === 'string' ? (args[k] as string).trim() : undefined)
   const zone = text('time_zone') ? (zoneOf(text('time_zone')) ?? fail(`Unknown time zone "${text('time_zone')}": use an IANA name like Europe/Amsterdam`)) : userZone
 

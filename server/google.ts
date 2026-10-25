@@ -1,4 +1,4 @@
-import { requirePrivateRequest, privateSignal } from './privateRequest.ts'
+import { requirePrivateRequest, privateRequestAuthority, withoutPrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { currentUser, sessionBinding, sessionKey, type User } from './auth.ts'
@@ -179,7 +179,15 @@ export async function disconnectGoogle(user: User) {
  * a newer link.
  */
 const linkChanges = new Set<(id: number) => void>()
-export const onGoogleLinkChanged = (fn: (id: number) => void) => void linkChanges.add(fn)
+export function onGoogleLinkChanged(fn: (id: number) => void) {
+  linkChanges.add(fn)
+  return () => { linkChanges.delete(fn) }
+}
+export function bindGoogleRequest(user: User) {
+  const generation = googleLinkGeneration(user)
+  if (generation === null) return
+  bindPrivateAccess(() => sameLink(user, generation), (end) => onGoogleLinkChanged((id) => { if (id === user.id) end() }))
+}
 const generations = new Map<number, number>()
 const generationOf = (id: number) => generations.get(id) ?? 0
 /** Includes disconnected links, for caches that must detect every link mutation. */
@@ -329,7 +337,7 @@ export type CalendarEvent = {
   notes?: string[]
 }
 
-const cache = new Map<string, { at: number; value: Promise<unknown> }>()
+const cache = new Map<string, { at: number; value: Promise<unknown>; authority: object | undefined; settled: boolean }>()
 /** After a change: the next read asks Google again. */
 export const clearGoogleCache = (user: User) => {
   for (const k of cache.keys()) if (k.startsWith(`${user.id}|`)) cache.delete(k)
@@ -340,12 +348,12 @@ onUserGone((id) => {
 })
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>
+  if (hit && Date.now() - hit.at < ms && (hit.settled || !hit.authority || hit.authority === privateRequestAuthority())) return hit.value as Promise<T>
   const value = load()
   // Only this call's own entry goes on failure: a newer one under the same key stays.
-  const entry = { at: Date.now(), value }
+  const entry = { at: Date.now(), value, authority: privateRequestAuthority(), settled: false }
   cache.set(key, entry)
-  value.catch(() => {
+  value.then((data) => { entry.settled = true; entry.authority = undefined; entry.value = withoutPrivateRequest(() => Promise.resolve(data)) }, () => {
     if (cache.get(key) === entry) cache.delete(key)
   })
   return value

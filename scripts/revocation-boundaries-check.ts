@@ -44,6 +44,8 @@ const mock = createServer(async (req, res) => {
     const range = req.headers.range
     return res.writeHead(range ? 206 : 200, { 'Content-Type': 'video/mp4', 'Content-Length': mediaBytes.length, ...(range ? { 'Content-Range': `bytes 0-${mediaBytes.length - 1}/${mediaBytes.length}` } : {}) }).end(mediaBytes)
   }
+  if (url.pathname === '/api/server/version') return send({ major: 3, minor: 0, patch: 0 })
+  if (url.pathname === '/api/timeline/buckets') return send([])
   if (url.pathname === '/api/users/me') return send({ id: 'owner' })
   if (url.pathname.startsWith('/api/assets/')) return send({ id: ASSET, ownerId: 'owner', originalFileName: 'private-photo.jpg' })
   if (url.pathname === '/api/assets' || url.pathname.includes('/api/albums/')) return send([{ id: ASSET, success: true }])
@@ -105,6 +107,7 @@ const { handleApi } = await import('../server/api.ts')
 const { photoCapabilitiesForTest } = await import('../server/photos.ts')
 const { allCalendars, allEvents } = await import('../server/calendars.ts')
 const { findLinked } = await import('../server/noteLinks.ts')
+const { prepareCalendarCall, eventId } = await import('../server/agentCalendar.ts')
 const { prepareNoteLinkCall } = await import('../server/agentNoteLinks.ts')
 const { removeCaldav } = await import('../server/caldav.ts')
 const { deleteUser, ban } = await import('../server/users.ts')
@@ -207,6 +210,12 @@ async function change(a: Account, kind: Change) {
     await a.call('/api/auth/logout', 'POST', undefined, { Cookie: `mvlos_sid=${sid}` })
   }
 }
+async function mediaChange(a: Account, kind: Change, media: string) {
+  if (media.startsWith('im-') && (kind === 'disconnect' || kind === 'relink')) {
+    gate = null
+    await a.call('/api/integrations/immich', kind === 'disconnect' ? 'DELETE' : 'POST', kind === 'relink' ? { url: provider, key: 'mock-key-B' } : undefined)
+  } else await change(a, kind)
+}
 const privateData = (bytes: Buffer) => bytes.includes(secretBytes) || /private-photo|private-library|private-title|private-location|52\.37/.test(bytes.toString())
 const settle = <T>(p: Promise<T>) => p.then((value) => ({ value, error: null as unknown }), (error: unknown) => ({ value: null, error }))
 const mutationLog = () => providerLog.filter((r) => /batch-delete|batch-move|revert-dirents|set-password|\/api\/assets$|\/albums\//.test(r.path) && !['GET', 'HEAD'].includes(r.method))
@@ -223,13 +232,13 @@ try {
   // Before headers, including HEAD and conditional thumbnail responses.
   for (const media of ['sf-photo-thumb', 'sf-photo-original', 'sf-thumb', 'sf-raw', 'sf-stream', 'im-original', 'im-video']) {
     for (const method of ['GET', 'HEAD', ...(media === 'sf-photo-thumb' ? ['304'] : [])]) {
-      for (const kind of ['none', 'other-logout', ...revoked, ...(media.startsWith('sf') ? ['disconnect', 'relink'] : [])] as Change[]) {
+      for (const kind of ['none', 'other-logout', ...revoked, ...['disconnect', 'relink']] as Change[]) {
         const a = account(); let id = ASSET
         if (media.startsWith('sf')) { await a.seafile(); id = a.seedPhoto() } else a.immich()
         const path = media === 'sf-photo-thumb' ? `/api/photos/seafile/thumb?id=${id}` : media === 'sf-photo-original' ? `/api/photos/seafile/original?id=${id}` : media.startsWith('sf-') ? `/api/seafile/${media.slice(3)}?repo=${REPO}&p=/private-photo.jpg` : `/api/photos/immich/${media === 'im-video' ? 'video' : 'original'}?id=${id}`
         const g = hold((u) => media === 'sf-photo-thumb' ? u.pathname === '/api/v2.1/repos/' : media === 'sf-photo-original' ? u.pathname.endsWith('/file/') : media === 'sf-thumb' ? u.pathname.endsWith('/thumbnail/') : media.startsWith('sf') ? u.pathname.startsWith('/files/') : u.pathname.includes('/api/assets/'))
         const pending = a.call(path, method === '304' ? 'GET' : method, undefined, { ...(media === 'sf-raw' ? { Range: `bytes=0-${mediaBytes.length - 1}` } : {}), ...(method === '304' ? { 'If-None-Match': '"sf-file-version-small"' } : {}) })
-        await arrived(g); await change(a, kind); release(g); const res = await pending; const body = await collect(res); await drain()
+        await arrived(g); await mediaChange(a, kind, media); release(g); const res = await pending; const body = await collect(res); await drain()
         const valid = kind === 'none' || kind === 'other-logout'
         check(`media/${media}/${method}/${kind}`, valid ? res.status === (method === '304' ? 304 : media === 'sf-photo-original' ? 302 : media === 'sf-raw' ? 206 : 200) : res.status >= 400 && !privateData(body.bytes) && !res.headers.has('location') && !res.headers.has('etag'))
         if (!valid && g.signals.length) check(`media/${media}/${method}/${kind}: upstream aborted`, g.signals.every((s) => s.aborted))
@@ -238,12 +247,12 @@ try {
   }
   // After headers and a harmless prefix have been delivered: keep partial bytes on errors.
   for (const media of ['sf-stream', 'im-original', 'im-video']) {
-    for (const kind of [...revoked, ...(media === 'sf-stream' ? ['disconnect', 'relink'] : [])] as Change[]) {
+    for (const kind of [...revoked, ...['disconnect', 'relink']] as Change[]) {
       const a = account(); if (media === 'sf-stream') await a.seafile(); else a.immich()
       const path = media === 'sf-stream' ? `/api/seafile/stream?repo=${REPO}&p=/private-photo.jpg` : `/api/photos/immich/${media === 'im-video' ? 'video' : 'original'}?id=${ASSET}`
       const g = hold((u) => u.pathname.startsWith('/files/') || u.pathname.includes('/api/assets/'), false, true)
       const pending = a.call(path); await arrived(g); const res = await pending; const receiving = collect(res)
-      await change(a, kind); release(g); const result = await receiving; await drain()
+      await mediaChange(a, kind, media); release(g); const result = await receiving; await drain()
       check(`delivery/${media}/${kind}: no partial private bytes`, !result.complete && result.bytes.equals(prefix))
       check(`delivery/${media}/${kind}: upstream aborted`, g.signals.length > 0 && g.signals.every((s) => s.aborted))
     }
@@ -273,6 +282,42 @@ try {
     const pending = a.call(`/api/calendar/${op}`, 'POST', op === 'known' ? { calendar: `caldav:${cal}:${dav.origin}/cal/mock/events/`, uids: ['private-event'] } : op === 'note-link' ? { note: 'note-12345678', link: { uid: 'private-event', source: 'caldav', calendarId: `caldav:${cal}:${dav.origin}/cal/mock/events/`, start: new Date(at).toISOString(), title: 'private-title', end: new Date(at + 3600_000).toISOString(), allDay: false, linked: Date.now() } } : { uid: 'private-event', fresh: true })
     await arrived(g); await change(a, kind); release(g); const res = await pending; const body = await collect(res); await drain()
     check(`calendar/${op}/${kind}: no private response`, res.status >= 400 && !privateData(body.bytes))
+  }
+  for (const tool of ['calendar_delete_event', 'notes_for_event']) for (const mutation of ['remove', 'relink', 'add']) {
+    const a = account(); const at = seedEvent(); const cal = await a.caldav(); const user = a.user()
+    const events = await allEvents(user, null, { from: new Date(at - 864e5), to: new Date(at + 864e5) })
+    const ref = events.events.find((e) => e.uid === 'private-event')!.ref!
+    const g = hold((u) => u.origin === new URL(dav.origin).origin && u.pathname.endsWith('.ics'), true)
+    const pending = settle(tool === 'calendar_delete_event' ? prepareCalendarCall(user, tool, { event_id: eventId(ref) }, 'UTC') : prepareNoteLinkCall(user, tool, { event_id: eventId(ref) }, 'UTC'))
+    await arrived(g); gate = null
+    if (mutation === 'remove') removeCaldav(user, cal)
+    else await a.call('/api/caldav', 'POST', { url: mutation === 'add' ? `${dav.origin}/dav/` : dav.origin, username: USER, password: PASSWORD })
+    release(g); const result = await pending
+    check(`CalDAV/GET-body/${tool}/${mutation}: no private prepared summary`, result.error !== null && result.value === null)
+    await deleteUser(a.id)
+  }
+  // Competing sessions must not inherit the canceled request's in-flight promise.
+  for (const source of ['photos', 'google', 'caldav']) {
+    const a = account(); let id = ''
+    if (source === 'photos') { await a.seafile(); id = a.seedPhoto() }
+    if (source === 'google') await a.google('private-title')
+    if (source === 'caldav') { seedEvent(); await a.caldav() }
+    const sidB = randomBytes(24).toString('hex'), sidC = randomBytes(24).toString('hex')
+    for (const sid of [sidB, sidC]) database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), a.id, Date.now(), Date.now() + 86400_000)
+    const g = hold((u) => source === 'photos' ? u.pathname === '/api/v2.1/repos/' : source === 'google' ? u.pathname.endsWith('/calendarList') : u.origin === new URL(dav.origin).origin && u.pathname === '/cal/mock/')
+    const path = source === 'photos' ? `/api/photos/seafile/info?id=${id}` : '/api/calendar/calendars'
+    const first = a.call(path); await arrived(g)
+    const second = a.call(path, 'GET', undefined, { Cookie: `mvlos_sid=${sidB}` })
+    const third = a.call(path, 'GET', undefined, { Cookie: `mvlos_sid=${sidC}` })
+    const deadline = performance.now() + 5000
+    while (active.size < 3 && performance.now() < deadline) await new Promise((r) => setImmediate(r))
+    if (active.size !== 3) throw new Error('Competing requests did not all reach their provider waits')
+    await a.call('/api/auth/logout', 'POST', undefined, { Cookie: `mvlos_sid=${source === 'photos' ? sidB : a.sid}` })
+    release(g)
+    const responses = await Promise.all([first, second, third]); const bodies = await Promise.all(responses.map(collect)); await drain()
+    const survivors = source === 'photos' ? [0, 2] : [1, 2]
+    check(`shared/${source}: surviving sessions get complete private data`, survivors.every((i) => responses[i].ok && privateData(bodies[i].bytes)))
+    check(`shared/${source}: only ended session refused`, responses[source === 'photos' ? 1 : 0].status >= 400)
   }
   // Hold authorization before any mutation. Compare both upstream log and persistent index.
   for (const op of ['favourite', 'trash', 'move', 'restore', 'zip']) {

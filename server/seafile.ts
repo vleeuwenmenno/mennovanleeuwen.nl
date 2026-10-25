@@ -233,7 +233,9 @@ export async function seafile<T>(user: User, path: string, init: RequestInit = {
 type ApiRepo = { repo_id: string; repo_name: string; type: string; owner_email?: string; owner_name?: string; encrypted: boolean; permission: string; size: number; last_modified: string }
 
 export async function libraries(user: User, signal?: AbortSignal): Promise<Library[]> {
+  const generation = seafileLinkGeneration(user)
   const { repos } = await seafile<{ repos: ApiRepo[] }>(user, '/api/v2.1/repos/?type=mine&type=shared&type=group&type=public', { signal })
+  assertSeafileLink(user, generation)
   for (const r of repos) encryptedRepos.set(`${user.id}:${r.repo_id}`, !!r.encrypted)
   const seen = new Set<string>()
   return repos

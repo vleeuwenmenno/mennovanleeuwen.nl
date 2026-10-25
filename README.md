@@ -1209,6 +1209,8 @@ still being delivered. The same request guard covers event lookup (`/api/calenda
 UID checks and note backlinks. CalDAV reads also snapshot the linked-account generation before
 the first await: adding, replacing or removing a link discards a held aggregate, including completed
 provider parts. That snapshot follows nested note lookups, agent calendar/note tools and reminders.
+Agent preparations also validate the snapshot after reading a full CalDAV event body, before
+returning a private title, location or change summary.
 `pnpm check:calendar-link-race` and `pnpm check:revocation-boundaries` cover these races.
 
 **Mail** ([`src/apps/mail`](src/apps/mail), [`server/jmap.ts`](server/jmap.ts)) reads and writes mail
@@ -3092,7 +3094,11 @@ is fetched, favourites, trash, undo and moves) first reads the account's library
 that is revoked, deleted or locked disappears at once (404 for a photo, nothing in the lists), before
 any stored preview, ETag or 304, detail, file link or file name leaves and before the local index or
 Seafile is changed. A burst of requests shares listings (at most one runs and one waits per account,
-and a request is never answered with one that started before it arrived). When Seafile cannot be asked
+and a request is never answered with one that started before it arrived). Shared listings hold
+separate subscriber lifetimes: ending one session cancels only its subscriber; the upstream listing
+is canceled once no readers remain, or the provider link changes. Pending Google and CalDAV cache
+loads also stay separate across request lifetimes; completed cache values remain reusable.
+When Seafile cannot be asked
 (it is down), nothing is shown on the strength of an earlier list: the months, a month, albums, photos
 and ZIPs answer 502 without a name or id, and the folder list is empty and marked unavailable, rather
 than guess. The last walk's status (the job in the status answer and in the answer to starting a walk) is
@@ -3115,7 +3121,7 @@ authorization cannot cause a later delete, index update or unlock.
 Originals and video from Immich, Seafile thumbnails and original redirects, and Files' raw ranges,
 media and archive streams use the same request lifetime through delivery, including HEAD and 304.
 Session logout, removal, a ban, expiry or revocation aborts upstream and downstream work; Seafile
-disconnect/relink also cuts that link's reads. Headers and every emitted chunk are checked, so an
+or Immich disconnect/relink also cuts that link's reads. Headers and every emitted chunk are checked, so an
 aborted body cannot leak a private tail after revocation.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an

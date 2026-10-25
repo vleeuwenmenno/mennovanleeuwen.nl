@@ -4,12 +4,12 @@ import { Readable } from 'node:stream'
 import { crc32 } from 'node:zlib'
 import { writeZip, type ZipInput } from '../src/data/zip.ts'
 import type { User } from './auth.ts'
-import { requirePrivateRequest, retainPrivateRequest } from './privateRequest.ts'
+import { requirePrivateRequest, retainPrivateRequest, privateSignal, withoutPrivateRequest } from './privateRequest.ts'
 import { bindResponse, requireStillSignedIn, requireUser } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
 import { HttpError, json as sendJson, readJson, SECURITY, UNTRUSTED } from './http.ts'
-import { immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
+import { bindImmichRequest, immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
 import { assertSeafileLink, bindSeafileRequest, onSeafileLinkChanged, seafileLinkGeneration, withSeafileLink, fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
@@ -177,38 +177,58 @@ function requireSeafile(user: User) {
 // library at all. It is never kept: every request (or operation) asks again, so a library that is
 // revoked, deleted or locked disappears from Photos at once, and when Seafile cannot answer nothing
 // is shown (the index holds only descriptive data, never who may see it).
-type Flight = { running?: Promise<Library[]>; next?: Promise<Library[]> }
+type Listing = { promise: Promise<Library[]>; abort: AbortController; readers: number }
+type Flight = { running?: Listing; next?: Listing }
 const flights = new Map<string, Flight>()
 
-/**
- * One listing per request, without ever answering from before the request came in: a request waits
- * for the listing under way to end and is served by the next one, which every request that arrived
- * meanwhile shares. So at most one listing runs and one waits, however many thumbnails are asked at once.
- */
+/** Share provider work without borrowing one subscriber's session or cancellation signal. */
 function fetchLibs(user: User): Promise<Library[]> {
   assertSeafileLink(user)
   const key = `${user.id}:${seafileLinkGeneration(user)}`
   let f = flights.get(key)
   if (!f) flights.set(key, (f = {}))
   const flight = f
-  const begin = () => {
-    assertSeafileLink(user)
-    const p = libraries(user)
-    const done = () => {
-      if (flight.running === p) flight.running = undefined
-    }
-    p.then(done, done)
-    flight.running = p
-    return p
-  }
-  if (!flight.running) return begin()
-  flight.next ??= flight.running
-    .then(() => undefined, () => undefined)
-    .then(() => {
-      flight.next = undefined
-      return begin()
+  const make = (after?: Listing): Listing => {
+    const abort = new AbortController()
+    const job: Listing = { promise: null!, abort, readers: 0 }
+    const stopLink = onSeafileLinkChanged((id) => { if (id === user.id) abort.abort() })
+    const begin = () => withoutPrivateRequest(() => {
+      if (abort.signal.aborted) throw new HttpError(401, 'Request ended')
+      assertSeafileLink(user)
+      if (flight.next === job) flight.next = undefined
+      flight.running = job
+      return libraries(user, abort.signal)
     })
-  return flight.next
+    job.promise = after ? after.promise.catch(() => undefined).then(begin) : Promise.resolve().then(begin)
+    const done = () => {
+      stopLink()
+      if (flight.running === job) flight.running = undefined
+      if (flight.next === job) flight.next = undefined
+    }
+    job.promise.then(done, done)
+    return job
+  }
+  const job = flight.running ? (flight.next ??= make(flight.running)) : (flight.next ?? (flight.running = make()))
+  job.readers++
+  const signal = privateSignal()
+  return new Promise<Library[]>((resolve, reject) => {
+    let finished = false
+    const finish = (error: unknown, value?: Library[]) => {
+      if (finished) return
+      finished = true
+      signal?.removeEventListener('abort', ended)
+      if (--job.readers === 0) {
+        job.abort.abort()
+        if (flight.next === job) flight.next = undefined
+      }
+      if (error) reject(error)
+      else resolve(value!)
+    }
+    const ended = () => finish(new HttpError(401, 'Request ended'))
+    signal?.addEventListener('abort', ended, { once: true })
+    job.promise.then((value) => finish(null, value), (error) => finish(error))
+    if (signal?.aborted) ended()
+  })
 }
 
 /** The libraries this account has right now. Any failure is a generic 502: nothing of what is indexed may be shown on a guess. */
@@ -1204,6 +1224,7 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   const user = requireUser(req)
   const seafile = url.pathname === '/api/photos/zip' ? zips.get(url.searchParams.get('t') ?? '')?.source === 'seafile' : url.pathname !== '/api/integrations/immich' && !url.pathname.includes('/immich/')
   const run = () => handlePhotosRequest(req, res, url, method)
+  if (url.pathname !== '/api/integrations/immich' && !seafile) bindImmichRequest(user)
   return seafile ? withSeafileLink(user, () => { bindSeafileRequest(user); return run() }) : run()
 }
 

@@ -18,6 +18,8 @@ type Scope = {
   retain: () => () => void
 }
 const requests = new AsyncLocalStorage<Scope>()
+export const privateRequestAuthority = (): object | undefined => requests.getStore()
+export const withoutPrivateRequest = <T>(work: () => T): T => requests.exit(work)
 export const privateRequestActive = (req: IncomingMessage) => requests.getStore()?.req === req
 export function requirePrivateRequest(user?: Pick<User, 'id'>) {
   const scope = requests.getStore()

@@ -1,6 +1,6 @@
 import type { User } from './auth.ts'
-import { requirePrivateRequest, privateSignal } from './privateRequest.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { requirePrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 
@@ -15,6 +15,25 @@ import { HttpError } from './http.ts'
 // and /video/playback, /api/albums); other major versions are refused when linking.
 
 const NAME = 'immich'
+const versions = new Map<number, number>()
+const changes = new Set<(id: number) => void>()
+const versionOf = (id: number) => versions.get(id) ?? 0
+function changed(id: number) {
+  versions.set(id, versionOf(id) + 1)
+  for (const fn of changes) fn(id)
+}
+onUserGone(changed)
+export function bindImmichRequest(user: User) {
+  const version = versionOf(user.id)
+  bindPrivateAccess(() => {
+    if (versionOf(user.id) !== version) throw new HttpError(409, 'Immich was reconnected or disconnected meanwhile: try again')
+  }, (end) => {
+    const listen = (id: number) => { if (id === user.id) end() }
+    changes.add(listen)
+    return () => { changes.delete(listen) }
+  })
+}
+
 /** The Immich majors this was written against. */
 const SUPPORTED = [2, 3]
 /** The most a JSON answer may hold: a month's bucket of a big library is a few MB. */
@@ -124,6 +143,7 @@ export async function immichFile(user: User, path: string, init: { range?: strin
  * against the account and the timeline, so a key without the permissions the app needs says so now.
  */
 export async function linkImmich(user: User, body: { url?: string; key?: string }): Promise<ImmichInfo> {
+  const linkVersion = versionOf(user.id)
   const url = normalizeUrl(body.url)
   const key = body.key?.trim()
   if (!key) throw new HttpError(400, 'The API key is required')
@@ -149,12 +169,18 @@ export async function linkImmich(user: User, body: { url?: string; key?: string 
   await timeline.body?.cancel().catch(() => {})
 
   requirePrivateRequest(user)
+  if (versionOf(user.id) !== linkVersion) throw new HttpError(409, 'Immich was reconnected or disconnected meanwhile: try again')
   const link: Link = { url, key, name: account?.name || null, email: account?.email || null, version: name }
   database()
     .prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret')
     .run(user.id, NAME, encrypt(JSON.stringify(link)), Date.now())
+  changed(user.id)
   return immichInfo(user)!
 }
 
 /** Forgets the key here. It stays valid on Immich until it is deleted there (Account settings → API keys). */
-export const unlinkImmich = (user: User) => void (requirePrivateRequest(user), database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME))
+export function unlinkImmich(user: User) {
+  requirePrivateRequest(user)
+  database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME)
+  changed(user.id)
+}

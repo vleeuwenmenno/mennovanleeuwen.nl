@@ -83,6 +83,15 @@ async function link(user: User, noteId: string, e: EventInfo, all: boolean) {
 
 /** Checks a call and gets it ready (see server/agentCalendar.ts prepareCalendarCall). Throws what the model should be told. */
 export async function prepareNoteLinkCall(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared> {
+  const google = googleLinkGeneration(user)
+  const caldav = caldavLinkVersion(user)
+  const prepared = await prepareNoteLinkCallInner(user, name, args, zone)
+  assertGoogleLink(user, google)
+  assertCaldavLink(user, caldav)
+  return prepared
+}
+
+async function prepareNoteLinkCallInner(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared> {
   if (name === 'events_for_note') {
     const note = liveNote(user, args.note_id)
     return {

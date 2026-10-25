@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { requireStillSignedIn, type User } from './auth.ts'
-import { requirePrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
+import { requirePrivateRequest, privateRequestAuthority, withoutPrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
@@ -501,13 +501,14 @@ export function parseEvents(ics: string, from: Date, to: Date): CaldavEvent[] {
 // ---------------------------------------------------------------------------------------------
 // Calendars and events, with the same cache rules as Google's
 
-const cache = new Map<string, { at: number; value: Promise<unknown> }>()
+const cache = new Map<string, { at: number; value: Promise<unknown>; authority: object | undefined; settled: boolean }>()
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>
+  if (hit && Date.now() - hit.at < ms && (hit.settled || !hit.authority || hit.authority === privateRequestAuthority())) return hit.value as Promise<T>
   const value = load()
-  cache.set(key, { at: Date.now(), value })
-  value.catch(() => cache.delete(key))
+  const entry = { at: Date.now(), value, authority: privateRequestAuthority(), settled: false }
+  cache.set(key, entry)
+  value.then((data) => { entry.settled = true; entry.authority = undefined; entry.value = withoutPrivateRequest(() => Promise.resolve(data)) }, () => { if (cache.get(key) === entry) cache.delete(key) })
   return value
 }
 export const clearCaldavCache = (user: User) => {
@@ -737,7 +738,9 @@ function refused(res: Response, url: string): never {
 async function getObject(account: Account, url: string): Promise<{ ics: Ics; etag: string | null }> {
   const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
   if (!res.ok) refused(res, url)
-  return { ics: parseIcs((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')), etag: res.headers.get('etag') }
+  const ics = parseIcs((await readCapped(res, 4 * 1024 * 1024)).toString('utf8'))
+  assertCaldavLink(account.user, account.generation)
+  return { ics, etag: res.headers.get('etag') }
 }
 
 /** Writes an object: `etag` it must still have, or 'new' for one that must not exist yet. */
@@ -791,6 +794,7 @@ export async function getCaldavEvent(user: User, ref: CaldavRef): Promise<Caldav
   const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
   if (!res.ok) refused(res, url)
   const raws = rawEvents((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')).filter((r) => r.props.UID?.value === ref.u)
+  assertCaldavLink(account.user, account.generation)
   const master = raws.find((r) => !r.props['RECURRENCE-ID'])
   const override = ref.r ? raws.find((r) => r.props['RECURRENCE-ID'] && sameStart(icalTime(r.props['RECURRENCE-ID'].value, r.props['RECURRENCE-ID'].params)?.iso, ref.r!)) : undefined
   // An occurrence nobody changed is the series at its own start (in the same form as DTSTART's value).
