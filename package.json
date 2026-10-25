@@ -76,6 +76,7 @@
     "check:mail": "node scripts/mail-check.ts",
     "check:mail-icons": "node scripts/mail-icons-check.ts",
     "check:egress": "node scripts/egress-check.ts",
+    "check:headers": "node scripts/headers-check.ts",
     "mail:mock": "node scripts/mail-mock.ts",
     "check:photos": "node scripts/photos-check.ts",
     "check:terminal-vt": "node scripts/terminal-vt.ts",

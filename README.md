@@ -4896,6 +4896,18 @@ so the status and join/leave notifications don't wait on public status APIs that
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.
 
+Every answer carries baseline security headers (`SECURITY` in [`server/http.ts`](server/http.ts)):
+`nosniff`, `Referrer-Policy`, `X-Frame-Options: SAMEORIGIN`, `Strict-Transport-Security:
+max-age=31536000` (no `includeSubDomains` or `preload`, since not every subdomain is known to be
+HTTPS; browsers ignore it over plain HTTP) and a general `Content-Security-Policy: script-src 'self';
+object-src 'none'; base-uri 'none'; frame-ancestors 'self'`. That blocks injected script and plugins
+and nothing else: there is no `default-src`, `connect-src`, `img-src` or `style-src`, because the
+site uses third-party fonts, public APIs, blob and data media, inline styles and framed content.
+Routes that send untrusted bytes spread `UNTRUSTED` (`default-src 'none'; sandbox`) after `SECURITY`,
+and share pages send their own stricter policy, so both replace the general one: keep that order
+when adding a route. `pnpm build && pnpm check:headers` boots the server and checks `/`, `/api/me`,
+a share page and the merge order.
+
 While it runs, the server also pings the Minecraft server every 30 seconds
 ([`server/minecraft.ts`](server/minecraft.ts)) and keeps 30 days of it in SQLite under `DATA_DIR`: online or
 not, the player count, the ping time, and each player's visits (from the names the ping lists).

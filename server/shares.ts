@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
 import { database } from './db.ts'
-import { HttpError, publicOrigin } from './http.ts'
+import { HttpError, publicOrigin, SECURITY } from './http.ts'
 import { parseMarkdown, safeImage, type Block, type Inline } from '../src/data/markdown/parse.ts'
 import { highlight, knownLanguage } from '../src/data/markdown/highlight.ts'
 import { isVisualLang, visualBlockText } from '../src/data/visual/spec.ts'
@@ -389,6 +389,7 @@ function pageHeaders(nonce: string, cache: string): Record<string, string> {
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
+    'Strict-Transport-Security': SECURITY['Strict-Transport-Security'],
     'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
   }
 }

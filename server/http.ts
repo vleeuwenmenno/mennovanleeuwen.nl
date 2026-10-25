@@ -6,6 +6,10 @@ export const SECURITY = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'SAMEORIGIN',
+  // Browsers ignore this over plain HTTP, so it only bites behind TLS. No includeSubDomains or preload: not every subdomain is known to be HTTPS.
+  'Strict-Transport-Security': 'max-age=31536000',
+  // Blocks injected script (inline, eval, other origins) and plugins; nothing else, because the app uses third-party fonts, public APIs, blob/data media and inline styles. Spread SECURITY first: UNTRUSTED and the share page's own policy replace it.
+  'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
 }
 
 /** For file bytes passed through from Seafile: never rendered as a page of this site, even when
