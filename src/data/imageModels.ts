@@ -161,6 +161,15 @@ export type UpscaleImageSettings = { operation: 'upscale'; upscale_model: string
 /** LaMa object removal: the source's full size, a mask, and no prompt, model or sampler. */
 export type RemoveImageSettings = { operation: 'remove'; width: number; height: number; mask: { id: string; url: string; width: number; height: number; semantics: 'white-edits-black-preserves' }; source: { id: string; name: string; url: string; width: number; height: number; resize: 'none' } }
 export type ImageGenerationSettings = DiffusionImageSettings | UpscaleImageSettings | RemoveImageSettings
+/**
+ * What an inpaint of a generated picture carries over from its recorded settings: the same
+ * components (a checkpoint's custom VAE too), LoRAs, clip skip and sampling. The server inherits
+ * recorded settings only for refine, so the Edit area dialog sends these explicitly.
+ */
+export function inpaintSettingsOf(s: ImageGenerationSettings | null | undefined) {
+  if (!s || s.operation === 'upscale' || s.operation === 'remove') return {}
+  return { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler, ...(s.checkpoint_vae ? { checkpoint_vae: s.checkpoint_vae } : {}), ...(s.clip_skip && s.clip_skip > 1 ? { clip_skip: s.clip_skip } : {}) }
+}
 /** Diffu defaults.ts preferences, restricted to the KSampler workflows we actually build. */
 export function recommendedImageSampling(preset: ImagePreset, model: string, catalog?: { samplers?: string[]; schedulers?: string[]; modelHints?: ImageModelHint[] }): ImageSampling {
   const spec = imagePresetSpec(preset)

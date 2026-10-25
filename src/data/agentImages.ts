@@ -11,10 +11,13 @@ export type GeneratedImage = { id: string; name: string; url: string; size: numb
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
 /** Saves only the approval choice; the rest of the saved settings stay as they are. */
 export const saveImageApproval = (askBeforeGenerate: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { askBeforeGenerate } })
-export const saveImageSettings = ({ civitaiKey: _saved, prediction: _predictions, ...s }: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s })
+/** Said on window after the connection is saved or removed, so an open Image Studio reads it again. */
+export const IMAGE_SETTINGS_EVENT = 'mvlos:image-settings'
+const announced = <T,>(p: Promise<T>) => p.then((v) => (window.dispatchEvent(new Event(IMAGE_SETTINGS_EVENT)), v))
+export const saveImageSettings = ({ civitaiKey: _saved, prediction: _predictions, ...s }: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s }))
 /** Saves one of the model details and quality check switches, or the Civitai key (empty keeps it). */
 export const saveImageIntelSettings = (patch: { civitaiLookup?: boolean; qualityCheck?: boolean; civitaiKey?: string; clearCivitaiKey?: boolean; prediction?: { model: string; value: PredictionSetting } }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: patch })
-export const resetImageSettings = () => api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' })
+export const resetImageSettings = () => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' }))
 export const getImageCatalog = () => api<ImageCatalog>('/api/agents/images/catalog')
 
 export type ImageProfile = { id: number; name: string; description: string; origin: 'user' | 'suggestion' }
@@ -88,7 +91,7 @@ export async function refineImage(id: string, input: RefineImageInput, onEvent: 
   await readEvents(res, onEvent)
 }
 
-export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
+export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'checkpoint_vae' | 'clip_skip' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
 export async function saveImageMask(thread: string, source: string, mask: Blob) {
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()

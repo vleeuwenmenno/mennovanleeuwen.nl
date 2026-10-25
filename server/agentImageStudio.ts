@@ -24,6 +24,12 @@ const UUID = /^[0-9a-f-]{36}$/
 const UPLOAD_MAX = 12 * 1024 * 1024
 /** One Generate press makes at most this many pictures, one after the other. */
 export const STUDIO_BATCH_MAX = 8
+/** The account's running Studio requests, so signing it out everywhere, a ban or deletion stops them. */
+const runs = new Map<number, Set<AbortController>>()
+/** Stops every Studio run an account has (server/agents.ts stopTurnsOf, from server/users.ts). */
+export function stopStudioOf(userId: number) {
+  for (const ctl of runs.get(userId) ?? []) ctl.abort()
+}
 
 /** The account's Studio thread, made on first use. */
 export function studioThread(user: User): string {
@@ -113,8 +119,11 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   const thread = studioThread(user)
   const ctl = new AbortController()
   res.on('close', () => { if (!res.writableEnded) ctl.abort() })
+  const mine = runs.get(user.id) ?? new Set<AbortController>()
+  runs.set(user.id, mine.add(ctl))
   const runInput = (i: number): ImageInput => (typeof seed === 'number' && i > 0 ? { ...input, seed: seed + i } : input)
-  let plan = await prepareImageGeneration(user, thread, runInput(0), ctl.signal)
+  let plan: Awaited<ReturnType<typeof prepareImageGeneration>>
+  try { plan = await prepareImageGeneration(user, thread, runInput(0), ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   const send = (e: Record<string, unknown>) => { if (!res.writableEnded) res.write(`${JSON.stringify(e)}\n`) }
   try {
@@ -128,8 +137,14 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   } catch (e) {
     send(ctl.signal.aborted ? { type: 'done', cancelled: true } : { type: 'error', error: e instanceof Error ? e.message : 'Generation failed' })
   } finally {
+    forget(user.id, ctl)
     res.end()
   }
+}
+function forget(userId: number, ctl: AbortController) {
+  const mine = runs.get(userId)
+  mine?.delete(ctl)
+  if (mine && !mine.size) runs.delete(userId)
 }
 
 /** /api/agents/images/studio…: the signed-in owner's own Studio only. */

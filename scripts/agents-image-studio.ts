@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
 import { applyPresetRules, bucketSize, presetRules, promptTokens, sizeBuckets, SIZE_LIMITS, variantFor } from '../src/data/modelFamilies.ts'
+import { inpaintSettingsOf } from '../src/data/imageModels.ts'
 import { applyRecipe, defaultStudioForm, formFromSettings, normalizeStudioForm, promptWithEmbeddings, sourceSize, studioProblems, studioRecipe, studioRunInput, variantPreset, type StudioCatalog } from '../src/data/imageStudio.ts'
 import type { ImagePreset } from '../src/data/imageModels.ts'
 
@@ -100,6 +101,11 @@ const catalog: StudioCatalog = {
   assert.deepEqual(restored.recipe, { model: 'm', preset: 'krea2_turbo', source: 'user_saved', label: 'Restored from a picture' }, 'no recipe offer for the restored model')
   assert.equal(restored.preset, 'krea2_turbo'); assert.equal(restored.variant, 'turbo'); assert.equal(restored.height, 768); assert.equal(restored.seed, 9); assert.equal(restored.prompt, 'p')
   assert.equal(formFromSettings(d, { operation: 'upscale' } as never), d)
+  // Edit area keeps a checkpoint's custom VAE and clip skip (inpaint does not inherit recorded settings on the server).
+  const recorded = { preset: 'sdxl' as const, model: 'm', clip: '', vae: '', checkpoint_vae: 'vae/x.safetensors', clip_skip: 2, loras: [], steps: 20, cfg: 6, sampler: 'euler', scheduler: 'normal', width: 512, height: 512, seed: 1, prompt: 'p', negative_prompt: '', denoise: 1 }
+  assert.equal(inpaintSettingsOf(recorded).checkpoint_vae, 'vae/x.safetensors'); assert.equal(inpaintSettingsOf(recorded).clip_skip, 2)
+  assert.ok(!('checkpoint_vae' in inpaintSettingsOf({ ...recorded, checkpoint_vae: undefined, clip_skip: 1 })) && !('clip_skip' in inpaintSettingsOf({ ...recorded, clip_skip: 1 })))
+  assert.deepEqual(inpaintSettingsOf({ operation: 'remove' } as never), {})
   console.log('PASS Studio form: saved copies normalized, variants, validation reasons, request with embeddings and family rules, recipes with their source, Use these settings')
 }
 
@@ -114,6 +120,8 @@ const options: Record<string, Record<string, unknown>> = {
 }
 const NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'CLIPSetLastLayer', 'ModelSamplingDiscrete']
 const graphs: any[] = []
+const deletions: string[] = []
+let hold = false
 let jobs = 0
 const comfy = createServer((req, res) => {
   let raw = ''
@@ -128,15 +136,17 @@ const comfy = createServer((req, res) => {
     if (path === '/embeddings') return send(['EasyNegative', 'good-hands'])
     if (path === '/upload/image') return send({ name: /filename="([^"]+)"/.exec(raw)![1], subfolder: '', type: 'input' })
     if (path === '/prompt') { graphs.push(JSON.parse(raw).prompt); return send({ prompt_id: `job-${++jobs}` }) }
+    if (path.startsWith('/history/') && hold) return send({})
     if (path.startsWith('/history/')) { const id = path.split('/').pop()!; return send({ [id]: { status: { completed: true }, outputs: { '9': { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } } } }) }
     if (path === '/view') return res.writeHead(200, { 'Content-Type': 'image/png' }).end(png)
+    if (path === '/queue' && req.method === 'POST') { deletions.push(...JSON.parse(raw).delete); return send({}) }
     if (path === '/queue') return send({ queue_running: [], queue_pending: [] })
     res.writeHead(404).end()
   })
 })
 await new Promise<void>((r) => comfy.listen(0, '127.0.0.1', r))
 const comfyUrl = `http://127.0.0.1:${(comfy.address() as { port: number }).port}`
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'studio-owner', OLLAMA_API_KEY: 'fake' })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'studio-owner,studio-other', OLLAMA_API_KEY: 'fake' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const sessions = [randomBytes(24).toString('hex'), randomBytes(24).toString('hex')]
@@ -261,6 +271,37 @@ try {
   await ok('DELETE', `/api/agents/images/studio/images/${history.images[0].id}`)
   assert.equal((await ok('GET', '/api/agents/images/studio/images')).images.length, 7)
   console.log('PASS Studio history and uploads: PNG uploads as sources, img2img graph, paging, owner-only pictures, deletes and embeddings')
+
+  // The Studio thread is not a chat: chat routes do not see it, so it cannot be adopted, renamed, sent to or deleted there.
+  for (const [method, path, body] of [['GET', `/api/agents/threads/${mine.thread}`, undefined], ['PATCH', `/api/agents/threads/${mine.thread}`, { quick: false }], ['PATCH', `/api/agents/threads/${mine.thread}`, { title: 'Mine now' }], ['POST', `/api/agents/threads/${mine.thread}/messages`, { text: 'hi' }], ['DELETE', `/api/agents/threads/${mine.thread}`, undefined]] as const) {
+    assert.equal((await call(method, path, body)).status, 404, `${method} ${path}`)
+  }
+  const after = await ok('GET', '/api/agents/images/studio')
+  assert.equal(after.thread, mine.thread, 'still the same Studio thread')
+  assert.equal((await ok('GET', '/api/agents/images/studio/images')).images.length, 7, 'its history is intact')
+  const row = database().prepare('SELECT quick, title FROM agent_threads WHERE id = ?').get(mine.thread) as { quick: number; title: string }
+  assert.deepEqual({ ...row }, { quick: 2, title: 'Image Studio' })
+  console.log('PASS Studio thread: no chat route reads, adopts, renames, sends to or deletes it; history stays')
+
+  // Deleting the account (which signs it out everywhere, as a ban does) stops its running Studio job and deletes its queued prompt.
+  await ok('PUT', '/api/agents/images/settings', { url: comfyUrl, preset: 'sdxl' }, 1)
+  hold = true
+  const held = call('POST', '/api/agents/images/studio/run', { input: { preset: 'sdxl', model: 'SDXL/studio.safetensors', prompt: 'held', steps: 4, cfg: 6, sampler: 'euler', scheduler: 'normal', width: 512, height: 512 }, batch: 4 }, 1)
+  const queuedBefore = jobs
+  const heldRes = await held
+  assert.equal(heldRes.status, 200)
+  for (let i = 0; i < 100 && jobs === queuedBefore; i++) await new Promise((r) => setTimeout(r, 50))
+  assert.equal(jobs, queuedBefore + 1, 'the held job reached ComfyUI')
+  const gone = await call('DELETE', '/api/me', undefined, 1)
+  assert.ok(gone.status < 300, await gone.text())
+  const heldEvents = await events(heldRes)
+  assert.deepEqual(heldEvents.at(-1), { type: 'done', cancelled: true })
+  assert.equal(heldEvents.filter((e) => e.type === 'image').length, 0, 'nothing saved after the sign-out')
+  for (let i = 0; i < 60 && !deletions.includes(`job-${jobs}`); i++) await new Promise((r) => setTimeout(r, 50))
+  assert.ok(deletions.includes(`job-${jobs}`), 'its queued prompt is deleted from ComfyUI')
+  assert.equal(jobs, queuedBefore + 1, 'the rest of the batch never starts')
+  hold = false
+  console.log('PASS Studio runs stop when the account is signed out everywhere (account deletion): cancelled, prompt deleted, nothing saved, batch ends')
 } finally {
   await server.dispose()
   comfy.close()

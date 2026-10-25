@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import './AgentsStudio.css'
-import { deleteStudioImage, getImageCatalog, getLoraDetails, getStudio, getStudioEmbeddings, getStudioImages, getStudioModelDetails, loraPreviewUrl, runStudio, uploadStudioImage, type GeneratedImage, type LoraDetail, type MaskedEditInput, type ModelDetails, type RefineImageInput, type StudioImage, type UpscaleImageInput } from '../data/agentImages'
+import { IMAGE_SETTINGS_EVENT, deleteStudioImage, getImageCatalog, getLoraDetails, getStudio, getStudioEmbeddings, getStudioImages, getStudioModelDetails, loraPreviewUrl, runStudio, uploadStudioImage, type GeneratedImage, type LoraDetail, type MaskedEditInput, type ModelDetails, type RefineImageInput, type StudioImage, type UpscaleImageInput } from '../data/agentImages'
 import { applyRecipe, defaultStudioForm, formFromSettings, normalizeStudioForm, sourceSize, STEP_PRESETS, STUDIO_LIMITS, studioProblems, studioRecipe, studioRunInput, studioSamplers, studioSchedulers, variantPreset, type StudioCatalog, type StudioForm, type StudioRecipe, type StudioSource } from '../data/imageStudio'
 import { isTurbo, presetRules, promptTokens, SIZE_LIMITS, sizeBuckets } from '../data/modelFamilies'
 import { detectedImageFamily, IMAGE_PRESETS, imagePresetSpec, resolveImageAssets, type ImagePreset, type ImageProgress } from '../data/imageModels'
@@ -39,10 +39,11 @@ export type StudioField = 'model' | 'loras' | 'embeddings' | 'prompt' | 'negativ
 // --- the runner: one job at a time, kept while the Studio view is closed ----------------------
 
 type Operation = 'generate' | 'refine' | 'inpaint' | 'remove' | 'upscale'
-type Job = { id: number; input: Record<string, unknown>; batch: number; label: string; operation: Operation }
+type Job = { id: number; input: Record<string, unknown>; batch: number; label: string; operation: Operation; /** Times the server said its one image job was still busy */ waits?: number }
 type Live = { job: Job; index: number; total: number; width: number; height: number; progress?: ImageProgress }
-type RunnerState = { live: Live | null; queue: Job[]; error: string; fresh: StudioImage[]; lastSeed: number | null }
-let runner: RunnerState = { live: null, queue: [], error: '', fresh: [], lastSeed: null }
+/** `paused`: after Cancel the queue waits (the server may still be releasing the cancelled job) until Resume or a new Generate. */
+type RunnerState = { live: Live | null; queue: Job[]; error: string; fresh: StudioImage[]; lastSeed: number | null; paused: boolean }
+let runner: RunnerState = { live: null, queue: [], error: '', fresh: [], lastSeed: null, paused: false }
 const runnerListeners = new Set<() => void>()
 let controller: AbortController | null = null
 let nextJob = 1
@@ -51,31 +52,59 @@ const update = (patch: Partial<RunnerState>) => {
   runnerListeners.forEach((l) => l())
 }
 const useRunner = () => useSyncExternalStore((l) => (runnerListeners.add(l), () => void runnerListeners.delete(l)), () => runner)
+/** The server's one-job lock (server/agentImages.ts): another of the account's jobs is still finishing. */
+const BUSY = /already (generating|running) for this account/
+const MAX_WAITS = 6
+let retry: ReturnType<typeof setTimeout> | null = null
 function pump() {
-  if (runner.live || !runner.queue.length) return
+  if (runner.live || runner.paused || retry || !runner.queue.length) return
   const [job, ...queue] = runner.queue
   const width = Number(job.input.width) || 1024, height = Number(job.input.height) || 1024
   const ctl = (controller = new AbortController())
+  let busy = false, made = 0
+  const failed = (message: string) => {
+    // Nothing made yet and the account's job slot is still taken: the job waits and tries again.
+    if (BUSY.test(message) && !made && (job.waits ?? 0) < MAX_WAITS) busy = true
+    else update({ error: message })
+  }
   update({ live: { job, index: 0, total: job.batch, width, height }, queue, error: '' })
   void runStudio(job.input, job.batch, (e) => {
     const live = runner.live
     if (e.type === 'start' && live) update({ live: { ...live, index: e.index, total: e.total, width: e.width, height: e.height, progress: undefined } })
     else if (e.type === 'progress' && live) update({ live: { ...live, progress: e.progress } })
-    else if (e.type === 'image') update({ fresh: [{ ...e.image, settings: e.image.settings ?? null, created_at: Date.now(), studio: true }, ...runner.fresh].slice(0, 60), lastSeed: e.image.seed ?? runner.lastSeed })
-    else if (e.type === 'error') update({ error: e.error })
+    else if (e.type === 'image') {
+      made++
+      update({ fresh: [{ ...e.image, settings: e.image.settings ?? null, created_at: Date.now(), studio: true }, ...runner.fresh].slice(0, 60), lastSeed: e.image.seed ?? runner.lastSeed })
+    } else if (e.type === 'error') failed(e.error)
   }, ctl.signal)
-    .catch((err: Error) => { if (!ctl.signal.aborted) update({ error: err.message }) })
+    .catch((err: Error) => { if (!ctl.signal.aborted) failed(err.message) })
     .finally(() => {
       if (controller === ctl) controller = null
+      if (busy) {
+        const waits = (job.waits ?? 0) + 1
+        update({ live: null, queue: [{ ...job, waits }, ...runner.queue] })
+        retry = setTimeout(() => ((retry = null), pump()), 1000 * waits)
+        return
+      }
       update({ live: null })
       pump()
     })
 }
 const enqueue = (input: Record<string, unknown>, batch: number, label: string, operation: Operation) => {
-  update({ queue: [...runner.queue, { id: nextJob++, input, batch, label, operation }] })
+  update({ queue: [...runner.queue, { id: nextJob++, input, batch, label, operation }], paused: false })
   pump()
 }
-const cancelRun = () => controller?.abort()
+/** Cancel stops the running job; whatever is queued waits for Resume. */
+const cancelRun = () => {
+  update({ paused: runner.queue.length > 0 })
+  controller?.abort()
+}
+const resumeQueue = () => {
+  update({ paused: false })
+  pump()
+}
+/** A deleted picture leaves this page's fresh results too, so a reopened Studio does not show it. */
+const forgetFresh = (id: string) => update({ fresh: runner.fresh.filter((i) => i.id !== id) })
 
 // --- small pieces ------------------------------------------------------------------------------
 
@@ -150,8 +179,24 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
     setDiscovering(true); setCatalogError('')
     getImageCatalog().then((c) => setCatalog(c as StudioCatalog), (e: Error) => setCatalogError(e.message)).finally(() => setDiscovering(false))
   }
+  // Read again when the Images settings are saved (or the tab comes back), so connecting ComfyUI elsewhere enables Generate.
+  const configured = useRef(false)
   useEffect(() => {
-    getStudio().then((s) => { setStudio(s); if (s.configured) discover() }, (e: Error) => setBootError(e.message))
+    const load = () => getStudio().then((s) => {
+      setStudio(s)
+      setBootError('')
+      if (s.configured && !configured.current) discover()
+      if (!s.configured) setCatalog(null)
+      configured.current = s.configured
+    }, (e: Error) => setBootError(e.message))
+    void load()
+    const onVisible = () => { if (!document.hidden) void load() }
+    window.addEventListener(IMAGE_SETTINGS_EVENT, load)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener(IMAGE_SETTINGS_EVENT, load)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   // History: the server's, with this page's fresh results in front.
@@ -178,6 +223,8 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   const recipeKey = `${form.preset}|${model}`
   useEffect(() => {
     if (!catalog) return
+    // Another model or workflow: an open question was about the previous one.
+    setOffer(null)
     setDetails(null); setDetailsFor('')
     if (!model) { setDetailsFor(recipeKey); return }
     const abort = new AbortController()
@@ -194,17 +241,17 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
     if (!form.edited) studioForm.set((f) => applyRecipe(f, recipe, model))
     else setOffer({ ...recipe, key: recipeKey })
   }, [recipe])
-  const acceptOffer = () => { if (offer) studioForm.set((f) => applyRecipe(f, offer, model)); setOffer(null) }
+  const acceptOffer = () => { if (offer?.key === recipeKey) studioForm.set((f) => applyRecipe(f, offer, model)); setOffer(null) }
   const keepCurrent = () => { set({ recipe: { model, preset: form.preset, source: 'user_saved', label: 'Your settings, kept over the recipe' } }); setOffer(null) }
 
   const problems = studio ? studioProblems(form, { configured: studio.configured, catalog, catalogError, loading: discovering }) : [bootError || 'Opening the Studio…']
   const generate = () => { if (!problems.length) enqueue(studioRunInput(form), form.batch, `${form.batch > 1 ? `${form.batch} × ` : ''}${form.prompt.trim().slice(0, 60) || 'Picture'}`, 'generate') }
   // The model hands its preset to the Variant switch: Auto reads raw or turbo from the name.
   const changeAssets = (patch: Partial<Pick<StudioForm, 'preset' | 'model' | 'clip' | 'vae'>>) => studioForm.set((f) => {
-    const next = { ...f, ...patch }
+    let next = { ...f, ...patch }
     if (patch.preset && patch.preset !== f.preset) {
-      // A new workflow: its own encoder and VAE, its pair's variant, and a fresh recipe.
-      if (Boolean(imagePresetSpec(patch.preset).clipType) !== Boolean(imagePresetSpec(f.preset).clipType)) Object.assign(next, { model: '', clip: '', vae: '', checkpointVae: '' })
+      // A new workflow: the old one's assets go first, then what the change names (a quick pick names its model).
+      if (Boolean(imagePresetSpec(patch.preset).clipType) !== Boolean(imagePresetSpec(f.preset).clipType)) next = { ...f, model: '', clip: '', vae: '', checkpointVae: '', ...patch }
       next.variant = presetRules(patch.preset).variants ? (isTurbo(patch.preset) ? 'turbo' : 'raw') : 'auto'
       if (!presetRules(patch.preset).embeddings) next.embeddings = []
     }
@@ -222,20 +269,24 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   }
   const removeImage = async (image: StudioImage) => {
     if (!(await ask({ title: 'Delete this picture?', body: 'It leaves the Studio’s history for good. Copies sent to a chat stay there.', confirm: 'Delete', danger: true }))) return
-    await deleteStudioImage(image.id).then(() => setDeleted((d) => new Set(d).add(image.id)), (e: Error) => update({ error: e.message }))
+    await deleteStudioImage(image.id).then(() => {
+      forgetFresh(image.id)
+      setHistory((h) => h.filter((i) => i.id !== image.id))
+      setDeleted((d) => new Set(d).add(image.id))
+    }, (e: Error) => update({ error: e.message }))
   }
 
   const [dialog, setDialog] = useState<{ kind: 'refine' | 'inpaint' | 'upscale' | 'view'; image: StudioImage } | null>(null)
   const frame = useRef<HTMLDivElement>(null)
 
   // --- the sections ---
-  const modelSection = <ModelSection form={form} catalog={catalog} details={details} resolved={resolved} model={model} offer={offer} onAccept={acceptOffer} onKeep={keepCurrent} onAssets={changeAssets} onSet={set} discovering={discovering} catalogError={catalogError} onRefresh={discover} assist={assist} />
+  const modelSection = <ModelSection form={form} catalog={catalog} details={details} resolved={resolved} model={model} offer={offer?.key === recipeKey ? offer : null} onAccept={acceptOffer} onKeep={keepCurrent} onAssets={changeAssets} onSet={set} discovering={discovering} catalogError={catalogError} onRefresh={discover} assist={assist} />
   const promptSection = <PromptSection form={form} onSet={set} assist={assist} />
   const loraSection = <LoraSection form={form} catalog={catalog} onSet={set} assist={assist} />
   const sourceSection = <SourceSection form={form} onSet={set} assist={assist} onError={(e) => update({ error: e })} />
   const sizeSection = <SizeSection form={form} onSet={set} batchMax={studio?.batchMax ?? STUDIO_LIMITS.batch[1]} assist={assist} />
   const advanced = <AdvancedSection form={form} catalog={catalog} lastSeed={run.lastSeed} recipe={recipe} onSet={set} onRecipe={() => recipe && studioForm.set((f) => applyRecipe(f, recipe, model, true))} assist={assist} />
-  const actions = <ActionSection problems={problems} live={run.live} queue={run.queue} error={run.error} batch={form.batch} onGenerate={generate} onSettings={onSettings} configured={!!studio?.configured} />
+  const actions = <ActionSection problems={problems} live={run.live} queue={run.queue} paused={run.paused} error={run.error} batch={form.batch} onGenerate={generate} onSettings={onSettings} configured={!!studio?.configured} />
 
   const preview = <section className="studio-preview" aria-label="Preview">
     {run.live ? <>
@@ -277,7 +328,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
     </div> : <>
       <main className="studio-col studio-centre">{promptSection}{preview}{historySection}</main>
       <div className="studio-bar">
-        <ActionSection compact problems={problems} live={run.live} queue={run.queue} error={run.error} batch={form.batch} onGenerate={generate} onSettings={onSettings} configured={!!studio?.configured} />
+        <ActionSection compact problems={problems} live={run.live} queue={run.queue} paused={run.paused} error={run.error} batch={form.batch} onGenerate={generate} onSettings={onSettings} configured={!!studio?.configured} />
       </div>
       {drawer && <div className="studio-drawer-backdrop" onClick={() => setDrawer(null)} />}
       {drawer && <aside className={`studio-drawer is-${drawer}`} aria-label={drawer === 'params' ? 'Parameters' : 'Advanced'}>
@@ -544,7 +595,7 @@ function QueueList({ queue }: { queue: Job[] }) {
   </ol>
 }
 
-function ActionSection({ problems, live, queue, error, batch, onGenerate, onSettings, configured, compact = false }: { problems: string[]; live: Live | null; queue: Job[]; error: string; batch: number; onGenerate: () => void; onSettings: () => void; configured: boolean; compact?: boolean }) {
+function ActionSection({ problems, live, queue, paused, error, batch, onGenerate, onSettings, configured, compact = false }: { problems: string[]; live: Live | null; queue: Job[]; paused: boolean; error: string; batch: number; onGenerate: () => void; onSettings: () => void; configured: boolean; compact?: boolean }) {
   const blocked = problems.length > 0
   return <section className={`studio-section studio-actions ${compact ? 'is-compact' : ''}`} aria-label="Generate">
     <span className="studio-row studio-go">
@@ -554,6 +605,7 @@ function ActionSection({ problems, live, queue, error, batch, onGenerate, onSett
     {blocked && <p className="studio-reason muted" role="status">{problems[0]}{problems.length > 1 && !compact ? <> <button type="button" className="studio-link" onClick={() => copy(problems.join('\n'))}>Copy all {problems.length}</button></> : null}</p>}
     {!configured && <button type="button" className="btn btn-small" onClick={onSettings}>Open Images settings</button>}
     {!compact && live && <p className="muted" role="status">Running: {live.job.label}{live.total > 1 ? ` (${live.index + 1} of ${live.total})` : ''}</p>}
+    {paused && queue.length > 0 && <p className="studio-reason muted" role="status">Queue paused after Cancel. <button type="button" className="studio-link" onClick={resumeQueue}>Resume</button></p>}
     {!compact && queue.length > 0 && <QueueList queue={queue} />}
     {compact && queue.length > 0 && <p className="muted">{queue.length} queued</p>}
     {error && <ErrorBox text={error} onDismiss={() => update({ error: '' })} />}
