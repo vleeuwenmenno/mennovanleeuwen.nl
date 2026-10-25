@@ -768,7 +768,14 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   a session (agent attachments, photos' originals, mail attachments, contact photos, mail icons,
   Files thumbnails, link previews) are `private, no-store`, so the browser never replays one after
   the account switches or the cookie goes; photo thumbnails are `private, no-cache` with an ETag, so
-  every reuse is checked by the server first. `pnpm check:sync-accounts` covers it. What belongs to the
+  every reuse is checked by the server first. Copies stored by older releases (`private, max-age`
+  up to 7 days) are purged once per browser: the first app page or `/api/me` answer without the
+  `mvlos_cache_purge` marker cookie (HttpOnly, SameSite=Lax, Secure on HTTPS, 400 days) carries
+  `Clear-Site-Data: "cache"` and sets it ([`server/http.ts`](server/http.ts), `cachePurge`; bump
+  `CACHE_PURGE_EPOCH` to repeat it). Only `"cache"`: the other directives would sign people out or
+  wipe their local data and service worker. `/api/me` repeats it because a service worker may serve
+  the page itself. With cookies blocked the purge just repeats on each load, which is harmless.
+  `pnpm check:sync-accounts` covers it. What belongs to the
   browser stays in plain keys: the theme, motion, sounds, the dock's look, the workspace on screen,
   window-drag keys, the photo viewer's panel, the media player's volume, the browser's own location
   for Weather, and games' settings.

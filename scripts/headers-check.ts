@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { SECURITY, UNTRUSTED, documentCsp } from '../server/http.ts'
+import { CACHE_PURGE_COOKIE, CACHE_PURGE_EPOCH, SECURITY, UNTRUSTED, cachePurge, documentCsp } from '../server/http.ts'
 import { launch, newPage, sleep } from './perf/cdp.ts'
 
 let failed = false
@@ -73,6 +73,38 @@ try {
       }
     }
   }
+  // One-time HTTP cache purge: Clear-Site-Data "cache" only, until the marker cookie is held.
+  const marker = `${CACHE_PURGE_COOKIE}=${CACHE_PURGE_EPOCH}`
+  const setCookies = (r: Response) => r.headers.getSetCookie()
+  const purgeOk = (r: Response) => r.headers.get('clear-site-data') === '"cache"'
+  const markerSet = (r: Response) => setCookies(r).filter((c) => c.startsWith(marker + ';'))
+  for (const path of ['/', '/api/me']) {
+    const first = await fetch(base + path)
+    check(`${path}: first load clears the cache, only "cache"`, purgeOk(first), first.headers.get('clear-site-data'))
+    const mc = markerSet(first)
+    check(`${path}: marker cookie set once, HttpOnly, SameSite, 400 days`, mc.length === 1 && /; HttpOnly/.test(mc[0]) && /; SameSite=Lax/.test(mc[0]) && /; Max-Age=34560000/.test(mc[0]) && /; Path=\//.test(mc[0]), mc)
+    check(`${path}: no other cookie, no storage or cookie directives`, setCookies(first).length === 1 && !/cookies|storage|executionContexts|\*/.test(first.headers.get('clear-site-data') ?? ''), setCookies(first))
+    const again = await fetch(base + path, { headers: { Cookie: marker } })
+    check(`${path}: marker present, no purge and no cookie`, !again.headers.has('clear-site-data') && setCookies(again).length === 0)
+    const old = await fetch(base + path, { headers: { Cookie: `${CACHE_PURGE_COOKIE}=0` } })
+    check(`${path}: an older epoch purges again`, purgeOk(old) && markerSet(old).length === 1)
+  }
+  const html1 = await fetch(base + '/')
+  check('/: security, CSP and cache headers unchanged by the purge', html1.headers.get('cache-control') === 'no-cache' && html1.headers.get('strict-transport-security') === 'max-age=31536000' && !!nonceOf(html1.headers.get('content-security-policy')) && html1.headers.get('x-content-type-options') === 'nosniff')
+  const me1 = await fetch(base + '/api/me')
+  check('/api/me: security, CSP and cache headers unchanged by the purge', me1.headers.get('cache-control') === 'no-store' && me1.headers.get('content-security-policy') === GENERAL && me1.headers.get('strict-transport-security') === 'max-age=31536000')
+  // A stale uid cookie with no session is cleared next to the marker: both Set-Cookie lines survive.
+  const merged = await fetch(base + '/api/me', { headers: { Cookie: 'mvlos_uid=7' } })
+  const mcs = setCookies(merged)
+  check('/api/me: uid repair and purge marker are both set', mcs.length === 2 && mcs.some((c) => /^mvlos_uid=; .*Max-Age=0/.test(c)) && mcs.some((c) => c.startsWith(marker + ';')), mcs)
+  const repairOnly = await fetch(base + '/api/me', { headers: { Cookie: `mvlos_uid=7; ${marker}` } })
+  check('/api/me: marker present leaves just the uid repair', !repairOnly.headers.has('clear-site-data') && setCookies(repairOnly).length === 1 && setCookies(repairOnly)[0].startsWith('mvlos_uid=;'))
+  // The marker is Secure on HTTPS and tolerates cookie noise and malformed values.
+  const fake = (cookie: string | undefined) => ({ headers: { cookie, 'x-forwarded-proto': 'https', host: 'x.test' } }) as never
+  check('purge marker is Secure on HTTPS', /; Secure$/.test(String(cachePurge(fake(undefined))['Set-Cookie'])))
+  check('purge skipped with the marker among other cookies', Object.keys(cachePurge(fake(`a=b; ${marker}; mvlos_session=s`))).length === 0)
+  check('purge repeats when cookies are blocked or malformed', 'Clear-Site-Data' in cachePurge(fake(undefined)) && 'Clear-Site-Data' in cachePurge(fake(`${CACHE_PURGE_COOKIE}=%E0%A4%A`)))
+
   // Compressed bodies decode to the same page as the plain one, apart from the nonce.
   const strip = (t: string) => t.replace(/nonce="[^"]*"/g, '')
   const plain = strip(await get2('/', 'identity').then((r) => r.text()))

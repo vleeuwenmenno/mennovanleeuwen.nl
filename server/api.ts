@@ -34,7 +34,7 @@ import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { handlePhotosApi } from './photos.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
-import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
+import { cachePurge, HttpError, json, mergeHeaders, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
@@ -113,7 +113,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         caldav: user ? listCaldav(user) : [],
         integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
         seafile: user ? seafileInfo(user) : null,
-      }, fix.length ? { 'Set-Cookie': fix } : {})
+      }, mergeHeaders(fix.length ? { 'Set-Cookie': fix } : {}, cachePurge(req)))
       return true
     }
 

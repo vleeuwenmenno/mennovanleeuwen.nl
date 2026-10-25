@@ -9,7 +9,7 @@ import { empiresUpgrade, startEmpires } from './empires.ts'
 import { startAgents } from './agents.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { startNotifications } from './watchers.ts'
-import { SECURITY, documentCsp } from './http.ts'
+import { SECURITY, cachePurge, documentCsp } from './http.ts'
 import { GAME_CATALOG } from '../src/apps/games/catalog.ts'
 
 // Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
@@ -198,6 +198,7 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
       'Cache-Control': 'no-cache',
       ...SECURITY,
       'Content-Security-Policy': documentCsp(nonce),
+      ...cachePurge(req),
     })
     res.end(req.method === 'HEAD' ? undefined : body)
     return

@@ -93,6 +93,34 @@ export function setCookie(req: IncomingMessage, name: string, value: string, opt
   return `${name}=${encodeURIComponent(value)}; Path=${opts.path ?? '/'}; Max-Age=${opts.maxAge}${opts.readable ? '' : '; HttpOnly'}; SameSite=Lax${secure}`
 }
 
+/** Bump to purge every browser's HTTP cache once more on its next load. */
+export const CACHE_PURGE_EPOCH = '1'
+export const CACHE_PURGE_COOKIE = 'mvlos_cache_purge'
+
+/**
+ * The one-time HTTP cache purge of the security release that made account-scoped media `no-store`:
+ * responses an older release let the browser keep for days could otherwise still be replayed
+ * to another account on the same browser. Until the marker cookie (HttpOnly, never readable by the
+ * page) holds this epoch, the response carries `Clear-Site-Data: "cache"` and sets the marker.
+ * Only "cache": never cookies, storage or service workers. Browsers that block cookies get the
+ * purge on every load, which is safe. Combine with other headers through `mergeHeaders`.
+ */
+export function cachePurge(req: IncomingMessage): Record<string, string | string[]> {
+  if (cookies(req)[CACHE_PURGE_COOKIE] === CACHE_PURGE_EPOCH) return {}
+  return {
+    'Clear-Site-Data': '"cache"',
+    'Set-Cookie': [setCookie(req, CACHE_PURGE_COOKIE, CACHE_PURGE_EPOCH, { maxAge: 400 * 86400 })],
+  }
+}
+
+/** `base` plus `extra`, with Set-Cookie lists joined rather than replaced. */
+export function mergeHeaders(base: Record<string, string | string[]>, extra: Record<string, string | string[]>): Record<string, string | string[]> {
+  const out = { ...base, ...extra }
+  const set = [base['Set-Cookie'] ?? [], extra['Set-Cookie'] ?? []].flat()
+  if (set.length) out['Set-Cookie'] = set
+  return out
+}
+
 /** State-changing requests must come from this site: a present Origin header has to match. */
 export function sameOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin
