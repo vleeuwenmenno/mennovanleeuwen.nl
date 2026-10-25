@@ -28,13 +28,23 @@
   --radius: 0px;
   --border: 2px;
   /* Room for a phone's status bar and home indicator when installed as an app (viewport-fit=cover). */
-  --sat: env(safe-area-inset-top, 0px);
-  --sab: env(safe-area-inset-bottom, 0px);
+  --sat: calc(env(safe-area-inset-top, 0px) / var(--ui-scale, 1));
+  --sab: calc(env(safe-area-inset-bottom, 0px) / var(--ui-scale, 1));
   --top: calc(28px + var(--sat));
   --ui: 'JetBrains Mono', ui-monospace, monospace;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
   --hand: 'Caveat', 'Comic Sans MS', cursive;
   color-scheme: dark;
+}
+
+/* Settings → Appearance → UI scale is CSS zoom on the root (src/os/uiScale.ts). --ui-scale is
+   that zoom, so lengths given in screen units (vw, vh, the safe areas) divide by it. Games, and
+   what they float over the page, undo it: they keep their own size and pointer maths. */
+.ui-native {
+  zoom: var(--ui-unscale, 1);
+  --ui-scale: 1;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
 }
 
 * {
@@ -331,7 +341,7 @@ body.is-resizing iframe {
 .desktop {
   position: fixed;
   inset: 0 0 auto 0;
-  height: 100dvh;
+  height: calc(100dvh / var(--ui-scale, 1));
   /* clip, not hidden: hidden still lets focus changes scroll the desktop sideways */
   overflow: clip;
 }
@@ -349,25 +359,25 @@ body.is-resizing iframe {
   opacity: 0.45;
 }
 .wp-a {
-  width: 46vw;
-  height: 46vw;
-  left: -10vw;
-  top: -14vw;
+  width: calc(46vw / var(--ui-scale, 1));
+  height: calc(46vw / var(--ui-scale, 1));
+  left: calc(-10vw / var(--ui-scale, 1));
+  top: calc(-14vw / var(--ui-scale, 1));
   background: color-mix(in srgb, var(--accent) 45%, transparent);
   animation: drift 26s ease-in-out infinite alternate;
 }
 .wp-b {
-  width: 50vw;
-  height: 50vw;
-  right: -14vw;
-  bottom: -18vw;
+  width: calc(50vw / var(--ui-scale, 1));
+  height: calc(50vw / var(--ui-scale, 1));
+  right: calc(-14vw / var(--ui-scale, 1));
+  bottom: calc(-18vw / var(--ui-scale, 1));
   background: var(--blue);
   opacity: 0.25;
   animation: drift 32s ease-in-out infinite alternate-reverse;
 }
 @keyframes drift {
   to {
-    transform: translate(6vw, 4vh) scale(1.08);
+    transform: translate(calc(6vw / var(--ui-scale, 1)), calc(4vh / var(--ui-scale, 1))) scale(1.08);
   }
 }
 .wp-grid {
@@ -383,7 +393,7 @@ body.is-resizing iframe {
   bottom: 104px;
   font-family: var(--mono);
   font-weight: 700;
-  font-size: clamp(28px, 6vw, 84px);
+  font-size: clamp(28px, calc(6vw / var(--ui-scale, 1)), 84px);
   letter-spacing: -0.04em;
   color: color-mix(in srgb, var(--fg) 7%, transparent);
 }
@@ -1585,7 +1595,7 @@ body.is-resizing iframe {
 @media (pointer: coarse) {
   .ctx-menu {
     font-size: 14px;
-    max-height: calc(100dvh - 16px);
+    max-height: calc(calc(100dvh / var(--ui-scale, 1)) - 16px);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -1722,8 +1732,8 @@ body.is-resizing iframe {
   /* Full screen inside Omarchy's 10px gaps, leaving room for the dock when it always shows. */
   left: 10px !important;
   top: calc(var(--top) + 10px) !important;
-  width: calc(100vw - 20px) !important;
-  height: calc(100vh - var(--top) - 20px - var(--dock-reserve, 0px)) !important;
+  width: calc(calc(100vw / var(--ui-scale, 1)) - 20px) !important;
+  height: calc(calc(100vh / var(--ui-scale, 1)) - var(--top) - 20px - var(--dock-reserve, 0px)) !important;
 }
 .snap-preview {
   position: fixed;
@@ -2493,7 +2503,8 @@ body.is-resizing iframe {
   border-top: 1px solid var(--line);
   text-align: right;
 }
-.t-stepper {
+.t-stepper,
+.set-stepper {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2504,7 +2515,8 @@ body.is-resizing iframe {
   font-family: var(--mono);
   color: var(--fg-bright);
 }
-.t-stepper .btn:not(.btn-ghost) {
+.t-stepper .btn:not(.btn-ghost),
+.set-stepper .btn:not(.btn-ghost) {
   min-width: 28px;
 }
 .t-zoom-row {
@@ -3565,7 +3577,7 @@ body.is-resizing iframe {
   align-items: stretch;
   /* The height the hero wants, and the height its poster is drawn at 3:4 for. The hero grows past
      it when the words need more room, which they do on a narrow phone. */
-  --hero-h: clamp(216px, 23vw, 268px);
+  --hero-h: clamp(216px, calc(23vw / var(--ui-scale, 1)), 268px);
   min-height: var(--hero-h);
   margin: 12px 0 0;
   border: 1px solid var(--line);
@@ -3611,7 +3623,7 @@ body.is-resizing iframe {
 }
 .game-hero h3 {
   margin: 0;
-  font-size: clamp(25px, 1.2vw + 18px, 34px);
+  font-size: clamp(25px, calc(1.2vw / var(--ui-scale, 1)) + 18px, 34px);
   line-height: 1.1;
   letter-spacing: -0.03em;
   color: var(--fg-bright);
@@ -3619,7 +3631,7 @@ body.is-resizing iframe {
 .game-hero-blurb {
   margin: 6px 0 0;
   max-width: 48ch;
-  font-size: clamp(12.5px, 0.3vw + 11.6px, 14px);
+  font-size: clamp(12.5px, calc(0.3vw / var(--ui-scale, 1)) + 11.6px, 14px);
 }
 .game-hero-meta {
   margin: 4px 0 0;
@@ -3915,18 +3927,18 @@ body.is-resizing iframe {
   inset: 0;
   z-index: 10000;
   background: var(--bg);
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-top: calc(env(safe-area-inset-top) / var(--ui-scale, 1));
+  padding-bottom: calc(env(safe-area-inset-bottom) / var(--ui-scale, 1));
 }
 /* Under the phone's notch, the bar and its handle start below the safe area. */
 .games-play.is-page-full .games-top {
-  top: env(safe-area-inset-top);
+  top: calc(env(safe-area-inset-top) / var(--ui-scale, 1));
 }
 .games-play.is-page-full:not(.is-bar) .games-top {
-  transform: translateY(calc(-100% - env(safe-area-inset-top)));
+  transform: translateY(calc(-100% - calc(env(safe-area-inset-top) / var(--ui-scale, 1))));
 }
 .games-play.is-page-full:not(.is-bar) .games-handle {
-  margin-top: env(safe-area-inset-top);
+  margin-top: calc(env(safe-area-inset-top) / var(--ui-scale, 1));
 }
 /* The dock shares the window's z-index and comes later in the page, so it would still sit on
    top of the game unless auto-hide already put it away (as it does for a maximized window). */
@@ -3959,7 +3971,7 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .play-arcade {
   height: 100%;
   overflow: auto;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding: calc(env(safe-area-inset-top) / var(--ui-scale, 1)) calc(env(safe-area-inset-right) / var(--ui-scale, 1)) calc(env(safe-area-inset-bottom) / var(--ui-scale, 1)) calc(env(safe-area-inset-left) / var(--ui-scale, 1));
   box-sizing: border-box;
 }
 .play-arcade .games-library {
@@ -4120,7 +4132,7 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   gap: 14px;
   color: #fff;
   font-weight: 700;
-  font-size: clamp(22px, 5vw, 36px);
+  font-size: clamp(22px, calc(5vw / var(--ui-scale, 1)), 36px);
   letter-spacing: 0.12em;
 }
 .mc-studio-mark {
@@ -4158,7 +4170,7 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .mc-title {
   margin: 0;
   font-weight: 700;
-  font-size: clamp(26px, 6vw, 46px);
+  font-size: clamp(26px, calc(6vw / var(--ui-scale, 1)), 46px);
   letter-spacing: 0.06em;
   color: #e8e8e8;
   text-shadow: 3px 3px 0 #555, 6px 6px 0 rgba(0, 0, 0, 0.35);
@@ -6817,7 +6829,7 @@ button.fm-dd-row:hover {
   animation: dlg-fade 0.12s ease-out;
 }
 .dlg {
-  width: min(420px, calc(100vw - 32px));
+  width: min(420px, calc(calc(100vw / var(--ui-scale, 1)) - 32px));
   display: grid;
   gap: 10px;
   padding: 18px;
@@ -6854,7 +6866,7 @@ button.fm-dd-row:hover {
   filter: brightness(1.1);
 }
 .fp {
-  width: min(460px, calc(100vw - 32px));
+  width: min(460px, calc(calc(100vw / var(--ui-scale, 1)) - 32px));
 }
 .fp-bar {
   display: flex;
@@ -6918,10 +6930,10 @@ button.fm-dd-row:hover {
   right: 14px;
   bottom: 96px;
   z-index: 9000;
-  width: min(360px, calc(100vw - 28px));
+  width: min(360px, calc(calc(100vw / var(--ui-scale, 1)) - 28px));
   display: flex;
   flex-direction: column;
-  max-height: min(440px, calc(100vh - 160px));
+  max-height: min(440px, calc(calc(100vh / var(--ui-scale, 1)) - 160px));
   border: 1px solid var(--line-strong);
   background: var(--bg);
   box-shadow: 0 16px 40px -14px rgba(0, 0, 0, 0.55);
@@ -8195,7 +8207,7 @@ ruby > rt {
   display: flex;
   flex-direction: column;
   width: min(300px, 100%);
-  max-height: min(560px, calc(var(--vvh, 100dvh) - 80px));
+  max-height: min(560px, calc(var(--vvh, calc(100dvh / var(--ui-scale, 1))) - 80px));
   padding: 14px 14px 10px;
   background: var(--bg);
   color: var(--text);
@@ -8313,8 +8325,8 @@ ruby > rt {
 .nc-panel {
   display: flex;
   flex-direction: column;
-  width: min(360px, calc(100vw - 16px));
-  max-height: min(560px, calc(100dvh - var(--top) - 24px));
+  width: min(360px, calc(calc(100vw / var(--ui-scale, 1)) - 16px));
+  max-height: min(560px, calc(calc(100dvh / var(--ui-scale, 1)) - var(--top) - 24px));
 }
 .nc-head {
   display: flex;
@@ -8457,7 +8469,7 @@ ruby > rt {
   z-index: 150000;
   display: grid;
   gap: 10px;
-  width: min(340px, calc(100vw - 20px));
+  width: min(340px, calc(calc(100vw / var(--ui-scale, 1)) - 20px));
 }
 .notice {
   position: relative;
@@ -8552,7 +8564,7 @@ ruby > rt {
   background: var(--bg);
   border: var(--border) solid var(--inactive-border);
   box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.5);
-  max-width: calc(100vw - 16px);
+  max-width: calc(calc(100vw / var(--ui-scale, 1)) - 16px);
 }
 .dock {
   transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.22s ease, border-color 0.15s;
@@ -8901,13 +8913,13 @@ kbd {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 12vh 16px 16px;
+  padding: calc(12vh / var(--ui-scale, 1)) 16px 16px;
   background: color-mix(in srgb, var(--bg) 35%, transparent);
 }
 .spotlight {
   position: relative;
   width: min(760px, 100%);
-  max-height: min(560px, 76vh);
+  max-height: min(560px, calc(76vh / var(--ui-scale, 1)));
   display: flex;
   flex-direction: column;
   background: color-mix(in srgb, var(--bg) 97%, transparent);
@@ -9297,7 +9309,7 @@ kbd {
   .spotlight-backdrop {
     top: var(--vvt, 0px);
     bottom: auto;
-    height: var(--vvh, 100dvh);
+    height: var(--vvh, calc(100dvh / var(--ui-scale, 1)));
     padding-top: calc(var(--top) + 12px);
     padding-bottom: calc(12px + var(--sab));
   }
@@ -9530,8 +9542,8 @@ kbd {
   .window.is-max {
     left: 6px !important;
     top: calc(var(--top) + 6px) !important;
-    width: calc(100vw - 12px) !important;
-    height: calc(100dvh - var(--top) - 104px - var(--sab)) !important;
+    width: calc(calc(100vw / var(--ui-scale, 1)) - 12px) !important;
+    height: calc(calc(100dvh / var(--ui-scale, 1)) - var(--top) - 104px - var(--sab)) !important;
   }
   /* App windows stay on the screen while the notes behind them scroll (.desk-scroll). */
   .window:not(.chrome-note) {
@@ -9541,7 +9553,7 @@ kbd {
   :root.keyboard-open .window:not(.chrome-note),
   :root.keyboard-open .window.is-max {
     top: calc(var(--vvt, 0px) + var(--top) + 6px) !important;
-    height: calc(var(--vvh, 100dvh) - var(--top) - 12px) !important;
+    height: calc(var(--vvh, calc(100dvh / var(--ui-scale, 1))) - var(--top) - 12px) !important;
   }
   :root.keyboard-open .dock,
   :root.keyboard-open .dock-handle {
@@ -9549,7 +9561,7 @@ kbd {
   }
   /* With the dock tucked away, app windows reach down to the handle bar. */
   :root[data-dock-tucked]:not(.keyboard-open) .window:not(.chrome-note):not(.is-max) {
-    height: calc(100dvh - var(--top) - 36px - var(--sab)) !important;
+    height: calc(calc(100dvh / var(--ui-scale, 1)) - var(--top) - 36px - var(--sab)) !important;
   }
   /* Notes go one under the other down the desktop, in the order they were opened, and the
      desktop (.desk-scroll) scrolls when they reach below the dock. */
@@ -9621,7 +9633,7 @@ kbd {
     height: auto !important;
   }
   .window.chrome-note[data-app='keys'] {
-    height: min(46dvh, 380px) !important;
+    height: min(calc(46dvh / var(--ui-scale, 1)), 380px) !important;
     transform: rotate(1deg);
   }
   .rz {
@@ -10418,18 +10430,18 @@ kbd {
     left: 0 !important;
     top: 0 !important;
     width: 100% !important;
-    height: 100dvh !important;
+    height: calc(100dvh / var(--ui-scale, 1)) !important;
     margin: 0;
     border: 0;
     border-radius: 0;
     box-shadow: none;
     transform: none;
     animation: none;
-    padding: var(--sat) env(safe-area-inset-right, 0px) var(--sab) env(safe-area-inset-left, 0px);
+    padding: var(--sat) calc(env(safe-area-inset-right, 0px) / var(--ui-scale, 1)) var(--sab) calc(env(safe-area-inset-left, 0px) / var(--ui-scale, 1));
   }
   :root.keyboard-open .window.chrome-default.is-max {
     top: var(--vvt, 0px) !important;
-    height: var(--vvh, 100dvh) !important;
+    height: var(--vvh, calc(100dvh / var(--ui-scale, 1))) !important;
     padding-bottom: 0;
   }
   .window.chrome-default.is-max > .titlebar {
@@ -10443,7 +10455,7 @@ kbd {
     place-items: center;
     position: absolute;
     top: var(--sat);
-    right: env(safe-area-inset-right, 0px);
+    right: calc(env(safe-area-inset-right, 0px) / var(--ui-scale, 1));
     width: 44px;
     height: 44px;
     z-index: 4;
@@ -10968,7 +10980,7 @@ kbd {
   display: grid;
   place-content: center;
   gap: 12px;
-  min-height: 40vh;
+  min-height: calc(40vh / var(--ui-scale, 1));
   text-align: center;
 }
 .wa-board {
@@ -10994,13 +11006,13 @@ kbd {
   gap: 10px;
 }
 .wa-hero-icon {
-  font-size: clamp(38px, 6vw, 54px);
+  font-size: clamp(38px, calc(6vw / var(--ui-scale, 1)), 54px);
   line-height: 1;
   text-shadow: none;
 }
 .wa-hero-temp {
   margin: 0;
-  font-size: clamp(60px, 10vw, 84px);
+  font-size: clamp(60px, calc(10vw / var(--ui-scale, 1)), 84px);
   font-weight: 500;
   line-height: 0.95;
   letter-spacing: -0.04em;
@@ -12465,12 +12477,12 @@ kbd {
 .wa-detail-map {
   display: block;
   width: 100%;
-  height: min(520px, 58vh);
+  height: min(520px, calc(58vh / var(--ui-scale, 1)));
   border: var(--border) solid var(--line);
   background: var(--bg);
 }
 .wa-shade.is-phone .wa-detail-map {
-  height: 52vh;
+  height: calc(52vh / var(--ui-scale, 1));
 }
 
 /* Animated weather icons. */

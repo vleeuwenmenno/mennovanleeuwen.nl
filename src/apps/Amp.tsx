@@ -5,6 +5,7 @@ import { download, isSf } from '../data/seafile'
 import { AMP_PRESETS, ampPrefs, ampPresetOf, type AmpPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
 import { Select } from '../os/Select'
 import { useWM, type WinState } from '../os/wm'
+import { viewH } from '../os/uiScale'
 
 // Omamp, the music player: Winamp's three windows (the player, the equalizer and the playlist)
 // stacked in one, drawn in the desktop's own palette. The music streams through this site
@@ -318,7 +319,7 @@ export function Amp({ win }: { win: WinState }) {
       const el = which === 'showEq' ? eqRef.current : plRef.current
       if (which === 'showPl' && el) plHeight.current = el.offsetHeight
       const by = which === 'showEq' ? (on ? 150 : -(el?.offsetHeight ?? 150)) : on ? plHeight.current : -plHeight.current
-      wm.setGeometry(win.pid, { h: Math.max(220, Math.min(window.innerHeight - win.y - 20, win.h + by)) })
+      wm.setGeometry(win.pid, { h: Math.max(220, Math.min(viewH() - win.y - 20, win.h + by)) })
     }
     setPrefs({ [which]: on })
   }

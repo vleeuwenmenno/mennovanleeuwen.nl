@@ -691,7 +691,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
       </div>
       {enemy.length > 0 && <p className="ew-inv-enemy ew-small">{factionName(g, enemy[0].owner)} here: {enemy.reduce((n, f) => n + f.ships.length, 0)} ships in {enemy.length} fleet{enemy.length > 1 ? 's' : ''}</p>}
       {carry && at && (!coarse || (dragging && finger)) && createPortal(
-        <div className={`ew-inv-ghost ${carry.w > carry.h ? 'is-side' : ''} ${hover ? 'is-over' : ''}`}
+        <div className={`ew-inv-ghost ui-native ${carry.w > carry.h ? 'is-side' : ''} ${hover ? 'is-over' : ''}`}
           style={{ left: at.x - (carry.dx + 0.5) * slot.current, top: at.y - (carry.dy + 0.5) * slot.current - (finger ? LIFT : 0), width: carry.w * slot.current, height: carry.h * slot.current, ['--gw' as string]: `${carry.w * slot.current}px`, ['--gh' as string]: `${carry.h * slot.current}px` }}>
           <span className="ew-inv-art"><ShipArt t={UNIT[carry.unit]} /></span>
           {carry.of > 1 && <em>{carry.n}</em>}
@@ -699,7 +699,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
         document.body,
       )}
       {fleetGhost && createPortal(
-        <div className="ew-inv-ghost is-fleet" style={{ left: fleetGhost.x - 22, top: fleetGhost.y - 22 - (finger ? LIFT : 0) }}>
+        <div className="ew-inv-ghost is-fleet ui-native" style={{ left: fleetGhost.x - 22, top: fleetGhost.y - 22 - (finger ? LIFT : 0) }}>
           <Icon name="fleet" size={26} />
           <em>{fleetGhost.n}</em>
         </div>,
@@ -707,7 +707,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
       )}
       {/* What letting go over the map would do: the order, or why it's refused. */}
       {mapHint && (carry || fleetGhost) && createPortal(
-        <div className={`ew-inv-maphint ${mapHint.ok ? 'is-ok' : 'is-bad'} ${finger ? 'is-finger' : ''}`} role="status"
+        <div className={`ew-inv-maphint ui-native ${mapHint.ok ? 'is-ok' : 'is-bad'} ${finger ? 'is-finger' : ''}`} role="status"
           style={{
             // By the mouse pointer, or centred above a finger (and the ship it carries), on screen.
             left: finger ? clampTo(mapHint.x, HINT_W / 2 + 6, window.innerWidth - HINT_W / 2 - 6) : clampTo(mapHint.x + 14, 6, window.innerWidth - HINT_W - 6),

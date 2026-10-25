@@ -6,6 +6,7 @@ import { useIsMobile } from '../../os/useIsMobile'
 import { useTheme } from '../../os/theme'
 import { PALETTE_VARS, SCENE_LIMITS, SCENE_PALETTE, serializeSvg, type ScenePalette } from './svg.ts'
 import './visual.css'
+import { toUi, uiRect, viewH } from '../../os/uiScale'
 
 // Draws a ```visual block (spec.ts reads it). Loaded on demand by MarkdownPreview, so the
 // Markdown everywhere else costs nothing extra. Everything is HTML and a little SVG coloured
@@ -165,8 +166,8 @@ function Zoomable({ W, H, maxH, grow = 1, sized = false, children, extra }: { W:
     const wheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
-      const r = v.getBoundingClientRect()
-      zoomTo(scale.current * Math.exp(-e.deltaY * 0.0025), e.clientX - r.left, e.clientY - r.top)
+      const r = uiRect(v)
+      zoomTo(scale.current * Math.exp(-e.deltaY * 0.0025), toUi(e.clientX) - r.left, toUi(e.clientY) - r.top)
     }
     let pinch: { d: number; s: number } | null = null
     const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
@@ -176,9 +177,9 @@ function Zoomable({ W, H, maxH, grow = 1, sized = false, children, extra }: { W:
     const tmove = (e: TouchEvent) => {
       if (!pinch || e.touches.length !== 2) return
       e.preventDefault()
-      const r = v.getBoundingClientRect()
-      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top
+      const r = uiRect(v)
+      const cx = (toUi(e.touches[0].clientX) + toUi(e.touches[1].clientX)) / 2 - r.left
+      const cy = (toUi(e.touches[0].clientY) + toUi(e.touches[1].clientY)) / 2 - r.top
       zoomTo(pinch.s * (dist(e.touches) / pinch.d), cx, cy)
     }
     const tend = (e: TouchEvent) => {
@@ -201,19 +202,19 @@ function Zoomable({ W, H, maxH, grow = 1, sized = false, children, extra }: { W:
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     const v = view.current
     if (e.pointerType !== 'mouse' || e.button !== 0 || !v || (v.scrollWidth <= v.clientWidth && v.scrollHeight <= v.clientHeight)) return
-    drag.current = { x: e.clientX, y: e.clientY, l: v.scrollLeft, t: v.scrollTop, id: e.pointerId }
+    drag.current = { x: toUi(e.clientX), y: toUi(e.clientY), l: v.scrollLeft, t: v.scrollTop, id: e.pointerId }
   }
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current
     const v = view.current
     if (!d || !v || d.id !== e.pointerId) return
-    if (!v.classList.contains('is-dragging') && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) {
+    if (!v.classList.contains('is-dragging') && Math.hypot(toUi(e.clientX) - d.x, toUi(e.clientY) - d.y) > 4) {
       v.classList.add('is-dragging')
       v.setPointerCapture(e.pointerId)
     }
     if (v.classList.contains('is-dragging')) {
-      v.scrollLeft = d.l - (e.clientX - d.x)
-      v.scrollTop = d.t - (e.clientY - d.y)
+      v.scrollLeft = d.l - (toUi(e.clientX) - d.x)
+      v.scrollTop = d.t - (toUi(e.clientY) - d.y)
     }
   }
   const endDrag = () => {
@@ -289,7 +290,7 @@ function Diagram({ nodes, edges, groups, dir: asked, arrows }: { nodes: Drawn[];
   const left = Math.max(0, ...groupBoxes.map((g) => -g.x0)) + PAD
   const W = Math.ceil(Math.max(layout.width, ...groupBoxes.map((g) => g.x1)) + left + PAD + 20)
   const H = Math.ceil(Math.max(layout.height, ...groupBoxes.map((g) => g.y1)) + top + PAD)
-  const maxH = mobile ? Math.round(window.innerHeight * 0.6) : 520
+  const maxH = mobile ? Math.round(viewH() * 0.6) : 520
 
 
   const at = (id: string) => {
@@ -740,8 +741,8 @@ function XYChart({ v }: { v: Extract<Visual, { type: 'chart' }> }) {
           height={H}
           className="vis-chart-svg"
           onPointerMove={(e) => {
-            const r = e.currentTarget.getBoundingClientRect()
-            const i = Math.floor((e.clientX - r.left - m.l) / band)
+            const r = uiRect(e.currentTarget)
+            const i = Math.floor((toUi(e.clientX) - r.left - m.l) / band)
             setHover(i >= 0 && i < n ? i : null)
           }}
           onPointerLeave={(e) => e.pointerType === 'mouse' && setHover(null)}
@@ -939,7 +940,7 @@ function SceneView({ v }: { v: Extract<Visual, { type: 'scene' }> }) {
   const k = Math.min(1, SCENE_LIMITS.size / Math.max(vw, vh))
   const W = Math.max(1, Math.round(vw * k))
   const H = Math.max(1, Math.round(vh * k))
-  const maxH = mobile ? Math.round(window.innerHeight * 0.6) : 560
+  const maxH = mobile ? Math.round(viewH() * 0.6) : 560
   // A small drawing grows to a readable width (up to twice its size), a large one fits.
   const grow = Math.max(1, Math.min(2, 720 / W))
 

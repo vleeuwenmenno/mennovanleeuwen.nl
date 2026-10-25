@@ -13,6 +13,7 @@ import { Lightbox } from './Lightbox'
 import { JobStatus, PhotosSettings } from './PhotosSettings'
 import { useTimeline } from './useTimeline'
 import './photos.css'
+import { toUi } from '../../os/uiScale'
 
 // Photos: a timeline of the photos and videos in your Seafile folders or your Immich library,
 // by the date they were taken, with albums (Seafile: the folders chosen; Immich: its albums),
@@ -177,7 +178,7 @@ export function Photos({ win }: { win: WinState }) {
       // Holding a selected photo drags the selection; holding any other starts (or adds to) the selection.
       if (selecting && sel.ids.has(item.id)) return holdToDrag(e, () => dragOf(ctx, targetOf(item.id)).items, 'photos', ctx.source === 'immich' ? dragOf(ctx, targetOf(item.id)).files : undefined)
       if (selecting) return
-      const start = { x: e.clientX, y: e.clientY }
+      const start = { x: toUi(e.clientX), y: toUi(e.clientY) }
       const timer = setTimeout(() => {
         stop()
         suppressClick.current = true
@@ -188,7 +189,7 @@ export function Photos({ win }: { win: WinState }) {
         }
         setSel({ ids: new Set([item.id]), anchor: item.id })
       }, LONG_PRESS_MS)
-      const move = (ev: PointerEvent) => Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > 10 && stop()
+      const move = (ev: PointerEvent) => Math.hypot(toUi(ev.clientX) - start.x, toUi(ev.clientY) - start.y) > 10 && stop()
       function stop() {
         clearTimeout(timer)
         window.removeEventListener('pointermove', move)

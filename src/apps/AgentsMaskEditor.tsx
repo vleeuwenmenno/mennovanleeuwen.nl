@@ -342,7 +342,7 @@ function Editor({ sourceUrl, sourceName, width, height, initialMaskUrl, applyLab
     </div>
     <p id={`${id}-help`}>Colored areas will change. The image always fits. Brush or erase with a pointer; on the canvas, arrow keys move the cursor (Shift: larger steps), Space paints a dot. Ctrl/⌘+Z undoes, Ctrl/⌘+Shift+Z redoes. Grow and Shrink move the edge by {growLabel}.</p>
     <div className="agt-mask-stage">
-      {!problem && <div className="agt-mask-image" style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, ${58 * width / height}dvh)` }}>
+      {!problem && <div className="agt-mask-image" style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, calc(${58 * width / height}dvh / var(--ui-scale, 1)))` }}>
         <img src={url} alt={sourceName} draggable={false} onLoad={e => {
           if (e.currentTarget.naturalWidth !== width || e.currentTarget.naturalHeight !== height) { setSourceReady(false); setError('Source dimensions do not match the oriented image. Reopen with the correct dimensions.') }
           else setSourceReady(true)

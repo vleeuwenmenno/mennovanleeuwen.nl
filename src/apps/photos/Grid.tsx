@@ -3,6 +3,7 @@ import { dayTitle, duration, monthTitle, thumbUrl, type Bucket, type Item, type 
 import { useIsMobile } from '../../os/useIsMobile'
 import { VideoThumb } from '../../os/VideoThumb'
 import type { Timeline } from './useTimeline'
+import { toUi, uiRect } from '../../os/uiScale'
 
 // The timeline's grid: months, then days, then square tiles, newest first. Only the rows on
 // screen (and a screen's worth either side) are in the page, so 20,000 photos scroll as easily
@@ -352,7 +353,7 @@ export function Grid({ source, timeline, zoom, onZoom, sel, empty }: { source: S
   }
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType !== 'touch') return startBox(e)
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    pointers.current.set(e.pointerId, { x: toUi(e.clientX), y: toUi(e.clientY) })
     if (pointers.current.size === 2) pinch.current = dist()
   }
 
@@ -365,14 +366,14 @@ export function Grid({ source, timeline, zoom, onZoom, sel, empty }: { source: S
     const el = scroller.current
     const c = canvas.current
     if (e.button !== 0 || !el || !c || (e.target as HTMLElement).closest('.ph-tile, .ph-check, .ph-scrub')) return
-    const r0 = c.getBoundingClientRect()
-    const start = { x: e.clientX - r0.left, y: e.clientY - r0.top }
+    const r0 = uiRect(c)
+    const start = { x: toUi(e.clientX) - r0.left, y: toUi(e.clientY) - r0.top }
     const base = e.ctrlKey || e.metaKey || e.shiftKey ? new Set(selRef.current.selected) : new Set<string>()
-    let at = { x: e.clientX, y: e.clientY }
+    let at = { x: toUi(e.clientX), y: toUi(e.clientY) }
     let drawn = false
     let timer: ReturnType<typeof setInterval> | null = null
     const update = () => {
-      const r = c.getBoundingClientRect()
+      const r = uiRect(c)
       const x = Math.max(0, Math.min(r.width, at.x - r.left))
       const y = Math.max(0, Math.min(r.height, at.y - r.top))
       if (!drawn && Math.abs(x - start.x) < 5 && Math.abs(y - start.y) < 5) return
@@ -383,7 +384,7 @@ export function Grid({ source, timeline, zoom, onZoom, sel, empty }: { source: S
     }
     // Near the top or bottom edge the grid scrolls on, faster the closer the pointer is.
     const tick = () => {
-      const r = el.getBoundingClientRect()
+      const r = uiRect(el)
       const edge = 48
       const speed = at.y < r.top + edge ? -Math.ceil((r.top + edge - at.y) / 3) : at.y > r.bottom - edge ? Math.ceil((at.y - (r.bottom - edge)) / 3) : 0
       if (drawn && speed) {
@@ -393,7 +394,7 @@ export function Grid({ source, timeline, zoom, onZoom, sel, empty }: { source: S
     }
     timer = setInterval(tick, 16)
     const move = (ev: PointerEvent) => {
-      at = { x: ev.clientX, y: ev.clientY }
+      at = { x: toUi(ev.clientX), y: toUi(ev.clientY) }
       update()
     }
     const up = (ev: PointerEvent) => {
@@ -410,7 +411,7 @@ export function Grid({ source, timeline, zoom, onZoom, sel, empty }: { source: S
   }
   const onPointerMove = (e: React.PointerEvent) => {
     if (!pointers.current.has(e.pointerId)) return
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    pointers.current.set(e.pointerId, { x: toUi(e.clientX), y: toUi(e.clientY) })
     if (pointers.current.size !== 2 || !pinch.current) return
     const ratio = dist() / pinch.current
     if (ratio > 1.3 || ratio < 0.77) {
@@ -505,7 +506,7 @@ function Scrubber({ buckets, l, height, scrollTop, scroller }: { buckets: Bucket
     if (!years.length || y - years[years.length - 1].y >= 18) years.push({ y, year })
   })
   const go = (clientY: number, target: HTMLElement) => {
-    const rect = target.getBoundingClientRect()
+    const rect = uiRect(target)
     const y = Math.max(0, Math.min(usable, clientY - rect.top - pad))
     const top = (y / usable) * span
     if (scroller.current) scroller.current.scrollTop = top
@@ -519,13 +520,13 @@ function Scrubber({ buckets, l, height, scrollTop, scroller }: { buckets: Bucket
       onPointerDown={(e) => {
         dragging.current = true
         e.currentTarget.setPointerCapture(e.pointerId)
-        go(e.clientY, e.currentTarget)
+        go(toUi(e.clientY), e.currentTarget)
       }}
       onPointerMove={(e) => {
-        if (dragging.current) go(e.clientY, e.currentTarget)
+        if (dragging.current) go(toUi(e.clientY), e.currentTarget)
         else if (e.pointerType === 'mouse') {
-          const rect = e.currentTarget.getBoundingClientRect()
-          const y = Math.max(0, Math.min(usable, e.clientY - rect.top - pad))
+          const rect = uiRect(e.currentTarget)
+          const y = Math.max(0, Math.min(usable, toUi(e.clientY) - rect.top - pad))
           setAt({ y: y + pad, month: buckets[bucketAt(l, (y / usable) * span)]?.month ?? '' })
         }
       }}

@@ -3,6 +3,7 @@ import { useEventSlot, type CalendarEvent, type CalendarInfo } from '../../data/
 import { PersonChip } from '../contacts/people'
 import { STATUS } from './EventEditor'
 import { addDays, hhmm, parseDay, span } from './time'
+import { uiRect } from '../../os/uiScale'
 
 // A click on an event shows this first: what the event is, beside it like Google Calendar's card
 // (or as a sheet from the bottom in a narrow window), read-only, with Edit and Delete for events
@@ -88,8 +89,8 @@ export function EventPreview({ event: e, calendar, rootRef, near, reveal, sheet,
     const el = elementOf(rootRef.current, e.id, null)
     const scroller = el?.closest<HTMLElement>('.ca-tg-scroll')
     if (!el || !scroller) return
-    const s = scroller.getBoundingClientRect()
-    const r = el.getBoundingClientRect()
+    const s = uiRect(scroller)
+    const r = uiRect(el)
     if (r.top < s.top || r.bottom > s.bottom) scroller.scrollTop += r.top - s.top - (s.height - r.height) / 2
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -99,11 +100,11 @@ export function EventPreview({ event: e, calendar, rootRef, near, reveal, sheet,
     const root = rootRef.current
     const pop = popRef.current
     if (!root || !pop || sheet) return
-    const rr = root.getBoundingClientRect()
-    const view = root.querySelector('.ca-view')?.getBoundingClientRect() ?? rr
+    const rr = uiRect(root)
+    const view = uiRect(root.querySelector('.ca-view')) ?? rr
     const w = pop.offsetWidth
     const h = pop.offsetHeight
-    const r = elementOf(root, e.id, near)?.getBoundingClientRect()
+    const r = uiRect(elementOf(root, e.id, near))
     const seen = r && r.bottom > view.top && r.top < view.bottom && r.right > view.left && r.left < view.right ? r : null
     let x = (rr.width - w) / 2
     let y = (rr.height - h) / 2

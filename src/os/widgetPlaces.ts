@@ -1,4 +1,5 @@
 import { synced } from './synced'
+import { viewH, viewW } from './uiScale'
 
 // Which widgets are on the desktop and where (src/widgets). Kept apart from the window layout
 // (wm.tsx) so they follow the account as a set merged entry by entry, like notes: two devices
@@ -29,6 +30,8 @@ export type WidgetPlace = {
   h: number
   /** Legacy layouts did not record screen dimensions; keep their coordinates without scaling. */
   screenUnknown?: boolean
+  /** Screen class is independent of logical dimensions at a high UI scale. Absent in old saves. */
+  phone?: boolean
   vw: number
   vh: number
   /** Its place in the phone layout's column, once moved there by hand. */
@@ -54,6 +57,7 @@ function place(id: string, raw: Partial<WidgetPlace>): WidgetPlace {
     w: num(raw.w, 280),
     h: num(raw.h, 260),
     ...(raw.screenUnknown ? { screenUnknown: true } : {}),
+    ...(typeof raw.phone === 'boolean' ? { phone: raw.phone } : {}),
     vw: num(raw.vw),
     vh: num(raw.vh),
     ...(typeof raw.stack === 'number' ? { stack: raw.stack } : {}),
@@ -85,10 +89,13 @@ export function normalizeSet(v: unknown): WidgetSet {
 /** The counter for a change to `existing` made now: past the entry's own, whatever the clock says. */
 export const nextAt = (existing?: Pick<WidgetPlace, 'at'>) => Math.max(Date.now(), (existing?.at ?? 0) + 1)
 
+/** Old saves used screen pixels and can still infer their screen class from the width. */
+export const placedOnPhone = (p: WidgetPlace) => p.phone ?? p.vw < 720
+
 /** Whether `a` wins over `b`: the higher counter, then (a tie) the same pick on every device. */
 export function wins(a: WidgetPlace, b: WidgetPlace): boolean {
   if (a.at !== b.at) return a.at > b.at
-  if ((a.vw >= 720) !== (b.vw >= 720)) return a.vw >= 720
+  if (placedOnPhone(a) !== placedOnPhone(b)) return !placedOnPhone(a)
   if (a.vw !== b.vw) return a.vw > b.vw
   return JSON.stringify(place(a.id, a)) > JSON.stringify(place(b.id, b))
 }
@@ -174,8 +181,8 @@ type LayoutWindow = { app?: unknown; x?: unknown; y?: unknown; w?: unknown; h?: 
  */
 export function importLayoutWidgets(saved: unknown): boolean {
   if (!Array.isArray(saved)) return false
-  const vw = typeof window === 'undefined' ? 0 : window.innerWidth
-  const vh = typeof window === 'undefined' ? 0 : window.innerHeight
+  const vw = typeof window === 'undefined' ? 0 : viewW()
+  const vh = typeof window === 'undefined' ? 0 : viewH()
   const found: Omit<WidgetPlace, 'at'>[] = []
   for (const w of saved as LayoutWindow[]) {
     if (!w || typeof w !== 'object') continue

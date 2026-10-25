@@ -35,6 +35,7 @@ import { useMediaQuery } from '../os/useMediaQuery'
 import { SecretInput } from '../os/SecretInput'
 import { VideoThumb } from '../os/VideoThumb'
 import { FilesPreview, PREVIEW_DEFAULT, PREVIEW_MAX, PREVIEW_MIN } from './FilesPreview'
+import { toUi, uiRect, uiScale } from '../os/uiScale'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -306,10 +307,10 @@ export function Files({ win }: { win: WinState }) {
   const onSplitDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
     e.preventDefault()
-    const startX = e.clientX
+    const startX = toUi(e.clientX)
     const startW = paneWidth
     let w = startW
-    const move = (ev: PointerEvent) => setDragWidth((w = clampPane(startW + startX - ev.clientX)))
+    const move = (ev: PointerEvent) => setDragWidth((w = clampPane(startW + startX - toUi(ev.clientX))))
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -1028,20 +1029,20 @@ export function Files({ win }: { win: WinState }) {
     if (e.button !== 0 || (e.target as HTMLElement).closest('.fm-item, .fm-list-head')) return
     // A finger on empty space scrolls the list; it only clears the selection.
     if (e.pointerType === 'touch') return setSelected(new Set())
-    const box = main.current!.getBoundingClientRect()
-    const start = { x: e.clientX - box.left + main.current!.scrollLeft, y: e.clientY - box.top + main.current!.scrollTop }
+    const box = uiRect(main.current!)
+    const start = { x: toUi(e.clientX) - box.left + main.current!.scrollLeft, y: toUi(e.clientY) - box.top + main.current!.scrollTop }
     const base = e.ctrlKey || e.metaKey || e.shiftKey ? new Set(selected) : new Set<string>()
     setSelected(base)
     main.current!.focus({ preventScroll: true })
     const move = (ev: PointerEvent) => {
-      const x = ev.clientX - box.left + main.current!.scrollLeft
-      const y = ev.clientY - box.top + main.current!.scrollTop
+      const x = toUi(ev.clientX) - box.left + main.current!.scrollLeft
+      const y = toUi(ev.clientY) - box.top + main.current!.scrollTop
       const rect = { x: Math.min(start.x, x), y: Math.min(start.y, y), w: Math.abs(x - start.x), h: Math.abs(y - start.y) }
       if (rect.w < 4 && rect.h < 4) return
       setMarquee(rect)
       const hit = new Set(base)
       for (const [p, el] of tiles.current) {
-        const r = el.getBoundingClientRect()
+        const r = uiRect(el)
         const t = { x: r.left - box.left + main.current!.scrollLeft, y: r.top - box.top + main.current!.scrollTop }
         if (t.x < rect.x + rect.w && t.x + r.width > rect.x && t.y < rect.y + rect.h && t.y + r.height > rect.y) hit.add(p)
       }
@@ -1326,7 +1327,7 @@ export function Files({ win }: { win: WinState }) {
           title="Menu"
           aria-label="Menu"
           onClick={(e) =>
-            openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().right - 220, clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, [
+            openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().right - 220 * uiScale(), clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, [
               { label: 'New window', onSelect: () => wm.openNew('files', { path }) },
               ...(isSf(path) || inBrowserHere
                 ? [

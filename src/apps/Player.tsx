@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { download, isSf } from '../data/seafile'
 import { folderOf, formatTime, nameOf, useMedia, useSiblings } from '../data/media'
 import { useWM, type WinState } from '../os/wm'
+import { viewH, viewW } from '../os/uiScale'
 
 // Player, for video and audio, after QuickTime: the picture fills the window (which takes the
 // video's shape when it opens), and a floating bar with play, skip, the timeline (hover for the
@@ -193,16 +194,16 @@ export function Player({ win }: { win: WinState }) {
     setDuration(v.duration)
     if (audio || fitted.current === path || win.maximized || win.snap || !v.videoWidth) return
     fitted.current = path
-    const maxW = Math.min(window.innerWidth - 40, 960)
-    const maxH = window.innerHeight - 140
+    const maxW = Math.min(viewW() - 40, 960)
+    const maxH = viewH() - 140
     let w = Math.max(480, Math.min(maxW, v.videoWidth))
     let h = (w * v.videoHeight) / v.videoWidth
     if (h > maxH) {
       h = maxH
       w = Math.max(480, (h * v.videoWidth) / v.videoHeight)
     }
-    const x = Math.max(10, Math.min(win.x, window.innerWidth - w - 10))
-    const y = Math.max(38, Math.min(win.y, window.innerHeight - h - BAR - 80))
+    const x = Math.max(10, Math.min(win.x, viewW() - w - 10))
+    const y = Math.max(38, Math.min(win.y, viewH() - h - BAR - 80))
     wm.setGeometry(win.pid, { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h + BAR) })
   }
 

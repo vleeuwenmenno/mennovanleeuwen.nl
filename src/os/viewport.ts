@@ -1,3 +1,5 @@
+import { toUi } from './uiScale'
+
 // Phones' on-screen keyboards. Android (with interactive-widget=resizes-content) shrinks the page
 // like a window resize; iOS lays the keyboard over the page and only shrinks the *visual*
 // viewport, so anything pinned to the bottom (the boot console, terminal prompts, editors)
@@ -26,8 +28,9 @@ export function trackVisualViewport() {
       // Pinch zoom also shrinks the visual viewport. Let the browser magnify the
       // existing layout instead of treating it as a keyboard and resizing windows.
       if (Math.abs(vv.scale - 1) > 0.01) return
-      root.style.setProperty('--vvh', `${Math.round(vv.height)}px`)
-      root.style.setProperty('--vvt', `${Math.round(vv.offsetTop)}px`)
+      // In page pixels: the UI scale (uiScale.ts) zooms the page, these are screen pixels.
+      root.style.setProperty('--vvh', `${Math.round(toUi(vv.height))}px`)
+      root.style.setProperty('--vvt', `${Math.round(toUi(vv.offsetTop))}px`)
       // Rotating or resizing the window starts over; the keyboard never changes the width.
       if (Math.round(vv.width) !== fullWidth) { fullWidth = Math.round(vv.width); fullHeight = 0 }
       fullHeight = Math.max(fullHeight, vv.height, editing() ? 0 : window.innerHeight)
@@ -43,6 +46,8 @@ export function trackVisualViewport() {
   }
   vv.addEventListener('resize', apply)
   vv.addEventListener('scroll', apply)
+  // A new UI scale changes the page pixels these are given in (uiScale.ts sends a resize).
+  window.addEventListener('resize', apply)
   // Focus leaving a field closes the keyboard without always resizing first.
   document.addEventListener('focusin', apply)
   document.addEventListener('focusout', apply)

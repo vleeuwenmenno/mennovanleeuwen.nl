@@ -3,6 +3,7 @@ import { BOLD, DIM, INVERSE, INVISIBLE, ITALIC, OVERLINE, STRIKE, UNDERLINE, typ
 import { cssColor } from './palette.ts'
 import { encodeKey, encodeMouse } from './keys.ts'
 import type { VtSession } from './session.ts'
+import { toUi, uiRect } from '../../os/uiScale'
 
 // Draws an emulator's grid (screen.ts) in the terminal window: one row per line, runs of cells
 // with the same style as one span. Rows are memoized by their version, so a program that changes
@@ -142,7 +143,7 @@ export function VtView({ session, focused, onCellSize, onDrawn }: { session: VtS
     const probe = probeRef.current
     if (!probe) return
     const measure = () => {
-      const r = probe.getBoundingClientRect()
+      const r = uiRect(probe)
       if (r.width) onCellSize(r.width / 10, r.height)
     }
     measure()
@@ -155,12 +156,12 @@ export function VtView({ session, focused, onCellSize, onDrawn }: { session: VtS
   const held = useRef<number | null>(null)
   const cellAt = (e: { clientX: number; clientY: number }) => {
     const el = screenRef.current
-    const probe = probeRef.current?.getBoundingClientRect()
+    const probe = uiRect(probeRef.current)
     if (!el || !probe) return null
-    const r = el.getBoundingClientRect()
+    const r = uiRect(el)
     const w = probe.width / 10
     const h = r.height / vt.rows
-    return { x: Math.max(0, Math.min(vt.cols - 1, Math.floor((e.clientX - r.left) / w))), y: Math.max(0, Math.min(vt.rows - 1, Math.floor((e.clientY - r.top) / h))) }
+    return { x: Math.max(0, Math.min(vt.cols - 1, Math.floor((toUi(e.clientX) - r.left) / w))), y: Math.max(0, Math.min(vt.rows - 1, Math.floor((toUi(e.clientY) - r.top) / h))) }
   }
   const mods = (e: { shiftKey: boolean; altKey: boolean; ctrlKey: boolean }) => ({ shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey })
   // Shift keeps the mouse for selecting text, as in xterm; the right button keeps the menu.

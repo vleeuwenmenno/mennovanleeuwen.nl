@@ -5,6 +5,7 @@ import { previewPrefs } from '../data/appPrefs'
 import { useWM, type WinState } from '../os/wm'
 import { useBackButton } from '../os/backButton'
 import { formatSize, prettyPath } from '../terminal/vfs'
+import { toUi, uiRect } from '../os/uiScale'
 
 // Preview, for pictures, after macOS's: the picture fitted to the window, zoom (buttons, keys,
 // Ctrl+wheel or a pinch, towards the pointer), pan by dragging or scrolling when zoomed in, rotate,
@@ -124,9 +125,9 @@ export function Preview({ win }: { win: WinState }) {
     if (!el) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const r = el.getBoundingClientRect()
-      const cx = e.clientX - r.left - r.width / 2
-      const cy = e.clientY - r.top - r.height / 2
+      const r = uiRect(el)
+      const cx = toUi(e.clientX) - r.left - r.width / 2
+      const cy = toUi(e.clientY) - r.top - r.height / 2
       if (e.ctrlKey || e.metaKey) zoomTo(scale * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0025)), cx, cy)
       else if (pannable) panBy(-e.deltaX, -e.deltaY)
     }
@@ -140,7 +141,7 @@ export function Preview({ win }: { win: WinState }) {
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    pointers.current.set(e.pointerId, { x: toUi(e.clientX), y: toUi(e.clientY) })
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()]
       pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y), s: scale }
@@ -149,12 +150,12 @@ export function Preview({ win }: { win: WinState }) {
   const onPointerMove = (e: React.PointerEvent) => {
     const last = pointers.current.get(e.pointerId)
     if (!last) return
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    pointers.current.set(e.pointerId, { x: toUi(e.clientX), y: toUi(e.clientY) })
     if (pointers.current.size === 2 && pinch.current) {
       const [a, b] = [...pointers.current.values()]
-      const r = stage.current!.getBoundingClientRect()
+      const r = uiRect(stage.current!)
       zoomTo((pinch.current.s * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.current.d, (a.x + b.x) / 2 - r.left - r.width / 2, (a.y + b.y) / 2 - r.top - r.height / 2)
-    } else if (pannable) panBy(e.clientX - last.x, e.clientY - last.y)
+    } else if (pannable) panBy(toUi(e.clientX) - last.x, toUi(e.clientY) - last.y)
   }
   const onPointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId)
@@ -162,9 +163,9 @@ export function Preview({ win }: { win: WinState }) {
   }
   const onDoubleClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button')) return
-    const r = stage.current!.getBoundingClientRect()
+    const r = uiRect(stage.current!)
     if (view.mode === 'free' && view.scale > fitScale) setView(AUTO)
-    else zoomTo(Math.max(1, scale * 2), e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2)
+    else zoomTo(Math.max(1, scale * 2), toUi(e.clientX) - r.left - r.width / 2, toUi(e.clientY) - r.top - r.height / 2)
   }
 
   // --- going through the folder --------------------------------------------------------------

@@ -104,6 +104,7 @@
     "check:revocation": "node scripts/revocation-check.ts",
     "check:session-streams": "node scripts/session-streams-check.ts",
     "check:widgets-sync": "node scripts/widgets-sync-check.ts",
+    "check:ui-scale": "node scripts/ui-scale-e2e.ts",
     "check:widget-stacking": "node scripts/widget-stacking-e2e.ts",
     "check:sync-loop": "node scripts/sync-loop-e2e.ts",
     "check:agents-favourites": "node scripts/agents-favourites-e2e.ts",

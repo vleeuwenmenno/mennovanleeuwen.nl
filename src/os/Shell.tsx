@@ -38,6 +38,7 @@ import { isDefaultDock, isDockableApp, isLauncherId, pinToDock, resetDock, setDo
 import { AppIcon } from './icons'
 import { TopBar } from './TopBar'
 import { useIsMobile } from './useIsMobile'
+import { toUi, uiScale, viewH, viewW } from './uiScale'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, workspaceOf, WORKSPACES, type AppId, type Geometry, type WinState } from './wm'
@@ -47,8 +48,8 @@ const DOCK_SPACE = 96
 
 export function placement(app: AppId, openCount: number, props?: WinState['props']): Geometry {
   const [w0, h0] = (props && APP_META[app].sizeOf?.(props)) || APP_META[app].size
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+  const vw = viewW()
+  const vh = viewH()
   const w = Math.min(w0, vw - 32)
   const h = Math.min(h0, vh - TOP - DOCK_SPACE - 16)
   const offset = (openCount % 6) * 28
@@ -65,10 +66,10 @@ export function placement(app: AppId, openCount: number, props?: WinState['props
 /** The opening layout: sticky note on the left, terminal beside it (just the note on phones).
  * The note is the welcome note, or Menno's headlines at /cv (src/apps/Notes.tsx). */
 export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinState['props'] }[] {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+  const vw = viewW()
+  const vh = viewH()
   // Phones only have room for one thing: the headline note. The terminal is a tap away in the dock.
-  if (vw < 720) return [{ app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } }]
+  if (window.innerWidth < 720) return [{ app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } }]
   const noteW = 310
 
   // Big screens on the CV page get a composed desk: notes on the left (shortcuts tucked under
@@ -226,8 +227,8 @@ function Dock() {
     if (!nav) return false
     const dw = nav.offsetWidth
     const dh = nav.offsetHeight
-    const dx = (window.innerWidth - dw) / 2
-    const dy = window.innerHeight - 10 - dh
+    const dx = (viewW() - dw) / 2
+    const dy = viewH() - 10 - dh
     return w.x < dx + dw && w.x + w.w > dx && w.y < dy + dh && w.y + w.h > dy
   })
   const dock = useDockVisibility(
@@ -249,7 +250,7 @@ function Dock() {
       const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)
       const sep = nav.querySelector<HTMLElement>('.dock-sep')
       const sepW = sep ? sep.offsetWidth + parseFloat(getComputedStyle(sep).marginLeft) * 2 : 0
-      const room = window.innerWidth - 16 - chrome - (runningApps.length ? 3 : 2) * sepW
+      const room = viewW() - 16 - chrome - (runningApps.length ? 3 : 2) * sepW
       const W = first.offsetWidth
       // n apps plus All apps and Trash (plus More when it is needed), with gaps between all children.
       const width = (n: number, more: boolean) => (n + 2 + +more) * W + (n + 3 + +more) * gap
@@ -283,7 +284,7 @@ function Dock() {
       if (app === drag.current?.app) continue
       const before = prev.get(app)
       if (before === undefined) continue
-      const dx = before - el.getBoundingClientRect().left
+      const dx = toUi(before - el.getBoundingClientRect().left)
       if (!dx) continue
       el.style.transition = 'none'
       el.style.transform = `translateX(${dx}px)`
@@ -313,7 +314,8 @@ function Dock() {
       document.body.classList.add('is-dragging')
       const el = items.current.get(d.app)!
       const r = el.getBoundingClientRect()
-      const naturalCenter = r.left + r.width / 2 - dxRef.current
+      // Screen pixels; the shift drawn (dxRef) is in page pixels (the UI scale, uiScale.ts).
+      const naturalCenter = r.left + r.width / 2 - dxRef.current * uiScale()
       const others = orderRef.current.filter((a) => a !== d.app)
       // Only the icons on show count (the ones behind More come after them anyway).
       const onShow = others.filter((a) => items.current.has(a))
@@ -323,14 +325,14 @@ function Dock() {
         if (ev.clientX > o.left + o.width / 2) idx++
       }
       const last = onShow.length ? items.current.get(onShow[onShow.length - 1])! : firstRef.current
-      const inPinned = !d.running || (!!last && ev.clientX <= last.getBoundingClientRect().right + last.offsetWidth / 2)
+      const inPinned = !d.running || (!!last && ev.clientX <= last.getBoundingClientRect().right + last.getBoundingClientRect().width / 2)
       const next = inPinned ? [...others.slice(0, idx), d.app, ...others.slice(idx)] : others
       if (next.join() !== orderRef.current.join()) {
         prevRects.current = new Map([...items.current].map(([a, node]) => [a, node.getBoundingClientRect().left]))
         orderRef.current = next // a quick drop can land before the re-render
         setOrder(next)
       }
-      dxRef.current = ev.clientX - naturalCenter
+      dxRef.current = toUi(ev.clientX - naturalCenter)
       setDragging({ app: d.app, dx: dxRef.current })
     }
 

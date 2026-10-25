@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { countFor, levels, useContributions, type ContributionDay, type Source } from '../data/contributions'
 import { timeAgo } from '../data/recents'
+import { uiRect } from '../os/uiScale'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const fmt = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
@@ -76,8 +77,8 @@ export function ContributionGraph() {
                     className={`contrib-day l${level(countFor(d, source))}`}
                     onPointerEnter={(e) => {
                       // Positioned inside the section: windows use backdrop-filter, which breaks position: fixed.
-                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                      const o = root.current!.getBoundingClientRect()
+                      const r = uiRect(e.currentTarget as HTMLElement)
+                      const o = uiRect(root.current!)
                       setHover({ day: d, x: r.left + r.width / 2 - o.left, y: r.top - o.top })
                     }}
                     aria-label={`${fmt(d.date)}: ${countFor(d, source)} contributions`}

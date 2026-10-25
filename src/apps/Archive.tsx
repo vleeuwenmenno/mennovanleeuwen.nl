@@ -14,6 +14,7 @@ import { useWM, type WinState } from '../os/wm'
 import { useBackButton } from '../os/backButton'
 import { formatSize, KIND_LABEL, kindOfName, prettyPath } from '../terminal/vfs'
 import { FileIcon, FolderIcon } from './Files'
+import { toUi, uiRect } from '../os/uiScale'
 
 // Archive: what is in a ZIP or a tar (plain or gzipped), browsed like a folder in Files, without
 // unpacking it. Of a ZIP only the table of contents is read (from Seafile, just the end of the
@@ -410,25 +411,25 @@ export function Archive({ win }: { win: WinState }) {
   const onListPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('.ar-head, .ar-label')) return
     const el = list.current!
-    const box = el.getBoundingClientRect()
+    const box = uiRect(el)
     // Not on the scrollbar.
-    if (e.clientX > box.left + el.clientWidth || e.clientY > box.top + el.clientHeight) return
+    if (toUi(e.clientX) > box.left + el.clientWidth || toUi(e.clientY) > box.top + el.clientHeight) return
     const onRow = !!(e.target as HTMLElement).closest('.ar-row')
-    const start = { x: e.clientX - box.left + el.scrollLeft, y: e.clientY - box.top + el.scrollTop }
+    const start = { x: toUi(e.clientX) - box.left + el.scrollLeft, y: toUi(e.clientY) - box.top + el.scrollTop }
     const kept = e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
     if (!onRow) setSelected(kept)
     banding.current = false
     el.focus({ preventScroll: true })
     const move = (ev: PointerEvent) => {
-      const x = ev.clientX - box.left + el.scrollLeft
-      const y = ev.clientY - box.top + el.scrollTop
+      const x = toUi(ev.clientX) - box.left + el.scrollLeft
+      const y = toUi(ev.clientY) - box.top + el.scrollTop
       const rect = { x: Math.min(start.x, x), y: Math.min(start.y, y), w: Math.abs(x - start.x), h: Math.abs(y - start.y) }
       if (!banding.current && rect.w < 4 && rect.h < 4) return
       banding.current = true
       setMarquee(rect)
       const hit = new Set(kept)
       for (const [p, row] of tiles.current) {
-        const r = row.getBoundingClientRect()
+        const r = uiRect(row)
         const top = r.top - box.top + el.scrollTop
         if (top < rect.y + rect.h && top + r.height > rect.y) hit.add(p)
       }

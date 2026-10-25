@@ -4,6 +4,7 @@ import { droppedFiles, type Picked } from '../data/uploads'
 import { kindOfName, type FileKind } from '../terminal/vfs'
 import { closeContextMenu, releaseTouchPress } from './ContextMenu'
 import type { AppId } from './wm'
+import { toUi, uiPoint } from './uiScale'
 
 // Drag and drop across MvL OS: one kind of payload for everything that can be dragged (files and
 // folders wherever they are, launchers, apps, rows out of an archive, the desktop's own icons),
@@ -69,6 +70,7 @@ export type DropOp = 'move' | 'copy' | 'link' | 'open' | 'trash'
 export type DropTarget = {
   /** What a drop here would do (null: not taken). `spot` is the data-drop of the element under the pointer, or null. */
   accept: (drag: Drag, spot: string | null) => DropOp | null
+  /** `at`: where it was let go, in page pixels (the UI scale, uiScale.ts). */
   drop: (drag: Drag, spot: string | null, op: DropOp, at: { x: number; y: number }) => void
   /** Held over a spot for a moment (a folder): open it, so the drag can go on inside. */
   spring?: (spot: string) => void
@@ -209,7 +211,7 @@ function install() {
       drag.files = () => files
     }
     endDrag()
-    hit.target.current.drop(drag, hit.spot, hit.op, { x: e.clientX, y: e.clientY })
+    hit.target.current.drop(drag, hit.spot, hit.op, uiPoint(e))
   })
   window.addEventListener('dragend', () => {
     clear()
@@ -354,7 +356,7 @@ export function beginPointerDrag(items: DragItem[], source: string, opts: { ghos
   let done = false
   const drag = (): Drag => ({ items, source, os: !!opts.files, keys: last.keys, files: opts.files ?? (async () => []) })
   const place = (x: number, y: number, op: DropOp | null, el: Element | null) => {
-    ghost.style.transform = `translate(${x}px, ${y}px)`
+    ghost.style.transform = `translate(${toUi(x)}px, ${toUi(y)}px)`
     ghost.dataset.op = op ?? ''
     ;(ghost.querySelector('.dnd-ghost-op') as HTMLElement).textContent = op ? OP_MARK[op] : ''
     const away = opts.ghost === 'away' && !!opts.home && !!el && opts.home.contains(el)
@@ -391,7 +393,7 @@ export function beginPointerDrag(items: DragItem[], source: string, opts: { ghos
       const hit = resolve(elementAt(x, y), drag())
       finish()
       if (!hit) return false
-      hit.target.current.drop(drag(), hit.spot, hit.op, { x, y })
+      hit.target.current.drop(drag(), hit.spot, hit.op, { x: toUi(x), y: toUi(y) })
       return true
     },
     cancel: finish,
