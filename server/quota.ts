@@ -19,6 +19,7 @@ export function usedBytes(userId: number): number {
          FROM agent_messages m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ?`) +
     one('SELECT SUM(LENGTH(m.body) + IFNULL(LENGTH(CAST(m.details AS BLOB)), 0)) AS n FROM agent_image_masks m JOIN agent_threads t ON t.id = m.thread_id WHERE t.user_id = ?') +
     one('SELECT SUM(LENGTH(i.body) + IFNULL(LENGTH(i.metadata), 0)) AS n FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ?') +
+    one('SELECT SUM(LENGTH(body) + LENGTH(prompt) + LENGTH(slug)) AS n FROM agent_icons WHERE user_id = ?') +
     one('SELECT SUM(LENGTH(text) + LENGTH(category) + IFNULL(LENGTH(image_learning), 0) + IFNULL(LENGTH(image_profile), 0)) AS n FROM agent_memories WHERE user_id = ?')
   )
 }

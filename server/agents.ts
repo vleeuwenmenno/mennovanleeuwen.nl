@@ -11,6 +11,7 @@ import { checkImageQuality, QualityRetry, type QualityVerdict, type VisionAsk } 
 import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageProgress } from '../src/data/imageModels.ts'
 import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, prepareImageGeneration, generatedImageForVision, imageAgainInput, retainBranchedImages, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
+import { icon as gptIcon, image as gptImage, listIcons, openaiImagesReady, SLUG as ICON_SLUG } from './agentOpenAI.ts'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
@@ -165,12 +166,14 @@ export async function automaticModels(): Promise<{ quick: string; deep: string; 
 // --- tool groups -----------------------------------------------------------------------------
 
 /** What a thread may use, switched in the window: each group is one or more tools. */
-export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'mail', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills', 'images', 'threads'] as const
+export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'mail', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills', 'images', 'gpt_images', 'threads'] as const
 export type ToolGroup = (typeof TOOL_GROUPS)[number]
 const GROUP_OF: Record<string, ToolGroup> = {
   search_threads: 'threads',
   read_thread: 'threads',
   generate_image: 'images',
+  gpt_image: 'gpt_images',
+  list_icons: 'gpt_images',
   list_image_masks: 'images',
   make_image_mask: 'images',
   list_image_attachments: 'images',
@@ -214,7 +217,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
 }
 const toolGroups = (v: unknown): ToolGroup[] | null => (Array.isArray(v) ? TOOL_GROUPS.filter((g) => v.includes(g)) : null)
 /** Groups added after threads first stored their choice as a bare list: a list from then doesn't know them, so they are on. */
-const LATER_GROUPS: ToolGroup[] = ['mail', 'images', 'threads']
+const LATER_GROUPS: ToolGroup[] = ['mail', 'images', 'gpt_images', 'threads']
 /**
  * A thread's stored groups: `{ on, seen }`, `seen` being the groups there were when it was saved,
  * so any group added since starts switched on, like it does for a new thread. A bare list is from
@@ -1713,6 +1716,20 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
       seed: { type: 'integer', description: 'Optional non-negative seed for reproducibility' },
     }, []),
   )
+  // OpenAI pictures and icons (server/agentOpenAI.ts): offered only once a provider is set up.
+  if (openaiImagesReady(user))
+    tools.push(
+      tool('gpt_image', "Make a picture with OpenAI's gpt-image, only when the user asks for one or a diagram, recipe or overview they asked for needs small symbols. mode=image: one picture, shown to the user under this call (it is not a link; never write base64 or a URL for it). mode=icon: a small square symbol with a transparent background in one consistent flat style, stored in the user's icon library under `slug` and drawn at 256 px; use icons for the parts of flow diagrams, crafting or cooking recipes, comparisons and other visualizations, and refer to one as icon:<slug> (for example icon:diamond_pickaxe). Call list_icons first and reuse an existing slug rather than drawing it again: asking for a slug that exists returns the stored icon without drawing (free), unless regenerate is true. Keep slugs and icon prompts generic and reusable (iron_ingot, water_bucket, server, user, database), not tied to this conversation. Each picture counts against the user's daily limit, so draw only what is needed and never several variants unasked.", {
+        mode: { type: 'string', enum: ['image', 'icon'], description: 'image (default) or icon' },
+        prompt: str('What to draw. For an icon: just the subject, like "a diamond pickaxe" (the house style is added for you). For an image: a full description, with any exact text in quotes'),
+        slug: str('Icon mode: the library name, 1–64 of a-z, 0-9, _ and -, like diamond_pickaxe'),
+        regenerate: { type: 'boolean', description: 'Icon mode: draw it again even though the slug exists (only when the user asks for a new look)' },
+        size: { type: 'string', enum: ['square', 'landscape', 'portrait'], description: 'Image mode: 1024×1024, 1536×1024 or 1024×1536 (default square)' },
+        quality: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Image mode: low for drafts, high for text, diagrams or close-ups (default medium)' },
+        transparent: { type: 'boolean', description: 'Image mode: a transparent background (a cut-out, a sticker)' },
+      }, ['prompt']),
+      tool('list_icons', "List the icons in the user's icon library: each slug (use it as icon:<slug>) and what it shows. Check it before drawing icons, and reuse what is there.", {}),
+    )
   if (opts.workdir) tools.push(...workdirTools())
   if (opts.terminal) tools.push(terminalTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
@@ -2012,6 +2029,8 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
   }
   // Making a mask writes only a mask (no approval card, like a read), but Plan still refuses it like the other image writes.
   if (name === 'make_image_mask') return permission === 'plan' ? 'refuse' : 'run'
+  // OpenAI pictures spend the account's own key or plan and its daily cap: they run, except in Plan.
+  if (name === 'gpt_image') return permission === 'plan' ? 'refuse' : 'run'
   if (!changes(name)) return 'run'
   if (permission === 'plan') return 'refuse'
   // Images only use the owner's own ComfyUI and storage quota: they run unless the owner asked to approve each one.
@@ -2026,6 +2045,28 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
 }
 
 const setPermission = (thread: string, p: Permission) => database().prepare('UPDATE agent_threads SET permission = ? WHERE id = ?').run(p, thread)
+
+/**
+ * gpt_image: an icon from (or into) the library, or a picture kept with the call's result like a
+ * sent picture, so it is there when the thread is opened again (server/agentOpenAI.ts).
+ */
+async function runGptImage(user: User, args: Record<string, unknown>, signal: AbortSignal): Promise<{ output: string; file?: Attachment }> {
+  const prompt = typeof args.prompt === 'string' ? args.prompt.trim().slice(0, 4000) : ''
+  if (args.mode === 'icon') {
+    const slug = typeof args.slug === 'string' ? args.slug.trim() : ''
+    if (!ICON_SLUG.test(slug)) throw new HttpError(400, 'Icon mode needs a slug: 1 to 64 of a-z, 0-9, _ and -, like diamond_pickaxe')
+    const made = await gptIcon(user, slug, prompt, args.regenerate === true, signal)
+    return { output: JSON.stringify({ icon: { slug, reference: `icon:${slug}`, url: `/api/agents/icons/${slug}`, reused: made.reused, shows: made.prompt.slice(0, 160) }, message: made.reused ? `The icon ${slug} was already in the library, so nothing was drawn. Refer to it as icon:${slug}.` : `The icon was drawn, saved in the user's icon library and shown to the user. Refer to it as icon:${slug}.` }) }
+  }
+  if (args.mode !== undefined && args.mode !== 'image') throw new HttpError(400, 'mode is image or icon')
+  if (!prompt) throw new HttpError(400, 'Say what to draw in prompt')
+  const size = args.size === 'landscape' ? '1536x1024' : args.size === 'portrait' ? '1024x1536' : '1024x1024'
+  const quality = args.quality === 'low' || args.quality === 'high' ? args.quality : 'medium'
+  const made = await gptImage(user, { prompt, size, quality, background: args.transparent === true ? 'transparent' : 'auto' }, signal)
+  const name = `${prompt.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 40).toLowerCase() || 'picture'}.${made.ext}`
+  const file: Attachment = { name, source: 'Made with gpt-image', kind: 'image', mime: made.mime, size: made.bytes.length, data: made.bytes.toString('base64') }
+  return { file, output: JSON.stringify({ image: { name, mime: made.mime, size: made.bytes.length, ...(made.width ? { width: made.width, height: made.height } : {}) }, message: 'The picture was made and is shown to the user under this call. Do not write a link or base64 for it; say briefly what it shows if that helps.' }) }
+}
 
 /** Hard work in a work folder takes many steps: a coding job gets more rounds than a question. */
 const FOLDER_ROUNDS = 60
@@ -3341,7 +3382,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       // Why a call ran without asking, when that is worth showing on its row (a checked web read).
       const notes: (string | undefined)[] = []
       // Image jobs share one ComfyUI slot per account: run them in order (a mask, then the edit that uses it).
-      const hasImageGeneration = calls.some((c) => c.name === 'generate_image' || c.name === 'make_image_mask')
+      const hasImageGeneration = calls.some((c) => c.name === 'generate_image' || c.name === 'make_image_mask' || c.name === 'gpt_image')
+      // Pictures a call keeps with its result (gpt_image), by the call's index.
+      const callFiles: Attachment[][] = []
       const generationPending: string[] = []
       const imageLearningRead = new Set<string>()
       let imageLearningReviewNeeded = false
@@ -3512,6 +3555,17 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             }
             return answerText(form, await askForm(row.id, assistant, index, form, ctl.signal, send))
           }
+          if (c.name === 'gpt_image') {
+            try {
+              const made = await runGptImage(user, c.arguments ?? {}, ctl.signal)
+              if (made.file) callFiles[index] = [made.file]
+              return made.output
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: (e as Error).message })
+            }
+          }
+          if (c.name === 'list_icons') return JSON.stringify({ icons: listIcons(user).map((i) => ({ slug: i.slug, reference: `icon:${i.slug}`, shows: i.prompt.slice(0, 160) })) })
           return runTool(user, key, row.id, mode, c, ctl.signal, (covered) => { for (const k of covered) imageLearningRead.add(k) }, zone)
       }
       const outputs: string[] = []
@@ -3522,7 +3576,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         for (const callId of generationPending) { pending.set(row.id, (pending.get(row.id) ?? []).filter((p) => p.callId !== callId)); send({ type: 'imageGenerationDone', callId }) }
         throw error
       }
-      calls.forEach((c, i) => send({ type: 'message', message: addMessage(row.id, { role: 'tool', toolName: c.name, content: outputs[i], ...(notes[i] ? { checked: notes[i] } : {}) }) }))
+      calls.forEach((c, i) => send({ type: 'message', message: addMessage(row.id, { role: 'tool', toolName: c.name, content: outputs[i], ...(notes[i] ? { checked: notes[i] } : {}) }, callFiles[i]) }))
       for (const callId of generationPending) {
         const remaining = (pending.get(row.id) ?? []).filter((p) => p.callId !== callId)
         if (remaining.length) pending.set(row.id, remaining); else pending.delete(row.id)

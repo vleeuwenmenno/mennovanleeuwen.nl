@@ -845,7 +845,7 @@ Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_
 "Sign-up is closed") dialog instead; existing accounts and admins can always sign in. Logins in
 `ADMIN_USERS` (default `vleeuwenmenno`) are admins: Settings → Users lists the accounts (counts and
 sizes only, never their contents), bans, signs out and deletes them, and opens or closes sign-up.
-Keys set on the server (`OLLAMA_API_KEY`, `UPDOWN_API_KEY`) are only used for admins; everyone
+Keys set on the server (`OLLAMA_API_KEY`, `UPDOWN_API_KEY`, `OPENAI_API_KEY`) are only used for admins; everyone
 else saves their own in Settings → Integrations.
 
 Users choose the addresses of their Gitea, CalDAV, Seafile, OnlyOffice and search servers, so the
@@ -1418,7 +1418,7 @@ pnpm check:agents-threads   # History search, ownership, attachment reads, bound
 ```
 
 The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
-`check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-mail` and `check:agents-threads`.
+`check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-mail` and `check:agents-threads`.
 
 A reply that only thinks gets one more round asking for the answer, and an answer given while the
 todo list still has open items gets one asking to update it. Those asks go to the model as a user
@@ -1428,6 +1428,53 @@ request that would still end there gets a short "Continue." after it.
 
 ```sh
 pnpm check:agents-roles   # The nudge, the todo wrap-up and a restart mid-reply, against a stand-in Ollama that refuses a trailing assistant message
+```
+
+**Pictures and icons from OpenAI.** Ollama Cloud makes no pictures, so the **GPT images** tool
+group (`gpt_image` and `list_icons`, [`server/agentOpenAI.ts`](server/agentOpenAI.ts)) gets them
+from OpenAI's gpt-image models. Set it up in Settings → Apps → Agents → Images, under
+**OpenAI pictures and icons**; the tools are only offered once it is set up. Pick where pictures
+come from, and the model (`gpt-image-2` by default):
+- **OpenAI API key**: checked with OpenAI (listing models, which costs nothing), stored encrypted
+  like the Ollama key and never sent back. Admins fall back to `OPENAI_API_KEY` on the server.
+  Pictures come from the Images API and are billed to that key.
+- **Sign in with ChatGPT**: uses the ChatGPT plan instead of a key, through the Codex CLI's sign-in,
+  done the way [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does it. It is
+  unofficial: OpenAI does not permit it for hosted apps and could restrict or ban the account. A
+  note says so next to the option, and an in-OS dialog says it again before the sign-in starts;
+  the server also refuses to start one unless the dialog was accepted. The sign-in is OAuth with
+  PKCE at auth.openai.com, with the Codex CLI's public client (`app_EMoamEEZ73f0CkXaXp7hrann`) and
+  its only registered redirect, `http://localhost:1455/auth/callback`. Nothing listens there on a
+  hosted site, so the browser ends on a page that does not load: copy that address and paste it
+  back into Settings within 15 minutes. Its `state` must match, and the code is exchanged on the
+  server. The tokens stay on the server, encrypted, and are refreshed there (before they expire,
+  and once more when the backend refuses one). Pictures come from the ChatGPT Codex backend
+  (`chatgpt.com/backend-api/codex`): its `/images/generations` route, or the Responses API with the
+  `image_generation` tool where that route is missing. **Sign out** forgets the tokens.
+
+`gpt_image` makes one of two things:
+- A **picture** (square, landscape or portrait; low, medium or high quality; optionally transparent).
+  It is kept with the tool's result like a sent picture, so it shows under the call (thumbnail, full
+  view, Open in Preview, Download) and is still there when the thread is opened again. The model is
+  told it was shown, never given the bytes.
+- An **icon** (`mode: "icon"`): a small square symbol in one fixed flat style on a transparent
+  background, drawn at low quality and stored at 256 px in the account's **icon library** under a
+  slug (`a-z`, `0-9`, `_`, `-`, like `diamond_pickaxe`). Asking for a slug that exists returns the
+  stored icon without drawing, unless the agent passes `regenerate`. The result gives the model the
+  reference `icon:<slug>` to use in diagrams, recipes and other visualizations. The tool tells the
+  model to check `list_icons` first, reuse slugs and keep names generic.
+
+`GET /api/agents/icons/<slug>` serves an icon of the signed-in account as a PNG (404 when there is
+none), and `GET /api/agents/icons` lists them. Settings shows the library: each icon with its slug
+and description, **Redraw** (from the saved description) and **Delete**.
+
+Each picture or new icon counts against a daily cap per account (`OPENAI_IMAGES_PER_DAY`, default
+40, over the last 24 hours; reused icons are free), and against the storage quota. Pictures run
+without asking in every mode except Plan. `OPENAI_URL`, `OPENAI_AUTH_URL` and `CHATGPT_CODEX_URL`
+point at stand-ins for testing.
+
+```sh
+pnpm check:agents-openai-images   # API key, pictures kept with results, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback), against fakes
 ```
 
 **Image generation.** In Settings → Apps → Agents → Images (also the app's settings),
