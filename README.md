@@ -1556,9 +1556,37 @@ the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_ico
 composer holds the mode, the model, which tools the thread may use and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
-and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP
-or GIF through the authenticated Photos proxy, not the thumbnail. Images keep the normal 5 MB per-file,
-10-attachment and combined payload limits; unsupported originals (including HEIC and RAW) show an error.
+and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP,
+GIF, camera raw or HEIC through the authenticated Photos proxy, not the thumbnail. Images keep the normal 5 MB per-file,
+10-attachment and combined payload limits (measured after the conversions below); videos show an error.
+
+**Camera raws, HEIC and multi-picture JPEGs** are turned into one still JPEG in the browser before
+they are attached, wherever they come from (this computer, Seafile, Files, Photos, a drop or a
+paste), by [`src/data/rawImage.ts`](src/data/rawImage.ts) and
+[`src/data/stillPicture.ts`](src/data/stillPicture.ts):
+- A TIFF-based camera raw (DNG, including iPhone ProRAW; also NEF, ARW and CR2) goes as its largest
+  embedded JPEG preview, found by walking IFD0, its chain and SubIFDs. Raw pixels are never
+  demosaiced. The raw's orientation is written into a minimal EXIF block, so the picture is upright
+  everywhere. A raw is read whole, up to 200 MB. A raw without a usable preview says *This raw file
+  has no embedded preview; export a JPEG*.
+- A multi-picture JPEG (an iPhone photo with an HDR gain map or depth map, marked by an APP2 `MPF`
+  segment) goes as its primary picture only: the MPF segment and everything after the primary's EOI
+  are cut off.
+- HEIC is decoded by the browser where it can (Safari), drawn into a JPEG; Chrome and Firefox
+  cannot, and say to export a JPEG (or set the iPhone to *Most Compatible*). There is no HEIC decoder
+  in the app or on the server.
+- A result over 5 MB or 16 megapixels is drawn down through a canvas to a JPEG of at most 4096
+  pixels on the long edge.
+
+The attachment keeps its file name (`IMG_2426.DNG`) with type `image/jpeg`. The server applies the
+same conversion to raws and multi-picture JPEGs arriving from other clients, and to pictures stored
+before it existed, when it reads them (it cannot scale, so there a preview within 16 megapixels wins over a
+larger one): as image sources, as `gpt_image` references, as the
+pictures a vision model sees, and as the thread's thumbnails (so a DNG shows in Chrome and Firefox).
+`pnpm check:agents-raw-sources` builds DNGs in the test (little- and big-endian, SubIFD and IFD1
+previews, strips, orientation, preview size choice), checks the MPF cut, the no-preview and HEIC
+errors, IFD cycles and hostile counts and offsets, and fuzzes truncated, corrupted and random TIFFs:
+they only ever end in a clean error, and quickly.
 Cancel leaves the draft and attachments unchanged; a failed download adds nothing. These are normal
 image attachments for vision and, after sending, supported still-image sources for image-to-image.
 The **context-window ring** is in the thread's top bar, by the ⋯ menu, not next to Send, so a thumb
@@ -2044,7 +2072,8 @@ Source validation is a bounded structural and dimension preflight, not a full im
 compressed pixels may still be rejected by ComfyUI; upload, prompt and decoding failures are reported
 as errors, with no successful image result.
 Sources are read only from the owner's persisted artifacts/attachments, never model-provided
-paths, URLs or base64. Supported sources are still PNG, JPEG and WebP, at most 20 MiB for generated artifacts or 8 MiB for attachments, 8192 pixels
+paths, URLs or base64. Supported sources are still PNG, JPEG and WebP (camera raws as their embedded
+preview, multi-picture JPEGs as their primary picture; HEIC is refused with its own message), at most 20 MiB for generated artifacts or 8 MiB for attachments, 8192 pixels
 per side and 16 megapixels (attachment upload limits still apply). EXIF orientation is honored when sizing the source, matching ComfyUI's loader. Malformed EXIF
 and animated inputs are refused. Original bytes are held through
 approval and generation, and the original artifact is never changed. Uploads use unpredictable

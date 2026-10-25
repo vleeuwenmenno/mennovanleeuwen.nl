@@ -1,3 +1,4 @@
+import { stillPicture } from '../data/stillPicture'
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import './AgentsStudio.css'
 import { IMAGE_SETTINGS_EVENT, deleteStudioImage, getImageCatalog, getLoraDetails, getStudio, getStudioEmbeddings, getStudioImages, getStudioModelDetails, loraPreviewUrl, runStudio, uploadStudioImage, type GeneratedImage, type LoraDetail, type MaskedEditInput, type ModelDetails, type RefineImageInput, type StudioImage, type UpscaleImageInput } from '../data/agentImages'
@@ -523,9 +524,9 @@ function LoraSection({ form, catalog, onSet, assist }: { form: StudioForm; catal
   </section>
 }
 
-/** A picture as PNG data (the server keeps PNGs only), drawn once through a canvas, which also drops its metadata. */
+/** A picture as PNG data (the server keeps PNGs only), drawn once through a canvas, which also drops its metadata. A camera raw is drawn from its embedded preview. */
 async function pngData(file: File): Promise<string> {
-  const bitmap = await createImageBitmap(file)
+  const bitmap = await createImageBitmap(await stillPicture(file, file.name, 12 * 1024 * 1024), { imageOrientation: 'from-image' })
   const canvas = document.createElement('canvas')
   canvas.width = bitmap.width; canvas.height = bitmap.height
   canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
@@ -582,7 +583,7 @@ function SourcePicker({ onChoose, onClose, onError }: { onChoose: (s: StudioSour
     <div className="studio-picker">
       <span className="studio-row">
         <button type="button" className="btn btn-small btn-primary" data-image-autofocus="" disabled={uploading} onClick={() => input.current?.click()}>{uploading ? 'Uploading…' : 'Upload from this device…'}</button>
-        <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => void upload(e.target.files?.[0])} />
+        <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/heic,.dng,.nef,.arw,.cr2,.heic" hidden onChange={(e) => void upload(e.target.files?.[0])} />
         <span className="muted">or pick one of your pictures:</span>
       </span>
       {error && <ErrorBox text={error} />}

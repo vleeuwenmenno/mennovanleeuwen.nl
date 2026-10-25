@@ -34,6 +34,13 @@ assert.equal(cancelled, true)
 cancelled = false
 await assert.rejects(readPhotoOriginal('immich', 'id', {}, async () => new Response(stream())), /too big/)
 assert.equal(cancelled, true)
+// A camera raw (TIFF-based) may be larger than 5 MB: it is attached as its embedded preview.
+const raw = new Uint8Array(6 * 1024 * 1024); raw.set([0x49, 0x49, 42, 0, 8, 0, 0, 0])
+const rawBlob = await readPhotoOriginal('immich', 'id', {}, async () => new Response(raw))
+assert.equal(rawBlob.type, 'image/x-adobe-dng')
+assert.equal(rawBlob.size, raw.length)
+const heic = new Uint8Array(64); heic.set([0, 0, 0, 24, ...new TextEncoder().encode('ftypheic')])
+assert.equal((await readPhotoOriginal('immich', 'id', {}, async () => new Response(heic))).type, 'image/heic')
 const abort = new AbortController(); abort.abort()
 await assert.rejects(readPhotoOriginal('immich', 'id', { signal: abort.signal }, async () => new Response(png)), { name: 'AbortError' })
 checkPhotoAttachmentBudget([{ kind: 'text', text: 'Existing draft attachment' }, { kind: 'image', data: 'abc' }])

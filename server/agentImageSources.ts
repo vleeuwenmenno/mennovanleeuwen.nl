@@ -1,6 +1,7 @@
 import type { User } from './auth.ts'
 import { database } from './db.ts'
 import { HttpError } from './http.ts'
+import { HEIF_UNSUPPORTED, isHeif, isTiff, needsStill, StillImageError, stillImage } from '../src/data/rawImage.ts'
 
 export type ImageSource = { id: string; name: string; url: string; width: number; height: number; mime: string; bytes: Buffer }
 const UUID = /^[0-9a-f-]{36}$/
@@ -27,6 +28,28 @@ function exifOrientation(data: Buffer): number {
     return orientation
   }
   return 1
+}
+
+/**
+ * A source as one still picture (src/data/rawImage.ts): a camera raw (DNG, iPhone ProRAW, NEF, ARW,
+ * CR2) as its largest embedded JPEG preview, a multi-picture JPEG (iPhone gain or depth maps) as its
+ * primary picture. Anything else comes back as it is, for sourceRaster to judge.
+ */
+export function stillSource(bytes: Buffer): Buffer {
+  if (!needsStill(bytes.subarray(0, 65536))) return bytes
+  try {
+    const out = stillImage(bytes)
+    return out === bytes ? bytes : Buffer.from(out.buffer, out.byteOffset, out.byteLength)
+  } catch (e) {
+    if (e instanceof StillImageError) throw new HttpError(400, e.message)
+    throw e
+  }
+}
+
+/** Base64 picture data as one still picture (stillSource), as base64 and its type; unchanged when it already is one. */
+export function stillData(data: string, mime: string): { data: string; mime: string } {
+  if (!needsStill(Buffer.from(data.slice(0, 87384), 'base64'))) return { data, mime }
+  return { data: stillSource(Buffer.from(data, 'base64')).toString('base64'), mime: 'image/jpeg' }
 }
 
 /** Read raster dimensions before ComfyUI decodes anything. No SVG, GIF or animated inputs. */
@@ -109,6 +132,8 @@ export function sourceRaster(bytes: Buffer, maxBytes = MAX_BYTES): { width: numb
     if (at !== bytes.length || !pixels) throw new HttpError(400, 'WebP source has no complete image payload')
     if (canvasWidth && (canvasWidth !== width || canvasHeight !== height)) throw new HttpError(400, 'WebP canvas and image dimensions do not match')
   }
+  if (!mime && isHeif(bytes)) throw new HttpError(400, HEIF_UNSUPPORTED)
+  if (!mime && isTiff(bytes)) throw new HttpError(400, 'Camera raw files are read through their embedded preview; this one could not be read, so export a JPEG')
   if (!width || !height || !mime) throw new HttpError(400, 'Source must be a valid still PNG, JPEG or WebP image')
   if (width > 8192 || height > 8192 || width * height > 16_777_216) throw new HttpError(413, 'Source dimensions exceed 8192 per side or 16 megapixels')
   return orientation >= 5 ? { width: height, height: width, mime } : { width, height, mime }
@@ -131,7 +156,7 @@ export function imageSource(user: User, id: unknown): ImageSource {
   if (UUID.test(id)) {
     const row = database().prepare('SELECT i.name, i.body FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(id, user.id) as { name: string; body: Uint8Array } | undefined
     if (!row) throw new HttpError(404, 'No such source image')
-    bytes = Buffer.from(row.body); name = row.name; url = `/api/agents/images/${id}`
+    bytes = stillSource(Buffer.from(row.body)); name = row.name; url = `/api/agents/images/${id}`
   } else {
     const match = /^attachment:([1-9][0-9]{0,14}):([0-9])$/.exec(id)
     if (!match) throw new HttpError(400, 'Choose source_image_id from list_image_attachments or list_generated_images; URLs, paths and image data are not accepted')
@@ -144,7 +169,7 @@ export function imageSource(user: User, id: unknown): ImageSource {
     const attachment = row?.attachments ? JSON.parse(row.attachments)[Number(match[2])] : null
     if (!attachment || attachment.kind !== 'image' || typeof attachment.data !== 'string') throw new HttpError(404, 'No such source image')
     if (attachment.data.length > Math.ceil(MAX_BYTES * 4 / 3) + 4) throw new HttpError(413, 'Source image must be at most 8 MiB')
-    bytes = Buffer.from(attachment.data, 'base64'); name = String(attachment.name).slice(0, 200)
+    bytes = stillSource(Buffer.from(attachment.data, 'base64')); name = String(attachment.name).slice(0, 200)
     url = `/api/agents/threads/${row!.thread_id}/messages/${row!.message_id}/attachments/${match[2]}`
   }
   return { id, name, url, bytes, ...sourceRaster(bytes, UUID.test(id) ? 20 * 1024 * 1024 : MAX_BYTES) }
