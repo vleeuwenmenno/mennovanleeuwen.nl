@@ -2836,9 +2836,16 @@ minutes old, or with *Look for new photos*. Caps: 100,000 photos and 20,000 fold
 two walks at a time across the server. EXIF dates have no time zone, so a photo shows the time on
 the camera's clock; a file's date (no EXIF) and a video's creation time are shown in yours.
 Encrypted libraries are walked only while unlocked in Files, and their photos only show then;
-when Seafile cannot say which libraries are encrypted (it is down, and the server has no earlier
-list since it started), nothing is shown: the months, a month, albums and folder list refuse or stay
-empty (502) rather than guess. A list kept from before is used, and a library it does not name stays hidden;
+access is asked of Seafile for every request, never remembered: each Photos request (the months, a month,
+albums, the folder list, a thumbnail, details, the original, a ZIP when it is made and again when it
+is fetched, favourites, trash, undo and moves) first reads the account's library list, so a library
+that is revoked, deleted or locked disappears at once (404 for a photo, nothing in the lists), before
+any stored preview, ETag or 304, detail, file link or file name leaves and before the local index or
+Seafile is changed. A burst of requests shares listings (at most one runs and one waits per account,
+and a request is never answered with one that started before it arrived). When Seafile cannot be asked
+(it is down), nothing is shown on the strength of an earlier list: the months, a month, albums, photos
+and ZIPs answer 502 without a name or id, and the folder list is empty and marked unavailable, rather
+than guess. The index itself only describes photos; it is never what says who may see them.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag that the browser must revalidate after the current account and library-access checks (an

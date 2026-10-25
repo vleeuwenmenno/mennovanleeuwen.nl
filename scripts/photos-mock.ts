@@ -105,6 +105,8 @@ export type SeafileMock = {
   sent: Map<string, number>
   /** Answer the library listing (and each library's details) with 503 */
   down: boolean
+  /** Library ids left out of the library listing only (revoked sharing), while their details, folders and files still answer as before */
+  hidden: Set<string>
   close: () => void
 }
 
@@ -144,6 +146,7 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
     log,
     sent,
     down: false,
+    hidden: new Set(),
     close: () => {
       out.server.closeAllConnections()
       out.server.close()
@@ -165,7 +168,7 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
 
     if (out.down && /^\/api\/v2\.1\/repos\//.test(path) && !path.includes('/set-password/')) return json(503, { detail: 'down' })
     if (path === '/api/v2.1/repos/') {
-      return json(200, { repos: libs.map((l) => ({ repo_id: l.id, repo_name: l.name, type: 'mine', owner_email: 'me@example.com', encrypted: l.encrypted, permission: l.perm ?? 'rw', size: 0, last_modified: new Date().toISOString() })) })
+      return json(200, { repos: libs.filter((l) => !out.hidden.has(l.id)).map((l) => ({ repo_id: l.id, repo_name: l.name, type: 'mine', owner_email: 'me@example.com', encrypted: l.encrypted, permission: l.perm ?? 'rw', size: 0, last_modified: new Date().toISOString() })) })
     }
     let m = /^\/api\/v2\.1\/repos\/([0-9a-f-]{36})\/$/.exec(path)
     if (m && lib(m[1])) return json(200, { repo_id: m[1], encrypted: lib(m[1])!.encrypted })

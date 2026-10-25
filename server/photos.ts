@@ -9,7 +9,7 @@ import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
-import { fileLink, guard, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
+import { fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
 // Immich library, or both (the app switches between them; they are not merged).
@@ -163,38 +163,63 @@ function requireSeafile(user: User) {
   if (!seafileReady(user)) throw new HttpError(409, 'Seafile is not linked')
 }
 
-// The libraries, briefly kept: their names and which are encrypted, for every list and walk.
-const libCache = new Map<number, { at: number; libs: Library[] }>()
-async function libs(user: User, fresh = false): Promise<Library[]> {
-  const hit = libCache.get(user.id)
-  if (hit && !fresh && Date.now() - hit.at < 5 * 60_000) return hit.libs
-  const list = await libraries(user)
-  libCache.set(user.id, { at: Date.now(), libs: list })
-  return list
-}
+// The libraries as Seafile lists them for this account: the only proof that the account may see a
+// library at all. It is never kept: every request (or operation) asks again, so a library that is
+// revoked, deleted or locked disappears from Photos at once, and when Seafile cannot answer nothing
+// is shown (the index holds only descriptive data, never who may see it).
+type Flight = { running?: Promise<Library[]>; next?: Promise<Library[]> }
+const flights = new Map<number, Flight>()
 
 /**
- * The libraries as last known: fresh when Seafile answers, else the last list it gave (what is
- * encrypted does not change; whether it is unlocked is read live). With neither, nothing can be
- * said about any library, so this refuses: 502, never an empty list.
+ * One listing per request, without ever answering from before the request came in: a request waits
+ * for the listing under way to end and is served by the next one, which every request that arrived
+ * meanwhile shares. So at most one listing runs and one waits, however many thumbnails are asked at once.
  */
-async function knownLibs(user: User): Promise<Library[]> {
+function fetchLibs(user: User): Promise<Library[]> {
+  let f = flights.get(user.id)
+  if (!f) flights.set(user.id, (f = {}))
+  const flight = f
+  const begin = () => {
+    const p = libraries(user)
+    const done = () => {
+      if (flight.running === p) flight.running = undefined
+    }
+    p.then(done, done)
+    flight.running = p
+    return p
+  }
+  if (!flight.running) return begin()
+  flight.next ??= flight.running
+    .then(() => undefined, () => undefined)
+    .then(() => {
+      flight.next = undefined
+      return begin()
+    })
+  return flight.next
+}
+
+/** The libraries this account has right now. Any failure is a generic 502: nothing of what is indexed may be shown on a guess. */
+async function libs(user: User): Promise<Library[]> {
   try {
-    return await libs(user)
-  } catch {
-    const kept = libCache.get(user.id)
-    if (kept) return kept.libs
-    throw new HttpError(502, 'Seafile did not say which libraries are encrypted, so no photos are shown')
+    return await fetchLibs(user)
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 409) throw e
+    throw new HttpError(502, 'Seafile is not available, so no photos are shown')
   }
 }
 
-/**
- * The libraries whose photos may be shown now: known, and either plain or unlocked. A library the
- * list does not mention is not on it (it could be an encrypted one that is locked), so its rows stay hidden.
- */
-async function openRepos(user: User): Promise<string[]> {
+/** The library a photo is in, if this account has it right now and it is open: 404 when not listed, 423 when encrypted and locked. */
+function openLib(user: User, list: Library[], repo: string): Library {
+  const lib = list.find((l) => l.id === repo)
+  if (!lib) throw new HttpError(404, 'No such photo')
+  if (lib.encrypted && !unlocked(user)[repo]) throw new HttpError(423, 'Locked')
+  return lib
+}
+
+/** The libraries whose photos may be shown now: listed for the account and either plain or unlocked. */
+const openRepos = (user: User, list: Library[]) => {
   const open = unlocked(user)
-  return (await knownLibs(user)).filter((l) => !l.encrypted || open[l.id]).map((l) => l.id)
+  return list.filter((l) => !l.encrypted || open[l.id]).map((l) => l.id)
 }
 
 type SourceRow = { repo: string; path: string }
@@ -202,8 +227,7 @@ const sourcesOf = (user: User) => db().prepare('SELECT repo, path FROM photo_sou
 const under = (path: string, root: string) => root === '/' || path === root || path.startsWith(root + '/')
 
 /** The chosen folders, with each one's library, lock and number of photos. */
-async function sourcesInfo(user: User) {
-  const list = await knownLibs(user)
+async function sourcesInfo(user: User, list: Library[]) {
   const open = unlocked(user)
   const counts = db().prepare('SELECT repo, path FROM photos WHERE user_id = ?').all(user.id) as { repo: string; path: string }[]
   // A folder whose library the list does not name (gone, revoked, unknown) is not named either.
@@ -255,7 +279,7 @@ async function suggestions(user: User): Promise<{ repo: string; path: string; li
   requireSeafile(user)
   const chosen = sourcesOf(user)
   const open = unlocked(user)
-  const list = (await libs(user, true)).filter((l) => !l.encrypted || open[l.id]).slice(0, 40)
+  const list = (await libs(user)).filter((l) => !l.encrypted || open[l.id]).slice(0, 40)
   const found: { repo: string; path: string; library: string; name: string }[] = []
   await pool(list, CONCURRENCY, async (lib) => {
     if (PHOTO_NAMES.test(lib.name)) return void found.push({ repo: lib.id, path: '/', library: lib.name, name: lib.name })
@@ -300,7 +324,7 @@ let running = 0
 onUserGone((id) => {
   cancels.get(id)?.abort()
   jobs.delete(id)
-  libCache.delete(id)
+  flights.delete(id)
 })
 
 /** Starts a walk of the user's chosen folders, unless one is running already. */
@@ -341,7 +365,7 @@ function freshen(user: User) {
 
 async function scan(user: User, job: Job, signal: AbortSignal) {
   if (!seafileReady(user)) throw new Error('Seafile is not linked')
-  const list = await libs(user, true)
+  const list = await libs(user)
   const open = unlocked(user)
   const d = db()
   const existing = new Map<string, { id: number; file_id: string; mtime: number }>()
@@ -523,10 +547,10 @@ async function readRange(user: User, repo: string, path: string, start: number, 
 // --- Seafile as a source -----------------------------------------------------------------------------
 
 /** The filter for a timeline, an album or the favourites, leaving out locked libraries. */
-async function seafileWhere(user: User, opts: Opts): Promise<{ sql: string; params: (string | number)[] }> {
+function seafileWhere(user: User, opts: Opts, list: Library[]): { sql: string; params: (string | number)[] } {
   const parts = ['user_id = ?']
   const params: (string | number)[] = [user.id]
-  const open = await openRepos(user)
+  const open = openRepos(user, list)
   if (open.length) {
     parts.push(`repo IN (${open.map(() => '?').join(', ')})`)
     params.push(...open)
@@ -556,14 +580,14 @@ const rowOf = (user: User, id: string) => {
 }
 
 /**
- * A photo's row, once its library is open to this account right now: an encrypted library that is
- * locked answers 423 before any stored preview, ETag or detail leaves. Says if the library is encrypted.
+ * A photo's row, once its library is open to this account right now (asked of Seafile for this
+ * request): a library the account no longer has is 404, an encrypted one that is locked 423,
+ * and Seafile not answering 502, all before any stored preview, ETag, detail or file link leaves.
  */
 async function openRow(user: User, id: string) {
   const row = rowOf(user, id)
-  await guard(user, row.repo)
-  const lib = (await libs(user).catch(() => [] as Library[])).find((l) => l.id === row.repo)
-  return { row, encrypted: !!lib?.encrypted }
+  const lib = openLib(user, await libs(user), row.repo)
+  return { row, lib, encrypted: lib.encrypted }
 }
 
 const SIZES: Record<Size, number> = { small: 256, medium: 512, large: 1024 }
@@ -572,7 +596,7 @@ const seafileSource: Source = {
   async buckets(user, opts) {
     requireSeafile(user)
     freshen(user)
-    const w = await seafileWhere(user, opts)
+    const w = seafileWhere(user, opts, await libs(user))
     const rows = db()
       .prepare(`SELECT strftime('%Y-%m', ${WALL} / 1000, 'unixepoch') AS month, COUNT(*) AS count FROM photos WHERE ${w.sql} GROUP BY month ORDER BY month DESC`)
       .all(opts.tz * 60_000, ...w.params) as { month: string; count: number }[]
@@ -584,7 +608,7 @@ const seafileSource: Source = {
     if (!m) throw new HttpError(400, 'Bad month')
     const from = Date.UTC(Number(m[1]), Number(m[2]) - 1, 1)
     const to = Date.UTC(Number(m[1]), Number(m[2]), 1)
-    const w = await seafileWhere(user, opts)
+    const w = seafileWhere(user, opts, await libs(user))
     const rows = db()
       .prepare(`SELECT id, repo, path, kind, width, height, orientation, favourite, file_id, ${WALL} AS wall FROM photos WHERE ${w.sql} AND ${WALL} >= ? AND ${WALL} < ? ORDER BY wall DESC, path DESC`)
       .all(opts.tz * 60_000, ...w.params, opts.tz * 60_000, from, opts.tz * 60_000, to) as { id: number; repo: string; path: string; kind: string; width: number | null; height: number | null; orientation: number | null; favourite: number; file_id: string; wall: number }[]
@@ -602,8 +626,7 @@ const seafileSource: Source = {
     return { status: 200, type: t.type, body: t.body, etag: tag }
   },
   async info(user, id) {
-    const { row } = await openRow(user, id)
-    const lib = (await libs(user).catch(() => [] as Library[])).find((l) => l.id === row.repo)
+    const { row, lib } = await openRow(user, id)
     const turned = (row.orientation ?? 1) >= 5
     return {
       id: String(row.id),
@@ -631,16 +654,17 @@ const seafileSource: Source = {
       duration: null,
       repo: row.repo,
       path: row.path,
-      library: lib?.name ?? undefined,
+      library: lib.name,
     }
   },
   async albums(user) {
     requireSeafile(user)
     const out: Album[] = []
-    for (const s of await sourcesInfo(user)) {
+    const list = await libs(user)
+    for (const s of await sourcesInfo(user, list)) {
       if (s.locked || !s.library) continue
       const id = `${s.repo}${s.path === '/' ? '' : s.path}`
-      const w = await seafileWhere(user, { album: id, favourites: false, tz: 0 })
+      const w = seafileWhere(user, { album: id, favourites: false, tz: 0 }, list)
       const cover = db().prepare(`SELECT id FROM photos WHERE ${w.sql} AND kind = 'image' ORDER BY taken_at DESC LIMIT 1`).get(...w.params) as { id: number } | undefined
       out.push({ id, name: s.name, count: s.count, cover: cover ? String(cover.id) : null, detail: s.path === '/' ? s.library : `${s.library ?? ''}${s.path}` })
     }
@@ -649,6 +673,8 @@ const seafileSource: Source = {
   async favourite(user, ids, on) {
     // Every id is checked first: one that is not this account's refuses the lot.
     const rows = ids.map((id) => rowOf(user, id))
+    const list = await libs(user)
+    for (const repo of new Set(rows.map((r) => r.repo))) openLib(user, list, repo)
     const set = db().prepare('UPDATE photos SET favourite = ? WHERE id = ? AND user_id = ?')
     for (const r of rows) set.run(on ? 1 : 0, r.id, user.id)
   },
@@ -744,11 +770,11 @@ function byFolder<R extends { repo: string; path: string }>(rows: R[]): { repo: 
  * do not even show then), and read-only ones (shared with the account for viewing only).
  */
 async function changeable(user: User, repos: string[]) {
-  const list = await libs(user, true)
+  const list = await libs(user)
   const open = unlocked(user)
   for (const repo of new Set(repos)) {
     const lib = list.find((l) => l.id === repo)
-    if (!lib) throw new HttpError(404, 'That library is gone from Seafile')
+    if (!lib) throw new HttpError(404, 'No such photo')
     if (lib.encrypted && !open[repo]) throw new HttpError(423, `${lib.name} is encrypted and locked: unlock it in Files first`)
     if (lib.permission !== 'rw') throw new HttpError(403, `${lib.name} is read-only for you, so nothing in it can be changed or deleted`)
   }
@@ -1025,10 +1051,12 @@ async function addToAlbum(user: User, body: { album?: unknown; ids?: unknown }) 
   return { added: res.filter((r) => r.success).length, already: res.filter((r) => r.error === 'duplicate').length, failed: res.filter((r) => !r.success && r.error !== 'duplicate').length }
 }
 
-/** Seafile photos' libraries must be open to this account right now (423 locked, an error when that cannot be told): before a ZIP is made or sent, so no file name goes into an answer. */
+/** Seafile photos' libraries must be open to this account right now (asked of Seafile: 404, 423 locked, or 502 when that cannot be told): before a ZIP is made or sent, so no file name goes into an answer. */
 async function guardZip(user: User, source: string, ids: string[]) {
   if (source !== 'seafile') return
-  for (const repo of new Set(ids.map((i) => rowOf(user, i).repo))) await guard(user, repo)
+  const repos = new Set(ids.map((i) => rowOf(user, i).repo))
+  const list = await libs(user)
+  for (const repo of repos) openLib(user, list, repo)
 }
 
 /** Streams the ZIP a token names: each file is fetched when its turn comes and piped on. */
@@ -1065,7 +1093,7 @@ async function status(user: User) {
   const seafile = seafileReady(user)
   const immichLink: ImmichInfo | null = immichInfo(user)
   // When Seafile cannot say which libraries are locked, no folder is named either.
-  const sources = seafile ? await sourcesInfo(user).then((s) => ({ sources: s, unavailable: false }), (e) => (e instanceof HttpError && e.status === 502 ? { sources: [], unavailable: true } : Promise.reject(e))) : null
+  const sources = seafile ? await libs(user).then((list) => sourcesInfo(user, list)).then((s) => ({ sources: s, unavailable: false }), (e) => (e instanceof HttpError && e.status === 502 ? { sources: [], unavailable: true } : Promise.reject(e))) : null
   return {
     seafile: seafile && sources ? { sources: sources.sources, unavailable: sources.unavailable, job: jobs.get(user.id) ?? null, scannedAt: (db().prepare('SELECT scanned_at FROM photo_accounts WHERE user_id = ?').get(user.id) as { scanned_at: number | null } | undefined)?.scanned_at ?? null } : null,
     immich: immichLink,
@@ -1175,7 +1203,7 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   // does); Immich's comes through here, with the key.
   if (op === 'original' && read) {
     if (name === 'seafile') {
-      const row = rowOf(user, id)
+      const { row } = await openRow(user, id)
       const { url: link } = await fileLink(user, row.repo, row.path, 'download')
       return res.writeHead(302, { Location: link, 'Cache-Control': 'no-store', ...SECURITY }).end(), true
     }
