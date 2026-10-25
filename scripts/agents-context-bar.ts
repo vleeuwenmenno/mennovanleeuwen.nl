@@ -1,7 +1,8 @@
 // Browser regression against a running scratch Vite server. All API fetches are mocked, no writes.
 // The context ring sits in the thread's top bar (not the composer), opens and closes the panel
 // reliably (also while a reply is being written, and while it loads or fails), the top bar adapts
-// to the width of its pane and the panel's title stays reachable.
+// to the width of its pane and the panel's title stays reachable. Its Stats tab (and the thread
+// menu's Thread stats) shows the thread's stats for nerds, fits the pane and opens a turn's calls.
 // DATA_DIR=<scratch> vite --port 5290 --strictPort
 // pnpm check:agents-context-bar http://127.0.0.1:5290 [1280x800,390x800,...]
 import assert from 'node:assert/strict'
@@ -27,6 +28,7 @@ const thread={id:'t1',title:'A thread with a rather long title to prove the bar 
 const messages=[{id:1,role:'user',content:'Hello',createdAt:1},{id:2,role:'assistant',content:'Hi there. '.repeat(40),createdAt:2}];
 const parts=[['System prompt',2400],['Tool definitions',3800],['Messages',22000],['Summary of earlier messages',2300],['Skills',900],['Memory',700],['Work folder notes',650],['Attachments',400]].map(([label,tokens])=>({label,tokens}));
 const context={model:'fixture',contextLength:131072,measured:30000,estimate:30500,parts,compaction:null,autoCompact:80};
+const stats={model:'fixture',turns:[{id:1,at:1,text:'Hello, a first question that is long enough to be cut short on a phone screen',calls:[{kind:'reply',stats:{provider:'chatgpt',model:'chatgpt/gpt-5.5',input:10000,cached:9000,output:400,reasoning:150,ttft:800,gen:4000,ms:65000}},{kind:'reply',stats:null}],tools:[{name:'web_search',ms:1200},{name:'write_file',ms:30000,waited:28000}]},{id:3,at:3,text:'/compact',calls:[{kind:'compact',stats:{provider:'ollama',model:'fixture',input:20000,output:900,ttft:1500,gen:9000,promptEval:2000,load:40,ms:11000}}],tools:[]}]};
 window.fetch=async(input, init)=>{
  const path=new URL(typeof input==='string'?input:input.url,location.href).pathname;
  if(!path.startsWith('/api/'))return rawFetch(input,init);
@@ -45,6 +47,7 @@ window.fetch=async(input, init)=>{
   if(window.__ctxMode==='slow')await new Promise(()=>{});
   return json(context);
  }
+ if(path==='/api/agents/threads/t1/stats')return json(stats);
  if(path==='/api/prefs')return json({});
  return json([]);
 };
@@ -66,12 +69,14 @@ for (const [width, height] of sizes) for (const worst of [false, true]) {
       await sleep(300)
     }
     await page.waitFor("import('/src/os/account.ts').then(m=>m.getAccount().status === 'user')")
+    // THEME=light (or dark) runs it in that theme.
+    if (process.env.THEME) await page.eval(`import('/src/os/theme.ts').then((m) => m.setMode(${JSON.stringify(process.env.THEME)}))`)
     for (let i = 0; i < 20 && !(await page.eval("!!document.querySelector('.agt-item')")); i++) {
       if (!(await page.eval("!!document.querySelector('.agt')"))) await page.eval("window.dispatchEvent(new CustomEvent('mvlos:open',{detail:{app:'agents'}}))")
       await sleep(400)
     }
     await page.waitFor("!!document.querySelector('.agt-item')")
-    await page.eval("document.querySelector('.agt-item').click()")
+    await page.eval("document.querySelector('.agt-item:not(.agt-studio-link)').click()")
     await page.waitFor("!!document.querySelector('.agt-toolbar .agt-ring')")
     const tag = `${width}px${worst ? ' answering, every chip' : ''}`
     if (worst) await page.waitFor("!!document.querySelector('.agt-send.is-stop')")
@@ -148,11 +153,35 @@ for (const [width, height] of sizes) for (const worst of [false, true]) {
     await page.waitFor("!!document.querySelector('.agt-ctx-bar')")
     await click('.agt-composer textarea')
     assert.equal(await panel(), !touch, `${tag}: outside tap ${touch ? 'closes' : 'leaves it open'}`)
+    // The Stats tab: the summary in monospace, every turn, no sideways scroll; a turn opens to its calls.
+    if (await panel()) await click('.agt-ctx-close')
+    await click('.agt-ring')
+    await page.waitFor("!!document.querySelector('.agt-ctx-bar')")
+    await click('.agt-ctx-tabs button:nth-child(2)')
+    await page.waitFor("!!document.querySelector('.agt-stats-sum')")
+    const st = await page.eval(`(() => { const p = document.querySelector('.agt-ctx-panel'); const t = p.textContent; const r = p.getBoundingClientRect(); return { sx: p.scrollWidth - p.clientWidth, right: r.right, cache: t.includes('90% of 10k input'), time: t.includes('LLM 1m16s') && t.includes('Tool 31s'), old: t.includes('1 from before stats'), turns: p.querySelectorAll('.agt-stats-turns > li').length, mono: getComputedStyle(p.querySelector('.agt-stats-sum dd')).fontFamily, selected: p.querySelector('[role=tab][aria-selected=true]').textContent } })()`)
+    assert.ok(st.sx <= 1 && st.right <= width && st.cache && st.time && st.old && st.turns === 2 && /mono/i.test(st.mono) && st.selected === 'Stats', `${tag}: stats tab ${JSON.stringify(st)}`)
+    await page.eval("document.querySelector('.agt-stats-turns summary').scrollIntoView({ block: 'center' })")
+    await click('.agt-stats-turns summary')
+    await page.waitFor("document.querySelector('.agt-stats-turns details')?.open")
+    const calls = await page.eval(`(() => { const p = document.querySelector('.agt-ctx-panel'); const d = document.querySelector('.agt-stats-turns details'); return { text: d.textContent, sx: p.scrollWidth - p.clientWidth } })()`)
+    assert.ok(calls.text.includes('90% cached') && calls.text.includes('150 reasoning') && calls.text.includes('—') && calls.text.includes('waiting for you') && calls.sx <= 1, `${tag}: a turn's calls ${JSON.stringify(calls)}`)
+    if (process.env.SHOT) writeFileSync(`/tmp/shot-stats-${width}${worst ? 'w' : ''}.png`, Buffer.from((await page.send('Page.captureScreenshot', {})).data, 'base64'))
+    await click('.agt-ctx-tabs button:nth-child(1)')
+    await page.waitFor("!!document.querySelector('.agt-ctx-bar')")
+    await click('.agt-ctx-close')
+    // The thread menu's Thread stats opens the panel on its Stats tab.
+    await click('.agt-more')
+    await page.waitFor("[...document.querySelectorAll('.ctx-menu .ctx-item')].some((b) => b.textContent.startsWith('Thread stats'))")
+    await page.eval("[...document.querySelectorAll('.ctx-menu .ctx-item')].find((b) => b.textContent.startsWith('Thread stats')).click()")
+    await page.waitFor("!!document.querySelector('.agt-stats-sum')")
+    await click('.agt-ctx-close')
+    assert.equal(await panel(), false, `${tag}: stats close`)
     // Send / Stop and the other composer controls are still there, without the ring.
     assert.equal(await page.eval("!!document.querySelector('.agt-send') && !!document.querySelector('.agt-model-pill') && !!document.querySelector('button[aria-label=\"Attach files\"]')"), true, `${tag}: composer controls`)
     assert.deepEqual(page.errors, [], `${tag}: page errors`)
     await page.close()
-    console.log(`${tag}: ring in the top bar, bar fits (title ${Math.round(fits.title)}px), toggle, close button, Esc, keyboard, loading, error${touch ? ', outside tap' : ''}`)
+    console.log(`${tag}: ring in the top bar, bar fits (title ${Math.round(fits.title)}px), toggle, close button, Esc, keyboard, loading, error${touch ? ', outside tap' : ''}, stats tab and Thread stats`)
   } catch (e) {
     console.error(`FAILED at ${width}px${worst ? ' worst' : ''}`)
     throw e

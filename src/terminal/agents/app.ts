@@ -25,6 +25,7 @@ import {
   branchThread,
   rewindThread,
   getContext,
+  getThreadStats,
   getThread,
   listMemories,
   listProjects,
@@ -75,6 +76,7 @@ import {
   siteOf,
   MAIL_READ_TOOLS,
 } from '../../data/agents'
+import { callLine, duration, percent, summarize, summaryLines, threadSummary } from '../../data/agentStats'
 import { seafileAt } from '../../data/agentPlaces'
 import { imageProgressLabel, type ImageProgress } from '../../data/imageModels'
 import { getAccount, hasCalendar } from '../../os/account'
@@ -146,6 +148,7 @@ const SLASH: [string, string][] = [
   ['/delete', 'delete the thread'],
   ['/todos', "the agent's plan (clear: drop it)"],
   ['/context', 'what takes up the context window'],
+  ['/stats', 'stats for nerds: model and tool time, speed, cache hits, tokens (all: every call)'],
   ['/compact', 'summarise the thread so far to free up context (add what to keep)'],
   ['/summary', 'what the last compaction kept: the summary the agent works from'],
   ['/memory', 'what the agent remembers (add, rm)'],
@@ -2070,6 +2073,31 @@ export class Session {
         for (const p of c.parts.filter((x) => x.tokens > 0)) out.push([seg(`  ${p.label.padEnd(36)}`, p.label.startsWith('Summary') ? 'accent' : undefined), seg(count(p.tokens).padStart(7), 'muted')])
         if (c.compaction) out.push(...wrap([seg(`Compacted ${c.compaction.times === 1 ? 'once' : `${c.compaction.times} times`}, last ${c.compaction.auto ? 'by itself' : 'on request'} ${ago(c.compaction.at)} ago: the summary stands in for the ${c.compaction.hidden} messages before it (/summary shows it).`, 'muted')], w, [seg('  ')]))
         out.push(...wrap([seg(c.autoCompact !== null ? `It compacts by itself at ${c.autoCompact}% of the window; /compact does it now.` : 'Compacting by itself is off (Settings → Agents); /compact does it now.', 'muted')], w, [seg('  ')]))
+        this.out([...out, []])
+        return true
+      }
+      case '/stats': {
+        if (!this.thread) return this.say('Nothing sent yet'), true
+        const st = await getThreadStats(this.thread.id).catch(() => null)
+        if (!st) return this.say('Could not get the stats', 'red'), true
+        const sum = threadSummary(st)
+        if (!sum.calls && !sum.toolCalls) return this.say('No model calls yet'), true
+        const out: Line[] = [[seg('Stats ', 'bold'), seg(st.model, 'muted')]]
+        for (const [k, v] of summaryLines(sum)) out.push(...wrap([seg(`  ${k.padEnd(11)}`, 'muted'), seg(v)], w, [seg(' '.repeat(13))]))
+        // Per turn; "/stats all" adds each model call and tool call under its turn.
+        const every = arg === 'all'
+        const turns = every ? st.turns : st.turns.slice(-10)
+        out.push([], [seg(every || st.turns.length <= 10 ? 'Turns' : `Last ${turns.length} of ${st.turns.length} turns (/stats all for every call)`, 'bold')])
+        turns.forEach((t) => {
+          const s = summarize(t.calls, t.tools)
+          const n = st.turns.indexOf(t) + 1
+          const head = `${duration(s.llmMs)} · ${s.calls} ${s.calls === 1 ? 'call' : 'calls'}${s.toolCalls ? ` · ${s.toolCalls} tools ${duration(s.toolMs)}` : ''}${s.cacheHit !== null ? ` · ${percent(s.cacheHit)} cached` : ''}`
+          out.push([seg(`  ${String(n).padStart(3)}. `, 'muted'), ...clipLine([seg(t.text || 'Compaction')], Math.max(10, w - head.length - 10)), seg(`  ${head}`, 'muted')])
+          if (every) {
+            for (const c of t.calls) out.push(...wrap([seg('       '), seg(callLine(c), 'muted')], w, [seg('         ')]))
+            for (const x of t.tools) out.push([seg('       '), seg(`${x.name || 'tool'} ${duration(x.ms)}${x.waited ? ` (${duration(x.waited)} waiting for you)` : ''}`, 'muted')])
+          }
+        })
         this.out([...out, []])
         return true
       }

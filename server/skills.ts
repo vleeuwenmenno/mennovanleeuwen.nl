@@ -151,7 +151,8 @@ function folderSkills(user: User, folder: Folder, source: SkillSource): Promise<
   while (cache.size >= MAX_CACHED) cache.delete(cache.keys().next().value!)
   const value = (async () => {
     const listing = await listDir(user, folder.repo, folder.path).catch(() => null)
-    const dirs = (listing?.entries ?? []).filter((e) => e.dir && !e.name.startsWith('.')).slice(0, 60)
+    // By name, whatever order Seafile lists them in: the skills' list in the system prompt stays the same between calls (the providers' prompt caches).
+    const dirs = (listing?.entries ?? []).filter((e) => e.dir && !e.name.startsWith('.')).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).slice(0, 60)
     const found = await Promise.all(
       dirs.map(async (d): Promise<Loaded | null> => {
         const path = `${folder.path === '/' ? '' : folder.path}/${d.name}`

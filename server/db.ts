@@ -399,6 +399,8 @@ export function database(): DatabaseSync {
   // Added later: a compaction (server/agents.ts), saved as a message with role 'compact' whose
   // content is the summary; this says how it came about (JSON {auto, reason?, instructions?, …}).
   if (!cols('agent_messages').includes('compact')) db.exec('ALTER TABLE agent_messages ADD COLUMN compact TEXT')
+  // Thread stats (server/agentStats.ts): a reply's model call, a tool result's time. Older messages have none.
+  if (!cols('agent_messages').includes('stats')) db.exec('ALTER TABLE agent_messages ADD COLUMN stats TEXT')
   if (!cols('agent_memories').includes('image_profile')) db.exec('ALTER TABLE agent_memories ADD COLUMN image_profile TEXT')
   if (!cols('agent_threads').includes('image_profile_id')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_profile_id INTEGER')
   if (!cols('agent_memories').includes('image_learning')) db.exec('ALTER TABLE agent_memories ADD COLUMN image_learning TEXT')
