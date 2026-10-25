@@ -290,10 +290,11 @@
    viewport: a small window on a desktop behaves like the app on a phone. */
 .nb.agt {
   container: agtapp / inline-size;
-  grid-template-columns: minmax(200px, 270px) 1fr;
+  grid-template-columns: var(--agt-side-w, minmax(200px, 270px)) 1fr;
   grid-template-rows: minmax(0, 1fr);
 }
 .nb.agt > .nb-side {
+  position: relative;
   border-right: 1px solid var(--line);
   border-bottom: 0;
 }
@@ -1723,6 +1724,39 @@ textarea.agt-q-input {
 .agt-icon.is-accent:hover {
   color: var(--on-accent);
   background: color-mix(in srgb, var(--accent) 85%, var(--fg));
+}
+/* The drag handle on the sidebar's right edge: a wide hit area over the border, a thin accent line on hover. */
+.agt-resize {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 9px;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+.agt-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.agt-resize:hover::after,
+.agt-resize:focus-visible::after,
+.agt.is-resizing .agt-resize::after {
+  background: var(--accent);
+}
+.agt-resize:focus-visible {
+  outline: none;
+}
+.agt.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .agt-rail {
   display: flex;
