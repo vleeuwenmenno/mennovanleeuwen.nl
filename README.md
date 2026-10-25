@@ -2173,16 +2173,29 @@ with scratch accounts only. It also runs a plain save request through current-im
 folder discovery, requested folder creation and four binary saves in an older eligible thread,
 with the same tool definitions, approval events and round limit used by the app and CLI.
 
+**First titles.** A new thread is named from your first message straight away, while the answer
+is still being written, so the sidebar is never empty. When the title model gives nothing usable,
+the first line of prose in the message stands in (code fences and what is in them, blank lines and
+lines of only symbols are skipped), else the attached files' names, else *Code snippet*. Once the
+first answer is in, the title model names the thread once more from question and answer, and the
+title changes when that one is different, as long as it is still that first automatic title (not
+renamed, regenerated or being checked meanwhile; Spotlight's quick threads are left alone). The
+title model's answer is read leniently: thinking and markdown code fences are dropped and the
+`{"title": …}` object is found inside any text around it, and a candidate without a letter or a
+digit (a bare code fence, `...`, `---`) is never a title.
+
 **Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
 title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;
-4 by default, sooner when a thread grows by more than about 24,000 characters over at least two
-messages) the server asks the title model once more, after the turn has answered and without
-holding up the answer or the next queued message. It gets the current title and a small digest of
-the latest exchanges (your last few messages and the start of each answer; no tool results,
-thinking or files beyond their names) and answers `{"keep": true}` or `{"title": "…"}`. The prompt
-leans hard towards keeping: a follow-up, a deeper question or new details keep the title, and only
-a real change of subject renames the thread. A failed check is only logged, and waits as long as a
-normal one before it is tried again. A title you set yourself (renaming in the app, or `/rename`)
+3 by default, sooner when a thread grows by more than about 24,000 characters over at least two
+messages) the server asks the title model once more, after the turn has answered (also when it
+ended in a generated image) and without holding up the answer or the next queued message. It gets
+the current title, how the thread started (your first message) and a small digest of the latest
+exchanges (your last few messages and the start of each answer; no tool results, thinking or files
+beyond their names) and answers `{"keep": true}` or `{"title": "…"}`, read as leniently as a first
+title. It keeps the title while it still names the main subject (a follow-up or a deeper question
+keeps it), and changes it when it no longer names what the conversation is mainly about, or when
+it is vague, generic or not a real title. An answer it cannot read keeps the title. A failed
+check is only logged, and waits as long as a normal one before it is tried again. A title you set yourself (renaming in the app, or `/rename`)
 is never changed automatically; *Regenerate title* (the thread's ⋯ menu, its right-click menu in
 the sidebar or the conversation, `/title regen` in the terminal) asks for a fresh title for what the
 thread talks about now, saves it straight away and hands the title back to the automatic check. Old

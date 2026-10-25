@@ -9,6 +9,10 @@ type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explic
 const MODEL = 'threads-test'
 const chats: J[] = []
 let webFetches = 0
+// The title model's answers (requests with stream: false): a plain title unless a test sets its own.
+const PLAIN_TITLE = (): string => '{"title":"History check"}'
+let titleAnswer: (body: J) => string = PLAIN_TITLE
+const titleCalls: J[] = []
 const json = (res: ServerResponse, body: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
 const ollama = createServer(async (req, res) => {
   let raw = ''; for await (const chunk of req) raw += chunk
@@ -17,7 +21,7 @@ const ollama = createServer(async (req, res) => {
   if (req.url === '/api/web_fetch') { webFetches++; return void json(res, { title: 'Should not be fetched', content: 'private destination' }) }
   if (req.url !== '/api/chat') { res.writeHead(404).end(); return }
   const body = JSON.parse(raw)
-  if (body.stream === false) return void json(res, { message: { role: 'assistant', content: '{"title":"History check"}' }, done: true })
+  if (body.stream === false) { titleCalls.push(body); return void json(res, { message: { role: 'assistant', content: titleAnswer(body) }, done: true }) }
   chats.push(body)
   const at = body.messages.findLastIndex((m: J) => m.role === 'user' && m.content.startsWith('RUN '))
   const call = JSON.parse(body.messages[at].content.slice(4))
@@ -74,6 +78,56 @@ function message(id: string, role: string, content: string, extra: J = {}) {
 const list = (r: J): J[] => r.threads ?? []
 try {
   await server.start()
+  // Thread titles: parsing what the title model says, the stand-in title, and when titles change.
+  const { pickTitle, pickRetitle, fallbackTitle, cleanTitle } = await import('../server/agents.ts')
+  check('Title: a fenced JSON answer gives its title', pickTitle('```json\n{"title": "Lentil soup"}\n```') === 'Lentil soup')
+  check('Title: JSON inside chatter gives its title', pickTitle('Sure! Here it is: {"title": "Postgres vs SQLite"} Hope that helps.') === 'Postgres vs SQLite')
+  check('Title: a bare code fence, or only symbols, is no title', pickTitle('```') === null && pickTitle('```\n```') === null && pickTitle('...') === null && pickTitle('{"title": "---"}') === null && cleanTitle('```') === null)
+  check('Title: backticks are trimmed off', cleanTitle('`Lentil soup`') === 'Lentil soup')
+  check('Fallback title: skips code to the first prose line', fallbackTitle('```ts\nconst x = 1\n```\n\nwhy does this throw?') === 'Why does this throw')
+  check('Fallback title: code only is never a code fence', fallbackTitle('```\n{ "a": 1 }\n```') === 'Code snippet' && fallbackTitle('```\n```', ['server.log']) === 'server.log' && fallbackTitle('', []) === 'Untitled thread')
+  check('Retitle: a fenced {"title"} is taken', pickRetitle('```json\n{"title": "Bread baking"}\n```', 'Lentil soup') === 'Bread baking')
+  check('Retitle: {"keep": true} keeps, fenced or not, and so do unclear answers', pickRetitle('{"keep": true}', 'Lentil soup') === null && pickRetitle('```json\n{"keep": true}\n```', 'Lentil soup') === null && pickRetitle('I think it fits.', 'Lentil soup') === null && pickRetitle('{"title": "```"}', 'Lentil soup') === null)
+  const view = async (id: string) => (await api('GET', `/api/agents/threads/${id}`)).thread as J
+  const titleWait = async (id: string, done: (t: J) => boolean) => {
+    for (let i = 0; i < 100; i++) {
+      const t = await view(id)
+      if (done(t) && !t.titling && !t.checkingTitle) return t
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return view(id)
+  }
+  const RETITLE = (b: J) => String(b.messages[0]?.content ?? '').startsWith('You keep the title')
+  // The first title from the question is a code fence, so the stand-in is used; with the answer the model knows better.
+  titleAnswer = (b) => (RETITLE(b) ? '{"keep": true}' : String(b.messages.at(-1)?.content ?? '').includes('Agent:') ? '```json\n{"title":"Zebrafish care guide"}\n```' : '```')
+  const named = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(named.id, 'search_threads', { query: 'zqone' })
+  let tt = await titleWait(named.id, (x) => x.title === 'Zebrafish care guide')
+  check('First title: named again from question and answer after the first answer', tt.title === 'Zebrafish care guide' && tt.titleSource === 'auto')
+  check('First title: the stand-in it replaced was not a code fence', tt.aliases.length === 1 && tt.aliases[0].title !== '```' && /[a-z]/i.test(tt.aliases[0].title))
+  // Later turns: the check keeps the title until the conversation moved on, then renames it.
+  let calls = titleCalls.length
+  titleAnswer = (b) => (RETITLE(b) ? '```json\n{"title":"Kayak repair"}\n```' : '{"title":"Not asked"}')
+  for (let i = 0; i < 2; i++) await turn(named.id, 'search_threads', { query: 'zqtwo' })
+  tt = await titleWait(named.id, () => true)
+  check('Title check: not asked before 3 messages', tt.title === 'Zebrafish care guide' && !titleCalls.slice(calls).some(RETITLE))
+  await turn(named.id, 'search_threads', { query: 'zqtwo' })
+  tt = await titleWait(named.id, (x) => x.title === 'Kayak repair')
+  const asked = titleCalls.slice(calls).find(RETITLE)
+  check('Title check: after 3 messages a fenced answer renames the thread', tt.title === 'Kayak repair' && tt.aliases[0]?.title === 'Zebrafish care guide')
+  check('Title check: is given how the thread started and the latest messages', !!asked && /How it started:[\s\S]*Latest messages:/.test(asked.messages.at(-1).content))
+  // A title set by hand is never changed: not after the first answer, not by the check.
+  titleAnswer = (b) => (RETITLE(b) ? '{"title":"Model rename"}' : '{"title":"Model first title"}')
+  const mine = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(mine.id, 'search_threads', { query: 'zqthree' })
+  await titleWait(mine.id, () => true)
+  await api('PATCH', `/api/agents/threads/${mine.id}`, { title: 'My own name' })
+  calls = titleCalls.length
+  for (let i = 0; i < 4; i++) await turn(mine.id, 'search_threads', { query: 'zqthree' })
+  await new Promise((r) => setTimeout(r, 300))
+  tt = await titleWait(mine.id, () => true)
+  check('User title: never changed automatically', tt.title === 'My own name' && tt.titleSource === 'user' && !titleCalls.slice(calls).length)
+  titleAnswer = PLAIN_TITLE
   const active = await api('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', tools: ['threads'], permission: 'default' })
   check('Past threads starts on for new default threads', (await api('POST', '/api/agents/threads', { model: MODEL })).tools.includes('threads'))
   const legacy = thread('Legacy'); db.prepare('UPDATE agent_threads SET tools = ? WHERE id = ?').run('["notes"]', legacy)
