@@ -810,6 +810,16 @@ cannot undo an old-version restore. Old-version edits and restores cannot be dis
 The first-layout exception ends when this browser receives or successfully pushes an account
 layout; later remote layouts do not replace window changes that have not been saved locally.
 
+Saving to the server stays quiet while nobody changes anything. A change is sent once, 800 ms
+after it was made; setting the same value again, or undoing a change before it went out, sends
+nothing. Merging another tab's copy only counts as unsaved for what that copy brought that this
+tab didn't have (its "unsaved" mark is often this tab's own earlier write). A store has one save
+out at a time, and one that has saved more than 6 times in 15 seconds waits before the next,
+twice as long each time up to a minute, so no conflict or merge between tabs and devices can
+keep the server busy. `pnpm check:widgets-sync` covers this in memory, and `pnpm check:sync-loop`
+(`scripts/sync-loop-e2e.ts`, port 5289 unless `PORT` is set) counts the saves of idle tabs and
+devices of different sizes in muted Chromium; it starts and stops its own server.
+
 Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
 ([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).
 Those on the desktop are in `~/Desktop`; the ones for the dock, All apps and Spotlight only are in

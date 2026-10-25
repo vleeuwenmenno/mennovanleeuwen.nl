@@ -110,6 +110,8 @@ let clock = 1000
 const requests: string[] = []
 /** Who the browser's cookie signs in as (another tab can switch it). */
 let cookieUser = 1
+/** Another device's save, made right before each of this one's (section 10). */
+let storming: (() => void) | null = null
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 g.fetch = async (path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}) => {
   if (path === '/api/me') return json({ authEnabled: true, user: { id: cookieUser, login: 'check', name: null, avatar: null, admin: false, githubScopes: [] }, forges: [] })
@@ -120,6 +122,7 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
   if (path === '/api/state') return json(Object.fromEntries(server))
   const key = decodeURIComponent(path.replace('/api/state/', ''))
   if (init.method === 'PUT') {
+    if (key === 'loop:storm') storming?.()
     puts.push(key)
     const { value, base } = JSON.parse(init.body!) as { value: unknown; base: number }
     const cur = server.get(key)
@@ -506,6 +509,68 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   check('notes: two tabs with tied links agree', JSON.stringify(a.get()) === JSON.stringify(b.get()))
   check(`notes: and hearing of each other writes nothing (${writes - before} writes)`, writes === before)
   tabs.splice(tabs.indexOf(t1), 2)
+}
+
+// --- 10. no save loops: a store saves what changed once, then stays quiet ---------------------------
+{
+  type Set = import('../src/os/widgetPlaces.ts').WidgetSet
+  const opts = { normalize: wp.normalizeSet, merge: wp.mergeSets, mergeTabs: true }
+  const entry = (id: string, at = 1) => ({ id, kind: 'status', x: 1, y: 1, w: 280, h: 220, vw: 1400, vh: 900, at })
+  const savesOf = (key: string, from: number) => puts.slice(from).filter((k) => k === key).length
+
+  // One tab (mergeTabs reads back its own earlier write, which says "unsaved").
+  const t1 = new Tab()
+  tabs.push(t1)
+  const a = as(t1, () => synced<Set>('loop:one', { places: {}, removed: '' }, opts))
+  let from = puts.length
+  as(t1, () => a.set((c) => wp.changeSet(c, { x: entry('x') })))
+  await sleep(4000)
+  check(`loop: one tab saves a change once (${savesOf('loop:one', from)} saves)`, savesOf('loop:one', from) === 1)
+  check('loop: and is clean after', meta('loop:one')?.dirty === false)
+
+  // Two tabs of one browser, both changing it.
+  const t2 = new Tab()
+  tabs.push(t2)
+  const b = as(t2, () => synced<Set>('loop:one', { places: {}, removed: '' }, opts))
+  from = puts.length
+  as(t2, () => b.set((c) => wp.changeSet(c, { y: entry('y') })))
+  as(t1, () => a.set((c) => wp.changeSet(c, { z: entry('z') })))
+  await sleep(5000)
+  const two = savesOf('loop:one', from)
+  check(`loop: two tabs save their changes and stop (${two} saves)`, two >= 1 && two <= 3)
+  check('loop: both tabs and the server have all three', ['x', 'y', 'z'].every((k) => k in a.get().places && k in b.get().places && k in (server.get('loop:one')!.value as Set).places))
+  from = puts.length
+  await sleep(3000)
+  check(`loop: then quiet (${savesOf('loop:one', from)} saves)`, savesOf('loop:one', from) === 0)
+
+  // A change made again (the same value): nothing sent.
+  from = puts.length
+  as(t1, () => a.set((c) => ({ places: { ...c.places }, removed: c.removed })))
+  await sleep(1500)
+  check(`loop: setting the same value again sends nothing (${savesOf('loop:one', from)} saves)`, savesOf('loop:one', from) === 0)
+  // A change undone before it was sent: nothing either (a plain store; in a set, an undo is a newer change).
+  const plain = synced<string>('loop:plain', '')
+  plain.set('first')
+  await sleep(1500)
+  from = puts.length
+  plain.set('second')
+  plain.set('first')
+  await sleep(1500)
+  check(`loop: a change undone before it was sent sends nothing (${savesOf('loop:plain', from)} saves)`, savesOf('loop:plain', from) === 0 && !meta('loop:plain')!.dirty)
+  tabs.splice(tabs.indexOf(t1), 2)
+
+  // Another device saving all the time: every save here conflicts and merges. Held back, not hammered.
+  const c = synced<Set>('loop:storm', { places: {}, removed: '' }, opts)
+  let n = 0
+  server.set('loop:storm', { value: { places: {}, removed: '' }, updatedAt: ++clock })
+  // Another save from there lands right before each of this tab's: each one conflicts.
+  storming = () => server.set('loop:storm', { value: { places: { [`other${++n}`]: entry(`other${n}`, n) }, removed: '' }, updatedAt: ++clock })
+  from = puts.length
+  c.set((v) => wp.changeSet(v, { mine: entry('mine', 1e15) }))
+  await sleep(8000)
+  storming = null
+  const stormy = savesOf('loop:storm', from)
+  check(`loop: conflict after conflict is rate-limited (${stormy} saves in 8 s)`, stormy >= 2 && stormy <= 10)
 }
 
 // Accounts (whose state a tab holds, switching account in another tab): scripts/sync-accounts-check.ts.

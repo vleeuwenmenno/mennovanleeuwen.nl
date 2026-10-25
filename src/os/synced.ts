@@ -44,6 +44,10 @@ type Internal = Synced<unknown> & {
   meta: () => Meta<unknown>
   adopt: (r: Remote, dirty?: boolean, notify?: boolean) => void
   pushed: (updatedAt: number, sent: unknown) => void
+  /** Whether the value is the server's copy at its base, as far as this tab knows. */
+  sameAsServer: () => boolean
+  /** Marks the value saved (it already is, on the server). */
+  clean: () => void
   reset: () => void
   merge?: (local: unknown, remote: unknown) => unknown
   normalize: (v: unknown) => unknown
@@ -93,6 +97,13 @@ export function synced<T>(
   } = {},
 ): Synced<T> {
   let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
+  /** The server's copy at a version, as last sent or received here (a save of the same is skipped). */
+  let known: { base: number; json: string } | null = null
+  /** A copy marked saved is the server's at its base. */
+  const learn = () => {
+    if (!meta.dirty && meta.base > 0) known = { base: meta.base, json: JSON.stringify(meta.value) }
+  }
+  learn()
   const listeners = new Set<() => void>()
   const remoteListeners = new Set<(v: T) => void>()
   const syncedListeners = new Set<() => void>()
@@ -113,7 +124,11 @@ export function synced<T>(
         const merged = opts.merge!(meta.value, theirs)
         others = JSON.stringify(merged) !== JSON.stringify(meta.value)
         const base = Math.max(meta.base, stored.base ?? 0)
-        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || !!stored.dirty || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
+        // Unsaved only for what is unsaved here, or what the stored copy brought that wasn't saved
+        // yet. Not for the stored copy's flag alone: that is often this tab's own earlier write
+        // (or another tab's copy of it), and taking it in again after every save kept both tabs
+        // saving the same value to the server forever.
+        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || (!!stored.dirty && others) || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
       } catch {
         /* not readable: written over */
       }
@@ -130,7 +145,8 @@ export function synced<T>(
     get: () => meta.value,
     set(next) {
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next
-      if (value === meta.value) return
+      // Nothing changed (the same value made again): nothing to save or send.
+      if (value === meta.value || JSON.stringify(value) === JSON.stringify(meta.value)) return
       meta = { ...meta, value, dirty: true }
       save()
       emit()
@@ -161,19 +177,28 @@ export function synced<T>(
     meta: () => meta,
     adopt(r, dirty = false, notify = true) {
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
+      if (!dirty) known = { base: r.updatedAt, json: JSON.stringify(meta.value) }
       save()
       emit()
       if (notify) remoteListeners.forEach((l) => l(meta.value))
       emitSynced()
     },
     pushed(updatedAt, sent) {
+      known = { base: updatedAt, json: JSON.stringify(sent) }
       // Still dirty if it changed while the request was out.
-      meta = { ...meta, base: updatedAt, dirty: meta.value !== sent }
+      meta = { ...meta, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
       save()
       emitSynced()
       if (meta.dirty) schedulePush(key)
     },
+    sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
+    clean() {
+      meta = { ...meta, dirty: false }
+      save()
+      emitSynced()
+    },
     reset() {
+      known = null
       meta = { value: fallback, base: 0, dirty: false }
       accountStorage.remove(storageKey(key))
       emit()
@@ -192,6 +217,7 @@ export function synced<T>(
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
+      learn()
       if (e.newValue !== null) opts.onIncoming?.(meta.value)
       emit()
       if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
@@ -230,17 +256,46 @@ export const useSyncStatus = () =>
     () => status,
   )
 
-function schedulePush(key: string) {
+// Every save goes through schedulePush, which holds a store back once it has saved more than a
+// few times in a short while (doubling the wait each time, up to a minute): whatever goes wrong
+// between tabs, devices and merges, no store can keep the server busy. One save per store is out
+// at a time; a change made meanwhile is saved after it.
+const BURST = 6
+const BURST_WINDOW = 15_000
+const MAX_BACKOFF = 60_000
+const pushTimes = new Map<string, number[]>()
+const inFlight = new Set<string>()
+
+/** How long `key` has to wait before its next save may go out. */
+function backoff(key: string, now = Date.now()): number {
+  const recent = (pushTimes.get(key) ?? []).filter((t) => now - t < BURST_WINDOW)
+  pushTimes.set(key, recent)
+  if (recent.length < BURST) return 0
+  return Math.min(MAX_BACKOFF, 1000 * 2 ** (recent.length - BURST))
+}
+
+function schedulePush(key: string, delay = PUSH_DELAY) {
   if (getAccount().status !== 'user' || frozen()) return
   clearTimeout(timers.get(key))
-  timers.set(key, setTimeout(() => push(key), PUSH_DELAY))
+  timers.set(key, setTimeout(() => void push(key), Math.max(delay, backoff(key))))
 }
 
 async function push(key: string) {
   timers.delete(key)
   const s = stores.get(key)
   if (!s || getAccount().status !== 'user' || frozen()) return
+  // The one out now comes back first; then this one (pushed() schedules it if still unsaved).
+  if (inFlight.has(key)) return
+  // Already the server's copy (a change made and undone, another tab's save): nothing to send.
+  if (s.sameAsServer()) {
+    if (s.meta().dirty) s.clean()
+    return
+  }
+  const wait = backoff(key)
+  if (wait > 0) return schedulePush(key, wait)
   const { value, base } = s.meta()
+  pushTimes.get(key)!.push(Date.now())
+  inFlight.add(key)
   setStatus({ state: 'syncing', at: status.at })
   try {
     const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
@@ -251,13 +306,15 @@ async function push(key: string) {
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
     setStatus({ state: 'error', at: status.at, error: (e as Error).message })
+  } finally {
+    inFlight.delete(key)
   }
 }
 
 function reconcile(s: Internal, remote: Remote | undefined) {
   const local = s.meta()
   if (!remote) {
-    if (local.dirty) void push(s.key)
+    if (local.dirty) schedulePush(s.key, 0)
     return
   }
   if (remote.updatedAt > local.base) {
@@ -271,9 +328,9 @@ function reconcile(s: Internal, remote: Remote | undefined) {
       const differs = JSON.stringify(merged) !== JSON.stringify(theirs)
       // Nothing new to show when the merge kept this tab's own value.
       s.adopt({ value: merged, updatedAt: remote.updatedAt }, differs, merged !== local.value)
-      if (differs) void push(s.key)
+      if (differs) schedulePush(s.key, 0)
     } else s.adopt(remote)
-  } else if (local.dirty) void push(s.key)
+  } else if (local.dirty) schedulePush(s.key, 0)
 }
 
 /** Loads every synced key from the server and reconciles it with the local copy. */
