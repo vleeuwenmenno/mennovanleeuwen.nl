@@ -128,14 +128,42 @@ async function arrived(g: NonNullable<typeof gate>) {
   await Promise.race([g.arrived, new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('Provider gate was never reached')), 5000); timer.unref(); void g.arrived.then(() => clearTimeout(timer)) })])
 }
 function release(g: NonNullable<typeof gate>) { if (gate === g) gate = null; g.release() }
-async function denied(label: string, pending: Promise<Response>) {
+/** Keep every byte already delivered, including when revocation aborts the rest of a body. */
+async function collect(response: Response): Promise<{ complete: boolean; bytes: Buffer }> {
+  const chunks: Buffer[] = []
+  const reader = response.body?.getReader()
+  if (!reader) return { complete: true, bytes: Buffer.alloc(0) }
+  let complete = false
   try {
-    const res = await pending, bytes = Buffer.from(await res.arrayBuffer()), text = bytes.toString()
-    check(label, res.status >= 400 && !res.headers.has('etag') && !res.headers.has('location') && !text.includes('private-photo') && !text.includes('private-library') && !text.includes('52.37') && !bytes.includes(secretBytes))
-  } catch { check(label, true) } // A revoked live response can close without an HTTP payload.
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) { complete = true; break }
+      chunks.push(Buffer.from(chunk.value))
+    }
+  } catch { /* Partial bytes remain evidence even when the response is aborted. */ }
+  finally { reader.releaseLock() }
+  return { complete, bytes: Buffer.concat(chunks) }
+}
+async function denied(label: string, pending: Promise<Response>) {
+  let res: Response
+  try { res = await pending }
+  catch (error) {
+    // A revoked live response can close before HTTP headers arrive.
+    check(label, error instanceof TypeError)
+    return
+  }
+  const { bytes } = await collect(res), text = bytes.toString()
+  check(label, res.status >= 400 && !res.headers.has('etag') && !res.headers.has('location') && !text.includes('private-photo') && !text.includes('private-library') && !text.includes('52.37') && !bytes.includes(secretBytes))
 }
 
 try {
+  // Verify that the race assertions retain evidence from a stream that leaks before failing.
+  let chunkSent = false
+  const partial = await collect(new Response(new ReadableStream({ pull(out) {
+    if (chunkSent) out.error(new Error('closed after bytes'))
+    else { chunkSent = true; out.enqueue(secretBytes) }
+  } })))
+  check('aborted-body collector retains previously received private bytes', !partial.complete && partial.bytes.equals(secretBytes))
   // Photos: held library, thumbnail-body, download-link and suggestion replies. A status purge is
   // deliberately requested before release, reproducing retention of a row already read into memory.
   const operations = ['info', 'thumb', 'etag', 'remote-thumb', 'original', 'albums', 'bucket', 'buckets', 'status', 'suggest', 'favourite', 'trash', 'move', 'restore', 'zip']
@@ -174,7 +202,7 @@ try {
     await arrived(g)
     const res = await response
     // Begin consuming before revocation so closure cannot hide a rejected body promise.
-    const consumed = res.arrayBuffer().then((b) => ({ complete: true, bytes: Buffer.from(b) }), () => ({ complete: false, bytes: Buffer.alloc(0) }))
+    const consumed = collect(res)
     await a.call(change === 'disconnect' ? '/api/integrations/seafile' : '/api/auth/logout', change === 'disconnect' ? 'DELETE' : 'POST')
     release(g)
     const result = await consumed
