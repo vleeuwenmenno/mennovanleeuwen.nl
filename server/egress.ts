@@ -165,6 +165,9 @@ export async function fetchPinned(url: URL, init: RequestInit, addresses: Lookup
   if (body) headers['content-length'] = String(body.length)
   const pinned = pinnedLookup(addresses)
   return new Promise<Response>((resolve, reject) => {
+    // DNS and Request body serialization may both await. Revalidate at the actual send.
+    requirePrivateRequest()
+    init.signal?.throwIfAborted()
     const https = url.protocol === 'https:'
     const send = https ? httpsRequest : httpRequest
     const r = send(url, { method: req.method, headers, lookup: pinned as never, agent: https ? pinnedHttps : pinnedHttp, signal: init.signal ?? undefined }, (res: IncomingMessage) => {

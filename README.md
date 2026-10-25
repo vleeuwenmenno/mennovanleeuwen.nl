@@ -1245,7 +1245,9 @@ provider parts. That snapshot follows nested note lookups, agent calendar/note t
 Agent preparations also validate the snapshot after reading a full CalDAV event body, before
 returning a private title, location or change summary. Prepared actions retain those same snapshots
 through approval and execution, checking before provider calls, local note writes and returned
-results. Reconnecting a calendar requires preparing the action again; approving an old meeting-note
+results. Non-admin pinned requests recheck after DNS and body serialization, at the actual HTTP
+send, so revocation during transport setup cannot dispatch a queued write. Reconnecting a calendar
+requires preparing the action again; approving an old meeting-note
 action cannot write its captured event into notes after revocation.
 `pnpm check:calendar-link-race` and `pnpm check:revocation-boundaries` cover these races.
 

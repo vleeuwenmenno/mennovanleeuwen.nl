@@ -1,6 +1,8 @@
 // Held media, calendar aggregates, mutations, and linking against real handlers and local mocks.
 // Every slow step has an explicit gate. Network access outside the local mocks is rejected.
-import { createServer } from 'node:http'
+import http, { createServer } from 'node:http'
+import { syncBuiltinESMExports } from 'node:module'
+import { Resolver } from 'node:dns/promises'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +27,7 @@ const mock = createServer(async (req, res) => {
   const send = (v: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(v))
   const form = new URLSearchParams(raw)
   providerLog.push({ method: req.method!, path: url.pathname, raw })
+  if (url.pathname === '/transport-write') return send({ ok: true })
   if (url.pathname === '/oauth/token') return send({ access_token: 'chat-access', refresh_token: 'chat-refresh', expires_in: 3600 })
   if (url.pathname === '/token') {
     const name = form.get('code') || 'A'
@@ -105,11 +108,12 @@ globalThis.fetch = async (input, init) => {
 const { database, encrypt, decrypt } = await import('../server/db.ts')
 const { handleApi } = await import('../server/api.ts')
 const { photoCapabilitiesForTest } = await import('../server/photos.ts')
+const { guardedFetch, pinnedHttp } = await import('../server/egress.ts')
 const { allCalendars, allEvents } = await import('../server/calendars.ts')
 const { findLinked } = await import('../server/noteLinks.ts')
-const { prepareCalendarCall, eventId } = await import('../server/agentCalendar.ts')
+const { prepareCalendarCall, protectPreparedCalendar, eventId } = await import('../server/agentCalendar.ts')
 const { prepareNoteLinkCall } = await import('../server/agentNoteLinks.ts')
-const { removeCaldav } = await import('../server/caldav.ts')
+const { caldavLinkVersion, removeCaldav } = await import('../server/caldav.ts')
 const { deleteUser, ban } = await import('../server/users.ts')
 const { sweep, liveCount } = await import('../server/liveSessions.ts')
 const { unlinkSeafile } = await import('../server/seafile.ts')
@@ -316,6 +320,50 @@ try {
     const result = await settle(prepared.run())
     check(`approval/${tool}/${mutation}: original provider authority preserved`, mutation === 'none' ? result.error === null && result.value !== null : result.error !== null && result.value === null && before === JSON.stringify(database().prepare('SELECT * FROM state WHERE user_id = ?').all(a.id)) && writesBefore === dav.log.filter((l) => /^(PUT|DELETE) /.test(l)).length)
     await deleteUser(a.id)
+  }
+  // Exercise the non-admin pinned transport; fake public DNS is redirected to a local mock.
+  const createConnection = pinnedHttp.createConnection
+  pinnedHttp.createConnection = (() => { throw new Error('Transport test escaped its local HTTP mock') }) as typeof pinnedHttp.createConnection
+  const request = http.request, resolve4 = Resolver.prototype.resolve4, resolve6 = Resolver.prototype.resolve6
+  let transport: { phase: string; arrived: () => void; wait: Promise<void> } | null = null
+  http.request = ((url: URL, options: Record<string, unknown>, callback: Parameters<typeof http.request>[2]) => {
+    if (url.hostname !== 'transport.example.test') return request(url, options, callback)
+    return request(new URL('/transport-write', provider), { ...options, lookup: undefined, agent: undefined }, callback)
+  }) as typeof http.request
+  Resolver.prototype.resolve4 = (async function(host: string, ...args: unknown[]) {
+    if (host !== 'transport.example.test') return Reflect.apply(resolve4, this, [host, ...args])
+    if (transport?.phase === 'dns') { transport.arrived(); await transport.wait }
+    return ['93.184.216.34']
+  }) as typeof resolve4
+  Resolver.prototype.resolve6 = (async function(host: string, ...args: unknown[]) {
+    return host === 'transport.example.test' ? [] : Reflect.apply(resolve6, this, [host, ...args])
+  }) as typeof resolve6
+  syncBuiltinESMExports()
+  try {
+    for (const phase of ['dns', 'body']) for (const mutation of ['none', 'remove', 'relink']) {
+      const a = account(); const cal = await a.caldav(); const user = { ...a.user(), admin: false }
+      let hit!: () => void, open!: () => void
+      const arrived = new Promise<void>((r) => { hit = r }), wait = new Promise<void>((r) => { open = r })
+      transport = { phase, arrived: hit, wait }
+      const body = phase === 'body' ? new ReadableStream({ async pull(out) { hit(); await wait; out.enqueue(new TextEncoder().encode('mock-body')); out.close() } }, { highWaterMark: 0 }) : 'mock-body'
+      const writes = providerLog.filter((l) => l.path === '/transport-write').length
+      const action = protectPreparedCalendar(user, null, caldavLinkVersion(user), { run: async () => {
+        const response = await guardedFetch(user, 'http://transport.example.test/transport-write', { method: 'POST', body })
+        if (!response.ok) throw new Error('Local transport mock refused the write')
+        await response.body?.cancel()
+        return 'changed'
+      } })
+      const pending = settle(action.run())
+      await Promise.race([arrived, new Promise<never>((_, reject) => { setTimeout(() => reject(new Error('Transport barrier not reached')), 5000).unref() })])
+      if (mutation === 'remove') removeCaldav(user, cal)
+      if (mutation === 'relink') await a.caldav()
+      open(); const result = await pending
+      const sent = providerLog.filter((l) => l.path === '/transport-write').length - writes
+      check(`transport/${phase}/${mutation}: zero revoked upstream writes`, mutation === 'none' ? result.value === 'changed' && sent === 1 : result.error !== null && sent === 0)
+      await deleteUser(a.id)
+    }
+  } finally {
+    transport = null; pinnedHttp.createConnection = createConnection; http.request = request; Resolver.prototype.resolve4 = resolve4; Resolver.prototype.resolve6 = resolve6; syncBuiltinESMExports()
   }
   // Competing sessions must not inherit the canceled request's in-flight promise.
   for (const source of ['photos', 'google', 'caldav']) {
