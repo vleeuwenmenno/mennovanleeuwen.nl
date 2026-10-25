@@ -1889,7 +1889,41 @@ textarea.agt-q-input {
   color: var(--bg);
 }
 .agt-model-pill {
-  max-width: 190px;
+  /* Takes the room the bar has: the other pills keep their size, this one shrinks last-resort (see data-level). */
+  flex: 0 1 auto;
+  max-width: none;
+}
+.agt-box-bar > .agt-pill:not(.agt-model-pill) {
+  flex: none;
+}
+.agt-model-short,
+.agt-model-mark {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-model-mark {
+  font-weight: 600;
+}
+.agt-model-pill[data-level='1'] .agt-model-variant {
+  display: none;
+}
+.agt-model-pill[data-level='2'] .agt-model-name,
+.agt-model-pill[data-level='2'] .agt-model-variant,
+.agt-model-pill[data-level='3'] .agt-model-name,
+.agt-model-pill[data-level='3'] .agt-model-variant {
+  display: none;
+}
+.agt-model-pill[data-level='2'] .agt-model-short,
+.agt-model-pill[data-level='3'] .agt-model-mark {
+  display: inline;
+}
+@media (pointer: coarse) {
+  .agt-model-pill {
+    min-height: 32px;
+  }
 }
 .agt-model-name {
   min-width: 0;
@@ -2673,12 +2707,6 @@ textarea.agt-q-input {
 /* Narrow: the pills keep their icons. */
 @container (max-width: 460px) {
   .agt-pill-label {
-    display: none;
-  }
-  .agt-model-pill {
-    max-width: 120px;
-  }
-  .agt-model-variant {
     display: none;
   }
   .agt-effort-short {

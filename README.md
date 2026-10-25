@@ -1642,7 +1642,10 @@ Google, `gpt-oss` and `gpt-*` OpenAI, `qwen*` Alibaba, `llama*` Meta; anything e
 under its raw id. Makers are drawn as letter marks in the text colour, not logos. Stars are kept
 with the account (the synced agents settings' `favoriteModels`), and Ctrl+1…9 picks the first nine
 favourites while the picker or the composer has focus (Alt+1…9 stays the workspaces'). Arrow keys
-and Enter pick from the list, Esc closes it. On a phone the picker is a sheet from the bottom and
+and Enter pick from the list, Esc closes it. The picker opens on ★ Favourites when there are any
+(else All models). The closed pill shows the full name and tag when the composer's bottom row has
+room, and steps down as it narrows: name without tag, "DS V4.1 Flash", the maker's mark alone (the
+full name stays in its tooltip). On a phone the picker is a sheet from the bottom and
 the rail a row of chips that scrolls sideways. Settings → Agents → Models uses the same names, by
 maker; titles and the safety check always run on Ollama.
 
