@@ -1,5 +1,7 @@
 import { api } from '../os/account'
 import { synced } from '../os/synced'
+import { useEffect, useState } from 'react'
+import { parseSkillConfig, type SkillConfig } from './agentSkillRules'
 import { getNote } from './notes'
 import type { ImageProgress } from './imageModels'
 import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
@@ -10,7 +12,7 @@ import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[] }
 /**
  * A title a thread had until `until`, newest first on the thread: the title model changed it when
  * the conversation moved on, or the user renamed it. Shown as "also known as", and found by search.
@@ -47,7 +49,8 @@ export const PERMISSIONS: Permission[] = ['default', 'auto', 'acceptEdits', 'pla
 export type Project = { id: number; name: string; sort: number; createdAt: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 /** A file sent with a message: text files as text, pictures as base64 (for models that can see). */
-export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string }
+/** `ref`: a picture gpt_image made, as the agent can draw from it again (gpt:<id>). */
+export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string; ref?: string }
 export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 /**
  * `checked` (tool results): why it ran without asking, such as a web read Auto's check cleared.
@@ -142,10 +145,18 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+/**
+ * A gpt_image picture being drawn: a typical time for it (ms), when it started (the server's clock;
+ * the window turns it into its own with `elapsed`, how long it had been drawing when the window
+ * heard of it) and how many rough previews there are so far.
+ */
+export type GptDrawing = { expected: number; startedAt: number; elapsed?: number; previews: number }
 
 export type TurnEvent =
-  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number }
+  | { type: 'imageGeneration'; callId: string; messageId: number; index: number; width: number; height: number; gpt?: GptDrawing }
+  /** A gpt_image picture being drawn has a new rough preview */
+  | { type: 'gptPreview'; callId: string; previews: number }
   /** Where an image job is (at most 4 a second) */
   | { type: 'imageProgress'; callId: string; progress: ImageProgress }
   | { type: 'imageGenerationDone'; callId: string }
@@ -169,7 +180,7 @@ export type TurnEvent =
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 export const listThreads = (archived: boolean) => api<Thread[]>(`/api/agents/threads${archived ? '?archived=1' : ''}`)
-export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean; workdir?: Workdir | null; permission?: Permission }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
+export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean; workdir?: Workdir | null; permission?: Permission; skillsOff?: string[] }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
 export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}`)
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
@@ -197,7 +208,7 @@ export const mailReadsLeft = (t: Pick<Thread, 'mailReadsUntil'> | null | undefin
 /** What the terminal printed for a terminal tool call. */
 export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
 /** `todos: null` dismisses the thread's plan (for the agent too). */
-export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
+export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission' | 'skillsOff'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
 
@@ -329,7 +340,7 @@ export function canAlwaysAllow(command: string): boolean {
 }
 
 /** A skill: instructions for a kind of task, in a folder with a SKILL.md (server/skills.ts). */
-export type Skill = { name: string; description: string; source: 'builtin' | 'user' | 'project'; folder: { repo: string; path: string } | null; label: string; userOnly: boolean; enabled: boolean }
+export type Skill = { name: string; description: string; source: 'builtin' | 'user' | 'project'; folder: { repo: string; path: string } | null; label: string; userOnly: boolean; enabled: boolean; /** Its SKILL.md's size in bytes (what it takes always on) */ size: number }
 /** Where to look for skills besides the user's and the built-in ones: a thread's work folder, or a folder. */
 export type SkillsWhere = { thread?: string; folder?: Workdir | null; fresh?: boolean }
 const skillsQuery = (w: SkillsWhere = {}) => {
@@ -346,6 +357,48 @@ export const skillInfo = (name: string, w?: SkillsWhere) => api<Skill & { body: 
 export const installSkills = (input: { source: string; skill?: string; force?: boolean; folder?: Workdir | null }) =>
   api<{ installed: { name: string; files: number; label: string }[]; from: string }>('/api/agents/skills/install', { method: 'POST', json: input })
 export const removeSkill = (name: string, folder?: Workdir | null) => api('/api/agents/skills/remove', { method: 'POST', json: { name, folder } })
+/**
+ * Always-on skills, where they apply, project overrides and rules (src/data/agentSkillRules.ts):
+ * kept with the account on the server, which validates every save. One copy per page, shared by
+ * every window that shows it.
+ */
+let skillConfigValue: SkillConfig | null = null
+let skillConfigLoad: Promise<SkillConfig> | null = null
+const skillConfigListeners = new Set<() => void>()
+const setSkillConfigValue = (c: SkillConfig) => {
+  skillConfigValue = c
+  skillConfigListeners.forEach((f) => f())
+}
+export function loadSkillConfig(fresh = false): Promise<SkillConfig> {
+  if (fresh || !skillConfigLoad)
+    skillConfigLoad = api<unknown>('/api/agents/skill-config').then(
+      (raw) => {
+        // Read as the server does: whatever is not a valid config counts as none.
+        const c = parseSkillConfig(raw).config
+        setSkillConfigValue(c)
+        return c
+      },
+      (e) => {
+        skillConfigLoad = null
+        throw e
+      },
+    )
+  return skillConfigLoad
+}
+/** Saves the whole config; the server answers it as stored (or refuses it with why). */
+export const saveSkillConfig = (c: SkillConfig) => api<unknown>('/api/agents/skill-config', { method: 'PUT', json: c }).then((raw) => parseSkillConfig(raw).config).then((saved) => (setSkillConfigValue(saved), (skillConfigLoad = Promise.resolve(saved)), saved))
+/** The config, loaded on first use (null until it is), kept current in every window of the page. */
+export function useSkillConfig(): SkillConfig | null {
+  const [, bump] = useState(0)
+  useEffect(() => {
+    const on = () => bump((n) => n + 1)
+    skillConfigListeners.add(on)
+    void loadSkillConfig().catch(() => {})
+    return () => void skillConfigListeners.delete(on)
+  }, [])
+  return skillConfigValue
+}
+
 export const setSkillEnabled = (name: string, on: boolean) => setAgentSettings({ skillsOff: on ? agentSettings().skillsOff.filter((n) => n !== name) : [...new Set([...agentSettings().skillsOff, name])] })
 
 /** "12.3k" */

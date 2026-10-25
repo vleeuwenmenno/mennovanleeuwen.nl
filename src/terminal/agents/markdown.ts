@@ -1,6 +1,7 @@
 import { furiganaMode } from '../../data/furigana'
 import { htmlRubyAt } from '../../data/markdown/parse'
 import { isVisualLang, visualBlockText } from '../../data/visual/spec'
+import { emojiReady, hasShortcode, loadEmoji, replaceShortcodes } from '../../data/emoji'
 import { seg, width, wrap, type Line, type Seg } from './text'
 
 // Markdown as terminal lines, the way a CLI agent prints a reply: headings in bold, `code` in
@@ -25,22 +26,31 @@ function furigana(t: string) {
   return out + curly(t.slice(last))
 }
 
+// The agents view is the only place this file is used, so the names start loading with it.
+void loadEmoji()
+
+/** Prose with furigana drawn and :shortcodes: as emoji. The names load on first need (the next redraw has them). */
+function prose(t: string) {
+  if (!emojiReady() && hasShortcode(t)) void loadEmoji()
+  return replaceShortcodes(furigana(t))
+}
+
 /** Inline Markdown: **bold**, *em*, `code`, [text](url), bare URLs, furigana. */
 export function inline(text: string, base?: string): Seg[] {
   const out: Seg[] = []
   const re = /(`+)([\s\S]+?)\1|\*\*([^*]+)\*\*|__([^_]+)__|(?<![\w*])\*([^*\s][^*]*?)\*(?!\w)|(?<![\w_])_([^_\s][^_]*?)_(?!\w)|~~([^~]+)~~|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g
   let last = 0
   for (const m of text.matchAll(re)) {
-    if (m.index! > last) out.push(seg(furigana(text.slice(last, m.index)), base))
+    if (m.index! > last) out.push(seg(prose(text.slice(last, m.index)), base))
     if (m[2] !== undefined) out.push(seg(m[2], 'cyan'))
-    else if (m[3] !== undefined || m[4] !== undefined) out.push(seg(furigana(m[3] ?? m[4]), 'bold'))
-    else if (m[5] !== undefined || m[6] !== undefined) out.push(seg(furigana(m[5] ?? m[6]), base ?? 'yellow'))
-    else if (m[7] !== undefined) out.push(seg(furigana(m[7]), 'muted'))
-    else if (m[8] !== undefined) out.push({ t: furigana(m[8]), link: m[9] })
+    else if (m[3] !== undefined || m[4] !== undefined) out.push(seg(prose(m[3] ?? m[4]), 'bold'))
+    else if (m[5] !== undefined || m[6] !== undefined) out.push(seg(prose(m[5] ?? m[6]), base ?? 'yellow'))
+    else if (m[7] !== undefined) out.push(seg(prose(m[7]), 'muted'))
+    else if (m[8] !== undefined) out.push({ t: prose(m[8]), link: m[9] })
     else if (m[10] !== undefined) out.push({ t: m[10], link: m[10] })
     last = m.index! + m[0].length
   }
-  if (last < text.length) out.push(seg(furigana(text.slice(last)), base))
+  if (last < text.length) out.push(seg(prose(text.slice(last)), base))
   return out
 }
 

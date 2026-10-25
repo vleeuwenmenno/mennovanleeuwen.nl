@@ -29,8 +29,10 @@ export type Skill = {
   /** disable-model-invocation: only the user starts it, with /name */
   userOnly: boolean
   enabled: boolean
+  /** How big its SKILL.md text is, in bytes: what it takes when it is always on */
+  size: number
 }
-type Loaded = Omit<Skill, 'enabled'> & { body: string }
+type Loaded = Omit<Skill, 'enabled' | 'size'> & { body: string }
 
 const NAME = /^[A-Za-z0-9][\w.-]{0,63}$/
 
@@ -190,13 +192,13 @@ async function loadAll(user: User, places: SkillPlaces): Promise<Loaded[]> {
 }
 
 export async function listSkills(user: User, places: SkillPlaces): Promise<Skill[]> {
-  return (await loadAll(user, places)).map(({ body: _b, ...s }) => ({ ...s, enabled: !places.off.includes(s.name) }))
+  return (await loadAll(user, places)).map(({ body, ...s }) => ({ ...s, enabled: !places.off.includes(s.name), size: Buffer.byteLength(body) }))
 }
 
 /** One skill with its instructions, by name (null when there is none). */
 export async function findSkill(user: User, places: SkillPlaces, name: string): Promise<(Skill & { body: string }) | null> {
   const s = (await loadAll(user, places)).find((x) => x.name === name)
-  return s ? { ...s, enabled: !places.off.includes(s.name) } : null
+  return s ? { ...s, enabled: !places.off.includes(s.name), size: Buffer.byteLength(s.body) } : null
 }
 
 /** The files in a skill's folder, relative to it (a few levels deep, at most 200). */
