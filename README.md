@@ -224,8 +224,8 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   `layout.ts`; `direction` down or right, node shapes box, round, diamond and circle, `group` boxes
   nodes together), `grid` (rows × cols of slots, an arrow with `via` on it, the result with counts:
   a Minecraft recipe, cooking or smelting; several in `grids` for a chain; `pattern` and `key` as
-  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards` and `table`.
-  A list of specs in one block draws them one under the other. The whole schema is the
+  Minecraft writes them), `tree`, `timeline`, `chart` (bar, line or pie), `cards`, `table` and
+  `scene` (a free drawing, below). A list of specs in one block draws them one under the other. The whole schema is the
   `VisualSpec` type in [`spec.ts`](src/data/visual/spec.ts).
 - **Forgiving.** Small models write it, so comments, trailing commas, single quotes, unquoted keys
   and missing commas are fine, fields have aliases (`edges`/`links`, `from`/`source`), a missing
@@ -234,20 +234,45 @@ model or a note can show a diagram instead of describing one ([`src/data/visual/
   in which field (`edges[2].to`), with the block as written under it, never a blank. While an
   answer is still streaming in, an unfinished block shows *Drawing…*. `validateVisual` and
   `parseVisual` are exported for the server side too.
+- **Scenes.** `{"type": "scene", "title": "…", "caption": "…", "svg": "<svg viewBox='0 0 400 250'>…</svg>"}`
+  is a drawing the model writes itself as SVG, for what boxes and arrows can't show (a machine
+  setup, a room, a circuit). The SVG is untrusted, so [`svg.ts`](src/data/visual/svg.ts) reads it
+  with its own small XML reader and keeps only an allowlist: the elements `g`, `rect`, `circle`,
+  `ellipse`, `line`, `polyline`, `polygon`, `path`, `text`, `tspan`, `defs`, `linearGradient`,
+  `radialGradient`, `stop`, `marker`, `pattern`, `clipPath`, `use`, `title`, `desc`, `image` and
+  `style`, and only geometry, paint, text, marker, `id`, `class`, `transform` and `style`
+  attributes. Scripts, `foreignObject`, animation, links, nested `<svg>`, event handlers and a
+  DOCTYPE (its entities are never expanded) go with everything in them; `href` may only point at
+  `#id` in the drawing (a `use` not at itself or at another `use`), `url()` only at `#id`, and a
+  `<style>` or `style` keeps only rules of allowed properties, without `@import`, escapes or
+  outside URLs. A new document is then written from that tree (never the model's text), and shown
+  as an `<img>` of a `data:` URL, where no script runs and nothing outside loads even if the
+  sanitizer missed something. Colours `accent`, `fg`, `bright`, `muted`, `bg`, `panel`, `border`
+  and the theme's hues (`red` … `magenta`), bare or as `var(--accent)`, are the current theme's,
+  and the drawing is redrawn when the theme changes; other colours stay as written.
+  `<image href="icon:<slug>">` (or an `icons` list with x, y and size) places an icon library
+  picture, fetched and put inside the drawing as a `data:` PNG; a missing one is a dashed tile
+  with its first letter. Up to 120,000 characters and 3,000 elements; a drawing with nothing safe
+  left shows what was left out. It zooms like a flow, with *SVG* and *PNG* buttons that save it
+  with the theme's background.
 - **Pictures.** Any item can be `"icon:<slug>"` (the account's icon library,
   `/api/agents/icons/<slug>`), an emoji (`"🍞 Bread"`) or `"app:<id>"` (an MvL OS app's icon), with
   `"4x Stick"` for a count. A missing icon falls back to the item's emoji, else its first letter in a
   tinted tile; grids list what each picture is under the slots, since a finger gets no tooltip.
-- **Theme, touch and phones.** Colours come only from the theme's variables (charts use the accent
+- **Theme, touch and phones.** Colours come from the theme's variables (a scene may also name its own; charts use the accent
   hues in a fixed order). A big flow fits the width (down to half size, then scrolls); Ctrl+wheel and
   pinch zoom it, a mouse drags it, and − ⤢ + buttons zoom and fit. On a phone a flow that runs
   sideways runs down instead. Charts have a hover (or tap) tooltip, a legend for two or more series
   and a *Table* view. *Spec* and *Copy* show and copy the JSON.
 - **Elsewhere.** The terminal's `agents` and shared answer links (`/s/<token>`) show a text
-  version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars.
-- **Cost.** The renderer is its own chunk (about 25 KB), loaded the first time a visual block shows;
+  version: `a → b` lines, grids as `[slots] ─ via ─▶ result`, trees with branches, charts as bars,
+  a scene as its title, caption and `(drawing: its labels)`.
+- **Cost.** The renderer is its own chunk (about 30 KB), loaded the first time a visual block shows;
   it draws once, and zooming only sets two styles. `pnpm check:visual` checks good and bad specs,
-  the loose JSON, the text version, the layout and that every example in the Agents prompt is valid.
+  the loose JSON, the text version, the layout, the scene sanitizer against a list of XSS tricks
+  (handlers, `javascript:` and encoded links, `foreignObject`, outside `use`, CSS `url()` and
+  `@import`, entities, CDATA, nested `<svg>`, animation) and that every example in the Agents
+  prompt is valid.
 
 ## Data snapshots
 
