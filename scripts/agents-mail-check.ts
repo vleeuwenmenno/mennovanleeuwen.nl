@@ -213,12 +213,13 @@ try {
   const MSG = `${linked.id}.${lunch.id}`
   const THREAD = `${linked.id}.${lunch.threadId}`
 
-  // 3. Threads from before the Mail group: a bare stored list knew nothing of it, so it is on;
+  // 3. Threads from before the Mail group: a bare stored list knew nothing of it, so it is on (as
+  // are the groups added after it: images, gpt_images, threads; LATER_GROUPS in server/agents.ts);
   // a list stored since that leaves it out keeps it off.
   const old = randomUUID()
   database().prepare("INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, permission) VALUES (?, 1, 'Old', 'quick', ?, 0, ?, ?, ?, 'default')").run(old, MODEL, now, now, JSON.stringify(['web', 'notes', 'memory']))
   const oldThread = (await api('GET', `/api/agents/threads/${old}`)).thread
-  check(`a thread stored before Mail gets it on, its other choices kept (${oldThread.tools.join(', ')})`, oldThread.tools.join() === 'web,notes,mail,memory')
+  check(`a thread stored before Mail gets it on, its other choices kept (${oldThread.tools.join(', ')})`, oldThread.tools.join() === 'web,notes,mail,memory,images,gpt_images,threads')
   const off = await api('PATCH', `/api/agents/threads/${old}`, { tools: ['web', 'notes', 'memory'] })
   check(`switched off by hand, it stays off (${off.tools.join(', ')})`, !off.tools.includes('mail') && !(await api('GET', `/api/agents/threads/${old}`)).thread.tools.includes('mail'))
   const renamed = await api('PATCH', `/api/agents/threads/${old}`, { title: 'Renamed' })
