@@ -516,6 +516,12 @@ async function coldRestartChecks(vaultId: string) {
 
   // Seafile back: a library listing is known again; the Vault is locked after the restart, the rest shows.
   sf.down = false
+  // A chosen folder whose library the list does not name is not named by status either.
+  const [gone] = libs.splice(libs.findIndex((l) => l.id === VAULT), 1)
+  const unknown = await call('/api/photos/status')
+  check(`a library missing from the list: status names no folder of it (got ${unknown.text.slice(0, 200)})`, unknown.status === 200 && !unknown.text.includes(VAULT) && !unknown.text.includes('Vault') && (unknown.json.seafile.sources as { repo: string }[]).some((x) => x.repo === PHOTOS))
+  libs.push(gone)
+  await call('/api/photos/suggest')
   const healthy = await buckets()
   check(`Seafile back: plain libraries on the timeline, the locked Vault not (got ${JSON.stringify(healthy)})`, healthy['2023-07'] === 4)
   const month = (await call('/api/photos/seafile/bucket?tz=0&key=2023-07')).json as unknown[][]

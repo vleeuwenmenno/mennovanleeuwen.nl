@@ -206,17 +206,19 @@ async function sourcesInfo(user: User) {
   const list = await knownLibs(user)
   const open = unlocked(user)
   const counts = db().prepare('SELECT repo, path FROM photos WHERE user_id = ?').all(user.id) as { repo: string; path: string }[]
-  return sourcesOf(user).map((s) => {
+  // A folder whose library the list does not name (gone, revoked, unknown) is not named either.
+  return sourcesOf(user).flatMap((s) => {
     const lib = list.find((l) => l.id === s.repo)
-    return {
+    if (!lib) return []
+    return [{
       repo: s.repo,
       path: s.path,
       library: lib?.name ?? null,
       name: s.path === '/' ? (lib?.name ?? 'Library') : s.path.split('/').pop()!,
       encrypted: !!lib?.encrypted,
       locked: !!lib?.encrypted && !open[s.repo],
-      count: lib ? counts.filter((c) => c.repo === s.repo && under(c.path, s.path)).length : 0,
-    }
+      count: counts.filter((c) => c.repo === s.repo && under(c.path, s.path)).length,
+    }]
   })
 }
 
