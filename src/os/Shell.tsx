@@ -674,7 +674,7 @@ export function Shell() {
   const power = usePower()
   const overlay = useOverlay()
 
-  // Notes and widgets put away from the MvL OS menu come back by themselves when another one is
+  // Notes and widgets put away in Settings → Windows come back by themselves when another one is
   // added: a new note that doesn't show would look like nothing happened.
   const hidden = notesHidden.use()
   const noteCount = wm.windows.filter((w) => NOTE_APPS.has(w.app)).length
