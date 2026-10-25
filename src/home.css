@@ -1065,6 +1065,73 @@
 .agt-ctx-compact {
   margin-top: 4px;
 }
+/* The panel's tabs (Context, Stats) and the thread's stats for nerds: numbers in monospace. */
+.agt-ctx-tabs {
+  flex: none;
+}
+.agt-ctx-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-stats-sum {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 2px 0 6px;
+}
+.agt-stats-sum > div {
+  display: contents;
+}
+.agt-stats-sum dd {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-bright);
+  overflow-wrap: anywhere;
+}
+.agt-stats-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.agt-stats-turns {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.agt-stats-turns > li {
+  border-bottom: 1px solid var(--line);
+}
+.agt-stats-turns summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.agt-stats-turn {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-stats-note {
+  margin-top: 6px;
+}
+.agt-stats-calls {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0 0 0 14px;
+  display: grid;
+  gap: 2px;
+}
 .agt-compact {
   max-width: 760px;
   margin: 4px 0 10px;
@@ -1889,7 +1956,41 @@ textarea.agt-q-input {
   color: var(--bg);
 }
 .agt-model-pill {
-  max-width: 190px;
+  /* Takes the room the bar has: the other pills keep their size, this one shrinks last-resort (see data-level). */
+  flex: 0 1 auto;
+  max-width: none;
+}
+.agt-box-bar > .agt-pill:not(.agt-model-pill) {
+  flex: none;
+}
+.agt-model-short,
+.agt-model-mark {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-model-mark {
+  font-weight: 600;
+}
+.agt-model-pill[data-level='1'] .agt-model-variant {
+  display: none;
+}
+.agt-model-pill[data-level='2'] .agt-model-name,
+.agt-model-pill[data-level='2'] .agt-model-variant,
+.agt-model-pill[data-level='3'] .agt-model-name,
+.agt-model-pill[data-level='3'] .agt-model-variant {
+  display: none;
+}
+.agt-model-pill[data-level='2'] .agt-model-short,
+.agt-model-pill[data-level='3'] .agt-model-mark {
+  display: inline;
+}
+@media (pointer: coarse) {
+  .agt-model-pill {
+    min-height: 32px;
+  }
 }
 .agt-model-name {
   min-width: 0;
@@ -2673,12 +2774,6 @@ textarea.agt-q-input {
 /* Narrow: the pills keep their icons. */
 @container (max-width: 460px) {
   .agt-pill-label {
-    display: none;
-  }
-  .agt-model-pill {
-    max-width: 120px;
-  }
-  .agt-model-variant {
     display: none;
   }
   .agt-effort-short {

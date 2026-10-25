@@ -99,11 +99,21 @@ export function calendarTools(): ToolDef[] {
   ]
 }
 
-/** What the system prompt says about calendars, when the group is on. */
+/**
+ * What the system prompt says about calendars, when the group is on. The time of day is not in it:
+ * a clock there would change the system prompt every minute, and with it the whole request, so the
+ * provider could never reuse its cached prompt. Each of the user's messages carries the time it was
+ * sent instead (sentStamp), which never changes once written.
+ */
 export function calendarLines(user: User, zone: string): string {
   if (!calendarConnected(user)) return `Calendar: no calendar is connected. If the user asks about their calendar, tell them they can connect Google Calendar or a CalDAV account (Fastmail, Nextcloud, iCloud...) in Settings → Integrations → Calendars.`
-  const now = wall(Date.now(), zone)
-  return `Calendar: the calendar tools read and change the user's calendars. It is ${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())} now in ${zone}; work out relative dates ("next Friday", "tomorrow at 3") from today's date, and give times without an offset, in that zone. Before changing or deleting an event, find it with calendar_list_events. Unless the user names a calendar, new events go in their default one.`
+  return `Calendar: the calendar tools read and change the user's calendars. Each of the user's messages ends with the time it was sent in ${zone}, like [Sent Sun 25 Oct 2026 14:05]; the latest one is about now. Work out relative dates ("next Friday", "tomorrow at 3") from it, and give times without an offset, in that zone. Before changing or deleting an event, find it with calendar_list_events. Unless the user names a calendar, new events go in their default one.`
+}
+
+/** "[Sent Sun 25 Oct 2026 14:05]": when a message was sent, in the user's zone (with the calendar tools). */
+export function sentStamp(ms: number, zone: string): string {
+  const t = wall(ms, zone)
+  return `[Sent ${DAYS[t.getUTCDay()]} ${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]} ${t.getUTCFullYear()} ${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}]`
 }
 
 // --- time ---------------------------------------------------------------------------------------

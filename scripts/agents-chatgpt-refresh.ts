@@ -3,7 +3,8 @@
 //   - disconnect while a refresh is held: the result is not stored and not returned;
 //   - disconnect + sign in as another account while it is held: the old result does not replace
 //     the new account's tokens, and a later refresh uses the new account's refresh token;
-//   - the account removed while it is held: nothing is stored.
+//   - the account removed while it is held: nothing is stored;
+//   - a code exchange whose answer cannot be stored leaves the old sign-in and its refresh alone.
 //
 //   node scripts/agents-chatgpt-refresh.ts
 //
@@ -33,6 +34,8 @@ const fake = createServer((req, res) => {
     const answer = (access: string, refresh: string, email: string) =>
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ access_token: access, refresh_token: refresh, id_token: jwt({ email, 'https://api.openai.com/auth': { chatgpt_account_id: `acct-${email}` } }), expires_in: 3600 }))
     grants.push(`${form.get('grant_type')}:${form.get('refresh_token') ?? form.get('code')}`)
+    // A malformed answer: an access token but no refresh token, which cannot be stored.
+    if (form.get('code') === 'code-bad') return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ access_token: 'access-bad', expires_in: 3600 }))
     if (form.get('grant_type') === 'authorization_code') return answer('access-B', 'refresh-B', 'b@example.test')
     // A refresh of account A: answered only when the check lets it go.
     held.push({ form, release: () => answer('access-A2', 'refresh-A2', 'a@example.test') })
@@ -57,9 +60,9 @@ const settled = async (p: Promise<unknown>) => p.then((value) => ({ value, error
 const waitHeld = async (n: number) => {
   for (let i = 0; i < 200 && held.length < n; i++) await new Promise((r) => setTimeout(r, 10))
 }
-const relink = async () => {
+const relink = async (code = 'code-B') => {
   const url = new URL(ops.startSignIn(user, { acceptedRisk: true }).url)
-  await ops.finishSignIn(user, { callback: `?code=code-B&state=${url.searchParams.get('state')}` })
+  await ops.finishSignIn(user, { callback: `?code=${code}&state=${url.searchParams.get('state')}` })
 }
 
 // 1. Disconnect only.
@@ -107,6 +110,18 @@ userGone(1)
 held[0].release()
 r = await refresh
 check('account removed while refreshing: refused and nothing stored', r.value === null && r.error !== null && stored() === null)
+
+// 5. A code exchange that fails validation keeps the old sign-in, and its pending refresh stays valid.
+held.length = 0
+seedA()
+refresh = settled(openaiChatAccess.freshTokens(user, true))
+await waitHeld(1)
+const bad = await settled(relink('code-bad'))
+check('malformed code exchange is refused', bad.error !== null)
+check('malformed code exchange: the previous credentials are kept', stored()?.email === 'a@example.test' && stored()?.refresh === 'refresh-A')
+held[0].release()
+r = await refresh
+check('malformed code exchange: the pending refresh of the kept account still completes', r.error === null && stored()?.access === 'access-A2')
 
 fake.close()
 rmSync(DATA, { recursive: true, force: true })

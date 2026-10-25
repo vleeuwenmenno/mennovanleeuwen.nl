@@ -243,8 +243,10 @@ async function finishSignIn(user: User, body: { callback?: unknown }) {
   const version = versionOf(user.id)
   const answer = await tokenRequest({ grant_type: 'authorization_code', client_id: CODEX_CLIENT_ID, code, redirect_uri: CODEX_REDIRECT, code_verifier: flow.verifier })
   if (versionOf(user.id) !== version) throw STALE() // signed out or removed while OpenAI answered
-  invalidate(user.id) // a refresh of the previous account's tokens must not land on this one
+  // storeTokens validates the answer and writes it without awaiting anything; only then is the old
+  // credential's pending work cancelled, so a malformed answer leaves the previous sign-in intact.
   const t = storeTokens(user, answer)
+  invalidate(user.id) // a refresh of the previous account's tokens must not land on this one
   const s = settings(user)
   if (s.provider === 'off') write(user, SETTINGS, { ...s, provider: 'chatgpt' })
   return { email: t.email, plan: t.plan }

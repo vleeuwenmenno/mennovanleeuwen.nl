@@ -575,6 +575,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   queue. A rule across the screen marks the spot, `/summary` shows what was kept, and `/context`
   and `/status` say when it was compacted and at what point it does so by itself. See
   *Compaction* under Agents below.
+- `/stats` prints the thread's stats for nerds (model and tool time, time to the first token and
+  tokens per second, cache hits, tokens, calls) and its last ten turns; `/stats all` every turn
+  with each model call and tool call. See *Thread stats* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -1630,7 +1633,44 @@ follows the width of its own pane, not the screen: wide enough for the title to 
 row, otherwise (a phone, or a narrow window with the sidebar open) the back button, title, ring and
 ⋯ are the first row and the chips (folder, Images, mail, permission) the second, wrapping further
 for a long folder name or every chip on. `pnpm check:agents-context-bar` covers this in a browser
-(scratch Vite server, mocked API).
+(scratch Vite server, mocked API), the Stats tab below included.
+
+**Thread stats** ([`server/agentStats.ts`](server/agentStats.ts), [`src/data/agentStats.ts`](src/data/agentStats.ts)):
+the context panel's **Stats** tab, also *Thread stats* in the thread's ⋯ menu (and `/stats` in the
+`agents` command), is for nerds who want to know how a thread performs. At the top, for the whole
+thread: LLM time and tool time (with the part spent waiting for you to allow a change or answer a
+form), the average time to the first token and tokens per second, the cache hit (cached input over
+input, only over calls whose provider reports it), input, output and reasoning tokens, and the number
+of model calls and tool calls. Below, each turn opens to its model calls (time, time to the first
+token, Ollama's prompt time, tokens in with the cached share, tokens out with reasoning, speed) and
+tool calls. The server measures each model call itself, from sending the request to the first text,
+thinking or tool call it streams back, and keeps it with the reply it wrote (column `stats` of
+`agent_messages`; a compaction's call with the compaction, a tool call's wall time with its result),
+so it survives a reload and a restart; messages from before then count as calls and show "—". The
+counts are the provider's: Ollama's last chunk gives `prompt_eval_count`, `eval_count` and its own
+durations (`eval_duration` is the writing time, `prompt_eval_duration` and `load_duration` show
+too), but no cache figure, so the cache hit says *not reported by Ollama* (whether Ollama Cloud caches
+prompts is not known); OpenAI's Responses usage gives `input_tokens` with
+`input_tokens_details.cached_tokens` and `output_tokens` with `output_tokens_details.reasoning_tokens`.
+A wrap-up round that adds nothing is not saved, and its call is not counted either.
+
+**Prompt caching.** Providers reuse the work on a prompt prefix they saw before, up to the first
+byte that differs, so a thread's requests keep their start the same between rounds and turns: the
+system prompt has what is the same in every thread first (AGENTS.md, the mode, the guides), then
+what changes now and then (today's date, the always-on skills, memory), and what can change within a
+turn last (the todo list); tool definitions keep their order; skills are listed by name; and there
+is no clock in it. The calendar's clock is in the messages instead: with the calendar tools on, each
+of your messages ends with when it was sent (`[Sent Sun 25 Oct 2026 14:05]`, in your zone), which
+never changes once written. ChatGPT and OpenAI calls send a `prompt_cache_key` (and Codex's
+`session_id`) that is the thread's own. What still changes the prefix: a todo list update, a new
+memory or a change of permission mode mid-turn (they are in the system prompt), the date at
+midnight, the round-budget and todo reminders on the rounds that carry them, the last round's
+missing tools, and at a new message the previous turn's thinking (Ollama) and its tool results over
+1,500 characters, which go in shortened from then on.
+
+```sh
+pnpm check:agents-stats   # Against fake Ollama and Codex: per-call counts, durations, cache and reasoning tokens, tool timing, a restart, old messages, and a byte-identical request prefix between rounds and turns
+```
 Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
@@ -1688,7 +1728,7 @@ pnpm check:agents-threads   # History search, ownership, attachment reads, bound
 ```
 
 The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
-`check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail` and `check:agents-threads`.
+`check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
 ([`src/apps/AgentsModelPicker.tsx`](src/apps/AgentsModelPicker.tsx)): a search box (*Search models…*,
@@ -1704,7 +1744,10 @@ Google, `gpt-oss` and `gpt-*` OpenAI, `qwen*` Alibaba, `llama*` Meta; anything e
 under its raw id. Makers are drawn as letter marks in the text colour, not logos. Stars are kept
 with the account (the synced agents settings' `favoriteModels`), and Ctrl+1…9 picks the first nine
 favourites while the picker or the composer has focus (Alt+1…9 stays the workspaces'). Arrow keys
-and Enter pick from the list, Esc closes it. On a phone the picker is a sheet from the bottom and
+and Enter pick from the list, Esc closes it. The picker opens on ★ Favourites when there are any
+(else All models). The closed pill shows the full name and tag when the composer's bottom row has
+room, and steps down as it narrows: name without tag, "DS V4.1 Flash", the maker's mark alone (the
+full name stays in its tooltip). On a phone the picker is a sheet from the bottom and
 the rail a row of chips that scrolls sideways. Settings → Agents → Models uses the same names, by
 maker; titles and the safety check always run on Ollama.
 
@@ -2825,7 +2868,8 @@ Changes always wait for *Allow*, in every permission mode (plan mode doesn't off
 card says what happens: the calendar, the event, the time and what changes. A new event can repeat
 (an RRULE); for one occurrence of a repeating event a change or a delete is that occurrence's alone
 unless the agent asks for the whole series. The window sends its time zone with each message, so the
-agent knows today's date and the time where you are, and times go both ways in that zone. Google
+agent knows today's date and, from the time each of your messages was sent (written at its end, see
+*Prompt caching* above), the time where you are; times go both ways in that zone. Google
 connections from before editing existed are read-only: the agent says to connect Google again. The
 group is only offered with a calendar connected.
 

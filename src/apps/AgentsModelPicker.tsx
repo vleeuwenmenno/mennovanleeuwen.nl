@@ -96,7 +96,8 @@ export function ModelPicker({ models, value, usual, onPick, onClose, status, anc
   const favRows = useMemo(() => favs.flatMap((f) => rows.filter((r) => r.info.name === f)), [favs, rows])
   const makers = useMemo(() => MAKERS.filter((m) => rows.some((r) => r.n.maker === m.id)), [rows])
   const current = rows.find((r) => r.info.name === value)
-  const [rail, setRail] = useState<MakerId | 'favourites' | 'all'>('all')
+  // Opens on ★ Favourites when there are any, else on all models.
+  const [rail, setRail] = useState<MakerId | 'favourites' | 'all'>(() => (favs.some((f) => models.some((m) => m.name === f)) ? 'favourites' : 'all'))
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const box = useRef<HTMLDivElement>(null)
@@ -138,7 +139,7 @@ export function ModelPicker({ models, value, usual, onPick, onClose, status, anc
   const count = shown.length + (withUsual ? 1 : 0)
 
   useEffect(() => setActive(0), [query, rail])
-  // Opened on the current model: its maker's rail, scrolled to it.
+  // Opened on the current model: highlighted in the view it opened on (Favourites, or all models).
   useLayoutEffect(() => {
     const at = withUsual && !value ? 0 : shown.findIndex((r) => r.info.name === value) + (withUsual ? 1 : 0)
     if (at >= 0) setActive(at)
