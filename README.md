@@ -1142,7 +1142,7 @@ Without the OAuth settings, sign-in is simply off and everything else works as b
 
 **Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
-refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). It
+refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). Each link has a generation that moves on connect, disconnect and account removal: a refresh or consent still waiting on Google when that happens, or when the session that started the consent is signed out, stores nothing and returns no token, and a stored token is only replaced where its refresh token is still the one the refresh began with. It
 needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
 application*) with the Calendar API enabled, the scopes `calendar.readonly` and `calendar.events`
 (plus `openid` and `email`), and the redirect URI `https://<your site>/api/google/callback` (and

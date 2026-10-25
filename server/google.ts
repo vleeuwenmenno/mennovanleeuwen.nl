@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { currentUser, sessionKey, type User } from './auth.ts'
+import { currentUser, sessionBinding, sessionKey, type User } from './auth.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { cookies, HttpError, publicOrigin, redirect, setCookie } from './http.ts'
@@ -131,6 +131,7 @@ export async function finishGoogle(req: IncomingMessage, res: ServerResponse, ur
   if (!googleEnabled()) return fail('off')
   if (url.searchParams.get('error')) return fail('denied')
   if (!code || !state || !live || !openState(cookies(req)[STATE_COOKIE], state, user, sessionKey(req))) return fail('error')
+  const generation = generationOf(user.id)
   let tokens
   try {
     tokens = await tokenRequest({ code, grant_type: 'authorization_code', redirect_uri: callbackUrl(req) })
@@ -138,6 +139,10 @@ export async function finishGoogle(req: IncomingMessage, res: ServerResponse, ur
     return fail('error')
   }
   if (!tokens.refresh_token) return fail('error')
+  // Google took a while to answer: the session that started this must still be this account's live one
+  // (not signed out, expired or banned) and the account's Google link must not have changed meanwhile.
+  // Otherwise nothing is stored.
+  if (sessionBinding(req)?.userId !== user.id || generationOf(user.id) !== generation) return fail('signin')
   // The ID token came straight from Google over TLS in this exchange; only its email is used.
   let email = 'Google account'
   try {
@@ -151,37 +156,67 @@ export async function finishGoogle(req: IncomingMessage, res: ServerResponse, ur
        ON CONFLICT (user_id) DO UPDATE SET email = excluded.email, refresh_token = excluded.refresh_token, access_token = excluded.access_token, expires_at = excluded.expires_at, scopes = excluded.scopes`,
     )
     .run(user.id, email, encrypt(tokens.refresh_token), encrypt(tokens.access_token!), Date.now() + (tokens.expires_in ?? 3600) * 1000, tokens.scope ?? '', Date.now())
+  // A new link: refreshes of the previous one that are still waiting on Google are dropped.
+  bump(user.id)
   clearGoogleCache(user)
   redirect(res, '/?google=ok', { 'Set-Cookie': clear })
 }
 
 export async function disconnectGoogle(user: User) {
+  bump(user.id)
   const row = database().prepare('SELECT refresh_token FROM google WHERE user_id = ?').get(user.id) as { refresh_token: string } | undefined
   database().prepare('DELETE FROM google WHERE user_id = ?').run(user.id)
   if (row)
     await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(decrypt(row.refresh_token))}`, { method: 'POST', signal: AbortSignal.timeout(8000) }).catch(() => {})
 }
 
+/**
+ * The generation of an account's Google link. It moves on every new link, disconnect and account
+ * removal, so work that began under an older link (a refresh waiting on Google, a consent exchange)
+ * can neither be stored nor handed to a caller. The row is also only updated where its refresh token
+ * is still the one the refresh started from, so even a missed bump cannot let an old result land on
+ * a newer link.
+ */
+const generations = new Map<number, number>()
+const generationOf = (id: number) => generations.get(id) ?? 0
+function bump(id: number) {
+  generations.set(id, generationOf(id) + 1)
+  refreshing.delete(id)
+}
+
 /** A valid access token, refreshed when it is about to expire. */
-const refreshing = new Map<number, Promise<string>>()
+const refreshing = new Map<number, { generation: number; job: Promise<string> }>()
 async function accessToken(user: User): Promise<string> {
   const row = database().prepare('SELECT email, refresh_token, access_token, expires_at FROM google WHERE user_id = ?').get(user.id) as GoogleRow | undefined
   if (!row) throw new HttpError(409, 'Google Calendar is not connected')
   if (row.access_token && row.expires_at > Date.now() + 60_000) return decrypt(row.access_token)
-  // One refresh at a time per user, however many requests ask at once.
+  // One refresh at a time per link of a user, however many requests ask at once.
+  const generation = generationOf(user.id)
   const pending = refreshing.get(user.id)
-  if (pending) return pending
-  const p = tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(row.refresh_token) })
+  if (pending && pending.generation === generation) return pending.job
+  const stale = () => new HttpError(409, 'Google Calendar was reconnected or disconnected meanwhile: try again')
+  const job: Promise<string> = tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(row.refresh_token) })
     .then((t) => {
-      database().prepare('UPDATE google SET access_token = ?, expires_at = ? WHERE user_id = ?').run(encrypt(t.access_token!), Date.now() + (t.expires_in ?? 3600) * 1000, user.id)
+      if (generationOf(user.id) !== generation) throw stale()
+      const done = database()
+        .prepare('UPDATE google SET access_token = ?, expires_at = ? WHERE user_id = ? AND refresh_token = ?')
+        .run(encrypt(t.access_token!), Date.now() + (t.expires_in ?? 3600) * 1000, user.id, row.refresh_token)
+      if (!Number(done.changes)) throw stale()
       return t.access_token!
     })
-    .finally(() => refreshing.delete(user.id))
-  refreshing.set(user.id, p)
-  return p
+    .catch((e: Error) => {
+      if (generationOf(user.id) !== generation) throw stale()
+      throw e
+    })
+    .finally(() => {
+      if (refreshing.get(user.id)?.job === job) refreshing.delete(user.id)
+    })
+  refreshing.set(user.id, { generation, job })
+  return job
 }
 
 async function calendarApi<T>(user: User, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  const generation = generationOf(user.id)
   const token = await accessToken(user)
   const res = await fetch(`${CALENDAR_API}${path}`, {
     method: init.method ?? 'GET',
@@ -190,6 +225,11 @@ async function calendarApi<T>(user: User, path: string, init: { method?: string;
     signal: AbortSignal.timeout(10_000),
   }).catch(() => null)
   if (!res) throw new HttpError(502, 'Google Calendar did not answer')
+  // Asked with an earlier link's token: its answer (another Google account's calendar) is dropped.
+  if (generationOf(user.id) !== generation) {
+    await res.body?.cancel().catch(() => {})
+    throw new HttpError(409, 'Google Calendar was reconnected or disconnected meanwhile: try again')
+  }
   if (res.status === 401) throw new HttpError(409, 'Google access was revoked; connect again')
   if (res.status === 403 && init.method && init.method !== 'GET') {
     const reason = ((await res.json().catch(() => null)) as { error?: { errors?: { reason?: string }[] } } | null)?.error?.errors?.[0]?.reason
@@ -240,7 +280,7 @@ export const clearGoogleCache = (user: User) => {
 }
 onUserGone((id) => {
   clearGoogleCache({ id } as User)
-  refreshing.delete(id)
+  bump(id)
 })
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
@@ -584,3 +624,6 @@ export async function importGoogleEvent(
   clearGoogleCache(user)
   return made.id
 }
+
+/** For the refresh-race check (scripts/google-refresh-check.ts) only. */
+export const googleForTest = { accessToken }
