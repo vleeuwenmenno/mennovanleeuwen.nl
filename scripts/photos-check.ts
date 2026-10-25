@@ -11,7 +11,7 @@
 //     item, a WebP's EXIF chunk, a MOV's moov box at the end),
 //   - suggestions, choosing folders and the walk: what is indexed, months (in the viewer's time
 //     zone for file dates), only ranged reads of at most 128 KB, hidden folders left out,
-//   - thumbnails through the server with ETag and Cache-Control (304 without asking Seafile again),
+//   - thumbnails through the server with ETag and Cache-Control (304 without asking Seafile again; Immich's and encrypted libraries' never kept, locked ones 423),
 //     and the camera's own preview for an encrypted library,
 //   - walking again: nothing read when nothing changed, an unchanged folder not even listed; new,
 //     changed and deleted files (and a deleted folder) found; favourites kept,
@@ -443,6 +443,16 @@ async function seafileChecks() {
   check(`unlocked: the Vault's photo is on the timeline (got ${JSON.stringify(await buckets())})`, (await buckets())['2023-07'] === 5)
   check('locking the Vault', (await call('/api/seafile/lock', { method: 'POST', body: { repo: VAULT } })).status === 200)
   check(`locked: the Vault's photo is hidden again (got ${JSON.stringify(await buckets())})`, (await buckets())['2023-07'] === 4)
+  // Locked: the stored preview, the ETag's 304 and the details are all refused, like the library's own routes.
+  {
+    const fileId = (database().prepare('SELECT file_id FROM photos WHERE id = ?').get(Number(vaultId)) as { file_id: string }).file_id
+    const asks = thumbsAsked()
+    const lt = await call(`/api/photos/seafile/thumb?id=${vaultId}&size=small&v=1`)
+    const lm = await call(`/api/photos/seafile/thumb?id=${vaultId}&size=small&v=1`, { headers: { 'If-None-Match': `"sf-${fileId}-small"` } })
+    const li = await call(`/api/photos/seafile/info?id=${vaultId}`)
+    check(`locked Vault: thumbnail, thumbnail with a matching If-None-Match and info all 423 (got ${lt.status}, ${lm.status}, ${li.status})`, lt.status === 423 && lm.status === 423 && li.status === 423)
+    check('locked Vault: no image bytes, no ETag, no filename in any answer', [lt, lm, li].every((r) => !r.headers.get('etag') && !(r.headers.get('content-type') ?? '').startsWith('image/') && r.bytes[0] !== 0xff && !/vault\.jpg/.test(r.text)) && thumbsAsked() === asks)
+  }
   const st = (await call('/api/photos/status')).json
   check(`status: the Vault says it is locked (got ${JSON.stringify(st.seafile.sources.map((s: { name: string; locked: boolean }) => [s.name, s.locked]))})`, st.seafile.sources.some((s: { repo: string; locked: boolean }) => s.repo === VAULT && s.locked))
 
@@ -558,10 +568,16 @@ async function immichChecks() {
 
     const asked = im.log.length
     const t1 = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`)
-    check(`Immich thumbnail: 200 image/png with ETag (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png' && !!t1.headers.get('etag'))
+    check(`Immich thumbnail: 200 image/png with ETag (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png')
+    check(`Immich thumbnail: never kept by the browser, no ETag (got ${t1.headers.get('cache-control')} ${t1.headers.get('etag')})`, /no-store/.test(t1.headers.get('cache-control') ?? '') && !t1.headers.get('etag'))
     check(`Immich thumbnail: size=thumbnail asked, with the key (got ${im.log.at(-1)?.path})`, im.log.length === asked + 1 && im.log.at(-1)!.path.includes('size=thumbnail') && im.log.at(-1)!.key === KEY)
-    const t2 = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`, { headers: { 'If-None-Match': t1.headers.get('etag')! } })
-    check(`Immich thumbnail again: 304, Immich not asked (got ${t2.status})`, t2.status === 304 && im.log.length === asked + 1)
+    // The old ETag, as a browser may still hold it: never a 304, for this account or another one.
+    const oldTag = `"im-${aid(1)}-small"`
+    const t2 = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`, { headers: { 'If-None-Match': oldTag } })
+    check(`Immich thumbnail again with a matching If-None-Match: 200 from Immich, never 304 (got ${t2.status}, ${im.log.length - asked} asks)`, t2.status === 200 && im.log.length === asked + 2 && t2.bytes.length > 0)
+    const askedB = im.log.length
+    const tB = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`, { headers: { 'If-None-Match': oldTag }, as: 2 })
+    check(`Immich thumbnail for an account without Immich, matching If-None-Match: 409, no 304, no bytes (got ${tB.status}, ${tB.bytes.length} bytes, ${im.log.length - askedB} asks)`, tB.status === 409 && tB.bytes.length === JSON.stringify(tB.json).length && im.log.length === askedB)
     const large = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=large`)
     check(`Immich large: the preview size (got ${large.status}, ${im.log.at(-1)?.path})`, large.status === 200 && im.log.at(-1)!.path.includes('size=preview'))
 

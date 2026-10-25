@@ -2810,7 +2810,11 @@ the camera's clock; a file's date (no EXIF) and a video's creation time are show
 Encrypted libraries are walked only while unlocked in Files, and their photos only show then;
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
-ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
+ETag that the browser must revalidate after the current account and library-access checks (an
+encrypted library's, and Immich's, are instead sent `no-store` with no ETag). A locked library
+answers 423 for its thumbnails and details before anything else, so locking, or switching account
+in the same browser, never shows cached photos;
+the full photo comes straight from Seafile's file server with a
 short-lived link, as in Files. Videos Seafile made no thumbnail for show a frame the browser takes
 from them, as in Files. Linking another Seafile account starts the index over.
 

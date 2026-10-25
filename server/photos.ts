@@ -9,7 +9,7 @@ import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
-import { fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
+import { fileLink, guard, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
 // Immich library, or both (the app switches between them; they are not merged).
@@ -51,7 +51,8 @@ type Opts = { album: string | null; favourites: boolean; tz: number }
 type Bucket = { key: string; month: string; count: number }
 type Album = { id: string; name: string; count: number; cover: string | null; detail: string | null }
 type Size = 'small' | 'medium' | 'large'
-type Thumb = { status: 200 | 304; type: string; body: Buffer | null; etag: string }
+/** `etag` is null where the browser must not keep or revalidate the bytes (Immich's, an encrypted library's). */
+type Thumb = { status: 200 | 304; type: string; body: Buffer | null; etag: string | null }
 
 /** What the info panel shows, whichever source the photo is in. */
 export type Info = {
@@ -535,6 +536,17 @@ const rowOf = (user: User, id: string) => {
   return row
 }
 
+/**
+ * A photo's row, once its library is open to this account right now: an encrypted library that is
+ * locked answers 423 before any stored preview, ETag or detail leaves. Says if the library is encrypted.
+ */
+async function openRow(user: User, id: string) {
+  const row = rowOf(user, id)
+  await guard(user, row.repo)
+  const lib = (await libs(user).catch(() => [] as Library[])).find((l) => l.id === row.repo)
+  return { row, encrypted: !!lib?.encrypted }
+}
+
 const SIZES: Record<Size, number> = { small: 256, medium: 512, large: 1024 }
 
 const seafileSource: Source = {
@@ -561,15 +573,17 @@ const seafileSource: Source = {
     return rows.map((r) => [String(r.id), r.wall, (r.kind === 'video' ? VIDEO : 0) | (r.favourite ? FAVOURITE : 0), ratioOf(r.width, r.height, r.orientation), null, r.file_id.slice(0, 10), `${r.repo}${r.path}`])
   },
   async thumb(user, id, size, etag) {
-    const row = rowOf(user, id)
-    const tag = `"sf-${row.file_id}-${size}"`
-    if (etag === tag) return { status: 304, type: '', body: null, etag: tag }
+    // The lock is checked first: no stored bytes and no 304 for a library that is locked now.
+    const { row, encrypted } = await openRow(user, id)
+    // An encrypted library's thumbnails are never kept by the browser, so locking takes effect at once.
+    const tag = encrypted ? null : `"sf-${row.file_id}-${size}"`
+    if (tag && etag === tag) return { status: 304, type: '', body: null, etag: tag }
     if (row.thumb) return { status: 200, type: 'image/jpeg', body: Buffer.from(row.thumb), etag: tag }
     const t = await thumbnail(user, row.repo, row.path, SIZES[size])
     return { status: 200, type: t.type, body: t.body, etag: tag }
   },
   async info(user, id) {
-    const row = rowOf(user, id)
+    const { row } = await openRow(user, id)
     const lib = (await libs(user).catch(() => [] as Library[])).find((l) => l.id === row.repo)
     const turned = (row.orientation ?? 1) >= 5
     return {
@@ -817,13 +831,12 @@ const immichSource: Source = {
     return items.sort((x, y) => y[1] - x[1])
   },
   async thumb(user, id, size, etag) {
-    const tag = `"im-${uuid(id)}-${size}"`
-    if (etag === tag) return { status: 304, type: '', body: null, etag: tag }
+    // No ETag and no 304: the answer depends on whose Immich key is asked, so every request goes upstream.
     const res = await immichFile(user, `/assets/${id}/thumbnail?size=${size === 'small' ? 'thumbnail' : 'preview'}`)
     const type = res.headers.get('content-type') ?? ''
     const body = Buffer.from(await res.arrayBuffer())
     if (!body.length) throw new HttpError(404, 'No thumbnail')
-    return { status: 200, type, body, etag: tag }
+    return { status: 200, type, body, etag: null }
   },
   async info(user, id) {
     const a = await immich<ImmichAsset>(user, `/assets/${uuid(id)}`)
@@ -1123,8 +1136,9 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   if (op === 'thumb' && read) {
     const size: Size = q('size') === 'large' ? 'large' : q('size') === 'medium' ? 'medium' : 'small'
     const t = await source.thumb(user, id, size, typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'] : null)
-    // The browser may keep it, but must ask again each time: the answer comes after the session check, so another account never gets it from the cache.
-    const cache = { 'Cache-Control': 'private, no-cache', ETag: t.etag }
+    // Revalidate ordinary Seafile thumbnails after the account and current library access checks.
+    // Immich and encrypted-library thumbnails have no validator and are never stored.
+    const cache: Record<string, string> = t.etag ? { 'Cache-Control': 'private, no-cache', ETag: t.etag } : { 'Cache-Control': 'private, no-store' }
     if (t.status === 304) return res.writeHead(304, { ...cache, ...SECURITY }).end(), true
     if (!IMAGE_TYPES.test(t.type)) throw new HttpError(404, 'No thumbnail')
     res.writeHead(200, { 'Content-Type': t.type, 'Content-Length': String(t.body!.length), ...cache, ...SECURITY, ...UNTRUSTED }).end(method === 'HEAD' ? undefined : t.body)
