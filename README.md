@@ -3286,6 +3286,13 @@ migration preference, not the original screen size. A missing sticky note stays 
 while its contents sync; arriving contents reveal it again. Only a user close or a known trash
 or purge removes its widget entry. Visitors keep their widgets in this browser;
 ones placed before signing in join the account's.
+Widgets stack with the windows: adding one or clicking it brings it in front, clicking a window
+brings that in front of it. That order survives a reload: the window layout keeps a mark for each
+widget (only its id) among the windows, so the stacking follows the account like the windows do.
+A widget that shows without a mark (one put there on a phone or by an older release, or arriving
+from the set before the layout) goes behind the windows instead of jumping in front; showing it
+saves nothing. `PORT=5294 pnpm check:widget-stacking` checks this signed out and signed in, in
+muted Chromium with a scratch account and data; it starts and stops its own server.
 
 ## Touch screens
 
