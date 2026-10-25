@@ -575,6 +575,23 @@ async function revocationChecks() {
   await Promise.all(Array.from({ length: 30 }, () => call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { headers: { 'If-None-Match': tag } })))
   check(`30 thumbnails at once: fewer library listings than thumbnails (got ${listings() - l0})`, listings() - l0 >= 1 && listings() - l0 < 30)
 
+  // A finished walk that left the locked Vault out: its job names the Vault, which is fine while the account has it.
+  await call('/api/photos/scan', { method: 'POST' })
+  const warmJob = await waitScan('walk before the revocations')
+  const jobText = () => call('/api/photos/status').then((r) => JSON.stringify(r.json.seafile?.job ?? null))
+  check(`warm job: done, the locked Vault listed as skipped (got ${JSON.stringify(warmJob.skipped)})`, warmJob.state === 'done' && warmJob.skipped.length === 1 && warmJob.skipped[0].repo === VAULT && warmJob.skipped[0].library === 'Vault')
+
+  // Only the Vault revoked: the walk mixed its library in, so no part of the job is shown, and none of the Vault.
+  sf.hidden.add(VAULT)
+  const vaultGone = await call('/api/photos/status')
+  const vaultGoneScan = await call('/api/photos/scan', { method: 'POST' })
+  check(`revoked Vault: status has no job and no trace of the library (got ${vaultGone.text.slice(0, 160)})`, vaultGone.status === 200 && vaultGone.json.seafile.job === null && !vaultGone.text.includes(VAULT) && !vaultGone.text.includes('Vault'))
+  check('revoked Vault: starting a walk answers no more than status does', vaultGoneScan.status === 200 && !vaultGoneScan.text.includes(VAULT) && !vaultGoneScan.text.includes('Vault'))
+  sf.hidden.delete(VAULT)
+  await call('/api/photos/scan', { method: 'POST' })
+  await waitScan('walk with the Vault back')
+  check('restored Vault: the job is shown again, with the Vault as skipped', (await jobText()).includes(VAULT))
+
   // Revoked: only the listing changes.
   sf.hidden.add(PHOTOS)
   const files0 = files().length
@@ -610,6 +627,9 @@ async function revocationChecks() {
   const favs = await call('/api/photos/seafile/buckets?tz=0&fav=1')
   check(`revoked sharing: status, timeline, albums and favourites omit it at once (got ${status.status}, ${months.status}, ${month.status}, ${albums.status}, ${album.status}, ${favs.status})`, [status, months, month, albums, album, favs].every((r) => r.status === 200 && !r.text.includes(PHOTOS) && !/"Photos"|canon\.jpg/.test(r.text)) && (status.json.seafile.sources as { repo: string }[]).every((x) => x.repo !== PHOTOS) && JSON.stringify(months.json) === '[]' && JSON.stringify(month.json) === '[]' && JSON.stringify(album.json) === '[]' && JSON.stringify(favs.json) === '[]' && (albums.json as { id: string }[]).every((a) => !a.id.startsWith(PHOTOS)))
 
+  const revokedJob = await call('/api/photos/status')
+  check(`revoked sharing: status shows no job, nothing of the library, its counts or state (got ${JSON.stringify(revokedJob.json.seafile.job)})`, revokedJob.json.seafile.job === null && !revokedJob.text.includes(PHOTOS) && !revokedJob.text.includes('"Photos"') && !/Trips|canon\.jpg/.test(revokedJob.text))
+
   // Access back: all of it recovers, the thumbnail's validator included.
   sf.hidden.delete(PHOTOS)
   const back = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`)
@@ -636,10 +656,12 @@ async function revocationChecks() {
   const down = await call('/api/photos/status')
   check(`listing down: every route refuses with 502 and no stale authorization (got ${Object.entries(outage).map(([k, r]) => `${k} ${r.status}`).join(', ')})`, Object.values(outage).every((r) => r.status === 502))
   check('listing down: no name, path, id, GPS, ETag, link or image bytes in any answer', Object.values(outage).every((r) => !leaks(r, PHOTOS, `"${canonId}"`) && !r.text.includes('2023-07')))
+  check(`listing down: status shows no job at all (got ${JSON.stringify(down.json.seafile.job)})`, down.json.seafile.job === null && !down.text.includes(VAULT) && !down.text.includes('Vault'))
   check(`listing down: status names no folder and says so (got ${down.text.slice(0, 120)})`, down.status === 200 && down.json.seafile.unavailable === true && down.json.seafile.sources.length === 0)
   check('listing down: the favourite and the files are untouched', (database().prepare('SELECT favourite FROM photos WHERE id = ?').get(Number(canonId)) as { favourite: number }).favourite === favBefore && libs[0].files.has('/canon.jpg'))
   sf.down = false
   check('listing back: details answer again', (await call(`/api/photos/seafile/info?id=${canonId}`)).status === 200)
+  check('listing back: status shows the finished job again', (await jobText()) !== 'null')
 }
 
 // --- Immich -----------------------------------------------------------------------------------------------

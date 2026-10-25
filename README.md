@@ -2845,7 +2845,11 @@ Seafile is changed. A burst of requests shares listings (at most one runs and on
 and a request is never answered with one that started before it arrived). When Seafile cannot be asked
 (it is down), nothing is shown on the strength of an earlier list: the months, a month, albums, photos
 and ZIPs answer 502 without a name or id, and the folder list is empty and marked unavailable, rather
-than guess. The index itself only describes photos; it is never what says who may see them.
+than guess. The last walk's status (the job in the status answer and in the answer to starting a walk) is
+checked against the same fresh list: a walk that touched a library the list does not name (revoked, deleted)
+mixes its counts, state and messages into the rest, so no part of it is shown (`job` is null) until the
+access is back, and the same goes while Seafile cannot be asked. Failures of the walk as a whole carry no
+raw error text. The index itself only describes photos; it is never what says who may see them.
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag that the browser must revalidate after the current account and library-access checks (an

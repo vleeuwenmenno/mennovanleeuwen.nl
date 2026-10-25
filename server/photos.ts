@@ -316,7 +316,15 @@ export type Job = {
   capped: boolean
 }
 
-const jobs = new Map<number, Job>()
+/** What a walk keeps for itself: the job as shown, plus which library each part of it came from. */
+type Walk = Omit<Job, 'errors'> & {
+  /** Every library the walk touched: its counts mix them all */
+  repos: Set<string>
+  /** Messages with the library they came from (null: none, such as a failure of the walk as a whole) */
+  errors: { repo: string | null; text: string }[]
+}
+
+const jobs = new Map<number, Walk>()
 const cancels = new Map<number, AbortController>()
 const waiting: (() => void)[] = []
 let running = 0
@@ -328,10 +336,10 @@ onUserGone((id) => {
 })
 
 /** Starts a walk of the user's chosen folders, unless one is running already. */
-export function startScan(user: User): Job {
+export function startScan(user: User): void {
   const current = jobs.get(user.id)
-  if (current && (current.state === 'waiting' || current.state === 'listing' || current.state === 'reading')) return current
-  const job: Job = { state: 'waiting', started: Date.now(), finished: null, folders: 0, files: 0, toRead: 0, read: 0, added: 0, removed: 0, skipped: [], errors: [], capped: false }
+  if (current && (current.state === 'waiting' || current.state === 'listing' || current.state === 'reading')) return
+  const job: Walk = { state: 'waiting', started: Date.now(), finished: null, folders: 0, files: 0, toRead: 0, read: 0, added: 0, removed: 0, skipped: [], errors: [], capped: false, repos: new Set() }
   jobs.set(user.id, job)
   const stop = new AbortController()
   cancels.set(user.id, stop)
@@ -344,7 +352,8 @@ export function startScan(user: User): Job {
       db().prepare('UPDATE photo_accounts SET scanned_at = ? WHERE user_id = ?').run(Date.now(), user.id)
     } catch (e) {
       job.state = 'failed'
-      job.errors.push((e as Error).message)
+      // Whatever the failure said (a URL, a path) stays here: the walk as a whole only reports that it failed.
+      job.errors.push({ repo: null, text: e instanceof HttpError ? e.message : 'The walk failed' })
     } finally {
       job.finished = Date.now()
       running--
@@ -352,7 +361,21 @@ export function startScan(user: User): Job {
       if (cancels.get(user.id) === stop) cancels.delete(user.id)
     }
   })()
-  return job
+}
+
+/**
+ * The walk as the account may see it, given the libraries Seafile lists for it right now. A walk
+ * that touched a library the list does not name (revoked, deleted, listing down) mixes that
+ * library's counts, state and messages into its own, so none of it is shown. Of a walk over
+ * listed libraries, the notes and messages about each library are shown for that library only.
+ */
+function jobView(user: User, list: Library[] | null): Job | null {
+  const walk = jobs.get(user.id)
+  if (!walk || !list) return null
+  const listed = new Set(list.map((l) => l.id))
+  if ([...walk.repos].some((r) => !listed.has(r)) || sourcesOf(user).some((s) => !listed.has(s.repo))) return null
+  const { repos: _repos, errors, skipped, ...rest } = walk
+  return { ...rest, skipped: skipped.filter((k) => listed.has(k.repo)), errors: errors.filter((e) => e.repo === null || listed.has(e.repo)).map((e) => e.text) }
 }
 
 /** Walks again when the last walk is older than STALE (opening the app asks for this). */
@@ -363,7 +386,7 @@ function freshen(user: User) {
   if (sourcesOf(user).length && (!row?.scanned_at || Date.now() - row.scanned_at > STALE) && (!job || Date.now() - (job.finished ?? 0) > STALE)) startScan(user)
 }
 
-async function scan(user: User, job: Job, signal: AbortSignal) {
+async function scan(user: User, job: Walk, signal: AbortSignal) {
   if (!seafileReady(user)) throw new Error('Seafile is not linked')
   const list = await libs(user)
   const open = unlocked(user)
@@ -374,6 +397,7 @@ async function scan(user: User, job: Job, signal: AbortSignal) {
 
   for (const source of sourcesOf(user)) {
     if (signal.aborted) return
+    job.repos.add(source.repo)
     const lib = list.find((l) => l.id === source.repo)
     if (!lib) {
       // The library is gone (deleted, or no longer shared): so are its photos.
@@ -441,7 +465,7 @@ async function scan(user: User, job: Job, signal: AbortSignal) {
           }
         } catch (e) {
           failed.push(folder)
-          if (job.errors.length < 20) job.errors.push(`${lib.name}${folder}: ${(e as Error).message}`)
+          if (job.errors.length < 20) job.errors.push({ repo: lib.id, text: `${lib.name}${folder}: ${(e as Error).message}` })
         } finally {
           busy--
         }
@@ -1093,9 +1117,9 @@ async function status(user: User) {
   const seafile = seafileReady(user)
   const immichLink: ImmichInfo | null = immichInfo(user)
   // When Seafile cannot say which libraries are locked, no folder is named either.
-  const sources = seafile ? await libs(user).then((list) => sourcesInfo(user, list)).then((s) => ({ sources: s, unavailable: false }), (e) => (e instanceof HttpError && e.status === 502 ? { sources: [], unavailable: true } : Promise.reject(e))) : null
+  const sources = seafile ? await libs(user).then(async (list) => ({ list, sources: await sourcesInfo(user, list), unavailable: false }), (e) => (e instanceof HttpError && e.status === 502 ? { list: [] as Library[], sources: [], unavailable: true } : Promise.reject(e))) : null
   return {
-    seafile: seafile && sources ? { sources: sources.sources, unavailable: sources.unavailable, job: jobs.get(user.id) ?? null, scannedAt: (db().prepare('SELECT scanned_at FROM photo_accounts WHERE user_id = ?').get(user.id) as { scanned_at: number | null } | undefined)?.scanned_at ?? null } : null,
+    seafile: seafile && sources ? { sources: sources.sources, unavailable: sources.unavailable, job: jobView(user, sources.unavailable ? null : sources.list), scannedAt: (db().prepare('SELECT scanned_at FROM photo_accounts WHERE user_id = ?').get(user.id) as { scanned_at: number | null } | undefined)?.scanned_at ?? null } : null,
     immich: immichLink,
   }
 }
@@ -1134,7 +1158,8 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   if (path === '/api/photos/scan' && method === 'POST') {
     const user = requireUser(req)
     requireSeafile(user)
-    return json(res, 200, startScan(user)), true
+    startScan(user)
+    return json(res, 200, jobView(user, await libs(user).catch(() => null))), true
   }
 
   if (path === '/api/photos/zip' && read) return await sendZip(req, res, q('t') ?? ''), true
