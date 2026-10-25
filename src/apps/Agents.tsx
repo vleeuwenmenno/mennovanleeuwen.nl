@@ -41,6 +41,7 @@ import {
   deleteMemory,
   deleteThread,
   getContext,
+  getThreadStats,
   getThread,
   listMemories,
   listThreads,
@@ -96,6 +97,7 @@ import {
   type Skill,
   type Workdir,
 } from '../data/agents'
+import { callLine, duration, percent, summarize, summaryLines, threadSummary, type ThreadStats } from '../data/agentStats'
 import { diffLines } from '../terminal/agents/diff'
 import { dropDraft, getDraft, setDraft } from '../data/agentDrafts'
 import { posixOf } from '../data/mounts'
@@ -1121,6 +1123,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  // Which side of the context-ring panel shows: the window's breakdown, or the thread's stats for nerds.
+  const [ctxTab, setCtxTab] = useState<'context' | 'stats'>('context')
   const ctxId = useId()
   useEffect(() => setCtxOpen(false), [thread?.id])
   const [openingImages, setOpeningImages] = useState(false)
@@ -2045,7 +2049,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {PERMISSION_LABEL[permission]}
         </button>
         </div>
-        {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} panelId={ctxId} onToggle={() => setCtxOpen((o) => !o)} />}
+        {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} panelId={ctxId} onToggle={() => (setCtxOpen((o) => !o), setCtxTab('context'))} />}
         {thread && (
           <button
             className="agt-icon agt-more"
@@ -2056,6 +2060,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
                 { label: 'Regenerate title', hint: regenerateHint(thread), disabled: thread.titling || !messages.length, onSelect: regenerate },
                 { label: 'Share thread…', disabled: !hasAnswer, onSelect: () => void openShareDialog(thread) },
                 { label: 'Compact conversation…', hint: 'Summarise it so far, to free up the context window', disabled: !hasConversation, onSelect: () => void compactDialog() },
+                { label: 'Thread stats', hint: 'Model and tool time, speed, cache hits and tokens', onSelect: () => (setCtxTab('stats'), setCtxOpen(true)) },
                 thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
                 { separator: true },
                 { label: 'Delete…', danger: true, onSelect: () => onDelete(thread) },
@@ -2068,7 +2073,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       </div>
       </div>
 
-      {thread && ctxOpen && <ContextPanel panelId={ctxId} id={thread.id} version={messages.length} onClose={() => setCtxOpen(false)} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
+      {thread && ctxOpen && <ContextPanel panelId={ctxId} id={thread.id} version={messages.length} tab={ctxTab} onTab={setCtxTab} onClose={() => setCtxOpen(false)} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
 
       <div
         className="agt-scroll selectable"
@@ -3081,14 +3086,15 @@ function ContextMeter({ thread, models, open, panelId, onToggle }: { thread: Thr
 /**
  * What the next message sends the model, part by part, against the window's size, with where it
  * compacts by itself (a mark on the bar) and the last compaction, if any. `onCompact`: Compact now.
+ * Its Stats tab (also the thread menu's Thread stats) has the thread's stats for nerds instead.
  */
-function ContextPanel({ panelId, id, version, onCompact, onClose }: { panelId: string; id: string; version: number; onCompact?: () => void; onClose: () => void }) {
+function ContextPanel({ panelId, id, version, tab, onTab, onCompact, onClose }: { panelId: string; id: string; version: number; tab: 'context' | 'stats'; onTab: (t: 'context' | 'stats') => void; onCompact?: () => void; onClose: () => void }) {
   const phone = useIsMobile()
   const [info, setInfo] = useState<ContextInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
-    getContext(id).then(setInfo, (e: Error) => setError(e.message))
-  }, [id, version])
+    if (tab === 'context') getContext(id).then(setInfo, (e: Error) => setError(e.message))
+  }, [id, version, tab])
   // Esc closes it (when focus is in this window, or nowhere); on a phone or touch screen a tap anywhere
   // else does too (the ring toggles it itself). Several Agents windows each have their own panel.
   useEffect(() => {
@@ -3109,23 +3115,31 @@ function ContextPanel({ panelId, id, version, onCompact, onClose }: { panelId: s
   }, [phone, onClose, panelId])
   const scale = info ? info.contextLength ?? Math.max(info.estimate, info.measured ?? 0) : 1
   return (
-    <div className="agt-ctx-panel" id={panelId} role="region" aria-label="Context window">
-      <p className="agt-ctx-head">
-        <span className="agt-ctx-title">
-          <strong>Context window</strong>
-          {info && (
-            <span className="muted">
-              {' '}
-              · {info.model}
+    <div className="agt-ctx-panel" id={panelId} role="region" aria-label={tab === 'stats' ? 'Thread stats' : 'Context window'}>
+      <div className="agt-ctx-head">
+        <span className="seg seg-small agt-ctx-tabs" role="tablist" aria-label="Context or stats">
+          <button type="button" role="tab" aria-selected={tab === 'context'} className={tab === 'context' ? 'is-active' : ''} onClick={() => onTab('context')}>
+            Context
+          </button>
+          <button type="button" role="tab" aria-selected={tab === 'stats'} className={tab === 'stats' ? 'is-active' : ''} onClick={() => onTab('stats')}>
+            Stats
+          </button>
+        </span>
+        <span className="agt-ctx-title muted">
+          {tab === 'context' && info && (
+            <>
+              {info.model}
               {info.contextLength ? ` · ${tokenCount(info.contextLength)} tokens` : ''}
-            </span>
+            </>
           )}
         </span>
-        <button type="button" className="agt-icon agt-ctx-close" onClick={onClose} aria-label="Close context window" title="Close (Esc)">
+        <button type="button" className="agt-icon agt-ctx-close" onClick={onClose} aria-label={tab === 'stats' ? 'Close thread stats' : 'Close context window'} title="Close (Esc)">
           <Icon name="close" size={14} />
         </button>
-      </p>
-      {error ? (
+      </div>
+      {tab === 'stats' ? (
+        <StatsView id={id} version={version} />
+      ) : error ? (
         <p className="t-red copyable agt-ctx-note">{error}</p>
       ) : !info ? (
         <p className="muted agt-ctx-note">Adding it up…</p>
@@ -3166,6 +3180,71 @@ function ContextPanel({ panelId, id, version, onCompact, onClose }: { panelId: s
           </p>
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * The thread's stats for nerds: model and tool time, time to the first token and speed, the prompt
+ * cache's hits (where the provider reports them), tokens and calls; then each turn, which opens to
+ * its model calls and tool calls. Numbers in monospace; what was not measured shows "—".
+ */
+function StatsView({ id, version }: { id: string; version: number }) {
+  const [stats, setStats] = useState<ThreadStats | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    getThreadStats(id).then((s) => (setStats(s), setError(null)), (e: Error) => setError(e.message))
+  }, [id, version])
+  if (error) return <p className="t-red copyable agt-ctx-note">{error}</p>
+  if (!stats) return <p className="muted agt-ctx-note">Adding it up…</p>
+  const all = threadSummary(stats)
+  if (!all.calls && !all.toolCalls) return <p className="muted agt-ctx-note">No model calls yet: stats show once the agent has answered.</p>
+  return (
+    <div className="agt-stats">
+      <dl className="agt-stats-sum">
+        {summaryLines(all).map(([k, v]) => (
+          <div key={k}>
+            <dt className="muted">{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+      <ol className="agt-stats-turns">
+        {stats.turns.map((t, i) => {
+          const s = summarize(t.calls, t.tools)
+          return (
+            <li key={t.id}>
+              <details>
+                <summary>
+                  <span className="agt-stats-turn">
+                    <span className="muted">{i + 1}.</span> {t.text || (t.calls.some((c) => c.kind === 'compact') ? 'Compaction' : 'Turn')}
+                  </span>
+                  <span className="agt-stats-num muted">
+                    {duration(s.llmMs)} · {s.calls} {s.calls === 1 ? 'call' : 'calls'}
+                    {s.toolCalls ? ` · ${s.toolCalls} ${s.toolCalls === 1 ? 'tool' : 'tools'}` : ''}
+                    {s.cacheHit !== null ? ` · ${percent(s.cacheHit)} cached` : ''}
+                  </span>
+                </summary>
+                <ul className="agt-stats-calls">
+                  {t.calls.map((c, k) => (
+                    <li key={`c${k}`}>
+                      <span className="muted">{c.stats?.model ?? 'not measured'}</span> <span className="agt-stats-num">{callLine(c)}</span>
+                    </li>
+                  ))}
+                  {t.tools.map((x, k) => (
+                    <li key={`t${k}`}>
+                      <span className="muted">{x.name || 'tool'}</span> <span className="agt-stats-num">{duration(x.ms)}{x.waited ? ` (${duration(x.waited)} waiting for you)` : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </li>
+          )
+        })}
+      </ol>
+      <p className="muted agt-ctx-note agt-stats-note">
+        Measured on the server, per model call: TTFT from sending the request to the first streamed text, thinking or tool call; speed is output tokens over the time spent writing them. Tool time includes waiting for you to allow a change.
+      </p>
     </div>
   )
 }

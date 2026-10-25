@@ -15,7 +15,7 @@ import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -381,7 +381,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     const againImage = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/images\/([0-9a-f-]{36})\/again$/.exec(path)
     if (againImage && method === 'POST') return await generateAnother(res, requireUser(req), againImage[1], againImage[2]), true
-    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/stats|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread
       if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
@@ -397,6 +397,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (sub === '/title' && method === 'POST') return json(res, 200, await suggestTitle(requireUser(req), tid)), true
       if (sub === '/retitle' && method === 'POST') return json(res, 200, await regenerateTitle(requireUser(req), tid)), true
       if (sub === '/context' && read) return json(res, 200, await contextOf(requireUser(req), tid)), true
+      if (sub === '/stats' && read) return json(res, 200, threadStats(requireUser(req), tid)), true
       if (sub === '/answer' && method === 'POST') return answer(requireUser(req), tid, await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
       if (sub === '/approve' && method === 'POST') return approve(requireUser(req), tid, await readJson(req, 8192)), json(res, 200, { ok: true }), true
       // Mail reads allowed for a while (from a read's card) end now: the × on the thread's chip.

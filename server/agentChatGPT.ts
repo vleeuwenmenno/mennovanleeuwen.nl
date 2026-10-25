@@ -3,6 +3,7 @@ import type { User } from './auth.ts'
 import { onUserGone } from './db.ts'
 import { HttpError } from './http.ts'
 import { openaiChatAccess as access } from './agentOpenAI.ts'
+import { meter, responsesStats, type CallStats } from './agentStats.ts'
 
 // OpenAI's models as a chat provider for the Agents app, next to Ollama Cloud (server/agents.ts).
 // A thread runs here when its model id carries a provider prefix:
@@ -124,7 +125,7 @@ export async function openaiModels(user: User): Promise<ProviderModel[]> {
 type ToolCall = { name: string; arguments: Record<string, unknown> }
 type ChatMessage = { role: string; content: string; thinking?: string; tool_calls?: { function: ToolCall }[]; tool_name?: string; images?: string[] }
 type ToolDef = { type: 'function'; function: { name: string; description: string; parameters: unknown } }
-type Reply = { content: string; thinking: string; calls: ToolCall[]; used: number | null }
+type Reply = { content: string; thinking: string; calls: ToolCall[]; used: number | null; stats?: CallStats }
 
 /** A picture's type from its first bytes (base64), for the data URL the Responses API wants. */
 function dataUrl(b64: string): string {
@@ -230,17 +231,22 @@ type Event = {
   delta?: string
   summary_index?: number
   item?: { type?: string; call_id?: string; name?: string; arguments?: string }
-  response?: { usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number }; error?: { message?: string; code?: string } }
+  response?: { usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; input_tokens_details?: { cached_tokens?: number }; output_tokens_details?: { reasoning_tokens?: number } }; error?: { message?: string; code?: string } }
   error?: { message?: string; code?: string } | string
   message?: string
   code?: string
 }
 
-/** Reads a Responses event stream: text and reasoning summaries go out as they come; calls and usage at the end. */
-async function readStream(res: Response, who: string, onDelta: (d: { content?: string; thinking?: string }) => void): Promise<Reply> {
+/**
+ * Reads a Responses event stream: text and reasoning summaries go out as they come; calls and usage
+ * at the end. `timer` started when the request went out: anything the model streams back (text,
+ * reasoning, a tool call's arguments) counts for the time to the first token.
+ */
+async function readStream(res: Response, who: string, onDelta: (d: { content?: string; thinking?: string }) => void, timer: ReturnType<typeof meter>, provider: ChatProvider, model: string): Promise<Reply> {
   let content = ''
   let thinking = ''
   let used: number | null = null
+  let usage: NonNullable<Event['response']>['usage'] | null = null
   const calls: ToolCall[] = []
   let lastSummary = -1
   const take = (data: string) => {
@@ -253,11 +259,15 @@ async function readStream(res: Response, who: string, onDelta: (d: { content?: s
     }
     switch (e.type) {
       case 'response.output_text.delta':
-        if (e.delta) (content += e.delta), onDelta({ content: e.delta })
+        if (e.delta) timer.first(), (content += e.delta), onDelta({ content: e.delta })
+        break
+      case 'response.function_call_arguments.delta':
+        timer.first()
         break
       case 'response.reasoning_summary_text.delta':
       case 'response.reasoning_text.delta':
         if (!e.delta) break
+        timer.first()
         // A new summary part starts on a line of its own.
         if (typeof e.summary_index === 'number' && e.summary_index !== lastSummary) {
           if (lastSummary >= 0 && thinking) (thinking += '\n\n'), onDelta({ thinking: '\n\n' })
@@ -268,6 +278,7 @@ async function readStream(res: Response, who: string, onDelta: (d: { content?: s
         break
       case 'response.output_item.done':
         if (e.item?.type === 'function_call' && e.item.name) {
+          timer.first()
           let args: Record<string, unknown> = {}
           try {
             args = (JSON.parse(e.item.arguments || '{}') as Record<string, unknown>) ?? {}
@@ -280,7 +291,7 @@ async function readStream(res: Response, who: string, onDelta: (d: { content?: s
       case 'response.completed':
       case 'response.done': {
         const u = e.response?.usage
-        if (u) used = u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+        if (u) (usage = u), (used = u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0))
         break
       }
       case 'response.failed':
@@ -307,7 +318,7 @@ async function readStream(res: Response, who: string, onDelta: (d: { content?: s
     }
   }
   block(buffer)
-  return { content, thinking, calls, used }
+  return { content, thinking, calls, used, stats: responsesStats(provider, model, usage, timer.end()) }
 }
 
 /**
@@ -338,12 +349,14 @@ export async function responsesChat(
   }
   if (provider === 'chatgpt') {
     if (!access.signedIn(user)) throw new HttpError(409, 'Sign in with ChatGPT first, in Settings → Agents → Images')
+    const timer = meter()
     const res = await codexFetch(user, '/responses', 'POST', body, signal, 'text/event-stream', typeof body.prompt_cache_key === 'string' ? body.prompt_cache_key : undefined)
     if (!res.ok) throw await failure(res, 'ChatGPT')
-    return readStream(res, 'ChatGPT', onDelta)
+    return readStream(res, 'ChatGPT', onDelta, timer, provider, req.model)
   }
   const key = access.apiKey(user)
   if (!key) throw new HttpError(409, 'Add an OpenAI API key in Settings → Agents → Images first')
+  const timer = meter()
   const res = await fetch(`${access.openaiUrl()}/v1/responses`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -358,5 +371,5 @@ export async function responsesChat(
     throw new HttpError(409, 'OpenAI refused the API key: set it again in Settings → Agents → Images')
   }
   if (!res.ok) throw await failure(res, 'OpenAI')
-  return readStream(res, 'OpenAI', onDelta)
+  return readStream(res, 'OpenAI', onDelta, timer, provider, req.model)
 }

@@ -6,6 +6,7 @@ import { getNote } from './notes'
 import type { ImageProgress } from './imageModels'
 import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 import { effortFor, type Effort } from './agentModelNames'
+import type { ThreadStats } from './agentStats'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -260,6 +261,8 @@ export type ContextPart = { label: string; tokens: number }
  */
 export type ContextInfo = { model: string; contextLength: number | null; measured: number | null; estimate: number; parts: ContextPart[]; compaction: { at: number; auto: boolean; hidden: number; times: number } | null; autoCompact: number | null }
 export const getContext = (id: string) => api<ContextInfo>(`/api/agents/threads/${id}/context`)
+/** The thread's stats for nerds: each model call and tool call, turn by turn (src/data/agentStats.ts adds them up). */
+export const getThreadStats = (id: string) => api<ThreadStats>(`/api/agents/threads/${id}/stats`)
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
 export const getDefaults = () => api<{ quick: string; deep: string; title: string; check: string }>('/api/agents/defaults')
