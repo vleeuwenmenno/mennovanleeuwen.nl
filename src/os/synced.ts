@@ -30,13 +30,23 @@ type Meta<T> = {
   /** changed since */
   dirty: boolean
   /**
-   * Set when the page closed while a save was out (see pagehide): what that save sent (`out`)
-   * and what the last save on closing sent (`sent`), both as JSON. The last one went out on top
-   * of the version before `out`, so if `out` got through, the server refused it.
+   * Set when the page closed while a save was out (see pagehide): the write ids of that save
+   * (`out`) and of the last save sent on closing (`sent`). The last one went out on top of the
+   * version before `out`, so if `out` got through, the server refused it.
    */
   final?: { out: string; sent: string }
 }
-type Remote = { value: unknown; updatedAt: number }
+/** `writeId`: the id of the save that made this version (none for versions saved before ids, or by the server itself). */
+type Remote = { value: unknown; updatedAt: number; writeId?: string }
+
+/** A new id for a save (server/state.ts keeps the one that made the current version). */
+const newWriteId = () => {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+  }
+}
 
 export type Synced<T> = {
   key: string
@@ -55,11 +65,11 @@ export type Synced<T> = {
 type Internal = Synced<unknown> & {
   meta: () => Meta<unknown>
   adopt: (r: Remote, dirty?: boolean, notify?: boolean) => void
-  pushed: (updatedAt: number, sent: unknown) => void
+  pushed: (updatedAt: number, sent: unknown, writeId: string) => void
   /** Whether the value is the server's copy at its base, as far as this tab knows. */
   sameAsServer: () => boolean
-  /** The page is closing with a save out that sent `out` (JSON): kept with the value (Meta.final). */
-  closing: (out: string) => void
+  /** The page is closing with save `out` still out and save `sent` sent now (write ids): kept with the value (Meta.final). */
+  closing: (out: string, sent: string) => void
   /** Keeps the unsaved value as it is, on top of the server's version `updatedAt`. */
   rebase: (updatedAt: number) => void
   /** Marks the value saved (it already is, on the server). */
@@ -129,8 +139,21 @@ export function synced<T>(
   }
   const emit = () => listeners.forEach((l) => l())
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
+  /** Set by what settles the closing mark (Meta.final), so save() doesn't keep the stored one. */
+  let settled = false
   const save = () => {
     if (frozen() || !accountGuard()) return
+    // The closing mark another tab (or this one, before) wrote stays, unless this tab settled it:
+    // a save here that knows nothing of it (an answer to an unrelated save) mustn't drop it.
+    if (!opts.merge && !meta.final && !settled)
+      try {
+        const stored = JSON.parse(accountStorage.get(storageKey(key)) ?? 'null') as Meta<unknown> | null
+        const f = stored?.final
+        if (f && typeof f.out === 'string' && typeof f.sent === 'string') meta = { ...meta, final: { out: f.out, sent: f.sent } }
+      } catch {
+        /* not readable */
+      }
+    settled = false
     let others = false
     // Another tab's save this tab hasn't heard of yet: merged in first.
     const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
@@ -193,6 +216,8 @@ export function synced<T>(
     ...(store as Synced<unknown>),
     meta: () => meta,
     adopt(r, dirty = false, notify = true) {
+      // Another version than this page's own (reconcile keeps the value when it is): the mark goes.
+      settled = true
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
       if (!dirty) known = { base: r.updatedAt, json: JSON.stringify(meta.value) }
       save()
@@ -200,20 +225,25 @@ export function synced<T>(
       if (notify) remoteListeners.forEach((l) => l(meta.value))
       emitSynced()
     },
-    pushed(updatedAt, sent) {
+    pushed(updatedAt, sent, writeId) {
       known = { base: updatedAt, json: JSON.stringify(sent) }
+      // The closing mark only goes with the answer to one of its own saves (the page came back
+      // from the back/forward cache), not with another tab's or another save's.
+      const final = meta.final && writeId !== meta.final.out && writeId !== meta.final.sent ? meta.final : undefined
+      if (meta.final && !final) settled = true
       // Still dirty if it changed while the request was out.
-      meta = { value: meta.value, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
+      meta = { value: meta.value, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json, ...(final ? { final } : {}) }
       save()
       emitSynced()
       if (meta.dirty) schedulePush(key)
     },
     sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
-    closing(out) {
-      meta = { ...meta, final: { out, sent: JSON.stringify(meta.value) } }
+    closing(out, sent) {
+      meta = { ...meta, final: { out, sent } }
       save()
     },
     rebase(updatedAt) {
+      settled = true
       meta = { value: meta.value, base: updatedAt, dirty: true }
       save()
     },
@@ -224,6 +254,7 @@ export function synced<T>(
     },
     reset() {
       known = null
+      settled = true
       meta = { value: fallback, base: 0, dirty: false }
       accountStorage.remove(storageKey(key))
       emit()
@@ -293,8 +324,8 @@ const MAX_BACKOFF = 60_000
 type Pace = { sent: number[]; level: number; last: number; errors: number }
 const paces = new Map<string, Pace>()
 const inFlight = new Set<string>()
-/** What the save out for a key sent (JSON). */
-const outJson = new Map<string, string>()
+/** The write id of the save out for a key. */
+const outId = new Map<string, string>()
 /** Keys with a save asked for here that hasn't gone through yet (pagehide sends them). */
 const pending = new Set<string>()
 const paceOf = (key: string) => {
@@ -355,22 +386,23 @@ async function push(key: string) {
   const pace = paceOf(key)
   counted(key)
   inFlight.add(key)
-  outJson.set(key, JSON.stringify(value))
+  const writeId = newWriteId()
+  outId.set(key, writeId)
   setStatus({ state: 'syncing', at: status.at })
   try {
-    const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base } })
+    const r = await api<Remote & { conflict?: boolean }>(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', json: { value, base, writeId } })
     // The browser was signed in as someone else while the request was out: not this tab's answer.
     if (frozen() || !accountGuard()) return
     pace.errors = 0
     if (r.conflict) reconcile(s, r)
-    else s.pushed(r.updatedAt, value)
+    else s.pushed(r.updatedAt, value, writeId)
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
     pace.errors = Math.min(pace.errors + 1, 16)
     setStatus({ state: 'error', at: status.at, error: (e as Error).message })
   } finally {
     inFlight.delete(key)
-    outJson.delete(key)
+    outId.delete(key)
     // Still unsaved (changed while it was out, or the save failed): saved next, unless something
     // already asked for that. A failed one waits (backoff, by its errors).
     if (!s.meta().dirty) pending.delete(key)
@@ -386,10 +418,11 @@ function reconcile(s: Internal, remote: Remote | undefined) {
   }
   if (remote.updatedAt > local.base) {
     s.onIncoming?.(remote.value)
-    // The page closed with a save out, and the server has what that save sent: the last save on
-    // closing (or a change since) was refused for being on top of the version before it, not
-    // because of a change elsewhere. Kept, and saved on top. Stores that merge already keep it.
-    if (local.final && local.dirty && !s.merge && JSON.stringify(s.normalize(remote.value)) === local.final.out) {
+    // The page closed with a save out, and the server's version is the one that save made (by
+    // its write id: nothing was saved since, here or elsewhere): the last save on closing was
+    // refused for being on top of the version before it. Kept, and saved on top. Stores that
+    // merge already keep it.
+    if (local.final && local.dirty && !s.merge && remote.writeId !== undefined && remote.writeId === local.final.out) {
       s.rebase(remote.updatedAt)
       schedulePush(s.key, 0)
       return
@@ -462,10 +495,11 @@ export function startSync() {
       if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
       // A save still out may get through before this one, which is then refused (it is on top of
       // the version before): the next page load keeps this value if so (see reconcile).
-      const out = outJson.get(key)
-      if (out !== undefined && !s.merge) s.closing(out)
+      const writeId = newWriteId()
+      const out = outId.get(key)
+      if (out !== undefined && !s.merge) s.closing(out, writeId)
       const { value, base } = s.meta()
-      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base, writeId }) }).catch(() => {})
     }
   })
   // Back from the back/forward cache: the page runs on, so what it hadn't saved is saved now

@@ -102,7 +102,7 @@ Object.defineProperty(globalThis, 'location', { value: { pathname: '/', protocol
 
 // --- the stand-in server ------------------------------------------------------------------------
 
-const server = new Map<string, { value: unknown; updatedAt: number }>()
+const server = new Map<string, { value: unknown; updatedAt: number; writeId?: string }>()
 /** The keys saved to the stand-in server, in order. */
 const puts: string[] = []
 let clock = 1000
@@ -138,7 +138,7 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
       }
     }
     puts.push(key)
-    const { value, base } = JSON.parse(init.body!) as { value: unknown; base: number }
+    const { value, base, writeId } = JSON.parse(init.body!) as { value: unknown; base: number; writeId?: string }
     const cur = server.get(key)
     // `late`: saved (or refused) at once, the answer arriving `ms` later.
     const answer = async (body: unknown) => (slow?.late && (await sleep(slow.ms)), json(body))
@@ -146,7 +146,7 @@ g.fetch = async (path: string, init: { method?: string; body?: string; headers?:
       puts.push(`${key}!conflict`)
       return answer({ ...cur, conflict: true })
     }
-    const entry = { value, updatedAt: ++clock }
+    const entry = { value, updatedAt: ++clock, ...(writeId ? { writeId } : {}) }
     server.set(key, entry)
     return answer(entry)
   }
@@ -680,42 +680,77 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
 {
   type List = string[]
   const union = (l: List, r: List) => [...new Set([...r, ...l])]
+  const sorted = (v: unknown) => (Array.isArray(v) ? [...(v as List)].sort() : [])
   const plain = synced<string>('final:plain', '')
   const other = synced<string>('final:other', '')
+  const aba = synced<string>('final:aba', '')
+  const old = synced<string>('final:old', '')
+  const norm = synced<List>('final:norm', [], { normalize: sorted })
+  const shared = synced<string>('final:tabs', '')
   const merged = synced<List>('final:merged', [], { merge: union })
-  plain.set('v1')
-  other.set('v1')
+  const plainKeys = ['final:plain', 'final:other', 'final:aba', 'final:old', 'final:norm', 'final:tabs']
+  const keys = [...plainKeys, 'final:merged']
+  for (const s of [plain, other, aba, old, shared]) s.set('v1')
+  norm.set(['v1'])
   merged.set(['x'])
   await sleep(1500)
-  // Saved by the server at once, answered 2 s later.
-  for (const k of ['final:plain', 'final:other', 'final:merged']) slowPut.set(k, { ms: 2000, fail: 0, late: true })
-  plain.set('A')
-  other.set('A')
+
+  // Another tab of this browser (a page of its own) saves X; the server has it at once, the answer
+  // comes 2.5 s later.
+  const tab2 = new Tab()
+  tabs.push(tab2)
+  g.window = tab2
+  const m3 = await import('../src/os/synced.ts?tab2-final')
+  g.window = main
+  const shared2 = as(tab2, () => m3.synced<string>('final:tabs', ''))
+  slowPut.set('final:tabs', { ms: 2500, fail: 0, late: true })
+  as(tab2, () => shared2.set('X'))
+  await sleep(1200) // X is on the server, its answer still out
+  // This page hears of X (a pull), then saves A everywhere: saved at once, answered 2 s later.
+  await pullAll()
+  for (const k of keys) slowPut.set(k, { ms: 2000, fail: 0, late: true })
+  for (const s of [plain, other, aba, old, shared]) s.set('A')
+  norm.set(['z', 'a']) // read back sorted: the server's copy is never the same JSON as what was sent
   merged.set(['x', 'a'])
   await sleep(1000) // the A saves are out, and on the server
-  plain.set('B')
-  other.set('B')
+  for (const s of [plain, other, aba, old, shared]) s.set('B')
+  norm.set(['y', 'b'])
   merged.set(['x', 'a', 'b'])
   const closeFrom = puts.length
   main.listeners.get('pagehide')?.forEach((l) => l({ key: null, newValue: null }))
   // Gone: nothing of this page runs from here (its answers arrive and are dropped).
   main.listeners.get('mvlos:forget')?.forEach((l) => l({ key: null, newValue: null }))
-  await sleep(2500)
+  // The other tab's answer for X arrives (an unrelated save's), then that tab closes too, before
+  // it saves again.
+  await sleep(1500)
+  tab2.listeners.get('mvlos:forget')?.forEach((l) => l({ key: null, newValue: null }))
+  await sleep(1000)
   slowPut.clear()
-  check('final save: the last saves on closing were refused (a save out got through first)', ['final:plain', 'final:other', 'final:merged'].every((k) => puts.slice(closeFrom).includes(`${k}!conflict`)), puts.slice(closeFrom))
-  check('final save: the server has the saves that were out', server.get('final:plain')!.value === 'A' && server.get('final:other')!.value === 'A')
-  // Meanwhile another device changes one of them.
-  server.set('final:other', { value: 'C', updatedAt: ++clock })
+  check('final save: the last saves on closing were refused (a save out got through first)', keys.every((k) => puts.slice(closeFrom).includes(`${k}!conflict`)), puts.slice(closeFrom))
+  check('final save: the server has the saves that were out', plainKeys.every((k) => JSON.stringify(sorted([server.get(k)!.value].flat())) === (k === 'final:norm' ? '["a","z"]' : '["A"]')), plainKeys.map((k) => server.get(k)))
+  check("final save: the other tab's answer to an unrelated save left the closing mark", !!meta('final:tabs')?.final, meta('final:tabs'))
+  // Meanwhile another device changes one of them, and another changes one and puts it back.
+  server.set('final:other', { value: 'C', updatedAt: ++clock, writeId: 'device-c' })
+  server.set('final:aba', { value: 'C', updatedAt: ++clock, writeId: 'device-c' })
+  server.set('final:aba', { value: 'A', updatedAt: ++clock, writeId: 'device-a' })
+  // And one rewritten by something that gives no write id (the server's own tools, an older release).
+  server.set('final:old', { value: 'A', updatedAt: ++clock })
 
   // The page loads again.
   const next = new Tab()
   tabs.push(next)
+  g.window = next
   const m2 = await import('../src/os/synced.ts?reload-final')
-  const [plain2, other2, merged2] = as(next, () => [m2.synced<string>('final:plain', ''), m2.synced<string>('final:other', ''), m2.synced<List>('final:merged', [], { merge: union })] as const)
+  g.window = main
+  const [plain2, other2, aba2, old2, norm2, shared3, merged2] = as(next, () => [m2.synced<string>('final:plain', ''), m2.synced<string>('final:other', ''), m2.synced<string>('final:aba', ''), m2.synced<string>('final:old', ''), m2.synced<List>('final:norm', [], { normalize: sorted }), m2.synced<string>('final:tabs', ''), m2.synced<List>('final:merged', [], { merge: union })] as const)
   await as(next, () => m2.pullAll())
   await sleep(1500)
   check('final save: after reload, a store without merge keeps the edit refused on closing', plain2.get() === 'B' && server.get('final:plain')!.value === 'B' && meta('final:plain')?.dirty === false && !('final' in meta('final:plain')!), { local: plain2.get(), server: server.get('final:plain'), meta: meta('final:plain') })
   check('final save: but takes a change made elsewhere since', other2.get() === 'C' && server.get('final:other')!.value === 'C', { local: other2.get(), server: server.get('final:other') })
+  check('final save: and a change elsewhere that put back the same value (not the same save)', aba2.get() === 'A' && server.get('final:aba')!.value === 'A' && server.get('final:aba')!.writeId === 'device-a', { local: aba2.get(), server: server.get('final:aba') })
+  check('final save: a version without a write id is taken, as before ids', old2.get() === 'A' && server.get('final:old')!.value === 'A', { local: old2.get(), server: server.get('final:old') })
+  check('final save: a store whose value is read back normalized keeps it too', JSON.stringify(norm2.get()) === '["b","y"]' && JSON.stringify(sorted(server.get('final:norm')!.value)) === '["b","y"]', { local: norm2.get(), server: server.get('final:norm') })
+  check("final save: and one whose mark another tab's answer came by", shared3.get() === 'B' && server.get('final:tabs')!.value === 'B', { local: shared3.get(), server: server.get('final:tabs') })
   check('final save: a store with merge merges as before', JSON.stringify([...merged2.get()].sort()) === '["a","b","x"]' && JSON.stringify([...(server.get('final:merged')!.value as List)].sort()) === '["a","b","x"]', { local: merged2.get(), server: server.get('final:merged') })
 }
 
