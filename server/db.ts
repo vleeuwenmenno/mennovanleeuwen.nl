@@ -241,7 +241,8 @@ export function database(): DatabaseSync {
   if (!cols('agent_threads').includes('turn_at')) db.exec('ALTER TABLE agent_threads ADD COLUMN turn_at INTEGER')
   if (!cols('agent_threads').includes('interrupted')) db.exec('ALTER TABLE agent_threads ADD COLUMN interrupted TEXT')
   // Added later: keeping titles up to date (server/agents.ts). Who set the title ('user' when it
-  // was renamed by hand, which the automatic check never overrides; NULL or 'auto' otherwise), the
+  // was renamed by hand, which the automatic check never overrides; 'first' for a first title made
+  // from the first message that is named again after the first answer; NULL or 'auto' otherwise), the
   // titles it had before (JSON [{title, until}], newest first), and the last message id when the
   // title was last decided on, so the check knows how much was said since.
   if (!cols('agent_threads').includes('title_source')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_source TEXT')

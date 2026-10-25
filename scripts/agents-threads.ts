@@ -11,7 +11,7 @@ const chats: J[] = []
 let webFetches = 0
 // The title model's answers (requests with stream: false): a plain title unless a test sets its own.
 const PLAIN_TITLE = (): string => '{"title":"History check"}'
-let titleAnswer: (body: J) => string = PLAIN_TITLE
+let titleAnswer: (body: J) => string | Promise<string> = PLAIN_TITLE
 const titleCalls: J[] = []
 const json = (res: ServerResponse, body: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
 const ollama = createServer(async (req, res) => {
@@ -21,10 +21,12 @@ const ollama = createServer(async (req, res) => {
   if (req.url === '/api/web_fetch') { webFetches++; return void json(res, { title: 'Should not be fetched', content: 'private destination' }) }
   if (req.url !== '/api/chat') { res.writeHead(404).end(); return }
   const body = JSON.parse(raw)
-  if (body.stream === false) { titleCalls.push(body); return void json(res, { message: { role: 'assistant', content: titleAnswer(body) }, done: true }) }
+  if (body.stream === false) { titleCalls.push(body); return void json(res, { message: { role: 'assistant', content: await titleAnswer(body) }, done: true }) }
   chats.push(body)
   const at = body.messages.findLastIndex((m: J) => m.role === 'user' && m.content.startsWith('RUN '))
   const call = JSON.parse(body.messages[at].content.slice(4))
+  // A turn whose model fails: the answer never comes.
+  if (call.name === 'fail_turn') return void res.writeHead(400, { 'Content-Type': 'application/json' }).end('{"error":"scripted failure"}')
   if (call.name === 'web_fetch') call.arguments = { url: 'https://not-given.example.test/private' }
   const after = body.messages.slice(at + 1)
   const message = after.some((m: J) => m.role === 'tool') ? { role: 'assistant', content: 'Finished.' } : { role: 'assistant', content: '', tool_calls: [{ function: call }] }
@@ -127,6 +129,62 @@ try {
   await new Promise((r) => setTimeout(r, 300))
   tt = await titleWait(mine.id, () => true)
   check('User title: never changed automatically', tt.title === 'My own name' && tt.titleSource === 'user' && !titleCalls.slice(calls).length)
+  // Races: the refinement after the first answer is slow, and something else writes the title meanwhile.
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const last = (b: J) => String(b.messages.at(-1)?.content ?? '')
+  const kind = (b: J) => (RETITLE(b) ? 'check' : last(b).includes('at its end') ? 'regenerate' : last(b).includes('Agent:') ? 'refine' : 'first')
+  let regenerated = 'Initial title'
+  titleAnswer = async (b) => {
+    const k = kind(b)
+    if (k === 'refine') return (await sleep(700), '{"title":"Stale refinement"}')
+    return JSON.stringify({ title: k === 'regenerate' ? regenerated : k === 'check' ? 'Not asked' : 'Initial title' })
+  }
+  const pendingRefine = async (id: string) => {
+    for (let i = 0; i < 60 && !(await view(id)).checkingTitle; i++) await sleep(25)
+    return (await view(id)).checkingTitle as boolean
+  }
+  for (const same of [true, false]) {
+    regenerated = same ? 'Initial title' : 'Regenerated title'
+    const raced = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+    await turn(raced.id, 'search_threads', { query: 'zqfour' })
+    const waiting = await pendingRefine(raced.id)
+    const regen = await api('POST', `/api/agents/threads/${raced.id}/retitle`, {})
+    tt = await titleWait(raced.id, () => true)
+    await sleep(800)
+    tt = await titleWait(raced.id, () => true)
+    check(`Race: Regenerate (${same ? 'same title' : 'new title'}) during a pending refinement wins`, waiting && regen.thread.title === regenerated && tt.title === regenerated && tt.titleSource === 'auto')
+  }
+  const renamed = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(renamed.id, 'search_threads', { query: 'zqfive' })
+  const waitingRename = await pendingRefine(renamed.id)
+  await api('PATCH', `/api/agents/threads/${renamed.id}`, { title: 'Hand named' })
+  await sleep(800)
+  tt = await titleWait(renamed.id, () => true)
+  check('Race: a rename during a pending refinement wins', waitingRename && tt.title === 'Hand named' && tt.titleSource === 'user')
+  // The same for the periodic check: Regenerate giving the same title while the check thinks wins.
+  titleAnswer = async (b) => {
+    const k = kind(b)
+    if (k === 'check') return (await sleep(700), '{"title":"Stale check"}')
+    return '{"title":"Initial title"}'
+  }
+  const checked = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  for (let i = 0; i < 3; i++) await turn(checked.id, 'search_threads', { query: 'zqseven' }), await titleWait(checked.id, () => true)
+  await turn(checked.id, 'search_threads', { query: 'zqseven' })
+  const waitingCheck = await pendingRefine(checked.id)
+  const regenCheck = await api('POST', `/api/agents/threads/${checked.id}/retitle`, {})
+  await sleep(800)
+  tt = await titleWait(checked.id, () => true)
+  check('Race: Regenerate (same title) during a pending title check wins', waitingCheck && regenCheck.thread.title === 'Initial title' && tt.title === 'Initial title')
+  // A first turn that fails still leaves the refinement for the first turn that answers.
+  titleAnswer = (b) => JSON.stringify({ title: kind(b) === 'refine' ? 'Refined after failure' : kind(b) === 'check' ? 'Not asked' : 'Initial title' })
+  const failing = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  const failed = await turn(failing.id, 'fail_turn', {}).then(() => false, () => true)
+  tt = await titleWait(failing.id, () => true)
+  const sourceAfterFail = (db.prepare('SELECT title_source FROM agent_threads WHERE id = ?').get(failing.id) as J).title_source
+  check('Failed first turn: the first title is set and still waits for its refinement', failed && tt.title === 'Initial title' && sourceAfterFail === 'first')
+  await turn(failing.id, 'search_threads', { query: 'zqsix' })
+  tt = await titleWait(failing.id, (x) => x.title === 'Refined after failure')
+  check('Failed first turn: the next answered turn refines the title, once', tt.title === 'Refined after failure' && (db.prepare('SELECT title_source FROM agent_threads WHERE id = ?').get(failing.id) as J).title_source === 'auto')
   titleAnswer = PLAIN_TITLE
   const active = await api('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', tools: ['threads'], permission: 'default' })
   check('Past threads starts on for new default threads', (await api('POST', '/api/agents/threads', { model: MODEL })).tools.includes('threads'))

@@ -1161,6 +1161,7 @@ const lastMessageId = (thread: string) => (database().prepare('SELECT MAX(id) AS
  * automatic check counts from here.
  */
 function setTitle(row: ThreadRow, title: string, source: TitleSource) {
+  bumpTitle(row.id)
   const old = row.title
   const aliases = aliasesOf(row).filter((a) => a.title.toLowerCase() !== title.toLowerCase() && a.title.toLowerCase() !== old.toLowerCase())
   const history = old !== title && old !== NEW_TITLE ? [{ title: old, until: Date.now() }, ...aliases] : aliases
@@ -1168,6 +1169,20 @@ function setTitle(row: ThreadRow, title: string, source: TitleSource) {
     .prepare('UPDATE agent_threads SET title = ?, title_source = ?, title_history = ?, title_mark = ? WHERE id = ?')
     .run(title, source, history.length ? JSON.stringify(history.slice(0, MAX_ALIASES)) : null, lastMessageId(row.id), row.id)
 }
+
+/**
+ * Every title write counts up its thread's revision (in memory: what runs in the background does
+ * not outlive the server either). The background namers note it when they start and write only
+ * when it has not moved since, so a rename or Regenerate title in the meantime always wins, even
+ * when it gave the same title as before.
+ */
+const titleRevs = new Map<string, number>()
+const titleRev = (thread: string) => titleRevs.get(thread) ?? 0
+function bumpTitle(thread: string) {
+  titleRevs.set(thread, titleRev(thread) + 1)
+}
+/** A new thread's first title while the title model thinks of it, for refineFirstTitle to wait on. */
+const firstTitles = new Map<string, Promise<unknown>>()
 
 /** The check's answer: keep the title (null), or this one instead. Anything unclear keeps it. */
 export function pickRetitle(raw: string, current: string): string | null {
@@ -1193,6 +1208,7 @@ function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnE
     .get(thread, row.title_mark ?? 0) as { asks: number; chars: number }
   if (since.asks < settings.titleEvery && !(since.asks >= 2 && since.chars >= TITLE_GROWTH)) return
   checkingTitle.add(thread)
+  const rev = titleRev(thread)
   const msgs = messagesOf(thread)
   const first = msgs.find((m) => m.role === 'user' && (m.content.trim() || m.attachments?.length))
   const start = first ? [clip(first.content.trim(), 600), ...(first.attachments ?? []).map((a) => `(attached: ${a.name})`)].filter(Boolean).join(' ') : ''
@@ -1205,7 +1221,7 @@ function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnE
     .then((raw) => {
       // Renamed by hand, or regenerated, while the model thought: that wins.
       const now = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
-      if (!now || now.title !== row.title || now.title_source === 'user') return
+      if (!now || titleRev(thread) !== rev || now.title !== row.title || now.title_source === 'user') return
       const title = pickRetitle(raw, now.title)
       if (title) setTitle(now, title, 'auto')
       else database().prepare('UPDATE agent_threads SET title_mark = ? WHERE id = ?').run(lastMessageId(thread), thread)
@@ -1227,22 +1243,31 @@ function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnE
  * After a thread's first answer: its title was made from the question alone, while the answer was
  * still being written, so the title model names it once more from question and answer, and the
  * title changes when that one is different. Only while the title is still that first automatic one
- * (`first`, once it is set): not when the user renamed it, Regenerate title or a check is busy
- * with it, or it changed in the meantime. Runs on its own, like keepTitleFresh.
+ * (title_source 'first', which any other title write replaces), so after the first turn that
+ * answered, also when earlier ones failed or were stopped, and also after a restart. Not when
+ * Regenerate title or a check is busy with it (the next answered turn tries again), and nothing is
+ * written when the title changed in the meantime. Done once: afterwards the title is 'auto'.
  */
-async function refineFirstTitle(user: User, key: string, thread: string, first: Promise<string | null>, send: (e: TurnEvent) => void) {
-  const set = await first.catch(() => null)
+async function refineFirstTitle(user: User, key: string, thread: string, send: (e: TurnEvent) => void) {
+  await firstTitles.get(thread)?.catch(() => null)
   const read = () => database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
-  const still = (r: ThreadRow | undefined): r is ThreadRow => !!r && !r.quick && r.title === set && r.title_source !== 'user'
-  if (!set || !still(read()) || titling.has(thread) || checkingTitle.has(thread)) return
+  const row = read()
+  if (!row || row.quick || row.title_source !== 'first' || titling.has(thread) || checkingTitle.has(thread)) return
   checkingTitle.add(thread)
+  const rev = titleRev(thread)
+  // Refined, or given up on: from now on the title is the automatic check's like any other.
+  const done = () => {
+    if (titleRev(thread) === rev) database().prepare("UPDATE agent_threads SET title_source = 'auto' WHERE id = ? AND title_source = 'first'").run(thread)
+  }
   try {
     const title = await makeTitle(user, key, thread)
     // Renamed by hand, or regenerated, while the model thought: that wins.
     const now = read()
-    if (title && still(now) && title.toLowerCase() !== now.title.toLowerCase()) setTitle(now, title, 'auto')
+    if (title && now && titleRev(thread) === rev && now.title_source === 'first' && title.toLowerCase() !== now.title.toLowerCase()) setTitle(now, title, 'auto')
+    else done()
   } catch (e) {
     console.warn('agents: naming a thread after its first answer failed:', (e as Error).message)
+    done()
   } finally {
     checkingTitle.delete(thread)
     const after = read()
@@ -3156,24 +3181,25 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     send({ type: 'message', message: asked })
     // A new thread gets its title from the title model, alongside the answer; the first prose
     // line of the question stands in if that fails. Once the answer is in, it is named again from
-    // both (refineFirstTitle); `firstTitle` is the title set here, when it was.
-    let firstTitle: Promise<string | null> | null = null
+    // both (refineFirstTitle), at the end of the first turn that answers: title_source 'first' marks
+    // a title that still waits for that.
     if (row.title === NEW_TITLE && !titling.has(row.id)) {
       titling.add(row.id)
       const fallback = fallbackTitle(text, files.map((f) => f.name))
-      firstTitle = makeTitle(user, key, row.id)
+      const first = makeTitle(user, key, row.id)
         .catch(() => null)
         .then((title) => {
-          const t = title || fallback
           // The automatic check counts the user's messages from this first one on.
-          const set = database().prepare("UPDATE agent_threads SET title = ?, title_source = 'auto', title_mark = ? WHERE id = ? AND title = ?").run(t, asked.id, row.id, NEW_TITLE)
-          return set.changes ? t : null
+          const set = database().prepare("UPDATE agent_threads SET title = ?, title_source = 'first', title_mark = ? WHERE id = ? AND title = ?").run(title || fallback, asked.id, row.id, NEW_TITLE)
+          if (set.changes) bumpTitle(row.id)
         })
         .finally(() => {
           titling.delete(row.id)
+          firstTitles.delete(row.id)
           const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(row.id) as ThreadRow | undefined
           if (after) send({ type: 'thread', thread: toThread(after) })
         })
+      firstTitles.set(row.id, first)
     }
     send({ type: 'thread', thread: toThread(ownThread(user, row.id)) })
 
@@ -3507,7 +3533,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     send({ type: 'done' })
     // The title (in the background): named again from the first answer, else checked now and then
     // against what the thread talks about by now. Also after a turn that ended in an image.
-    if (firstTitle) void refineFirstTitle(user, key, row.id, firstTitle, send)
+    if (titling.has(row.id) || ownThread(user, row.id).title_source === 'first') void refineFirstTitle(user, key, row.id, send)
     else keepTitleFresh(user, key, row.id, send)
     return { outcome: 'answered' }
   } catch (e) {

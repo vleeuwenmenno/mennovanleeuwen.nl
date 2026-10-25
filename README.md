@@ -2177,9 +2177,13 @@ with the same tool definitions, approval events and round limit used by the app 
 is still being written, so the sidebar is never empty. When the title model gives nothing usable,
 the first line of prose in the message stands in (code fences and what is in them, blank lines and
 lines of only symbols are skipped), else the attached files' names, else *Code snippet*. Once the
-first answer is in, the title model names the thread once more from question and answer, and the
-title changes when that one is different, as long as it is still that first automatic title (not
-renamed, regenerated or being checked meanwhile; Spotlight's quick threads are left alone). The
+first answer is in (the first turn that answers: a failed or stopped first turn, a Retry or a
+server restart in between do not lose it), the title model names the thread once more from
+question and answer, and the title changes when that one is different, as long as it is still that
+first automatic title (`title_source` is `first` until then). A rename, *Regenerate title* or a
+check that writes the title in the meantime always wins, also when it gave the same title: every
+title write counts up a revision, and a background namer only writes when it has not moved since it
+started. Spotlight's quick threads are left alone. The
 title model's answer is read leniently: thinking and markdown code fences are dropped and the
 `{"title": …}` object is found inside any text around it, and a candidate without a letter or a
 digit (a bare code fence, `...`, `---`) is never a title.
