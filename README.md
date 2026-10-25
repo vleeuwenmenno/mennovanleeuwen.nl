@@ -3356,6 +3356,20 @@ home-indicator space is padding inside the window; the on-screen keyboard reduce
 height. Tap **Restore size** at the top right to return to the previous window layout. The
 window's saved geometry is retained, including when returning to a larger screen.
 
+While a maximized window is on screen, on any screen size, the notes and widgets are hidden
+outright rather than left behind it ([`Shell.tsx`](src/os/Shell.tsx), `.desk-scroll.is-covered`).
+Their stacking order alone can't promise that: a widget shown later, or brought back with a
+restored session, lands above the window, and on iOS the window follows the visible area while the
+keyboard and its formatting bar slide in, so for a moment the desk behind it shows. They keep their
+place, and come back when the window is restored, minimized or closed.
+
+**Settings → Windows → Touch screens → Open new windows maximized** (only shown on a phone or a
+touch screen) makes every app window opened from then on start maximized
+([`src/os/windowPrefs.ts`](src/os/windowPrefs.ts)). Notes and widgets are not affected, an app
+whose window is already open just brings it forward as it is, and windows a session brings back
+keep their saved state. It is off by default and kept per device (`mvlos.windows.openMaximized`);
+with storage blocked it holds until the page closes.
+
 With the on-screen keyboard open, windows end just above it, whether the browser lays the
 keyboard over the page (iOS) or shrinks the page (Android, newer iOS). Text fields are at least
 16px on touch screens, and on iOS the page has a maximum scale of 1, so focusing a field never
