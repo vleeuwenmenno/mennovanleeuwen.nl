@@ -96,6 +96,7 @@ const catalog: StudioCatalog = {
   assert.equal(applied.edited, false); assert.equal(applied.steps, 30); assert.equal(applied.recipe?.model, 'SDXL/studio.safetensors'); assert.equal(applied.recipe?.source, 'civitai_examples')
   // Use these settings: the recorded generation back in the form; the seed stays when locked.
   const restored = formFromSettings({ ...d, seed: 9, seedLock: true }, { preset: 'krea2_turbo', model: 'm', clip: 'c', vae: 'v', loras: [], steps: 8, cfg: 1, sampler: 'euler', scheduler: 'beta', width: 1024, height: 768, seed: 77, prompt: 'p', negative_prompt: '', denoise: 1 })
+  assert.deepEqual(restored.recipe, { model: 'm', preset: 'krea2_turbo', source: 'user_saved', label: 'Restored from a picture' }, 'no recipe offer for the restored model')
   assert.equal(restored.preset, 'krea2_turbo'); assert.equal(restored.variant, 'turbo'); assert.equal(restored.height, 768); assert.equal(restored.seed, 9); assert.equal(restored.prompt, 'p')
   assert.equal(formFromSettings(d, { operation: 'upscale' } as never), d)
   console.log('PASS Studio form: saved copies normalized, variants, validation reasons, request with embeddings and family rules, recipes with their source, Use these settings')

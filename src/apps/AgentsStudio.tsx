@@ -241,7 +241,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
       <p className="muted studio-caption">{run.live.job.label}{run.live.total > 1 ? ` · ${run.live.index + 1} of ${run.live.total}` : ''} · {run.live.width} × {run.live.height}</p>
       <GeneratedPicture operation={run.live.job.operation} width={run.live.width} height={run.live.height} pending progress={run.live.progress} frame={frame} onView={() => {}} />
     </> : shown ? <>
-      <p className="muted studio-caption">{shown.name} · {shown.width} × {shown.height}{shown.settings && 'seed' in shown.settings ? ` · seed ${shown.settings.seed}` : ''}</p>
+      <p className="muted studio-caption" title={shown.name}>{shown.width} × {shown.height}{shown.settings && 'seed' in shown.settings ? ` · seed ${shown.settings.seed}` : ''}{shown.settings && 'model' in shown.settings ? ` · ${shown.settings.model.split(/[\\/]/).at(-1)}` : shown.settings ? '' : ' · uploaded'} · {new Date(shown.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</p>
       <GeneratedPicture image={asGenerated(shown)} width={shown.width || 1024} height={shown.height || 1024} pending={false} frame={frame} onView={() => setDialog({ kind: 'view', image: shown })} />
       <ResultActions image={shown} threads={threads} disabled={false} onUse={() => shown.settings && studioForm.set((f) => formFromSettings(f, shown.settings!))} onSend={(t) => void sendToChat(shown, t).catch((e: Error) => update({ error: e.message }))} onDialog={(kind) => setDialog({ kind, image: shown })} onDelete={() => void removeImage(shown)} />
     </> : <div className="studio-empty muted">{studio && !studio.configured ? 'Connect ComfyUI to start.' : 'Your pictures show here. Write a prompt and press Generate.'}</div>}
@@ -257,7 +257,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   </section>
 
   const head = <header className="studio-top">
-    {(!columns || mobile) && <button type="button" className="btn btn-small" onClick={onBack} aria-label="Back to threads">‹ Back</button>}
+    {(!columns || mobile) && <button type="button" className="btn btn-small" onClick={onBack} aria-label="Back to threads" title="Back to threads">‹</button>}
     <h3>Image Studio</h3>
     <span className="studio-grow" />
     {!columns && <>
@@ -328,6 +328,11 @@ function ModelSection({ form, catalog, details, resolved, model, offer, onAccept
   return <section className="studio-section" aria-label="Model">
     <div className="studio-label"><h4 className="studio-head">Model</h4>{assist?.('model')}</div>
     {catalogError && <ErrorBox text={catalogError} />}
+    {/* Asked here, where the model was just changed: the settings were edited by hand since the last recipe. */}
+    {offer && <div className="studio-offer" role="group" aria-label="Recommended settings">
+      <span>The new model recommends {offer.steps} steps · CFG {offer.cfg} · {offer.sampler}/{offer.scheduler}{rules.clipSkip ? ` · clip skip ${offer.clipSkip}` : ''} ({offer.label}). Your settings were changed by hand.</span>
+      <span className="studio-row"><button type="button" className="btn btn-small btn-primary" onClick={onAccept}>Apply recommended settings</button><button type="button" className="btn btn-small" onClick={onKeep}>Keep current</button></span>
+    </div>}
     {options.length > 0 && <Field label="Quick pick by family">
       <Select aria-label="Quick pick a model by family" value={model || null} placeholder="Choose a model…" onChange={pick} options={options.map((o) => ({ value: o.name, label: o.name.split(/[\\/]/).at(-1) ?? o.name, note: o.group, disabled: o.family === 'unsupported' }))} />
     </Field>}
@@ -353,10 +358,6 @@ function ModelSection({ form, catalog, details, resolved, model, offer, onAccept
       {details?.prediction?.v_prediction && <span className="t-yellow">V-prediction model: sampled with v_prediction automatically.</span>}
       {resolved?.errors.length ? <span className="t-red">{resolved.errors.join(' ')}</span> : null}
       {notes.length > 0 && <span className="muted">{notes.join(' ')}</span>}
-      {offer && <div className="studio-offer" role="group" aria-label="Recommended settings">
-        <span>This model recommends {offer.steps} steps · CFG {offer.cfg} · {offer.sampler}/{offer.scheduler}{rules.clipSkip ? ` · clip skip ${offer.clipSkip}` : ''} ({offer.label}).</span>
-        <span className="studio-row"><button type="button" className="btn btn-small btn-primary" onClick={onAccept}>Apply recommended settings</button><button type="button" className="btn btn-small" onClick={onKeep}>Keep current</button></span>
-      </div>}
     </div>
   </section>
 }
@@ -572,7 +573,7 @@ function AdvancedSection({ form, catalog, lastSeed, recipe, onSet, onRecipe, ass
         <span className="studio-row">
           <input id={`${id}-seed`} className="studio-seed" type="number" min={-1} step={1} value={seedText} onChange={(e) => setSeedText(e.target.value)} onBlur={() => { const n = Math.trunc(Number(seedText)); onSet({ seed: Number.isFinite(n) ? Math.max(-1, Math.min(STUDIO_LIMITS.seed[1], n)) : -1 }) }} />
           <button type="button" className="btn btn-small" title="A random seed, kept" aria-label="Random seed" onClick={() => onSet({ seed: randomSeed() })}>Roll</button>
-          <button type="button" className="btn btn-small" title={lastSeed === null ? 'No picture yet' : `Reuse the last seed (${lastSeed})`} aria-label="Reuse the last seed" disabled={lastSeed === null} onClick={() => lastSeed !== null && onSet({ seed: lastSeed })}>↺</button>
+          <button type="button" className="btn btn-small" title={lastSeed === null ? 'No picture yet' : `Reuse the last seed (${lastSeed})`} aria-label="Reuse the last seed" disabled={lastSeed === null} onClick={() => lastSeed !== null && onSet({ seed: lastSeed })}>Last</button>
           <button type="button" className={`btn btn-small ${form.seed < 0 ? 'btn-primary' : ''}`} aria-pressed={form.seed < 0} onClick={() => onSet({ seed: form.seed < 0 ? randomSeed() : -1 })}>Random</button>
           <button type="button" className={`btn btn-small ${form.seedLock ? 'btn-primary' : ''}`} aria-pressed={form.seedLock} title="Keep this seed when restoring settings from a result" onClick={() => onSet({ seedLock: !form.seedLock })}>{form.seedLock ? 'Locked' : 'Lock'}</button>
         </span>

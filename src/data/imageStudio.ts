@@ -234,7 +234,9 @@ export function formFromSettings(form: StudioForm, recorded: ImageGenerationSett
     denoise: settings.source ? settings.denoise ?? form.denoise : form.denoise,
     source: settings.source && settings.operation !== 'inpaint' && settings.operation !== 'refine' ? { id: settings.source.id, name: settings.source.name, url: settings.source.url, width: settings.source.width, height: settings.source.height } : null,
     hires: hires ? { on: true, scale: Math.round((hires.width / hires.base_width) * 100) / 100, denoise: hires.denoise, steps: hires.steps, upscaleModel: hires.upscale_model ?? '' } : { ...form.hires, on: false },
+    // The picture's own settings stand in for a recipe: its model does not ask to replace them.
     edited: true,
+    recipe: { model: settings.model ?? '', preset, source: 'user_saved', label: 'Restored from a picture' },
   }
   return normalizeStudioForm(next)
 }

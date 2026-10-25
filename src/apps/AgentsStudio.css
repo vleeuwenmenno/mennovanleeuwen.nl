@@ -1,8 +1,8 @@
 /* The Image Studio (AgentsStudio.tsx): three columns in a wide window; in a narrow one the middle
    column with the prompt, two drawers and a Generate bar at the bottom. Theme colours only. */
 .studio { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg); color: var(--fg); }
-.studio-top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.studio-top h3 { margin: 0; font-size: 14px; color: var(--fg-bright); }
+.studio-top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.studio-top h3 { min-width: 0; margin: 0; overflow: hidden; font-size: 14px; color: var(--fg-bright); text-overflow: ellipsis; white-space: nowrap; }
 .studio-grow { flex: 1; }
 .studio-cols { display: grid; grid-template-columns: minmax(300px, 340px) minmax(0, 1fr) minmax(260px, 300px); flex: 1; min-height: 0; }
 .studio-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; }
@@ -61,6 +61,7 @@
 
 .studio-actions .studio-go { flex-wrap: nowrap; }
 .studio-generate { flex: 1; justify-content: center; min-height: 40px; font-size: 13px; }
+.studio-generate:disabled { opacity: .45; cursor: not-allowed; filter: none; }
 .studio-cancel { min-height: 40px; }
 .studio-reason { margin: 0; font-size: 12px; line-height: 1.45; }
 .studio-queue { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
@@ -97,3 +98,6 @@
   .studio textarea { font-size: 16px; }
   .studio-slider input[type='range'] { min-height: 44px; }
 }
+
+/* The Studio's entry at the top of the Agents sidebar (Agents.tsx). */
+.agt-studio-link { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 6px; }

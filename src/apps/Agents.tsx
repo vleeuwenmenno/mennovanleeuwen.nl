@@ -564,6 +564,12 @@ function AgentsApp({ win }: { win: WinState }) {
           </div>
           <div className="agt-list">
             {!archived && (
+              <button className={`agt-item agt-studio-link ${main.kind === 'studio' ? 'is-active' : ''}`} onClick={openStudio} title="Generate pictures with your ComfyUI by hand, without an agent">
+                <Icon name="studio" />
+                <span className="agt-item-title">Image Studio</span>
+              </button>
+            )}
+            {!archived && (
               <section>
                 <h4 className="agt-group agt-group-row">
                   <span>Projects</span>
@@ -664,9 +670,6 @@ function AgentsApp({ win }: { win: WinState }) {
             </button>
             <button className={main.kind === 'memory' ? 'is-on' : ''} onClick={() => openMemory(null)} title="What the agent remembers">
               <Icon name="memory" /> <span>Memory</span>
-            </button>
-            <button className={main.kind === 'studio' ? 'is-on' : ''} onClick={openStudio} title="Image Studio: generate pictures with ComfyUI by hand">
-              <Icon name="studio" /> <span>Studio</span>
             </button>
             <button className={main.kind === 'settings' ? 'is-on' : ''} onClick={openSettings} title="Agents settings">
               <Icon name="gear" /> <span>Settings</span>
