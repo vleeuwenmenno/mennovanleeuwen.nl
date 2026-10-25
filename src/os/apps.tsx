@@ -99,7 +99,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   contacts: { title: 'Contacts', dock: 'Contacts', blurb: 'Your people: on this site, Fastmail, iCloud and other CardDAV', size: [920, 620], render: (w) => <ContactsApp win={w} />, menu: settingsMenu('Contacts', 'contacts') },
   tasks: { title: 'Tasks', dock: 'Tasks', blurb: 'Reminders and to-dos: your CalDAV lists, or lists on this site', size: [880, 600], render: (w) => <TasksApp win={w} /> },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
-  notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
+  notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} />, menu: settingsMenu('Notebook', 'notebook') },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },
   mcserver: { title: 'Minecraft server', dock: 'Minecraft', blurb: 'Who is on, uptime and who played most', size: [760, 660], render: (w) => <McServer win={w} /> },

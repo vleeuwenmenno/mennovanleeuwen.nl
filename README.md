@@ -625,6 +625,13 @@ open its editor in a separate view; **← Notes** returns to the list without lo
 Trash uses the same list/detail navigation. Links from stickies open the requested note directly.
 Desktop windows retain the side-by-side list and editor.
 
+A note opens in **Preview** by default; a brand-new note (**+ New**) opens in **Edit**, since there
+is nothing to preview yet. **Settings → Apps → Notebook** (also *Notebook settings…* in the
+window's menu) sets *Open notes in*: Preview, Edit or Last used (the view you picked by hand most
+recently). It follows the account ([`src/data/notebookPrefs.ts`](src/data/notebookPrefs.ts)). The
+Edit/Preview switch in a note still works as before, and double-clicking a preview opens Edit.
+Sticky notes on the desktop have their own editor and are not affected.
+
 Anyone can write notes and add launchers: **Notebook** (dock) lists every note in Markdown, and
 each one can sit on the desktop as a sticky (right-click the desktop → *New sticky note*). Stickies
 get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
