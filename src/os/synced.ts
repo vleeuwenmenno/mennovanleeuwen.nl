@@ -412,14 +412,25 @@ export function startSync() {
   // Leaving: send pending saves right away.
   window.addEventListener('pagehide', () => {
     if (getAccount().status !== 'user' || frozen() || !accountGuard()) return
-    for (const t of timers.values()) clearTimeout(t)
     // Every save asked for and not through yet, with or without a timer (one waiting for a save
-    // still out has none).
-    for (const key of new Set([...pending, ...timers.keys()])) {
+    // still out has none). The timers go: a save coming back after this must not take one still
+    // listed as already asking for the next save.
+    const keys = new Set([...pending, ...timers.keys()])
+    for (const t of timers.values()) clearTimeout(t)
+    timers.clear()
+    for (const key of keys) {
       const s = stores.get(key)
-      if (!s || !s.meta().dirty || s.sameAsServer()) continue
+      // The server's copy, as far as this tab knows, unless a save is still out: then the server
+      // may be about to hold that save's value instead (a change undone meanwhile), so send it.
+      if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
       const { value, base } = s.meta()
       fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
     }
+  })
+  // Back from the back/forward cache: the page runs on, so what it hadn't saved is saved now
+  // (the last saves sent on leaving may not have made it).
+  window.addEventListener('pageshow', (e) => {
+    if (!(e as PageTransitionEvent).persisted) return
+    for (const key of pending) if (!timers.has(key) && stores.get(key)?.meta().dirty) schedulePush(key)
   })
 }

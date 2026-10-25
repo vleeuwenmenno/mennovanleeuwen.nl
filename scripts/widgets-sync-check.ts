@@ -610,6 +610,37 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   const hidden = sentBodies.slice(hideFrom)
   check('pagehide: a change waiting for a save still out is sent', hidden.some((b) => b.startsWith('loop:hide ') && JSON.parse(b.slice(9)).value === 'B'), hidden)
   await sleep(2500)
+
+  // Undone while the save is out, then the page closes: the server's old value is sent anyway,
+  // or the save out would be the one the server keeps.
+  const u = synced<string>('loop:undo', '')
+  u.set('X')
+  await sleep(1500)
+  slowPut.set('loop:undo', { ms: 2000, fail: 0 })
+  u.set('A')
+  await sleep(1000) // A is out
+  u.set('X')
+  const undoFrom = sentBodies.length
+  main.listeners.get('pagehide')?.forEach((l) => l({ key: null, newValue: null }))
+  const undone = sentBodies.slice(undoFrom)
+  check('pagehide: a change undone while a save is out is still sent', undone.some((b) => b.startsWith('loop:undo ') && JSON.parse(b.slice(10)).value === 'X'), undone)
+  await sleep(2500)
+
+  // Closing cancels the timers; both saves fail; the page comes back from the back/forward cache:
+  // what it hadn't saved is saved then.
+  ;(g.document as { visibilityState: string }).visibilityState = 'hidden'
+  slowPut.set('loop:bfcache', { ms: 1500, fail: 2 })
+  const c2 = synced<string>('loop:bfcache', '')
+  c2.set('A')
+  await sleep(1000) // A is out (answered, failing, at 2300 ms)
+  c2.set('B') // its timer would run out at 1800 ms
+  await sleep(200)
+  main.listeners.get('pagehide')?.forEach((l) => l({ key: null, newValue: null })) // B sent, and fails
+  await sleep(2000)
+  main.listeners.get('pageshow')?.forEach((l) => l({ persisted: true } as never))
+  await sleep(6000)
+  ;(g.document as { visibilityState: string }).visibilityState = 'visible'
+  check('bfcache: after both saves failed, the page back from the cache saves its change', (server.get('loop:bfcache')?.value as string) === 'B' && !meta('loop:bfcache')!.dirty, { server: server.get('loop:bfcache'), puts: puts.filter((k) => k.startsWith('loop:bfcache')) })
   slowPut.clear()
 
   // The pacing over a long stretch, on a clock of its own: a store that saves again as soon as it
