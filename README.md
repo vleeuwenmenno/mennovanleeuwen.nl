@@ -1380,7 +1380,7 @@ signed-in users ([`server/agents.ts`](server/agents.ts), [`src/apps/Agents.tsx`]
 Add an API key from ollama.com in Settings → Integrations (stored encrypted), or set
 `OLLAMA_API_KEY` on the server (admins only). Each thread is *Quick* (a search or two, a short answer) or *Deep*
 (searches from several angles, reads the sources with web fetch, and writes a structured answer
-with citations), on any of Ollama's cloud models that can call tools. Turns run on the server and
+with citations), on any of Ollama's cloud models that can call tools, or OpenAI's (see *Models, makers and thinking effort* below). Turns run on the server and
 stream to the window, with the model's thinking folded under each reply; Stop ends one. Answers stay
 plain by default: a thread's model, workflow, sampling and file names are named only when the user
 asks about them or is changing them, so swapping the model or the LoRA is one short paragraph rather
@@ -1463,7 +1463,58 @@ pnpm check:agents-threads   # History search, ownership, attachment reads, bound
 ```
 
 The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
-`check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-mail` and `check:agents-threads`.
+`check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail` and `check:agents-threads`.
+
+**Models, makers and thinking effort.** The model pill in the composer opens a picker
+([`src/apps/AgentsModelPicker.tsx`](src/apps/AgentsModelPicker.tsx)): a search box (*Search models…*,
+matching the pretty name, the raw id, the maker and the provider, also with gaps, like `dsv41`), a
+rail of makers on the left (★ Favourites first, then All models, then each maker that has models),
+and the models as rows: the pretty name, a small variant tag (a size such as `120B`, or a dated
+build such as `1017`), the provider under it (*Ollama Cloud*, *ChatGPT* or *OpenAI API*) with the
+raw id, badges (*sees* for vision, *thinks*, the context window) and a star. Pretty names and makers
+come from patterns in [`src/data/agentModelNames.ts`](src/data/agentModelNames.ts): `deepseek-v4.1-flash:1017`
+is DeepSeek's "DeepSeek V4.1 Flash" with `1017`, `glm-5.3-flash` Z.ai's "GLM 5.3 Flash", `kimi-*`
+Moonshot AI, `minimax-*` MiniMax, `mistral-*`/`devstral-*` Mistral, `nemotron-*` NVIDIA, `gemma*`
+Google, `gpt-oss` and `gpt-*` OpenAI, `qwen*` Alibaba, `llama*` Meta; anything else is *Other*
+under its raw id. Makers are drawn as letter marks in the text colour, not logos. Stars are kept
+with the account (the synced agents settings' `favoriteModels`), and Ctrl+1…9 picks the first nine
+favourites while the picker or the composer has focus (Alt+1…9 stays the workspaces'). Arrow keys
+and Enter pick from the list, Esc closes it. On a phone the picker is a sheet from the bottom and
+the rail a row of chips that scrolls sideways. Settings → Agents → Models uses the same names, by
+maker; titles and the safety check always run on Ollama.
+
+Beside the pill, for models that can think, the **thinking effort**: *As the mode* (Quick low, Deep
+high, as before; Ollama's on/off thinkers stay on) or a level the model takes, kept per thread
+(`effort` on the thread, `PATCH /api/agents/threads/<id>`). Ollama's models get `think` off or on,
+gpt-oss low, medium or high; OpenAI's get `reasoning.effort` from the levels their list names
+(ChatGPT's GPT-5.5: low to xhigh; some newer ones max), and a level the model lacks goes to the
+nearest it has.
+
+**ChatGPT and OpenAI models** ([`server/agentChatGPT.ts`](server/agentChatGPT.ts)). With *Sign in
+with ChatGPT* (Settings → Agents → Images, below) the picker also lists the ChatGPT plan's models,
+from the Codex backend's own list (`GET chatgpt.com/backend-api/codex/models?client_version=…`, the
+ones marked to list), with their display names, context windows and reasoning levels; an OpenAI API
+key adds the public API's chat models (`/v1/models`, filtered to GPT and o-series chat models). Their
+ids carry the provider (`chatgpt/gpt-5.5`, `openai/gpt-5-mini`), and a thread runs on whichever its
+id names; Ollama stays the default. Both go through the Responses API, streamed, in the shape
+CLIProxyAPI's Codex translator sends: `instructions` empty with the system prompt as a developer
+message, `store: false`, `reasoning.effort` with `summary: "auto"`, `include:
+["reasoning.encrypted_content"]`, `parallel_tool_calls`, the thread's tools as function tools
+(`strict: false`), pictures as `input_image` data URLs, and, for ChatGPT, the Codex headers
+(`Originator`, `Chatgpt-Account-Id`, the Codex User-Agent, a `session_id`). Tool results go back as
+`function_call_output` paired with their calls; the reasoning summary shows as the reply's thinking;
+the usage fills the context ring. Stop aborts the request. A refused token is refreshed and the call
+tried once more, so a long thread survives the token's expiry; the backend's errors (a usage limit,
+a conversation too long for the window, which compacts as with Ollama) show as they are worded. A
+thread on an OpenAI model runs without an Ollama key, but its titles then fall back to the first
+line of the question and Ollama's web search and fetch are unavailable. It counts against the same
+per-account limits as any turn and nothing new. This is the same unofficial sign-in as the pictures:
+OpenAI does not permit it for hosted apps and could restrict the account, which Settings says before
+the sign-in starts.
+
+```sh
+pnpm check:agents-chatgpt-models   # Pretty names and makers for the known ids, search and effort; then, against fake Codex, auth and API servers: the model list, the request shape, streamed text and reasoning, parallel tool calls, effort, pictures, Stop, token refresh, errors and the API-key route
+```
 
 A reply that only thinks gets one more round asking for the answer, and an answer given while the
 todo list still has open items gets one asking to update it. Those asks go to the model as a user

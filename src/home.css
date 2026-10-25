@@ -1881,6 +1881,20 @@ textarea.agt-q-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.agt-model-variant {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid var(--line-strong);
+  font-size: 9.5px;
+  line-height: 14px;
+}
+.agt-effort-pill {
+  flex: none;
+  padding: 0 6px;
+}
+.agt-effort-short {
+  display: none;
+}
 .agt-ring {
   flex: none;
   display: inline-flex;
@@ -2574,6 +2588,12 @@ textarea.agt-q-input {
   }
   .agt-model-pill {
     max-width: 120px;
+  }
+  .agt-model-variant {
+    display: none;
+  }
+  .agt-effort-short {
+    display: inline;
   }
 }
 

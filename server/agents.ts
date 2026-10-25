@@ -12,6 +12,7 @@ import { resolveImageAssets, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCH
 import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, prepareImageGeneration, generatedImageForVision, imageAgainInput, retainBranchedImages, PRESETS, imageCatalog, imageSettings, imageGenerationAsks, imageObservationAsks, saveThreadImageSettings, threadImageSettings } from './agentImages.ts'
 import { randomUUID } from 'node:crypto'
 import { icon as gptIcon, image as gptImage, listIcons, openaiImagesReady, SLUG as ICON_SLUG } from './agentOpenAI.ts'
+import { chatProviderReady, isEffort, openaiModels, providerOf, responsesChat, type Effort } from './agentChatGPT.ts'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
@@ -83,11 +84,22 @@ export function removeOllamaKey(user: User) {
   database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME)
 }
 
-function requireKey(user: User): string {
+/**
+ * The Ollama key, needed for every turn on Ollama. A thread on an OpenAI model (`model`, with its
+ * provider prefix) runs without one when that provider is set up; titles and Ollama's web tools then
+ * do without (the first line of the question stands in for a title).
+ */
+function requireKey(user: User, model?: string): string {
   const key = storedKey(user)
-  if (!key) throw new HttpError(409, 'Add an Ollama API key in Settings → Integrations first')
-  return key
+  if (key) return key
+  const provider = model ? providerOf(model) : 'ollama'
+  if (provider !== 'ollama' && chatProviderReady(user, provider)) return ''
+  if (provider === 'chatgpt') throw new HttpError(409, 'Sign in with ChatGPT in Settings → Agents → Images first, or pick an Ollama model')
+  if (provider === 'openai') throw new HttpError(409, 'Add an OpenAI API key in Settings → Agents → Images first, or pick an Ollama model')
+  throw new HttpError(409, 'Add an Ollama API key in Settings → Integrations first')
 }
+/** The key a turn in this thread needs (see requireKey). */
+const threadKey = (user: User, thread: string) => requireKey(user, (database().prepare('SELECT model FROM agent_threads WHERE id = ?').get(thread) as { model: string } | undefined)?.model)
 
 /** A request to Ollama's API, with its errors turned into ones the window can show. */
 async function ollama(key: string, path: string, body: unknown, signal: AbortSignal): Promise<Response> {
@@ -109,7 +121,12 @@ async function ollama(key: string, path: string, body: unknown, signal: AbortSig
 
 // --- models ------------------------------------------------------------------------------------
 
-export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null }
+/**
+ * A model a thread can run on. `provider`: Ollama Cloud, or OpenAI's (server/agentChatGPT.ts, ids
+ * prefixed chatgpt/ or openai/). `efforts`: the thinking levels it takes (Ollama's boolean thinking is
+ * off and on; gpt-oss takes low, medium and high), absent when thinking cannot be set.
+ */
+export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider?: 'ollama' | 'chatgpt' | 'openai'; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
 export type Mode = 'quick' | 'deep'
 
 /** Picked when a thread does not say: quick wants speed, deep a stronger reasoner. */
@@ -140,7 +157,9 @@ export function models(): Promise<ModelInfo[]> {
       .filter((m) => m.caps.includes('tools'))
       .map((m) => {
         const ctx = Object.entries(m.info).find(([k]) => k.endsWith('.context_length'))?.[1]
-        return { name: m.name, thinking: m.caps.includes('thinking'), vision: m.caps.includes('vision'), contextLength: typeof ctx === 'number' ? ctx : null }
+        const thinking = m.caps.includes('thinking')
+        const efforts: Effort[] | undefined = !thinking ? undefined : m.name.startsWith('gpt-oss') ? ['low', 'medium', 'high'] : ['off', 'on']
+        return { name: m.name, thinking, vision: m.caps.includes('vision'), contextLength: typeof ctx === 'number' ? ctx : null, provider: 'ollama' as const, ...(efforts ? { efforts } : {}) }
       })
       .sort((a, b) => a.name.localeCompare(b.name))
   })()
@@ -150,11 +169,30 @@ export function models(): Promise<ModelInfo[]> {
   return value
 }
 
+/**
+ * Every model this account can pick for a thread: Ollama Cloud's, then OpenAI's when signed in
+ * with ChatGPT or with an API key. Fails only when there is nothing at all.
+ */
+export async function allModels(user: User): Promise<ModelInfo[]> {
+  const [ollamaList, openai] = await Promise.all([models().then((l) => ({ l }), (e: Error) => ({ l: [] as ModelInfo[], e })), openaiModels(user)])
+  if (!ollamaList.l.length && !openai.length && 'e' in ollamaList) throw ollamaList.e
+  return [...ollamaList.l, ...openai]
+}
+
+/** One model's details, from its provider's list (null when it is not offered now). */
+async function modelInfo(user: User, name: string): Promise<ModelInfo | null> {
+  const list = providerOf(name) === 'ollama' ? await models().catch(() => [] as ModelInfo[]) : await openaiModels(user)
+  return list.find((m) => m.name === name) ?? null
+}
+
 /** The model a new thread gets: the user's pick for the mode (Settings), else a sensible one. */
 async function defaultModel(mode: Mode, user?: User): Promise<string> {
   const list = await models().catch(() => [] as ModelInfo[])
   const chosen = user ? agentSettings(user)[mode === 'deep' ? 'deepModel' : 'quickModel'] : null
-  if (chosen && (!list.length || list.some((m) => m.name === chosen))) return chosen
+  // An OpenAI model as the usual one: kept while its provider is set up.
+  const openai = chosen && providerOf(chosen) !== 'ollama'
+  if (openai && user && chatProviderReady(user, providerOf(chosen))) return chosen
+  if (chosen && !openai && (!list.length || list.some((m) => m.name === chosen))) return chosen
   return PREFERRED[mode].find((n) => list.some((m) => m.name === n)) ?? list[0]?.name ?? PREFERRED[mode][0]
 }
 
@@ -270,7 +308,7 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, Auto (web addresses it built are checked), edits allowed, read only while planning, or Bypass */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null; /** Who set the title: the title model, or the user by hand (never changed automatically) */ titleSource: TitleSource; /** Titles it had before, newest first, for "also known as" */ aliases: TitleAlias[]; /** The title is being checked against what the thread talks about now, in the background */ checkingTitle: boolean; /** Until when (server time) the user allowed mail reads in this thread without asking, while they do (mailReadsUntil) */ mailReadsUntil: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, Auto (web addresses it built are checked), edits allowed, read only while planning, or Bypass */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null; /** Who set the title: the title model, or the user by hand (never changed automatically) */ titleSource: TitleSource; /** Titles it had before, newest first, for "also known as" */ aliases: TitleAlias[]; /** The title is being checked against what the thread talks about now, in the background */ checkingTitle: boolean; /** Until when (server time) the user allowed mail reads in this thread without asking, while they do (mailReadsUntil) */ mailReadsUntil: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways: boolean; /** The thinking effort picked for this thread (null: as the mode has it, quick low and deep high) */ effort: Effort | null }
 export type TitleSource = 'auto' | 'user'
 /** A title a thread had until `until`, when it was changed (by the title model or by hand). */
 export type TitleAlias = { title: string; until: number }
@@ -290,7 +328,7 @@ export type AgentMessage = { id: number; /** 'compact': a compaction, its conten
  */
 export type Compaction = { auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[] }
 
-type ThreadRow = { id: string; user_id: number; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null; turn_at: number | null; interrupted: string | null; title_source: string | null; title_history: string | null; title_mark: number | null }
+type ThreadRow = { id: string; user_id: number; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null; turn_at: number | null; interrupted: string | null; title_source: string | null; title_history: string | null; title_mark: number | null; effort?: string | null }
 type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; checked: string | null; compact: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
@@ -493,7 +531,7 @@ function deliver(user: User, thread: string, ask: Ask) {
 /** Starts a chain of turns that no request streams (a window follows it): Send now on a thread at rest, or the queue going on. */
 function startChain(user: User, thread: string, ask: Ask) {
   checkTurnRoom(user)
-  requireKey(user)
+  threadKey(user, thread)
   void runChain(user, thread, ask, null, false)
 }
 
@@ -509,7 +547,7 @@ function resumeHeld(thread: string) {
   if (running.has(thread) || !list.length || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return
   try {
     checkTurnRoom(h.user)
-    requireKey(h.user)
+    threadKey(h.user, thread)
   } catch {
     return // the queue stays, for the user to send
   }
@@ -625,14 +663,14 @@ export function moveQueued(user: User, id: string, qid: string, body: { to?: unk
 export function sendQueued(user: User, id: string, qid: string): { thread: Thread } {
   const row = ownThread(user, id)
   const { list, i } = ownQueued(row, qid)
-  if (!running.has(row.id)) (checkTurnRoom(user), requireKey(user))
+  if (!running.has(row.id)) (checkTurnRoom(user), requireKey(user, row.model))
   if (editing.get(row.id)?.id === qid) editing.delete(row.id)
   setQueue(row.id, list.filter((_, j) => j !== i))
   deliver(user, row.id, askOf(list[i]))
   return { thread: toThread(ownThread(user, row.id)) }
 }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: storedGroups(r.tools) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id), mailReadsUntil: mailReadsUntil(r.id), mailReadsAlways: mailReadsAlways(r.user_id) })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: storedGroups(r.tools) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id), mailReadsUntil: mailReadsUntil(r.id), mailReadsAlways: mailReadsAlways(r.user_id), effort: isEffort(r.effort) ? r.effort : null })
 const aliasesOf = (r: ThreadRow): TitleAlias[] => (r.title_history ? (JSON.parse(r.title_history) as TitleAlias[]) : [])
 /** A stored or asked-for mode; threads from before the modes (no value) ask first. New threads start in Auto (createThread). */
 const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
@@ -665,6 +703,11 @@ function ownThread(user: User, id: string): ThreadRow {
 }
 
 const modeOf = (v: unknown, fallback: Mode = 'quick'): Mode => (v === 'deep' ? 'deep' : v === 'quick' ? 'quick' : fallback)
+const effortOf = (v: unknown): Effort | null => {
+  if (v === null || v === '') return null
+  if (!isEffort(v)) throw new HttpError(400, 'Bad thinking effort')
+  return v
+}
 const modelName = (v: unknown) => {
   const name = String(v ?? '').trim()
   if (!/^[\w.:/-]{1,80}$/.test(name)) throw new HttpError(400, 'Bad model name')
@@ -761,7 +804,7 @@ export function clearQuick(user: User) {
   for (const { id } of rows) if (!running.has(id)) deleteThread(user, id)
 }
 
-export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown; quick?: unknown; workdir?: unknown; permission?: unknown }): Promise<Thread> {
+export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown; quick?: unknown; workdir?: unknown; permission?: unknown; effort?: unknown }): Promise<Thread> {
   const mode = modeOf(body.mode)
   const project = projectRef(user, body.projectId)
   const model = body.model ? modelName(body.model) : await defaultModel(mode, user)
@@ -772,6 +815,7 @@ export async function createThread(user: User, body: { mode?: string; model?: st
   database()
     .prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, project_id, quick, workdir, permission) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? storeGroups(tools) : null, project, body.quick === true ? 1 : 0, workdir ? JSON.stringify(workdir) : null, body.permission === undefined ? 'auto' : permissionOf(body.permission))
+  if (body.effort !== undefined) database().prepare('UPDATE agent_threads SET effort = ? WHERE id = ?').run(effortOf(body.effort), id)
   return toThread(ownThread(user, id))
 }
 
@@ -837,8 +881,10 @@ export function answer(user: User, id: string, body: { callId?: string; answers?
  * Renames, archives or unarchives, pins, moves to a project, or switches the mode, model or tools.
  * `quick: false` takes a quick answer from Spotlight into the app (there is no way back).
  */
-export async function updateThread(user: User, id: string, body: { title?: string; archived?: boolean; mode?: string; model?: string; tools?: unknown; pinned?: boolean; projectId?: unknown; quick?: boolean; todos?: null; workdir?: unknown; permission?: unknown }): Promise<Thread> {
+export async function updateThread(user: User, id: string, body: { title?: string; archived?: boolean; mode?: string; model?: string; tools?: unknown; pinned?: boolean; projectId?: unknown; quick?: boolean; todos?: null; workdir?: unknown; permission?: unknown; effort?: unknown }): Promise<Thread> {
   const row = ownThread(user, id)
+  // The thinking effort: one of the levels, or null to follow the mode again.
+  if (body.effort !== undefined) database().prepare('UPDATE agent_threads SET effort = ? WHERE id = ?').run(effortOf(body.effort), row.id)
   // Dismissed in the window: the plan is gone, for the agent too.
   if (body.todos === null) database().prepare('UPDATE agent_threads SET todos = NULL WHERE id = ?').run(row.id)
   const title = body.title === undefined ? row.title : String(body.title).trim().slice(0, 120) || row.title
@@ -1337,7 +1383,7 @@ export async function contextOf(user: User, id: string, terminal = terminals.has
     { label: `Tool results (${count('tool')})`, tokens: sum('tool') },
     { label: 'Pictures', tokens: history.reduce((n, m) => n + (m.images?.length ?? 0) * 800, 0) },
   ]
-  const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
+  const info = await modelInfo(user, row.model)
   const settings = agentSettings(user)
   const compaction = boundary
     ? {
@@ -2232,7 +2278,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         if (Object.keys(args).some((k) => k !== 'image_id' && k !== 'instruction' && k !== 'mask_id') || args.instruction !== undefined && (typeof args.instruction !== 'string' || args.instruction.length > 2000)) throw new HttpError(400, 'Supply only an optional image ID or mask ID and instruction up to 2000 characters')
         if (args.mask_id !== undefined && args.image_id !== undefined) throw new HttpError(400, 'Supply image_id or mask_id, not both: a mask is shown with its own source')
         const row = ownThread(user, thread)
-        const model = (await models()).find((m) => m.name === row.model)
+        const model = await modelInfo(user, row.model)
         if (!model?.vision) throw new HttpError(400, 'This model cannot inspect images. Choose a vision-capable model for this thread, then call view_generated_image again.')
         limit.throwIfAborted()
         // A mask is checked next to its source: the second picture is the mask, white selected.
@@ -2246,7 +2292,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
           const bounded = new AbortController()
           let length = 0, content = ''
           try {
-            const reply = await chat(key, { model: row.model, messages: retry ? messages.map((m) => m.role === 'system' ? { ...m, content: m.content + ' Answer with the visual analysis itself, not reasoning about how to answer.' } : m) : messages, ...(retry ? { think: false } : {}), options: { num_predict: retry ? 4096 : 2048 } }, AbortSignal.any([limit, bounded.signal]), (delta) => {
+            const reply = await talk(user, key, { model: row.model, messages: retry ? messages.map((m) => m.role === 'system' ? { ...m, content: m.content + ' Answer with the visual analysis itself, not reasoning about how to answer.' } : m) : messages, ...(retry ? { think: false } : {}), options: { num_predict: retry ? 4096 : 2048 } }, AbortSignal.any([limit, bounded.signal]), (delta) => {
               length += (delta.content?.length ?? 0) + (delta.thinking?.length ?? 0)
               if (length > 16000) { bounded.abort(); return }
               content += delta.content ?? ''
@@ -2801,6 +2847,27 @@ async function chat(key: string, body: { messages: ChatMessage[] } & Record<stri
   return { content, thinking, calls, used }
 }
 
+/** What Ollama's `think` gets for a picked effort: off and on as they are, a level for gpt-oss only. */
+function ollamaThink(model: string, effort: Effort | null, mode: Mode): boolean | string {
+  const oss = model.startsWith('gpt-oss')
+  if (!effort || effort === 'on') return oss ? MODES[mode].think : true
+  if (effort === 'off' || effort === 'none') return oss ? 'low' : false
+  if (!oss) return true
+  return effort === 'minimal' ? 'low' : effort === 'low' || effort === 'medium' || effort === 'high' ? effort : 'high'
+}
+
+/**
+ * One model call on the thread's provider: Ollama's chat (above) for Ollama's models, OpenAI's
+ * Responses API (server/agentChatGPT.ts) for chatgpt/ and openai/ ones. There `effort` is the level
+ * asked for; without one, `think: false` asks for the lowest and anything else for the model's default.
+ */
+async function talk(user: User, key: string, body: { model: string; messages: ChatMessage[]; tools?: unknown[]; think?: boolean | string; effort?: Effort | null; session?: string } & Record<string, unknown>, signal: AbortSignal, onDelta: (d: { content?: string; thinking?: string }) => void): Promise<{ content: string; thinking: string; calls: ToolCall[]; used: number | null }> {
+  const { effort, session, ...rest } = body
+  if (providerOf(body.model) === 'ollama') return chat(key, rest, signal, onDelta)
+  const level = effort ?? (body.think === false ? 'none' : isEffort(body.think) ? body.think : null)
+  return responsesChat(user, { model: body.model, messages: endOnUser(body.messages) as ChatMessage[], tools: body.tools as Parameters<typeof responsesChat>[1]['tools'], effort: level, session }, signal, onDelta)
+}
+
 // --- compaction --------------------------------------------------------------------------------
 //
 // A long thread outgrows the model's context window. Compacting asks the thread's own model for a
@@ -2909,7 +2976,7 @@ async function compactThread(user: User, key: string, thread: string, opts: { au
   if (!row) throw new HttpError(404, 'No such thread')
   const { boundary, rest } = sinceCompaction(thread)
   if (!rest.some((m) => m.role === 'user' || m.role === 'assistant')) throw new HttpError(409, boundary ? 'Nothing new to compact since the last time' : 'There is nothing to compact yet')
-  const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
+  const info = await modelInfo(user, row.model)
   const rows = database().prepare('SELECT id, attachments FROM agent_messages WHERE thread_id = ? AND attachments IS NOT NULL').all(thread) as { id: number; attachments: string }[]
   const files = new Map(rows.map((r) => [r.id, JSON.parse(r.attachments) as Attachment[]]))
   const before = requestTokens(chatHistory(thread, info?.vision ?? false))
@@ -2929,7 +2996,7 @@ async function compactThread(user: User, key: string, thread: string, opts: { au
         .filter(Boolean)
         .join('\n\n')
       try {
-        const reply = await chat(key, { model: row.model, messages: [{ role: 'system', content: COMPACT_PROMPT }, { role: 'user', content: ask }], options: { temperature: 0.2 }, ...(think === undefined ? {} : { think }) }, signal, () => {})
+        const reply = await talk(user, key, { model: row.model, messages: [{ role: 'system', content: COMPACT_PROMPT }, { role: 'user', content: ask }], options: { temperature: 0.2 }, ...(think === undefined ? {} : { think }) }, signal, () => {})
         summary = reply.content.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
         break
       } catch (e) {
@@ -2973,7 +3040,7 @@ async function compactThread(user: User, key: string, thread: string, opts: { au
 async function compactTurn(user: User, thread: string, instructions: string | undefined, ctl: AbortController, send: (e: TurnEvent) => void): Promise<TurnResult> {
   const step = instructions ? { instructions } : {}
   try {
-    const key = requireKey(user)
+    const key = threadKey(user, thread)
     // Nothing new since the last boundary (a /compact queued twice): nothing to do.
     if (compactable(thread)) await compactThread(user, key, thread, { auto: false, ...step }, ctl.signal, send)
     send({ type: 'done' })
@@ -3109,7 +3176,7 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
   if (compactAsk(ask) && !compactable(row.id)) throw new HttpError(409, sinceCompaction(row.id).boundary ? 'Nothing new to compact since the last time' : 'There is nothing to compact yet')
   checkTurnRoom(user)
-  requireKey(user)
+  requireKey(user, row.model)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
@@ -3204,9 +3271,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
   const { text, files, zone } = ask
   try {
     const row = ownThread(user, thread)
-    const key = requireKey(user)
+    const key = requireKey(user, row.model)
     const mode = modeOf(row.mode)
-    const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
+    const info = await modelInfo(user, row.model)
     // Compacting by itself (Settings → Agents): past this many tokens, when the window's size is known.
     const settings = agentSettings(user)
     const limit = settings.autoCompact && info?.contextLength ? Math.floor((info.contextLength * settings.compactAt) / 100) : null
@@ -3263,8 +3330,11 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           .catch(() => null)
       : null
     const started = Date.now()
-    // Thinking is on in both modes (the window shows it, folded). gpt-oss takes a level for it.
-    const think = !info?.thinking ? undefined : row.model.startsWith('gpt-oss') ? MODES[mode].think : true
+    // Thinking is on in both modes (the window shows it, folded). gpt-oss takes a level for it. The
+    // thread's own effort, when one was picked, says instead: off, on or a level (OpenAI's models).
+    const picked = isEffort(row.effort) ? row.effort : null
+    const think = !info?.thinking ? undefined : ollamaThink(row.model, picked, mode)
+    const effort = picked ?? (MODES[mode].think as Effort)
     // Models forget their todo list: reminded when it has not been touched for a few rounds, and
     // asked once to update or clear it when they finish a turn with items still open.
     let todoRound = -1
@@ -3332,8 +3402,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           console.warn('agents: compacting failed:', (e as Error).message)
         }
       }
-      const callModel = () => chat(key, { model: row.model, messages, ...(offer.length ? { tools: offer } : {}), ...(think === undefined ? {} : { think }) }, ctl.signal, (d) => send({ type: 'delta', ...(wrapUp ? { thinking: d.thinking } : d) }))
-      let reply: Awaited<ReturnType<typeof chat>>
+      const callModel = () => talk(user, key, { model: row.model, messages, ...(offer.length ? { tools: offer } : {}), ...(think === undefined ? {} : { think }), effort, session: row.id }, ctl.signal, (d) => send({ type: 'delta', ...(wrapUp ? { thinking: d.thinking } : d) }))
+      let reply: Awaited<ReturnType<typeof talk>>
       try {
         reply = await callModel()
       } catch (e) {
@@ -3730,7 +3800,7 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   const inpaint = !cut?.compact && last?.checked?.startsWith('image-inpaint:') ? JSON.parse(last.checked.slice('image-inpaint:'.length)) as ImageInput : undefined
   if (again) imageAgainAllowed(user, row.id, again)
   else if (upscale || inpaint) imageActionAllowed(user, row.id)
-  else requireKey(user)
+  else requireKey(user, row.model)
   const zone = zoneFor(body.client?.timeZone)
   const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again, upscale, inpaint }
   if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
