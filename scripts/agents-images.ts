@@ -10,7 +10,14 @@ import { Server } from './empires-harness.ts'
 import type { ImageReviewTurn } from '../server/agentImageLearning.ts'
 import { asPage } from './as-page.ts'
 import { modelAssets, modelFolders, visibleModelAssets, resolveImageAssets, recommendedImageSampling, imageProgressFraction, imageProgressLabel, type ImageAssetCatalog } from '../src/data/imageModels.ts'
-import { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } from '../server/comfyProgress.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Set the scratch directory before Comfy progress imports the authenticated transport/database.
+const imageData = mkdtempSync(join(tmpdir(), 'mvlos-images-'))
+process.env.DATA_DIR = imageData
+const { applyComfyMessage, frameReader, progressState, queuePosition, throttleProgress } = await import('../server/comfyProgress.ts')
 import { createHash } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import type { Duplex } from 'node:stream'
@@ -354,8 +361,8 @@ const ollama = createServer((req, res) => {
 })
 const listen = async (s: ReturnType<typeof createServer>) => { await new Promise<void>((r) => s.listen(0, '127.0.0.1', r)); return `http://127.0.0.1:${(s.address() as { port: number }).port}` }
 const comfyUrl = await listen(comfy), ollamaUrl = await listen(ollama)
-const server = new Server({ OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'image-admin' })
-process.env.DATA_DIR = server.data
+const server = new Server({ DATA_DIR: imageData, OLLAMA_URL: ollamaUrl, OLLAMA_API_KEY: 'fake', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
+process.env.DATA_DIR = imageData
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const sessions = [randomBytes(24).toString('hex'), randomBytes(24).toString('hex')]
 for (let i = 1; i <= 2; i++) {
@@ -646,7 +653,7 @@ try {
   await json('PUT', '/api/agents/images/settings', settings, 1)
   const denied = await api('GET', '/api/agents/images/catalog', undefined, 1)
   assert.equal(denied.status, 400)
-  const admin = { id: 1, admin: true, login: 'image-admin', name: null, avatar: null, githubToken: '', githubScopes: [] }
+  const admin = { id: 1, githubId: 1, admin: true, login: 'image-admin', name: null, avatar: null, githubToken: '', githubScopes: [] }
   await assert.rejects(generateImage({ ...admin, id: 2 }, t.id, { prompt: 'test' }, new AbortController().signal), /No such thread/)
   assert.throws(() => saveImageSettings(admin, { url: 'file:///etc/passwd' }))
   assert.throws(() => saveImageSettings(admin, { url: 'https://user:password@example.com' }))
@@ -1607,6 +1614,7 @@ try {
   console.log('All image generation checks passed')
 } finally {
   await server.dispose()
+  rmSync(imageData, { recursive: true, force: true })
   for (const socket of sockets.values()) socket.destroy() // upgraded, so closeAllConnections no longer holds them
   comfy.closeAllConnections(); ollama.closeAllConnections()
   await Promise.all([new Promise<void>((r) => comfy.close(() => r())), new Promise<void>((r) => ollama.close(() => r()))])

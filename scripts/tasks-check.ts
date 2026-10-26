@@ -24,8 +24,8 @@ import { asPage } from './as-page.ts'
 
 const mock = await startMock()
 const LOGIN = 'tasks-check'
-process.env.ADMIN_USERS = LOGIN
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: LOGIN, NOTIFY_WATCH: 'off' })
+process.env.ADMIN_GITHUB_IDS = '1'
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1', NOTIFY_WATCH: 'off' })
 // The account and its session go straight into the scratch database, before the server opens it.
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')

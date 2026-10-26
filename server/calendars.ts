@@ -1,11 +1,13 @@
 import type { User } from './auth.ts'
-import { caldavCalendars, caldavEvents, caldavKnownUids, createCaldavEvent, deleteCaldavEvent, getCaldavEvent, listCaldav, moveCaldavEvent, updateCaldavEvent, type CaldavRef } from './caldav.ts'
+import { assertCaldavLink, caldavLinkVersion, caldavCalendars, caldavEvents, caldavKnownUids, createCaldavEvent, deleteCaldavEvent, getCaldavEvent, listCaldav, moveCaldavEvent, updateCaldavEvent, type CaldavRef } from './caldav.ts'
 import {
   createGoogleEvent,
   deleteGoogleEvent,
   getGoogleEvent,
-  googleAccount,
   googleKnownUids,
+  googleLinkGeneration,
+  assertGoogleLink,
+  type GoogleSnapshot,
   listCalendars,
   listEvents,
   moveGoogleEvent,
@@ -57,18 +59,25 @@ export function hiddenCalendars(user: User): Set<string> {
 }
 
 /** Every connected calendar, except the hidden ones unless `withHidden` (the browser filters those itself; a note's link may still resolve in one). */
-export async function allCalendars(user: User, withHidden = false): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
-  const { calendars, errors } = await connectedCalendars(user)
+export async function allCalendars(user: User, withHidden = false, snapshot?: GoogleSnapshot, caldav = caldavLinkVersion(user)): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+  // The Google snapshot this answer is made under (taken before any await, or the caller's, for a
+  // bigger read that holds one): Google takes part if it was connected then, only under that link, and
+  // if the link changes before the answer leaves (a relink, a disconnect, the account removed), all of
+  // it is dropped, Google's part that already came included.
+  const generation = snapshot === undefined ? googleLinkGeneration(user) : snapshot
+  const { calendars, errors } = await connectedCalendars(user, generation)
+  assertGoogleLink(user, generation)
+  assertCaldavLink(user, caldav)
   if (withHidden) return { calendars, errors }
   const hidden = hiddenCalendars(user)
   return { calendars: hidden.size ? calendars.filter((c) => !hidden.has(c.id)) : calendars, errors }
 }
 
-async function connectedCalendars(user: User): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+async function connectedCalendars(user: User, generation: GoogleSnapshot): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
   const labels = new Map(listCaldav(user).map((a) => [a.id, a.label]))
   const errors: string[] = []
   const [google, caldav] = await Promise.all([
-    googleAccount(user) ? listCalendars(user).catch((e) => (errors.push(message('Google', e)), [] as CalendarInfo[])) : Promise.resolve([] as CalendarInfo[]),
+    generation !== null ? listCalendars(user, generation).catch((e) => (errors.push(message('Google', e)), [] as CalendarInfo[])) : Promise.resolve([] as CalendarInfo[]),
     caldavCalendars(user),
   ])
   return {
@@ -94,20 +103,22 @@ async function connectedCalendars(user: User): Promise<{ calendars: AnyCalendar[
  * Events in range from the given calendars (default: Google's shown ones and every CalDAV one,
  * without the hidden ones; calendars asked for by id are taken as asked, the caller leaves out hidden ones).
  */
-export async function allEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+export async function allEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }, snapshot?: GoogleSnapshot, caldavGeneration = caldavLinkVersion(user)): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+  // As in allCalendars: one Google snapshot for the whole answer, checked once everything is in.
+  const generation = snapshot === undefined ? googleLinkGeneration(user) : snapshot
   const hidden = ids ? null : hiddenCalendars(user)
   if (hidden?.size) {
-    const { calendars } = await connectedCalendars(user)
+    const { calendars } = await connectedCalendars(user, generation)
     ids = calendars.filter((c) => !hidden.has(c.id) && (c.source !== 'Google' || c.selected)).map((c) => c.id)
   }
   const caldavIds = ids?.filter((id) => id.startsWith('caldav:')) ?? null
   const googleIds = ids?.filter((id) => !id.startsWith('caldav:')) ?? null
   const { calendars: cals, errors } = await caldavCalendars(user)
   const pick = caldavIds ? cals.filter((c) => caldavIds.includes(c.id)) : cals
-  const googleWanted = googleAccount(user) && (!googleIds || googleIds.length > 0)
+  const googleWanted = generation !== null && (!googleIds || googleIds.length > 0)
   const usernames = new Map(listCaldav(user).map((a) => [a.id, a.username.toLowerCase()]))
   const [google, caldav] = await Promise.all([
-    googleWanted ? listEvents(user, googleIds, range, encodeRef).catch((e) => (errors.push(message('Google', e)), [] as CalendarEvent[])) : Promise.resolve([] as CalendarEvent[]),
+    googleWanted ? listEvents(user, googleIds, range, encodeRef, generation!).catch((e) => (errors.push(message('Google', e)), [] as CalendarEvent[])) : Promise.resolve([] as CalendarEvent[]),
     Promise.all(
       pick.map((cal) =>
         caldavEvents(user, cal, range.from, range.to)
@@ -137,6 +148,8 @@ export async function allEvents(user: User, ids: string[] | null, range: { from:
       ),
     ).then((l) => l.flat()),
   ])
+  assertGoogleLink(user, generation)
+  assertCaldavLink(user, caldavGeneration)
   return {
     events: [...google, ...caldav].sort((a, b) => a.start.localeCompare(b.start) || Number(b.allDay) - Number(a.allDay)),
     errors: [...new Set(errors)],

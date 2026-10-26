@@ -112,7 +112,7 @@ const ollama = createServer(async (req, res) => {
 })
 const listen = async (server: ReturnType<typeof createServer>) => { await new Promise<void>((r) => server.listen(0, '127.0.0.1', r)); return `http://127.0.0.1:${(server.address() as { port: number }).port}` }
 base = await listen(remote)
-const server = new Server({ OLLAMA_URL: await listen(ollama), OLLAMA_API_KEY: 'fake', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'image-save-one,image-save-two', NOTIFY_WATCH: 'off' })
+const server = new Server({ OLLAMA_URL: await listen(ollama), OLLAMA_API_KEY: 'fake', GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1,2', NOTIFY_WATCH: 'off' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const { prepareImageFileSave } = await import('../server/agentImageFiles.ts')

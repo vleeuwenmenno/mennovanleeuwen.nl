@@ -1,3 +1,4 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { GitBranch, GitComment, GitCommit, GitCommitItem, GitFile, GitFileList, GitIssue, GitIssueItem, GitPage, GitPull, GitRepoList, GitRepoOverview, GitTimeline } from '../src/data/gitTypes.ts'
 import type { User } from './auth.ts'
@@ -163,8 +164,8 @@ export function stateParam<T extends string>(v: string | null, allowed: readonly
 const cache = new Map<string, { at: number; ttl: number; value: Promise<unknown> }>()
 function cachedAnswer<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < hit.ttl) return hit.value as Promise<T>
-  const value = load()
+  if (hit && Date.now() - hit.at < hit.ttl && canUsePrivateCache(hit.value)) return hit.value as Promise<T>
+  const value = ownPrivateCache(load())
   cache.set(key, { at: Date.now(), ttl, value })
   value.catch(() => cache.get(key)?.value === value && cache.delete(key))
   if (cache.size > 1000) for (const [k, v] of cache) if (Date.now() - v.at > v.ttl) cache.delete(k)

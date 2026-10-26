@@ -1,3 +1,4 @@
+import { privateRequestAuthority, requirePrivateRequest } from './privateRequest.ts'
 import type { IssueHit } from '../src/data/code.ts'
 import type { User } from './auth.ts'
 import { onUserGone } from './db.ts'
@@ -11,7 +12,7 @@ import { list, toIssue, type ApiIssue } from './search.ts'
 export type Inbox = { review: IssueHit[]; mine: IssueHit[]; assigned: IssueHit[]; errors: string[] }
 
 const CACHE_MS = 60_000
-const cache = new Map<number, { at: number; value: Promise<Inbox> }>()
+const cache = new Map<number, { at: number; authority: object | undefined; pending: boolean; value: Promise<Inbox> }>()
 onUserGone((id) => cache.delete(id))
 
 async function githubBox(src: Source): Promise<Omit<Inbox, 'errors'>> {
@@ -29,10 +30,11 @@ async function giteaBox(src: Source): Promise<Omit<Inbox, 'errors'>> {
 
 export function inbox(user: User, fresh = false): Promise<Inbox> {
   const hit = cache.get(user.id)
-  if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value
+  if (!fresh && hit && Date.now() - hit.at < CACHE_MS && (!hit.pending || hit.authority === privateRequestAuthority())) return hit.value
   const value = (async () => {
     const errors: string[] = []
     const boxes = await Promise.all(sources(user).map((src) => (src.kind === 'github' ? githubBox(src) : giteaBox(src)).catch((e: Error) => (errors.push(e.message), { review: [], mine: [], assigned: [] }))))
+    requirePrivateRequest(user)
     const byUpdate = (a: IssueHit, b: IssueHit) => b.updatedAt.localeCompare(a.updatedAt)
     return {
       review: boxes.flatMap((b) => b.review).sort(byUpdate),
@@ -41,7 +43,8 @@ export function inbox(user: User, fresh = false): Promise<Inbox> {
       errors,
     }
   })()
-  cache.set(user.id, { at: Date.now(), value })
-  value.catch(() => cache.delete(user.id))
+  const entry = { at: Date.now(), authority: privateRequestAuthority(), pending: true, value }
+  cache.set(user.id, entry)
+  value.then(() => { entry.pending = false }, () => { if (cache.get(user.id) === entry) cache.delete(user.id) })
   return value
 }

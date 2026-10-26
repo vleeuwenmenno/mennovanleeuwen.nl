@@ -119,7 +119,7 @@ const OTHER = 'mail-agent-other'
 const server = new Server({
   GITHUB_CLIENT_ID: 'x',
   GITHUB_CLIENT_SECRET: 'x',
-  ADMIN_USERS: `${LOGIN},${OTHER}`,
+  ADMIN_GITHUB_IDS: '1,2',
   NOTIFY_WATCH: 'off',
   MAIL_POLL_MS: '600000',
   OLLAMA_URL: `http://127.0.0.1:${(ollama.address() as { port: number }).port}`,

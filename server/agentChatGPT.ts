@@ -1,3 +1,6 @@
+import { withProviderLifetime } from './privateRequest.ts'
+import { privateRequestAuthority, withProviderGuard } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { createHash } from 'node:crypto'
 import type { User } from './auth.ts'
 import { onUserGone } from './db.ts'
@@ -73,7 +76,7 @@ function apiModel(id: string): ProviderModel | null {
   return { name: `openai/${id}`, thinking: efforts.length > 0, vision: !/^o1-mini|^o3-mini|^gpt-3/.test(id), contextLength, provider: 'openai', ...(efforts.length ? { efforts, defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] } : {}) }
 }
 
-const cache = new Map<string, { at: number; value: Promise<ProviderModel[]> }>()
+const cache = new Map<string, { at: number; pending: boolean; authority: object | undefined; value: Promise<ProviderModel[]> }>()
 onUserGone((id) => {
   for (const k of cache.keys()) if (k.endsWith(`:${id}`)) cache.delete(k)
 })
@@ -81,11 +84,12 @@ const TTL = 30 * 60_000
 
 function cached(key: string, load: () => Promise<ProviderModel[]>): Promise<ProviderModel[]> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < TTL) return hit.value
+  if (hit && Date.now() - hit.at < TTL && (!hit.pending || hit.authority === privateRequestAuthority())) return hit.value
   const value = load()
-  const entry = { at: Date.now(), value }
+  const entry = { at: Date.now(), pending: true, authority: privateRequestAuthority(), value }
+  value.then(() => { entry.pending = false }, () => {})
   cache.set(key, entry)
-  value.catch(() => cache.delete(key))
+  value.catch(() => { if (cache.get(key) === entry) cache.delete(key) })
   return value
 }
 
@@ -182,8 +186,11 @@ export function clampEffort(want: Effort | null | undefined, efforts: Effort[] |
 }
 
 async function codexFetch(user: User, path: string, method: string, body: unknown, signal: AbortSignal, accept: string, session?: string): Promise<Response> {
+  const version = access.version(user)
+  return withProviderGuard(() => access.assertVersion(user, version), async () => {
   const go = async (force: boolean) => {
-    const t = await access.freshTokens(user, force)
+    const t = await access.freshTokens(user, force, version, signal)
+    access.assertVersion(user, version)
     return fetch(`${access.codexUrl()}${path}`, {
       method,
       headers: { ...access.codexHeaders(t, accept), ...(session ? { session_id: session } : {}) },
@@ -204,7 +211,9 @@ async function codexFetch(user: User, path: string, method: string, body: unknow
       throw new HttpError(409, 'ChatGPT refused the sign-in: sign in again in Settings → Agents → Images')
     }
   }
+  access.assertVersion(user, version)
   return res
+  })
 }
 
 /** An error answer from either backend, worded for the window; a too-long one so the turn compacts. */
@@ -325,7 +334,7 @@ async function readStream(res: Response, who: string, onDelta: (d: { content?: s
  * One model call on an OpenAI provider, streamed, answered like Ollama's chat: the reply's text,
  * its reasoning summary, the tool calls it made and how many tokens the context took.
  */
-export async function responsesChat(
+async function responsesChatInner(
   user: User,
   req: { model: string; messages: ChatMessage[]; tools?: ToolDef[]; effort?: Effort | null; session?: string },
   signal: AbortSignal,
@@ -372,4 +381,16 @@ export async function responsesChat(
   }
   if (!res.ok) throw await failure(res, 'OpenAI')
   return readStream(res, 'OpenAI', onDelta, timer, provider, req.model)
+}
+
+// Capture before model discovery too: a held model list must not move this prompt to a new link.
+export const responsesChat: typeof responsesChatInner = (user, request, ...args) => {
+  if (providerOf(request.model) !== 'chatgpt') return responsesChatInner(user, request, ...args)
+  const version = access.version(user)
+  return withProviderLifetime(() => access.assertVersion(user, version), (end) => access.onChanged((id) => { if (id === user.id) end() }), async () => {
+    access.assertVersion(user, version)
+    const reply = await responsesChatInner(user, request, ...args)
+    access.assertVersion(user, version)
+    return reply
+  })
 }

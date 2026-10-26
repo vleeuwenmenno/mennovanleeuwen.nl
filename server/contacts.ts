@@ -1,7 +1,8 @@
+import { withPrivateOperation } from './privateRequest.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
-import { addCarddav, bookCards, carddavBooks, cardUrl, deleteCard, fetchPhoto, getCard, listCarddav, putCard, removeCarddav, reusableLogins, type AddressBook } from './carddav.ts'
+import { bindCarddavRequest, addCarddav, bookCards, carddavBooks, cardUrl, deleteCard, fetchPhoto, getCard, listCarddav, putCard, removeCarddav, reusableLogins, type AddressBook } from './carddav.ts'
 import { database } from './db.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { applyFields, emptyFields, ensureUid, groupOf, newCard, newGroupCard, photoOf, printCards, readFields, setMembers, setPhoto, splitCards, uidOf, versionOf, type Card, type ContactFields } from './vcard.ts'
@@ -166,7 +167,7 @@ function groupsIn(stored: Stored[]): Group[] {
   })
 }
 
-export async function listContacts(user: User, fresh: boolean): Promise<{ books: Book[]; contacts: Contact[]; groups: Group[]; errors: string[] }> {
+async function listContactsOperation(user: User, fresh: boolean): Promise<{ books: Book[]; contacts: Contact[]; groups: Group[]; errors: string[] }> {
   const { books: list, stored, errors } = await allCards(user, fresh ? 0 : undefined)
   const groups = groupsIn(stored)
   const contacts = stored.filter((s) => !groupOf(s.card)).map((s) => toContact(s, groups))
@@ -252,7 +253,7 @@ async function created(user: User, s: Stored): Promise<Contact> {
   return toContact(stored.find((x) => idOf(x) === idOf(s)) ?? s, groups)
 }
 
-export async function createContact(user: User, body: Body): Promise<Contact> {
+async function createContactOperation(user: User, body: Body): Promise<Contact> {
   const { book, dav } = await bookFor(user, String(body.book ?? 'local'))
   if (!book.writable) throw new HttpError(403, `${book.name} is read-only`)
   const uid = randomUUID()
@@ -267,7 +268,7 @@ export async function createContact(user: User, body: Body): Promise<Contact> {
 }
 
 /** Changes what the editor changed (`base` → `fields`) in the card as it is now, written back with its ETag. */
-export async function updateContact(user: User, body: Body): Promise<Contact> {
+async function updateContactOperation(user: User, body: Body): Promise<Contact> {
   const s = await current(user, body.id)
   if (!s.book.writable) throw new HttpError(403, `${s.book.name} is read-only`)
   const base = cleanFields(body.base)
@@ -284,7 +285,7 @@ export async function updateContact(user: User, body: Body): Promise<Contact> {
   return created(user, await write(user, s, s.etag))
 }
 
-export async function deleteContact(user: User, body: Body) {
+async function deleteContactOperation(user: User, body: Body) {
   const s = await current(user, body.id)
   if (!s.book.writable) throw new HttpError(403, `${s.book.name} is read-only`)
   if (body.etag && s.etag && body.etag !== s.etag && !s.dav) throw new HttpError(409, 'It changed somewhere else meanwhile; try again')
@@ -292,7 +293,7 @@ export async function deleteContact(user: User, body: Body) {
 }
 
 /** Moves a contact's whole card to another address book (any account), then takes it out of the first. */
-export async function moveContact(user: User, body: Body): Promise<Contact> {
+async function moveContactOperation(user: User, body: Body): Promise<Contact> {
   const s = await current(user, body.id)
   const { book, dav } = await bookFor(user, String(body.book))
   if (book.id === s.book.id) return created(user, s)
@@ -307,7 +308,7 @@ export async function moveContact(user: User, body: Body): Promise<Contact> {
  * Cards from a .vcf into a book: one with a UID the book already has replaces that card, the rest
  * are added. Group cards come along. Four at a time to a CardDAV server.
  */
-export async function importCards(user: User, body: { book?: string; text?: string; skipDuplicates?: boolean }): Promise<{ added: number; updated: number; skipped: number; failed: string[] }> {
+async function importCardsOperation(user: User, body: { book?: string; text?: string; skipDuplicates?: boolean }): Promise<{ added: number; updated: number; skipped: number; failed: string[] }> {
   const { book, dav } = await bookFor(user, String(body.book ?? 'local'))
   if (!book.writable) throw new HttpError(403, `${book.name} is read-only`)
   const cards = splitCards(String(body.text ?? ''))
@@ -354,13 +355,13 @@ export async function importCards(user: User, body: { book?: string; text?: stri
 }
 
 /** A .vcf of a book (with its group cards), or of some contacts: the cards as they are stored. */
-export async function exportCards(user: User, book: string | null, ids: string[] | null): Promise<string> {
+async function exportCardsOperation(user: User, book: string | null, ids: string[] | null): Promise<string> {
   const { stored } = await allCards(user)
   const pick = ids ? stored.filter((s) => ids.includes(idOf(s))) : stored.filter((s) => !book || s.book.id === book)
   return printCards(pick.map((s) => s.card))
 }
 
-export async function contactPhoto(user: User, id: string | null): Promise<{ type: string; bytes: Buffer }> {
+async function contactPhotoOperation(user: User, id: string | null): Promise<{ type: string; bytes: Buffer }> {
   const { book: bookId } = splitId(id)
   const { stored } = await allCards(user)
   const s = stored.find((x) => idOf(x) === id && x.book.id === bookId)
@@ -396,8 +397,24 @@ export async function handleContactsApi(req: IncomingMessage, res: ServerRespons
   }
   if (path === '/api/contacts/photo' && read) {
     const p = await contactPhoto(user, url.searchParams.get('id'))
-    res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(method === 'HEAD' ? undefined : p.bytes)
+    res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(method === 'HEAD' ? undefined : p.bytes)
     return true
   }
   return false
 }
+
+export const listContacts = (...args: Parameters<typeof listContactsOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return listContactsOperation(...args) })
+
+export const createContact = (...args: Parameters<typeof createContactOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return createContactOperation(...args) })
+
+export const updateContact = (...args: Parameters<typeof updateContactOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return updateContactOperation(...args) })
+
+export const deleteContact = (...args: Parameters<typeof deleteContactOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return deleteContactOperation(...args) })
+
+export const moveContact = (...args: Parameters<typeof moveContactOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return moveContactOperation(...args) })
+
+export const importCards = (...args: Parameters<typeof importCardsOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return importCardsOperation(...args) })
+
+export const exportCards = (...args: Parameters<typeof exportCardsOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return exportCardsOperation(...args) })
+
+export const contactPhoto = (...args: Parameters<typeof contactPhotoOperation>) => withPrivateOperation(() => { bindCarddavRequest(args[0]); return contactPhotoOperation(...args) })

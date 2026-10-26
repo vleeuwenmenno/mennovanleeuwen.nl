@@ -17,7 +17,7 @@
 // Exits 1 on any failure.
 
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { Server, check, finish, sleep } from './empires-harness.ts'
@@ -40,7 +40,7 @@ const realFetch = globalThis.fetch
 
 // --- 1. the real server -------------------------------------------------------------------------
 {
-  const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'nobody' })
+  const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '999999' })
   process.env.DATA_DIR = server.data
   const { database, encrypt, sha256 } = await import('../server/db.ts')
   const now = Date.now()
@@ -80,6 +80,22 @@ const realFetch = globalThis.fetch
   // The page of the session's own account goes through.
   check('server: account 2’s own page saves', (await put(sids[2], '2', ['account-2-own'])).status === 200 && JSON.stringify(await stateOf(2)).includes('account-2-own'))
   check('server: and sends notifications', (await req('/api/notifications', { sid: sids[2], held: '2', method: 'POST', json: { source: 'calendar.reminder', title: 'done' } })).status === 200)
+  // Browser caches: an account-scoped response must never be reusable by another session.
+  const threadId = '00000000-0000-4000-8000-000000000001'
+  database().prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, created_at, updated_at) VALUES (?, 1, ?, ?, ?, ?, ?)').run(threadId, 't', 'ask', 'm', now, now)
+  const attachments = JSON.stringify([{ kind: 'image', mime: 'image/png', name: 'a.png', data: Buffer.from('account-1-bytes').toString('base64') }])
+  const msg = Number(database().prepare('INSERT INTO agent_messages (thread_id, role, content, attachments, created_at) VALUES (?, ?, ?, ?, ?)').run(threadId, 'user', 'hi', attachments, now).lastInsertRowid)
+  const pic = `/api/agents/threads/${threadId}/messages/${msg}/attachments/0`
+  const own = await req(pic, { sid: sids[1], held: '1' })
+  check('cache: the owner’s agent attachment is served', own.status === 200 && (await own.text()) === 'account-1-bytes')
+  check('cache: and is never stored by the browser (private, no-store)', own.headers.get('cache-control') === 'private, no-store')
+  check('cache: account 2 can’t fetch it (404)', (await req(pic, { sid: sids[2], held: '2' })).status === 404)
+  check('cache: nor without a session (401)', (await req(pic)).status === 401)
+  // Source invariant: no auth-gated handler may let the browser reuse a response without asking.
+  const SERVER_DIR = fileURLToPath(new URL('../server/', import.meta.url))
+  const allowed = new Set(['shares.ts']) // token-addressed public share page, not account-scoped
+  const leaks = readdirSync(SERVER_DIR).filter((f) => f.endsWith('.ts') && !allowed.has(f)).filter((f) => /private,\s*max-age/.test(readFileSync(SERVER_DIR + f, 'utf8')))
+  check(`cache: no server file sets "private, max-age" (${leaks.join(', ') || 'none'})`, leaks.length === 0)
   // The account id cookie: set for the session's account, cleared without a valid session.
   const setCookies = (r: Response) => r.headers.getSetCookie().join('\n')
   let r = await req('/api/me', { sid: sids[1] })
@@ -97,6 +113,49 @@ const realFetch = globalThis.fetch
   check('server: the notification stream without it is refused', (await req('/api/notifications/stream?page=x', { sid: sids[2] })).status === 409)
   check('server: reading the notification list without it is not', (await req('/api/notifications', { sid: sids[2] })).status === 200)
   check('server: the service worker renewing its push subscription (no header) is let through', (await req('/api/push/subscription', { sid: sids[2], method: 'POST', json: {} })).status === 400)
+
+  // Admin follows GitHub's immutable id (ADMIN_GITHUB_IDS), never the login.
+  const addUser = (id: number, githubId: number, login: string) => {
+    database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, githubId, login, encrypt('none'), now, now)
+    sids[id] = randomBytes(24).toString('hex')
+    database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sids[id]), id, now, now + 86400_000)
+  }
+  addUser(3, 999999, 'configured-owner')
+  addUser(4, 777, 'vleeuwenmenno')
+  check('admin: a login named like the old default owner, with another github id, is refused (403)', (await req('/api/admin/stats', { sid: sids[4], held: '4' })).status === 403)
+  check('admin: the configured github id is admin', (await req('/api/admin/stats', { sid: sids[3], held: '3' })).status === 200)
+  database().prepare("UPDATE users SET login = 'renamed-owner' WHERE id = 3").run()
+  check('admin: and stays admin after its login is renamed', (await req('/api/admin/stats', { sid: sids[3], held: '3' })).status === 200)
+  database().prepare("UPDATE users SET login = 'vleeuwenmenno' WHERE id = 3").run()
+  database().prepare("UPDATE users SET login = 'someone-new' WHERE id = 4").run()
+  check('admin: a login rename never changes who is admin', (await req('/api/admin/stats', { sid: sids[4], held: '4' })).status === 403)
+
+  // Sign-in scopes: a link can't pick them; the signed-in account's POST is used once, by that account.
+  const login = (opts: { sid?: string; cookie?: string; query?: string } = {}) =>
+    realFetch(`${server.origin}/api/auth/github/login${opts.query ?? ''}`, { redirect: 'manual', headers: { Cookie: [opts.sid ? `mvlos_sid=${opts.sid}` : '', opts.cookie ?? ''].filter(Boolean).join('; ') } })
+  const scopeOf = (r: Response) => new URL(r.headers.get('location')!).searchParams.get('scope')
+  let l = await login({ query: '?repo=1' })
+  check('scope: an anonymous login?repo=1 asks for read:user only', scopeOf(l) === 'read:user')
+  check('scope: and leaves no repo cookie behind', !l.headers.getSetCookie().some((c) => /mvlos_gh_(repo|scope)=[^;]/.test(c)))
+  l = await login({ sid: sids[2], query: '?repo=1' })
+  check('scope: even a signed-in login?repo=1 is ignored', scopeOf(l) === 'read:user')
+  const post = (sid: string, held: string, json: unknown = { repo: true }) => req('/api/auth/github/scope', { sid, held, method: 'POST', json })
+  check('scope: the POST needs the account header (409)', (await req('/api/auth/github/scope', { sid: sids[2], method: 'POST', json: { repo: true } })).status === 409)
+  check('scope: and a session (401)', (await req('/api/auth/github/scope', { held: 'visitor', method: 'POST', json: { repo: true } })).status === 401)
+  check('scope: and a boolean (400)', (await post(sids[2], '2', { repo: 'yes' })).status === 400)
+  const chosen = await post(sids[2], '2')
+  const scopeCookie = chosen.headers.getSetCookie().find((c) => c.startsWith('mvlos_gh_scope='))!
+  check('scope: the POST sets a short-lived HttpOnly cookie', chosen.status === 200 && /HttpOnly/.test(scopeCookie) && /Max-Age=600\b/.test(scopeCookie) && /Path=\/api\/auth/.test(scopeCookie))
+  const pair = scopeCookie.split(';')[0]
+  l = await login({ sid: sids[2], cookie: pair })
+  check('scope: the same account’s next login asks for repo', scopeOf(l)?.includes('repo') === true)
+  check('scope: and clears the cookie (one time)', l.headers.getSetCookie().some((c) => /^mvlos_gh_scope=;.*Max-Age=0/.test(c)))
+  l = await login({ sid: sids[1], cookie: pair })
+  check('scope: another account can’t inherit it', scopeOf(l) === 'read:user' && l.headers.getSetCookie().some((c) => /^mvlos_gh_scope=;.*Max-Age=0/.test(c)))
+  l = await login({ cookie: pair })
+  check('scope: nor a visitor', scopeOf(l) === 'read:user')
+  l = await login({ sid: sids[2], cookie: 'mvlos_gh_repo=1' })
+  check('scope: the old sticky cookie is ignored and cleared', scopeOf(l) === 'read:user' && l.headers.getSetCookie().some((c) => /^mvlos_gh_repo=;.*Max-Age=0/.test(c)))
 
   // Push: a subscription belongs to the session that sent it.
   const { liveSubscriptions } = await import('../server/webpush.ts')
@@ -171,6 +230,26 @@ const realFetch = globalThis.fetch
   const back = await a1again.next(['ready', 'welcome'])
   check('empires: account 1 gets its player back with it', back.t === 'welcome' && back.resumed === true)
   a1again.close()
+  await sleep(300)
+  // Login recycling: account 1 renames, another account takes the old login. Ownership follows the id.
+  database().prepare('UPDATE users SET login = ? WHERE id = 1').run('acct-1-renamed')
+  database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (5, 5, ?, ?, ?, ?)').run('acct-1', encrypt('none'), now, now)
+  sids[5] = randomBytes(24).toString('hex')
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 5, ?, ?)').run(sha256(sids[5]), now, now + 86400_000)
+  const c3 = await ws(sids[5])
+  c3.send({ t: 'hello', v: PROTOCOL })
+  check('empires: a new account on the login account 1 had can’t reclaim its paused player', (await c3.next(['ready', 'welcome'])).t === 'ready')
+  c3.close()
+  const c3t = await ws(sids[5])
+  c3t.send({ t: 'hello', v: PROTOCOL, token })
+  check('empires: nor with its token', (await c3t.next(['ready', 'welcome'])).t === 'ready')
+  c3t.close()
+  check('empires: "a battle waits" follows the account, not the login', (await away(sids[5], '5')) === false)
+  const a1renamed = await ws(sids[1])
+  a1renamed.send({ t: 'hello', v: PROTOCOL })
+  const resumed = await a1renamed.next(['ready', 'welcome'])
+  check('empires: account 1 resumes its player after the rename, without a token', resumed.t === 'welcome' && resumed.resumed === true && resumed.token === token)
+  a1renamed.close()
 
   const auth = readFileSync(new URL('../server/auth.ts', import.meta.url), 'utf8')
   check('server: signing in sets it, readable, like the login cookie', /setCookie\(req, UID_COOKIE, String\(id\), \{ maxAge: SESSION_DAYS \* 86400, readable: true \}\)/.test(auth))

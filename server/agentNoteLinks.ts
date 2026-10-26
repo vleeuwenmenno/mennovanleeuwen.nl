@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { User } from './auth.ts'
-import { calendarsOf, eventDay, eventId, refOf, whenText, type CallSummary, type Prepared } from './agentCalendar.ts'
+import { protectPreparedCalendar, calendarsOf, eventDay, eventId, refOf, whenText, type CallSummary, type Prepared } from './agentCalendar.ts'
 import { changeLinks, eventInfo, findLinked, liveNote, linkTo, markEvent, readNotes, writeNotes, type EventInfo, type NoteRow } from './noteLinks.ts'
+import { assertCaldavLink, caldavLinkVersion } from './caldav.ts'
+import { assertGoogleLink, googleLinkGeneration } from './google.ts'
 import { cleanNoteEvents, linkMatches, MAX_NOTE_EVENTS, meetingNoteText, sameOccurrence, textTitle } from '../src/data/noteEvents.ts'
 
 // The Agents app's tools for notes linked to calendar events (server/noteLinks.ts): which notes an
@@ -81,14 +83,29 @@ async function link(user: User, noteId: string, e: EventInfo, all: boolean) {
 
 /** Checks a call and gets it ready (see server/agentCalendar.ts prepareCalendarCall). Throws what the model should be told. */
 export async function prepareNoteLinkCall(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared> {
+  const google = googleLinkGeneration(user)
+  const caldav = caldavLinkVersion(user)
+  const prepared = await prepareNoteLinkCallInner(user, name, args, zone)
+  assertGoogleLink(user, google)
+  assertCaldavLink(user, caldav)
+  return protectPreparedCalendar(user, google, caldav, prepared)
+}
+
+async function prepareNoteLinkCallInner(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared> {
   if (name === 'events_for_note') {
     const note = liveNote(user, args.note_id)
     return {
       run: async () => {
+        // One Google snapshot for all the lookups, taken before the first await: Google takes part
+        // only if it was connected now, and nothing of it is returned if the link changes before the
+        // answer is written (a lookup that fails for that reason falls back like any other failure,
+        // so the whole answer is checked at the end).
+        const google = googleLinkGeneration(user)
+        const caldav = caldavLinkVersion(user)
         const links = cleanNoteEvents(note.events) ?? []
         const events = await Promise.all(
           links.map(async (l) => {
-            const now = await findLinked(user, l).catch(() => ({ event: null, gone: false }))
+            const now = await findLinked(user, l, false, google, caldav).catch(() => ({ event: null, gone: false }))
             const e = now.event ?? l
             return {
               ...(now.event?.ref ? { id: eventId(now.event.ref) } : {}),
@@ -99,6 +116,8 @@ export async function prepareNoteLinkCall(user: User, name: string, args: Record
             }
           }),
         )
+        assertGoogleLink(user, google)
+        assertCaldavLink(user, caldav)
         return JSON.stringify({ note: { id: note.id, title: textTitle(note.text) }, events })
       },
     }

@@ -1,3 +1,4 @@
+import { privateSignal, requirePrivateRequest, privateRequestAuthority } from './privateRequest.ts'
 import { fetchPinned, publicAddresses } from './egress.ts'
 import { HttpError } from './http.ts'
 
@@ -11,7 +12,7 @@ export type LinkPreview = { url: string; host: string; title: string | null; des
 const MAX_BYTES = 512 * 1024
 const OK_TTL = 24 * 3600_000
 const FAIL_TTL = 10 * 60_000
-const cache = new Map<string, { at: number; ttl: number; value: Promise<LinkPreview> }>()
+const cache = new Map<string, { at: number; ttl: number; pending: boolean; authority: object | undefined; value: Promise<LinkPreview> }>()
 
 /** Public addresses only (server/egress.ts), on the usual web ports: the ones to connect to. */
 export async function websiteAddresses(url: URL, signal?: AbortSignal) {
@@ -137,6 +138,8 @@ export function iconLinks(html: string, base: URL): { href: string; size: number
 }
 
 export async function fetchHead(start: URL, cancel?: AbortSignal): Promise<{ url: URL; html: string }> {
+  cancel = privateSignal(cancel)
+  requirePrivateRequest()
   let url = start
   for (let hop = 0; hop < 4; hop++) {
     const addresses = await websiteAddresses(url, cancel)
@@ -169,6 +172,7 @@ export async function fetchHead(start: URL, cancel?: AbortSignal): Promise<{ url
     try {
       while (reader && size < MAX_BYTES) {
         const { done, value } = await reader.read()
+        requirePrivateRequest()
         if (done) break
         chunks.push(value)
         size += value.length
@@ -192,9 +196,10 @@ export function linkPreview(raw: string): Promise<LinkPreview> {
   }
   const key = start.href
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < hit.ttl) return hit.value
+  if (hit && Date.now() - hit.at < hit.ttl && (!hit.pending || hit.authority === privateRequestAuthority())) return hit.value
   const value = (async () => {
     const { url, html } = await fetchHead(start)
+    requirePrivateRequest()
     // Sent to another domain (a cookie wall, a login page): that page isn't the site. Keep only
     // the site's own icon.
     const base = (h: string) => h.replace(/^www\./, '').split('.').slice(-2).join('.')
@@ -221,8 +226,13 @@ export function linkPreview(raw: string): Promise<LinkPreview> {
       siteName: meta(head, 'og:site_name'),
     }
   })()
-  cache.set(key, { at: Date.now(), ttl: OK_TTL, value })
-  value.catch(() => cache.set(key, { at: Date.now(), ttl: FAIL_TTL, value }))
+  const entry = { at: Date.now(), ttl: OK_TTL, pending: true, authority: privateRequestAuthority(), value }
+  cache.set(key, entry)
+  value.then(() => { entry.pending = false }, () => {
+    if (cache.get(key) !== entry) return
+    try { requirePrivateRequest() } catch { cache.delete(key); return }
+    entry.pending = false; entry.ttl = FAIL_TTL
+  })
   if (cache.size > 2000) for (const [k, v] of cache) if (Date.now() - v.at > v.ttl) cache.delete(k)
   return value
 }

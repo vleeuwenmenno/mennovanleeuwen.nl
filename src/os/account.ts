@@ -140,10 +140,10 @@ export const signIn = () => {
   location.assign(`/api/auth/github/login${to ? `?back=${encodeURIComponent(to)}` : ''}`)
 }
 
-/** Signs in again, asking GitHub for private repositories too (remembered for later sign-ins), or no longer asking. */
-export const signInWithRepos = (repo: boolean) => {
-  const to = back()
-  location.assign(`/api/auth/github/login?repo=${repo ? 1 : 0}${to ? `&back=${encodeURIComponent(to)}` : ''}`)
+/** Signs in again, asking GitHub for private repositories too (once, for this sign-in), or only the profile. */
+export const signInWithRepos = async (repo: boolean) => {
+  await api('/api/auth/github/scope', { method: 'POST', json: { repo } })
+  signIn()
 }
 
 /** Whether GitHub gave this account's token access to private repositories. */

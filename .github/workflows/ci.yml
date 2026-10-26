@@ -17,6 +17,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm check:data-perms
       - run: pnpm build
 
   # pnpm check:perf: fixed scenes in headless Chrome held to perf-budgets.json and the pixel

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -8,7 +9,7 @@ import { empiresUpgrade, startEmpires } from './empires.ts'
 import { startAgents } from './agents.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { startNotifications } from './watchers.ts'
-import { SECURITY } from './http.ts'
+import { SECURITY, cachePurge, documentCsp } from './http.ts'
 import { GAME_CATALOG } from '../src/apps/games/catalog.ts'
 
 // Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
@@ -125,18 +126,23 @@ function playHead(path: string): { key: string; meta: string; noscript: string }
   }
 }
 
-/** index.html with another page's title, description, link preview and noscript text, made once per page. */
-type Page = Record<Encoding | 'raw', Buffer>
-const swappedPages = new Map<string, Page>()
-async function swappedIndex(full: string, key: string, meta: string, noscript: string): Promise<Page> {
-  const hit = swappedPages.get(key)
-  if (hit) return hit
-  const html = await readFile(full, 'utf8')
-  const raw = Buffer.from(html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, meta).replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, noscript))
-  // Compressed once too, like the build's own copies: a few kilobytes, so quick.
-  const page = { raw, br: brotliCompressSync(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } }), gzip: gzipSync(raw, { level: 9 }) }
-  swappedPages.set(key, page)
-  return page
+const NONCE = '__CSP_NONCE__'
+/** index.html with another page's title, description, link preview and noscript text (or as built, for
+ * `meta` undefined), made once per page. Scripts and modulepreload links carry a nonce placeholder
+ * that serve() fills per response, see documentCsp. */
+const templates = new Map<string, Promise<string>>()
+function indexTemplate(full: string, key: string, meta?: string, noscript?: string): Promise<string> {
+  let t = templates.get(key)
+  if (!t) {
+    t = readFile(full, 'utf8').then((html) => {
+      if (meta !== undefined) html = html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, meta)
+      if (noscript !== undefined) html = html.replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, noscript)
+      return html.replace(/<(script|link rel="modulepreload")(?=[\s>])/g, `<$1 nonce="${NONCE}"`)
+    })
+    t.catch(() => templates.delete(key))
+    templates.set(key, t)
+  }
+  return t
 }
 
 /** One request: an /api route, or a file of the built site. */
@@ -171,11 +177,19 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
     res.writeHead(404, { 'Content-Type': 'text/plain', ...SECURITY }).end('Not found\n')
     return
   }
-  const play = served === '/index.html' ? playHead(path) : null
-  if (served === '/index.html' && (play || /^\/cv\/?$/.test(path))) {
-    const page = play ? await swappedIndex(found.full, play.key, play.meta, play.noscript) : await swappedIndex(found.full, 'cv', CV_META, CV_NOSCRIPT)
+  if (served === '/index.html') {
+    const play = playHead(path)
+    const template = play
+      ? await indexTemplate(found.full, play.key, play.meta, play.noscript)
+      : /^\/cv\/?$/.test(path)
+        ? await indexTemplate(found.full, 'cv', CV_META, CV_NOSCRIPT)
+        : await indexTemplate(found.full, 'app')
+    // A fresh nonce for every response, so the page is made and compressed per request (a few
+    // kilobytes, so cheap at a lower setting than the build's own copies).
+    const nonce = randomBytes(16).toString('base64')
+    const raw = Buffer.from(template.replaceAll(NONCE, nonce))
     const encoding = accepted(req)[0]
-    const body = encoding ? page[encoding] : page.raw
+    const body = encoding === 'br' ? brotliCompressSync(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }) : encoding === 'gzip' ? gzipSync(raw) : raw
     res.writeHead(200, {
       'Content-Type': TYPES['.html'],
       'Content-Length': body.length,
@@ -183,6 +197,8 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
       Vary: 'Accept-Encoding',
       'Cache-Control': 'no-cache',
       ...SECURITY,
+      'Content-Security-Policy': documentCsp(nonce),
+      ...cachePurge(req),
     })
     res.end(req.method === 'HEAD' ? undefined : body)
     return

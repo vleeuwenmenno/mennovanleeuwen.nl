@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { actionUrl, allows, brandBadge, brandIcon, keepMs, normalizePrefs, NOTIFY_SOURCES, sourceOf, type Brand, type Entry, type NoticeAction, type NotifyPrefs, type SourceId } from '../src/data/notifySources.ts'
-import type { User } from './auth.ts'
+import { bindConnection, type User } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { readState } from './state.ts'
@@ -47,15 +47,15 @@ onUserGone((id) => pageSent.delete(id))
 
 // --- open pages ----------------------------------------------------------------------------------
 
-/** A page with the live stream open: whether it is in view, as it last said (a heartbeat). */
-type Page = { res: ServerResponse; visible: boolean; seen: number }
+/** A page with the live stream open: whether it is in view, as it last said (a heartbeat), and the session it was opened with (the stream ends with it, server/liveSessions.ts). */
+type Page = { res: ServerResponse; visible: boolean; seen: number; live: NonNullable<ReturnType<typeof bindConnection>> }
 const pages = new Map<number, Map<string, Page>>() // account → page id → page
 /** Live streams one account may have open at once (tabs, devices). */
 const MAX_PAGES = 8
 /** A page that said it was in view longer ago than this is taken to be asleep (a phone in a pocket). */
 const VISIBLE_FOR = 75_000
 
-/** Ends an account's live streams (signed out everywhere, banned or deleted, server/users.ts). */
+/** Ends an account's live streams (the account is deleted; signing out and bans end them by session, server/liveSessions.ts). */
 export function closeStreams(userId: number) {
   for (const p of pages.get(userId)?.values() ?? []) p.res.end()
   pages.delete(userId)
@@ -65,7 +65,9 @@ onUserGone(closeStreams)
 const inView = (userId: number) => [...(pages.get(userId)?.values() ?? [])].some((p) => p.visible && Date.now() - p.seen < VISIBLE_FOR)
 
 function broadcast(userId: number, event: string, data: unknown) {
-  for (const p of pages.get(userId)?.values() ?? []) if (!p.res.writableEnded) p.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  // Each page is asked whether its session is still good before it is sent anything: a session that
+  // ended without a word (deleted, expired, banned) is closed here instead of being told.
+  for (const p of [...(pages.get(userId)?.values() ?? [])]) if (!p.res.writableEnded && p.live.check(true)) p.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
 /** Tells the account's open pages that something they show changed (`calendar`: events; `mail`: an account's mail, `{ account }`; `state`: synced desktop state the server changed, `{ key }`), over the same live stream. */
@@ -73,6 +75,9 @@ export const tellPages = (userId: number, event: 'calendar' | 'mail' | 'state', 
 
 /** GET /api/notifications/stream?page=<id>: the page's live stream (Server-Sent Events). */
 export function openStream(req: IncomingMessage, res: ServerResponse, user: User, pageId: string | null) {
+  // Bound to the session that opened it: signing out of it (not of another device) closes it.
+  const live = bindConnection(req, user.id, () => res.destroy())
+  if (!live) throw new HttpError(401, 'Not signed in')
   const id = pageId && /^[\w-]{8,64}$/.test(pageId) ? pageId : randomUUID()
   res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive', ...SECURITY })
   const list = pages.get(user.id) ?? new Map<string, Page>()
@@ -83,12 +88,13 @@ export function openStream(req: IncomingMessage, res: ServerResponse, user: User
     list.delete(oldest)
     page.res.end()
   }
-  list.set(id, { res, visible: true, seen: Date.now() })
+  list.set(id, { res, visible: true, seen: Date.now(), live })
   res.write(`event: hello\ndata: ${JSON.stringify({ page: id })}\n\n`)
-  // A comment now and then keeps proxies from closing a quiet stream.
-  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 25_000)
+  // A comment now and then keeps proxies from closing a quiet stream (and asks whether its session is still good).
+  const keepAlive = setInterval(() => live.check() && res.write(': keep-alive\n\n'), 25_000)
   const done = () => {
     clearInterval(keepAlive)
+    live.stop()
     if (list.get(id)?.res === res) list.delete(id)
     if (!list.size) pages.delete(user.id)
   }

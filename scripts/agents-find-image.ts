@@ -270,7 +270,7 @@ const server = new Server({
   OLLAMA_API_KEY: 'fake-ollama',
   GITHUB_CLIENT_ID: 'x',
   GITHUB_CLIENT_SECRET: 'x',
-  ADMIN_USERS: `${LOGIN},find-image-other`,
+  ADMIN_GITHUB_IDS: '1,2',
   DATA_DIR: DATA,
   NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import ./scripts/find-image-fake-net.ts`,
   FIND_IMAGE_FAKE_WEB: webUrl,

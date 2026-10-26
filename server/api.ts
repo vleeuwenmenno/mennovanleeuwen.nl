@@ -1,3 +1,4 @@
+import { bindCarddavRequest } from './carddav.ts'
 import { saveImageMask, imageMask, discardImageMask, maskSource } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
 import { saveSkillConfig, skillConfig } from './agentSkills.ts'
@@ -13,22 +14,24 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
+import { privateRequestActive, runPrivateRequest } from './privateRequest.ts'
+import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafile.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
-import { accountMismatch, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
+import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
-import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
+import { bindCaldavRequest, addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, knownUids, updateEvent } from './calendars.ts'
 import { findLinked, noteLinkApi } from './noteLinks.ts'
 import { handleContactsApi } from './contacts.ts'
 import { handleTasksApi } from './tasks.ts'
 import { handlePimApi } from './pim.ts'
 import { empiresAway } from './empires.ts'
-import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
+import { bindGoogleRequest, disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, streamFile, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
@@ -36,7 +39,7 @@ import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { handlePhotosApi } from './photos.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
-import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
+import { cachePurge, HttpError, json, mergeHeaders, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
@@ -115,7 +118,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         caldav: user ? listCaldav(user) : [],
         integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null, openai: user ? chatProviderReady(user, 'chatgpt') || chatProviderReady(user, 'openai') : false },
         seafile: user ? seafileInfo(user) : null,
-      }, fix.length ? { 'Set-Cookie': fix } : {})
+      }, mergeHeaders(fix.length ? { 'Set-Cookie': fix } : {}, cachePurge(req)))
       return true
     }
 
@@ -145,7 +148,27 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const refused = accountMismatch(req, held, required)
       if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
     }
+    // Private by default. Public reads and OAuth/signed callbacks finish above this boundary.
+    // Session lifecycle endpoints finish their own logout/removal; guest rejoin and sealed Mail
+    // pictures authenticate by their own capability (inline pictures restore the sealed session).
+    const independent = path === '/api/auth/logout' || (path === '/api/me' && method === 'DELETE') || path === '/api/empires/away' || path.startsWith('/api/mail/inline/')
+    if (!independent && !privateRequestActive(req)) {
+      const user = requireUser(req)
+      return await runPrivateRequest(req, res, user, () => {
+        if (path.startsWith('/api/calendar/') || path.startsWith('/api/pim/')) {
+          bindCaldavRequest(user)
+          bindGoogleRequest(user)
+        }
+        if (path === '/api/tasks' || path.startsWith('/api/tasks/')) bindCaldavRequest(user)
+        if ((path === '/api/contacts' || path.startsWith('/api/contacts/')) && !path.startsWith('/api/contacts/accounts')) bindCarddavRequest(user)
+        const dispatch = () => handleApi(req, res)
+        if (!path.startsWith('/api/seafile/') && !path.startsWith('/api/office/') && path !== '/api/integrations/onlyoffice') return dispatch()
+        return withSeafileLink(user, () => { bindSeafileRequest(user); assertSeafileLink(user); return dispatch() })
+      })
+    }
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
+    // Settings → Code hosts: whether the next sign-in asks for private repositories (server/auth.ts).
+    if (method === 'POST' && path === '/api/auth/github/scope') return chooseRepoScope(req, res, await readJson(req, 256)), true
     // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
     if (method === 'DELETE' && path === '/api/me') {
       await deleteUser(requireUser(req).id)
@@ -175,7 +198,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // this account's, for the menus' "Rejoin battle" (server/empires.ts). Guests may ask too.
     if (path === '/api/empires/away' && method === 'POST') {
       const body = await readJson<{ token?: unknown }>(req, 1024)
-      return json(res, 200, empiresAway(body?.token, currentUser(req)?.login ?? null)), true
+      return json(res, 200, empiresAway(body?.token, currentUser(req)?.id ?? null)), true
     }
 
     if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
@@ -197,12 +220,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (path === '/api/google' && method === 'DELETE') return await disconnectGoogle(requireUser(req)), json(res, 200, { ok: true }), true
-    if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024), req)), true
     const caldavId = /^\/api\/caldav\/(\d+)$/.exec(path)?.[1]
     if (caldavId && method === 'DELETE') return removeCaldav(requireUser(req), Number(caldavId)), json(res, 200, { ok: true }), true
     // The Contacts app (server/contacts.ts): the address book on this site and CardDAV ones.
     if (path.startsWith('/api/contacts') && (await handleContactsApi(req, res, url, method, requireUser(req)))) return true
-    if (path === '/api/calendar/calendars' && read) return json(res, 200, await allCalendars(requireUser(req), true)), true
+    if (path === '/api/calendar/calendars' && read) {
+      const user = requireUser(req)
+      const result = await allCalendars(user, true)
+      requireStillSignedIn(req)
+      const live = bindResponse(res, user.id)
+      if (live?.check(true)) json(res, 200, result)
+      return true
+    }
     if (path === '/api/calendar/events' && read) {
       // ?from=&to= (ISO dates or times) for a range, or ?days=N from the start of today.
       const ids = url.searchParams.get('calendars')
@@ -218,7 +248,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const user = requireUser(req)
       // The Calendar app's refresh button: past the server's cache of CalDAV calendars too.
       if (q('fresh') === '1') clearCaldavCache(user)
-      return json(res, 200, await allEvents(user, ids ? ids.split(',') : null, { from, to })), true
+      const result = await allEvents(user, ids ? ids.split(',') : null, { from, to })
+      requireStillSignedIn(req)
+      const live = bindResponse(res, user.id)
+      if (live?.check(true)) json(res, 200, result)
+      return true
     }
     // The Calendar app's changes: { calendar, event } to add, { ref, event, calendar?, all? } to change, { ref, all? } to delete.
     if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
@@ -240,7 +274,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     // Seafile, for the Files app (server/seafile.ts): link with { url, username, password, otp? }.
-    if (path === '/api/integrations/seafile' && method === 'POST') return json(res, 200, await linkSeafile(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/integrations/seafile' && method === 'POST') return json(res, 200, await linkSeafile(requireUser(req), await readJson(req, 8 * 1024), req)), true
     if (path === '/api/integrations/seafile' && method === 'DELETE') return await unlinkSeafile(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/onlyoffice' && method === 'PUT') return await setOffice(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, seafileInfo(requireUser(req))), true
     if (path === '/api/integrations/onlyoffice' && method === 'DELETE') return removeOffice(requireUser(req)), json(res, 200, seafileInfo(requireUser(req))), true
@@ -255,7 +289,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/transfer' && method === 'POST') return await transfer(requireUser(req), await readJson(req, 256 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/seafile/thumb' && read) {
       const t = await thumbnail(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('size'))
-      res.writeHead(200, { 'Content-Type': t.type, 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(head ? undefined : t.body)
+      res.writeHead(200, { 'Content-Type': t.type, 'Cache-Control': 'private, no-store', ...SECURITY }).end(head ? undefined : t.body)
       return true
     }
     if (path === '/api/seafile/trash' && read) {
@@ -294,7 +328,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/raw' && read) {
       const range = req.headers.range
       const r = await rangeRead(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
-      res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
+      res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
       return true
     }
     // A whole file, piped with whatever range the browser asks for (the music and video players).
@@ -306,7 +340,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined, gone.signal)
       if (r.status === 416) return res.writeHead(416, { ...(r.contentRange ? { 'Content-Range': r.contentRange } : {}), 'Cache-Control': 'no-store', ...SECURITY }).end(), true
       // Only media types pass: an HTML or SVG file served from this origin would run as the site.
-      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(r.type) ? r.type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
+      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(r.type) ? r.type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }
       if (r.length) headers['Content-Length'] = r.length
       if (r.contentRange) headers['Content-Range'] = r.contentRange
       res.writeHead(r.status, headers)
@@ -339,12 +373,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
     if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
-    // A picture sent with one of your messages: the thumbnails and the full view in the app. The
-    // address never changes what it shows (message ids are not reused), so the browser keeps it.
+    // A picture sent with one of your messages: the thumbnails and the full view in the app. Never
+    // stored by the browser: a stored copy could be replayed after the account switches.
     const agentPicture = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/messages\/(\d{1,15})\/attachments\/(\d{1,2})$/.exec(path)
     if (agentPicture && read) {
       const p = messagePicture(requireUser(req), agentPicture[1], agentPicture[2], agentPicture[3])
-      res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
+      res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, no-store', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
     }
     // The latest rough preview of a gpt_image picture being drawn (gone once it is done).
@@ -485,7 +519,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in user only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(JSON.stringify(res2))
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store', ...SECURITY }).end(JSON.stringify(res2))
       return true
     }
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true

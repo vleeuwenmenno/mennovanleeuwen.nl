@@ -147,7 +147,7 @@ export async function handleLoraPreviewApi(req: IncomingMessage, res: ServerResp
     const name = url.searchParams.get('name') ?? ''
     if (!name || name.length > 2048) throw new HttpError(400, 'Name a LoRA')
     const { mime, body } = await loraPreview(user, name)
-    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': mime, 'Content-Length': body.length, 'Cache-Control': 'private, max-age=300' }).end(body)
+    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': mime, 'Content-Length': body.length, 'Cache-Control': 'private, no-store' }).end(body)
     return true
   }
   return false

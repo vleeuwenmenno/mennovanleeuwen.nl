@@ -146,7 +146,7 @@ const comfy = createServer((req, res) => {
 })
 await new Promise<void>((r) => comfy.listen(0, '127.0.0.1', r))
 const comfyUrl = `http://127.0.0.1:${(comfy.address() as { port: number }).port}`
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'studio-owner,studio-other', OLLAMA_API_KEY: 'fake' })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1,2', OLLAMA_API_KEY: 'fake' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const sessions = [randomBytes(24).toString('hex'), randomBytes(24).toString('hex')]

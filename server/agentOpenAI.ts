@@ -1,6 +1,8 @@
+import { sharedProviderJob, withProviderLifetime } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { serverKey, type User } from './auth.ts'
+import { requireStillSignedIn, serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { checkRoom } from './quota.ts'
@@ -138,7 +140,28 @@ const FLOW_TTL = 15 * 60_000
 onUserGone((id) => {
   flows.delete(id)
   refreshing.delete(id)
+  invalidate(id)
 })
+
+/**
+ * The version of an account's stored ChatGPT credential. It moves on sign-out, a new sign-in and
+ * account removal, so work that started under an older version (a refresh in flight, a sign-in
+ * waiting on OpenAI) can neither store nor hand out its tokens.
+ */
+const credentialChanged = new Set<(id: number) => void>()
+export function onChatGPTChanged(fn: (id: number) => void) { credentialChanged.add(fn); return () => { credentialChanged.delete(fn) } }
+const credentialVersion = new Map<number, number>()
+const versionOf = (id: number) => credentialVersion.get(id) ?? 0
+function invalidate(id: number) {
+  credentialVersion.set(id, versionOf(id) + 1)
+  refreshing.delete(id)
+  for (const changed of credentialChanged) changed(id)
+}
+export const chatGPTVersion = (user: User) => versionOf(user.id)
+export function assertChatGPTVersion(user: User, version: number) {
+  if (versionOf(user.id) !== version || !database().prepare('SELECT 1 FROM users WHERE id=? AND banned_at IS NULL').get(user.id)) throw STALE()
+}
+const STALE = () => new HttpError(409, 'The ChatGPT sign-in changed while this was running: try again')
 
 const b64url = (b: Buffer) => b.toString('base64url')
 
@@ -207,7 +230,8 @@ function storeTokens(user: User, answer: TokenAnswer, previous?: Tokens | null) 
  * Finishes a sign-in with the address the browser ended on (http://localhost:1455/auth/callback?code=…&state=…),
  * pasted back, or just its query. The state must be this account's sign-in's.
  */
-async function finishSignIn(user: User, body: { callback?: unknown }) {
+async function finishSignIn(user: User, body: { callback?: unknown }, req: IncomingMessage) {
+  requireStillSignedIn(req)
   const flow = flows.get(user.id)
   if (!flow || Date.now() - flow.at > FLOW_TTL) {
     flows.delete(user.id)
@@ -226,14 +250,21 @@ async function finishSignIn(user: User, body: { callback?: unknown }) {
   if (!code) throw new HttpError(400, 'That address has no code in it: paste the whole address from the address bar, starting with http://localhost:1455')
   if (query.get('state') !== flow.state) throw new HttpError(400, 'That address belongs to another sign-in: start again')
   flows.delete(user.id)
+  const version = versionOf(user.id)
   const answer = await tokenRequest({ grant_type: 'authorization_code', client_id: CODEX_CLIENT_ID, code, redirect_uri: CODEX_REDIRECT, code_verifier: flow.verifier })
+  if (versionOf(user.id) !== version) throw STALE() // signed out or removed while OpenAI answered
+  // storeTokens validates the answer and writes it without awaiting anything; only then is the old
+  // credential's pending work cancelled, so a malformed answer leaves the previous sign-in intact.
+  requireStillSignedIn(req)
   const t = storeTokens(user, answer)
+  invalidate(user.id) // a refresh of the previous account's tokens must not land on this one
   const s = settings(user)
   if (s.provider === 'off') write(user, SETTINGS, { ...s, provider: 'chatgpt' })
   return { email: t.email, plan: t.plan }
 }
 
 function signOut(user: User) {
+  invalidate(user.id)
   forget(user, TOKENS)
   flows.delete(user.id)
   const s = settings(user)
@@ -241,22 +272,29 @@ function signOut(user: User) {
 }
 
 /** One refresh at a time per account: two pictures at once must not both spend the refresh token. */
-const refreshing = new Map<number, Promise<Tokens>>()
-async function freshTokens(user: User, force = false): Promise<Tokens> {
+const refreshing = new Map<number, { version: number; job: ReturnType<typeof sharedProviderJob<Tokens>> }>()
+async function freshTokens(user: User, force = false, expected = versionOf(user.id), signal?: AbortSignal): Promise<Tokens> {
+  assertChatGPTVersion(user, expected)
   const t = tokens(user)
   if (!t) throw new HttpError(409, 'Sign in with ChatGPT first, in Settings → Agents → Images')
   if (!force && t.expires - Date.now() > 5 * 60_000) return t
+  const version = versionOf(user.id)
   const running = refreshing.get(user.id)
-  if (running) return running
-  const job = tokenRequest({ client_id: CODEX_CLIENT_ID, grant_type: 'refresh_token', refresh_token: t.refresh, scope: 'openid profile email' })
-    .then((answer) => storeTokens(user, answer, t))
-    .catch((e: Error) => {
-      if (e instanceof HttpError && e.status === 400) throw new HttpError(409, 'The ChatGPT sign-in has expired: sign in again in Settings → Agents → Images')
-      throw e
-    })
-    .finally(() => refreshing.delete(user.id))
-  refreshing.set(user.id, job)
-  return job
+  if (running && running.version === version && !running.job.signal.aborted) return running.job.join(signal)
+  const job = sharedProviderJob(() => assertChatGPTVersion(user, version), (end) => onChatGPTChanged((id) => { if (id === user.id) end() }), async () => {
+    try {
+      const answer = await tokenRequest({ client_id: CODEX_CLIENT_ID, grant_type: 'refresh_token', refresh_token: t.refresh, scope: 'openid profile email' })
+      assertChatGPTVersion(user, version)
+      return storeTokens(user, answer, t)
+    } catch (error) {
+      assertChatGPTVersion(user, version)
+      if (error instanceof HttpError && error.status === 400) throw new HttpError(409, 'The ChatGPT sign-in has expired: sign in again in Settings → Agents → Images')
+      throw error
+    }
+  })
+  void job.value.finally(() => { if (refreshing.get(user.id)?.job === job) refreshing.delete(user.id) }).catch(() => {})
+  refreshing.set(user.id, { version, job })
+  return job.join(signal)
 }
 
 // --- making a picture ----------------------------------------------------------------------------
@@ -452,6 +490,8 @@ async function imageFromEvents(res: Response, onPartial?: OnPartial): Promise<Ma
 let codexDirectStreams: boolean | null = null
 
 async function withChatGPT(user: User, model: string, r: ImageRequest, signal: AbortSignal, onPartial?: OnPartial): Promise<Made> {
+  const version = chatGPTVersion(user)
+  return withProviderLifetime(() => assertChatGPTVersion(user, version), (end) => onChatGPTChanged((id) => { if (id === user.id) end() }), async () => {
   const attempt = async (t: Tokens): Promise<{ res: Response; kind: 'images' | 'responses' }> => {
     // References: the Responses API, which takes input pictures. Otherwise the direct images route
     // first (what CLIProxyAPI uses for gpt-image models), the Responses API where it is missing.
@@ -482,17 +522,20 @@ async function withChatGPT(user: User, model: string, r: ImageRequest, signal: A
       if (signal.aborted) throw e
       throw new HttpError(502, 'ChatGPT did not answer')
     })
-  let { res, kind } = await call(await freshTokens(user))
+  let { res, kind } = await call(await freshTokens(user, false, version, signal))
   if (res.status === 401) {
     await res.body?.cancel()
-    ;({ res, kind } = await call(await freshTokens(user, true)))
+    ;({ res, kind } = await call(await freshTokens(user, true, version, signal)))
     if (res.status === 401) {
       await res.body?.cancel()
       throw new HttpError(409, 'ChatGPT refused the sign-in: sign in again in Settings → Agents → Images')
     }
   }
   if (!res.ok) throw await failure(res, 'ChatGPT')
-  return kind === 'responses' ? imageFromEvents(res, onPartial) : imagesAnswer(res, 'ChatGPT', onPartial)
+  const made = await (kind === 'responses' ? imageFromEvents(res, onPartial) : imagesAnswer(res, 'ChatGPT', onPartial))
+  assertChatGPTVersion(user, version)
+  return made
+  })
 }
 
 /** One picture from the provider picked in Settings, counted against the daily cap once it is made. */
@@ -570,7 +613,7 @@ export async function handleOpenAIApi(req: IncomingMessage, res: ServerResponse,
     return json(res, 200, openaiImagesView(user)), true
   }
   if (path === '/api/agents/openai/chatgpt/start' && method === 'POST') return json(res, 200, startSignIn(user, await readJson(req, 1024))), true
-  if (path === '/api/agents/openai/chatgpt/finish' && method === 'POST') return await finishSignIn(user, await readJson(req, 16 * 1024)), json(res, 200, openaiImagesView(user)), true
+  if (path === '/api/agents/openai/chatgpt/finish' && method === 'POST') return await finishSignIn(user, await readJson(req, 16 * 1024), req), json(res, 200, openaiImagesView(user)), true
   if (path === '/api/agents/openai/chatgpt/cancel' && method === 'POST') return flows.delete(user.id), json(res, 200, openaiImagesView(user)), true
   if (path === '/api/agents/openai/chatgpt' && method === 'DELETE') return signOut(user), json(res, 200, openaiImagesView(user)), true
   if (path === '/api/agents/icons' && read) return json(res, 200, { icons: listIcons(user) }), true
@@ -604,4 +647,7 @@ export async function handleOpenAIApi(req: IncomingMessage, res: ServerResponse,
 // --- for chat on OpenAI's models (server/agentChatGPT.ts) ------------------------------------------
 
 /** What the chat provider needs from the sign-in and the key, without handing out the stored secrets anywhere else. */
-export const openaiChatAccess = { openaiUrl: OPENAI, codexUrl: CODEX, apiKey, signedIn: (user: User) => !!tokens(user), freshTokens, codexHeaders }
+export const openaiChatAccess = { openaiUrl: OPENAI, codexUrl: CODEX, apiKey, signedIn: (user: User) => !!tokens(user), freshTokens, codexHeaders, version: chatGPTVersion, assertVersion: assertChatGPTVersion, onChanged: onChatGPTChanged }
+
+/** The sign-in steps, for the refresh-race check (scripts/agents-chatgpt-refresh.ts) only. */
+export const chatgptSignInForTest = { startSignIn, finishSignIn, signOut }

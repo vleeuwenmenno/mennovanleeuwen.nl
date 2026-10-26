@@ -1,3 +1,4 @@
+import { withoutPrivateRequest } from './privateRequest.ts'
 import { addHiresStage, refinementSize, refinementSampling } from './agentImageRefine.ts'
 import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentImageInpaint.ts'
 import { imageMask, saveAutoMask, type ImageMask } from './agentImageMasks.ts'
@@ -700,7 +701,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
     }
   } catch (error) {
     // Delete only our queued prompt. Never use /interrupt: it can stop another client's GPU job.
-    if (promptId) await request(user, s, '/queue', AbortSignal.timeout(3000), { delete: [promptId] }).then((r) => r.body?.cancel()).catch(() => {})
+    if (promptId) await cancelQueuedPrompt(user, s, promptId)
     if (limit.aborted) throw new HttpError(signal.aborted ? 499 : 504, signal.aborted ? 'Image generation cancelled. An already running ComfyUI job may finish, but its output will not be saved here.' : 'Image generation timed out after 10 minutes')
     throw error
   } finally {
@@ -818,6 +819,12 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
   return false
 }
 
+/** Failure cleanup is limited to the prompt already accepted at the captured backend. It must
+ * survive Stop/session revocation; it neither rereads replacement credentials nor starts work. */
+async function cancelQueuedPrompt(user: User, settings: ImageSettings, prompt: string) {
+  await withoutPrivateRequest(() => request(user, settings, '/queue', AbortSignal.timeout(3000), { delete: [prompt] }).then((r) => r.body?.cancel()).catch(() => {}))
+}
+
 /** Queue a fixed graph, wait for all its saved pictures and read them back. Deletes only our own prompt on failure. */
 async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, outputNodes: string[], limit: AbortSignal) {
   let promptId: string | null = null
@@ -848,7 +855,7 @@ async function runComfyGraph(user: User, s: ImageSettings, graph: ImageGraph, ou
       await delay(700, undefined, { signal: limit }).catch(() => {})
     }
   } catch (error) {
-    if (promptId) await request(user, s, '/queue', AbortSignal.timeout(3000), { delete: [promptId] }).then((r) => r.body?.cancel()).catch(() => {})
+    if (promptId) await cancelQueuedPrompt(user, s, promptId)
     throw error
   }
 }
@@ -930,3 +937,6 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
       : 'Check coverage_percent, bbox and what each phrase caught fit the request, then call generate_image with operation remove (or inpaint with a prompt for a replacement), this source_image_id and mask_id. Do not ask the user first.',
   }
 }
+
+/** Direct local-mock regression seam for cancellation of an accepted fixed graph. */
+export const comfyGraphForTest = runComfyGraph

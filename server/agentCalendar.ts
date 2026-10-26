@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import type { User } from './auth.ts'
-import { listCaldav } from './caldav.ts'
+import { withProviderGuard } from './privateRequest.ts'
+import { assertCaldavLink, caldavLinkVersion, listCaldav } from './caldav.ts'
 import { allCalendars, allEvents, cleanInput, createEvent, decodeRef, deleteEvent, encodeRef, getEvent, updateEvent, type AnyCalendar, type EventInput, type EventNow, type Ref } from './calendars.ts'
-import { googleAccount, MAX_RANGE_DAYS } from './google.ts'
+import { assertGoogleLink, googleLinkGeneration, googleAccount, MAX_RANGE_DAYS, type GoogleSnapshot } from './google.ts'
 import { readNotes } from './noteLinks.ts'
 import { readState } from './state.ts'
 import { linkMatches } from '../src/data/noteEvents.ts'
@@ -221,9 +222,9 @@ const calendarHref = (calendarId: string) => {
 
 const ACCESS = { owner: 'yours', writer: 'shared with the user, can edit', reader: 'shared with the user, read only' } as const
 
-export async function calendarsOf(user: User): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+export async function calendarsOf(user: User, google?: GoogleSnapshot, caldav?: number): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
   if (!calendarConnected(user)) throw new Error(NOT_CONNECTED)
-  return allCalendars(user)
+  return allCalendars(user, false, google, caldav)
 }
 
 /** The calendars switched on in Settings → Apps → Calendar (as src/data/calendar.ts decides). */
@@ -316,7 +317,32 @@ const calendarName = (c: AnyCalendar) => `${c.name} (${c.source})`
  * event as it is, the new times), so a mistake goes back to the model before the user is asked,
  * and the user sees exactly what will happen. Throws what the model should be told.
  */
+/** A prepared action keeps the same provider authority while approval waits and execution runs. */
+export function protectPreparedCalendar(user: User, google: GoogleSnapshot, caldav: number, prepared: Prepared): Prepared {
+  const check = () => {
+    assertGoogleLink(user, google)
+    // Use the raw version here: assertCaldavLink also checks active provider guards.
+    if (caldavLinkVersion(user) !== caldav) throw new Error('Calendar links changed: prepare this action again')
+  }
+  check()
+  return { ...prepared, run: () => withProviderGuard(check, async () => {
+    check()
+    const result = await prepared.run()
+    check()
+    return result
+  }) }
+}
+
 export async function prepareCalendarCall(user: User, name: string, args: Record<string, unknown>, userZone: string): Promise<Prepared> {
+  const google = googleLinkGeneration(user)
+  const caldav = caldavLinkVersion(user)
+  const prepared = await prepareCalendarCallInner(user, name, args, userZone)
+  assertGoogleLink(user, google)
+  assertCaldavLink(user, caldav)
+  return protectPreparedCalendar(user, google, caldav, prepared)
+}
+
+async function prepareCalendarCallInner(user: User, name: string, args: Record<string, unknown>, userZone: string): Promise<Prepared> {
   const text = (k: string) => (typeof args[k] === 'string' ? (args[k] as string).trim() : undefined)
   const zone = text('time_zone') ? (zoneOf(text('time_zone')) ?? fail(`Unknown time zone "${text('time_zone')}": use an IANA name like Europe/Amsterdam`)) : userZone
 
@@ -348,7 +374,9 @@ export async function prepareCalendarCall(user: User, name: string, args: Record
   if (name === 'calendar_list_events')
     return {
       run: async () => {
-        const { calendars, errors } = await calendarsOf(user)
+        const google = googleLinkGeneration(user)
+        const caldav = caldavLinkVersion(user)
+        const { calendars, errors } = await calendarsOf(user, google, caldav)
         const named = Array.isArray(args.calendars) ? args.calendars : typeof args.calendars === 'string' && args.calendars.trim() ? args.calendars.split(',') : null
         const pick = named?.length ? [...new Set(named.map((n) => findCalendar(calendars, n)))] : calendars.filter(shownIn(user))
         const words = (text('query') ?? '').toLowerCase().split(/\s+/).filter(Boolean)
@@ -361,7 +389,9 @@ export async function prepareCalendarCall(user: User, name: string, args: Record
         if (to <= from) throw new Error('`to` has to be after `from`')
         if (to - from > MAX_RANGE_DAYS * DAY) throw new Error(`At most ${MAX_RANGE_DAYS} days at a time`)
         const limit = Math.min(200, Math.max(1, Math.round(Number(args.limit) || 50)))
-        const found = pick.length ? await allEvents(user, pick.map((c) => c.id), { from: new Date(from), to: new Date(to) }) : { events: [], errors: [] }
+        const found = pick.length ? await allEvents(user, pick.map((c) => c.id), { from: new Date(from), to: new Date(to) }, google, caldav) : { events: [], errors: [] }
+        assertGoogleLink(user, google)
+        assertCaldavLink(user, caldav)
         const byId = new Map(calendars.map((c) => [c.id, c]))
         const notes = readNotes(user).filter((n) => !n.deleted && !n.purged)
         const notesOn = (e: (typeof found.events)[number]) => notes.filter((n) => (n.events ?? []).some((l) => linkMatches(l, e)) || e.notes?.includes(n.id)).length

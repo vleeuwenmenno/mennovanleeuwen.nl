@@ -1,3 +1,6 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { privateRequestAuthority, requirePrivateRequest, withPrivateOperation, withoutPrivateRequest } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { stopStudioOf } from './agentImageStudio.ts'
 import { imageMask, listImageMasks, retainImageMasks } from './agentImageMasks.ts'
 import { imageSource, listImageAttachments, aliasBranchedImageSources, stillData, stillSource } from './agentImageSources.ts'
@@ -15,7 +18,7 @@ import { expectedMs, icon as gptIcon, image as gptImage, listIcons, MAX_REFERENC
 import { chatProviderReady, isEffort, openaiModels, providerOf, responsesChat, type Effort } from './agentChatGPT.ts'
 import { meter, ollamaStats, type CallStats, type ToolStats } from './agentStats.ts'
 import type { ServerResponse } from 'node:http'
-import { serverKey, type User } from './auth.ts'
+import { bindResponse, serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { search as codeSearch } from './search.ts'
@@ -136,11 +139,11 @@ export type Mode = 'quick' | 'deep'
 /** Picked when a thread does not say: quick wants speed, deep a stronger reasoner. */
 const PREFERRED: Record<Mode, string[]> = { quick: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'gpt-oss:120b'], deep: ['kimi-k3', 'glm-5.3', 'gpt-oss:120b'] }
 
-let modelCache: { at: number; ttl: number; value: Promise<ModelInfo[]> } | null = null
+let modelCache: { at: number; ttl: number; pending: boolean; authority: object | undefined; value: Promise<ModelInfo[]> } | null = null
 
 /** Ollama's cloud models that can call tools, cached for an hour. The list and details are public. */
 export function models(): Promise<ModelInfo[]> {
-  if (modelCache && Date.now() - modelCache.at < modelCache.ttl) return modelCache.value
+  if (modelCache && Date.now() - modelCache.at < modelCache.ttl && (!modelCache.pending || modelCache.authority === privateRequestAuthority())) return modelCache.value
   const value = (async () => {
     const tags = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(10_000) })
       .then((r) => (r.ok ? (r.json() as Promise<{ models?: { name: string }[] }>) : null))
@@ -167,7 +170,8 @@ export function models(): Promise<ModelInfo[]> {
       })
       .sort((a, b) => a.name.localeCompare(b.name))
   })()
-  const entry = { at: Date.now(), ttl: 3600_000, value }
+  const entry = { at: Date.now(), ttl: 3600_000, pending: true, authority: privateRequestAuthority(), value }
+  value.then(() => { entry.pending = false }, () => { entry.pending = false })
   modelCache = entry
   value.catch(() => (entry.ttl = 60_000))
   return value
@@ -547,8 +551,12 @@ function deliver(user: User, thread: string, ask: Ask) {
   running.get(thread)?.abort()
 }
 
+/** Whether the account still exists and is not banned: a turn the account did not just ask for (a queued message, a held queue) starts only for one that does. */
+const accountActive = (userId: number) => !!database().prepare('SELECT 1 FROM users WHERE id = ? AND banned_at IS NULL').get(userId)
+
 /** Starts a chain of turns that no request streams (a window follows it): Send now on a thread at rest, or the queue going on. */
 function startChain(user: User, thread: string, ask: Ask) {
+  if (!accountActive(user.id)) throw new HttpError(401, 'Not signed in')
   checkTurnRoom(user)
   threadKey(user, thread)
   void runChain(user, thread, ask, null, false)
@@ -563,7 +571,7 @@ function resumeHeld(thread: string) {
   if (lock) return void (h.timer = setTimeout(() => resumeHeld(thread), EDIT_HOLD - (Date.now() - lock.at) + 500))
   held.delete(thread)
   const list = queueOf(thread)
-  if (running.has(thread) || !list.length || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return
+  if (running.has(thread) || !list.length || !accountActive(h.user.id) || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return
   try {
     checkTurnRoom(h.user)
     threadKey(h.user, thread)
@@ -578,6 +586,7 @@ function resumeHeld(thread: string) {
 function nextAsk(user: User, thread: string, outcome: Outcome): Ask | null {
   // On the way down nothing new starts: what waits stays queued for after the restart.
   if (isShuttingDown()) return null
+  if (!accountActive(user.id)) return sendNext.delete(thread), null
   const now = sendNext.get(thread)
   if (now) return sendNext.delete(thread), now
   if (outcome !== 'answered' || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return null
@@ -991,6 +1000,8 @@ export function deleteThread(user: User, id: string) {
 /** Stops every turn an account has running (banned or deleted, server/users.ts). */
 export function stopTurnsOf(userId: number) {
   for (const [thread, u] of runningFor) if (u === userId) (sendNext.delete(thread), running.get(thread)?.abort())
+  // A queue held for an edit would start again, as that account, when the edit ends.
+  for (const [thread, h] of held) if (h.user.id === userId) (clearTimeout(h.timer), held.delete(thread))
   stopStudioOf(userId)
 }
 
@@ -1045,7 +1056,7 @@ export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
   if (!promptFile || !seafileInfo(user)) return Promise.resolve(builtin)
   const key = `${promptFile.repo}:${promptFile.path}`
   const hit = promptCache.get(user.id)
-  if (!fresh && hit && hit.key === key && Date.now() - hit.at < 30_000) return hit.value
+  if (!fresh && hit && hit.key === key && Date.now() - hit.at < 30_000 && canUsePrivateCache(hit.value)) return hit.value
   const value = (async (): Promise<PromptInfo> => {
     try {
       const { url } = await fileLink(user, promptFile.repo, promptFile.path, 'download')
@@ -1059,6 +1070,7 @@ export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
       return { ...builtin, error: e instanceof HttpError && e.status === 423 ? 'its library is locked' : (e as Error).message }
     }
   })()
+  ownPrivateCache(value)
   promptCache.set(user.id, { at: Date.now(), key, value })
   return value
 }
@@ -3358,6 +3370,10 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   checkTurnRoom(user)
   requireKey(user, row.model)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  // The commit point: the session that asked must still be good now (it may have ended while the
+  // body was sent). Nothing is saved, called or attached before this, and the turn is marked
+  // running below in the same tick, so a ban finds it (stopTurnsOf).
+  if (!bindResponse(res, user.id)) return
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
@@ -3367,7 +3383,10 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
 /** Each running chain of turns, by thread, to wait for its end (Rewind stops it first). */
 const chains = new Map<string, Promise<void>>()
 function runChain(user: User, thread: string, first: Ask, res: ServerResponse | null, fromTerminal: boolean) {
-  const p = chain(user, thread, first, res, fromTerminal)
+  // Once accepted synchronously, a turn is an account job: closing/logging out its original
+  // stream must not cancel another session's observer. Each turn still retains provider links.
+  requirePrivateRequest(user)
+  const p = withoutPrivateRequest(() => chain(user, thread, first, res, fromTerminal))
   chains.set(thread, p)
   void p.finally(() => chains.get(thread) === p && chains.delete(thread))
   return p
@@ -3413,7 +3432,15 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
     while (ask) {
       const ctl = new AbortController()
       running.set(thread, ctl)
-      ;({ outcome, error, compact } = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first))
+      try {
+        ;({ outcome, error, compact } = await withPrivateOperation(() => turn(user, thread, ask!, ctl, send, fromTerminal && ask === first), ctl.signal))
+      } catch {
+        outcome = ctl.signal.aborted ? 'stopped' : 'failed'
+        error = ctl.signal.aborted ? undefined : 'The linked account changed while this turn was running'
+        compact = undefined
+        // Send now is an explicit handoff. Select it outside the ended operation, so the next
+        // turn gets fresh provider authority; nextAsk also rejects banned/removed accounts.
+      }
       ask = nextAsk(user, thread, outcome)
       // A turn stopped halfway through a reply leaves it unsaved: the next one starts clean.
       if (ask) partial.set(thread, { content: '', thinking: '' })
@@ -3484,6 +3511,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       const first = makeTitle(user, key, row.id)
         .catch(() => null)
         .then((title) => {
+          try { requirePrivateRequest(user) } catch { return }
           // The automatic check counts the user's messages from this first one on.
           const set = database().prepare("UPDATE agent_threads SET title = ?, title_source = 'first', title_mark = ? WHERE id = ? AND title = ?").run(title || fallback, asked.id, row.id, NEW_TITLE)
           if (set.changes) bumpTitle(row.id)
@@ -3905,8 +3933,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
  */
 export function followThread(res: ServerResponse, user: User, id: string, terminal = false) {
   const row = ownThread(user, id)
-  if (terminal) attachTerminal(row.id, res)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  if (!bindResponse(res, user.id)) return
+  if (terminal) attachTerminal(row.id, res)
   const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
   const { thread, messages, pending: waiting } = getThread(user, row.id)
   const live = partial.get(row.id)
@@ -4025,8 +4054,10 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   else requireKey(user, row.model)
   const zone = zoneFor(body.client?.timeZone)
   const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone, again, upscale, inpaint }
-  if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  // Commit point: only a session that is still good deletes the old reply and asks again.
+  if (!bindResponse(res, user.id)) return
+  if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
   await runChain(user, row.id, ask, res, fromTerminal)
@@ -4074,6 +4105,7 @@ export async function upscaleImage(res: ServerResponse, user: User, id: string, 
   checkTurnRoom(user)
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'upscale' && input.operation !== 'refine') throw new HttpError(400, 'Choose an upscale or refine operation')
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  if (!bindResponse(res, user.id)) return
   await runChain(user, id, { text: input.operation === 'refine' ? 'Refine image' : 'Upscale image', files: [], zone: 'UTC', upscale: input }, res, false)
 }
 
@@ -4084,6 +4116,7 @@ export async function inpaintImage(res: ServerResponse, user: User, id: string, 
   checkTurnRoom(user)
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.operation !== 'inpaint' && input.operation !== 'remove') throw new HttpError(400, 'Choose an inpaint or remove operation')
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  if (!bindResponse(res, user.id)) return
   await runChain(user, id, { text: input.operation === 'remove' ? 'Remove masked area' : 'Inpaint image', files: [], zone: 'UTC', inpaint: input }, res, false)
 }
 
@@ -4094,6 +4127,7 @@ export async function generateAnother(res: ServerResponse, user: User, id: strin
   checkTurnRoom(user)
   imageAgainAllowed(user, id, image)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  if (!bindResponse(res, user.id)) return
   await runChain(user, id, { text: 'Generate another', files: [], zone: 'UTC', again: image }, res, false)
 }
 

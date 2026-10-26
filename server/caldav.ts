@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { User } from './auth.ts'
+import type { IncomingMessage } from 'node:http'
+import { requireStillSignedIn, type User } from './auth.ts'
+import { requirePrivateRequest, privateRequestAuthority, withoutPrivateRequest, bindPrivateAccess } from './privateRequest.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
-import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
+import { readCapped, rethrowEgress } from './egress.ts'
+import { davAuthority, davRequest as sharedDavRequest, type DavAuthority } from './dav.ts'
 import { HttpError } from './http.ts'
 
 // CalDAV calendars (Fastmail, Nextcloud, iCloud, Radicale...) for the Agenda widget, the clock and
@@ -16,7 +19,7 @@ import { HttpError } from './http.ts'
 
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
 /** `user` is who linked it: the server only reaches public addresses for them (server/egress.ts). */
-type Account = CaldavInfo & { password: string; user: User }
+type Account = CaldavInfo & { password: string; user: User; generation: number; authority: DavAuthority }
 /** `shared`: someone else's calendar shared with you, or yours shared with others (CalendarServer's resourcetype marks, which Apple and Nextcloud send). */
 type Calendar = { href: string; name: string; color: string; writable: boolean; shared?: 'with-you' | 'by-you' }
 export type CaldavAttendee = { email: string; name?: string; status?: 'accepted' | 'declined' | 'tentative' | 'needs-action'; organizer?: boolean }
@@ -44,6 +47,37 @@ export const FASTMAIL_URL = 'https://caldav.fastmail.com/dav/'
 // ---------------------------------------------------------------------------------------------
 // Accounts
 
+const linkChanges = new Set<(id: number) => void>()
+export const onCaldavLinkChanged = (fn: (id: number) => void) => void linkChanges.add(fn)
+const linkVersions = new Map<number, number>()
+export const caldavLinkVersion = (user: User): number => linkVersions.get(user.id) ?? 0
+export function assertCaldavLink(user: User, generation: number) {
+  requirePrivateRequest(user)
+  if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
+}
+function linkAuthority(user: User): DavAuthority {
+  const generation = caldavLinkVersion(user)
+  return {
+    key: `caldav:${user.id}:${generation}`,
+    check: () => {
+      if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
+    },
+    subscribe: (end) => {
+      const changed = (id: number) => { if (id === user.id) end() }
+      linkChanges.add(changed)
+      return () => { linkChanges.delete(changed) }
+    },
+  }
+}
+export function bindCaldavRequest(user: User) {
+  const authority = linkAuthority(user)
+  bindPrivateAccess(authority.check, authority.subscribe, authority.key)
+}
+function changedLink(id: number) {
+  linkVersions.set(id, (linkVersions.get(id) ?? 0) + 1)
+  for (const fn of linkChanges) fn(id)
+}
+
 type Row = { id: number; label: string; base_url: string; username: string; password: string }
 
 export function listCaldav(user: User): CaldavInfo[] {
@@ -53,34 +87,40 @@ export function listCaldav(user: User): CaldavInfo[] {
 
 function accounts(user: User): Account[] {
   const rows = database().prepare('SELECT id, label, base_url, username, password FROM caldav WHERE user_id = ? ORDER BY id').all(user.id) as unknown as Row[]
-  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user }))
+  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user, generation: caldavLinkVersion(user), authority: davAuthority(user, 'caldav', r, linkAuthority(user)) }))
 }
 
 /** Finds the account's calendars (proving the URL and password work), then stores it. */
-export async function addCaldav(user: User, body: { url?: string; username?: string; password?: string; label?: string }): Promise<CaldavInfo> {
+export async function addCaldav(user: User, body: { url?: string; username?: string; password?: string; label?: string }, req?: IncomingMessage): Promise<CaldavInfo> {
+  if (req) requireStillSignedIn(req)
   const url = normalizeUrl(body.url || FASTMAIL_URL)
   const username = body.username?.trim()
   const password = body.password?.trim()
   if (!username || !password) throw new HttpError(400, 'Username and app password are required')
-  const account: Account = { id: 0, label: '', url, username, password, user }
+  const account: Account = { id: 0, label: '', url, username, password, user, generation: caldavLinkVersion(user), authority: davAuthority(user, 'caldav', undefined, linkAuthority(user)) }
   const found = await discover(account).catch((e: Error) => {
     throw new HttpError(400, e.message)
   })
   if (!found.length) throw new HttpError(400, 'Signed in, but found no calendars there')
   const label = (body.label?.trim() || (url.includes('fastmail') ? 'Fastmail' : new URL(url).host)).slice(0, 40)
   // The same account again (a new app password, read-write this time): keep it, and its calendars' ids.
+  if (req) requireStillSignedIn(req)
+  assertCaldavLink(user, account.generation)
   const existing = database().prepare('SELECT id FROM caldav WHERE user_id = ? AND base_url = ? AND username = ?').get(user.id, url, username) as { id: number } | undefined
   if (existing) {
     database().prepare('UPDATE caldav SET label = ?, password = ? WHERE id = ?').run(label, encrypt(password), existing.id)
+    changedLink(user.id)
     clearCaldavCache(user)
     return { id: existing.id, label, url, username }
   }
   const r = database().prepare('INSERT INTO caldav (user_id, label, base_url, username, password, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, label, url, username, encrypt(password), Date.now())
+  changedLink(user.id)
   clearCaldavCache(user)
   return { id: Number(r.lastInsertRowid), label, url, username }
 }
 
 export function removeCaldav(user: User, id: number) {
+  changedLink(user.id)
   database().prepare('DELETE FROM caldav WHERE user_id = ? AND id = ?').run(user.id, id)
   clearCaldavCache(user)
 }
@@ -102,21 +142,16 @@ function normalizeUrl(input: string): string {
 // WebDAV
 
 async function request(account: Account, method: string, url: string, init: { headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
-  const res = await guardedFetch(account.user, url, {
-    method,
-    headers: { Authorization: `Basic ${Buffer.from(`${account.username}:${account.password}`).toString('base64')}`, 'User-Agent': 'mvlos', ...init.headers },
-    body: init.body,
-    signal: AbortSignal.timeout(12_000),
-  }).catch((e) => (rethrowEgress(e), null))
-  if (!res) throw new HttpError(502, `${new URL(url).host} did not answer`)
-  return res
+  return sharedDavRequest(account, method, url, { ...init, timeout: 12_000 })
 }
 
 async function dav(account: Account, method: 'PROPFIND' | 'REPORT', url: string, depth: '0' | '1', body: string): Promise<string> {
   const res = await request(account, method, url, { headers: { Depth: depth, 'Content-Type': 'application/xml; charset=utf-8' }, body })
   if (res.status === 401 || res.status === 403) throw new Error(`${new URL(url).host} refused the username or app password`)
   if (res.status !== 207 && !res.ok) throw new Error(`${new URL(url).host} answered ${res.status}`)
-  return (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  const text = (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
+  assertCaldavLink(account.user, account.generation)
+  return text
 }
 
 const unescapeXml = (s: string) =>
@@ -466,13 +501,14 @@ export function parseEvents(ics: string, from: Date, to: Date): CaldavEvent[] {
 // ---------------------------------------------------------------------------------------------
 // Calendars and events, with the same cache rules as Google's
 
-const cache = new Map<string, { at: number; value: Promise<unknown> }>()
+const cache = new Map<string, { at: number; value: Promise<unknown>; authority: object | undefined; settled: boolean }>()
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>
+  if (hit && Date.now() - hit.at < ms && (hit.settled || !hit.authority || hit.authority === privateRequestAuthority())) return hit.value as Promise<T>
   const value = load()
-  cache.set(key, { at: Date.now(), value })
-  value.catch(() => cache.delete(key))
+  const entry = { at: Date.now(), value, authority: privateRequestAuthority(), settled: false }
+  cache.set(key, entry)
+  value.then((data) => { entry.settled = true; entry.authority = undefined; entry.value = withoutPrivateRequest(() => Promise.resolve(data)) }, () => { if (cache.get(key) === entry) cache.delete(key) })
   return value
 }
 export const clearCaldavCache = (user: User) => {
@@ -480,6 +516,7 @@ export const clearCaldavCache = (user: User) => {
 }
 
 onUserGone((id) => {
+  changedLink(id)
   for (const k of cache.keys()) if (k.startsWith(`${id}|`)) cache.delete(k)
 })
 
@@ -701,7 +738,9 @@ function refused(res: Response, url: string): never {
 async function getObject(account: Account, url: string): Promise<{ ics: Ics; etag: string | null }> {
   const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
   if (!res.ok) refused(res, url)
-  return { ics: parseIcs((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')), etag: res.headers.get('etag') }
+  const ics = parseIcs((await readCapped(res, 4 * 1024 * 1024)).toString('utf8'))
+  assertCaldavLink(account.user, account.generation)
+  return { ics, etag: res.headers.get('etag') }
 }
 
 /** Writes an object: `etag` it must still have, or 'new' for one that must not exist yet. */
@@ -755,6 +794,7 @@ export async function getCaldavEvent(user: User, ref: CaldavRef): Promise<Caldav
   const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
   if (!res.ok) refused(res, url)
   const raws = rawEvents((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')).filter((r) => r.props.UID?.value === ref.u)
+  assertCaldavLink(account.user, account.generation)
   const master = raws.find((r) => !r.props['RECURRENCE-ID'])
   const override = ref.r ? raws.find((r) => r.props['RECURRENCE-ID'] && sameStart(icalTime(r.props['RECURRENCE-ID'].value, r.props['RECURRENCE-ID'].params)?.iso, ref.r!)) : undefined
   // An occurrence nobody changed is the series at its own start (in the same form as DTSTART's value).

@@ -252,7 +252,7 @@ export function Photos({ win }: { win: WinState }) {
   if (!status) return <div className="ph-blank muted copyable">{error ?? 'Loading…'}</div>
 
   const nothing = !available.length
-  const noFolders = source === 'seafile' && !status.seafile?.sources.length
+  const noFolders = source === 'seafile' && !status.seafile?.sources.length && !status.seafile?.unavailable
   const current: View = nothing || noFolders ? 'settings' : view
   const tabs: { id: View; label: string }[] = [
     { id: 'timeline', label: 'Photos' },

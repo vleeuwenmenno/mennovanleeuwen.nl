@@ -4,7 +4,7 @@ import { HttpError } from './http.ts'
 import { usedBytes } from './quota.ts'
 import { ban, deleteUser, signOutEverywhere, unban } from './users.ts'
 
-// Settings → Users, for admins (ADMIN_USERS): every account with what it links and how much it
+// Settings → Users, for admins (ADMIN_GITHUB_IDS): every account with what it links and how much it
 // stores, never what it stores. Ban, sign out, delete, and whether new accounts may sign up.
 
 const PAGE = 50
@@ -25,7 +25,7 @@ export type AdminUser = {
   threads: number
 }
 
-type Row = { id: number; login: string; name: string | null; avatar: string | null; created_at: number; last_seen_at: number | null; banned_at: number | null; ban_reason: string | null }
+type Row = { id: number; github_id: number; login: string; name: string | null; avatar: string | null; created_at: number; last_seen_at: number | null; banned_at: number | null; ban_reason: string | null }
 
 function describe(r: Row): AdminUser {
   const db = database()
@@ -44,14 +44,14 @@ function describe(r: Row): AdminUser {
     joinedAt: r.created_at,
     lastSeenAt: r.last_seen_at,
     banned: r.banned_at ? { at: r.banned_at, reason: r.ban_reason } : null,
-    admin: isAdmin(r.login),
+    admin: isAdmin(r.github_id),
     services,
     storageBytes: usedBytes(r.id),
     threads: count('SELECT COUNT(*) AS n FROM agent_threads WHERE user_id = ?'),
   }
 }
 
-const COLS = 'id, login, name, avatar, created_at, last_seen_at, banned_at, ban_reason'
+const COLS = 'id, github_id, login, name, avatar, created_at, last_seen_at, banned_at, ban_reason'
 
 /** A page of accounts, most recently seen first, searched by login or name. */
 export function listUsers(q: string | null, cursor: string | null): { users: AdminUser[]; next: string | null } {
@@ -87,10 +87,10 @@ export function updateSettings(body: { registration?: unknown; maxUsers?: unknow
 /** An account the admin may act on: not themselves, not another admin. */
 function target(admin: User, raw: string): number {
   const id = Number(raw)
-  const row = database().prepare('SELECT login FROM users WHERE id = ?').get(id) as { login: string } | undefined
+  const row = database().prepare('SELECT github_id FROM users WHERE id = ?').get(id) as { github_id: number } | undefined
   if (!row) throw new HttpError(404, 'No such user')
   if (id === admin.id) throw new HttpError(400, 'Not on your own account (Settings → Account can delete it)')
-  if (isAdmin(row.login)) throw new HttpError(400, 'Admins are set in ADMIN_USERS on the server, not here')
+  if (isAdmin(row.github_id)) throw new HttpError(400, 'Admins are set in ADMIN_GITHUB_IDS on the server, not here')
   return id
 }
 

@@ -4,7 +4,9 @@ import { isAdmin, type User } from './auth.ts'
 import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { HttpError, publicOrigin } from './http.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
-import { fileLink, officeServer, seafile, seafileInfo } from './seafile.ts'
+import { fileLink, officeServer, seafile, seafileInfo, integrationIdentity, onSeafileLinkChanged, onOfficeLinkChanged } from './seafile.ts'
+
+import { requirePrivateRequest, withProviderLifetime } from './privateRequest.ts'
 
 // OnlyOffice, the document server Seafile uses, editing Seafile's Office files in a window here.
 // This side builds the editor's settings and signs them with the server's JWT secret (as Seahub
@@ -49,7 +51,25 @@ export function verifyJwt<T>(token: string, secret: string): T {
 
 // --- the editor's settings ----------------------------------------------------------------------
 
-type Ticket = { u: number; r: string; p: string; e: number }
+type Ticket = { u: number; r: string; p: string; e: number; s: string; o: string }
+
+function officeIdentity(user: User) {
+  const s = integrationIdentity(user, 'seafile'), o = integrationIdentity(user, 'onlyoffice')
+  if (!s || !o) throw new HttpError(409, 'OnlyOffice is not set up')
+  return { s, o }
+}
+function withOfficeIdentity<T>(user: User, identity: { s: string; o: string }, work: () => Promise<T>) {
+  return withProviderLifetime(() => {
+    if (!database().prepare('SELECT 1 FROM users WHERE id = ? AND banned_at IS NULL').get(user.id) ||
+        integrationIdentity(user, 'seafile') !== identity.s || integrationIdentity(user, 'onlyoffice') !== identity.o) {
+      throw new HttpError(409, 'The document accounts changed: reopen the file')
+    }
+  }, (end) => {
+    const changed = (id: number) => { if (id === user.id) end() }
+    const a = onSeafileLinkChanged(changed), b = onOfficeLinkChanged(changed)
+    return () => { a(); b() }
+  }, work)
+}
 
 /** Where a save goes, sealed (encrypted and signed) for the callback URL. */
 const seal = (t: Ticket) => encrypt(JSON.stringify(t))
@@ -60,7 +80,7 @@ function unseal(sealed: string): Ticket {
   } catch {
     throw new HttpError(403, 'Bad ticket')
   }
-  if (t.e < Date.now()) throw new HttpError(403, 'Ticket expired')
+  if (!t.s || !t.o || !Number.isFinite(t.e) || t.e < Date.now()) throw new HttpError(403, 'Ticket expired')
   return t
 }
 
@@ -70,7 +90,7 @@ export type OfficeConfig = { api: string; config: Record<string, unknown>; /** W
  * The editor for a file in Seafile: the document server's api.js and the signed settings to start
  * it with. Read-only libraries and formats OnlyOffice only shows open in view mode.
  */
-export async function officeConfig(req: IncomingMessage, user: User, repo: string | null, path: string | null, opts: { theme?: string | null; mobile?: boolean }): Promise<OfficeConfig> {
+async function officeConfigInner(req: IncomingMessage, user: User, repo: string | null, path: string | null, opts: { theme?: string | null; mobile?: boolean }): Promise<OfficeConfig> {
   const office = officeServer(user)
   if (!office) throw new HttpError(409, 'OnlyOffice is not set up (Settings → Integrations)')
   const id = String(repo ?? '')
@@ -88,7 +108,7 @@ export async function officeConfig(req: IncomingMessage, user: User, repo: strin
   const { url } = await fileLink(user, id, p, 'download')
   const key = `${id.slice(0, 8)}-${sha256(`${id}:${p}:${detail.id}`).slice(0, 32)}`
   const origin = process.env.OFFICE_CALLBACK_ORIGIN?.replace(/\/+$/, '') || publicOrigin(req)
-  const ticket = seal({ u: user.id, r: id, p, e: Date.now() + 7 * 864e5 })
+  const ticket = seal({ u: user.id, r: id, p, e: Date.now() + 7 * 864e5, ...officeIdentity(user) })
   const who = seafileInfo(user)
 
   const config: Record<string, unknown> = {
@@ -134,32 +154,34 @@ type Callback = { key?: string; status?: number; url?: string; users?: string[];
 export async function officeCallback(req: IncomingMessage, sealed: string | null, body: Callback & { token?: string }): Promise<{ error: number }> {
   if (!sealed) throw new HttpError(403, 'No ticket')
   const ticket = unseal(sealed)
-  const row = database().prepare('SELECT id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(ticket.u) as { id: number; login: string; name: string | null; avatar: string | null } | undefined
+  const row = database().prepare('SELECT id, github_id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(ticket.u) as { id: number; github_id: number; login: string; name: string | null; avatar: string | null } | undefined
   if (!row) throw new HttpError(403, 'No such user')
-  const user: User = { id: row.id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.login) }
-  const office = officeServer(user)
-  if (!office) throw new HttpError(409, 'OnlyOffice is not set up')
+  const user: User = { id: row.id, githubId: row.github_id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.github_id) }
+  return await withOfficeIdentity(user, ticket, async () => {
+    const office = officeServer(user)
+    if (!office) throw new HttpError(409, 'OnlyOffice is not set up')
 
-  // OnlyOffice signs the callback: in the body's token, or the Authorization header.
-  const header = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
-  let data: Callback
-  if (body.token) data = verifyJwt<Callback>(body.token, office.secret)
-  else if (header) data = verifyJwt<{ payload: Callback }>(header, office.secret).payload
-  else throw new HttpError(403, 'Unsigned callback')
-  noteCallback(user.id, data.status ?? 0)
+    // OnlyOffice signs the callback: in the body's token, or the Authorization header.
+    const header = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+    let data: Callback
+    if (body.token) data = verifyJwt<Callback>(body.token, office.secret)
+    else if (header) data = verifyJwt<{ payload: Callback }>(header, office.secret).payload
+    else throw new HttpError(403, 'Unsigned callback')
+    noteCallback(user.id, data.status ?? 0)
 
-  if (data.status !== 2 && data.status !== 6) {
-    if (data.status === 3 || data.status === 7) console.error(`OnlyOffice could not save ${ticket.p} (status ${data.status})`)
-    return { error: 0 }
-  }
-  if (!data.url) return { error: 1 }
-  try {
-    await saveVersion(user, ticket.r, ticket.p, data.url)
-    return { error: 0 }
-  } catch (e) {
-    console.error(`Saving ${ticket.p} from OnlyOffice failed:`, (e as Error).message)
-    return { error: 1 }
-  }
+    if (data.status !== 2 && data.status !== 6) {
+      if (data.status === 3 || data.status === 7) console.error(`OnlyOffice could not save ${ticket.p} (status ${data.status})`)
+      return { error: 0 }
+    }
+    if (!data.url) return { error: 1 }
+    try {
+      await saveVersion(user, ticket.r, ticket.p, data.url)
+      return { error: 0 }
+    } catch (e) {
+      console.error(`Saving ${ticket.p} from OnlyOffice failed:`, (e as Error).message)
+      return { error: 1 }
+    }
+  })
 }
 
 /** Fetches the edited file from the document server and puts it in Seafile as a new version. */
@@ -168,12 +190,15 @@ async function saveVersion(user: User, repo: string, path: string, from: string)
   if (!res.ok) throw new Error(`the document server answered ${res.status}`)
   // From the document server the user chose: at most what a document can sensibly be.
   const blob = new Blob([new Uint8Array(await readCapped(res, 200 * 1024 * 1024))])
+  requirePrivateRequest(user)
   const dir = path.split('/').slice(0, -1).join('/') || '/'
   const { url: link } = await fileLink(user, repo, dir, 'update')
+  requirePrivateRequest(user)
   const form = new FormData()
   form.append('target_file', path)
   form.append('file', blob, path.split('/').pop())
   const up = await guardedFetch(user, `${link}?ret-json=1`, { method: 'POST', body: form, signal: AbortSignal.timeout(120_000) })
+  requirePrivateRequest(user)
   if (!up.ok) throw new Error(`Seafile answered ${up.status}: ${(await up.text()).slice(0, 200)}`)
 }
 
@@ -202,7 +227,7 @@ export type OfficeCheck = { api: string; download: string; downloadOk: boolean; 
  * editor does first: its answer says whether it can reach Seafile's file server. And whether
  * OnlyOffice has ever called back here, which saving needs.
  */
-export async function officeCheck(req: IncomingMessage, user: User, repo: string | null, path: string | null): Promise<OfficeCheck> {
+async function officeCheckInner(req: IncomingMessage, user: User, repo: string | null, path: string | null): Promise<OfficeCheck> {
   const office = officeServer(user)
   if (!office) throw new HttpError(409, 'OnlyOffice is not set up')
   const id = String(repo ?? '')
@@ -249,3 +274,6 @@ export async function officeCheck(req: IncomingMessage, user: User, repo: string
       : `OnlyOffice has not called back to ${origin} yet (it does once a document opens). If it never does, it cannot reach this site.`
   return { api, download, downloadOk, callback, callbackOk: !!last, seafileUrl: host }
 }
+
+export const officeConfig: typeof officeConfigInner = (req, user, ...args) => withOfficeIdentity(user, officeIdentity(user), () => officeConfigInner(req, user, ...args))
+export const officeCheck: typeof officeCheckInner = (req, user, ...args) => withOfficeIdentity(user, officeIdentity(user), () => officeCheckInner(req, user, ...args))

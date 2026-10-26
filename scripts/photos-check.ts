@@ -11,7 +11,7 @@
 //     item, a WebP's EXIF chunk, a MOV's moov box at the end),
 //   - suggestions, choosing folders and the walk: what is indexed, months (in the viewer's time
 //     zone for file dates), only ranged reads of at most 128 KB, hidden folders left out,
-//   - thumbnails through the server with ETag and Cache-Control (304 without asking Seafile again),
+//   - thumbnails through the server with ETag and Cache-Control (304 without asking Seafile again; Immich's and encrypted libraries' never kept, locked ones 423),
 //     and the camera's own preview for an encrypted library,
 //   - walking again: nothing read when nothing changed, an unchanged folder not even listed; new,
 //     changed and deleted files (and a deleted folder) found; favourites kept,
@@ -186,7 +186,7 @@ const libs: SfLib[] = [
 const sf = await seafileMock(libs)
 
 const ADMIN = 'photos-check'
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: ADMIN })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1' })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
 const now = Date.now()
@@ -383,7 +383,7 @@ async function seafileChecks() {
   const canonId = idOf(PHOTOS, '/canon.jpg')
   const thumbsAsked = () => sf.log.filter((l) => l.path.includes('/thumbnail/')).length
   const t1 = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small&v=1`)
-  check(`thumbnail: 200 image/png, ETag, kept by the browser (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')} ${t1.headers.get('cache-control')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png' && !!t1.headers.get('etag') && /max-age=\d{5,}/.test(t1.headers.get('cache-control') ?? '') && t1.bytes[1] === 0x50)
+  check(`thumbnail: 200 image/png, ETag, private revalidation (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')} ${t1.headers.get('cache-control')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png' && !!t1.headers.get('etag') && t1.headers.get('cache-control') === 'private, no-cache' && t1.bytes[1] === 0x50)
   check(`thumbnail: asked Seafile at 256 px (got ${sf.log.findLast((l) => l.path.includes('/thumbnail/'))?.path})`, !!sf.log.findLast((l) => l.path.includes('/thumbnail/'))?.path.includes('size=256'))
   const before = thumbsAsked()
   const t2 = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small&v=1`, { headers: { 'If-None-Match': t1.headers.get('etag')! } })
@@ -443,10 +443,24 @@ async function seafileChecks() {
   check(`unlocked: the Vault's photo is on the timeline (got ${JSON.stringify(await buckets())})`, (await buckets())['2023-07'] === 5)
   check('locking the Vault', (await call('/api/seafile/lock', { method: 'POST', body: { repo: VAULT } })).status === 200)
   check(`locked: the Vault's photo is hidden again (got ${JSON.stringify(await buckets())})`, (await buckets())['2023-07'] === 4)
+  // Locked: the stored preview, the ETag's 304 and the details are all refused, like the library's own routes.
+  {
+    const fileId = (database().prepare('SELECT file_id FROM photos WHERE id = ?').get(Number(vaultId)) as { file_id: string }).file_id
+    const asks = thumbsAsked()
+    const lt = await call(`/api/photos/seafile/thumb?id=${vaultId}&size=small&v=1`)
+    const lm = await call(`/api/photos/seafile/thumb?id=${vaultId}&size=small&v=1`, { headers: { 'If-None-Match': `"sf-${fileId}-small"` } })
+    const li = await call(`/api/photos/seafile/info?id=${vaultId}`)
+    check(`locked Vault: thumbnail, thumbnail with a matching If-None-Match and info all 423 (got ${lt.status}, ${lm.status}, ${li.status})`, lt.status === 423 && lm.status === 423 && li.status === 423)
+    check('locked Vault: no image bytes, no ETag, no filename in any answer', [lt, lm, li].every((r) => !r.headers.get('etag') && !(r.headers.get('content-type') ?? '').startsWith('image/') && r.bytes[0] !== 0xff && !/vault\.jpg/.test(r.text)) && thumbsAsked() === asks)
+  }
   const st = (await call('/api/photos/status')).json
   check(`status: the Vault says it is locked (got ${JSON.stringify(st.seafile.sources.map((s: { name: string; locked: boolean }) => [s.name, s.locked]))})`, st.seafile.sources.some((s: { repo: string; locked: boolean }) => s.repo === VAULT && s.locked))
 
   await selectionChecks(vaultId)
+
+  await coldRestartChecks(vaultId)
+
+  await revocationChecks()
 
   // Another account sees none of it.
   const other = await call(`/api/photos/seafile/info?id=${canonId}`, { as: 2 })
@@ -455,7 +469,7 @@ async function seafileChecks() {
   const otherInfo = await call(`/api/photos/seafile/info?id=${canonId}`, { as: 2 })
   const otherThumb = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { as: 2 })
   const otherBuckets = await call('/api/photos/seafile/buckets?tz=0', { as: 2 })
-  check(`another account with Seafile: not this one's photos (info ${otherInfo.status}, thumbnail ${otherThumb.status}, ${otherBuckets.json?.length} months)`, otherInfo.status === 404 && otherThumb.status === 404 && otherBuckets.json?.length === 0)
+  check(`another account with Seafile: not this one's photos (info ${otherInfo.status}, thumbnail ${otherThumb.status}, ${otherBuckets.json?.length} months)`, otherInfo.status === 404 && otherThumb.status === 404 && (otherBuckets.json?.length ?? 0) === 0)
   const otherFav = await call('/api/photos/seafile/favourite', { method: 'PUT', body: { id: canonId, on: false }, as: 2 })
   check(`another account cannot unfavourite it (got ${otherFav.status})`, otherFav.status === 404 && JSON.stringify(await buckets('&fav=1')) === '{"2018-01":1}')
   const otherTrash = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [canonId] }, as: 2 })
@@ -469,6 +483,185 @@ async function seafileChecks() {
   linkSeafile(1, 'another@example.com')
   const fresh = (await call('/api/photos/status')).json
   check(`another Seafile account: no folders, no photos (got ${fresh.seafile.sources.length} folders, ${JSON.stringify(await buckets())})`, fresh.seafile.sources.length === 0 && JSON.stringify(await buckets()) === '{}')
+}
+
+/**
+ * Seafile cannot say which libraries are encrypted (the library listing is down) while the server
+ * has just started, so it holds no list: nothing from an encrypted library may leave, whatever
+ * the index holds, and the folders are not named either. A list kept from before stays usable.
+ */
+async function coldRestartChecks(vaultId: string) {
+  const row = database().prepare('SELECT file_id FROM photos WHERE id = ?').get(Number(vaultId)) as { file_id: string }
+  await server.stop()
+  sf.down = true
+  await server.start()
+  const routes = [
+    '/api/photos/seafile/buckets?tz=0',
+    '/api/photos/seafile/buckets?tz=0&fav=1',
+    '/api/photos/seafile/bucket?tz=0&key=2023-07',
+    `/api/photos/seafile/albums`,
+    `/api/photos/seafile/buckets?tz=0&album=${VAULT}`,
+    `/api/photos/seafile/bucket?tz=0&key=2023-07&album=${VAULT}`,
+    `/api/photos/seafile/thumb?id=${vaultId}&size=small`,
+    `/api/photos/seafile/info?id=${vaultId}`,
+    `/api/photos/seafile/original?id=${vaultId}`,
+    '/api/photos/suggest',
+  ]
+  const cold = await Promise.all(routes.map((r) => call(r)))
+  const zip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [vaultId] } })
+  const status = await call('/api/photos/status')
+  const all = [...cold, zip, status]
+  check(`cold start, library listing down: every metadata and file route refuses (got ${[...cold, zip].map((r) => r.status).join(', ')})`, [...cold, zip].every((r) => r.status >= 400))
+  check('cold start, library listing down: no filename, library id, photo id, file version or image bytes in any answer', all.every((r) => !/vault\.jpg|Vault/.test(r.text) && !r.text.includes(VAULT) && !r.text.includes(row.file_id.slice(0, 10)) && !(r.headers.get('content-type') ?? '').startsWith('image/') && !r.headers.get('etag')))
+  const sources = status.json?.seafile?.sources
+  check(`cold start, library listing down: status names no folder and says why (got ${status.status} ${status.text.slice(0, 160)})`, status.status === 200 && Array.isArray(sources) && sources.length === 0 && status.json.seafile.unavailable === true)
+
+  // Seafile back: a library listing is known again; the Vault is locked after the restart, the rest shows.
+  sf.down = false
+  // A chosen folder whose library the list does not name is not named by status either.
+  const [gone] = libs.splice(libs.findIndex((l) => l.id === VAULT), 1)
+  const unknown = await call('/api/photos/status')
+  check(`a library missing from the list: status names no folder of it (got ${unknown.text.slice(0, 200)})`, unknown.status === 200 && !unknown.text.includes(VAULT) && !unknown.text.includes('Vault') && (unknown.json.seafile.sources as { repo: string }[]).some((x) => x.repo === PHOTOS))
+  libs.push(gone)
+  await call('/api/photos/suggest')
+  const healthy = await buckets()
+  check(`Seafile back: plain libraries on the timeline, the locked Vault not (got ${JSON.stringify(healthy)})`, healthy['2023-07'] === 4)
+  const month = (await call('/api/photos/seafile/bucket?tz=0&key=2023-07')).json as unknown[][]
+  check(`Seafile back: the month lists no Vault photo (got ${month.length})`, month.length === 4 && month.every((i) => !String(i[6]).startsWith(VAULT) && i[0] !== vaultId))
+  check('Seafile back: status lists the folders again, the Vault locked', ((await call('/api/photos/status')).json.seafile.sources as { repo: string; locked: boolean }[]).some((x) => x.repo === VAULT && x.locked))
+
+  // Down again, a moment after a good answer: no list is kept to authorize from, so nothing is shown.
+  sf.down = true
+  const kept = await call('/api/photos/seafile/bucket?tz=0&key=2023-07')
+  const keptBuckets = await call('/api/photos/seafile/buckets?tz=0')
+  check(`listing down again: no kept list is used, the timeline refuses (got ${kept.status}, ${keptBuckets.status})`, kept.status === 502 && keptBuckets.status === 502 && !kept.text.includes(PHOTOS) && !keptBuckets.text.includes('2023'))
+  const keptThumb = await call(`/api/photos/seafile/thumb?id=${vaultId}&size=small`)
+  check(`listing down again: the Vault's thumbnail still refused (got ${keptThumb.status})`, keptThumb.status >= 400 && !(keptThumb.headers.get('content-type') ?? '').startsWith('image/'))
+  const keptZip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [vaultId] } })
+  check(`listing down again: a ZIP with the Vault's photo refused before it starts, no file name (got ${keptZip.status} ${keptZip.text})`, keptZip.status === 502 && !/vault/i.test(keptZip.text))
+  sf.down = false
+}
+
+/** What must never leave for a library the account no longer has: its names, paths, ids, details, bytes, validators or links. */
+const leaks = (r: Answer, ...ids: string[]) =>
+  /canon\.jpg|Trips|52\.37|"lat"|"repo"/.test(r.text) || ids.some((i) => r.text.includes(i)) || !!r.headers.get('etag') || !!r.headers.get('location') || !!r.headers.get('content-disposition') || (r.headers.get('content-type') ?? '').startsWith('image/') || r.bytes[0] === 0xff
+
+/**
+ * Access is asked of Seafile for every request, never taken from what was seen a moment ago:
+ * warm everything while the Photos library is shared, then take it out of the listing only
+ * (Seafile would still serve its details and files, as a stale share might), and every route that
+ * shows metadata, bytes, validators, links, a ZIP or changes something refuses without saying
+ * what was there; likewise while the listing is down; and all of it comes back with the access.
+ */
+async function revocationChecks() {
+  const canonId = idOf(PHOTOS, '/canon.jpg')
+  const otherId = idOf(PHOTOS, '/plain.jpg')
+  const row = database().prepare('SELECT file_id FROM photos WHERE id = ?').get(Number(canonId)) as { file_id: string }
+  const tag = `"sf-${row.file_id}-small"`
+  const listings = () => sf.log.filter((l) => l.path === '/api/v2.1/repos/?type=mine&type=shared&type=group&type=public').length
+
+  // Warm: thumbnail and its validator, details, the timeline, albums, a ZIP token and a ZIP.
+  const warm = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`)
+  const warmInfo = await call(`/api/photos/seafile/info?id=${canonId}`)
+  const warmZip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [canonId] } })
+  const tokenKept = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [otherId] } })
+  const warmMonths = await buckets()
+  const warmAlbums = await call('/api/photos/seafile/albums')
+  const warmOriginal = await call(`/api/photos/seafile/original?id=${canonId}`)
+  check(`access warmed: thumbnail, details, ZIP, original link, albums all answer (got ${[warm, warmInfo, warmZip, warmOriginal, warmAlbums].map((r) => r.status).join(', ')})`, warm.status === 200 && !!warm.headers.get('etag') && warmInfo.status === 200 && warmZip.status === 200 && warmOriginal.status === 302 && warmAlbums.status === 200 && warmMonths['2023-07'] === 4)
+
+  // A burst of thumbnails costs a bounded number of library listings, not one each.
+  const l0 = listings()
+  await Promise.all(Array.from({ length: 30 }, () => call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { headers: { 'If-None-Match': tag } })))
+  check(`30 thumbnails at once: fewer library listings than thumbnails (got ${listings() - l0})`, listings() - l0 >= 1 && listings() - l0 < 30)
+
+  // A finished walk that left the locked Vault out: its job names the Vault, which is fine while the account has it.
+  await call('/api/photos/scan', { method: 'POST' })
+  const warmJob = await waitScan('walk before the revocations')
+  const jobText = () => call('/api/photos/status').then((r) => JSON.stringify(r.json.seafile?.job ?? null))
+  check(`warm job: done, the locked Vault listed as skipped (got ${JSON.stringify(warmJob.skipped)})`, warmJob.state === 'done' && warmJob.skipped.length === 1 && warmJob.skipped[0].repo === VAULT && warmJob.skipped[0].library === 'Vault')
+
+  // Only the Vault revoked: the walk mixed its library in, so no part of the job is shown, and none of the Vault.
+  sf.hidden.add(VAULT)
+  const vaultGone = await call('/api/photos/status')
+  const vaultGoneScan = await call('/api/photos/scan', { method: 'POST' })
+  check(`revoked Vault: status has no job and no trace of the library (got ${vaultGone.text.slice(0, 160)})`, vaultGone.status === 200 && vaultGone.json.seafile.job === null && !vaultGone.text.includes(VAULT) && !vaultGone.text.includes('Vault'))
+  check('revoked Vault: starting a walk answers no more than status does', vaultGoneScan.status === 200 && !vaultGoneScan.text.includes(VAULT) && !vaultGoneScan.text.includes('Vault'))
+  sf.hidden.delete(VAULT)
+  await call('/api/photos/scan', { method: 'POST' })
+  await waitScan('walk with the Vault back')
+  check('restored Vault: the job is shown again, with the Vault as skipped', (await jobText()).includes(VAULT))
+
+  // Revoked: only the listing changes.
+  sf.hidden.add(PHOTOS)
+  const files0 = files().length
+  const thumbs0 = sf.log.filter((l) => l.path.includes('/thumbnail/')).length
+  const dels0 = sf.log.filter((l) => l.method === 'DELETE' || l.path.includes('move') || l.path.includes('transfer') || l.path.includes('sync-batch')).length
+  const l1 = listings()
+  const favBefore = (database().prepare('SELECT favourite FROM photos WHERE id = ?').get(Number(canonId)) as { favourite: number }).favourite
+  const rowsBefore = (database().prepare('SELECT COUNT(*) AS n FROM photos WHERE user_id = 1').get() as { n: number }).n
+  const revoked = {
+    info: await call(`/api/photos/seafile/info?id=${canonId}`),
+    thumb: await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`),
+    thumb304: await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { headers: { 'If-None-Match': tag } }),
+    thumbLarge: await call(`/api/photos/seafile/thumb?id=${canonId}&size=large`, { headers: { 'If-None-Match': `"sf-${row.file_id}-large"` } }),
+    original: await call(`/api/photos/seafile/original?id=${canonId}`),
+    zip: await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [canonId] } }),
+    zipToken: await call(tokenKept.json.url),
+    zipTokenOld: await call(warmZip.json.url),
+    favourite: await call('/api/photos/seafile/favourite', { method: 'PUT', body: { ids: [canonId], on: !favBefore } }),
+    trash: await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [canonId] } }),
+    move: await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [canonId], to: { repo: DOCS, path: '/Work' } } }),
+    moveInto: await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [idOf(DOCS, '/Work/x.jpg') || otherId], to: { repo: PHOTOS, path: '/Trips' } } }),
+  }
+  check(`revoked sharing: every route refuses with 404 (got ${Object.entries(revoked).map(([k, r]) => `${k} ${r.status}`).join(', ')})`, Object.values(revoked).every((r) => r.status === 404))
+  check('revoked sharing: no name, path, library id, photo id, GPS, ETag, link, file name or image bytes in any answer', Object.values(revoked).every((r) => !leaks(r, PHOTOS, `"${canonId}"`)))
+  check('revoked sharing: Seafile asked for nothing (no thumbnail, file, delete or move), the index and favourite untouched', files().length === files0 && sf.log.filter((l) => l.path.includes('/thumbnail/')).length === thumbs0 && sf.log.filter((l) => l.method === 'DELETE' || l.path.includes('move') || l.path.includes('transfer') || l.path.includes('sync-batch')).length === dels0 && libs[0].files.has('/canon.jpg') && (database().prepare('SELECT favourite FROM photos WHERE id = ?').get(Number(canonId)) as { favourite: number }).favourite === favBefore && (database().prepare('SELECT COUNT(*) AS n FROM photos WHERE user_id = 1').get() as { n: number }).n === rowsBefore)
+  check(`revoked sharing: the library list was asked for again, not remembered (${listings() - l1} listings for ${Object.keys(revoked).length} requests)`, listings() - l1 >= Object.keys(revoked).length - 1)
+
+  const status = await call('/api/photos/status')
+  const months = await call('/api/photos/seafile/buckets?tz=0')
+  const month = await call('/api/photos/seafile/bucket?tz=0&key=2023-07')
+  const albums = await call('/api/photos/seafile/albums')
+  const album = await call(`/api/photos/seafile/bucket?tz=0&key=2023-07&album=${PHOTOS}`)
+  const favs = await call('/api/photos/seafile/buckets?tz=0&fav=1')
+  check(`revoked sharing: status, timeline, albums and favourites omit it at once (got ${status.status}, ${months.status}, ${month.status}, ${albums.status}, ${album.status}, ${favs.status})`, [status, months, month, albums, album, favs].every((r) => r.status === 200 && !r.text.includes(PHOTOS) && !/"Photos"|canon\.jpg/.test(r.text)) && (status.json.seafile.sources as { repo: string }[]).every((x) => x.repo !== PHOTOS) && JSON.stringify(months.json) === '[]' && JSON.stringify(month.json) === '[]' && JSON.stringify(album.json) === '[]' && JSON.stringify(favs.json) === '[]' && (albums.json as { id: string }[]).every((a) => !a.id.startsWith(PHOTOS)))
+
+  const revokedJob = await call('/api/photos/status')
+  check(`revoked sharing: status shows no job, nothing of the library, its counts or state (got ${JSON.stringify(revokedJob.json.seafile.job)})`, revokedJob.json.seafile.job === null && !revokedJob.text.includes(PHOTOS) && !revokedJob.text.includes('"Photos"') && !/Trips|canon\.jpg/.test(revokedJob.text))
+
+  // Access back: all of it recovers, the thumbnail's validator included.
+  sf.hidden.delete(PHOTOS)
+  const back = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`)
+  const back304 = await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { headers: { 'If-None-Match': tag } })
+  const backInfo = await call(`/api/photos/seafile/info?id=${canonId}`)
+  const backZip = await call(tokenKept.json.url)
+  check(`access restored: thumbnail 200, 304, details, the ZIP token, the timeline and albums are back (got ${back.status}, ${back304.status}, ${backInfo.status}, ${backZip.status}, ${JSON.stringify(await buckets())})`, back.status === 200 && back304.status === 304 && backInfo.status === 200 && backZip.status === 200 && (await buckets())['2023-07'] === 4 && ((await call('/api/photos/seafile/albums')).json as { id: string }[]).some((a) => a.id.startsWith(PHOTOS)))
+
+  // The listing down while everything was just warmed: nothing is shown on the strength of what was seen.
+  sf.down = true
+  const outage = {
+    info: await call(`/api/photos/seafile/info?id=${canonId}`),
+    thumb: await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`),
+    thumb304: await call(`/api/photos/seafile/thumb?id=${canonId}&size=small`, { headers: { 'If-None-Match': tag } }),
+    original: await call(`/api/photos/seafile/original?id=${canonId}`),
+    zip: await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [canonId] } }),
+    zipToken: await call(warmZip.json.url),
+    favourite: await call('/api/photos/seafile/favourite', { method: 'PUT', body: { ids: [canonId], on: !favBefore } }),
+    trash: await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [canonId] } }),
+    buckets: await call('/api/photos/seafile/buckets?tz=0'),
+    bucket: await call('/api/photos/seafile/bucket?tz=0&key=2023-07'),
+    albums: await call('/api/photos/seafile/albums'),
+  }
+  const down = await call('/api/photos/status')
+  check(`listing down: every route refuses with 502 and no stale authorization (got ${Object.entries(outage).map(([k, r]) => `${k} ${r.status}`).join(', ')})`, Object.values(outage).every((r) => r.status === 502))
+  check('listing down: no name, path, id, GPS, ETag, link or image bytes in any answer', Object.values(outage).every((r) => !leaks(r, PHOTOS, `"${canonId}"`) && !r.text.includes('2023-07')))
+  check(`listing down: status shows no job at all (got ${JSON.stringify(down.json.seafile.job)})`, down.json.seafile.job === null && !down.text.includes(VAULT) && !down.text.includes('Vault'))
+  check(`listing down: status names no folder and says so (got ${down.text.slice(0, 120)})`, down.status === 200 && down.json.seafile.unavailable === true && down.json.seafile.sources.length === 0)
+  check('listing down: the favourite and the files are untouched', (database().prepare('SELECT favourite FROM photos WHERE id = ?').get(Number(canonId)) as { favourite: number }).favourite === favBefore && libs[0].files.has('/canon.jpg'))
+  sf.down = false
+  check('listing back: details answer again', (await call(`/api/photos/seafile/info?id=${canonId}`)).status === 200)
+  check('listing back: status shows the finished job again', (await jobText()) !== 'null')
 }
 
 // --- Immich -----------------------------------------------------------------------------------------------
@@ -558,10 +751,16 @@ async function immichChecks() {
 
     const asked = im.log.length
     const t1 = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`)
-    check(`Immich thumbnail: 200 image/png with ETag (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png' && !!t1.headers.get('etag'))
+    check(`Immich thumbnail: 200 image/png with ETag (got ${t1.status} ${t1.headers.get('content-type')} ${t1.headers.get('etag')})`, t1.status === 200 && t1.headers.get('content-type') === 'image/png')
+    check(`Immich thumbnail: never kept by the browser, no ETag (got ${t1.headers.get('cache-control')} ${t1.headers.get('etag')})`, /no-store/.test(t1.headers.get('cache-control') ?? '') && !t1.headers.get('etag'))
     check(`Immich thumbnail: size=thumbnail asked, with the key (got ${im.log.at(-1)?.path})`, im.log.length === asked + 1 && im.log.at(-1)!.path.includes('size=thumbnail') && im.log.at(-1)!.key === KEY)
-    const t2 = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`, { headers: { 'If-None-Match': t1.headers.get('etag')! } })
-    check(`Immich thumbnail again: 304, Immich not asked (got ${t2.status})`, t2.status === 304 && im.log.length === asked + 1)
+    // The old ETag, as a browser may still hold it: never a 304, for this account or another one.
+    const oldTag = `"im-${aid(1)}-small"`
+    const t2 = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`, { headers: { 'If-None-Match': oldTag } })
+    check(`Immich thumbnail again with a matching If-None-Match: 200 from Immich, never 304 (got ${t2.status}, ${im.log.length - asked} asks)`, t2.status === 200 && im.log.length === asked + 2 && t2.bytes.length > 0)
+    const askedB = im.log.length
+    const tB = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=small`, { headers: { 'If-None-Match': oldTag }, as: 2 })
+    check(`Immich thumbnail for an account without Immich, matching If-None-Match: 409, no 304, no bytes (got ${tB.status}, ${tB.bytes.length} bytes, ${im.log.length - askedB} asks)`, tB.status === 409 && tB.bytes.length === JSON.stringify(tB.json).length && im.log.length === askedB)
     const large = await call(`/api/photos/immich/thumb?id=${aid(1)}&size=large`)
     check(`Immich large: the preview size (got ${large.status}, ${im.log.at(-1)?.path})`, large.status === 200 && im.log.at(-1)!.path.includes('size=preview'))
 

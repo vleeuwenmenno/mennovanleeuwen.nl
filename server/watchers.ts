@@ -1,10 +1,11 @@
+import { privateFetch as fetch } from './privateRequest.ts'
 import { ACTIVITY_KIND, activityWindowMs, allows, normalizePrefs, type SourceId } from '../src/data/notifySources.ts'
 import { mergeActivity, normalizeGithubEvents, normalizeGithubReleases, type Activity } from '../src/data/normalize.ts'
 import { forgejoActivity } from './activity.ts'
 import { accounts, type User } from './auth.ts'
-import { listCaldav } from './caldav.ts'
+import { caldavLinkVersion, listCaldav, onCaldavLinkChanged } from './caldav.ts'
 import { allEvents } from './calendars.ts'
-import { googleAccount } from './google.ts'
+import { googleAccount, googleLinkVersion, onGoogleLinkChanged } from './google.ts'
 import { MC_HOST, onMinecraftStatus, type McStatus } from './minecraft.ts'
 import { claimOnce, notify, registerWatcher, startWatchers, type Notice } from './notifier.ts'
 import { onUserGone } from './db.ts'
@@ -126,22 +127,40 @@ export async function activity() {
 
 type CalEvent = Awaited<ReturnType<typeof allEvents>>['events'][number]
 /** Each account's coming events, read again every five minutes (Google and CalDAV are not asked every minute). */
-const upcoming = new Map<number, { at: number; events: CalEvent[] }>()
+const calendarLinks = (user: User) => `${googleLinkVersion(user)}:${caldavLinkVersion(user)}`
+const upcoming = new Map<number, { at: number; links: string; events: CalEvent[] }>()
 onUserGone((id) => upcoming.delete(id))
+onGoogleLinkChanged((id) => upcoming.delete(id))
+onCaldavLinkChanged((id) => upcoming.delete(id))
 const REFRESH_MS = 5 * 60_000
 
-async function calendar() {
+export async function calendar() {
   const now = Date.now()
   for (const u of accounts()) {
-    if (!googleAccount(u) && !listCaldav(u).length) continue
+    const links = calendarLinks(u)
+    if (!googleAccount(u) && !listCaldav(u).length) {
+      upcoming.delete(u.id)
+      continue
+    }
     const prefs = prefsOf(u)
     if (!allows(prefs, 'calendar.reminder')) continue
     let cached = upcoming.get(u.id)
+    if (cached?.links !== links) {
+      upcoming.delete(u.id)
+      cached = undefined
+    }
     if (!cached || now - cached.at > REFRESH_MS) {
       const { events } = await allEvents(u, null, { from: new Date(now - 10 * 60_000), to: new Date(now + 3 * 3600_000) }).catch(() => ({ events: cached?.events ?? [] }))
-      cached = { at: now, events }
+      // A failed combined read can fall back only to this exact set of links. Recheck after
+      // the await, including removal/ban, before either caching or sending a private reminder.
+      if (calendarLinks(u) !== links || !accounts().some((a) => a.id === u.id)) {
+        upcoming.delete(u.id)
+        continue
+      }
+      cached = { at: now, links, events }
       upcoming.set(u.id, cached)
     }
+    if (calendarLinks(u) !== cached.links || !accounts().some((a) => a.id === u.id)) continue
     for (const n of reminders(cached.events, now, prefs.calendarLead)) notify(u, n)
   }
 }

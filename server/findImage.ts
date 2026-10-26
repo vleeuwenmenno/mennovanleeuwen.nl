@@ -1,3 +1,5 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -10,6 +12,7 @@ import { decodePng, encodePng, isPng } from './pngResize.ts'
 import { headOf, tagsOf } from './preview.ts'
 import { checkRoom } from './quota.ts'
 import { loadSettings, webSearch } from './websearch.ts'
+import { sizedCache } from './sizedcache.ts'
 
 // The Agents app's find_image: real-world pictures (a product, a dish, a place) for the model to
 // show in a visual list as image:<id>. Ollama's web search (the default) has no image search, so
@@ -302,7 +305,7 @@ function titleOf(head: string): string | null {
 const PRODUCTISH = /\/(products?|item|items|p|dp|shop|store|goods|catalog|detail)\b|[?&](product|item|sku)=/i
 
 /** A page's pictures, from a short-lived cache when this account read it for this query in the last half hour. */
-const pageCache = new Map<string, { at: number; value: Promise<PageImages | null> }>()
+const pageCache = sizedCache<Promise<PageImages | null>>({ maxEntries: 200, maxBytes: 16 * 1024 * 1024 })
 async function pageImages(user: User, raw: string, terms: string[], signal: AbortSignal): Promise<PageImages | null> {
   let url: URL
   try {
@@ -315,7 +318,7 @@ async function pageImages(user: User, raw: string, terms: string[], signal: Abor
   // candidates are scored against its words).
   const key = `${user.id}\n${terms.join(' ')}\n${url.href}`
   const hit = pageCache.get(key)
-  if (hit && Date.now() - hit.at < 30 * 60_000) return hit.value
+  if (hit && Date.now() - hit.at < 30 * 60_000 && canUsePrivateCache(hit.value)) return hit.value
   const value = (async () => {
     const { url: final, res } = await safeGet(url, 'text/html,application/xhtml+xml', AbortSignal.any([signal, AbortSignal.timeout(PAGE_MS)]))
     if (!res.ok || !/html/i.test(res.headers.get('content-type') ?? '')) {
@@ -325,10 +328,11 @@ async function pageImages(user: User, raw: string, terms: string[], signal: Abor
     const html = (await readUpTo(res, PAGE_BYTES, true)).toString('utf8')
     return extractImages(html, final, terms)
   })()
-  pageCache.set(key, { at: Date.now(), value })
-  // A failure is not kept: the next call may find the site up again.
-  value.then((v) => v ?? pageCache.delete(key), () => pageCache.delete(key))
-  if (pageCache.size > 500) for (const [k, v] of pageCache) if (Date.now() - v.at > 30 * 60_000) pageCache.delete(k)
+  ownPrivateCache(value)
+  pageCache.set(key, value)
+  // A failure is not kept: the next call may find the site up again. A success is counted by size,
+  // and the oldest entries go when the cache is over its entry or byte cap.
+  value.then((v) => (v ? pageCache.settle(key, value, JSON.stringify(v).length * 2) : pageCache.delete(key, value)), () => pageCache.delete(key, value))
   return value
 }
 

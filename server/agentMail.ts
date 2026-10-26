@@ -1,3 +1,4 @@
+import { withPrivateOperation } from './privateRequest.ts'
 import type { User } from './auth.ts'
 import type { CallSummary, Prepared } from './agentCalendar.ts'
 import { HttpError } from './http.ts'
@@ -283,7 +284,7 @@ const fail = (message: string): never => {
  * a mistake goes back to the model before the user is asked, and `run` does exactly what the card
  * says. Throws what the model should be told.
  */
-export async function prepareMailCall(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared & { summary: CallSummary }> {
+async function prepareMailCallInner(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared & { summary: CallSummary }> {
   if (!mailLinked(user)) throw new Error(MAIL_NOT_LINKED)
   const text = (k: string) => (typeof args[k] === 'string' ? (args[k] as string).trim() : '')
 
@@ -585,3 +586,8 @@ export async function prepareMailCall(user: User, name: string, args: Record<str
 
   throw new Error(`There is no tool called ${name}`)
 }
+
+export const prepareMailCall: typeof prepareMailCallInner = (user, name, args, zone) => withPrivateOperation(async () => {
+  const prepared = await prepareMailCallInner(user, name, args, zone)
+  return { ...prepared, run: () => withPrivateOperation(() => prepared.run()) }
+})

@@ -42,7 +42,7 @@ const [U1, U2] = users
 // --- dev server ---------------------------------------------------------------------------------
 const vite = spawn(`${WT}/node_modules/.bin/vite`, ['--port', String(PORT), '--strictPort'], {
   cwd: WT,
-  env: { ...process.env, DATA_DIR: data, GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_USERS: 'nobody', MC_WATCH: 'off' },
+  env: { ...process.env, DATA_DIR: data, GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '999999', MC_WATCH: 'off' },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 let log = ''

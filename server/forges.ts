@@ -1,3 +1,5 @@
+import { requirePrivateRequest } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import type { User } from './auth.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { database, decrypt, encrypt } from './db.ts'
@@ -165,6 +167,7 @@ export async function addForge(user: User, body: { baseUrl?: string; token?: str
   })
   const username = me?.login ?? me?.username
   if (!username) throw new HttpError(400, `${base} does not look like a Gitea or Forgejo instance`)
+  requirePrivateRequest(user)
   const db = database()
   const existing = db.prepare('SELECT id FROM forges WHERE user_id = ? AND base_url = ?').get(user.id, base) as { id: number } | undefined
   if (existing) {

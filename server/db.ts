@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
@@ -10,26 +10,49 @@ import { DatabaseSync } from 'node:sqlite'
 // Access tokens and passwords (GitHub, Gitea, Google, CalDAV, updown.io, Ollama) are encrypted at rest
 // with AES-256-GCM. The key comes from SESSION_SECRET, or a random one generated once into
 // DATA_DIR/secret.key.
+//
+// The database holds plaintext user data, so on every start DATA_DIR is set to 0700 and mvlos.db
+// (plus its -wal and -shm files) and secret.key to 0600: existing installs are corrected too, not
+// just new ones. The private directory keeps the WAL/SHM files closed to other users whatever
+// mode SQLite gives them. Windows has no POSIX modes, so nothing is changed there.
 
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
+const POSIX = process.platform !== 'win32'
 
 let db: DatabaseSync | null = null
 let key: Buffer | null = null
 
+function privateDir() {
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
+  if (POSIX) chmodSync(DATA_DIR, 0o700)
+}
+
+function privateFile(file: string) {
+  if (POSIX && existsSync(file)) chmodSync(file, 0o600)
+}
+
 function secret(): Buffer {
   if (process.env.SESSION_SECRET) return Buffer.from(process.env.SESSION_SECRET, 'utf8')
   const file = join(DATA_DIR, 'secret.key')
-  if (!existsSync(file)) {
-    writeFileSync(file, randomBytes(32).toString('base64'), { mode: 0o600 })
-    chmodSync(file, 0o600)
-  }
+  privateDir()
+  if (!existsSync(file)) writeFileSync(file, randomBytes(32).toString('base64'), { mode: 0o600 })
+  privateFile(file)
   return Buffer.from(readFileSync(file, 'utf8').trim(), 'base64')
 }
 
+// Installed by privateRequest without importing auth back into this storage module. Every local
+// commit uses the current request/aggregate authority, including helpers that await providers.
+const rollbackOnly = (sql: string) => /^\s*ROLLBACK(?:\s+TRANSACTION)?\s*;?\s*$/i.test(sql)
+let checkWrite = () => {}
+export const guardDatabaseWrites = (check: () => void) => { checkWrite = check }
+
 export function database(): DatabaseSync {
   if (db) return db
-  mkdirSync(DATA_DIR, { recursive: true })
-  db = new DatabaseSync(join(DATA_DIR, 'mvlos.db'))
+  privateDir()
+  const file = join(DATA_DIR, 'mvlos.db')
+  if (!existsSync(file)) closeSync(openSync(file, 'a', 0o600))
+  privateFile(file)
+  db = new DatabaseSync(file)
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
@@ -165,6 +188,8 @@ export function database(): DatabaseSync {
       created_at INTEGER NOT NULL
     );
   `)
+  privateFile(`${file}-wal`)
+  privateFile(`${file}-shm`)
   // Added later: the scopes Google granted (editing needs calendar.events).
   if (!(db.prepare('PRAGMA table_info(google)').all() as { name: string }[]).some((c) => c.name === 'scopes')) db.exec('ALTER TABLE google ADD COLUMN scopes TEXT')
   // Added later: which tool groups a thread may use (JSON; null for all), and files attached to a message.
@@ -413,6 +438,14 @@ export function database(): DatabaseSync {
   if (!cols('agent_threads').includes('image_config')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_config TEXT')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
+  const prepare = db.prepare.bind(db), exec = db.exec.bind(db)
+  db.prepare = ((...args: Parameters<typeof prepare>) => {
+    const statement = prepare(...args)
+    const run = statement.run.bind(statement)
+    statement.run = ((...values: Parameters<typeof run>) => { if (!rollbackOnly(args[0])) checkWrite(); return run(...values) }) as typeof run
+    return statement
+  }) as typeof prepare
+  db.exec = ((sql: string) => { if (!rollbackOnly(sql)) checkWrite(); return exec(sql) }) as typeof exec
   return db
 }
 

@@ -5,7 +5,7 @@ import { timeAgo } from '../data/recents'
 import { useAccount } from '../os/account'
 import { ask } from '../os/Dialogs'
 
-// Settings → Users, only for admins (ADMIN_USERS on the server, which checks every request
+// Settings → Users, only for admins (ADMIN_GITHUB_IDS on the server, which checks every request
 // itself): sign-up open or closed and the cap, then every account, searchable, with what it
 // links and how much it stores. Never what it stores.
 
@@ -141,7 +141,7 @@ export function UsersSettings() {
           </button>
         )}
       </section>
-      <p className="muted set-help">Admins see who has an account and how much it stores, never the notes, threads, memories or files in it. Admins themselves are set with ADMIN_USERS on the server.</p>
+      <p className="muted set-help">Admins see who has an account and how much it stores, never the notes, threads, memories or files in it. Admins themselves are set with ADMIN_GITHUB_IDS on the server.</p>
     </>
   )
 }
@@ -236,7 +236,7 @@ function UserDetail({ u, onBack, onChange }: { u: AdminUser; onBack: () => void;
       </ul>
 
       {u.admin ? (
-        <p className="muted set-help">Admins are managed with ADMIN_USERS on the server, not here.</p>
+        <p className="muted set-help">Admins are managed with ADMIN_GITHUB_IDS on the server, not here.</p>
       ) : (
         <ul className="set-list">
           <li className="set-row">
