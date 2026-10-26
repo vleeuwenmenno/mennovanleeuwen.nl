@@ -3675,6 +3675,13 @@ keyboard over the page (iOS) or shrinks the page (Android, newer iOS). Text fiel
 16px on touch screens, and on iOS the page has a maximum scale of 1, so focusing a field never
 zooms the page in; double-tap zoom is off everywhere. Pinch zoom still works.
 
+The terminal's prompt field is the one exception to "the same size as the text around it": it keeps
+its 16px for iOS but is scaled down (a CSS transform, which iOS does not look at) to the terminal's
+text size, so a typed character is 1ch wide there as everywhere in the terminal and the block
+cursor, which is drawn at 1ch steps, sits on the cell the caret is in (`--t-k` in
+[`src/styles.css`](src/styles.css), set by `Terminal.tsx`). Before, the 16px text was wider than the
+13px cursor steps and the cursor drifted over the typed letters.
+
 ## Games
 
 The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is a games library: a shelf

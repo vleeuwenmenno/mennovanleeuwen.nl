@@ -2380,6 +2380,32 @@ body.is-resizing iframe {
   caret-color: transparent;
   padding: 0;
 }
+/* Touch screens: every text field is at least 16px (iOS zooms the page in on smaller ones, see the
+   end of this file), but the terminal's text is smaller, so the prompt's text and the block cursor
+   drawn at 1ch steps of the terminal's font drifted apart. The field keeps its 16px and is scaled
+   down to the terminal's text size instead (zooming is decided on the computed size, not on a
+   transform), so a character is 1ch wide in it too. --t-k is the terminal's text size over 16px
+   (Terminal.tsx sets it; this is the boot console's 13px). */
+@media (pointer: coarse) {
+  .terminal {
+    --t-k: 0.8125;
+  }
+  .t-input {
+    align-items: center;
+  }
+  .t-field {
+    height: calc(1em * 1.55);
+  }
+  .t-input input {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(100% / var(--t-k));
+    height: calc(100% / var(--t-k));
+    transform: scale(var(--t-k));
+    transform-origin: 0 0;
+  }
+}
 /* A block cursor like Omarchy's terminals: solid while typing, hollow when the window is not focused. */
 .t-cursor {
   position: absolute;

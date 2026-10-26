@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { cvMode } from '../os/cvMode'
 import { browserMountPoint, useMounts } from '../data/mounts'
@@ -1419,7 +1419,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
         const el = e.currentTarget
         stuckRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 8
       }}
-      style={fontPx === null ? undefined : { fontSize: fontPx }}
+      style={fontPx === null ? undefined : ({ fontSize: fontPx, ...(coarse ? { '--t-k': Math.min(1, fontPx / 16) } : {}) } as CSSProperties)}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
         if ((e.target as Element).closest('.term-find')) return
@@ -1557,7 +1557,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
             enterKeyHint="send"
           />
           {!caret.range && (
-            <span className={`t-cursor ${caret.focused && !readOnly ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px)` }} aria-hidden>
+            <span className={`t-cursor ${caret.focused && !readOnly ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px * var(--t-k, 1))` }} aria-hidden>
               {value[caret.at] ?? ' '}
             </span>
           )}
