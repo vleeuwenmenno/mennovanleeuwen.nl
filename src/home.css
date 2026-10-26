@@ -2689,6 +2689,23 @@ textarea.agt-q-input {
   color: var(--accent);
   font-size: 11.5px;
 }
+/* A suggested reply on a touch screen has no Tab: this chip fills it in. */
+.agt-suggest-use {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.agt-suggest-use:hover,
+.agt-suggest-use:active {
+  background: var(--accent);
+  color: var(--bg-dark);
+}
 /* Queue, Send instead and Save carry a word, so it is clear what Enter does. */
 .agt-send.has-label {
   width: auto;

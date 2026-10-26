@@ -13,6 +13,11 @@ let webFetches = 0
 const PLAIN_TITLE = (): string => '{"title":"History check"}'
 let titleAnswer: (body: J) => string | Promise<string> = PLAIN_TITLE
 const titleCalls: J[] = []
+// The reply suggester's calls (also non-streaming) are kept apart from the title model's.
+let replyAnswer: (body: J) => string = () => '{"reply":""}'
+const replyCalls: J[] = []
+let replyDelay = 0
+const REPLYING = (b: J) => String(b.messages?.[0]?.content ?? '').startsWith('You suggest what a user could answer')
 const json = (res: ServerResponse, body: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
 const ollama = createServer(async (req, res) => {
   let raw = ''; for await (const chunk of req) raw += chunk
@@ -21,6 +26,7 @@ const ollama = createServer(async (req, res) => {
   if (req.url === '/api/web_fetch') { webFetches++; return void json(res, { title: 'Should not be fetched', content: 'private destination' }) }
   if (req.url !== '/api/chat') { res.writeHead(404).end(); return }
   const body = JSON.parse(raw)
+  if (body.stream === false && REPLYING(body)) { replyCalls.push(body); if (replyDelay) await new Promise((r) => setTimeout(r, replyDelay)); let out = ''; try { out = replyAnswer(body) } catch { return void res.writeHead(500).end('{}') }; return void json(res, { message: { role: 'assistant', content: out }, done: true }) }
   if (body.stream === false) { titleCalls.push(body); return void json(res, { message: { role: 'assistant', content: await titleAnswer(body) }, done: true }) }
   chats.push(body)
   const at = body.messages.findLastIndex((m: J) => m.role === 'user' && m.content.startsWith('RUN '))
@@ -29,7 +35,7 @@ const ollama = createServer(async (req, res) => {
   if (call.name === 'fail_turn') return void res.writeHead(400, { 'Content-Type': 'application/json' }).end('{"error":"scripted failure"}')
   if (call.name === 'web_fetch') call.arguments = { url: 'https://not-given.example.test/private' }
   const after = body.messages.slice(at + 1)
-  const message = after.some((m: J) => m.role === 'tool') ? { role: 'assistant', content: 'Finished.' } : { role: 'assistant', content: '', tool_calls: [{ function: call }] }
+  const message = after.some((m: J) => m.role === 'tool') ? { role: 'assistant', content: call.arguments?.query === 'zqask' ? 'Shall I go ahead with the second option?' : 'Finished.' } : { role: 'assistant', content: '', tool_calls: [{ function: call }] }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
   res.end(JSON.stringify({ message, done: false }) + '\n' + JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, prompt_eval_count: 100, eval_count: 10 }) + '\n')
 })
@@ -129,6 +135,63 @@ try {
   await new Promise((r) => setTimeout(r, 300))
   tt = await titleWait(mine.id, () => true)
   check('User title: never changed automatically', tt.title === 'My own name' && tt.titleSource === 'user' && !titleCalls.slice(calls).length)
+
+  // Suggested reply: thought of after an answer that asks something, kept for that last message only.
+  const replyWait = async (id: string) => {
+    for (let i = 0; i < 100; i++) {
+      const t = await view(id)
+      if (!t.suggestingReply && !t.running) return t
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return view(id)
+  }
+  const { pickReply, wantsReplySuggestion } = await import('../server/agents.ts')
+  check('Reply: the JSON reply is taken, quotes and fences trimmed', pickReply('```json\n{"reply": "\\"Yes, go ahead\\""}\n```') === 'Yes, go ahead' && pickReply('Sure: {"reply":"The second one"}') === 'The second one')
+  check('Reply: empty, missing, symbol-only or overlong replies are none', pickReply('{"reply":""}') === null && pickReply('{"keep":true}') === null && pickReply('no json') === null && pickReply('{"reply":"..."}') === null && pickReply(JSON.stringify({ reply: 'x'.repeat(141) })) === null)
+  const ready = { enabled: true, quick: false, permission: 'default', approvals: 0, queued: 0, last: { role: 'assistant', content: 'Shall I?' } }
+  check('Reply gating: only a normal idle thread whose last message is the agent\'s words', wantsReplySuggestion(ready) && !wantsReplySuggestion({ ...ready, enabled: false }) && !wantsReplySuggestion({ ...ready, quick: true }) && !wantsReplySuggestion({ ...ready, permission: 'plan' }) && !wantsReplySuggestion({ ...ready, approvals: 1 }) && !wantsReplySuggestion({ ...ready, queued: 1 }) && !wantsReplySuggestion({ ...ready, last: { role: 'user', content: 'hi' } }) && !wantsReplySuggestion({ ...ready, last: { role: 'assistant', content: '  ' } }) && !wantsReplySuggestion({ ...ready, last: undefined }))
+  titleAnswer = PLAIN_TITLE
+  // The scripted model suggests only when the agent's last message asks.
+  const answerFor = (reply: string) => (b: J) => (String(b.messages.at(-1)?.content).includes('Agent (last message): Shall I go ahead') ? JSON.stringify({ reply }) : '{"reply":""}')
+  replyAnswer = answerFor('Yes, go with the second option')
+  const r0 = replyCalls.length
+  const asker = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(asker.id, 'search_threads', { query: 'zqask' })
+  let rt = await replyWait(asker.id)
+  check('Reply: an answer that asks something gets a suggestion for the user', rt.suggestedReply === 'Yes, go with the second option' && replyCalls.length === r0 + 1)
+  check('Reply: the model reads the agent\'s last message as data after the instructions', /Agent \(last message\): Shall I go ahead/.test(String(replyCalls[r0]?.messages.at(-1)?.content)) && replyCalls[r0].options.num_predict === 120)
+  check('Reply: it is in the thread list too, and never in another account\'s view', ((await api('GET', '/api/agents/threads')) as J[]).find((t: J) => t.id === asker.id)?.suggestedReply === 'Yes, go with the second option' && !((await api('GET', '/api/agents/threads', undefined, otherSid)) as J[]).some((t: J) => t.id === asker.id))
+  await turn(asker.id, 'search_threads', { query: 'zqplain' })
+  rt = await replyWait(asker.id)
+  check('Reply: a newer message clears it, and a model that says nothing is needed leaves none', rt.suggestedReply === null)
+  replyAnswer = () => '{"reply":""}'
+  await turn(asker.id, 'search_threads', { query: 'zqask' })
+  rt = await replyWait(asker.id)
+  check('Reply: an empty answer from the model means no suggestion', rt.suggestedReply === null)
+  // A message sent while the model thinks: the suggestion was for what came before it.
+  replyAnswer = answerFor('Late one')
+  replyDelay = 600
+  const slow = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(slow.id, 'search_threads', { query: 'zqask' })
+  await turn(slow.id, 'search_threads', { query: 'zqplain' })
+  rt = await replyWait(slow.id)
+  replyDelay = 0
+  check('Reply: a suggestion for an older last message is never shown', rt.suggestedReply === null)
+  // Off in Settings: nothing is asked.
+  const before = replyCalls.length
+  await api('PUT', '/api/state/agents', { value: { replySuggestions: false } })
+  const quiet = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(quiet.id, 'search_threads', { query: 'zqask' })
+  rt = await replyWait(quiet.id)
+  check('Reply: with the setting off no call is made and no suggestion exists', replyCalls.length === before && rt.suggestedReply === null)
+  await api('PUT', '/api/state/agents', { value: { replySuggestions: true } })
+  // A failing model is silent.
+  replyAnswer = () => { throw new Error('boom') }
+  const brokenReply = await api('POST', '/api/agents/threads', { model: MODEL, tools: ['threads'], permission: 'default' })
+  await turn(brokenReply.id, 'search_threads', { query: 'zqask' })
+  rt = await replyWait(brokenReply.id)
+  check('Reply: a failed suggestion call is silent', rt.suggestedReply === null && !rt.running)
+  replyAnswer = () => '{"reply":""}'
   // Races: the refinement after the first answer is slow, and something else writes the title meanwhile.
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
   const last = (b: J) => String(b.messages.at(-1)?.content ?? '')

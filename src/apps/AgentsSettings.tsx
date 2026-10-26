@@ -353,6 +353,16 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           />
         </li>
       </ul>
+      <h4 className="set-subhead">Replies</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Suggest a reply</strong>
+            <span className="muted">When the agent's last message asks you something, the empty message box shows a suggested answer: Tab (or Use, on a touch screen) fills it in, and you can change it before sending. The title model thinks of it after the answer is in.</span>
+          </span>
+          <Toggle on={settings.replySuggestions} onChange={(replySuggestions) => setAgentSettings({ replySuggestions })} label="Suggest a reply when the agent asks something" />
+        </li>
+      </ul>
       <p className="muted set-help">Compact any time with /compact in a thread (in the app or the agents command), or Compact conversation in its menu; add what the summary should keep, like <code>/compact keep the API details</code>.</p>
 
       </>
@@ -490,7 +500,7 @@ function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: S
   const cards: Card[] = [
     { id: 'general', summary: ollama ? `Ollama Cloud connected${memories === null ? '' : ` · ${plural(memories, 'thing')} remembered`}` : 'Ollama Cloud not connected: Agents needs an API key', ...(ollama ? {} : { fix: 'Add a key', tone: 'error' as const }) },
     { id: 'models', summary: ollama && !models.length && !auto ? loading : `Quick: ${model(settings.quickModel, auto?.quick)} · Deep: ${model(settings.deepModel, auto?.deep)}` },
-    { id: 'threads', summary: `${MODE_LABEL[settings.mode]} · ${settings.tools.length} of ${plural(TOOL_GROUPS.length, 'tool group')} on${settings.autoCompact ? ' · compacts long threads' : ''}` },
+    { id: 'threads', summary: `${MODE_LABEL[settings.mode]} · ${settings.tools.length} of ${plural(TOOL_GROUPS.length, 'tool group')} on${settings.autoCompact ? ' · compacts long threads' : ''}${settings.replySuggestions ? ' · suggests replies' : ''}` },
     { id: 'prompt', summary: !prompt ? loading : prompt.source === 'seafile' ? 'Your own ~/AGENTS.md' : prompt.error ? `Built in: ~/AGENTS.md could not be read` : 'Built in', ...(prompt?.error ? { tone: 'warn' as const } : {}) },
     failed('permissions', mail, sites) ?? { id: 'permissions', summary: !mail || !sites ? loading : `Mail reads: ${mail && 'value' in mail && mail.value.mode === 'always' ? 'always allowed' : 'ask first'} · ${plural(sites && 'value' in sites ? sites.value.length : 0, 'web site')} allowed` },
     failed('images', images) ?? (images && 'value' in images && !images.value.url

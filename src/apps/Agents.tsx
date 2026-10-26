@@ -9,6 +9,7 @@ import { openSessionImages } from './AgentsSessionImages'
 import { agentMasks, generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type MaskedEditInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
 import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
 import { useIsMobile } from '../os/useIsMobile'
+import { useMediaQuery } from '../os/useMediaQuery'
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
@@ -308,7 +309,7 @@ function AgentsApp({ win }: { win: WinState }) {
   // after it ends, and threads answering in the background finish on their own: look again until
   // the titles are in and nothing is running.
   useEffect(() => {
-    const titling = threads.some((t) => t.titling || t.checkingTitle)
+    const titling = threads.some((t) => t.titling || t.checkingTitle || t.suggestingReply)
     if (!titling && !threads.some((t) => t.running)) return
     const timer = setTimeout(refresh, titling ? 1500 : 3000)
     return () => clearTimeout(timer)
@@ -1256,6 +1257,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         : t,
     )
   }, [listThread?.title, listThread?.titling, listThread?.aliases.length, listThread?.titleSource])
+  // A suggested reply is thought of after the answer, when the turn's stream has ended: it arrives with the list.
+  useEffect(() => {
+    if (!listThread) return
+    setThread((t) => (t && t.id === listThread.id && !t.running && !listThread.running && (t.suggestedReply ?? null) !== (listThread.suggestedReply ?? null) ? { ...t, suggestedReply: listThread.suggestedReply ?? null, suggestingReply: listThread.suggestingReply } : t))
+  }, [listThread?.suggestedReply, listThread?.suggestingReply, listThread?.running])
 
   // Mail reads always allowed or not, changed in Settings or on a card: open threads show it at once.
   useEffect(() => {
@@ -1984,7 +1990,32 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(nextCaret, nextCaret) })
   }
   useEffect(() => { composerBox.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [suggestionIndex])
-  const visionless = files.some((f) => f.kind === 'image') && !models.find((m) => m.name === model)?.vision
+
+  // A suggested reply (the server thinks of it after an answer that asks you something): the hint of
+  // the empty box, which Tab or Use fills in. Only in the box's normal state.
+  const touch = useMediaQuery('(pointer: coarse)') || phone
+  // Typing anything (or taking it, then clearing the box) is an answer to it: the hint does not come back.
+  const [replyDismissed, setReplyDismissed] = useState<string | null>(null)
+  const replyKey = thread?.suggestedReply ? `${thread.id}:${thread.suggestedReply}` : null
+  useEffect(() => { if (text && replyKey) setReplyDismissed(replyKey) }, [text, replyKey])
+  useEffect(() => { if (answering) setReplyDismissed(null) }, [answering])
+  const suggestion = settingsNow.replySuggestions && thread?.suggestedReply && replyDismissed !== replyKey && !text && !answering && !waiting && !editingQ && !queue.length ? thread.suggestedReply : null
+  // The hint is a placeholder, which a textarea does not count in its height: measured by setting it as the value for a moment.
+  useEffect(() => {
+    const el = input.current
+    if (!el || el.value || !suggestion) return
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    if (!set) return
+    el.style.height = 'auto'
+    set.call(el, el.placeholder)
+    el.style.height = `${el.scrollHeight}px`
+    set.call(el, '')
+  }, [suggestion, touch])
+  const takeSuggestion = () => {
+    if (!suggestion) return
+    setText(suggestion); setCaret(suggestion.length)
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(suggestion.length, suggestion.length) })
+  }
 
   // Tools: one group at a time, for this thread (and new threads start with the last choice).
   const toggleTool = (g: ToolGroup) => {
@@ -2020,6 +2051,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // effort beside it for models that take one.
   const shownModel = model || usualModel || ''
   const shownInfo = models.find((m) => m.name === shownModel)
+  // Warned only when the model that will answer is known (the thread's, or the usual one from Settings) and has no vision.
+  const visionless = files.some((f) => f.kind === 'image') && !!shownInfo && !shownInfo.vision
   const pretty = shownModel ? modelName(shownModel, shownInfo?.label) : null
   // The pill's compact forms: "DeepSeek V4.1 Flash" → "DS V4.1 Flash" (the maker's mark and the rest of the name).
   const shortName = pretty ? `${makerOf(pretty.maker).mark}${pretty.name.startsWith(pretty.family) && pretty.name.length > pretty.family.length ? pretty.name.slice(pretty.family.length) : ` ${pretty.name}`}` : ''
@@ -2327,6 +2360,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
                 // caret at the end of the word, so moving through a word already written still moves the caret.
                 if (suggestions.length && (e.key === 'Tab' || e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey || e.key === 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !/^\S/.test(text.slice(caret)))) { e.preventDefault(); acceptSuggestion(suggestions[Math.min(suggestionIndex, suggestions.length - 1)].name); return }
               }
+              // Tab in the empty box takes the suggested reply (after the lists above, which Tab accepts first).
+              if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !e.nativeEvent.isComposing && suggestion && !text) { e.preventDefault(); takeSuggestion(); return }
               // Up in an empty box edits the last queued message, Esc puts an edit back.
               if (e.key === 'ArrowUp' && !text && !files.length && !editingQ && queue.length && !e.shiftKey) {
                 e.preventDefault()
@@ -2360,10 +2395,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               }
             }}
             onContextMenu={composerMenu}
-            placeholder={editingQ ? 'The queued message' : waiting ? 'Tell it what to do instead…' : answering ? 'Queue a message for when it is done…' : mode === 'deep' ? 'What should it research?' : 'Ask anything'}
+            placeholder={suggestion ? `Suggested reply: “${suggestion}”${touch ? '' : ' — Tab to complete, or type your own'}` : editingQ ? 'The queued message' : waiting ? 'Tell it what to do instead…' : answering ? 'Queue a message for when it is done…' : mode === 'deep' ? 'What should it research?' : 'Ask anything'}
             rows={1}
             aria-label="Message"
           />
+          {suggestion && touch && (
+            <button type="button" className="agt-suggest-use" onMouseDown={(e) => e.preventDefault()} onClick={takeSuggestion} aria-label={`Use the suggested reply: ${suggestion}`}>
+              Use suggested reply
+            </button>
+          )}
           <div className="agt-box-bar" ref={boxBar}>
             <button type="button" className="agt-icon" onClick={attachMenu} disabled={answering} aria-label="Attach files" title="Attach files">
               <Icon name="clip" />
