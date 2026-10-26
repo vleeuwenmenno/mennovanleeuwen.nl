@@ -284,7 +284,7 @@ export class Session {
   }
 
   private w() {
-    return Math.max(30, this.ctx.size.cols - 1)
+    return Math.max(19, this.ctx.size.cols - 1)
   }
 
   /** Keep asynchronous image art below its links, ahead of the next finished message. */
