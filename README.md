@@ -516,6 +516,13 @@ Selecting the scrollback (or a full-screen program's screen) leaves the selectio
 you click elsewhere or type; a plain click puts the caret on the prompt. Ctrl+Shift+C copies it
 (so does Ctrl+C with text selected, or the right-click menu), Ctrl+Shift+V pastes.
 
+On a touch screen a tap anywhere on the screen (not on a link, button or field) puts the caret
+back on the prompt, which brings the on-screen keyboard back after it was put away (iOS's Done,
+Android's Back), in the shell and in full-screen programs like `agents` alike. It is handled in the
+`touchend` itself, because iOS only opens the keyboard for focus from inside a touch, and only
+sends mouse events for taps on things it counts as clickable. A scroll, a long press (selecting,
+the menu), a pinch, and a tap while text is selected are not taps.
+
 ### Terminal settings
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),

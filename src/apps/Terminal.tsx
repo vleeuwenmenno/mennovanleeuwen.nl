@@ -637,6 +637,47 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onLogout])
 
+  // A tap on the screen puts the caret back on the prompt, which also brings the on-screen keyboard
+  // back after it was put away (iOS's Done button, Android's Back). That has to happen inside the
+  // touch itself: iOS only opens the keyboard for focus() called from a user gesture, which a
+  // timeout after the mouse events is not, and it sends those mouse events only for taps on things
+  // it counts as clickable, which plain text and the hidden prompt of a full-screen program are not.
+  // A drag (scrolling), a long press (selecting, the menu), a second finger (pinch) and a tap on a
+  // link, button or field do not count, and a selection stays until the next tap.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !coarse) return
+    let start: { x: number; y: number; at: number } | null = null
+    const onStart = (e: TouchEvent) => {
+      start = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, at: performance.now() } : null
+    }
+    const onMove = (e: TouchEvent) => {
+      if (start && (e.touches.length !== 1 || Math.hypot(e.touches[0].clientX - start.x, e.touches[0].clientY - start.y) > 10)) start = null
+    }
+    const onEnd = (e: TouchEvent) => {
+      const s = start
+      start = null
+      const input = inputRef.current
+      if (!s || !input || e.touches.length || performance.now() - s.at > 450 || input.readOnly) return
+      if (e.target instanceof Element && e.target.closest('a, button, input, textarea, select, .term-find, .t-picker')) return
+      if (window.getSelection()?.toString()) return
+      // Still the active element, but the keyboard is away (Android's Back does that without a
+      // blur): focus() would do nothing, so start over.
+      if (document.activeElement === input && !document.documentElement.classList.contains('keyboard-open')) input.blur()
+      input.focus({ preventScroll: true })
+    }
+    el.addEventListener('touchstart', onStart, { passive: true })
+    el.addEventListener('touchmove', onMove, { passive: true })
+    el.addEventListener('touchend', onEnd, { passive: true })
+    el.addEventListener('touchcancel', onMove, { passive: true })
+    return () => {
+      el.removeEventListener('touchstart', onStart)
+      el.removeEventListener('touchmove', onMove)
+      el.removeEventListener('touchend', onEnd)
+      el.removeEventListener('touchcancel', onMove)
+    }
+  }, [coarse])
+
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   // The same when it becomes the front tab.
   useEffect(() => {
