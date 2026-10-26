@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { requireStillSignedIn, type User } from './auth.ts'
-import { requirePrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
+import { requirePrivateRequest, privateSignal, bindPrivateAccess, withoutPrivateRequest } from './privateRequest.ts'
 import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 
@@ -82,12 +82,13 @@ export function integrationIdentity(user: User, name: 'seafile' | 'onlyoffice'):
   const row = database().prepare('SELECT secret, created_at FROM integrations WHERE user_id = ? AND name = ?').get(user.id, name) as { secret: string; created_at: number } | undefined
   return row ? sha256(JSON.stringify([user.id, name, row.secret, row.created_at])) : null
 }
+const officeVersions = new Map<number, number>()
 const officeChanged = new Set<(id: number) => void>()
 export function onOfficeLinkChanged(fn: (id: number) => void) {
   officeChanged.add(fn)
   return () => { officeChanged.delete(fn) }
 }
-const changedOffice = (id: number) => { for (const fn of officeChanged) fn(id) }
+const changedOffice = (id: number) => { officeVersions.set(id, (officeVersions.get(id) ?? 0) + 1); for (const fn of officeChanged) fn(id) }
 onUserGone(changedOffice)
 
 function write(user: User, name: string, value: unknown) {
@@ -205,6 +206,8 @@ export async function unlinkSeafile(user: User) {
 
 /** The OnlyOffice document server Seafile uses: checked by loading its api.js, then stored. */
 export async function setOffice(user: User, body: { url?: string; secret?: string }) {
+  const version = (officeVersions.get(user.id) ?? 0) + 1
+  changedOffice(user.id)
   if (!read<Link>(user, NAME)) throw new HttpError(409, 'Link Seafile first')
   const url = normalizeUrl(body.url, 'OnlyOffice')
   const secret = body.secret?.trim()
@@ -212,6 +215,8 @@ export async function setOffice(user: User, body: { url?: string; secret?: strin
   const res = await guardedFetch(user, `${url}/web-apps/apps/api/documents/api.js`, { signal: AbortSignal.timeout(10_000) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(400, 'OnlyOffice did not answer at that URL')
   if (!res.ok) throw new HttpError(400, `No OnlyOffice there (api.js answered ${res.status})`)
+  requirePrivateRequest(user)
+  if (officeVersions.get(user.id) !== version) throw new HttpError(409, 'OnlyOffice changed meanwhile: try again')
   write(user, OFFICE, { url, secret } satisfies Office)
 }
 
@@ -300,6 +305,56 @@ onUserGone((id) => {
   for (const m of [encryptedRepos, unlockedUntil]) for (const k of m.keys()) if (k.startsWith(`${id}:`)) m.delete(k)
 })
 
+// Persisted epochs distinguish every unlock grant, even same-password re-unlocks. Grants
+// themselves stay in memory, so a restart locks libraries. Timers revoke held delivery promptly.
+let libraryTable = false
+function accessDb() {
+  if (!libraryTable) {
+    database().exec(`CREATE TABLE IF NOT EXISTS seafile_library_access (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, repo TEXT NOT NULL,
+      version TEXT NOT NULL, PRIMARY KEY(user_id, repo))`)
+    libraryTable = true
+  }
+  return database()
+}
+export function libraryAccessIdentity(user: User, repo: string): string {
+  return (accessDb().prepare('SELECT version FROM seafile_library_access WHERE user_id = ? AND repo = ?').get(user.id, repo) as { version: string } | undefined)?.version ?? ''
+}
+const libraryListeners = new Map<string, Set<() => void>>()
+const libraryTimers = new Map<string, NodeJS.Timeout>()
+function changeLibrary(user: User, repo: string) {
+  const key = `${user.id}:${repo}`, version = randomBytes(32).toString('hex')
+  accessDb().prepare('INSERT INTO seafile_library_access (user_id, repo, version) VALUES (?, ?, ?) ON CONFLICT(user_id, repo) DO UPDATE SET version = excluded.version').run(user.id, repo, version)
+  const timer = libraryTimers.get(key)
+  if (timer) clearTimeout(timer)
+  libraryTimers.delete(key)
+  unlockedUntil.delete(key)
+  for (const end of libraryListeners.get(key) ?? []) end()
+  return version
+}
+export function bindLibraryAccess(user: User, repo: string, encrypted?: boolean) {
+  if (encrypted !== undefined) encryptedRepos.set(`${user.id}:${repo}`, encrypted)
+  const key = `${user.id}:${repo}`, version = libraryAccessIdentity(user, repo)
+  const until = unlockedUntil.get(key), link = seafileLinkGeneration(user)
+  const check = () => {
+    if (libraryAccessIdentity(user, repo) !== version || seafileLinkGeneration(user) !== link) throw new HttpError(423, 'The library lock changed: try again')
+    if (encryptedRepos.get(key) && (!until || Date.now() >= until || unlockedUntil.get(key) !== until)) throw new HttpError(423, 'Locked')
+  }
+  check()
+  bindPrivateAccess(check, (end) => {
+    const list = libraryListeners.get(key) ?? new Set<() => void>()
+    libraryListeners.set(key, list.add(end))
+    const stopLink = onSeafileLinkChanged((id) => { if (id === user.id) end() })
+    return () => { list.delete(end); if (!list.size) libraryListeners.delete(key); stopLink() }
+  }, `library:${key}:${version}`)
+}
+export function bindUnlockedLibraries(user: User) {
+  for (const repo of Object.keys(unlocked(user))) bindLibraryAccess(user, repo, true)
+}
+onUserGone((id) => {
+  for (const [key, timer] of libraryTimers) if (key.startsWith(`${id}:`)) { clearTimeout(timer); libraryTimers.delete(key) }
+})
+
 async function isEncrypted(user: User, id: string, signal?: AbortSignal): Promise<boolean> {
   const key = `${user.id}:${id}`
   if (!encryptedRepos.has(key)) encryptedRepos.set(key, !!(await seafile<{ encrypted?: boolean }>(user, `/api/v2.1/repos/${id}/`, { signal })).encrypted)
@@ -308,9 +363,11 @@ async function isEncrypted(user: User, id: string, signal?: AbortSignal): Promis
 
 /** Throws 423 for an encrypted library that is locked (here; Seafile may still hold it open). */
 export async function guard(user: User, id: string, signal?: AbortSignal) {
-  if (!(await isEncrypted(user, id, signal))) return
-  if ((unlockedUntil.get(`${user.id}:${id}`) ?? 0) > Date.now()) return
-  throw new HttpError(423, 'Locked')
+  const version = libraryAccessIdentity(user, id)
+  bindLibraryAccess(user, id)
+  const encrypted = await isEncrypted(user, id, signal)
+  if (libraryAccessIdentity(user, id) !== version) throw new HttpError(423, 'The library lock changed: try again')
+  bindLibraryAccess(user, id, encrypted)
 }
 
 /** Encrypted libraries unlocked right now, with when they lock again, for the Files app. */
@@ -321,7 +378,7 @@ export const unlocked = (user: User) =>
       .map(([k, until]) => [k.slice(k.indexOf(':') + 1), until]),
   )
 
-export const lock = (user: User, repo: unknown) => { requirePrivateRequest(user); unlockedUntil.delete(`${user.id}:${repoId(repo)}`) }
+export const lock = (user: User, repo: unknown) => { requirePrivateRequest(user); changeLibrary(user, repoId(repo)) }
 
 /** A folder's contents, and whether the account may change things in it. */
 export async function listDir(user: User, repo: unknown, path: unknown, signal?: AbortSignal): Promise<{ perm: 'r' | 'rw'; entries: Entry[] }> {
@@ -354,6 +411,7 @@ export async function fileLink(user: User, repo: unknown, path: unknown, op: unk
 export async function unlock(user: User, body: { repo?: string; password?: string; minutes?: number }): Promise<{ until: number }> {
   const id = repoId(body.repo)
   if (!body.password) throw new HttpError(400, 'The password is required')
+  const link = seafileLinkGeneration(user), version = changeLibrary(user, id)
   try {
     await seafile(user, `/api/v2.1/repos/${id}/set-password/`, { method: 'POST', body: new URLSearchParams({ password: body.password }) })
   } catch (e) {
@@ -361,9 +419,14 @@ export async function unlock(user: User, body: { repo?: string; password?: strin
     throw e
   }
   requirePrivateRequest(user)
+  if (seafileLinkGeneration(user) !== link || libraryAccessIdentity(user, id) !== version) throw new HttpError(423, 'The library lock changed: try again')
   encryptedRepos.set(`${user.id}:${id}`, true)
   const until = Date.now() + Math.min(55, Math.max(5, Number(body.minutes) || 55)) * 60_000
   unlockedUntil.set(`${user.id}:${id}`, until)
+  const timer = withoutPrivateRequest(() => setTimeout(() => {
+    if (libraryAccessIdentity(user, id) === version) changeLibrary(user, id)
+  }, Math.max(0, until - Date.now())).unref())
+  libraryTimers.set(`${user.id}:${id}`, timer)
   return { until }
 }
 

@@ -10,7 +10,7 @@ import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
 import { HttpError, json as sendJson, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { bindImmichRequest, immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
-import { assertSeafileLink, bindSeafileRequest, onSeafileLinkChanged, seafileLinkGeneration, withSeafileLink, fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
+import { assertSeafileLink, bindSeafileRequest, onSeafileLinkChanged, seafileLinkGeneration, withSeafileLink, bindLibraryAccess, bindUnlockedLibraries, libraryAccessIdentity, fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
 // Immich library, or both (the app switches between them; they are not merged).
@@ -233,6 +233,7 @@ function fetchLibs(user: User): Promise<Library[]> {
 
 /** The libraries this account has right now. Any failure is a generic 502: nothing of what is indexed may be shown on a guess. */
 async function libs(user: User): Promise<Library[]> {
+  bindUnlockedLibraries(user)
   try {
     const list = await fetchLibs(user)
     assertSeafileLink(user)
@@ -247,14 +248,14 @@ async function libs(user: User): Promise<Library[]> {
 function openLib(user: User, list: Library[], repo: string): Library {
   const lib = list.find((l) => l.id === repo)
   if (!lib) throw new HttpError(404, 'No such photo')
-  if (lib.encrypted && !unlocked(user)[repo]) throw new HttpError(423, 'Locked')
+  bindLibraryAccess(user, repo, lib.encrypted)
   return lib
 }
 
 /** The libraries whose photos may be shown now: listed for the account and either plain or unlocked. */
 const openRepos = (user: User, list: Library[]) => {
   const open = unlocked(user)
-  return list.filter((l) => !l.encrypted || open[l.id]).map((l) => l.id)
+  return list.filter((l) => !l.encrypted || open[l.id]).map((l) => { bindLibraryAccess(user, l.id, l.encrypted); return l.id })
 }
 
 type SourceRow = { repo: string; path: string }
@@ -657,6 +658,7 @@ const rowOf = (user: User, id: string) => {
  */
 async function openRow(user: User, id: string) {
   const row = rowOf(user, id)
+  bindLibraryAccess(user, row.repo)
   const lib = openLib(user, await libs(user), row.repo)
   return { row, lib, encrypted: lib.encrypted }
 }
@@ -1089,7 +1091,7 @@ function keepUndo(user: User, source: string, undo: Undo): string {
 
 // A ZIP of the selection: asked for with the ids (a POST), then fetched by the browser's own
 // download with a short-lived token, so the file streams to disk instead of into the page.
-const zips = new Map<string, { user: number; source: string; ids: string[]; at: number }>()
+const zips = new Map<string, { user: number; source: string; ids: string[]; access?: Record<string, string>; at: number }>()
 const ZIP_MS = 10 * 60_000
 
 /** Read-only capability counts for the revocation regression check; never an HTTP response. */
@@ -1157,6 +1159,7 @@ async function sendZip(req: IncomingMessage, res: ServerResponse, token: string)
   const user = requireUser(req)
   const z = zips.get(token)
   if (!z || z.user !== user.id || Date.now() - z.at > ZIP_MS) throw new HttpError(404, 'That download has expired: ask for it again')
+  if (z.source === 'seafile') for (const [repo, version] of Object.entries(z.access ?? {})) if (libraryAccessIdentity(user, repo) !== version) throw new HttpError(423, 'The library lock changed: ask for the ZIP again')
   await guardZip(user, z.source, z.ids)
   const source = SOURCES[z.source]
   const gone = new AbortController()
@@ -1302,7 +1305,7 @@ async function handlePhotosRequest(req: IncomingMessage, res: ServerResponse, ur
     const token = tokens()
     for (const [k, z] of zips) if (Date.now() - z.at > ZIP_MS) zips.delete(k)
     requirePrivateRequest(user)
-    zips.set(token, { user: user.id, source: name, ids, at: Date.now() })
+    zips.set(token, { user: user.id, source: name, ids, ...(name === 'seafile' ? { access: Object.fromEntries(ids.map((id) => { const repo = rowOf(user, id).repo; return [repo, libraryAccessIdentity(user, repo)] })) } : {}), at: Date.now() })
     return json(res, 200, { url: `/api/photos/zip?t=${token}` }), true
   }
   if (op === 'move' && method === 'POST' && name === 'seafile') return json(res, 200, await moveSeafile(user, await readJson(req, 64 * 1024))), true

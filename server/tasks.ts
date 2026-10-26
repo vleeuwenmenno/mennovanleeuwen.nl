@@ -1,3 +1,4 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
@@ -568,10 +569,10 @@ function davStore(account: CaldavAccount, list: DavList): Store {
 const cache = new Map<string, { at: number; value: Promise<unknown> }>()
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>
-  const value = load()
+  if (hit && Date.now() - hit.at < ms && canUsePrivateCache(hit.value)) return hit.value as Promise<T>
+  const value = ownPrivateCache(load())
   cache.set(key, { at: Date.now(), value })
-  value.catch(() => cache.delete(key))
+  value.catch(() => { if (cache.get(key)?.value === value) cache.delete(key) })
   return value
 }
 const forget = (userId: number, what = '') => {

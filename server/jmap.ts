@@ -104,11 +104,12 @@ function checkMailLink(acc: Linked) {
 }
 function assertMail(acc: Linked) { requirePrivateRequest(acc.user); checkMailLink(acc) }
 function bindMailRequest(acc: Linked) {
-  bindPrivateAccess(() => checkMailLink(acc), (end) => onMailChanged(acc.key, end))
+  bindPrivateAccess(() => checkMailLink(acc), (end) => onMailChanged(acc.key, end), `mail:${acc.key}`)
 }
 /** All account operations carry prepared link authority, including agent tools and pollers. */
 function mailOperation<A extends unknown[], T>(work: (acc: Linked, ...args: A) => Promise<T>) {
   return (acc: Linked, ...args: A): Promise<T> => withProviderGuard(() => checkMailLink(acc), async () => {
+    bindMailRequest(acc)
     assertMail(acc)
     const result = await work(acc, ...args)
     assertMail(acc)

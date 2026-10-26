@@ -40,6 +40,12 @@ function secret(): Buffer {
   return Buffer.from(readFileSync(file, 'utf8').trim(), 'base64')
 }
 
+// Installed by privateRequest without importing auth back into this storage module. Every local
+// commit uses the current request/aggregate authority, including helpers that await providers.
+const rollbackOnly = (sql: string) => /^\s*ROLLBACK(?:\s+TRANSACTION)?\s*;?\s*$/i.test(sql)
+let checkWrite = () => {}
+export const guardDatabaseWrites = (check: () => void) => { checkWrite = check }
+
 export function database(): DatabaseSync {
   if (db) return db
   privateDir()
@@ -432,6 +438,14 @@ export function database(): DatabaseSync {
   if (!cols('agent_threads').includes('image_config')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_config TEXT')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
+  const prepare = db.prepare.bind(db), exec = db.exec.bind(db)
+  db.prepare = ((...args: Parameters<typeof prepare>) => {
+    const statement = prepare(...args)
+    const run = statement.run.bind(statement)
+    statement.run = ((...values: Parameters<typeof run>) => { if (!rollbackOnly(args[0])) checkWrite(); return run(...values) }) as typeof run
+    return statement
+  }) as typeof prepare
+  db.exec = ((sql: string) => { if (!rollbackOnly(sql)) checkWrite(); return exec(sql) }) as typeof exec
   return db
 }
 

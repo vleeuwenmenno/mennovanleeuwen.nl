@@ -118,6 +118,8 @@ export function isPrivate(ip: string): boolean {
  * few threads Node has for it. localhost (and *.localhost) is 127.0.0.1, as the system says.
  */
 export async function resolveHost(host: string, signal?: AbortSignal): Promise<LookupAddress[]> {
+  signal = privateSignal(signal)
+  requirePrivateRequest()
   const name = host.toLowerCase().replace(/\.$/, '')
   if (name === 'localhost' || name.endsWith('.localhost')) return [{ address: '127.0.0.1', family: 4 }]
   if (signal?.aborted) return []
@@ -154,6 +156,8 @@ export async function assertPublic(url: URL) {
  * for.
  */
 export async function fetchPinned(url: URL, init: RequestInit, addresses: LookupAddress[]): Promise<Response> {
+  requirePrivateRequest()
+  init = { ...init, signal: privateSignal(init.signal) }
   // Request turns any body fetch takes (text, bytes, FormData, URLSearchParams) into bytes with
   // the right Content-Type.
   const req = new Request(url, { method: init.method, headers: init.headers, body: init.body, ...(init.body instanceof ReadableStream ? { duplex: 'half' } : {}) } as RequestInit)

@@ -1,3 +1,5 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError } from './http.ts'
@@ -80,7 +82,7 @@ onUserGone((id) => cache.delete(id))
 
 export function updownChecks(user: User): Promise<UpdownCheck[]> {
   const hit = cache.get(user.id)
-  if (hit && Date.now() - hit.at < 60_000) return hit.value
+  if (hit && Date.now() - hit.at < 60_000 && canUsePrivateCache(hit.value)) return hit.value
   const key = storedKey(user)
   if (!key) return Promise.reject(new HttpError(409, 'No updown.io key yet'))
   const value = (async () => {
@@ -103,7 +105,8 @@ export function updownChecks(user: User): Promise<UpdownCheck[]> {
       sslValid: c.ssl?.valid ?? null,
     }))
   })()
+  ownPrivateCache(value)
   cache.set(user.id, { at: Date.now(), value })
-  value.catch(() => cache.delete(user.id))
+  value.catch(() => { if (cache.get(user.id)?.value === value) cache.delete(user.id) })
   return value
 }

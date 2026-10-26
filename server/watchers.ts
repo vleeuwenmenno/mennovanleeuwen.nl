@@ -1,3 +1,4 @@
+import { privateFetch as fetch } from './privateRequest.ts'
 import { ACTIVITY_KIND, activityWindowMs, allows, normalizePrefs, type SourceId } from '../src/data/notifySources.ts'
 import { mergeActivity, normalizeGithubEvents, normalizeGithubReleases, type Activity } from '../src/data/normalize.ts'
 import { forgejoActivity } from './activity.ts'

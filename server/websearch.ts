@@ -1,3 +1,4 @@
+import { privateFetch as fetch } from './privateRequest.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
 import { guardedFetch, rethrowEgress } from './egress.ts'

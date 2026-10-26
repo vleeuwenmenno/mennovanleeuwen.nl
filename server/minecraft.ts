@@ -1,3 +1,4 @@
+import { privateAuthorityCheck, privateSignal } from './privateRequest.ts'
 import { connect } from 'node:net'
 import { database } from './db.ts'
 import { HttpError } from './http.ts'
@@ -155,16 +156,24 @@ export function rconSession<T>(host: string, port: number, password: string, use
   // sessions at once (the pinger's tick, a visitor's status, the admin console) can get each
   // other's answers glued onto their own: "There are 0 of a max of 20 players online: There are 0
   // …", read as a player called "There are 0 of a max…". One session at a time, in turn.
-  const turn = rconQueue.then(() => openRconSession(host, port, password, use))
+  const check = privateAuthorityCheck(), signal = privateSignal()
+  const turn = rconQueue.then(() => { check(); signal?.throwIfAborted(); return openRconSession(host, port, password, use, check, signal) })
   rconQueue = turn.then(
     () => {},
     () => {},
   )
-  return turn
+  // A revoked queued caller ends promptly, while its queue slot still waits for earlier work.
+  if (!signal) return turn
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    turn.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+    if (signal.aborted) abort()
+  })
 }
 let rconQueue: Promise<void> = Promise.resolve()
 
-function openRconSession<T>(host: string, port: number, password: string, use: (run: (command: string) => Promise<string>) => Promise<T>): Promise<T> {
+function openRconSession<T>(host: string, port: number, password: string, use: (run: (command: string) => Promise<string>) => Promise<T>, check: () => void, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const sock = connect({ host, port })
     let buf = Buffer.alloc(0)
@@ -177,23 +186,29 @@ function openRconSession<T>(host: string, port: number, password: string, use: (
       if (done) return
       done = true
       clearTimeout(deadline)
+      signal?.removeEventListener('abort', abort)
       sock.destroy()
       waiting?.reject(err)
       reject(err)
     }
+    const abort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error('Request ended'))
+    const allowed = () => { try { check(); signal?.throwIfAborted(); return !done } catch (error) { fail(error as Error); return false } }
     const deadline = setTimeout(() => fail(new Error('timeout')), RCON_SESSION_MS)
     sock.setTimeout(RCON_TIMEOUT_MS, () => fail(new Error('timeout')))
     sock.on('error', fail)
     sock.on('close', () => fail(new Error('connection closed')))
-    sock.on('connect', () => sock.write(rconPacket(1, RCON_AUTH, password)))
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
+    sock.on('connect', () => { if (allowed()) sock.write(rconPacket(1, RCON_AUTH, password)) })
     const run = (command: string) =>
       new Promise<string>((res, rej) => {
-        if (done) return rej(new Error('connection closed'))
+        if (!allowed()) return rej(new Error('connection closed'))
         const id = nextId++
         waiting = { id, parts: [], resolve: res, reject: rej }
         sock.write(rconPacket(id, RCON_COMMAND, command))
       })
     sock.on('data', (chunk: Buffer) => {
+      if (!allowed()) return
       buf = Buffer.concat([buf, chunk])
       while (buf.length >= 4 && buf.length >= 4 + buf.readInt32LE(0)) {
         const len = buf.readInt32LE(0)
@@ -207,8 +222,9 @@ function openRconSession<T>(host: string, port: number, password: string, use: (
           if (id === -1) return fail(new Error('wrong RCON password'))
           authed = true
           use(run).then((value) => {
-            if (done) return
+            if (!allowed()) return
             done = true
+            signal?.removeEventListener('abort', abort)
             clearTimeout(deadline)
             sock.end()
             resolve(value)

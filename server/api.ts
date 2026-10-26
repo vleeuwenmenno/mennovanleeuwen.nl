@@ -147,10 +147,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const refused = accountMismatch(req, held, required)
       if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
     }
-    // Install one request lifetime before any private provider/body await in these route groups.
-    // Recursive dispatch runs once inside the frozen session scope; nested helpers inherit it.
-    const privateProvider = (path.startsWith('/api/mail/') && !path.startsWith('/api/mail/inline/')) || path.startsWith('/api/calendar/') || path.startsWith('/api/pim/') || path.startsWith('/api/caldav/') || path.startsWith('/api/seafile/') || path.startsWith('/api/photos/') || ['/api/caldav', '/api/integrations/seafile', '/api/integrations/immich', '/api/integrations/onlyoffice', '/api/office/check', '/api/office/config'].includes(path)
-    if (privateProvider && !privateRequestActive(req)) {
+    // Private by default. Public reads and OAuth/signed callbacks finish above this boundary.
+    // Session lifecycle endpoints finish their own logout/removal; guest rejoin and sealed Mail
+    // pictures authenticate by their own capability (inline pictures restore the sealed session).
+    const independent = path === '/api/auth/logout' || (path === '/api/me' && method === 'DELETE') || path === '/api/empires/away' || path.startsWith('/api/mail/inline/')
+    if (!independent && !privateRequestActive(req)) {
       const user = requireUser(req)
       return await runPrivateRequest(req, res, user, () => {
         if (path.startsWith('/api/calendar/') || path.startsWith('/api/pim/')) {

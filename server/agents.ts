@@ -1,3 +1,6 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { privateRequestAuthority, requirePrivateRequest, withPrivateOperation, withoutPrivateRequest } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { stopStudioOf } from './agentImageStudio.ts'
 import { imageMask, listImageMasks, retainImageMasks } from './agentImageMasks.ts'
 import { imageSource, listImageAttachments, aliasBranchedImageSources, stillData, stillSource } from './agentImageSources.ts'
@@ -136,11 +139,11 @@ export type Mode = 'quick' | 'deep'
 /** Picked when a thread does not say: quick wants speed, deep a stronger reasoner. */
 const PREFERRED: Record<Mode, string[]> = { quick: ['glm-5.3-flash', 'deepseek-v4.1-flash', 'gpt-oss:120b'], deep: ['kimi-k3', 'glm-5.3', 'gpt-oss:120b'] }
 
-let modelCache: { at: number; ttl: number; value: Promise<ModelInfo[]> } | null = null
+let modelCache: { at: number; ttl: number; pending: boolean; authority: object | undefined; value: Promise<ModelInfo[]> } | null = null
 
 /** Ollama's cloud models that can call tools, cached for an hour. The list and details are public. */
 export function models(): Promise<ModelInfo[]> {
-  if (modelCache && Date.now() - modelCache.at < modelCache.ttl) return modelCache.value
+  if (modelCache && Date.now() - modelCache.at < modelCache.ttl && (!modelCache.pending || modelCache.authority === privateRequestAuthority())) return modelCache.value
   const value = (async () => {
     const tags = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(10_000) })
       .then((r) => (r.ok ? (r.json() as Promise<{ models?: { name: string }[] }>) : null))
@@ -167,7 +170,8 @@ export function models(): Promise<ModelInfo[]> {
       })
       .sort((a, b) => a.name.localeCompare(b.name))
   })()
-  const entry = { at: Date.now(), ttl: 3600_000, value }
+  const entry = { at: Date.now(), ttl: 3600_000, pending: true, authority: privateRequestAuthority(), value }
+  value.then(() => { entry.pending = false }, () => { entry.pending = false })
   modelCache = entry
   value.catch(() => (entry.ttl = 60_000))
   return value
@@ -1052,7 +1056,7 @@ export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
   if (!promptFile || !seafileInfo(user)) return Promise.resolve(builtin)
   const key = `${promptFile.repo}:${promptFile.path}`
   const hit = promptCache.get(user.id)
-  if (!fresh && hit && hit.key === key && Date.now() - hit.at < 30_000) return hit.value
+  if (!fresh && hit && hit.key === key && Date.now() - hit.at < 30_000 && canUsePrivateCache(hit.value)) return hit.value
   const value = (async (): Promise<PromptInfo> => {
     try {
       const { url } = await fileLink(user, promptFile.repo, promptFile.path, 'download')
@@ -1066,6 +1070,7 @@ export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
       return { ...builtin, error: e instanceof HttpError && e.status === 423 ? 'its library is locked' : (e as Error).message }
     }
   })()
+  ownPrivateCache(value)
   promptCache.set(user.id, { at: Date.now(), key, value })
   return value
 }
@@ -3378,7 +3383,10 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
 /** Each running chain of turns, by thread, to wait for its end (Rewind stops it first). */
 const chains = new Map<string, Promise<void>>()
 function runChain(user: User, thread: string, first: Ask, res: ServerResponse | null, fromTerminal: boolean) {
-  const p = chain(user, thread, first, res, fromTerminal)
+  // Once accepted synchronously, a turn is an account job: closing/logging out its original
+  // stream must not cancel another session's observer. Each turn still retains provider links.
+  requirePrivateRequest(user)
+  const p = withoutPrivateRequest(() => chain(user, thread, first, res, fromTerminal))
   chains.set(thread, p)
   void p.finally(() => chains.get(thread) === p && chains.delete(thread))
   return p
@@ -3424,7 +3432,13 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
     while (ask) {
       const ctl = new AbortController()
       running.set(thread, ctl)
-      ;({ outcome, error, compact } = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first))
+      try {
+        ;({ outcome, error, compact } = await withPrivateOperation(() => turn(user, thread, ask!, ctl, send, fromTerminal && ask === first), ctl.signal))
+      } catch {
+        outcome = ctl.signal.aborted ? 'stopped' : 'failed'
+        error = ctl.signal.aborted ? undefined : 'The linked account changed while this turn was running'
+        break
+      }
       ask = nextAsk(user, thread, outcome)
       // A turn stopped halfway through a reply leaves it unsaved: the next one starts clean.
       if (ask) partial.set(thread, { content: '', thinking: '' })

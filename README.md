@@ -904,6 +904,38 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
 
 `pnpm check:sync-accounts` checks this against the real server and with tabs in memory.
 
+ChatGPT text and image operations keep the exact sign-in generation from before model discovery.
+Refreshes, 401 retries, image-route fallbacks and streamed bodies cannot switch to a newly linked
+account. Disconnecting or relinking cancels stalled transport. Google and ChatGPT refreshes stay
+single-flight per credential, with independent subscribers: ending one request does not cancel
+another authorized subscriber, while losing the last subscriber cancels the refresh and its commit.
+
+**Private requests keep their original authority** ([`server/privateRequest.ts`](server/privateRequest.ts)).
+The API is private by default after its public and authentication boundary. The original stored
+session is checked before response headers, every body write and local database commit; trusted
+native fetches, pinned fetches and user-selected providers inherit cancellation. Logout, expiry,
+revocation, a ban or account removal aborts held transport and prevents stale data or side effects.
+Cleanup can only delete an already accepted ComfyUI prompt at its captured backend; Stop or
+session revocation must not leave that prompt queued, and cleanup never uses replacement credentials.
+Transactions may always roll back after authority expires, so a rejected commit cannot leave the
+shared database in a transaction. Queued RCON work keeps the same authority through socket
+connection, authentication and each command write.
+
+The route inventory is explicit: Inbox, Code search/repositories/organisation access, Contacts,
+Tasks, calendars and PIM, Files/archives, Mail, Photos, Agents, integrations, link previews, synced
+state, notifications/push and admin operations all use this default. Admin actions on another
+account retain the initiating admin's session, including credential cleanup and the final removal.
+Pending cache loads belong to their request or operation; completed results remain reusable, so
+one session ending does not cancel another session's private read.
+
+Exceptions are the public Minecraft/activity feeds, suggestions, exchange rates, build version
+and allow-listed public Git history; public share capabilities; GitHub/Google authentication
+callbacks, signed OnlyOffice callbacks and synchronous session discovery (`/api/me`); logout and
+self-removal; guest Empires rejoin tokens; and sealed inline Mail images, which restore their
+original session instead. Accepted Agents turns are account jobs, as described below: each turn
+retains provider authority while each observer's delivery remains tied to its own session.
+`pnpm check:private-authority` exercises these boundaries with held local providers and sockets.
+
 **Open connections end with their session** ([`server/liveSessions.ts`](server/liveSessions.ts)).
 What stays open after one check at the start (the notification stream, the Empires socket, and the
 streamed answers of Agents: a turn, a joined turn, the Image Studio) is bound to the stored session
@@ -1383,6 +1415,9 @@ revocation aborts pending provider requests and delivery before any further priv
 Mail sessions, mailbox/people caches, push lines and pollers use a persisted per-link identity plus
 the owner and provider credential record, so a deleted/reused account row cannot inherit another
 account's endpoints or private data. Same-account token replacement also invalidates held work.
+Mail aggregates retain every participating link until their entire response or agent operation
+finishes. Unlinking A after A answered while B is still pending discards the aggregate, and a task
+or other change cannot use A's captured mail after that unlink.
 Notification deduplication hashes the complete link/message identity, keeping distinct long
 JMAP message IDs separate.
 `pnpm check:mail-office-revocation` covers these races against local providers.
@@ -1544,6 +1579,14 @@ under *Needs attention* until they are dealt with.
 `mount`, `findmnt`, `lsblk -f` and `man fstab` describe the table, read-only libraries mount `ro`,
 and encrypted ones answer `Required key not available` until `fscrypt unlock` gets their password.
 
+Encrypted Seafile access is bound to an exact per-library unlock grant. Locking, re-unlocking,
+grant expiry, reconnecting Seafile or removing the account invalidates held reads and streams,
+including cached previews, details, lists, original-file links and ZIP downloads. Grant generations
+are persisted; unlocked state remains in memory, so restarting the server locks libraries. Expiry
+cancels active delivery immediately. A ZIP token from an earlier unlock cannot be revived by
+unlocking again. Encrypted thumbnails have no ETag or browser cache entry, including HEAD and
+conditional requests.
+
 Pictures open in **Preview** and video and audio in **Player**, from Seafile or the site's own
 files. Preview fits the picture to the window and zooms with its buttons, the keys (+, −, 0 for
 actual size, 9 to fit), Ctrl+wheel or a pinch, towards the pointer; dragging or scrolling pans when
@@ -1619,7 +1662,9 @@ one). Tickets also seal the exact persisted Seafile and OnlyOffice link identiti
 removing either link cancels a pending save, including its document download and upload, and an
 old document can never save through the replacement account. Tickets survive a server restart
 only while both original links remain unchanged; legacy tickets without these claims require
-reopening the file. The document server must reach that callback: on a public site it does by itself; elsewhere
+reopening the file. Each OnlyOffice setup or removal attempt also advances setup authority,
+even when no link exists yet: delayed validation cannot overwrite a newer setup or removal.
+The document server must reach that callback: on a public site it does by itself; elsewhere
 set `OFFICE_CALLBACK_ORIGIN` to an address it can reach. **New Document**, **New Spreadsheet** and
 **New Presentation** make a blank file in Documents (or a folder picked with *New documents go here*)
 and open it; they are in Spotlight and All apps, and can go on the dock and the desktop.

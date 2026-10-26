@@ -1,3 +1,5 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -316,7 +318,7 @@ async function pageImages(user: User, raw: string, terms: string[], signal: Abor
   // candidates are scored against its words).
   const key = `${user.id}\n${terms.join(' ')}\n${url.href}`
   const hit = pageCache.get(key)
-  if (hit && Date.now() - hit.at < 30 * 60_000) return hit.value
+  if (hit && Date.now() - hit.at < 30 * 60_000 && canUsePrivateCache(hit.value)) return hit.value
   const value = (async () => {
     const { url: final, res } = await safeGet(url, 'text/html,application/xhtml+xml', AbortSignal.any([signal, AbortSignal.timeout(PAGE_MS)]))
     if (!res.ok || !/html/i.test(res.headers.get('content-type') ?? '')) {
@@ -326,6 +328,7 @@ async function pageImages(user: User, raw: string, terms: string[], signal: Abor
     const html = (await readUpTo(res, PAGE_BYTES, true)).toString('utf8')
     return extractImages(html, final, terms)
   })()
+  ownPrivateCache(value)
   pageCache.set(key, value)
   // A failure is not kept: the next call may find the site up again. A success is counted by size,
   // and the oldest entries go when the cache is over its entry or byte cap.

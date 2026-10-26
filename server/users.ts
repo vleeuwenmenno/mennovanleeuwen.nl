@@ -1,3 +1,5 @@
+import { requirePrivateRequest, withPrivateTarget } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { stopTurnsOf } from './agents.ts'
 import { isAdmin, type User } from './auth.ts'
 import { database, decrypt, userGone } from './db.ts'
@@ -64,7 +66,8 @@ async function revokeGithub(token: string) {
 export async function deleteUser(id: number) {
   const user = userById(id)
   signOutEverywhere(id)
-  await Promise.all([disconnectGoogle(user).catch(() => {}), unlinkSeafile(user).catch(() => {}), revokeGithub(user.githubToken)])
+  await withPrivateTarget(user, () => Promise.all([disconnectGoogle(user).catch(() => {}), unlinkSeafile(user).catch(() => {}), revokeGithub(user.githubToken)]))
+  requirePrivateRequest()
   database().prepare('DELETE FROM users WHERE id = ?').run(id)
-  userGone(id)
+  withPrivateTarget(user, () => userGone(id))
 }

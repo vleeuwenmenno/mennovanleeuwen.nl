@@ -1,3 +1,4 @@
+import { privateRequestAuthority, requirePrivateRequest } from './privateRequest.ts'
 import type { BranchHit, Hit, IssueHit, Label, OrgAccess, OrgsResponse, ParsedQuery, RepoHit, SearchResponse } from '../src/data/code.ts'
 import { parseQuery } from '../src/data/code.ts'
 import { onSignIn, type User } from './auth.ts'
@@ -19,7 +20,7 @@ const FORGE_REPO_TTL = 15 * 60_000
 const repoTtl = (src: Source) => (src.kind === 'github' ? GITHUB_REPO_TTL : FORGE_REPO_TTL)
 const ISSUE_SEARCH_TTL = 2 * 60_000
 const LIST_TTL = 2 * 60_000
-const cache = new Map<string, { at: number; ttl: number; value: Promise<unknown> }>()
+const cache = new Map<string, { at: number; ttl: number; authority: object | undefined; value: Promise<unknown> }>()
 
 const settled = new WeakSet<Promise<unknown>>()
 
@@ -30,8 +31,9 @@ function cachedStale<T>(key: string, ttl: number, load: () => Promise<T>): Promi
     hit.at = Date.now() // one refresh at a time
     const fresh = load()
     fresh.then(() => {
+      try { requirePrivateRequest() } catch { return }
       settled.add(fresh)
-      cache.set(key, { at: Date.now(), ttl, value: fresh })
+      cache.set(key, { at: Date.now(), ttl, authority: privateRequestAuthority(), value: fresh })
     }, () => {})
     return hit.value as Promise<T>
   }
@@ -42,9 +44,10 @@ function cachedStale<T>(key: string, ttl: number, load: () => Promise<T>): Promi
 
 function cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < hit.ttl) return hit.value as Promise<T>
-  const value = load()
-  cache.set(key, { at: Date.now(), ttl, value })
+  if (hit && Date.now() - hit.at < hit.ttl && (settled.has(hit.value) || hit.authority === privateRequestAuthority())) return hit.value as Promise<T>
+  const value = load().then((result) => { requirePrivateRequest(); return result })
+  value.then(() => settled.add(value), () => {})
+  cache.set(key, { at: Date.now(), ttl, authority: privateRequestAuthority(), value })
   // Failures aren't cached.
   value.catch(() => cache.get(key)?.value === value && cache.delete(key))
   if (cache.size > 2000) for (const [k, v] of cache) if (Date.now() - v.at > v.ttl) cache.delete(k)
@@ -236,8 +239,9 @@ export function repoList(user: User, src: Source): Promise<RepoHit[]> {
 function refreshRepos(user: User, src: Source): Promise<RepoSet> {
   const fresh = loadRepos(src)
   fresh.then(() => {
+    try { requirePrivateRequest() } catch { return }
     settled.add(fresh)
-    cache.set(repoKey(user, src), { at: Date.now(), ttl: repoTtl(src), value: fresh })
+    cache.set(repoKey(user, src), { at: Date.now(), ttl: repoTtl(src), authority: privateRequestAuthority(), value: fresh })
   }, () => {})
   return fresh
 }

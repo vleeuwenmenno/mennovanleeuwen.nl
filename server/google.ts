@@ -1,3 +1,5 @@
+import { sharedProviderJob } from './privateRequest.ts'
+import { privateFetch as fetch } from './privateRequest.ts'
 import { requirePrivateRequest, privateRequestAuthority, withoutPrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -233,7 +235,7 @@ function sameLink(user: User, generation: number) {
 }
 
 /** A valid access token, refreshed when it is about to expire. */
-const refreshing = new Map<number, { generation: number; job: Promise<string> }>()
+const refreshing = new Map<number, { generation: number; job: ReturnType<typeof sharedProviderJob<string>> }>()
 async function accessToken(user: User): Promise<string> {
   const row = database().prepare('SELECT email, refresh_token, access_token, expires_at FROM google WHERE user_id = ?').get(user.id) as GoogleRow | undefined
   if (!row) throw new HttpError(409, 'Google Calendar is not connected')
@@ -241,26 +243,21 @@ async function accessToken(user: User): Promise<string> {
   // One refresh at a time per link of a user, however many requests ask at once.
   const generation = generationOf(user.id)
   const pending = refreshing.get(user.id)
-  if (pending && pending.generation === generation) return pending.job
+  if (pending && pending.generation === generation && !pending.job.signal.aborted) return pending.job.join()
   const stale = () => new StaleLink()
-  const job: Promise<string> = tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(row.refresh_token) })
-    .then((t) => {
-      if (generationOf(user.id) !== generation) throw stale()
-      const done = database()
-        .prepare('UPDATE google SET access_token = ?, expires_at = ? WHERE user_id = ? AND refresh_token = ?')
-        .run(encrypt(t.access_token!), Date.now() + (t.expires_in ?? 3600) * 1000, user.id, row.refresh_token)
-      if (!Number(done.changes)) throw stale()
-      return t.access_token!
-    })
-    .catch((e: Error) => {
-      if (generationOf(user.id) !== generation) throw stale()
-      throw e
-    })
-    .finally(() => {
-      if (refreshing.get(user.id)?.job === job) refreshing.delete(user.id)
-    })
+  const check = () => {
+    if (generationOf(user.id) !== generation || !database().prepare('SELECT 1 FROM users WHERE id=? AND banned_at IS NULL').get(user.id)) throw stale()
+  }
+  const job = sharedProviderJob(check, (end) => onGoogleLinkChanged((id) => { if (id === user.id) end() }), async () => {
+    const t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(row.refresh_token) })
+    check()
+    const done = database().prepare('UPDATE google SET access_token = ?, expires_at = ? WHERE user_id = ? AND refresh_token = ?').run(encrypt(t.access_token!), Date.now() + (t.expires_in ?? 3600) * 1000, user.id, row.refresh_token)
+    if (!Number(done.changes)) throw stale()
+    return t.access_token!
+  })
+  void job.value.finally(() => { if (refreshing.get(user.id)?.job === job) refreshing.delete(user.id) }).catch(() => {})
   refreshing.set(user.id, { generation, job })
-  return job
+  return job.join()
 }
 
 /**

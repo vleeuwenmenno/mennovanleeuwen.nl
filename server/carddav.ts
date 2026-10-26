@@ -1,3 +1,4 @@
+import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
 import type { User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { davRefused, davRequest, davXml, escapeXml, found, hrefIn, normalizeDavUrl, prop, resolveHref, responses, unescapeXml, type DavLogin } from './dav.ts'
@@ -167,10 +168,10 @@ const cardCache = new Map<string, CardSet>()
 
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = bookCache.get(key)
-  if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>
-  const value = load()
+  if (hit && Date.now() - hit.at < ms && canUsePrivateCache(hit.value)) return hit.value as Promise<T>
+  const value = ownPrivateCache(load())
   bookCache.set(key, { at: Date.now(), value })
-  value.catch(() => bookCache.delete(key))
+  value.catch(() => { if (bookCache.get(key)?.value === value) bookCache.delete(key) })
   return value
 }
 
@@ -215,12 +216,13 @@ const isCard = (book: AddressBook, href: string) => href !== book.href && !href.
 export async function bookCards(user: User, book: AddressBook, maxAge = 60_000): Promise<DavCard[]> {
   const key = `${user.id}|cards|${book.id}`
   let set = cardCache.get(key)
+  if (set?.syncing && !canUsePrivateCache(set.syncing)) set = undefined
   if (!set) cardCache.set(key, (set = { at: 0, cards: new Map(), syncing: null }))
   const s = set
   if (Date.now() - s.at > maxAge && !s.syncing) {
-    s.syncing = sync(loginFor(user, book), book, s.cards)
+    s.syncing = ownPrivateCache(sync(loginFor(user, book), book, s.cards)
       .then(() => void (s.at = Date.now()))
-      .finally(() => (s.syncing = null))
+      .finally(() => (s.syncing = null)))
   }
   if (s.syncing) await s.syncing
   return [...s.cards.values()]
