@@ -1,6 +1,6 @@
 import { toUi } from '../os/uiScale'
 import { Icon, NEW_TITLE, regenerateHint, RenameBox, Scramble, titlePending } from './agentsSidebar/bits'
-import { AgentsSidebar, sideKeys, type SideCtx } from './agentsSidebar'
+import { AgentsSidebar, Rail, reportBulk, runBulk, sideKeys, useThreadSelection, type Bulk, type SideCtx } from './agentsSidebar'
 import { type Drag } from './agentsSidebar/ctx'
 import { useUnread } from './agentsSidebar/unread'
 import { GptImageDrawing, GptImageResult } from './AgentsGptImage'
@@ -343,6 +343,67 @@ function AgentsApp({ win }: { win: WinState }) {
     regenerateTitle(t.id).then(refresh, (e: Error) => (refresh(), void tell({ title: 'No new title', body: e.message })))
   }
   const move = (t: Thread, projectId: number | null) => void updateThread(t.id, { projectId }).then(refresh, () => {})
+
+  // What the sidebar's selection can do to many threads at once. The server has no bulk endpoint,
+  // so every thread takes the call a single one does, a few at a time, and what failed is said
+  // rather than dropped (see agentsSidebar/bulk.ts).
+  const selection = useThreadSelection()
+  const [bulkBusy, setBulkBusy] = useState(false)
+  /** The selected threads, in the order the list shows them. */
+  const selectedThreads = () => {
+    const byId = new Map(threads.map((t) => [t.id, t]))
+    // The list's order first, then any selected thread the list no longer shows; each once.
+    const ids = [...new Set([...selection.order(), ...selection.ids])].filter((id) => selection.has(id))
+    return ids.flatMap((id) => byId.get(id) ?? [])
+  }
+  const runSelection = async (verb: string, job: (t: Thread) => Promise<unknown>) => {
+    const list = selectedThreads()
+    if (!list.length) return
+    setBulkBusy(true)
+    try {
+      const result = await runBulk(list, job)
+      reportBulk(verb, result, (t) => t.title)
+      if (result.done.some((t) => t.id === selected)) open(null)
+      selection.clear()
+      refresh()
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+  const bulk: Bulk = {
+    busy: bulkBusy,
+    archive: () => void runSelection(archived ? 'Moved back' : 'Archived', (t) => updateThread(t.id, { archived: !archived })),
+    remove: () =>
+      void (async () => {
+        const list = selectedThreads()
+        if (!list.length) return
+        const running = list.filter((t) => t.running).length
+        const ok = await ask({
+          title: `Delete ${list.length === 1 ? `“${list[0].title}”` : `${list.length} threads`}?`,
+          body: `${running ? `${running === 1 ? 'One is' : `${running} are`} still answering and will be stopped. ` : ''}The threads and everything in them are gone for good. Archive them instead to keep them out of the way.`,
+          confirm: list.length === 1 ? 'Delete' : `Delete ${list.length}`,
+          danger: true,
+        })
+        if (!ok) return
+        await runSelection('Deleted', async (t) => {
+          await deleteThread(t.id)
+          dropDraft(t.id)
+        })
+      })(),
+    move: (projectId) => void runSelection('Moved', (t) => updateThread(t.id, { projectId })),
+    moveMenu: () =>
+      tidyMenu([
+        ...projects.map((p) => ({ label: p.name, onSelect: () => bulk.move(p.id) })),
+        ...(projects.length ? [{ separator: true as const }] : []),
+        { label: 'No project', onSelect: () => bulk.move(null) },
+      ]),
+    menu: () => [
+      { label: archived ? 'Move back to threads' : 'Archive', onSelect: bulk.archive },
+      { label: 'Move to project', submenu: bulk.moveMenu() },
+      { separator: true },
+      { label: 'Delete…', danger: true, onSelect: bulk.remove },
+    ],
+  }
   const menu = (t: Thread): MenuItem[] => [
     { label: 'Open', onSelect: () => open(t.id) },
     { label: t.pinned ? 'Unpin' : 'Pin', onSelect: () => pin(t) },
@@ -617,6 +678,8 @@ function AgentsApp({ win }: { win: WinState }) {
     move,
     reorder,
     menu,
+    selection,
+    bulk,
     projectMenu,
     open,
     newThread,
@@ -627,34 +690,20 @@ function AgentsApp({ win }: { win: WinState }) {
     toggleArchived,
     leaveArchived: () => setArchived(false),
     hide: () => fold(true),
+    show: () => fold(false),
+    findThreads: () => {
+      findFocus.current = true
+      fold(false)
+      setPane('list')
+    },
   }
 
   return (
     <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} style={rail || narrow ? undefined : ({ '--agt-side-w': `min(${sideWidth}px, 50%)` } as React.CSSProperties)} onContextMenu={rootMenu}>
       {rail ? (
-        <nav className="agt-rail" aria-label="Agents" onContextMenu={sideMenu}>
-          <button className="agt-icon" onClick={() => fold(false)} title="Show the sidebar" aria-label="Show the sidebar">
-            <Icon name="sidebar" />
-          </button>
-          <button className="agt-icon is-accent" onClick={newThread} title="New thread" aria-label="New thread">
-            <Icon name="plus" />
-          </button>
-          <span className="agt-grow" />
-          <button className="agt-icon" onClick={toggleArchived} title="Archived threads" aria-label="Archived threads">
-            <Icon name="archive" />
-          </button>
-          <button className={`agt-icon ${main.kind === 'memory' ? 'is-on' : ''}`} onClick={() => openMemory(null)} title="Memory" aria-label="Memory">
-            <Icon name="memory" />
-          </button>
-          <button className={`agt-icon ${main.kind === 'studio' ? 'is-on' : ''}`} onClick={openStudio} title="Image Studio" aria-label="Image Studio">
-            <Icon name="studio" />
-          </button>
-          <button className={`agt-icon ${main.kind === 'settings' ? 'is-on' : ''}`} onClick={openSettings} title="Settings" aria-label="Settings">
-            <Icon name="gear" />
-          </button>
-        </nav>
+        <Rail ctx={sideCtx} onContextMenu={sideMenu} />
       ) : (
-        <aside className={`nb-side agt-side is-side-${sidebarStyle}`} onContextMenu={sideMenu} onKeyDown={sideKeys}>
+        <aside className={`nb-side agt-side is-side-${sidebarStyle}`} onContextMenu={sideMenu} onKeyDown={(e) => sideKeys(e, sideCtx)}>
           <AgentsSidebar style={sidebarStyle} ctx={sideCtx} />
           {!narrow && (
             <div

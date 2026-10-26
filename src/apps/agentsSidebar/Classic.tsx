@@ -29,7 +29,7 @@ export function ClassicSidebar({ ctx }: { ctx: SideCtx }) {
         <SearchBox ctx={ctx} />
         <HideButton ctx={ctx} />
       </div>
-      <List>
+      <List ctx={ctx}>
         <StudioLink ctx={ctx} />
         <ProjectsSection ctx={ctx} model={model} row={row} />
         <ThreadsSection ctx={ctx} model={model} row={row} />

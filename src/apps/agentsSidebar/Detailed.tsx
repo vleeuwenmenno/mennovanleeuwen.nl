@@ -8,7 +8,8 @@ import { longWhen, statusOf, useSidebarModel, type Status } from './model'
 
 // Detailed: two lines per thread. The title comes first and wraps to a second line when there is
 // room; under it, small and muted, the project (or the model) and when. A bar on the left and a
-// badge say what is running, new or stopped. Its CSS is Detailed.css.
+// badge say what is running, new or stopped. The + on the Threads header starts a thread. Its CSS
+// is Detailed.css.
 
 const modelLabel = (raw: string) => {
   const n = modelName(raw)
@@ -57,27 +58,18 @@ export function DetailedSidebar({ ctx }: { ctx: SideCtx }) {
   }
   return (
     <>
-      {!ctx.archived && (
-        <div className="agt-dx-top">
-          <button className="agt-dx-new" onClick={ctx.newThread}>
-            <Icon name="plus" size={15} />
-            <span>New thread</span>
-          </button>
-          <HideButton ctx={ctx} />
-        </div>
-      )}
       <div className="agt-side-head agt-dx-search">
         <SearchBox ctx={ctx} />
-        {ctx.archived && <HideButton ctx={ctx} />}
+        <HideButton ctx={ctx} />
       </div>
-      <List>
+      <List ctx={ctx}>
         <StudioLink ctx={ctx} />
         <ProjectsSection ctx={ctx} model={model} row={rowOf(false)} showCount />
         <ThreadsSection
           ctx={ctx}
           model={model}
           row={rowOf(true)}
-          header={<GroupHeader title={ctx.archived ? 'Archived' : 'Threads'} count={model.loose.length} />}
+          header={<GroupHeader title={ctx.archived ? 'Archived' : 'Threads'} count={model.loose.length} onAdd={ctx.archived ? undefined : ctx.newThread} addLabel="New thread" />}
           day={(label, items) => (
             <h5 className="agt-day agt-dx-day">
               <span>{label}</span>
