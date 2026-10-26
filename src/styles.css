@@ -1,3 +1,18 @@
+/* The symbols a terminal draws with (box drawing, blocks, braille, arrows, ❯ ▸ ⚠…), which Google's
+   JetBrains Mono files (index.html) leave out. Without them a browser takes them from another
+   font, and where that one is not exactly 0.6em wide (iOS: a row of ─ ends up a character longer
+   than the text above it) boxes wrap, columns drift and the cursor lands off its cell. These come
+   from the same typeface (SIL OFL, src/fonts/OFL.txt), in the same 0.6em cell and vertical
+   metrics; the file is only fetched once a page shows one. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono-symbols.woff2') format('woff2');
+  unicode-range: U+2190, U+2192, U+2194-21FF, U+2300-23FF, U+2500-26FF, U+2700-27BF, U+2800-28FF;
+}
+
 :root {
   /* Fallbacks (Tokyo Night). src/os/theme.ts sets these from the active Omarchy palette. */
   --bg: #1a1b26;
@@ -2380,6 +2395,32 @@ body.is-resizing iframe {
   caret-color: transparent;
   padding: 0;
 }
+/* Touch screens: every text field is at least 16px (iOS zooms the page in on smaller ones, see the
+   end of this file), but the terminal's text is smaller, so the prompt's text and the block cursor
+   drawn at 1ch steps of the terminal's font drifted apart. The field keeps its 16px and is scaled
+   down to the terminal's text size instead (zooming is decided on the computed size, not on a
+   transform), so a character is 1ch wide in it too. --t-k is the terminal's text size over 16px
+   (Terminal.tsx sets it; this is the boot console's 13px). */
+@media (pointer: coarse) {
+  .terminal {
+    --t-k: 0.8125;
+  }
+  .t-input {
+    align-items: center;
+  }
+  .t-field {
+    height: calc(1em * 1.55);
+  }
+  .t-input input {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(100% / var(--t-k));
+    height: calc(100% / var(--t-k));
+    transform: scale(var(--t-k));
+    transform-origin: 0 0;
+  }
+}
 /* A block cursor like Omarchy's terminals: solid while typing, hollow when the window is not focused. */
 .t-cursor {
   position: absolute;
@@ -2441,6 +2482,42 @@ body.is-resizing iframe {
   .term-tab > .terminal {
     touch-action: pan-x pan-y;
   }
+}
+/* The suggestions above a touch keyboard (src/terminal/HintBar.tsx): what Tab would complete, as
+   chips on one line that scrolls sideways, over the extra keys. */
+.t-hints {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 5px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-dark);
+  font-family: var(--mono);
+  touch-action: pan-x;
+}
+.t-hints::-webkit-scrollbar {
+  display: none;
+}
+.t-hint {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: var(--panel-2);
+  color: var(--green);
+  font: inherit;
+  font-size: 13px;
+  white-space: pre;
+}
+.t-hint:active {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.t-hints + .t-keys {
+  border-top: 0;
 }
 /* The extra keys row above a touch keyboard (src/terminal/ExtraKeys.tsx), Termux-style. */
 .t-keys {

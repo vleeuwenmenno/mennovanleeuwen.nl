@@ -205,6 +205,9 @@ export class Session {
   private esc = 0
   private notice: string | null = null
   private pick = 0
+  /** What the last draw offered to complete (null when nothing), for the suggestions row on touch screens. */
+  private compNow: { start: number; items: PickItem[] } | null = null
+  private hintCache: { value: string; start: number }[] = []
   private tick = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private models: ModelInfo[] = []
@@ -271,6 +274,7 @@ export class Session {
     if (this.editingQ && this.thread) void releaseQueued(this.thread.id, this.editingQ.id).catch(() => {})
     this.ctx.onKey(null)
     this.ctx.onResize?.(null)
+    this.ctx.setHints?.(null)
     this.ctx.live(null)
     const lines: Line[] = []
     if (this.turn) lines.push([seg('The agent is still working on it; ', 'muted'), seg('agents -c', 'cyan'), seg(' picks it up again.', 'muted')])
@@ -280,7 +284,7 @@ export class Session {
   }
 
   private w() {
-    return Math.max(30, this.ctx.size.cols - 1)
+    return Math.max(19, this.ctx.size.cols - 1)
   }
 
   /** Keep asynchronous image art below its links, ahead of the next finished message. */
@@ -387,6 +391,7 @@ export class Session {
 
   private draw() {
     if (this.closed) return
+    this.compNow = null
     const w = this.w()
     const L: Line[] = []
     if (this.turn) {
@@ -411,6 +416,43 @@ export class Session {
     if (this.modal) L.push(...this.drawModal(w))
     else L.push(...this.drawPrompt(w), ...this.drawFooter(w))
     this.ctx.live(toMarkup(L), { hideInput: true })
+    this.publishHints()
+  }
+
+  /**
+   * Touch screens show what Tab would complete as chips above the keyboard (Ctx.setHints): slash
+   * commands, #LoRA, $skill, @tool and @./path from the same lists the picker under the prompt
+   * uses, and after a `!` the shell's own completion for the command being typed.
+   */
+  private publishHints() {
+    const set = this.ctx.setHints
+    if (!set) return
+    const found: { value: string; label: string; hint?: string; start: number }[] = []
+    const e = this.editor
+    if (!this.modal && this.shellMode() && this.ctx.completeLine) {
+      const before = e.text.slice(0, e.cursor)
+      const line = before.slice(1).replace(/^ /, '')
+      if (line.trim()) {
+        const r = this.ctx.completeLine(line)
+        const start = e.cursor - (line.length - r.before.length)
+        const word = line.slice(r.before.length)
+        if (!(r.items.length === 1 && r.items[0].value.trim() === word)) for (const it of r.items) found.push({ ...it, start })
+      }
+    } else if (!this.modal && this.compNow) {
+      for (const it of this.compNow.items) found.push({ value: it.value + (it.value.endsWith('/') ? '' : ' '), label: it.value, hint: it.hint, start: this.compNow.start })
+    }
+    const shown = found.slice(0, 8)
+    this.hintCache = shown.map((f) => ({ value: f.value, start: f.start }))
+    set(shown.map((f, i) => ({ label: f.label, hint: f.hint, apply: () => this.takeHint(i) })))
+  }
+
+  /** A tapped suggestion goes in as Tab would put it. The row may be a draw behind, so it is looked up again. */
+  private takeHint(at: number) {
+    const f = this.hintCache[at]
+    if (!f || this.closed || this.modal) return
+    this.editor.complete(f.start, f.value)
+    this.pick = 0
+    this.draw()
   }
 
   private shellMode() {
@@ -503,6 +545,7 @@ export class Session {
   private drawCompletions(w: number): Line[] {
     if (this.dismissedCompletion === `${this.editor.cursor}:${this.editor.text}`) return []
     const c = this.completions()
+    this.compNow = c
     if (!c) return mentionAt(this.editor.text, this.editor.cursor)?.sigil === '#' ? [[seg(this.loraLoading ? ' Loading LoRAs…' : this.loraError || ' No installed LoRAs match.', 'muted')]] : []
     this.pick = Math.min(this.pick, c.items.length - 1)
     const from = Math.max(0, Math.min(this.pick - 3, c.items.length - 8))

@@ -516,6 +516,38 @@ Selecting the scrollback (or a full-screen program's screen) leaves the selectio
 you click elsewhere or type; a plain click puts the caret on the prompt. Ctrl+Shift+C copies it
 (so does Ctrl+C with text selected, or the right-click menu), Ctrl+Shift+V pastes.
 
+On a touch screen a tap anywhere on the screen (not on a link, button or field) puts the caret
+back on the prompt, which brings the on-screen keyboard back after it was put away (iOS's Done,
+Android's Back), in the shell and in full-screen programs like `agents` alike. It is handled in the
+`touchend` itself, because iOS only opens the keyboard for focus from inside a touch, and only
+sends mouse events for taps on things it counts as clickable. A scroll, a long press (selecting,
+the menu), a pinch, and a tap while text is selected are not taps.
+
+**Columns and rows.** A full-screen program (nano, htop, `agents`) is told the size in characters
+when it starts and again whenever it changes: the window resized or maximized, the phone rotated,
+the on-screen keyboard or the extra keys row opening (the window follows the visible area, see
+*Touch screens*), a new text size or zoom, or the font finishing loading. The width of a character
+is measured on a real one in the terminal's own element
+([`cellWidth`](src/apps/Terminal.tsx)), not on a canvas, whose idea of a font family can differ
+from what is drawn. Box drawing, blocks, braille, arrows and symbols like ❯ ▸ ⚠ are not in the
+JetBrains Mono files Google serves, so a browser takes them from another font, which on iOS is a
+little wider than the text: the border of the agents' boxes wrapped and the right-hand side drifted.
+[`src/fonts/jetbrains-mono-symbols.woff2`](src/fonts/jetbrains-mono-symbols.woff2) (a subset of
+the same typeface, SIL OFL, loaded only once a page shows one of them) supplies them in the same
+0.6em cell. `pnpm check:terminal-mobile` runs a phone-sized, touch-emulated browser through all
+of this.
+
+**Suggestions above the keyboard.** On a touch screen, one line of tappable chips sits over the
+extra keys while the prompt has the keyboard ([`HintBar.tsx`](src/terminal/HintBar.tsx)): what Tab
+would offer for the word being typed, at most eight, scrolling sideways, gone when there is nothing
+to offer. At the shell prompt they come from the same completion as Tab (`completions` in
+[`commands.ts`](src/terminal/commands.ts)): commands for the first word, then folders and files.
+In `agents` they are the lists under its prompt: slash commands, `#LoRA`, `$skill`, `@tool`,
+`@./path`, and after a `!` the shell's own completion for the command being typed (a program hands
+them over with `Ctx.setHints`, and gets the shell's through `Ctx.completeLine`). A tap puts the
+suggestion on the line like Tab does, and never takes the focus, so the keyboard stays up. The
+desktop is unchanged.
+
 ### Terminal settings
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
@@ -623,6 +655,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   with each model call and tool call. See *Thread stats* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
+- On a touch screen the same completions are tappable (see *Suggestions above the keyboard*
+  under Terminal): slash commands, `#LoRA`, `$skill`, `@tool` and `@./path` as you type them, and
+  after a `!` the shell's commands and paths.
 
 `skills` ([`src/terminal/skills.ts`](src/terminal/skills.ts),
 [`server/skills.ts`](server/skills.ts)) manages SKILL.md folders. They live in
@@ -3692,6 +3727,13 @@ With the on-screen keyboard open, windows end just above it, whether the browser
 keyboard over the page (iOS) or shrinks the page (Android, newer iOS). Text fields are at least
 16px on touch screens, and on iOS the page has a maximum scale of 1, so focusing a field never
 zooms the page in; double-tap zoom is off everywhere. Pinch zoom still works.
+
+The terminal's prompt field is the one exception to "the same size as the text around it": it keeps
+its 16px for iOS but is scaled down (a CSS transform, which iOS does not look at) to the terminal's
+text size, so a typed character is 1ch wide there as everywhere in the terminal and the block
+cursor, which is drawn at 1ch steps, sits on the cell the caret is in (`--t-k` in
+[`src/styles.css`](src/styles.css), set by `Terminal.tsx`). Before, the 16px text was wider than the
+13px cursor steps and the cursor drifted over the typed letters.
 
 ## Games
 

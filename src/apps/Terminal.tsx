@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { cvMode } from '../os/cvMode'
 import { browserMountPoint, useMounts } from '../data/mounts'
@@ -17,6 +17,7 @@ import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { aliasesOf } from '../terminal/msh/interp'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
 import { ExtraKeys, useStickyMods, type ModKeys } from '../terminal/ExtraKeys'
+import { HintBar, sameHints } from '../terminal/HintBar'
 import { prepareFolder } from '../terminal/fs'
 import { quotePaths } from '../terminal/words'
 import { terminalPrefs, useTerminalPrefs } from '../terminal/prefs'
@@ -29,7 +30,7 @@ import type { Line } from '../terminal/vt/screen'
 import { VtSession, type TermPort } from '../terminal/vt/session'
 import { VtLines, VtView } from '../terminal/vt/VtView'
 import { encodeKey, encodePaste } from '../terminal/vt/keys'
-import { CmdError } from '../terminal/types'
+import { CmdError, type Hint } from '../terminal/types'
 import { accountStorage } from '../os/accountSpace'
 
 /** Which terminal session last painted the shared find highlights. */
@@ -239,10 +240,33 @@ function terminalCopyPaste(e: globalThis.KeyboardEvent, shell: TabShell): boolea
 /** A theme colour (set by src/os/theme.ts) for programs that ask for the terminal's colours. */
 const themeColor = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
+/**
+ * The width of one character of the terminal's text, measured on the element itself: what the
+ * browser really lays out, with the font that loaded (a canvas has its own idea of a font family
+ * string, and of a font that is still loading).
+ */
+function cellWidth(el: HTMLElement): number {
+  const probe = document.createElement('span')
+  probe.setAttribute('aria-hidden', 'true')
+  probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;white-space:pre'
+  probe.textContent = 'M'.repeat(40)
+  el.appendChild(probe)
+  const w = probe.offsetWidth / 40
+  probe.remove()
+  if (w > 0) return w
+  const style = getComputedStyle(el)
+  const ctx2d = document.createElement('canvas').getContext('2d')
+  if (!ctx2d) return 8
+  ctx2d.font = `${style.fontSize} ${style.fontFamily}`
+  return ctx2d.measureText('MMMMMMMMMM').width / 10 || 8
+}
+
 // An attached stream draws with a tighter line height than msh's output (src/styles.css), so
 // box drawing joins up; rows are counted with it.
 const VT_LINE_HEIGHT = 1.25
 
+/** Suggestions shown at most above a touch keyboard. */
+const HINTS_MAX = 8
 // Phones have no Tab key and typing is slow, so touch devices get one-tap commands.
 const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ping boltwarden.org', 'sl', 'fastfetch', 'fortune | cowsay']
 const HISTORY_KEY = 'mvlos.history'
@@ -430,9 +454,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     const style = getComputedStyle(el)
     let cell = cellRef.current
     if (!cell) {
-      const ctx2d = document.createElement('canvas').getContext('2d')!
-      ctx2d.font = `${style.fontSize} ${style.fontFamily}`
-      cell = { w: ctx2d.measureText('MMMMMMMMMM').width / 10 || 8, h: parseFloat(style.fontSize) * VT_LINE_HEIGHT || 16 }
+      cell = { w: cellWidth(el), h: parseFloat(style.fontSize) * VT_LINE_HEIGHT || 16 }
     }
     const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
     const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
@@ -597,6 +619,15 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   // A new text size changes how many rows and columns fit without changing the window, which the
   // ResizeObserver would not notice: full-screen programs (nano, htop, agents) redraw to fit.
   useLayoutEffect(() => sizeCheck.current?.(), [fontPx])
+  // The same when the font (or its symbols) finishes loading after the size was measured: a
+  // character is then a different width, with no change of the window to say so.
+  useEffect(() => {
+    const fonts = document.fonts
+    if (!fonts?.addEventListener) return
+    const again = () => sizeCheck.current?.()
+    fonts.addEventListener('loadingdone', again)
+    return () => fonts.removeEventListener('loadingdone', again)
+  }, [])
 
   // Ctrl with the scroll wheel (a trackpad pinch sends the same) and a two-finger pinch on a touch
   // screen zoom this window instead of the page.
@@ -636,6 +667,47 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onLogout])
+
+  // A tap on the screen puts the caret back on the prompt, which also brings the on-screen keyboard
+  // back after it was put away (iOS's Done button, Android's Back). That has to happen inside the
+  // touch itself: iOS only opens the keyboard for focus() called from a user gesture, which a
+  // timeout after the mouse events is not, and it sends those mouse events only for taps on things
+  // it counts as clickable, which plain text and the hidden prompt of a full-screen program are not.
+  // A drag (scrolling), a long press (selecting, the menu), a second finger (pinch) and a tap on a
+  // link, button or field do not count, and a selection stays until the next tap.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !coarse) return
+    let start: { x: number; y: number; at: number } | null = null
+    const onStart = (e: TouchEvent) => {
+      start = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, at: performance.now() } : null
+    }
+    const onMove = (e: TouchEvent) => {
+      if (start && (e.touches.length !== 1 || Math.hypot(e.touches[0].clientX - start.x, e.touches[0].clientY - start.y) > 10)) start = null
+    }
+    const onEnd = (e: TouchEvent) => {
+      const s = start
+      start = null
+      const input = inputRef.current
+      if (!s || !input || e.touches.length || performance.now() - s.at > 450 || input.readOnly) return
+      if (e.target instanceof Element && e.target.closest('a, button, input, textarea, select, .term-find, .t-picker')) return
+      if (window.getSelection()?.toString()) return
+      // Still the active element, but the keyboard is away (Android's Back does that without a
+      // blur): focus() would do nothing, so start over.
+      if (document.activeElement === input && !document.documentElement.classList.contains('keyboard-open')) input.blur()
+      input.focus({ preventScroll: true })
+    }
+    el.addEventListener('touchstart', onStart, { passive: true })
+    el.addEventListener('touchmove', onMove, { passive: true })
+    el.addEventListener('touchend', onEnd, { passive: true })
+    el.addEventListener('touchcancel', onMove, { passive: true })
+    return () => {
+      el.removeEventListener('touchstart', onStart)
+      el.removeEventListener('touchmove', onMove)
+      el.removeEventListener('touchend', onEnd)
+      el.removeEventListener('touchcancel', onMove)
+    }
+  }, [coarse])
 
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   // The same when it becomes the front tab.
@@ -798,6 +870,12 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       paint,
       size,
       onResize: (h) => void (resizeHandler.current = h),
+      // The suggestions row above a touch keyboard, for a program with a prompt of its own (agents).
+      setHints: coarse ? (list) => setProgramHints((prev) => (sameHints(prev, list ?? []) ? prev : (list ?? []))) : undefined,
+      completeLine: (line) => {
+        const r = completions(line, cwd, aliasesOf(env.current).keys())
+        return { before: r.before, items: r.items.map((i) => ({ ...i, value: escapeArg(i.value) + (i.value.endsWith('/') ? '' : ' ') })) }
+      },
       onKey: (h, opts) => {
         keyHandler.current = h
         rawKeys.current = !!h && !!opts?.raw
@@ -818,6 +896,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       setEntries((e) => e.filter((x) => x.id !== id))
     }
     watcher.disconnect()
+    setProgramHints([])
     sizeCheck.current = null
     resizeHandler.current = null
     keyHandler.current = null
@@ -836,9 +915,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     const el = scrollRef.current
     if (!el) return { cols: 80, rows: 24 }
     const style = getComputedStyle(el)
-    const ctx2d = document.createElement('canvas').getContext('2d')!
-    ctx2d.font = `${style.fontSize} ${style.fontFamily}`
-    const charW = ctx2d.measureText('MMMMMMMMMM').width / 10 || 8
+    const charW = cellWidth(el)
     const lineH = parseFloat(style.lineHeight) || 20
     const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
     const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
@@ -975,6 +1052,52 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   // The extra keys row on touch screens (src/terminal/ExtraKeys.tsx), while the prompt has the
   // keyboard. Its Ctrl, Alt and Shift also apply to what is typed on the keyboard.
   const mods = useStickyMods()
+
+  // The suggestions row above the keyboard (touch screens): what Tab would offer for the word being
+  // typed. In the shell that is its own completion (commands for the first word, then folders and
+  // files); a program with a prompt of its own, running, brings its own (agents).
+  const [programHints, setProgramHints] = useState<Hint[]>([])
+  const [foldersSeen, setFoldersSeen] = useState(0)
+  const hintLine = coarse && !onLogout && !busy && !session && !goMode && !readOnly ? value : ''
+  // A folder in Seafile is fetched first, so its names can be offered (as Tab does).
+  const preparing = useRef('')
+  useEffect(() => {
+    if (!hintLine.trim()) return
+    const word = WORD_RE.exec(hintLine)![1].replace(/\\(.)/g, '$1')
+    const dir = resolvePath(cwd, word.includes('/') ? word.slice(0, word.lastIndexOf('/') + 1) : '.')
+    if (preparing.current === dir) return
+    preparing.current = dir
+    void prepareFolder(dir).then(() => setFoldersSeen((n) => n + 1))
+  }, [hintLine, cwd])
+  const shellHints = useMemo<Hint[]>(() => {
+    if (!hintLine.trim()) return []
+    const { word, items } = completions(hintLine, cwd, aliasesOf(env.current).keys())
+    // Already what is typed: nothing left to suggest.
+    if (!items.length || (items.length === 1 && items[0].value === word)) return []
+    return items.slice(0, HINTS_MAX).map((c) => ({ label: c.label, hint: c.hint, apply: () => takeHint(c.value) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hintLine, cwd, foldersSeen])
+  /** A tapped suggestion goes in place of the word being typed, as Tab puts it. */
+  function takeHint(chosen: string) {
+    const el = inputRef.current
+    const line = el?.value ?? value
+    const word = WORD_RE.exec(line)![1]
+    const next = line.slice(0, line.length - word.length) + escapeArg(chosen) + (chosen.endsWith('/') ? '' : ' ')
+    setPicking(null)
+    setValue(next)
+    el?.focus({ preventScroll: true })
+    requestAnimationFrame(() => {
+      el?.setSelectionRange(next.length, next.length)
+      syncCaret()
+    })
+  }
+  const hints = running ? programHints : shellHints
+  const showHints = coarse && !onLogout && caret.focused && !readOnly && !animating && !session && hints.length > 0
+  // The row takes room from the screen: the prompt stays in view.
+  useLayoutEffect(() => {
+    if (!sessionRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [showHints])
+
   const showKeys = coarse && prefs.extraKeys && caret.focused && !readOnly && !animating && !onLogout
   useEffect(() => {
     if (!showKeys) mods.reset()
@@ -1378,7 +1501,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
         const el = e.currentTarget
         stuckRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 8
       }}
-      style={fontPx === null ? undefined : { fontSize: fontPx }}
+      style={fontPx === null ? undefined : ({ fontSize: fontPx, ...(coarse ? { '--t-k': Math.min(1, fontPx / 16) } : {}) } as CSSProperties)}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
         if ((e.target as Element).closest('.term-find')) return
@@ -1516,7 +1639,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
             enterKeyHint="send"
           />
           {!caret.range && (
-            <span className={`t-cursor ${caret.focused && !readOnly ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px)` }} aria-hidden>
+            <span className={`t-cursor ${caret.focused && !readOnly ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px * var(--t-k, 1))` }} aria-hidden>
               {value[caret.at] ?? ' '}
             </span>
           )}
@@ -1573,6 +1696,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
           {Math.round(zoom * 100)}%
         </div>
       )}
+      {showHints && <HintBar hints={hints} />}
       {showKeys && <ExtraKeys mods={mods} onKey={rowKey} />}
       {settingsOpen && (
         <TerminalSettings
