@@ -24,6 +24,7 @@ export function shortcuts(ctrlSpace: CtrlSpace = spotlightPrefs().ctrlSpace): Sh
   {
     area: 'Windows & dock',
     keys: [
+      ['Ctrl Q', 'close the focused window (best-effort; some browsers keep the key and quit)'],
       ['Double-click title', 'maximize / restore'],
       ['Drag title / Drag edge', 'move / resize'],
       ['Ctrl drag / Ctrl right-drag', 'move the window / resize it from the nearest corner (Alt or off in Settings)'],
@@ -67,6 +68,7 @@ export function shortcuts(ctrlSpace: CtrlSpace = spotlightPrefs().ctrlSpace): Sh
   {
     area: 'Terminal',
     keys: [
+      ['Ctrl F', 'search this tab’s scrollback (a program that has the keys still gets Ctrl+F)'],
       ['Tab', 'complete commands, paths and go links; again to cycle'],
       ['→ / ↵', 'put the picked completion on the line'],
       ['↑ ↓', 'history'],
@@ -84,6 +86,7 @@ export function shortcuts(ctrlSpace: CtrlSpace = spotlightPrefs().ctrlSpace): Sh
       ['Double-click the tab bar', 'new tab'],
     ],
   },
+  { area: 'Agents', keys: [['Ctrl F', 'search threads']] },
   {
     area: 'Files',
     keys: [

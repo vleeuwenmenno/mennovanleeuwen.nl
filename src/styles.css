@@ -2218,6 +2218,63 @@ body.is-resizing iframe {
   font-variant-ligatures: none;
   cursor: text;
 }
+.term-find {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  max-width: 100%;
+  margin: -4px 0 6px auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-size: 11px;
+  box-shadow: 0 5px 16px -10px rgba(0, 0, 0, 0.7);
+}
+.term-find input {
+  width: min(180px, 42vw);
+  min-width: 80px;
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+.term-find input:focus {
+  border-color: var(--accent);
+}
+.term-find-count {
+  min-width: 6ch;
+  text-align: right;
+  white-space: nowrap;
+}
+.term-find-count.is-none {
+  color: var(--red);
+}
+.term-find button {
+  width: 22px;
+  height: 22px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+}
+.term-find button:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+::highlight(terminal-find) {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+::highlight(terminal-find-current) {
+  background: color-mix(in srgb, var(--accent) 68%, transparent);
+  color: var(--fg-bright);
+}
 /* The alternate screen (nano): only the program's block shows; the prompt stays focusable but out of sight. */
 .terminal.is-alt > :not(.t-alt):not(.t-input) {
   display: none;

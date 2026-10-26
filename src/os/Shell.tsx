@@ -15,7 +15,7 @@ import { spotlightPrefs } from '../data/spotlightPrefs'
 import { Spotlight } from './Spotlight'
 import { useSnapPreview } from './snapPreview'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs'
-import { ContextMenuHost, openContextMenu, type MenuItem } from './ContextMenu'
+import { ContextMenuHost, closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
@@ -780,6 +780,29 @@ export function Shell() {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [power.phase, wm])
+
+  // Claim quit before the terminal sees it, without closing a window behind an open surface.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (power.phase !== 'up' || !e.isTrusted || e.repeat || (!e.ctrlKey && !e.metaKey) || e.altKey || e.shiftKey) return
+      if (e.code === 'KeyQ') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (document.querySelector('.ctx-menu')) closeContextMenu()
+        else if (overlay) setOverlay(null)
+        else if (!document.querySelector('[role="dialog"]:not(.window)') && wm.focusedPid !== null) wm.close(wm.focusedPid)
+      } else if (e.code === 'KeyF') {
+        const pid = wm.focusedPid
+        const app = wm.windows.find((w) => w.pid === pid)?.app
+        if (pid === null || (app !== 'files' && app !== 'pdf' && app !== 'agents' && app !== 'terminal')) return
+        e.preventDefault()
+        e.stopPropagation()
+        window.dispatchEvent(new CustomEvent('mvlos:find', { detail: { pid } }))
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [overlay, power.phase, wm])
 
   // By default Ctrl+Space toggles Spotlight and Ctrl+K / Cmd+K toggles All apps. Settings →
   // Spotlight can point Ctrl+Space at All apps, which gives Ctrl+K back to Spotlight. Both from
