@@ -185,10 +185,22 @@ const type = async (p: Opened, text: string) => {
   await p.send('Input.insertText', { text })
   await sleep(300)
 }
-const key = async (p: Opened, k: string, code: string, vk: number) => {
-  await p.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk })
-  await p.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk })
+const key = async (p: Opened, k: string, code: string, vk: number, modifiers: string[] = []) => {
+  // CDP's modifiers: Alt 1, Ctrl 2, Meta 4, Shift 8.
+  const bits = (['Alt', 'Control', 'Meta', 'Shift'] as const).reduce((n, name, i) => n + (modifiers.includes(name) ? 1 << i : 0), 0)
+  await p.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, modifiers: bits })
+  await p.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, modifiers: bits })
   await sleep(120)
+}
+/** Clicks a thread's row with Ctrl, Shift or plain (a plain click opens it). */
+const clickRow = async (p: Opened, title: string, mods: Record<string, boolean> = {}) => {
+  const init = Object.entries(mods)
+    .filter(([, on]) => on)
+    .map(([k]) => `${k}: true`)
+    .join(', ')
+  const there = await p.eval<boolean>(`(() => { const b = [...document.querySelectorAll('.agt-list .agt-row .agt-item')].find((e) => e.textContent.includes(${JSON.stringify(title)})); if (!b) return false; b.scrollIntoView({ block: 'nearest' }); b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true${init ? `, ${init}` : ''} })); return true })()`)
+  if (!there) throw new Error(`No row: ${title}`)
+  await sleep(220)
 }
 const focusedIn = (p: Opened) => p.eval<string>(`(() => { const a = document.activeElement; return a ? (a.getAttribute('aria-label') || a.className || a.tagName) + '|' + (a.textContent || '').slice(0, 40) : '' })()`)
 
@@ -274,12 +286,13 @@ try {
         const long = await p.eval<number>(`(() => { const t = [...document.querySelectorAll('.agt-dx-title')].find((e) => e.textContent.startsWith('How do I migrate')); const lh = parseFloat(getComputedStyle(t).lineHeight); return Math.round(t.getBoundingClientRect().height / lh) })()`)
         check(`${tag}: a long title wraps to two lines`, long === 2, long)
         check(`${tag}: the badges say Running, New and Failed`, await p.eval(`['Running', 'New', 'Failed'].every((w) => [...document.querySelectorAll('.agt-dx-badge')].some((b) => b.textContent === w))`))
-        check(`${tag}: a prominent New thread button`, (await rect(p, '.agt-dx-new'))!.h >= 34)
+        check(`${tag}: one small New thread button, on the Threads header`, !(await rect(p, '.agt-dx-new')) && !!(await rect(p, '.agt-group-row .agt-mini[aria-label="New thread"]')))
       }
       if (style === 'focus') {
         check(`${tag}: chips All, Running, Unread, Stopped and one per project`, await p.eval(`(() => { const c = [...document.querySelectorAll('.agt-fx-chip')].map((e) => e.firstChild.textContent); return ['All', 'Running', 'Unread', 'Stopped', 'Home lab', 'Thesis', 'Trip to Japan'].every((w) => c.includes(w)) })()`))
         check(`${tag}: Running now is on top`, await p.eval(`(() => { const s = document.querySelector('.agt-fx-live'); return !!s && s.querySelectorAll('.agt-row').length === 3 && s === document.querySelector('.agt-list').firstElementChild })()`))
         check(`${tag}: the foot has icon buttons with tooltips`, await p.eval(`[...document.querySelectorAll('.agt-fx-foot button')].length === 4 && [...document.querySelectorAll('.agt-fx-foot button')].every((b) => b.title && !b.textContent.trim())`))
+        check(`${tag}: one small New thread button, on the Threads header`, !(await rect(p, '.agt-fx-new')) && !!(await rect(p, '.agt-group-row .agt-mini[aria-label="New thread"]')))
         await shot(p, `${kind}-${style}-all`)
         await tapSel(p, '.agt-fx-chip', phone, 'Running')
         check(`${tag}: the Running chip lists the 3 that run`, (await count(p, '.agt-list .agt-row')) === 3 && !(await count(p, '.agt-fx-live')), await count(p, '.agt-list .agt-row'))
@@ -353,11 +366,126 @@ try {
 
       // The rail (desktop only: a narrow window has nothing to fold).
       if (!phone) {
-        await tapSel(p, '.agt-side-head .agt-icon[aria-label="Hide the sidebar"], .agt-dx-top .agt-icon[aria-label="Hide the sidebar"]', false)
+        await tapSel(p, '.agt-side-head .agt-icon[aria-label="Hide the sidebar"]', false)
         check(`${tag}: hiding the sidebar leaves the rail`, !!(await rect(p, '.agt-rail')) && !(await rect(p, '.agt-side')))
+        check(`${tag}: the rail lists the threads as chips`, (await count(p, '.agt-rail .agt-rail-chip')) === LIVE, await count(p, '.agt-rail .agt-rail-chip'))
+        check(`${tag}: the rail marks the 3 that run and the open thread`, (await count(p, '.agt-rail .agt-rail-dot.is-running')) === 3 && !!(await rect(p, '.agt-rail-chip.is-active')))
         await shot(p, `${kind}-${style}-rail`)
-        await tapSel(p, '.agt-rail .agt-icon[aria-label="Show the sidebar"]', false)
-        check(`${tag}: and the sidebar comes back in the same style`, !!(await rect(p, `.agt-side.is-side-${style}`)))
+        await tapSel(p, '.agt-rail .agt-icon[aria-label="Search threads"]', false)
+        check(`${tag}: search from the rail unfolds it with the cursor in the search`, !!(await rect(p, `.agt-side.is-side-${style}`)) && /Search threads/.test(await focusedIn(p)), await focusedIn(p))
+      }
+
+      // Selecting several threads: Ctrl+click, Shift+click, the bar that acts on them (desktop).
+      if (!phone) {
+        await clickRow(p, 'Regex for Dutch postcodes', { ctrlKey: true })
+        await clickRow(p, 'Spanish subjunctive', { ctrlKey: true })
+        check(`${tag}: Ctrl+click ticks two threads and the bar counts them`, (await count(p, '.agt-list .agt-row.is-selected')) === 2 && (await p.eval(`document.querySelector('.agt-bulk-count')?.textContent ?? ''`)).includes('2 selected'), await p.eval(`document.querySelector('.agt-bulk-count')?.textContent`))
+        check(`${tag}: every row shows a tick box while a selection goes on`, (await count(p, '.agt-list .agt-row.is-selecting')) === (await count(p, '.agt-list .agt-row')) && (await count(p, '.agt-list .agt-row.is-selecting .agt-check')) === (await count(p, '.agt-list .agt-row')))
+        await clickRow(p, 'Sourdough starter', { shiftKey: true })
+        check(`${tag}: Shift+click adds the range from the last row`, (await count(p, '.agt-list .agt-row.is-selected')) >= 3, await count(p, '.agt-list .agt-row.is-selected'))
+        // A right-click on one of them talks about all of them.
+        const picked = (await p.eval<{ x: number; y: number } | null>(`(() => { const r = document.querySelector('.agt-list .agt-row.is-selected'); if (!r) return null; const b = r.querySelector('.agt-item').getBoundingClientRect(); return { x: b.x + 40, y: b.y + b.height / 2 } })()`))!
+        await rightClick(p, picked.x, picked.y)
+        const pickedItems = await p.eval<string[]>(`[...document.querySelectorAll('.ctx-menu .ctx-item')].map((e) => e.textContent)`)
+        check(`${tag}: the menu of a selected row acts on the whole selection`, ['Archive', 'Move to project', 'Delete'].every((w) => pickedItems.some((i) => i.includes(w))) && !pickedItems.some((i) => i.startsWith('Open')), pickedItems)
+        await key(p, 'Escape', 'Escape', 27)
+        await p.eval(`document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); document.body.click()`)
+        await sleep(200)
+        await shot(p, `${kind}-${style}-selected`)
+        await key(p, 'Escape', 'Escape', 27)
+        check(`${tag}: Escape clears the selection`, !(await count(p, '.agt-bulk')) && !(await count(p, '.agt-list .agt-row.is-selected')))
+        if (style === 'classic') {
+          // Ctrl+A takes every row, and a drag over the list (the rubber band) ticks what it touches.
+          await clickRow(p, 'Regex for Dutch postcodes', { ctrlKey: true })
+          await p.eval(`document.querySelector('.agt-list .agt-row .agt-item').focus()`)
+          await key(p, 'a', 'KeyA', 65, ['Control'])
+          check(`${tag}: Ctrl+A selects every row in the list`, (await count(p, '.agt-list .agt-row.is-selected')) === LIVE, await count(p, '.agt-list .agt-row.is-selected'))
+          await key(p, 'Escape', 'Escape', 27)
+          // A drag over the list (the rubber band) ticks what it touches; the events go to the list itself.
+          // The band lives in the list's coordinates, so it scrolls with the rows.
+          const band = await p.eval<{ w: number; h: number; shown: string }>(`(() => {
+            const l = document.querySelector('.agt-list')
+            const r = l.getBoundingClientRect()
+            const at = (x, y) => ({ clientX: x, clientY: y, bubbles: true, cancelable: true, button: 0, buttons: 1 })
+            const x = r.left + r.width - 60
+            l.dispatchEvent(new MouseEvent('mousedown', at(x, r.top + 50)))
+            for (let i = 1; i <= 8; i++) window.dispatchEvent(new MouseEvent('mousemove', at(x - i * 8, r.top + 50 + i * 18)))
+            const b = document.querySelector('.agt-band').getBoundingClientRect()
+            return { w: Math.round(b.width), h: Math.round(b.height), shown: document.querySelector('.agt-band').style.display }
+          })()`)
+          check(`${tag}: dragging over the list shows a rubber band and ticks the rows`, band.shown === 'block' && band.w > 20 && band.h > 20 && (await count(p, '.agt-list .agt-row.is-selected')) > 0, band)
+          await p.eval(`window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 0, clientY: 0 }))`)
+          await sleep(200)
+          check(`${tag}: the band is gone when the drag ends`, (await p.eval(`document.querySelector('.agt-band').style.display`)) !== 'block')
+          await key(p, 'Escape', 'Escape', 27)
+        }
+        // A bulk action, round trip: archive two, unarchive them again from the archived view.
+        await clickRow(p, 'Regex for Dutch postcodes', { ctrlKey: true })
+        await clickRow(p, 'Spanish subjunctive', { ctrlKey: true })
+        await tapSel(p, '.agt-bulk-actions button', false, 'Archive')
+        await sleep(1200)
+        check(`${tag}: Archive takes the selected threads out of the list`, (await count(p, '.agt-list .agt-row')) === want - 2 && !(await count(p, '.agt-bulk')), await count(p, '.agt-list .agt-row'))
+        if (style === 'focus') await tapSel(p, '.agt-fx-foot button[title="Archived threads"]', false)
+        else await tapSel(p, '.agt-side-foot button', false, 'Archived')
+        await sleep(900)
+        check(`${tag}: the archived view holds them`, (await count(p, '.agt-list .agt-row')) === 5, await count(p, '.agt-list .agt-row'))
+        // Only those two go back: the 3 that were archived already stay archived.
+        await clickRow(p, 'Regex for Dutch postcodes', { ctrlKey: true })
+        await clickRow(p, 'Spanish subjunctive', { ctrlKey: true })
+        await tapSel(p, '.agt-bulk-actions button', false, 'Unarchive')
+        await sleep(1200)
+        await tapSel(p, '.agt-side-title .agt-icon', false)
+        await sleep(900)
+        check(`${tag}: Unarchive brings them back to the threads`, (await count(p, '.agt-list .agt-row')) === want && (await count(p, '.agt-bulk')) === 0, await count(p, '.agt-list .agt-row'))
+        // Delete asks about the whole selection first, and Cancel leaves it alone.
+        await clickRow(p, 'Regex for Dutch postcodes', { ctrlKey: true })
+        await clickRow(p, 'Spanish subjunctive', { ctrlKey: true })
+        await p.eval(`[...document.querySelectorAll('.agt-bulk-actions button')].find((b) => b.textContent.includes('Delete')).click()`)
+        await sleep(700)
+        const dialog = await p.eval<string>(`document.querySelector('.dlg')?.textContent?.slice(0, 120) ?? ''`)
+        check(`${tag}: Delete asks about both before anything goes`, dialog.includes('2 threads'), dialog)
+        await p.eval(`(() => { const d = document.querySelector('.dlg'); const b = d && [...d.querySelectorAll('button')].find((x) => /Cancel/i.test(x.textContent)); if (b) b.click(); return !!b })()`)
+        await sleep(600)
+        check(`${tag}: Cancel keeps the threads and the selection`, (await count(p, '.agt-list .agt-row')) === want && (await count(p, '.agt-list .agt-row.is-selected')) === 2)
+        await key(p, 'Escape', 'Escape', 27)
+      } else {
+        // A long press on a row starts touch selection; a tap then ticks another one.
+        const spot = await p.eval<{ x: number; y: number; title: string } | null>(`(() => {
+          const l = document.querySelector('.agt-list')
+          const rows = [...l.querySelectorAll('.agt-row[data-thread]')]
+          for (const row of rows) {
+            // Not one that runs: Focus lists those twice, and the tick then counts twice.
+            if (row.querySelector('.agt-dot-mode.is-running') || row.closest('[data-dup]')) continue
+            row.scrollIntoView({ block: 'nearest' })
+            const r = row.getBoundingClientRect()
+            const x = r.x + Math.min(40, r.width / 3)
+            const y = r.y + r.height / 2
+            const hit = document.elementFromPoint(x, y)
+            if (hit && hit.closest('.agt-row') === row) return { x, y, title: row.querySelector('.agt-item').textContent.slice(0, 40) }
+          }
+          return null
+        })()`)
+        if (!spot) throw new Error('No row to long-press')
+        await p.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: spot.x, y: spot.y }] })
+        await sleep(700)
+        await p.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+        await sleep(400)
+        const ticked = () => p.eval<number>(`new Set([...document.querySelectorAll('.agt-list .agt-row.is-selecting .agt-check.is-on')].map((e) => e.closest('.agt-row').dataset.thread)).size`)
+        check('phone: a long press starts selecting and ticks that row', (await ticked()) === 1 && !!(await rect(p, '.agt-bulk')), { spot, ticks: await ticked() })
+        const other = await p.eval<{ x: number; y: number } | null>(`(() => {
+          const row = [...document.querySelectorAll('.agt-list .agt-row:not(.is-selected)')][1]
+          if (!row) return null
+          row.scrollIntoView({ block: 'nearest' })
+          const r = row.getBoundingClientRect()
+          return { x: r.x + Math.min(40, r.width / 3), y: r.y + r.height / 2 }
+        })()`)
+        await tap(p, other!.x, other!.y, true)
+        await sleep(300)
+        check('phone: a tap ticks another row instead of opening it', (await ticked()) === 2 && !(await p.eval(`document.querySelector('.agt.is-chat') !== null`)), await ticked())
+        await shot(p, `${kind}-${style}-selected`)
+        await tapSel(p, '.agt-bulk-head .agt-icon', true)
+        await sleep(300)
+        check("phone: the bar's × clears the selection", !(await count(p, '.agt-bulk')))
       }
       // The window is back on the thread list.
       await tapSel(p, '.agt-list .agt-row .agt-item', phone, 'Sourdough')

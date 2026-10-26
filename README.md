@@ -1883,7 +1883,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail or is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail: New thread, Search (which unfolds the sidebar with the cursor in the search), the threads as chips with their first letter, a tooltip and a mark for running, new and stopped (running and pinned first; or grouped per project), then Archived, Memory, Image Studio and Settings. It is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Sidebar style.** The thread list comes in four looks, picked in Settings → Agents → General →
 Sidebar or from *Sidebar style* in the sidebar's right-click menu (a synced setting, `sidebarStyle`,
@@ -1892,17 +1892,32 @@ projects, drag and drop, menus, archived view, rail, the one-pane phone layout, 
 the list from the search). *Classic* is the original list. *Compact* is one dense line per thread
 with thin sticky group headers (a count each), a faint short time, and a New button beside the
 search. *Detailed* has two lines per thread: the title, wrapping to two lines, then its project or
-model and how long ago, with a bar and a badge on the left for Running, New and Failed. *Focus* has a
-New thread button, filter chips (All, Running, Unread, Stopped when something stopped, and one per
+model and how long ago, with a bar and a badge on the left for Running, New and Failed. *Focus* has
+filter chips (All, Running, Unread, Stopped when something stopped, and one per
 project when there are at most four), a Running now section on top, sticky headers and a foot of icon
-buttons. Compact, Detailed and Focus mark running threads, new answers and threads that stopped on an
+buttons. Detailed and Focus start a thread from the + on the Threads header, so the list keeps the
+room. Compact, Detailed and Focus mark running threads, new answers and threads that stopped on an
 error; "new" is this browser's own memory of when it last showed each thread
 ([`src/apps/agentsSidebar/unread.ts`](src/apps/agentsSidebar/unread.ts)), not synced. Each style is
 a component and a CSS file of its own in [`src/apps/agentsSidebar/`](src/apps/agentsSidebar/), built
 from shared parts (`shared.tsx`) and one model (`model.ts`); the choice lives in `SIDEBAR_STYLES`
 (`src/data/agents.ts`), so a style that is not kept goes by deleting its two files, its line in
-`index.tsx` and its entry there. `pnpm check:agents-sidebar` drives all four on a desktop and on an
-emulated phone.
+`index.tsx` and its entry there. The rail and the selecting are the same in every style
+(`Rail.tsx`, `select.tsx`, `selection.ts`). `pnpm check:agents-sidebar` drives all four, the rail and
+the selection on a desktop and on an emulated phone.
+
+**Selecting threads.** Ctrl/Cmd+click ticks a thread, Shift+click takes the range from the last one,
+Shift+Up/Down walks it, and dragging over the list draws a rubber band that ticks what it touches
+(hold Ctrl/Cmd or Shift to add to what is selected). Ctrl+A selects every thread the list shows and
+Esc clears the selection; the tick boxes appear once one is selected. Below the list a bar counts
+them and offers Archive (or Unarchive in the archived view), Move to a project and Delete, which asks
+first; Move offers the projects and No project. Each thread goes through the same call a single one
+does, a few at a time, and a failure is named in a notification rather than dropped
+([`src/apps/agentsSidebar/bulk.ts`](src/apps/agentsSidebar/bulk.ts); the server has no bulk endpoint).
+On a touch screen a long press on a row starts selecting, a tap then ticks another one, and a plain
+click leaves the selection without opening the thread. Switching style keeps the selection, so the
+bar and its actions are in one place (`ctx.selection` and `ctx.bulk` in
+[`src/apps/agentsSidebar/ctx.ts`](src/apps/agentsSidebar/ctx.ts)).
 
 **Past threads** lets the agent look back when you refer to an earlier conversation and the
 answer is not already in this thread or memory. The `threads` tool group is on by default,

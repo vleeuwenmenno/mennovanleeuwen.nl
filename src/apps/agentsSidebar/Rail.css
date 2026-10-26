@@ -1,0 +1,130 @@
+/* The folded sidebar (Rail.tsx), the same for every style. The rail's frame (46 px wide, the column
+   of icons) is .agt-rail in home.css; this adds the thread chips between the top buttons and the foot. */
+
+.agt-rail {
+  /* The chips scroll, so the rail itself must not grow past the window. */
+  min-height: 0;
+  overflow: hidden;
+}
+.agt-rail-list {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 6px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Wheel and touch scroll it; a scrollbar would take a third of the rail. */
+  scrollbar-width: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.agt-rail-list::-webkit-scrollbar {
+  display: none;
+}
+.agt-rail-sep {
+  flex: none;
+  width: 16px;
+  height: 1px;
+  margin: 2px 0;
+  background: var(--line-strong);
+}
+.agt-rail-empty {
+  color: var(--muted);
+}
+
+.agt-rail-chip {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+.agt-rail-chip:hover {
+  background: color-mix(in srgb, var(--fg) 16%, transparent);
+  color: var(--fg-bright);
+}
+.agt-rail-chip.is-active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+/* Deep research has a magenta edge, as its dot does in the lists. */
+.agt-rail-chip.is-deep {
+  box-shadow: inset 0 -2px 0 var(--magenta);
+}
+.agt-rail-chip.is-unread {
+  color: var(--fg-bright);
+}
+/* The dot in the corner: running pulses in the accent, a new answer is green, a stopped thread red. */
+.agt-rail-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--panel-2);
+}
+.agt-rail-dot.is-running {
+  background: var(--accent);
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agt-rail-chip.is-active .agt-rail-dot.is-running {
+  background: var(--on-accent);
+}
+.agt-rail-dot.is-unread {
+  background: var(--green);
+}
+.agt-rail-dot.is-attention {
+  background: var(--red);
+}
+
+/* Projects on: each project's threads under its initial. */
+.agt-rail-group {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 6px;
+}
+.agt-rail-group + .agt-rail-group {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.agt-rail-project {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agt-rail-dot.is-running {
+    animation: none;
+  }
+}
+@media (pointer: coarse) {
+  /* A rail with a finger: the same size as the icon buttons, a little more room around them. */
+  .agt-rail-chip {
+    width: 36px;
+    height: 36px;
+  }
+  .agt-rail-list {
+    gap: 6px;
+  }
+}

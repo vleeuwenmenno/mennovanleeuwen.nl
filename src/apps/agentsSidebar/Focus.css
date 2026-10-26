@@ -2,22 +2,6 @@
    foot of icon buttons. Everything is under .is-side-focus; the classic rules in home.css are what it
    adjusts. */
 
-.agt-side.is-side-focus .agt-fx-new {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 0 10px 8px;
-  height: 32px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-.agt-side.is-side-focus .agt-fx-new:hover {
-  filter: brightness(1.12);
-}
-
 /* The chips: they wrap onto a second line when there are more than fit. */
 .agt-fx-chips {
   flex: none;
@@ -216,8 +200,14 @@
   .agt-fx-chip {
     padding: 5px 12px;
   }
-  .agt-side.is-side-focus .agt-fx-new {
-    height: 40px;
+  /* The + of the Threads header is a small mark: a finger gets a bigger target around it. */
+  .agt-side.is-side-focus .agt-group .agt-mini {
+    position: relative;
+  }
+  .agt-side.is-side-focus .agt-group .agt-mini::after {
+    content: '';
+    position: absolute;
+    inset: -10px -6px;
   }
   .agt-side.is-side-focus .agt-fx-foot button {
     height: 42px;

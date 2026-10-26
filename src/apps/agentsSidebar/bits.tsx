@@ -102,6 +102,9 @@ export const ICONS: Record<string, ReactNode> = {
   pin: <path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7" />,
   edit: <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />,
   close: <path d="M6 6l12 12M18 6L6 18" />,
+  check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  trash: <path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
+  chat: <path d="M4 5h16v11H9l-5 4z" />,
   more: (
     <>
       <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />

@@ -12,7 +12,10 @@ import { ArchivedTitle } from './shared'
 // (src/data/agents.ts). Classic's CSS is in src/home.css, and the others build on it.
 
 export { sideKeys } from './shared'
-export type { SideCtx } from './ctx'
+export { Rail } from './Rail'
+export { useThreadSelection } from './selection'
+export { reportBulk, runBulk } from './bulk'
+export type { Bulk, SideCtx } from './ctx'
 
 export function AgentsSidebar({ style, ctx }: { style: SidebarStyle; ctx: SideCtx }) {
   return (

@@ -1,30 +1,9 @@
-/* Agents sidebar style "Detailed" (Detailed.tsx): two-line rows with a status bar and badge, a big
-   New thread button on top. Everything is under .is-side-detailed; the classic rules in home.css are
+/* Agents sidebar style "Detailed" (Detailed.tsx): two-line rows with a status bar and badge, and a
+   count on each header. Everything is under .is-side-detailed; the classic rules in home.css are
    what it adjusts. */
 
-.agt-side.is-side-detailed .agt-dx-top {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 6px 0 10px;
-}
-.agt-dx-new {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 36px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-.agt-dx-new:hover {
-  filter: brightness(1.12);
-}
 .agt-side.is-side-detailed .agt-dx-search {
-  padding-top: 8px;
+  padding-top: 10px;
 }
 .agt-side.is-side-detailed .agt-list {
   padding: 2px 6px 8px;
@@ -199,5 +178,14 @@
   }
   .agt-side.is-side-detailed .agt-dx-meta {
     padding-right: 24px;
+  }
+  /* The + of the Threads header is a small mark: a finger gets a bigger target around it. */
+  .agt-side.is-side-detailed .agt-group .agt-mini {
+    position: relative;
+  }
+  .agt-side.is-side-detailed .agt-group .agt-mini::after {
+    content: '';
+    position: absolute;
+    inset: -10px -6px;
   }
 }

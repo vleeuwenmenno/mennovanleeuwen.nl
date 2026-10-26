@@ -1,9 +1,10 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { alsoKnownAs, type Project, type Thread } from '../../data/agents'
 import { openContextMenu, openMenuAt } from '../../os/ContextMenu'
 import { Icon, InlineName, RenameBox } from './bits'
 import type { SideCtx } from './ctx'
 import type { SidebarModel } from './model'
+import { BulkBar, SelectCheck, useBandSelect, useRowSelect } from './select'
 
 // The parts every sidebar style is made of. They draw what the classic sidebar always drew; a
 // style changes them with its own class names, CSS, and the few render props below, and builds
@@ -60,21 +61,66 @@ export function StudioLink({ ctx }: { ctx: SideCtx }) {
   )
 }
 
-/** The scrolling list. Arrow keys walk through its rows (see `sideKeys`). */
-export function List({ children }: { children: ReactNode }) {
-  return <div className="agt-list">{children}</div>
+/**
+ * The scrolling list, with the rubber band over it and the bulk bar under it. Arrow keys walk
+ * through its rows (see `sideKeys`). The selection only ever holds what the list shows: a search, a
+ * folded project or a deleted thread takes its rows out of it.
+ */
+export function List({ ctx, children }: { ctx: SideCtx; children: ReactNode }) {
+  const sel = ctx.selection
+  const { onMouseDown, band } = useBandSelect(ctx)
+  useEffect(() => {
+    const list = sel.listRef.current
+    if (!sel.size || !list || !list.getClientRects().length) return
+    sel.keepOnly(new Set(sel.order()))
+  })
+  return (
+    <>
+      <div ref={sel.listRef} className={`agt-list ${sel.active ? 'is-selecting' : ''}`} onMouseDown={onMouseDown}>
+        {children}
+        <div ref={band} className="agt-band" aria-hidden />
+      </div>
+      <BulkBar ctx={ctx} />
+    </>
+  )
 }
 
 /**
  * Up and Down move between the search, the project headers and the thread rows, in the order they
- * are on screen; Up from the first row goes back to the search. Put on the sidebar itself.
+ * are on screen; Up from the first row goes back to the search. In the list, Shift+Up and Down
+ * extend the selection from the row it started on, Ctrl+A selects every row and Esc ends the
+ * selection. Put on the sidebar itself.
  */
-export function sideKeys(e: React.KeyboardEvent<HTMLElement>) {
-  if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+export function sideKeys(e: React.KeyboardEvent<HTMLElement>, ctx: SideCtx) {
   const target = e.target as HTMLElement
+  const sel = ctx.selection
   const search = e.currentTarget.querySelector<HTMLInputElement>('input[aria-label="Search threads"]')
-  // Other text fields (renaming) keep their arrow keys.
-  if (target instanceof HTMLInputElement && target !== search) return
+  // Other text fields (renaming) keep their keys.
+  const typing = (target instanceof HTMLInputElement && target !== search) || target instanceof HTMLTextAreaElement
+  if (e.key === 'Escape' && sel.active && !typing) {
+    e.preventDefault()
+    e.stopPropagation()
+    return sel.clear()
+  }
+  if (typing || e.altKey) return
+  if (e.key.toLowerCase() === 'a' && (e.ctrlKey || e.metaKey) && !e.shiftKey && target !== search && target.closest('.agt-list')) {
+    e.preventDefault()
+    return sel.selectAll()
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>('.agt-list .agt-row > .agt-item')].filter((el) => el.offsetParent !== null)
+    const here = rows.indexOf(target)
+    if (here < 0) return
+    e.preventDefault()
+    const next = rows[here + (e.key === 'ArrowDown' ? 1 : -1)]
+    if (!next) return
+    const idOf = (el: HTMLElement) => el.closest<HTMLElement>('.agt-row')!.dataset.thread!
+    sel.range(idOf(next), false, sel.anchor ?? idOf(target))
+    next.focus()
+    return next.scrollIntoView({ block: 'nearest' })
+  }
+  if (e.ctrlKey || e.metaKey || e.shiftKey) return
   const stops = [...e.currentTarget.querySelectorAll<HTMLElement>('.agt-list .agt-item, .agt-list .agt-project-toggle')].filter((el) => el.offsetParent !== null)
   const here = stops.indexOf(target)
   if (target !== search && here < 0) return
@@ -91,8 +137,13 @@ export function sideKeys(e: React.KeyboardEvent<HTMLElement>) {
  */
 export function ThreadRow({ ctx, t, itemClass = '', rowClass = '', children }: { ctx: SideCtx; t: Thread; itemClass?: string; rowClass?: string; children: ReactNode }) {
   const active = t.id === ctx.selected && ctx.mainKind === 'thread'
+  const rs = useRowSelect(ctx, t)
+  const selecting = ctx.selection.active
+  const drag = ctx.archived ? {} : (ctx.dragging({ kind: 'thread', id: t.id }) as { onDragStart?: (e: React.DragEvent) => void })
+  const classes = ['agt-row', rowClass, selecting && 'is-selecting', ctx.selection.has(t.id) && 'is-selected']
   return (
-    <li className={rowClass ? `agt-row ${rowClass}` : 'agt-row'}>
+    <li className={classes.filter(Boolean).join(' ')} data-thread={t.id}>
+      {selecting && ctx.renaming !== t.id && <SelectCheck ctx={ctx} t={t} />}
       {ctx.renaming === t.id ? (
         <div className={`agt-item is-active ${itemClass}`}>
           <RenameBox thread={t} onSave={(title) => ctx.rename(t, title)} onCancel={() => ctx.setRenaming(null)} />
@@ -100,10 +151,21 @@ export function ThreadRow({ ctx, t, itemClass = '', rowClass = '', children }: {
       ) : (
         <button
           className={`agt-item ${active ? 'is-active' : ''} ${itemClass}`}
-          onClick={() => ctx.open(t.id)}
-          onContextMenu={(e) => openContextMenu(e, ctx.menu(t))}
           title={[t.title, alsoKnownAs(t), `${t.mode === 'deep' ? 'Deep research' : 'Quick'} · ${t.model}`].filter(Boolean).join('\n')}
-          {...(ctx.archived ? {} : ctx.dragging({ kind: 'thread', id: t.id }))}
+          {...drag}
+          onDragStart={drag.onDragStart && ((e) => rs.onDragStart(e, drag.onDragStart!))}
+          onPointerDown={rs.onPointerDown}
+          onPointerMove={rs.onPointerMove}
+          onPointerUp={rs.onPointerUp}
+          onPointerCancel={rs.onPointerCancel}
+          onPointerLeave={rs.onPointerLeave}
+          onClick={rs.onClick}
+          onKeyDown={rs.onKeyDown}
+          onKeyUp={rs.onKeyUp}
+          onContextMenu={(e) => {
+            if (rs.onContextMenu(e)) return
+            openContextMenu(e, ctx.selection.size > 1 && ctx.selection.has(t.id) ? ctx.bulk.menu() : ctx.menu(t))
+          }}
         >
           {children}
         </button>
@@ -115,6 +177,13 @@ export function ThreadRow({ ctx, t, itemClass = '', rowClass = '', children }: {
       )}
     </li>
   )
+}
+
+/** A thread dropped on a project (or out of them): all the selected ones go with it when it is one of them. */
+function dropThread(ctx: SideCtx, id: string, projectId: number | null) {
+  if (ctx.selection.has(id) && ctx.selection.size > 1) return ctx.bulk.move(projectId)
+  const t = ctx.threads.find((x) => x.id === id)
+  if (t) ctx.move(t, projectId)
 }
 
 /** The small header of a group of the list: its name, how many it holds (styles that show it), and a + for a new one. */
@@ -167,7 +236,7 @@ export function ProjectsSection({ ctx, model, row, showCount, badge }: { ctx: Si
               {...ctx.dropZone(
                 `p${p.id}`,
                 (d) => (d.kind === 'project' ? d.id !== p.id : ctx.threads.find((t) => t.id === d.id)?.projectId !== p.id),
-                (d) => (d.kind === 'project' ? ctx.reorder(d.id, p.id) : ctx.move(ctx.threads.find((t) => t.id === d.id)!, p.id)),
+                (d) => (d.kind === 'project' ? ctx.reorder(d.id, p.id) : dropThread(ctx, d.id, p.id)),
               )}
             >
               {ctx.renamingProject === p.id ? (
@@ -222,7 +291,7 @@ export function ThreadsSection({ ctx, model, row, header, day, empty }: { ctx: S
       {...ctx.dropZone(
         'loose',
         (d) => d.kind === 'thread' && ctx.inProject(threads.find((t) => t.id === d.id)!),
-        (d) => ctx.move(threads.find((t) => t.id === d.id)!, null),
+        (d) => d.kind === 'thread' && dropThread(ctx, d.id, null),
       )}
     >
       {header === undefined ? <GroupHeader title={archived ? 'Archived' : 'Threads'} onAdd={archived ? undefined : ctx.newThread} addLabel="New thread" /> : header}

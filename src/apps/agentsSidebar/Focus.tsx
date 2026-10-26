@@ -8,7 +8,9 @@ import { GroupHeader, HideButton, List, ProjectsSection, SearchBox, ThreadRow, T
 
 // Focus: made to see what needs you. Chips filter the list (All, Running, Unread, Needs a look when
 // something does, and one per project when there are few), a Running now section sits on top while
-// anything runs, headers stick, and the foot is icon buttons with tooltips. Its CSS is Focus.css.
+// anything runs, headers stick (the Threads header's + starts a thread), and the foot is icon
+// buttons with tooltips. The Running now rows are marked `data-dup`: those threads are listed
+// again where they belong, and a selection range counts them once. Its CSS is Focus.css.
 
 type Filter = 'all' | 'running' | 'unread' | 'attention' | number
 /** Up to this many projects get a chip each; with more, the project blocks of All do the job. */
@@ -80,23 +82,17 @@ export function FocusSidebar({ ctx }: { ctx: SideCtx }) {
         <HideButton ctx={ctx} />
       </div>
       {!archived && (
-        <>
-          <button className="agt-fx-new" onClick={ctx.newThread}>
-            <Icon name="plus" size={15} />
-            <span>New thread</span>
-          </button>
-          <div className="agt-fx-chips" role="group" aria-label="Show threads">
-            {chip('all', 'All')}
-            {chip('running', 'Running', all.running.length, 'is-live')}
-            {chip('unread', 'Unread', all.unread.length)}
-            {attention > 0 && chip('attention', 'Stopped', attention, 'is-warn')}
-            {chipProjects.map((p) => chip(p.id, p.name, shown.filter((t) => t.projectId === p.id).length))}
-          </div>
-        </>
+        <div className="agt-fx-chips" role="group" aria-label="Show threads">
+          {chip('all', 'All')}
+          {chip('running', 'Running', all.running.length, 'is-live')}
+          {chip('unread', 'Unread', all.unread.length)}
+          {attention > 0 && chip('attention', 'Stopped', attention, 'is-warn')}
+          {chipProjects.map((p) => chip(p.id, p.name, shown.filter((t) => t.projectId === p.id).length))}
+        </div>
       )}
-      <List>
+      <List ctx={ctx}>
         {!filtered && !archived && all.running.length > 0 && (
-          <section className="agt-fx-live">
+          <section className="agt-fx-live" data-dup>
             <GroupHeader title="Running now" count={all.running.length} className="agt-fx-head is-live" />
             <ul>{all.running.map(row)}</ul>
           </section>

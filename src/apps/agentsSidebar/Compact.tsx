@@ -41,7 +41,7 @@ export function CompactSidebar({ ctx }: { ctx: SideCtx }) {
         )}
         <HideButton ctx={ctx} />
       </div>
-      <List>
+      <List ctx={ctx}>
         <StudioLink ctx={ctx} />
         <ProjectsSection ctx={ctx} model={model} row={row} showCount />
         <ThreadsSection

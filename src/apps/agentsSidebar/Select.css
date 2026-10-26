@@ -1,0 +1,157 @@
+/* Selecting threads (select.tsx), the same in every sidebar style: a tick box in front of the rows
+   while a selection goes on, the selected rows, the rubber band over the list and the bar with the
+   actions. Nothing here shows until a selection starts, so a style looks as it always did. */
+
+.agt-list {
+  position: relative;
+}
+.agt-list.is-banding {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.agt-list.is-banding .agt-item {
+  cursor: default;
+}
+
+/* The rubber band: it lives in the list's own coordinates, so it scrolls with the rows. */
+.agt-band {
+  display: none;
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent);
+}
+
+/* A row with a tick box in front of it: the room is taken from the row, so its own layout stays. */
+.agt-row.is-selecting {
+  padding-left: 24px;
+}
+.agt-row .agt-check {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--on-accent);
+}
+.agt-row .agt-check:hover {
+  border-color: var(--accent);
+}
+.agt-row .agt-check.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.agt-side .agt-row.is-selected > .agt-item {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--fg-bright);
+}
+
+/* The actions, between the list and the foot. */
+.agt-bulk {
+  flex: none;
+  container: agtbulk / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
+  /* Opaque (the sidebar's own tint is see-through), or the rows show through. */
+  background: linear-gradient(color-mix(in srgb, var(--accent) 7%, var(--panel-2)), color-mix(in srgb, var(--accent) 7%, var(--panel-2))) var(--bg);
+}
+.agt-bulk-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.agt-bulk-count {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--fg-bright);
+}
+.agt-bulk-all {
+  flex: none;
+  padding: 3px 6px;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.agt-bulk-all:hover {
+  text-decoration: underline;
+}
+.agt-bulk-actions {
+  display: flex;
+  gap: 4px;
+}
+.agt-bulk-actions button {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 4px;
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+  color: var(--fg-bright);
+}
+.agt-bulk-actions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.agt-bulk-actions button:disabled {
+  opacity: 0.45;
+}
+.agt-bulk-actions button.is-danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.agt-bulk-actions button.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+/* A narrow sidebar keeps the icons and puts the words in their tooltips. */
+@container agtbulk (max-width: 215px) {
+  .agt-bulk-actions button span {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  /* A finger long-presses a row: no text selection or callout from the browser while it does. */
+  .agt-list .agt-row .agt-item {
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .agt-row.is-selecting {
+    padding-left: 34px;
+  }
+  .agt-row .agt-check {
+    left: 6px;
+    width: 22px;
+    height: 22px;
+  }
+  .agt-bulk {
+    padding: 8px 10px 10px;
+  }
+  .agt-bulk .agt-bulk-head .agt-icon.agt-mini {
+    width: 40px;
+    height: 40px;
+  }
+  .agt-bulk-all {
+    padding: 10px 8px;
+  }
+  .agt-bulk-actions button {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}

@@ -1,11 +1,28 @@
 import type { MenuItem } from '../../os/ContextMenu'
 import type { Project, Thread } from '../../data/agents'
+import type { ThreadSelection } from './selection'
 
 /** What is being dragged in the sidebar. */
 export type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
 
 /** What the app's main pane shows (the sidebar marks Memory, Settings and the Image Studio when they do). */
 export type MainKind = 'thread' | 'settings' | 'memory' | 'studio'
+
+/** What can be done to the selected threads at once (see select.tsx for the bar that offers it). */
+export type Bulk = {
+  /** An action is under way. */
+  busy: boolean
+  /** Archive them, or in the archived view move them back to the threads. */
+  archive: () => void
+  /** Ask, then delete them (a running one is stopped). */
+  remove: () => void
+  /** Put them in a project, or out of any (null). */
+  move: (projectId: number | null) => void
+  /** The projects to pick from, for a menu. */
+  moveMenu: () => MenuItem[]
+  /** The right-click menu of a selected row: acts on the whole selection. */
+  menu: () => MenuItem[]
+}
 
 /**
  * Everything a sidebar style needs from the app: the threads and projects, what is selected, and
@@ -51,6 +68,8 @@ export type SideCtx = {
   reorder: (moved: number, before: number) => void
 
   menu: (t: Thread) => MenuItem[]
+  selection: ThreadSelection
+  bulk: Bulk
   projectMenu: (p: Project) => MenuItem[]
 
   open: (id: string | null, project?: number | null) => void
@@ -63,4 +82,8 @@ export type SideCtx = {
   leaveArchived: () => void
   /** Fold the sidebar to its rail (not offered in a narrow window). */
   hide: () => void
+  /** Unfold it again (from the rail). */
+  show: () => void
+  /** Unfold it and put the cursor in the search (from the rail). */
+  findThreads: () => void
 }
