@@ -6,6 +6,8 @@ export class CmdError extends Error {
   constructor(
     message: string,
     readonly raw = false,
+    /** The exit status: 126 for a file that cannot be run, like a real shell's */
+    readonly status = 1,
   ) {
     super(message)
   }

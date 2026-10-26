@@ -10,6 +10,10 @@
 //   - `ls` with several arguments (GNU style: files first, then each folder under `name:`) and
 //     `open <app>`, run through the real command table (src/terminal/commands.ts), loaded by Vite
 //     the way the site loads it.
+//   - Permissions: `ls -l` and `find` agreeing on one mode per path, `chmod` (octal, symbolic, -R),
+//     scripts needing an x bit (Permission denied, status 126; source and msh file do not), Tab
+//     offering only what runs, modes staying with a file through mv, and reads and writes refused
+//     only where chmod set the mode (src/terminal/modes.ts, chmod.ts).
 //   - cmatrix: its flags, its usage, refusing a pipe, quitting on q, Esc, Ctrl+C and (with -s)
 //     any key, and the rain itself staying inside its grid through resizes.
 //
@@ -319,6 +323,192 @@ try {
   const { completions } = (await vite.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
   check(completions('xx', HOME).items.some((i) => i.value === 'xxd'), 'Tab completes xxd')
   check(completions('xxd -', HOME).items.some((i) => i.value === '-p'), 'Tab completes the options of xxd')
+
+  // --- permissions (src/terminal/modes.ts, chmod.ts) -----------------------------------------------
+
+  {
+    const mode = async (path: string) => (await out(`find ${path} -maxdepth 0 -printf '%m'`)).trim()
+    // The listing line of a path, from its folder's own listing.
+    const row = async (path: string) => {
+      const dir = path.replace(/\/[^/]*$/, '') || '/'
+      const name = path.split('/').pop()!
+      return (await out(`ls -l ${dir}`)).split('\n').find((l) => l.endsWith(`  ${name}`) || l.endsWith(`  ${name}/`))?.split(/\s+/)[0] ?? '(no row)'
+    }
+    const mods = (await vite.ssrLoadModule('/src/terminal/modes.ts')) as typeof import('../src/terminal/modes.ts')
+    const { completions: complete } = (await vite.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
+    const vfs = (await vite.ssrLoadModule('/src/terminal/vfs.ts')) as typeof import('../src/terminal/vfs.ts')
+
+    // Defaults: what ls -l showed before, apart from the places where it disagreed with find.
+    eq(await row('/etc/hostname'), '-r--r--r--', 'default: a site file is 444')
+    eq(await row('/bin/ls'), '-r-xr-xr-x', 'default: a /bin program is 555')
+    eq(await row('/srv'), 'dr-xr-xr-x', 'default: a read-only folder is 555')
+    eq(await row('/etc/fstab'), '-r--r--r--', 'default: /etc/fstab is 444')
+    eq(await mode('/etc/hostname'), '444', 'find %m agrees: 444')
+    eq(await mode('/bin/ls'), '555', 'find %m agrees: 555')
+    eq(await mode('/srv'), '555', 'find %m agrees: a folder is 555')
+    await run("echo hi > /tmp/perm-a.txt")
+    eq(await row('/tmp/perm-a.txt'), '-rw-r--r--', 'default: a /tmp file is 644')
+    eq(await mode('/tmp/perm-a.txt'), '644', 'find %m agrees: a /tmp file is 644')
+    eq(await mode('/tmp'), '1777', '/tmp is 1777 in find')
+    eq(await row('/tmp'), 'drwxrwxrwt', '/tmp is 1777 in ls -l too (it said 555 before)')
+    const game = (await out('ls ~/games | cat')).split('\n')[0]
+    eq(await row(`~/games/${game}`), '-r-xr-xr-x', 'default: a .game file runs, so ls -l shows x (find said so already)')
+    check((await out('find ~/games -executable -type f')).split('\n').length === (await out('ls ~/games | cat')).split('\n').length, 'find -executable lists every .game file')
+    eq(await out('find /etc -maxdepth 1 -type f -executable'), '', 'find -executable: no plain file in /etc')
+
+    // A game runs without a chmod.
+    {
+      const before = opened.length
+      cwd = `${HOME}/games`
+      const r = await run(`./${game}`)
+      check(r.ok && opened.length === before + 1, `./${game} runs without chmod`, r.out)
+    }
+
+    // Running a script needs its x bit.
+    await run("echo 'echo ran-$1' > /tmp/perm-s.msh")
+    await run("echo 'echo ran-$1' > /tmp/perm-t.sh")
+    await run("printf '#!/bin/sh\\necho shebang\\n' > /tmp/perm-b")
+    cwd = '/tmp'
+    for (const f of ['./perm-s.msh', './perm-t.sh', '/tmp/perm-s.msh', './perm-b']) {
+      const r = await run(`${f}; echo status=$?`)
+      check(r.out.includes(`msh: ${f}: Permission denied`) && r.out.includes('status=126') && !r.out.includes('ran-') && !r.out.includes('shebang'), `${f} without x: Permission denied, status 126`, r.out)
+    }
+    const plain = await run('./perm-a.txt; echo status=$?')
+    check(plain.out.includes('msh: ./perm-a.txt: Permission denied') && plain.out.includes('status=126'), 'a plain file without x: Permission denied too', plain.out)
+    const readme = await run(`${HOME}/README.md; echo status=$?`)
+    check(readme.out.includes('Permission denied') && readme.out.includes('status=126'), 'a site file: Permission denied', readme.out)
+    // source, . and msh read it without.
+    eq((await run('source ./perm-s.msh one')).out, 'ran-one', 'source runs a script without x')
+    eq((await run('. ./perm-s.msh two')).out, 'ran-two', '. runs a script without x')
+    eq((await run('msh ./perm-s.msh three')).out, 'ran-three', 'msh file runs a script without x')
+    eq((await run('./perm-s.msh; echo status=$?', true)).out.includes('ran-'), true, 'root runs it anyway')
+
+    // chmod +x, and it runs.
+    check((await run('chmod +x perm-s.msh perm-t.sh perm-b')).ok, 'chmod +x on three files')
+    eq(await row('/tmp/perm-s.msh'), '-rwxr-xr-x', 'chmod +x: ls -l shows rwxr-xr-x')
+    eq(await mode('/tmp/perm-s.msh'), '755', 'chmod +x: find %m says 755')
+    eq((await run('./perm-s.msh hi')).out, 'ran-hi', './x.msh runs with x')
+    eq((await run('/tmp/perm-t.sh yo')).out, 'ran-yo', 'an .sh file runs with x')
+    eq((await run('./perm-b')).out, 'shebang', 'a shebang script runs with x')
+    eq((await run("echo 'echo extra' >> /tmp/perm-s.msh; ./perm-s.msh again")).out.trim(), 'ran-again\nextra', 'writing to the script keeps its mode')
+    check((await out('find /tmp -maxdepth 1 -type f -executable')).split('\n').sort().join() === ['/tmp/perm-b', '/tmp/perm-s.msh', '/tmp/perm-t.sh'].join(), 'find -executable agrees with ls -l')
+    const lsX = (await out('ls -l /tmp')).split('\n').filter((l) => l.startsWith('-rwx')).map((l) => l.split(/\s+/).pop()).sort()
+    eq(lsX, ['perm-b', 'perm-s.msh', 'perm-t.sh'], 'ls -l: the same three files have x')
+    check((await out('find /tmp -type f -perm -u+x')).split('\n').length === 3, 'find -perm -u+x finds them')
+    eq((await out('find /tmp -type f -perm 755 | sort')).split('\n'), ['/tmp/perm-b', '/tmp/perm-s.msh', '/tmp/perm-t.sh'], 'find -perm 755')
+    eq((await out("find /tmp/perm-s.msh -printf '%M'")), '-rwxr-xr-x', 'find %M')
+
+    // Tab, in command position.
+    const offers = (line: string) => complete(line, '/tmp').items.map((i) => i.label)
+    eq(offers('./perm-').sort(), ['perm-b', 'perm-s.msh', 'perm-t.sh'], './perm-<Tab> offers the executable files, not the .txt')
+    check(!offers('./perm-a').includes('perm-a.txt'), 'a plain .txt is not offered as a command')
+    check(complete('./perm-', '/tmp').items.every((i) => i.hint === 'executable'), 'the picker calls them executable')
+    check(complete('cat ./perm-', '/tmp').items.some((i) => i.label === 'perm-a.txt' && i.hint === 'text'), 'as an argument the .txt is still offered, as text')
+    check(complete(`${HOME}/games/`, '/tmp').items.length === (await out('ls ~/games | cat')).split('\n').length, 'folders and .game files are offered without chmod')
+    check(complete('./', HOME).items.some((i) => i.label === 'games/'), 'folders are offered as commands')
+
+    // chmod modes.
+    const m = async (spec: string, start: string, file = '/tmp/perm-c') => {
+      await run(`echo x > ${file}`)
+      await run(`chmod ${start} ${file}`)
+      const r = await run(`chmod ${spec} ${file}`)
+      return r.ok ? await mode(file) : r.out
+    }
+    eq(await m('644', '000'), '644', 'chmod 644')
+    eq(await m('0755', '000'), '755', 'chmod 0755')
+    eq(await m('+x', '644'), '755', 'chmod +x: all three, as umask 022 allows')
+    eq(await m('-x', '755'), '644', 'chmod -x is a mode, not a flag')
+    eq(await m('u+x', '644'), '744', 'chmod u+x')
+    eq(await m('go=r', '777'), '744', 'chmod go=r')
+    eq(await m('a-rx', '755'), '200', 'chmod a-rx')
+    eq(await m('u=rwx,go=rx', '000'), '755', 'chmod u=rwx,go=rx')
+    eq(await m('g=u', '740'), '770', 'chmod g=u copies the owner bits')
+    eq(await m('+w', '444'), '644', 'chmod +w only adds the owner (umask)')
+    eq(await m('a+w', '444'), '666', 'chmod a+w adds everyone')
+    eq(await m('u+X', '644'), '644', 'chmod X leaves a plain file alone')
+    eq(await m('u+X', '744'), '744', 'chmod X on a file that runs')
+    eq(await m('o+t', '755'), '1755', 'chmod o+t sets the sticky bit')
+    for (const [line, why] of [['chmod 999 /tmp/perm-c', "invalid mode: '999'"], ['chmod u+z /tmp/perm-c', "invalid mode: 'u+z'"], ['chmod', 'missing operand'], ['chmod 755', "missing operand after '755'"], ['chmod 755 /tmp/nope', "cannot access '/tmp/nope': No such file or directory"], ['chmod +x /etc/hostname', "Operation not permitted"], ['chmod +x /bin/ls', 'Operation not permitted'], [`chmod +x ${HOME}/README.md`, 'Read-only file system']] as const) {
+      const r = await run(line)
+      check(!r.ok && r.out.includes(why), `${line}: ${why}`, r.out)
+    }
+    await run('chmod 600 /tmp/perm-c')
+    eq((await run('chmod -v 640 /tmp/perm-c')).out, "mode of '/tmp/perm-c' changed from 0600 (rw-------) to 0640 (rw-r-----)", 'chmod -v says what changed')
+    eq((await run('chmod -c 640 /tmp/perm-c')).out, '', 'chmod -c is quiet when nothing changed')
+
+    // -R: /tmp is flat for commands, so give it a folder of its own to walk.
+    const tmpDir = vfs.lookup('/tmp') as import('../src/terminal/vfs.ts').DirNode
+    const leaf = (name: string): import('../src/terminal/vfs.ts').FileNode => ({ type: 'file', name, content: () => 'echo leaf' })
+    tmpDir.children.set('perm-d', { type: 'dir', name: 'perm-d', children: new Map([['a.msh', leaf('a.msh')], ['sub', { type: 'dir', name: 'sub', children: new Map([['b.msh', leaf('b.msh')]]) }]]) })
+    check((await run('chmod -R 750 /tmp/perm-d')).ok, 'chmod -R on a folder')
+    eq([await mode('/tmp/perm-d'), await mode('/tmp/perm-d/a.msh'), await mode('/tmp/perm-d/sub'), await mode('/tmp/perm-d/sub/b.msh')], ['750', '750', '750', '750'], 'chmod -R: the folder and everything in it')
+    await run('chmod u-x /tmp/perm-d/sub/b.msh')
+    check((await run('chmod -R go-rwx /tmp/perm-d')).ok && (await mode('/tmp/perm-d/sub/b.msh')) === '600', 'chmod -R, symbolic, goes per file')
+    await run('chmod 644 /tmp/perm-d/a.msh')
+    check(!(await run('chmod +x /tmp/perm-d/a.msh /etc/hostname')).ok && (await mode('/tmp/perm-d/a.msh')) === '755', 'chmod on several: the ones that can change do, the status says the rest did not')
+    tmpDir.children.delete('perm-d')
+
+    // The mode stays with the file: mv keeps it, rm and a new file start over, writing keeps it.
+    await run('echo x > /tmp/perm-m; chmod 700 /tmp/perm-m')
+    check((await run('mv /tmp/perm-m /tmp/perm-n')).ok, 'mv a file with a mode')
+    eq([await mode('/tmp/perm-n'), (await run('ls /tmp/perm-m')).ok], ['700', false], 'mv keeps the mode')
+    await run('cp /tmp/perm-n /tmp/perm-o')
+    eq(await mode('/tmp/perm-o'), '700', 'cp carries it to the copy')
+    await run('echo y > /tmp/perm-n')
+    eq(await mode('/tmp/perm-n'), '700', 'overwriting keeps the mode')
+    await run('rm /tmp/perm-n; touch /tmp/perm-n')
+    eq(await mode('/tmp/perm-n'), '644', 'rm then touch: the default again')
+    await run('echo x > /tmp/perm-p; chmod 700 /tmp/perm-p; echo x > /tmp/perm-q; mv /tmp/perm-q /tmp/perm-p')
+    eq(await mode('/tmp/perm-p'), '644', 'mv over a file with a mode: the moved file wins')
+
+    // Reads and writes are refused only where chmod set the mode.
+    await run('echo secret > /tmp/perm-r; chmod a-r /tmp/perm-r')
+    const noRead = await run('cat /tmp/perm-r')
+    check(!noRead.ok && noRead.out === 'cat: /tmp/perm-r: Permission denied', 'chmod a-r: cat is Permission denied', noRead.out)
+    check(!(await run('grep s /tmp/perm-r')).ok && !(await run('cat < /tmp/perm-r')).ok && !(await run('source /tmp/perm-r')).ok, 'grep, < and source are refused too')
+    eq((await run('cat /tmp/perm-r', true)).out, 'secret', 'root reads it anyway')
+    await run('chmod u+r /tmp/perm-r')
+    eq((await run('cat /tmp/perm-r')).out, 'secret', 'chmod u+r: readable again')
+    await run('chmod a-w /tmp/perm-r')
+    const noWrite = await run('echo more > /tmp/perm-r')
+    check(!noWrite.ok && noWrite.out.includes('/tmp/perm-r: Permission denied'), 'chmod a-w: > is Permission denied', noWrite.out)
+    check(!(await run('echo more >> /tmp/perm-r')).ok && !(await run('echo more | tee /tmp/perm-r')).ok, '>> and tee are refused too')
+    check((await run('echo more > /tmp/perm-r', true)).ok, 'root writes anyway')
+    check((await run('cat /etc/hostname')).ok && (await run(`cat ${HOME}/README.md`)).ok, 'files nobody chmod-ed still read, although ls -l says 444')
+    check(!(await run('echo x > /etc/hostname')).ok, 'and site files still cannot be written')
+
+    // The Seafile table: where the server has no modes.
+    {
+      const sf = 'seafile://repo/dir/run.msh'
+      mods.setSfMode(sf, 0o755)
+      mods.setSfMode('seafile://repo/dir/other', 0o600)
+      eq(mods.sfModeOf(sf), 0o755, 'sfModes: set')
+      check([...store.entries()].some(([k, v]) => k.endsWith('terminal.modes') && JSON.parse(v)[sf] === 0o755), 'sfModes: kept in localStorage, in the account space', JSON.stringify([...store.keys()]))
+      mods.carrySfModes('seafile://repo/dir', 'seafile://repo/dir2', false)
+      eq([mods.sfModeOf('seafile://repo/dir2/run.msh'), mods.sfModeOf(sf)], [0o755, undefined], 'sfModes: a rename carries the folder and what is in it')
+      mods.carrySfModes('seafile://repo/dir2', 'seafile://repo/copy', true)
+      eq([mods.sfModeOf('seafile://repo/copy/other'), mods.sfModeOf('seafile://repo/dir2/other')], [0o600, 0o600], 'sfModes: a copy keeps the original too')
+      mods.dropSfModes('seafile://repo/dir2')
+      mods.dropSfModes('seafile://repo/copy')
+      eq([mods.sfModeOf('seafile://repo/dir2/run.msh'), mods.sfModeOf('seafile://repo/copy/other'), Object.keys(mods.sfModes.get()).length], [undefined, undefined, 0], 'sfModes: removing a folder drops what was under it')
+      const seafile = { type: 'file', name: 'x.msh', sf: 'seafile://repo/x.msh', content: () => '', mode: undefined } as import('../src/terminal/vfs.ts').FileNode
+      eq([mods.modeOf('/mnt/seafile/x.msh', seafile), mods.modeOf('/mnt/seafile/x.msh', { ...seafile, ro: true }), mods.canRun('/mnt/seafile/x.msh', seafile)], [0o644, 0o444, false], 'Seafile files: 644, or 444 in a read-only library, and not runnable by default')
+      const browser = { type: 'file', name: 'x.msh', browser: '/x.msh', content: () => '' } as import('../src/terminal/vfs.ts').FileNode
+      eq([mods.modeOf(`${HOME}/x.msh`, browser), mods.modeOf(`${HOME}/x.msh`, { ...browser, mode: 0o700 }), mods.canRun(`${HOME}/x.msh`, { ...browser, mode: 0o700 })], [0o644, 0o700, true], 'browser files: 644 by default, the stored mode wins')
+      eq(mods.canRun(`${HOME}/x.msh`, { ...browser, mode: 0o070 }), false, 'the owner class counts for your own files: g+x alone does not run')
+      eq(mods.canRun('/srv/x', { type: 'file', name: 'x', content: () => '', mode: 0o001 }), true, 'the other class counts for root-owned ones')
+    }
+
+    // Help, man, Tab.
+    check((await out('help')).split('\n').some((l) => /\bchmod\b/.test(l)), 'help lists chmod')
+    check((await out('man chmod')).includes('Permission denied') && (await out('chmod --help')).includes('CHMOD(1)'), 'man chmod and chmod --help')
+    check(complete('chm', HOME).items.some((i) => i.value === 'chmod'), 'Tab completes chmod')
+    check(complete('chmod -', HOME).items.some((i) => i.value === '-R'), 'Tab completes chmod -R')
+    eq(complete('chmod +x ./perm-', '/tmp').items.map((i) => i.label).sort().slice(0, 2), ['perm-a.txt', 'perm-b'], 'Tab completes the paths chmod takes, plain files too')
+
+    for (const f of ['a.txt', 's.msh', 't.sh', 'b', 'c', 'm', 'n', 'o', 'p', 'q', 'r']) await run(`rm -f /tmp/perm-${f}`)
+    cwd = HOME
+  }
 
   // --- cmatrix ------------------------------------------------------------------------------------
 

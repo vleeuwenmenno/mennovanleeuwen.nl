@@ -1,6 +1,7 @@
 import { bytesToText, textToBytes } from './bytes'
 import { readError } from './devices'
 import { lookup } from './fs'
+import { allows } from './modes'
 import { CmdError, type Ctx } from './types'
 import { resolvePath } from './vfs'
 
@@ -12,6 +13,7 @@ export function readFile(ctx: Pick<Ctx, 'cwd' | 'root'>, path: string, cmd: stri
   if (node.type === 'dir') throw new CmdError(`${cmd}: ${path}: Is a directory`)
   const denied = readError(cmd, path, node.dev, !!ctx.root)
   if (denied) throw denied
+  if (!allows(abs, node, 'r', !!ctx.root)) throw new CmdError(`${cmd}: ${path}: Permission denied`)
   return node.content()
 }
 

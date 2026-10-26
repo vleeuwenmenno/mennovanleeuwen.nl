@@ -1,4 +1,4 @@
-import { browserFilesReady, browserText, listBrowser, mkdirBrowser, readBrowserBlob, readBrowserText, removeBrowser, statBrowser, transferBrowser, writeBrowserFile } from '../data/browserfs'
+import { browserFilesReady, browserText, listBrowser, mkdirBrowser, readBrowserBlob, readBrowserText, removeBrowser, setBrowserMode, statBrowser, transferBrowser, writeBrowserFile } from '../data/browserfs'
 import { browserMountPoint, getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
 import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readBlob, readText, renameItem, SF, sfPath, transferItems, uploadBlob, writeText, type Entry } from '../data/seafile'
 import { getAccount } from '../os/account'
@@ -8,6 +8,7 @@ import { writeError } from './devices'
 import { cvMode } from '../os/cvMode'
 import { keptRc, RC_NAME, RC_PATH, setKeptRc } from './rcfile'
 import { HOME, kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
+import { allows, carrySfModes, dropSfModes, setSfMode, sfModeOf, userOwns, type Access } from './modes'
 
 // The filesystem as the terminal sees it: the site's own files (vfs.ts), with whatever /etc/fstab
 // mounts on top (data/mounts.ts): Seafile libraries under /mnt/seafile, a library on ~, bind
@@ -49,7 +50,7 @@ function sfEntry(sf: string): Entry | null | undefined {
 }
 
 function sfFile(sf: string, e: Entry, ro: boolean): FileNode {
-  return { type: 'file', name: e.name, sf, ro, size: e.size, mtime: e.mtime, content: () => texts.get(sf)?.text ?? '' }
+  return { type: 'file', name: e.name, sf, ro, size: e.size, mtime: e.mtime, mode: sfModeOf(sf), content: () => texts.get(sf)?.text ?? '' }
 }
 
 function sfDir(sf: string, name: string, ro: boolean): DirNode {
@@ -71,6 +72,7 @@ function sfDir(sf: string, name: string, ro: boolean): DirNode {
     name,
     sf,
     ro,
+    mode: sfModeOf(sf),
     get children() {
       const out = new Map<string, Node>()
       const listing = cachedDir(sf)?.listing
@@ -105,12 +107,13 @@ function browserNode(abs: string, path: string): Node | null {
   const site = siteLookup(abs)
   if (!e) return site
   const name = abs === '/' ? '' : baseOf(abs)
-  if (!e.dir) return { type: 'file', name, browser: path, size: e.size, mtime: e.mtime, content: () => browserText(path) ?? '' }
+  if (!e.dir) return { type: 'file', name, browser: path, size: e.size, mtime: e.mtime, mode: e.mode, content: () => browserText(path) ?? '' }
   return {
     type: 'dir',
     name,
     browser: path,
     mtime: e.mtime,
+    mode: e.mode,
     get children() {
       const out = new Map<string, Node>(site?.type === 'dir' ? site.children : [])
       for (const child of listBrowser(path)) {
@@ -125,7 +128,7 @@ function browserNode(abs: string, path: string): Node | null {
 /** ~/.mvshrc where home is read-only: kept in this browser (rcfile.ts). */
 function keptRcNode(): FileNode {
   const text = keptRc() ?? ''
-  return { type: 'file', name: RC_NAME, size: new TextEncoder().encode(text).length, content: () => keptRc() ?? '' }
+  return { type: 'file', name: RC_NAME, ro: false, size: new TextEncoder().encode(text).length, content: () => keptRc() ?? '' }
 }
 
 /** Names a folder gains on top of its own: mount points right inside it. */
@@ -188,7 +191,7 @@ const READERS = new Set(['cat', 'less', 'more', 'head', 'tail', 'wc', 'grep', 'e
 /** Commands that look after themselves (sudo runs its command, which is prepared then). */
 const SELF_SERVED = new Set(['fscrypt', 'mount', 'umount', 'findmnt', 'lsblk', 'sudo', 'echo', 'man', 'help', 'clear', 'history', 'visited'])
 const ALWAYS_RECURSIVE = new Set(['find', 'fd', 'tree', 'du'])
-const MAYBE_RECURSIVE = new Set(['grep', 'egrep', 'ls', 'rm', 'cp'])
+const MAYBE_RECURSIVE = new Set(['grep', 'egrep', 'ls', 'rm', 'cp', 'chmod'])
 
 const usesSeafile = () => mounts().some((m) => isSeafileType(m) || m.options.includes('bind'))
 
@@ -317,6 +320,41 @@ export async function readFileText(abs: string): Promise<{ text: string; ro: boo
 
 const err = (msg: string) => new CmdError(msg)
 
+/**
+ * Refuses (Permission denied) when a path's mode, set by chmod, does not allow `access`. Paths
+ * that do not exist are not this check's business; root passes.
+ */
+function need(abs: string, access: Access, what: string, root?: boolean) {
+  const node = lookup(abs)
+  if (node && !allows(abs, node, access, root)) throw err(`${what}: Permission denied`)
+}
+
+/** Writing a new name or removing one needs write permission on the folder it is in. */
+const needParent = (abs: string, what: string, root?: boolean) => need(parentOf(abs), 'w', what, root)
+
+/** Whether a file's mode can be set where it lives, and the error to give where it cannot. */
+export async function setMode(abs: string, mode: number | null, root = false): Promise<void> {
+  const node = lookup(abs)
+  if (!node) throw err(`chmod: cannot access '${abs}': No such file or directory`)
+  const w = whereIs(abs)
+  const refuse = (why: string) => err(`chmod: changing permissions of '${abs}': ${why}`)
+  if (w.kind === 'missing') throw refuse('Transport endpoint is not connected')
+  if (node.browser) {
+    await setBrowserMode(node.browser, mode).catch(() => {
+      throw refuse('Operation not permitted')
+    })
+    return
+  }
+  if (node.sf && !node.ro && node.sf !== SF) return setSfMode(node.sf, mode)
+  if (w.kind === 'local' && abs.startsWith('/tmp/')) {
+    const kept = siteLookup(abs)
+    if (kept) kept.mode = mode ?? undefined
+    return
+  }
+  // The site's own files, /bin, /etc, read-only libraries: nothing here can be changed.
+  throw refuse(!root && !userOwns(abs, node) ? 'Operation not permitted' : 'Read-only file system')
+}
+
 /** Writes a file: /tmp, Seafile, or /etc/fstab (root only). `append` adds to the end, like >>. */
 export async function writeFile(cwd: string, target: string, content: string, append: boolean, root = false, who = 'msh') {
   const abs = resolvePath(cwd, target)
@@ -334,6 +372,8 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   }
   const w = whereIs(abs)
   if (w.kind === 'missing') throw err(`${who}: ${target}: Transport endpoint is not connected`)
+  if (lookup(abs)) need(abs, 'w', `${who}: ${target}`, root)
+  else needParent(abs, `${who}: ${target}`, root)
   if (abs === RC_PATH && w.kind === 'local' && !cvMode()) {
     const prev = keptRc()
     const body = content && !content.endsWith('\n') ? `${content}\n` : content
@@ -397,7 +437,7 @@ function writable(abs: string, arg: string, what: string): string {
   return w.sf
 }
 
-export async function makeDir(cwd: string, arg: string, parents: boolean) {
+export async function makeDir(cwd: string, arg: string, parents: boolean, root = false) {
   const abs = resolvePath(cwd, arg)
   const existing = lookup(abs)
   if (existing) {
@@ -405,12 +445,13 @@ export async function makeDir(cwd: string, arg: string, parents: boolean) {
     throw err(`mkdir: cannot create directory '${arg}': File exists`)
   }
   if (abs.startsWith('/tmp/')) throw err(`mkdir: cannot create directory '${arg}': /tmp is flat here, files only`)
+  needParent(abs, `mkdir: cannot create directory '${arg}'`, root)
   const where = whereIs(abs)
   if (where.kind === 'browser') {
     await browserFilesReady()
     if (!lookup(parentOf(abs))) {
       if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
-      await makeDir('/', parentOf(abs), true)
+      await makeDir('/', parentOf(abs), true, root)
     }
     await browserFolder(parentOf(abs), 'mkdir', arg)
     await mkdirBrowser(where.path, true).catch(asCmdError('mkdir'))
@@ -421,15 +462,16 @@ export async function makeDir(cwd: string, arg: string, parents: boolean) {
   await ensure(parent, 'mkdir', null, false)
   if (!lookup(parent)) {
     if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
-    await makeDir('/', parent, true)
+    await makeDir('/', parent, true, root)
   }
   await sfMkdir(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
-export async function touchFile(cwd: string, arg: string) {
+export async function touchFile(cwd: string, arg: string, root = false) {
   const abs = resolvePath(cwd, arg)
   if (lookup(abs)) return
+  needParent(abs, `touch: cannot touch '${arg}'`, root)
   if (abs === RC_PATH && whereIs(abs).kind === 'local' && !cvMode()) return setKeptRc('')
   if (abs.startsWith('/tmp/')) return writeTmp('/', abs, '', true)
   const where = whereIs(abs)
@@ -449,13 +491,14 @@ export async function touchFile(cwd: string, arg: string) {
  * rm: Seafile puts what it deletes in the library's trash, so this one is forgiving. Except in a
  * library that keeps no history: there it is gone for good, so `ask` (rm without -f) gets a say.
  */
-export async function removePath(cwd: string, arg: string, opts: { recursive: boolean; force: boolean; dir: boolean; ask?: (question: string) => Promise<boolean> }) {
+export async function removePath(cwd: string, arg: string, opts: { recursive: boolean; force: boolean; dir: boolean; ask?: (question: string) => Promise<boolean>; root?: boolean }) {
   const abs = resolvePath(cwd, arg)
   const node = lookup(abs)
   if (!node) {
     if (opts.force) return
     throw err(`rm: cannot remove '${arg}': No such file or directory`)
   }
+  needParent(abs, `rm: cannot remove '${arg}'`, opts.root)
   if (node.type === 'dir' && !opts.recursive && !(opts.dir && node.children.size === 0)) throw err(`rm: cannot remove '${arg}': ${opts.dir ? 'Directory not empty' : 'Is a directory'}`)
   if (abs.startsWith('/tmp/')) {
     ;(siteLookup('/tmp') as DirNode).children.delete(baseOf(abs))
@@ -482,11 +525,44 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
   }
   await deleteItems([sf])
   texts.delete(sf)
+  dropSfModes(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
-/** mv and cp: into a folder, or onto a new name (replacing a file of that name). */
-export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean) {
+/**
+ * mv and cp: into a folder, or onto a new name (replacing a file of that name). The modes chmod
+ * set go along with what is moved or copied.
+ */
+export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean, root = false) {
+  const cmd = op === 'move' ? 'mv' : 'cp'
+  const src = resolvePath(cwd, srcArg)
+  const node = lookup(src)
+  let dest = resolvePath(cwd, destArg)
+  if (node && lookup(dest)?.type === 'dir') dest = join(dest, baseOf(src))
+  if (node) {
+    const kind = node.type === 'dir' ? 'directory' : 'regular file'
+    if (op === 'copy') need(src, 'r', `cp: cannot open '${srcArg}' for reading`, root)
+    else needParent(src, `mv: cannot move '${srcArg}'`, root)
+    if (dest !== src) needParent(dest, `${cmd}: cannot create ${kind} '${destArg}'`, root)
+  }
+  const kept: [string, number | null][] = walk(src, node)
+    .map((p): [string, number | null] => [p.slice(src.length), lookup(p)?.mode ?? null])
+    .filter(([rel, m]) => m !== null || (rel === '' && op === 'move'))
+  await move(op, cwd, srcArg, destArg, recursive)
+  if (!node || dest === src) return
+  const fromSf = sfOf(src)
+  const toSf = whereIs(dest)
+  if (fromSf && toSf.kind === 'sf') return carrySfModes(fromSf.sf, toSf.sf, op === 'copy')
+  for (const [rel, mode] of kept) {
+    const to = dest + rel
+    if (lookup(to)?.mode === (mode ?? undefined)) continue
+    const at = whereIs(to)
+    if (at.kind === 'sf') setSfMode(at.sf, mode)
+    else await setMode(to, mode, true).catch(() => {})
+  }
+}
+
+async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean) {
   const cmd = op === 'move' ? 'mv' : 'cp'
   const src = resolvePath(cwd, srcArg)
   const node = lookup(src)
@@ -532,7 +608,7 @@ export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string,
   if (op === 'move' && (!movable || fromSf?.ro)) throw err(`mv: cannot move '${srcArg}': Read-only file system`)
   if (node.type === 'dir' && fromSf) await ensureTree(fromSf.sf, cmd, false)
   await copyAcross(src, dest, cmd, destArg)
-  if (op === 'move') await removePath('/', src, { recursive: true, force: true, dir: false })
+  if (op === 'move') await removePath('/', src, { recursive: true, force: true, dir: false, root: true })
 }
 
 /** A file's bytes, wherever it is. */

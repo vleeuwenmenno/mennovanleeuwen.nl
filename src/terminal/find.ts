@@ -2,6 +2,7 @@ import { HANDLE } from '../os/identity'
 import { runLine, writeTmp, type Completion } from './commands'
 import { CmdError, type Ctx } from './types'
 import { lookup, removePath, sfOf } from './fs'
+import { allows, applyMode, canRun, modeOf, permString } from './modes'
 import { HOME, resolvePath, stat, type DirNode, type Node } from './vfs'
 
 // GNU find (findutils 4.10) and sharkdp's fd (10.2) over the in-memory filesystem: their options,
@@ -23,23 +24,8 @@ const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || is
 const idOf = (abs: string) => (owner(abs) === 'root' ? 0 : 1000)
 /** find's -type letter: d, f, or c and b for the devices in /dev. */
 const typeLetter = (node: Node) => (node.type === 'dir' ? 'd' : node.dev ? (node.dev.kind === 'char' ? 'c' : 'b') : 'f')
-const isExecutable = (node: Node) => node.type === 'dir' || (node.type === 'file' && !!node.exec) || node.name.endsWith('.game')
-
-/** Read-only everywhere (0555 folders and runnable games, 0444 files), except /tmp. */
-function modeOf(abs: string, node: Node): number {
-  if (node.type === 'file' && node.dev) return node.dev.kind === 'char' ? 0o666 : 0o660
-  if (node.sf) return node.ro ? (node.type === 'dir' ? 0o555 : 0o444) : node.type === 'dir' ? 0o755 : 0o644
-  if (abs === '/tmp') return 0o1777
-  if (isUnderTmp(abs)) return 0o644
-  return isExecutable(node) ? 0o555 : 0o444
-}
-
-function permString(abs: string, node: Node) {
-  const m = modeOf(abs, node)
-  const bits = [6, 3, 0].map((s) => `${m & (4 << s) ? 'r' : '-'}${m & (2 << s) ? 'w' : '-'}${m & (1 << s) ? 'x' : '-'}`).join('')
-  const sticky = m & 0o1000 ? bits.slice(0, 8) + (bits[8] === 'x' ? 't' : 'T') : bits
-  return (node.type === 'dir' ? 'd' : node.dev ? (node.dev.kind === 'char' ? 'c' : 'b') : '-') + sticky
-}
+/** What -executable says: a folder can be entered, a file needs an x bit (modes.ts). */
+const isExecutable = (abs: string, node: Node, root = false) => node.type === 'dir' || canRun(abs, node, root)
 
 const sizeOf = (abs: string, node: Node) => (node.type === 'dir' ? DIR_SIZE : stat(abs, node).size)
 /** Disk space taken, in whole 4 KiB ext4 blocks. */
@@ -315,22 +301,8 @@ function parseN(arg: string, pred: string): (v: number) => boolean {
 
 /** chmod-style modes, octal or symbolic (u+rwx,go=r…), from nothing. */
 function parseMode(spec: string, pred: string): number {
-  if (/^[0-7]{1,4}$/.test(spec)) return parseInt(spec, 8)
-  let mode = 0
-  for (const clause of spec.split(',')) {
-    const m = /^([ugoa]*)([+=-])([rwxXst]*)$/.exec(clause)
-    if (!m) throw new FindError(`find: invalid mode '${spec}'`)
-    const who = m[1] || 'a'
-    let bits = 0
-    for (const p of m[3]) bits |= p === 'r' ? 4 : p === 'w' ? 2 : p === 'x' || p === 'X' ? 1 : 0
-    let mask = 0
-    if (/[ua]/.test(who)) mask |= bits << 6
-    if (/[ga]/.test(who)) mask |= bits << 3
-    if (/[oa]/.test(who)) mask |= bits
-    if (m[3].includes('t')) mask |= 0o1000
-    if (m[3].includes('s')) mask |= (/[ua]/.test(who) ? 0o4000 : 0) | (/[ga]/.test(who) ? 0o2000 : 0)
-    mode = m[2] === '-' ? mode & ~mask : m[2] === '=' ? mask : mode | mask
-  }
+  const mode = applyMode(spec, 0, false)
+  if (mode === null) throw new FindError(`find: invalid mode '${spec}'`)
   void pred
   return mode
 }
@@ -741,11 +713,11 @@ class FindParser {
         })
       }
       case '-readable':
-        return test(() => true)
+        return test((e) => allows(e.abs, e.node, 'r', st.ctx.root))
       case '-writable':
-        return test((e) => e.abs === '/tmp' || isUnderTmp(e.abs) || (!!e.node.sf && !e.node.ro))
+        return test((e) => (e.node.mode !== undefined ? allows(e.abs, e.node, 'w', st.ctx.root) : e.abs === '/tmp' || isUnderTmp(e.abs) || (!!e.node.sf && !e.node.ro) || !!e.node.browser))
       case '-executable':
-        return test((e) => isExecutable(e.node))
+        return test((e) => isExecutable(e.abs, e.node, st.ctx.root))
       case '-links': {
         const cmp = parseN(this.arg(pred), pred)
         return test((e) => cmp(linksOf(e.node)))
@@ -1566,7 +1538,7 @@ async function fd(ctx: Ctx): Promise<string> {
   const wantDir = o.types.has('d')
   const typeOk = (abs: string, node: Node) => {
     if (!o.types.size) return true
-    if (o.types.has('x') && !(node.type === 'file' && isExecutable(node))) return false
+    if (o.types.has('x') && !(node.type === 'file' && isExecutable(abs, node))) return false
     if (o.types.has('e')) {
       if (!isEmpty(abs, node)) return false
       if (!wantFile && !wantDir) return true

@@ -13,7 +13,8 @@ import type { VirtualFiles } from './launcherStore'
 // with the text of small text files; the bytes stay in IndexedDB as Blobs until something reads
 // them. Paths are relative to the store's root: "/", "/Documents/notes.md".
 
-export type BrowserEntry = { path: string; dir: boolean; size: number; mtime: number; type: string }
+/** `mode`: permission bits set with chmod (terminal/modes.ts); absent means the defaults. Moves with the file, goes with it when it is deleted, and survives a rewrite. */
+export type BrowserEntry = { path: string; dir: boolean; size: number; mtime: number; type: string; mode?: number }
 
 /** Text files up to this size are kept in memory too, for cat, grep and the editors. */
 const TEXT_IN_MEMORY = 1024 * 1024
@@ -271,9 +272,20 @@ export async function writeBrowserFile(path: string, data: Blob | string) {
   }
   const blob = typeof data === 'string' ? new Blob([data], { type: 'text/plain' }) : data
   persist()
-  await put({ path, dir: false, size: blob.size, mtime: Date.now(), type: blob.type }, blob)
+  const mode = nodes.get(path)?.mode
+  await put({ path, dir: false, size: blob.size, mtime: Date.now(), type: blob.type, ...(mode === undefined ? {} : { mode }) }, blob)
   if (blob.size <= TEXT_IN_MEMORY && isTextName(nameOf(path))) texts.set(path, typeof data === 'string' ? data : await blob.text())
   else texts.delete(path)
+  emit()
+}
+
+/** Sets a file's or folder's permission bits (chmod); null puts the defaults back. */
+export async function setBrowserMode(path: string, mode: number | null) {
+  const e = nodes.get(path)
+  if (!e) throw new BrowserFsError(`${path}: no such file or folder`)
+  const { mode: _was, ...rest } = e
+  void _was
+  await put(mode === null ? rest : { ...rest, mode })
   emit()
 }
 
