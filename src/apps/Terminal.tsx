@@ -239,10 +239,33 @@ function terminalCopyPaste(e: globalThis.KeyboardEvent, shell: TabShell): boolea
 /** A theme colour (set by src/os/theme.ts) for programs that ask for the terminal's colours. */
 const themeColor = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
+/**
+ * The width of one character of the terminal's text, measured on the element itself: what the
+ * browser really lays out, with the font that loaded (a canvas has its own idea of a font family
+ * string, and of a font that is still loading).
+ */
+function cellWidth(el: HTMLElement): number {
+  const probe = document.createElement('span')
+  probe.setAttribute('aria-hidden', 'true')
+  probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;white-space:pre'
+  probe.textContent = 'M'.repeat(40)
+  el.appendChild(probe)
+  const w = probe.offsetWidth / 40
+  probe.remove()
+  if (w > 0) return w
+  const style = getComputedStyle(el)
+  const ctx2d = document.createElement('canvas').getContext('2d')
+  if (!ctx2d) return 8
+  ctx2d.font = `${style.fontSize} ${style.fontFamily}`
+  return ctx2d.measureText('MMMMMMMMMM').width / 10 || 8
+}
+
 // An attached stream draws with a tighter line height than msh's output (src/styles.css), so
 // box drawing joins up; rows are counted with it.
 const VT_LINE_HEIGHT = 1.25
 
+/** Suggestions shown at most above a touch keyboard. */
+const HINTS_MAX = 8
 // Phones have no Tab key and typing is slow, so touch devices get one-tap commands.
 const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ping boltwarden.org', 'sl', 'fastfetch', 'fortune | cowsay']
 const HISTORY_KEY = 'mvlos.history'
@@ -430,9 +453,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     const style = getComputedStyle(el)
     let cell = cellRef.current
     if (!cell) {
-      const ctx2d = document.createElement('canvas').getContext('2d')!
-      ctx2d.font = `${style.fontSize} ${style.fontFamily}`
-      cell = { w: ctx2d.measureText('MMMMMMMMMM').width / 10 || 8, h: parseFloat(style.fontSize) * VT_LINE_HEIGHT || 16 }
+      cell = { w: cellWidth(el), h: parseFloat(style.fontSize) * VT_LINE_HEIGHT || 16 }
     }
     const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
     const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
@@ -597,6 +618,15 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   // A new text size changes how many rows and columns fit without changing the window, which the
   // ResizeObserver would not notice: full-screen programs (nano, htop, agents) redraw to fit.
   useLayoutEffect(() => sizeCheck.current?.(), [fontPx])
+  // The same when the font (or its symbols) finishes loading after the size was measured: a
+  // character is then a different width, with no change of the window to say so.
+  useEffect(() => {
+    const fonts = document.fonts
+    if (!fonts?.addEventListener) return
+    const again = () => sizeCheck.current?.()
+    fonts.addEventListener('loadingdone', again)
+    return () => fonts.removeEventListener('loadingdone', again)
+  }, [])
 
   // Ctrl with the scroll wheel (a trackpad pinch sends the same) and a two-finger pinch on a touch
   // screen zoom this window instead of the page.
@@ -877,9 +907,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     const el = scrollRef.current
     if (!el) return { cols: 80, rows: 24 }
     const style = getComputedStyle(el)
-    const ctx2d = document.createElement('canvas').getContext('2d')!
-    ctx2d.font = `${style.fontSize} ${style.fontFamily}`
-    const charW = ctx2d.measureText('MMMMMMMMMM').width / 10 || 8
+    const charW = cellWidth(el)
     const lineH = parseFloat(style.lineHeight) || 20
     const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
     const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)

@@ -523,6 +523,20 @@ Android's Back), in the shell and in full-screen programs like `agents` alike. I
 sends mouse events for taps on things it counts as clickable. A scroll, a long press (selecting,
 the menu), a pinch, and a tap while text is selected are not taps.
 
+**Columns and rows.** A full-screen program (nano, htop, `agents`) is told the size in characters
+when it starts and again whenever it changes: the window resized or maximized, the phone rotated,
+the on-screen keyboard or the extra keys row opening (the window follows the visible area, see
+*Touch screens*), a new text size or zoom, or the font finishing loading. The width of a character
+is measured on a real one in the terminal's own element
+([`cellWidth`](src/apps/Terminal.tsx)), not on a canvas, whose idea of a font family can differ
+from what is drawn. Box drawing, blocks, braille, arrows and symbols like ❯ ▸ ⚠ are not in the
+JetBrains Mono files Google serves, so a browser takes them from another font, which on iOS is a
+little wider than the text: the border of the agents' boxes wrapped and the right-hand side drifted.
+[`src/fonts/jetbrains-mono-symbols.woff2`](src/fonts/jetbrains-mono-symbols.woff2) (a subset of
+the same typeface, SIL OFL, loaded only once a page shows one of them) supplies them in the same
+0.6em cell. `pnpm check:terminal-mobile` runs a phone-sized, touch-emulated browser through all
+of this.
+
 ### Terminal settings
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
