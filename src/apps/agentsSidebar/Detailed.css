@@ -1,0 +1,203 @@
+/* Agents sidebar style "Detailed" (Detailed.tsx): two-line rows with a status bar and badge, a big
+   New thread button on top. Everything is under .is-side-detailed; the classic rules in home.css are
+   what it adjusts. */
+
+.agt-side.is-side-detailed .agt-dx-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px 0 10px;
+}
+.agt-dx-new {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.agt-dx-new:hover {
+  filter: brightness(1.12);
+}
+.agt-side.is-side-detailed .agt-dx-search {
+  padding-top: 8px;
+}
+.agt-side.is-side-detailed .agt-list {
+  padding: 2px 6px 8px;
+}
+
+.agt-side.is-side-detailed .agt-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 6px 4px;
+}
+.agt-side.is-side-detailed .agt-group .agt-group-count,
+.agt-dx-day .agt-group-count {
+  margin-right: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+.agt-dx-day {
+  display: flex;
+  gap: 6px;
+  margin: 10px 8px 3px !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 1 !important;
+}
+.agt-side.is-side-detailed .agt-project-threads {
+  padding-left: 8px !important;
+}
+
+.agt-side.is-side-detailed .agt-row {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+.agt-side.is-side-detailed .agt-row:last-child {
+  border-bottom: 0;
+}
+.agt-side.is-side-detailed .agt-item.agt-dx-item {
+  position: relative;
+  align-items: stretch;
+  gap: 0;
+  padding: 7px 10px 6px 13px;
+}
+/* The bar on the left says what is going on: pulsing accent for running, green for a new answer, red for stopped. */
+.agt-dx-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: transparent;
+}
+.agt-dx-item.is-active::before {
+  background: var(--accent);
+}
+.agt-dx-item.is-running::before {
+  background: var(--accent);
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agt-dx-item.is-unread::before {
+  background: var(--green);
+}
+.agt-dx-item.is-attention::before {
+  background: var(--red);
+}
+.agt-dx-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Long titles wrap onto a second line instead of being cut off at once. */
+.agt-dx-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  color: var(--fg-bright);
+}
+.agt-dx-item.is-unread .agt-dx-title {
+  font-weight: 600;
+}
+.agt-dx-title .agt-pin {
+  display: inline-block;
+  margin-left: 5px;
+  vertical-align: -1px;
+}
+.agt-dx-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.agt-dx-sub {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.agt-dx-sub > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agt-dx-project {
+  flex: none;
+  max-width: 60%;
+  color: var(--fg);
+}
+.agt-dx-project::after {
+  content: '·';
+  margin: 0 5px;
+  color: var(--muted);
+}
+.agt-dx-badge {
+  flex: none;
+  padding: 0 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.agt-dx-badge.is-running {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agt-dx-badge.is-unread {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+}
+.agt-dx-badge.is-attention {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+/* The row's menu takes the time's place, on the second line (not over the title). */
+.agt-side.is-side-detailed .agt-item-more {
+  top: auto;
+  bottom: 4px;
+  transform: none;
+}
+.agt-side.is-side-detailed .agt-dx-meta .agt-item-when {
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agt-dx-item.is-running::before,
+  .agt-dx-badge.is-running {
+    animation: none;
+  }
+}
+@media (pointer: coarse) {
+  .agt-side.is-side-detailed .agt-item.agt-dx-item {
+    padding-top: 10px;
+    padding-bottom: 9px;
+  }
+  .agt-side.is-side-detailed .agt-item-more {
+    visibility: visible;
+    bottom: 6px;
+  }
+  .agt-side.is-side-detailed .agt-row:hover .agt-item-when {
+    visibility: visible;
+  }
+  .agt-side.is-side-detailed .agt-dx-meta {
+    padding-right: 24px;
+  }
+}

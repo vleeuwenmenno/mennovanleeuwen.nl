@@ -1,4 +1,8 @@
 import { toUi } from '../os/uiScale'
+import { Icon, NEW_TITLE, regenerateHint, RenameBox, Scramble, titlePending } from './agentsSidebar/bits'
+import { AgentsSidebar, sideKeys, type SideCtx } from './agentsSidebar'
+import { type Drag } from './agentsSidebar/ctx'
+import { useUnread } from './agentsSidebar/unread'
 import { GptImageDrawing, GptImageResult } from './AgentsGptImage'
 import { InpaintDialog, type InpaintSource } from './AgentsInpaint'
 import { MaskCards, type SavedMask } from './AgentsMaskCard'
@@ -68,7 +72,6 @@ import {
   interruptionText,
   compactionText,
   isCompact,
-  suggestTitle,
   regenerateTitle,
   threadMatches,
   alsoKnownAs,
@@ -90,6 +93,7 @@ import {
   type Thread,
   type ToolCall,
   listSkills,
+  SIDEBAR_STYLES,
   listMentionTools,
   type MentionTool,
   canAlwaysAllow,
@@ -189,7 +193,6 @@ export function Agents({ win }: { win: WinState }) {
 
 /** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), or the Image Studio. */
 type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'studio' }
-type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
 
 const FOLDED_PROJECTS = 'mvlos.agents.folded'
 const readFolded = (): number[] => {
@@ -199,9 +202,6 @@ const readFolded = (): number[] => {
     return []
   }
 }
-/** Pinned first, then the newest. */
-const pinnedFirst = (list: Thread[]) => [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
-
 function AgentsApp({ win }: { win: WinState }) {
   const wm = useWM()
   const [archived, setArchived] = useState(false)
@@ -322,10 +322,7 @@ function AgentsApp({ win }: { win: WinState }) {
   const query = q.trim().toLowerCase()
   // Earlier titles count too: a thread is found by the name it had when you last saw it.
   const shown = useMemo(() => threads.filter((t) => threadMatches(t, query)), [threads, query])
-  const inProject = (t: Thread) => t.projectId !== null && projects.some((p) => p.id === t.projectId)
-  const loose = pinnedFirst(shown.filter((t) => archived || !inProject(t)))
-  const loosePinned = loose.filter((t) => t.pinned)
-  const looseByDay = useMemo(() => byDay(loose.filter((t) => !t.pinned)), [loose])
+  const inProject = useCallback((t: Thread) => t.projectId !== null && projects.some((p) => p.id === t.projectId), [projects])
 
   const remove = async (t: Thread) => {
     if (!(await ask({ title: `Delete “${t.title}”?`, body: 'The thread and everything in it is gone for good. Archive it instead to keep it out of the way.', confirm: 'Delete', danger: true }))) return
@@ -453,6 +450,9 @@ function AgentsApp({ win }: { win: WinState }) {
     }
   }
   const rail = collapsed && !narrow
+  // Threads with an answer nobody looked at yet (this browser's memory): the sidebar styles show them.
+  const isUnread = useUnread(threads, main.kind === 'thread' && (!narrow || pane === 'chat') ? selected : null)
+  const { sidebarStyle } = useAgentSettings()
 
   // Ctrl+F never reaches the app (the desktop takes the keypress itself), so it arrives as
   // mvlos:find. Focus the search this window is showing. Two Agents windows stay apart because
@@ -578,44 +578,56 @@ function AgentsApp({ win }: { win: WinState }) {
         { label: 'Memory', onSelect: () => openMemory(null) },
         { label: 'Image Studio', onSelect: openStudio },
         { label: 'Settings…', onSelect: openSettings },
+        { separator: true },
+        { label: 'Sidebar style', submenu: SIDEBAR_STYLES.map((s) => ({ label: s.label, checked: sidebarStyle === s.id, onSelect: () => setAgentSettings({ sidebarStyle: s.id }) })) },
         ...(narrow ? [] : [{ separator: true as const }, { label: rail ? 'Show the sidebar' : 'Hide the sidebar', onSelect: () => fold(!rail) }]),
       ]),
     )
   }
 
-  const row = (t: Thread) => (
-    <li key={t.id} className="agt-row">
-      {renaming === t.id ? (
-        <div className="agt-item is-active">
-          <RenameBox thread={t} onSave={(title) => rename(t, title)} onCancel={() => setRenaming(null)} />
-        </div>
-      ) : (
-        <button
-          className={`agt-item ${t.id === selected && main.kind === 'thread' ? 'is-active' : ''}`}
-          onClick={() => open(t.id)}
-          onContextMenu={(e) => openContextMenu(e, menu(t))}
-          title={[t.title, alsoKnownAs(t), `${t.mode === 'deep' ? 'Deep research' : 'Quick'} · ${t.model}`].filter(Boolean).join('\n')}
-          {...(archived ? {} : dragging({ kind: 'thread', id: t.id }))}
-        >
-          <span className={`agt-dot-mode is-${t.mode} ${t.running ? 'is-running' : ''}`} aria-label={t.mode === 'deep' ? 'Deep research' : 'Quick'} />
-          <span className="agt-item-title">
-            <Scramble text={t.title} pending={titlePending(t)} />
-          </span>
-          {t.pinned && (
-            <span className="agt-pin" title="Pinned" aria-label="Pinned">
-              <Icon name="pin" size={11} />
-            </span>
-          )}
-          <span className="agt-item-when">{t.running ? '…' : shortWhen(t.updatedAt)}</span>
-        </button>
-      )}
-      {renaming !== t.id && (
-        <button className="agt-icon agt-mini agt-item-more" onClick={(e) => openMenuAt(e.currentTarget, menu(t))} title="More" aria-label={`${t.title}: more`}>
-          <Icon name="more" size={13} />
-        </button>
-      )}
-    </li>
-  )
+  const sideCtx: SideCtx = {
+    narrow,
+    archived,
+    q,
+    setQ,
+    query,
+    listError,
+    threads,
+    shown,
+    projects,
+    inProject,
+    selected,
+    mainKind: main.kind,
+    isUnread,
+    renaming,
+    setRenaming,
+    rename,
+    renamingProject,
+    setRenamingProject,
+    addingProject,
+    setAddingProject,
+    addProject: (name) => void createProject(name).then(refresh, () => {}),
+    renameProject: (p, name) => void renameProject(p.id, name).then(refresh, () => {}),
+    folded,
+    toggleFold,
+    drag,
+    dropAt,
+    dropZone,
+    dragging,
+    move,
+    reorder,
+    menu,
+    projectMenu,
+    open,
+    newThread,
+    newProject,
+    openStudio,
+    openMemory,
+    openSettings,
+    toggleArchived,
+    leaveArchived: () => setArchived(false),
+    hide: () => fold(true),
+  }
 
   return (
     <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} style={rail || narrow ? undefined : ({ '--agt-side-w': `min(${sideWidth}px, 50%)` } as React.CSSProperties)} onContextMenu={rootMenu}>
@@ -642,144 +654,8 @@ function AgentsApp({ win }: { win: WinState }) {
           </button>
         </nav>
       ) : (
-        <aside className="nb-side agt-side" onContextMenu={sideMenu}>
-          {archived && (
-            <div className="agt-side-title">
-              <button className="agt-icon" onClick={() => setArchived(false)} aria-label="Back to threads" title="Back to threads">
-                <Icon name="back" />
-              </button>
-              <strong>Archived</strong>
-            </div>
-          )}
-          <div className="agt-side-head">
-            <label className="agt-search">
-              <Icon name="search" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && q && (e.stopPropagation(), setQ(''))} placeholder={archived ? 'Search archived' : 'Search threads'} aria-label="Search threads" spellCheck={false} />
-              {q && (
-                <button type="button" className="agt-search-clear" onClick={() => setQ('')} title="Clear the search" aria-label="Clear the search">
-                  <Icon name="close" size={12} />
-                </button>
-              )}
-            </label>
-            {!narrow && (
-              <button className="agt-icon" onClick={() => fold(true)} title="Hide the sidebar" aria-label="Hide the sidebar">
-                <Icon name="sidebar" />
-              </button>
-            )}
-          </div>
-          <div className="agt-list">
-            {!archived && (
-              <button className={`agt-item agt-studio-link ${main.kind === 'studio' ? 'is-active' : ''}`} onClick={openStudio} title="Generate pictures with your ComfyUI by hand, without an agent">
-                <Icon name="studio" />
-                <span className="agt-item-title">Image Studio</span>
-              </button>
-            )}
-            {!archived && (
-              <section>
-                <h4 className="agt-group agt-group-row">
-                  <span>Projects</span>
-                  <button className="agt-icon agt-mini" onClick={newProject} title="New project" aria-label="New project">
-                    <Icon name="plus" size={13} />
-                  </button>
-                </h4>
-                {addingProject && (
-                  <InlineName
-                    placeholder="Project name"
-                    onDone={(name) => {
-                      setAddingProject(false)
-                      if (name) void createProject(name).then(refresh, () => {})
-                    }}
-                  />
-                )}
-                {projects.map((p) => {
-                  const list = pinnedFirst(shown.filter((t) => t.projectId === p.id))
-                  if (query && !list.length) return null
-                  const isFolded = folded.includes(p.id) && !query
-                  return (
-                    <div key={p.id} className={`agt-project ${dropAt === `p${p.id}` ? 'is-drop' : ''} ${drag?.kind === 'project' && drag.id === p.id ? 'is-dragged' : ''}`}>
-                      <div
-                        className="agt-project-head"
-                        onContextMenu={(e) => openContextMenu(e, projectMenu(p))}
-                        {...dragging({ kind: 'project', id: p.id })}
-                        {...dropZone(
-                          `p${p.id}`,
-                          (d) => (d.kind === 'project' ? d.id !== p.id : threads.find((t) => t.id === d.id)?.projectId !== p.id),
-                          (d) => (d.kind === 'project' ? reorder(d.id, p.id) : move(threads.find((t) => t.id === d.id)!, p.id)),
-                        )}
-                      >
-                        {renamingProject === p.id ? (
-                          <InlineName
-                            value={p.name}
-                            onDone={(name) => {
-                              setRenamingProject(null)
-                              if (name && name !== p.name) void renameProject(p.id, name).then(refresh, () => {})
-                            }}
-                          />
-                        ) : (
-                          <button className="agt-project-toggle" onClick={() => toggleFold(p.id)} onDoubleClick={() => setRenamingProject(p.id)} aria-expanded={!isFolded}>
-                            <span className={`agt-chev ${isFolded ? 'is-folded' : ''}`}>
-                              <Icon name="chevron" size={12} />
-                            </span>
-                            <span className="agt-project-name">{p.name}</span>
-                            <span className="agt-project-count">{list.length || ''}</span>
-                          </button>
-                        )}
-                        <button className="agt-icon agt-mini" onClick={() => open(null, p.id)} title={`New thread in ${p.name}`} aria-label={`New thread in ${p.name}`}>
-                          <Icon name="plus" size={13} />
-                        </button>
-                        <button className="agt-icon agt-mini" onClick={(e) => openMenuAt(e.currentTarget, projectMenu(p))} title="More" aria-label={`${p.name}: more`}>
-                          <Icon name="more" size={13} />
-                        </button>
-                      </div>
-                      {!isFolded && (
-                        <ul className="agt-project-threads">
-                          {list.map(row)}
-                          {!list.length && <li className="agt-hint muted">No threads yet: + starts one, or drag one here.</li>}
-                        </ul>
-                      )}
-                    </div>
-                  )
-                })}
-                {!projects.length && !addingProject && <p className="agt-hint muted">Projects group threads that belong together, each with a memory of its own.</p>}
-              </section>
-            )}
-            <section
-              className={dropAt === 'loose' ? 'agt-drop-loose is-drop' : 'agt-drop-loose'}
-              {...dropZone(
-                'loose',
-                (d) => d.kind === 'thread' && inProject(threads.find((t) => t.id === d.id)!),
-                (d) => move(threads.find((t) => t.id === d.id)!, null),
-              )}
-            >
-              <h4 className="agt-group agt-group-row">
-                <span>{archived ? 'Archived' : 'Threads'}</span>
-                {!archived && (
-                  <button className="agt-icon agt-mini" onClick={newThread} title="New thread" aria-label="New thread">
-                    <Icon name="plus" size={13} />
-                  </button>
-                )}
-              </h4>
-              {loosePinned.length > 0 && <ul>{loosePinned.map(row)}</ul>}
-              {looseByDay.map((g) => (
-                <div key={g.label}>
-                  <h5 className="agt-day">{g.label}</h5>
-                  <ul>{g.items.map(row)}</ul>
-                </div>
-              ))}
-              {!loose.length && <p className="agt-list-empty muted">{listError ?? (q ? 'Nothing matches.' : archived ? 'Nothing archived.' : 'No threads yet. Ask something to start one.')}</p>}
-            </section>
-          </div>
-          <div className="agt-side-foot">
-            <button className={archived ? 'is-on' : ''} onClick={toggleArchived} title="Archived threads">
-              <Icon name="archive" /> <span>Archived</span>
-            </button>
-            <button className={main.kind === 'memory' ? 'is-on' : ''} onClick={() => openMemory(null)} title="What the agent remembers">
-              <Icon name="memory" /> <span>Memory</span>
-            </button>
-            <button className={main.kind === 'settings' ? 'is-on' : ''} onClick={openSettings} title="Agents settings">
-              <Icon name="gear" /> <span>Settings</span>
-            </button>
-          </div>
+        <aside className={`nb-side agt-side is-side-${sidebarStyle}`} onContextMenu={sideMenu} onKeyDown={sideKeys}>
+          <AgentsSidebar style={sidebarStyle} ctx={sideCtx} />
           {!narrow && (
             <div
               className="agt-resize"
@@ -833,28 +709,6 @@ function AgentsApp({ win }: { win: WinState }) {
   )
 }
 
-/** A one-line name field: Enter or leaving it keeps the name, Escape drops it. */
-function InlineName({ value = '', placeholder, onDone }: { value?: string; placeholder?: string; onDone: (name: string | null) => void }) {
-  const done = useRef(false)
-  const finish = (name: string | null) => {
-    if (done.current) return
-    done.current = true
-    onDone(name?.trim() || null)
-  }
-  return (
-    <input
-      className="agt-inline-name"
-      defaultValue={value}
-      placeholder={placeholder}
-      autoFocus
-      onFocus={(e) => e.currentTarget.select()}
-      onBlur={(e) => finish(e.currentTarget.value)}
-      onKeyDown={(e) => (e.key === 'Enter' ? finish(e.currentTarget.value) : e.key === 'Escape' && finish(null))}
-      onClick={(e) => e.stopPropagation()}
-      aria-label={placeholder ?? 'Name'}
-    />
-  )
-}
 
 /** A category path's tree: "People/Friends" sits under "People". */
 type CatNode = { name: string; path: string; items: Memory[]; children: CatNode[] }
@@ -3030,202 +2884,11 @@ const sideWidthPref = localPref<number>('mvlos.agents.sidebarWidth', (raw) => {
   return raw && Number.isFinite(n) && n >= SIDE_MIN ? Math.round(n) : SIDE_DEFAULT
 }, String)
 
-/** "now", "5m", "3h", "Tue", "12 Oct": as short as the one line allows. */
-function shortWhen(ms: number, now = Date.now()) {
-  const s = (now - ms) / 1000
-  if (s < 60) return 'now'
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  const d = new Date(ms)
-  if (new Date(now).toDateString() === d.toDateString()) return `${Math.floor(s / 3600)}h`
-  if (s < 6 * 86400) return d.toLocaleDateString('en-GB', { weekday: 'short' })
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-}
-
-/** Threads under Today, Yesterday, This week, This month and Older (newest first). */
-function byDay(threads: Thread[]): { label: string; items: Thread[] }[] {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const t0 = today.getTime()
-  const label = (ms: number) => (ms >= t0 ? 'Today' : ms >= t0 - 864e5 ? 'Yesterday' : ms >= t0 - 6 * 864e5 ? 'This week' : ms >= t0 - 30 * 864e5 ? 'This month' : 'Older')
-  const out: { label: string; items: Thread[] }[] = []
-  for (const t of threads) {
-    const l = label(t.updatedAt)
-    if (out[out.length - 1]?.label === l) out[out.length - 1].items.push(t)
-    else out.push({ label: l, items: [t] })
-  }
-  return out
-}
-
-const ICONS: Record<string, ReactNode> = {
-  folder: <path d="M3 6h6l2 2h10v11H3z" />,
-  sidebar: (
-    <>
-      <rect x="3" y="4" width="18" height="16" />
-      <path d="M9 4v16" />
-    </>
-  ),
-  plus: <path d="M12 5v14M5 12h14" />,
-  archive: (
-    <>
-      <path d="M3 5h18v4H3zM5 9v10h14V9M10 13h4" />
-    </>
-  ),
-  memory: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />,
-  gear: (
-    <>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" />
-    </>
-  ),
-  search: (
-    <>
-      <circle cx="11" cy="11" r="6" />
-      <path d="M20 20l-4.5-4.5" />
-    </>
-  ),
-  back: <path d="M15 5l-7 7 7 7" />,
-  studio: (
-    <>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <circle cx="9" cy="10" r="2" />
-      <path d="M21 16l-5-5-9 9" />
-    </>
-  ),
-  clip: <path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15 7" />,
-  bolt: <path d="M13 2L5 14h6l-1 8 8-12h-6z" />,
-  deep: (
-    <>
-      <circle cx="10" cy="10" r="6" />
-      <path d="M20 20l-5.5-5.5M10 7v6M7 10h6" />
-    </>
-  ),
-  tools: <path d="M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L4 12l2.7-2.7a4 4 0 0 0 5-5L14 2z" />,
-  chevron: <path d="M7 10l5 5 5-5" />,
-  send: <path d="M12 19V5M6 11l6-6 6 6" />,
-  stop: <rect x="7" y="7" width="10" height="10" fill="currentColor" />,
-  pin: <path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7" />,
-  edit: <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />,
-  close: <path d="M6 6l12 12M18 6L6 18" />,
-  more: (
-    <>
-      <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-      <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    </>
-  ),
-}
-
-function Icon({ name, size = 15 }: { name: keyof typeof ICONS; size?: number }) {
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden className="agt-svg">
-      {ICONS[name]}
-    </svg>
-  )
-}
-
 // --- modes -----------------------------------------------------------------------------------
 
 const MODE_HELP: Record<Mode, string> = {
   quick: 'Answers straight away, searching the web or your files only when it needs to, in a few seconds. Up to 6 rounds of tools.',
   deep: 'Researches first: searches from several angles, reads the sources, compares them, then writes a structured answer with citations. Takes a minute or a few; up to 24 rounds of tools.',
-}
-
-// --- titles ----------------------------------------------------------------------------------
-
-const NEW_TITLE = 'New thread'
-/** Regenerate title's second line: only when it changes more than the title (one you named goes back to automatic). */
-const regenerateHint = (t: Thread) => (t.titleSource === 'user' ? 'You named it: titles keep up to date again after this' : undefined)
-/** Still waiting for the title model. */
-const titlePending = (t: Thread) => t.titling || (t.title === NEW_TITLE && t.running)
-
-const GLYPHS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789'
-const noise = (n: number) => Array.from({ length: n }, () => GLYPHS[Math.floor(Math.random() * GLYPHS.length)]).join('')
-const calm = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-
-/**
- * A title that is still being thought of rains Matrix glyphs in its one line, then decodes into
- * the real title from the left once it arrives.
- */
-function Scramble({ text, pending, length = 16 }: { text: string; pending: boolean; length?: number }) {
-  const [shown, setShown] = useState(() => (pending ? noise(length) : text))
-  const wasPending = useRef(pending)
-  useEffect(() => {
-    const before = wasPending.current
-    wasPending.current = pending
-    if (calm()) return setShown(pending ? 'Naming…' : text)
-    if (pending) {
-      const timer = setInterval(() => setShown(noise(length)), 70)
-      return () => clearInterval(timer)
-    }
-    if (!before) return setShown(text)
-    // A timer, not animation frames: those stop in a hidden tab, and the title must still land.
-    const start = Date.now()
-    const timer = setInterval(() => {
-      const p = Math.min(1, (Date.now() - start) / 650)
-      const n = Math.floor(p * text.length)
-      setShown(p < 1 ? text.slice(0, n) + noise(Math.min(length, text.length - n)) : text)
-      if (p >= 1) clearInterval(timer)
-    }, 40)
-    return () => clearInterval(timer)
-  }, [pending, text, length])
-  return (
-    <span className={`agt-matrix ${pending ? 'is-pending' : ''}`} aria-label={pending ? 'Thinking of a title' : text}>
-      {shown}
-    </span>
-  )
-}
-
-/** Renaming in place, with a fresh suggestion from the title model one click away. */
-function RenameBox({ thread, onSave, onCancel }: { thread: Thread; onSave: (title: string) => void; onCancel: () => void }) {
-  const [value, setValue] = useState(thread.title === NEW_TITLE ? '' : thread.title)
-  const [suggestion, setSuggestion] = useState<string | null>(null)
-  const [asking, setAsking] = useState(true)
-  const input = useRef<HTMLInputElement>(null)
-  const done = useRef(false)
-  const finish = (save: boolean) => {
-    if (done.current) return
-    done.current = true
-    if (save) onSave(input.current?.value ?? value)
-    else onCancel()
-  }
-  useEffect(() => {
-    input.current?.select()
-    let live = true
-    suggestTitle(thread.id).then(
-      (r) => live && (setSuggestion(r.title), setAsking(false)),
-      () => live && setAsking(false),
-    )
-    return () => {
-      live = false
-    }
-  }, [thread.id])
-  return (
-    <div className="agt-rename">
-      <input
-        ref={input}
-        autoFocus
-        value={value}
-        placeholder={thread.title}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={() => finish(true)}
-        onKeyDown={(e) => (e.key === 'Enter' ? finish(true) : e.key === 'Escape' && finish(false))}
-        aria-label="Thread title"
-      />
-      {(asking || suggestion) && (
-        <button
-          className="agt-suggest"
-          disabled={!suggestion}
-          // Keep the input focused, so choosing the suggestion doesn't end the rename.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => suggestion && (setValue(suggestion), input.current?.focus())}
-          title="Use this title"
-        >
-          <span aria-hidden>✦ </span>
-          <Scramble text={suggestion ?? ''} pending={asking} length={14} />
-        </button>
-      )}
-    </div>
-  )
 }
 
 // --- the context window ------------------------------------------------------------------------

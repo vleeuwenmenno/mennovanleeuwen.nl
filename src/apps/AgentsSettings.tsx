@@ -7,7 +7,7 @@ import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_REA
 import { ask } from '../os/Dialogs'
 import { makerOf, modelName, PROVIDER_NAMES } from '../data/agentModelNames'
 import { namedModels } from './AgentsModelPicker'
-import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, SIDEBAR_STYLES, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
@@ -57,7 +57,7 @@ const icon = (d: ReactNode) => (
 )
 const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }[] = [
   { id: 'overview', label: 'Overview', blurb: 'What is set up, at a glance. Pick a card to change it.', icon: icon(<><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></>) },
-  { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, and what it remembers.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
+  { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, what it remembers, and how its sidebar looks.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
@@ -214,6 +214,20 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           </button>
         </li>
       </ul>
+
+      <h4 className="set-subhead">Sidebar</h4>
+      <div className="set-radios agt-set-styles" role="radiogroup" aria-label="Sidebar style">
+        {SIDEBAR_STYLES.map((s) => (
+          <label key={s.id} className={`set-choice ${settings.sidebarStyle === s.id ? 'is-on' : ''}`}>
+            <input type="radio" name="agents-sidebar-style" className="agt-set-radio" checked={settings.sidebarStyle === s.id} onChange={() => setAgentSettings({ sidebarStyle: s.id })} />
+            <span className="agt-set-style">
+              <strong>{s.label}</strong>
+              <span className="muted">{s.blurb}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="muted set-help">How the thread list on the left looks. Also in the sidebar's right-click menu, to try them in turn. It follows your account.</p>
 
       <h4 className="set-subhead">Notifications</h4>
       <ul className="set-list">
