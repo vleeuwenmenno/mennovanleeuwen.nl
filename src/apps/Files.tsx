@@ -275,6 +275,21 @@ export function Files({ win }: { win: WinState }) {
   useEdgeSwipe(fmRoot, { enabled: narrow, open: drawer, onOpen: () => setDrawer(true), onClose: () => setDrawer(false) })
   const [editingPath, setEditingPath] = useState(false)
   const [search, setSearch] = useState<string | null>(null)
+  const searchInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const onFind = (event: Event) => {
+      if ((event as CustomEvent<{ pid: number }>).detail.pid !== win.pid) return
+      if (search === null) {
+        setEditingPath(false)
+        setSearch('')
+      } else {
+        searchInput.current?.focus()
+        searchInput.current?.select()
+      }
+    }
+    window.addEventListener('mvlos:find', onFind)
+    return () => window.removeEventListener('mvlos:find', onFind)
+  }, [search, win.pid])
   const [menu, setMenu] = useState<'view' | null>(null)
   const [props, setProps] = useState<Item | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -1243,6 +1258,7 @@ export function Files({ win }: { win: WinState }) {
         <div className="fm-path" onClick={() => search === null && !editingPath && setEditingPath(true)}>
           {search !== null ? (
             <input
+              ref={searchInput}
               className="fm-path-input"
               autoFocus
               value={search}

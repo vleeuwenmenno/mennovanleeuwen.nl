@@ -32,6 +32,10 @@ import { encodeKey, encodePaste } from '../terminal/vt/keys'
 import { CmdError } from '../terminal/types'
 import { accountStorage } from '../os/accountSpace'
 
+/** Which terminal session last painted the shared find highlights. */
+let findHighlightOwner = 0
+let findSessionSeq = 0
+
 /** The query's letters in `name`, in order and case-insensitively, marked the way fzf does. */
 function Matched({ name, query }: { name: string; query: string }) {
   const q = query.toLowerCase()
@@ -259,7 +263,7 @@ export type EmbeddedTerminal = { cwd: string; onExit: () => void }
 /** What a tab's shell tells its window: where it is, the title a program set, what runs. */
 type TabReport = { cwd: string; program: string; command: string | null }
 /** What the window asks of the shell in its front tab (the keys it takes before the shell). */
-type TabShell = { copy: () => boolean; paste: () => void; focus: () => void }
+type TabShell = { copy: () => boolean; paste: () => void; focus: () => void; find: () => void }
 /** How one tab's shell and its window's tab strip (TerminalTabs, below) talk. */
 type TabLink = {
   id: string
@@ -378,6 +382,12 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   const history = useRef<string[]>(loadHistory())
   const histIdx = useRef<number | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const findInputRef = useRef<HTMLInputElement>(null)
+  const [find, setFind] = useState<{ query: string; count: number; current: number } | null>(null)
+  const findRef = useRef(find)
+  findRef.current = find
+  const findId = useRef(0)
+  if (findId.current === 0) findId.current = ++findSessionSeq
   const abortRef = useRef<AbortController | null>(null)
   const keyHandler = useRef<((key: string, text?: string) => boolean) | null>(null)
   const rawKeys = useRef(false)
@@ -1071,6 +1081,123 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     return sel && !sel.isCollapsed && scrollRef.current && sel.containsNode(scrollRef.current, true) ? sel.toString() : ''
   }
 
+  /** Drops this session's find marks only. A closed bar must not wipe a selection elsewhere. */
+  function clearFindSelection() {
+    if (findHighlightOwner !== findId.current) return
+    findHighlightOwner = 0
+    const highlights = (CSS as typeof CSS & { highlights?: { delete: (name: string) => void } }).highlights
+    highlights?.delete('terminal-find')
+    highlights?.delete('terminal-find-current')
+    const root = scrollRef.current
+    const selection = window.getSelection()
+    if (!root || !selection) return
+    for (let i = selection.rangeCount - 1; i >= 0; i--) {
+      const range = selection.getRangeAt(i)
+      if (root.contains(range.commonAncestorContainer)) selection.removeRange(range)
+    }
+  }
+
+  /** Finds text in this tab's rendered scrollback so selections follow its styled DOM. */
+  function searchScrollback(query: string, requested: number) {
+    if (!findRef.current) return
+    const root = scrollRef.current
+    if (!root || !query) {
+      clearFindSelection()
+      setFind((f) => (f ? { ...f, count: 0, current: 0 } : f))
+      return
+    }
+    const nodes: { node: Text; start: number; end: number }[] = []
+    let text = ''
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return node.parentElement?.closest('.term-find') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+      },
+    })
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const value = node.nodeValue ?? ''
+      nodes.push({ node: node as Text, start: text.length, end: text.length + value.length })
+      text += value
+    }
+    const haystack = text.toLowerCase()
+    const needle = query.toLowerCase()
+    const ranges: Range[] = []
+    for (let at = haystack.indexOf(needle); at >= 0 && ranges.length < 500; at = haystack.indexOf(needle, at + Math.max(needle.length, 1))) {
+      const end = at + needle.length
+      const first = nodes.find((part) => part.end > at)
+      const last = [...nodes].reverse().find((part) => part.start < end)
+      if (!first || !last) continue
+      const startOff = at - first.start
+      const endOff = end - last.start
+      if (startOff < 0 || endOff < 0 || startOff > first.node.length || endOff > last.node.length) continue
+      const range = document.createRange()
+      range.setStart(first.node, startOff)
+      range.setEnd(last.node, endOff)
+      ranges.push(range)
+    }
+    const current = ranges.length ? Math.min(Math.max(0, requested), ranges.length - 1) : 0
+    const registry = (CSS as typeof CSS & { highlights?: { set: (name: string, value: unknown) => void; delete: (name: string) => void } }).highlights
+    const HighlightClass = (window as Window & { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
+    if (registry && HighlightClass) {
+      findHighlightOwner = findId.current
+      registry.set('terminal-find', new HighlightClass(...ranges))
+      if (ranges[current]) registry.set('terminal-find-current', new HighlightClass(ranges[current]))
+      else registry.delete('terminal-find-current')
+    }
+    const selected = ranges[current]
+    const selection = window.getSelection()
+    if (selection) {
+      for (let i = selection.rangeCount - 1; i >= 0; i--) {
+        const range = selection.getRangeAt(i)
+        if (root.contains(range.commonAncestorContainer)) selection.removeRange(range)
+      }
+      if (selected) {
+        selection.addRange(selected)
+        selected.startContainer.parentElement?.scrollIntoView({ block: 'nearest' })
+      }
+    }
+    setFind((f) => (f && (f.count !== ranges.length || f.current !== current) ? { ...f, count: ranges.length, current } : f))
+  }
+
+  function closeFind() {
+    findRef.current = null
+    clearFindSelection()
+    setFind(null)
+    requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
+  }
+
+  function stepFind(by: number) {
+    const state = findRef.current
+    if (!state?.count) return
+    const current = (state.current + by + state.count) % state.count
+    setFind({ ...state, current })
+    requestAnimationFrame(() => searchScrollback(state.query, current))
+  }
+
+  function openFind() {
+    if (sessionRef.current || (running && keyHandler.current && rawKeys.current)) {
+      onKeyDown({ key: 'f', code: 'KeyF', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false, preventDefault: () => {}, stopPropagation: () => {} })
+      return
+    }
+    setFind((state) => state ?? { query: '', count: 0, current: 0 })
+    requestAnimationFrame(() => findInputRef.current?.select())
+  }
+
+  // Output changes the rendered text under a still-open bar. A closed bar stays out of this:
+  // clearing on every prompt keystroke would drop a selection in another window.
+  const findShown = !tab || active
+  useLayoutEffect(() => {
+    if (!find || !findShown) return
+    searchScrollback(find.query, find.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [find?.query, entries, value, busy, findShown])
+
+  useLayoutEffect(() => {
+    if (find && findShown) return
+    clearFindSelection()
+  }, [find, findShown])
+
+  useEffect(() => () => clearFindSelection(), [])
+
   async function paste() {
     let text: string
     try {
@@ -1106,8 +1233,8 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
     void navigator.clipboard?.writeText(text).catch(() => {})
     return true
   }
-  const shellRef = useRef<TabShell>({ copy, paste, focus: () => {} })
-  shellRef.current = { copy, paste, focus: () => inputRef.current?.focus({ preventScroll: true }) }
+  const shellRef = useRef<TabShell>({ copy, paste, focus: () => {}, find: () => {} })
+  shellRef.current = { copy, paste, focus: () => inputRef.current?.focus({ preventScroll: true }), find: openFind }
 
   // Ctrl+Shift+C copies and Ctrl+Shift+V pastes, as in other terminals, also with the focus out
   // of the prompt (selecting the scrollback takes it). In a window with tabs, the window takes
@@ -1126,7 +1253,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   useEffect(() => {
     const t = tabRef.current
     if (!t) return
-    t.shell(t.id, { copy: () => shellRef.current.copy(), paste: () => shellRef.current.paste(), focus: () => shellRef.current.focus() })
+    t.shell(t.id, { copy: () => shellRef.current.copy(), paste: () => shellRef.current.paste(), focus: () => shellRef.current.focus(), find: () => shellRef.current.find() })
     return () => t.shell(t.id, null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1254,6 +1381,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       style={fontPx === null ? undefined : { fontSize: fontPx }}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
+        if ((e.target as Element).closest('.term-find')) return
         // A click puts the caret on the prompt; a selection stays. A click inside an earlier
         // selection only collapses it after the mouse-up (it could have been a drag of the
         // selected text), so this looks a moment later.
@@ -1261,6 +1389,41 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
         setTimeout(() => !window.getSelection()?.toString() && inputRef.current?.focus({ preventScroll: true }))
       }}
     >
+      {find && (
+        <div className="term-find" role="search">
+          <input
+            ref={findInputRef}
+            autoFocus
+            aria-label="Find in terminal"
+            placeholder="Find"
+            value={find.query}
+            onChange={(e) => setFind({ query: e.target.value, count: 0, current: 0 })}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                stepFind(e.shiftKey ? -1 : 1)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                closeFind()
+              } else if (e.ctrlKey && e.key.toLowerCase() === 'f') {
+                e.preventDefault()
+                e.currentTarget.select()
+              }
+            }}
+          />
+          <span className={`term-find-count ${find.query && !find.count ? 'is-none' : ''}`}>{find.query ? (find.count ? `${find.current + 1} of ${find.count}` : 'none') : ''}</span>
+          <button type="button" onClick={() => stepFind(-1)} aria-label="Previous match">
+            ‹
+          </button>
+          <button type="button" onClick={() => stepFind(1)} aria-label="Next match">
+            ›
+          </button>
+          <button type="button" onClick={closeFind} aria-label="Close search">
+            ×
+          </button>
+        </div>
+      )}
       {entries.map((e) => (
         <Fragment key={e.id}>
           {e.kind === 'cmd' ? (
@@ -1543,6 +1706,15 @@ function TerminalTabs({ win }: { win: WinState }) {
   useEffect(() => {
     tabOpeners.set(win.pid, () => actions.current.addTab())
     return () => void tabOpeners.delete(win.pid)
+  }, [win.pid])
+
+  useEffect(() => {
+    const onFind = (event: Event) => {
+      if ((event as CustomEvent<{ pid?: number }>).detail?.pid !== win.pid) return
+      shells.current.get(activeRef.current)?.find()
+    }
+    window.addEventListener('mvlos:find', onFind)
+    return () => window.removeEventListener('mvlos:find', onFind)
   }, [win.pid])
 
   // Other apps' requests go to the tab in front.
