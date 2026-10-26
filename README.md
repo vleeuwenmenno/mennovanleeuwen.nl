@@ -537,6 +537,17 @@ the same typeface, SIL OFL, loaded only once a page shows one of them) supplies 
 0.6em cell. `pnpm check:terminal-mobile` runs a phone-sized, touch-emulated browser through all
 of this.
 
+**Suggestions above the keyboard.** On a touch screen, one line of tappable chips sits over the
+extra keys while the prompt has the keyboard ([`HintBar.tsx`](src/terminal/HintBar.tsx)): what Tab
+would offer for the word being typed, at most eight, scrolling sideways, gone when there is nothing
+to offer. At the shell prompt they come from the same completion as Tab (`completions` in
+[`commands.ts`](src/terminal/commands.ts)): commands for the first word, then folders and files.
+In `agents` they are the lists under its prompt: slash commands, `#LoRA`, `$skill`, `@tool`,
+`@./path`, and after a `!` the shell's own completion for the command being typed (a program hands
+them over with `Ctx.setHints`, and gets the shell's through `Ctx.completeLine`). A tap puts the
+suggestion on the line like Tab does, and never takes the focus, so the keyboard stays up. The
+desktop is unchanged.
+
 ### Terminal settings
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
@@ -644,6 +655,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   with each model call and tool call. See *Thread stats* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
+- On a touch screen the same completions are tappable (see *Suggestions above the keyboard*
+  under Terminal): slash commands, `#LoRA`, `$skill`, `@tool` and `@./path` as you type them, and
+  after a `!` the shell's commands and paths.
 
 `skills` ([`src/terminal/skills.ts`](src/terminal/skills.ts),
 [`server/skills.ts`](server/skills.ts)) manages SKILL.md folders. They live in

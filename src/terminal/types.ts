@@ -11,6 +11,9 @@ export class CmdError extends Error {
   }
 }
 
+/** One tappable suggestion for the line being typed; touch screens show them above the keyboard. */
+export type Hint = { label: string; hint?: string; apply: () => void }
+
 export type Ctx = {
   args: string[]
   stdin: string | null
@@ -50,6 +53,18 @@ export type Ctx = {
   size: { cols: number; rows: number }
   /** Called when the terminal changes size while the command runs (agents redraws); null stops it. */
   onResize?: (handler: (() => void) | null) => void
+  /**
+   * Touch screens: tappable suggestions for what the program's own prompt holds (agents offers its
+   * slash commands and mentions), shown in a row above the keyboard; null or an empty list hides
+   * the row. Absent where there is nothing to show them on. `apply` puts one on the program's line.
+   */
+  setHints?: (hints: Hint[] | null) => void
+  /**
+   * What Tab would offer for the last word of a command line, for a program with a shell prompt
+   * of its own (agents' `!`). `before` is the line up to that word; each `value` is ready to put
+   * in its place (escaped, with the space after it that Tab adds).
+   */
+  completeLine?: (line: string) => { before: string; items: { value: string; label: string; hint?: string }[] }
   /** Receives keys typed while the command runs (q in htop); return true to swallow the key. */
   /**
    * `raw` handlers also get Ctrl and Alt combinations (as ^X and M-x), F-keys (F1…F12), pastes

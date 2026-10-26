@@ -2483,6 +2483,42 @@ body.is-resizing iframe {
     touch-action: pan-x pan-y;
   }
 }
+/* The suggestions above a touch keyboard (src/terminal/HintBar.tsx): what Tab would complete, as
+   chips on one line that scrolls sideways, over the extra keys. */
+.t-hints {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 5px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-dark);
+  font-family: var(--mono);
+  touch-action: pan-x;
+}
+.t-hints::-webkit-scrollbar {
+  display: none;
+}
+.t-hint {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: var(--panel-2);
+  color: var(--green);
+  font: inherit;
+  font-size: 13px;
+  white-space: pre;
+}
+.t-hint:active {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.t-hints + .t-keys {
+  border-top: 0;
+}
 /* The extra keys row above a touch keyboard (src/terminal/ExtraKeys.tsx), Termux-style. */
 .t-keys {
   flex: none;

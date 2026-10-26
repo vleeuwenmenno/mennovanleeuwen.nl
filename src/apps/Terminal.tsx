@@ -17,6 +17,7 @@ import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { aliasesOf } from '../terminal/msh/interp'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
 import { ExtraKeys, useStickyMods, type ModKeys } from '../terminal/ExtraKeys'
+import { HintBar, sameHints } from '../terminal/HintBar'
 import { prepareFolder } from '../terminal/fs'
 import { quotePaths } from '../terminal/words'
 import { terminalPrefs, useTerminalPrefs } from '../terminal/prefs'
@@ -29,7 +30,7 @@ import type { Line } from '../terminal/vt/screen'
 import { VtSession, type TermPort } from '../terminal/vt/session'
 import { VtLines, VtView } from '../terminal/vt/VtView'
 import { encodeKey, encodePaste } from '../terminal/vt/keys'
-import { CmdError } from '../terminal/types'
+import { CmdError, type Hint } from '../terminal/types'
 import { accountStorage } from '../os/accountSpace'
 
 /** Which terminal session last painted the shared find highlights. */
@@ -869,6 +870,12 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       paint,
       size,
       onResize: (h) => void (resizeHandler.current = h),
+      // The suggestions row above a touch keyboard, for a program with a prompt of its own (agents).
+      setHints: coarse ? (list) => setProgramHints((prev) => (sameHints(prev, list ?? []) ? prev : (list ?? []))) : undefined,
+      completeLine: (line) => {
+        const r = completions(line, cwd, aliasesOf(env.current).keys())
+        return { before: r.before, items: r.items.map((i) => ({ ...i, value: escapeArg(i.value) + (i.value.endsWith('/') ? '' : ' ') })) }
+      },
       onKey: (h, opts) => {
         keyHandler.current = h
         rawKeys.current = !!h && !!opts?.raw
@@ -889,6 +896,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       setEntries((e) => e.filter((x) => x.id !== id))
     }
     watcher.disconnect()
+    setProgramHints([])
     sizeCheck.current = null
     resizeHandler.current = null
     keyHandler.current = null
@@ -1044,6 +1052,52 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
   // The extra keys row on touch screens (src/terminal/ExtraKeys.tsx), while the prompt has the
   // keyboard. Its Ctrl, Alt and Shift also apply to what is typed on the keyboard.
   const mods = useStickyMods()
+
+  // The suggestions row above the keyboard (touch screens): what Tab would offer for the word being
+  // typed. In the shell that is its own completion (commands for the first word, then folders and
+  // files); a program with a prompt of its own, running, brings its own (agents).
+  const [programHints, setProgramHints] = useState<Hint[]>([])
+  const [foldersSeen, setFoldersSeen] = useState(0)
+  const hintLine = coarse && !onLogout && !busy && !session && !goMode && !readOnly ? value : ''
+  // A folder in Seafile is fetched first, so its names can be offered (as Tab does).
+  const preparing = useRef('')
+  useEffect(() => {
+    if (!hintLine.trim()) return
+    const word = WORD_RE.exec(hintLine)![1].replace(/\\(.)/g, '$1')
+    const dir = resolvePath(cwd, word.includes('/') ? word.slice(0, word.lastIndexOf('/') + 1) : '.')
+    if (preparing.current === dir) return
+    preparing.current = dir
+    void prepareFolder(dir).then(() => setFoldersSeen((n) => n + 1))
+  }, [hintLine, cwd])
+  const shellHints = useMemo<Hint[]>(() => {
+    if (!hintLine.trim()) return []
+    const { word, items } = completions(hintLine, cwd, aliasesOf(env.current).keys())
+    // Already what is typed: nothing left to suggest.
+    if (!items.length || (items.length === 1 && items[0].value === word)) return []
+    return items.slice(0, HINTS_MAX).map((c) => ({ label: c.label, hint: c.hint, apply: () => takeHint(c.value) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hintLine, cwd, foldersSeen])
+  /** A tapped suggestion goes in place of the word being typed, as Tab puts it. */
+  function takeHint(chosen: string) {
+    const el = inputRef.current
+    const line = el?.value ?? value
+    const word = WORD_RE.exec(line)![1]
+    const next = line.slice(0, line.length - word.length) + escapeArg(chosen) + (chosen.endsWith('/') ? '' : ' ')
+    setPicking(null)
+    setValue(next)
+    el?.focus({ preventScroll: true })
+    requestAnimationFrame(() => {
+      el?.setSelectionRange(next.length, next.length)
+      syncCaret()
+    })
+  }
+  const hints = running ? programHints : shellHints
+  const showHints = coarse && !onLogout && caret.focused && !readOnly && !animating && !session && hints.length > 0
+  // The row takes room from the screen: the prompt stays in view.
+  useLayoutEffect(() => {
+    if (!sessionRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [showHints])
+
   const showKeys = coarse && prefs.extraKeys && caret.focused && !readOnly && !animating && !onLogout
   useEffect(() => {
     if (!showKeys) mods.reset()
@@ -1642,6 +1696,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
           {Math.round(zoom * 100)}%
         </div>
       )}
+      {showHints && <HintBar hints={hints} />}
       {showKeys && <ExtraKeys mods={mods} onKey={rowKey} />}
       {settingsOpen && (
         <TerminalSettings
