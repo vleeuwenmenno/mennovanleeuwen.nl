@@ -1,7 +1,8 @@
-import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { ownPrivateCache, canUsePrivateCache, bindPrivateAccess, requirePrivateRequest, withPrivateOperation, withProviderGuard } from './privateRequest.ts'
 import type { User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
-import { davRefused, davRequest, davXml, escapeXml, found, hrefIn, normalizeDavUrl, prop, resolveHref, responses, unescapeXml, type DavLogin } from './dav.ts'
+import { caldavAccounts } from './caldav.ts'
+import { davAuthority, assertDavLogin, type DavAuthority, davRefused, davRequest, davXml, escapeXml, found, hrefIn, normalizeDavUrl, prop, resolveHref, responses, unescapeXml, type DavLogin } from './dav.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 import { printCard, splitCards, type Card } from './vcard.ts'
@@ -15,7 +16,7 @@ import { printCard, splitCards, type Card } from './vcard.ts'
 // overwritten (412 → "it changed somewhere else").
 
 export type CarddavInfo = { id: number; label: string; url: string; username: string }
-type Account = CarddavInfo & { password: string; user: User }
+type Account = CarddavInfo & DavLogin
 export type AddressBook = { id: string; account: number; href: string; name: string; writable: boolean }
 /** One card on the server: where it lives, its ETag, and its lines. */
 export type DavCard = { href: string; etag: string; card: Card }
@@ -24,6 +25,35 @@ export const FASTMAIL_URL = 'https://carddav.fastmail.com/dav/'
 
 // ---------------------------------------------------------------------------------------------
 // Accounts
+
+const versions = new Map<number, number>()
+const changes = new Set<(id: number) => void>()
+export const carddavLinkVersion = (user: User) => versions.get(user.id) ?? 0
+function linkAuthority(user: User): DavAuthority {
+  const generation = carddavLinkVersion(user)
+  return {
+    key: `carddav:${user.id}:${generation}`,
+    check() { if (carddavLinkVersion(user) !== generation) throw new HttpError(409, 'CardDAV was reconnected or disconnected meanwhile: try again') },
+    subscribe(end) {
+      const changed = (id: number) => { if (id === user.id) end() }
+      changes.add(changed)
+      return () => { changes.delete(changed) }
+    },
+  }
+}
+export function bindCarddavRequest(user: User) {
+  requirePrivateRequest(user)
+  const a = linkAuthority(user)
+  bindPrivateAccess(a.check, a.subscribe, a.key)
+}
+function changedLink(user: User | number) {
+  const id = typeof user === 'number' ? user : user.id
+  versions.set(id, (versions.get(id) ?? 0) + 1)
+  clearCarddavCache(id)
+  for (const changed of changes) changed(id)
+}
+// Credentials never appear in an AddressBook's enumerable/public representation.
+const bookAccounts = new WeakMap<AddressBook, Account>()
 
 let ready = false
 /** The accounts table, made on first use (this module's own; it goes with the user's account). */
@@ -53,7 +83,7 @@ export function listCarddav(user: User): CarddavInfo[] {
 
 function accounts(user: User): Account[] {
   const rows = db().prepare('SELECT id, label, base_url, username, password FROM carddav WHERE user_id = ? ORDER BY id').all(user.id) as unknown as Row[]
-  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user }))
+  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user, authority: davAuthority(user, 'carddav', r, linkAuthority(user)) }))
 }
 
 /** The CardDAV address for a provider's CalDAV one: Fastmail and iCloud use other hosts, the rest (Nextcloud, Radicale, Baïkal) the same URL. */
@@ -79,23 +109,26 @@ export function reusableLogins(user: User): { caldav: number; label: string; url
  * Finds the account's address books (proving the URL and password work), then stores it. With
  * `caldav`, the username and app password of that CalDAV account of the user's are used.
  */
-export async function addCarddav(user: User, body: { url?: string; username?: string; password?: string; label?: string; caldav?: number }): Promise<CarddavInfo> {
+async function addCarddavOperation(user: User, body: { url?: string; username?: string; password?: string; label?: string; caldav?: number }): Promise<CarddavInfo> {
+  requirePrivateRequest(user)
+  const epoch = linkAuthority(user)
+  const source = body.caldav === undefined ? undefined : caldavAccounts(user).find((a) => a.id === Number(body.caldav))
   let url: string
   let username: string | undefined
   let password: string | undefined
   if (body.caldav !== undefined) {
-    const row = database().prepare('SELECT base_url, username, password FROM caldav WHERE user_id = ? AND id = ?').get(user.id, Number(body.caldav)) as Row | undefined
-    if (!row) throw new HttpError(404, 'That calendar account is not linked')
-    url = normalizeDavUrl(body.url || carddavUrlFor(row.base_url))
-    username = row.username
-    password = decrypt(row.password)
+    if (!source) throw new HttpError(404, 'That calendar account is not linked')
+    url = normalizeDavUrl(body.url || carddavUrlFor(source.url))
+    username = source.username
+    password = source.password
   } else {
     url = normalizeDavUrl(body.url || FASTMAIL_URL)
     username = body.username?.trim()
     password = body.password?.trim()
   }
   if (!username || !password) throw new HttpError(400, 'Username and app password are required')
-  const account: Account = { id: 0, label: '', url, username, password, user }
+  const authority = davAuthority(user, 'carddav', undefined, epoch)
+  const account: Account = { id: 0, label: '', url, username, password, user, authority: { ...authority, check() { authority.check(); source?.authority.check() }, subscribe(end) { const off = authority.subscribe(end), sourceOff = source?.authority.subscribe(end); return () => { off(); sourceOff?.() } } } }
   const books = await discover(account).catch((e: Error) => {
     if (body.caldav !== undefined && /refused/.test(e.message)) throw new HttpError(400, `${e.message}. That app password may only be for calendars: make one that can read contacts too.`)
     throw new HttpError(400, e.message)
@@ -104,18 +137,21 @@ export async function addCarddav(user: User, body: { url?: string; username?: st
   const host = new URL(url).hostname
   const label = (body.label?.trim() || (host.includes('fastmail') ? 'Fastmail' : host.includes('icloud') ? 'iCloud' : host)).slice(0, 40)
   // The same account again (a new app password, read-write this time): keep it, and its books' ids.
+  assertDavLogin(account)
   const existing = db().prepare('SELECT id FROM carddav WHERE user_id = ? AND base_url = ? AND username = ?').get(user.id, url, username) as { id: number } | undefined
   if (existing) {
     db().prepare('UPDATE carddav SET label = ?, password = ? WHERE id = ?').run(label, encrypt(password), existing.id)
-    clearCarddavCache(user)
+    changedLink(user)
     return { id: existing.id, label, url, username }
   }
   const r = db().prepare('INSERT INTO carddav (user_id, label, base_url, username, password, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, label, url, username, encrypt(password), Date.now())
-  clearCarddavCache(user)
+  changedLink(user)
   return { id: Number(r.lastInsertRowid), label, url, username }
 }
 
 export function removeCarddav(user: User, id: number) {
+  requirePrivateRequest(user)
+  changedLink(user)
   db().prepare('DELETE FROM carddav WHERE user_id = ? AND id = ?').run(user.id, id)
   clearCarddavCache(user)
 }
@@ -181,7 +217,7 @@ export const clearCarddavCache = (user: User | number) => {
   for (const k of cardCache.keys()) if (k.startsWith(`${id}|`)) cardCache.delete(k)
 }
 
-onUserGone((id) => clearCarddavCache(id))
+onUserGone((id) => changedLink(id))
 
 // Cards of address books nobody looked at for half an hour are let go (photos make them big).
 setInterval(() => {
@@ -189,12 +225,20 @@ setInterval(() => {
 }, 5 * 60_000).unref()
 
 /** Every address book of every CardDAV account (ids are "dav:<account>:<href>"), and what went wrong per account. */
-export async function carddavBooks(user: User): Promise<{ books: AddressBook[]; errors: string[] }> {
+async function carddavBooksOperation(user: User): Promise<{ books: AddressBook[]; errors: string[] }> {
+  bindCarddavRequest(user)
   const errors: string[] = []
   const lists = await Promise.all(
     accounts(user).map((a) =>
-      cached(`${user.id}|books|${a.id}`, 10 * 60_000, () => discover(a))
-        .then((books) => books.map((b) => ({ id: `dav:${a.id}:${b.href}`, account: a.id, href: b.href, name: b.name, writable: b.writable })))
+      cached(`${user.id}|books|${a.authority.key}`, 10 * 60_000, () => discover(a))
+        .then((books) => {
+          assertDavLogin(a)
+          return books.map((b) => {
+            const book = { id: `dav:${a.id}:${b.href}`, account: a.id, href: b.href, name: b.name, writable: b.writable }
+            bookAccounts.set(book, a)
+            return book
+          })
+        })
         .catch((e: Error) => (errors.push(`${a.label}: ${e.message}`), [] as AddressBook[])),
     ),
   )
@@ -202,8 +246,9 @@ export async function carddavBooks(user: User): Promise<{ books: AddressBook[]; 
 }
 
 function loginFor(user: User, book: AddressBook): Account {
-  const account = accounts(user).find((a) => a.id === book.account)
-  if (!account) throw new HttpError(404, 'That address book is not connected')
+  const account = bookAccounts.get(book)
+  if (!account || account.user.id !== user.id) throw new HttpError(404, 'That address book is not connected')
+  assertDavLogin(account)
   return account
 }
 
@@ -213,8 +258,8 @@ const isCard = (book: AddressBook, href: string) => href !== book.href && !href.
  * The book's cards, up to date within `maxAge`: the ETags are listed, and only cards that are new
  * or changed are fetched (in batches, with addressbook-multiget).
  */
-export async function bookCards(user: User, book: AddressBook, maxAge = 60_000): Promise<DavCard[]> {
-  const key = `${user.id}|cards|${book.id}`
+async function bookCardsOperation(user: User, book: AddressBook, maxAge = 60_000): Promise<DavCard[]> {
+  const key = `${user.id}|cards|${loginFor(user, book).authority.key}|${book.id}`
   let set = cardCache.get(key)
   if (set?.syncing && !canUsePrivateCache(set.syncing)) set = undefined
   if (!set) cardCache.set(key, (set = { at: 0, cards: new Map(), syncing: null }))
@@ -261,18 +306,18 @@ export function cardUrl(book: AddressBook, name: string): string {
 }
 
 /** One card as it is on the server now, with its ETag (and the cache told). */
-export async function getCard(user: User, book: AddressBook, url: string): Promise<DavCard> {
+async function getCardOperation(user: User, book: AddressBook, url: string): Promise<DavCard> {
   const res = await davRequest(loginFor(user, book), 'GET', url, { headers: { Accept: 'text/vcard' } })
   if (!res.ok) davRefused(res, url, 'contact')
   const card = splitCards((await readCapped(res, 8 * 1024 * 1024)).toString('utf8'))[0]
   if (!card) throw new HttpError(502, 'That contact could not be read')
   const got = { href: url, etag: res.headers.get('etag') ?? '', card }
-  cardCache.get(`${user.id}|cards|${book.id}`)?.cards.set(url, got)
+  cardCache.get(`${user.id}|cards|${loginFor(user, book).authority.key}|${book.id}`)?.cards.set(url, got)
   return got
 }
 
 /** Writes a card: with the `etag` it must still have, or 'new' for one that must not exist yet. Answers it as stored. */
-export async function putCard(user: User, book: AddressBook, url: string, card: Card, etag: string | 'new'): Promise<DavCard> {
+async function putCardOperation(user: User, book: AddressBook, url: string, card: Card, etag: string | 'new'): Promise<DavCard> {
   const headers: Record<string, string> = { 'Content-Type': 'text/vcard; charset=utf-8' }
   if (etag === 'new') headers['If-None-Match'] = '*'
   else if (etag) headers['If-Match'] = etag
@@ -283,25 +328,41 @@ export async function putCard(user: User, book: AddressBook, url: string, card: 
   const newEtag = res.headers.get('etag')
   if (!newEtag || /^W\//.test(newEtag)) return getCard(user, book, url)
   const stored = { href: url, etag: newEtag, card }
-  cardCache.get(`${user.id}|cards|${book.id}`)?.cards.set(url, stored)
+  cardCache.get(`${user.id}|cards|${loginFor(user, book).authority.key}|${book.id}`)?.cards.set(url, stored)
   return stored
 }
 
-export async function deleteCard(user: User, book: AddressBook, url: string, etag?: string) {
+async function deleteCardOperation(user: User, book: AddressBook, url: string, etag?: string) {
   const res = await davRequest(loginFor(user, book), 'DELETE', url, { headers: etag ? { 'If-Match': etag } : {} })
   if (!res.ok && res.status !== 404) davRefused(res, url, 'contact')
   await res.body?.cancel().catch(() => {})
-  cardCache.get(`${user.id}|cards|${book.id}`)?.cards.delete(url)
+  cardCache.get(`${user.id}|cards|${loginFor(user, book).authority.key}|${book.id}`)?.cards.delete(url)
 }
 
 /** A PHOTO given as an address on the account's own server: fetched with its login. */
-export async function fetchPhoto(user: User, book: AddressBook, uri: string): Promise<{ type: string; bytes: Buffer }> {
+async function fetchPhotoOperation(user: User, book: AddressBook, uri: string): Promise<{ type: string; bytes: Buffer }> {
   const account = loginFor(user, book)
   // The login only goes to the account's own server; a photo elsewhere is fetched without it.
   const res =
     new URL(uri).origin === new URL(book.href).origin
       ? await davRequest(account, 'GET', uri)
-      : await guardedFetch(user, uri, { headers: { 'User-Agent': 'mvlos' }, signal: AbortSignal.timeout(15_000) }).catch((e) => (rethrowEgress(e), null))
+      : await withProviderGuard(account.authority.check, () => guardedFetch(user, uri, { headers: { 'User-Agent': 'mvlos' }, signal: AbortSignal.timeout(15_000) })).catch((e) => (rethrowEgress(e), null))
   if (!res?.ok) throw new HttpError(404, 'No photo')
-  return { type: res.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? 'image/jpeg', bytes: await readCapped(res, 5 * 1024 * 1024) }
+  const bytes = await readCapped(res, 5 * 1024 * 1024)
+  assertDavLogin(account)
+  return { type: res.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? 'image/jpeg', bytes }
 }
+
+export const addCarddav = (...args: Parameters<typeof addCarddavOperation>) => withPrivateOperation(() => addCarddavOperation(...args))
+
+export const carddavBooks = (...args: Parameters<typeof carddavBooksOperation>) => withPrivateOperation(() => carddavBooksOperation(...args))
+
+export const bookCards = (...args: Parameters<typeof bookCardsOperation>) => withPrivateOperation(() => bookCardsOperation(...args))
+
+export const getCard = (...args: Parameters<typeof getCardOperation>) => withPrivateOperation(() => getCardOperation(...args))
+
+export const putCard = (...args: Parameters<typeof putCardOperation>) => withPrivateOperation(() => putCardOperation(...args))
+
+export const deleteCard = (...args: Parameters<typeof deleteCardOperation>) => withPrivateOperation(() => deleteCardOperation(...args))
+
+export const fetchPhoto = (...args: Parameters<typeof fetchPhotoOperation>) => withPrivateOperation(() => fetchPhotoOperation(...args))

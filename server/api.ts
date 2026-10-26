@@ -1,3 +1,4 @@
+import { bindCarddavRequest } from './carddav.ts'
 import { saveImageMask, imageMask, discardImageMask, maskSource } from './agentImageMasks.ts'
 import { searchPastThreads } from './agents.ts'
 import { saveSkillConfig, skillConfig } from './agentSkills.ts'
@@ -158,6 +159,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           bindCaldavRequest(user)
           bindGoogleRequest(user)
         }
+        if (path === '/api/tasks' || path.startsWith('/api/tasks/')) bindCaldavRequest(user)
+        if ((path === '/api/contacts' || path.startsWith('/api/contacts/')) && !path.startsWith('/api/contacts/accounts')) bindCarddavRequest(user)
         const dispatch = () => handleApi(req, res)
         if (!path.startsWith('/api/seafile/') && !path.startsWith('/api/office/') && path !== '/api/integrations/onlyoffice') return dispatch()
         return withSeafileLink(user, () => { bindSeafileRequest(user); assertSeafileLink(user); return dispatch() })

@@ -1503,6 +1503,11 @@ between reading and writing (412) is read again and the change made once more on
 changed yet again, the app says so. Tasks on the site are kept the same way, as each task's VTODO text
 (tables `task_lists` and `task_items`), so one set of code handles both.
 
+Tasks discovery, task caches and reminder snapshots belong to the exact CalDAV link that found
+them. Unlinking, replacing or removing an account clears those caches and aborts pending reads and
+writes, including agent/PIM operations and moves to local lists. A reused numeric account ID never
+pairs an old server address with replacement credentials; no reminder falls back to a removed link.
+
 In the **Calendar** app, tasks with a due date show on their day, all day or at their time, with a
 ring to tick them; dragging one changes its due date and opening one opens it in Tasks. The sidebar's
 *Tasks* section switches lists on and off (the same switch as *Show in Calendar* on a list in Tasks).
@@ -3309,6 +3314,19 @@ properties, keys, sounds) is kept. A 412 from the server answers "it changed som
 New cards are vCard 3.0, which every server takes. `pnpm check:contacts`
 ([`scripts/contacts-check.ts`](scripts/contacts-check.ts)) runs all of this against a stand-in
 CardDAV server, including another user who must see none of it.
+
+CardDAV books retain the discovering account privately on the server. Discovery/card caches and
+in-flight jobs use an owner-bound identity derived from the encrypted credential record, plus the
+current link generation. The identity survives restart for unchanged links and changes on every
+credential replacement, even when SQLite reuses an account ID. Unlink/relink or account removal aborts
+pending list, card, photo and write operations; Contacts, agent and PIM aggregates retain that
+authority until delivery and local commits. CalDAV and CardDAV share a transport that requires
+captured link authority and checks it before dispatch, after awaits, and while reading response
+bodies. Credentials are never reloaded by an address book or task list's numeric account ID.
+
+`pnpm check:dav-link-race` uses two local DAV origins, reused SQLite IDs and held discovery/body
+boundaries to check credential isolation, stale-handle rejection, aggregate effects and reminders.
+
 
 **For other apps** ([`src/data/contacts.ts`](src/data/contacts.ts)): the contacts are loaded once
 per page and shared, with an index by email address.

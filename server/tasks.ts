@@ -1,4 +1,4 @@
-import { ownPrivateCache, canUsePrivateCache } from './privateRequest.ts'
+import { ownPrivateCache, canUsePrivateCache, withPrivateOperation } from './privateRequest.ts'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
@@ -6,6 +6,10 @@ import { normalizeTaskPrefs, type TaskPrefs } from '../src/data/taskPrefs.ts'
 import { accounts as allAccounts, type User } from './auth.ts'
 import {
   caldavAccounts,
+  caldavLinkVersion,
+  assertCaldavLink,
+  bindCaldavRequest,
+  onCaldavLinkChanged,
   calendarHome,
   calendarTitle,
   dav,
@@ -30,6 +34,7 @@ import {
   type CaldavAccount,
   type IcalProp,
 } from './caldav.ts'
+import { assertDavLogin } from './dav.ts'
 import { database, onUserGone } from './db.ts'
 import { readCapped } from './egress.ts'
 import { HttpError, json, readJson } from './http.ts'
@@ -401,6 +406,7 @@ function newTaskText(uid: string, input: TaskInput): Ics {
 
 type Obj = { href: string; etag: string | null; text: string }
 type Store = {
+  account?: CaldavAccount
   list: TaskList
   objects: () => Promise<Obj[]>
   get: (href: string) => Promise<Obj>
@@ -517,6 +523,7 @@ function refused(res: Response, url: string): never {
 }
 
 function davStore(account: CaldavAccount, list: DavList): Store {
+  assertDavLogin(account)
   const base = new URL(list.href)
   const dir = list.href.endsWith('/') ? list.href : `${list.href}/`
   /** An object's address, only if it is inside this list (refs come back from the browser). */
@@ -526,6 +533,7 @@ function davStore(account: CaldavAccount, list: DavList): Store {
     return url.href
   }
   return {
+    account,
     list,
     async objects() {
       const xml = await dav(
@@ -580,16 +588,18 @@ const forget = (userId: number, what = '') => {
   upcoming.delete(userId)
 }
 onUserGone((id) => forget(id))
+onCaldavLinkChanged((id) => forget(id))
 
 /** Every store of the account: its lists on this site and in each CalDAV account, and what went wrong per account. */
 async function stores(user: User): Promise<{ stores: Store[]; errors: string[] }> {
+  bindCaldavRequest(user)
   const errors: string[] = []
   // Someone with no lists anywhere yet gets one here, to start with.
   if (!localLists(user).length && !listCaldav(user).length) createLocalList(user, 'Reminders', '#7aa2f7')
   const local = localLists(user).map((l) => localStore(user, l))
   const dav = await Promise.all(
     caldavAccounts(user).map((a) =>
-      cached(`${user.id}|lists|${a.id}`, 10 * 60_000, () => discoverLists(a))
+      cached(`${user.id}|lists|${a.authority.key}`, 10 * 60_000, () => discoverLists(a))
         .then((lists) => lists.map((l) => davStore(a, l)))
         .catch((e: Error) => (errors.push(`${a.label}: ${e.message}`), [] as Store[])),
     ),
@@ -614,11 +624,11 @@ async function tasksOf(user: User, store: Store): Promise<Task[]> {
     const done = tasks.filter((t) => t.completed).sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
     return [...tasks.filter((t) => !t.completed), ...done.slice(0, MAX_COMPLETED)]
   }
-  return store.list.local ? load() : cached(`${user.id}|tasks|${store.list.id}`, 2 * 60_000, load)
+  return store.list.local ? load() : cached(`${user.id}|tasks|${store.account!.authority.key}|${store.list.id}`, 2 * 60_000, load)
 }
 
 /** Every list and task of the account, and per-source problems. */
-export async function allTasks(user: User): Promise<{ lists: TaskList[]; tasks: Task[]; errors: string[] }> {
+async function allTasksOperation(user: User): Promise<{ lists: TaskList[]; tasks: Task[]; errors: string[] }> {
   const { stores: all, errors } = await stores(user)
   const lists = await Promise.all(all.map((s) => tasksOf(user, s).catch((e: Error) => (errors.push(`${s.list.name}: ${e.message}`), [] as Task[]))))
   const pub = ({ id, name, color, source, writable, local, calendar }: TaskList): TaskList => ({ id, name, color, source, writable, local, ...(calendar ? { calendar } : {}) })
@@ -646,7 +656,7 @@ async function change(store: Store, href: string, uid: string | null, edit: (com
 }
 
 function changed(user: User, store?: Store) {
-  forget(user.id, store ? `tasks|${store.list.id}` : 'tasks|')
+  forget(user.id, store?.account ? `tasks|${store.account.authority.key}|${store.list.id}` : 'tasks|')
   // The Tasks and Calendar apps and the Agenda widget, in every open page.
   tellPages(user.id, 'calendar')
 }
@@ -660,7 +670,7 @@ async function defaultStore(user: User, listId: unknown): Promise<Store> {
   return store
 }
 
-export async function createTask(user: User, body: { list?: unknown; task?: unknown }): Promise<Task> {
+async function createTaskOperation(user: User, body: { list?: unknown; task?: unknown }): Promise<Task> {
   const input = cleanInput(body.task)
   if (!input.title) throw new HttpError(400, 'A task needs a title')
   const store = await defaultStore(user, body.list)
@@ -684,7 +694,7 @@ async function childrenOf(user: User, store: Store, uid: string): Promise<Task[]
   return out
 }
 
-export async function updateTask(user: User, body: { ref?: unknown; task?: unknown; list?: unknown }): Promise<{ task: Task; advanced: boolean }> {
+async function updateTaskOperation(user: User, body: { ref?: unknown; task?: unknown; list?: unknown }): Promise<{ task: Task; advanced: boolean }> {
   const ref = decodeRef(body.ref)
   const input = cleanInput(body.task ?? {})
   const store = await storeFor(user, ref.l)
@@ -715,7 +725,7 @@ async function moveTask(user: User, from: Store, task: Task, to: Store): Promise
   return moved
 }
 
-export async function deleteTask(user: User, body: { ref?: unknown }) {
+async function deleteTaskOperation(user: User, body: { ref?: unknown }) {
   const ref = decodeRef(body.ref)
   const store = await storeFor(user, ref.l)
   try {
@@ -734,7 +744,7 @@ export async function deleteTask(user: User, body: { ref?: unknown }) {
  * moved one gets an X-APPLE-SORT-ORDER between its neighbours'; when there is no room (or the
  * neighbours have none yet), the list is numbered again, writing only the tasks whose number changes.
  */
-export async function orderTasks(user: User, body: { list?: unknown; refs?: unknown; moved?: unknown }) {
+async function orderTasksOperation(user: User, body: { list?: unknown; refs?: unknown; moved?: unknown }) {
   if (typeof body.list !== 'string' || !Array.isArray(body.refs) || body.refs.length > 1000) throw new HttpError(400, 'Bad order')
   const store = await storeFor(user, body.list)
   const tasks = await tasksOf(user, store)
@@ -773,7 +783,7 @@ function createLocalList(user: User, name: string, color: string): TaskList {
 const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /** A new list: on this site (`account` "local"), or a new collection for tasks in a CalDAV account (MKCALENDAR). */
-export async function createList(user: User, body: { name?: unknown; color?: unknown; account?: unknown }): Promise<TaskList> {
+async function createListOperation(user: User, body: { name?: unknown; color?: unknown; account?: unknown }): Promise<TaskList> {
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : ''
   if (!name) throw new HttpError(400, 'A list needs a name')
   const color = typeof body.color === 'string' && COLOR.test(body.color) ? body.color : '#7aa2f7'
@@ -796,7 +806,7 @@ export async function createList(user: User, body: { name?: unknown; color?: unk
   }
 }
 
-export async function updateList(user: User, body: { id?: unknown; name?: unknown; color?: unknown }) {
+async function updateListOperation(user: User, body: { id?: unknown; name?: unknown; color?: unknown }) {
   const store = await storeFor(user, String(body.id ?? ''))
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : undefined
   const color = typeof body.color === 'string' && COLOR.test(body.color) ? body.color : undefined
@@ -808,7 +818,7 @@ export async function updateList(user: User, body: { id?: unknown; name?: unknow
       return
     }
     const list = store.list as DavList
-    const account = caldavAccounts(user).find((a) => a.id === list.account)!
+    const account = store.account!
     const res = await davRequest(account, 'PROPPATCH', list.href, {
       headers: { 'Content-Type': 'application/xml; charset=utf-8' },
       body: `<?xml version="1.0" encoding="utf-8"?><d:propertyupdate ${D}><d:set><d:prop>${name ? `<d:displayname>${xmlEsc(name)}</d:displayname>` : ''}${color ? `<a:calendar-color>${color}</a:calendar-color>` : ''}</d:prop></d:set></d:propertyupdate>`,
@@ -820,7 +830,7 @@ export async function updateList(user: User, body: { id?: unknown; name?: unknow
   }
 }
 
-export async function deleteList(user: User, body: { id?: unknown }) {
+async function deleteListOperation(user: User, body: { id?: unknown }) {
   const store = await storeFor(user, String(body.id ?? ''))
   try {
     if (store.list.local) {
@@ -830,7 +840,7 @@ export async function deleteList(user: User, body: { id?: unknown }) {
     // A collection that holds events too is a calendar: never deleted from the Tasks app.
     if (store.list.calendar) throw new HttpError(400, `"${store.list.name}" is also a calendar; delete it in ${store.list.source} itself`)
     const list = store.list as DavList
-    const account = caldavAccounts(user).find((a) => a.id === list.account)!
+    const account = store.account!
     const res = await davRequest(account, 'DELETE', list.href)
     if (!res.ok && res.status !== 404) refused(res, list.href)
   } finally {
@@ -886,7 +896,7 @@ export function dueNotices(tasks: Task[], lists: TaskList[], now: number, prefs:
 }
 
 /** Each account's tasks, read again every five minutes (or after a change made here). */
-const upcoming = new Map<number, { at: number; tasks: Task[]; lists: TaskList[] }>()
+const upcoming = new Map<number, { at: number; generation: number; tasks: Task[]; lists: TaskList[] }>()
 const REFRESH_MS = 5 * 60_000
 
 /** The watcher (every minute): due tasks of every account that has any, through the notification hub. */
@@ -895,13 +905,20 @@ export async function taskReminders(now = Date.now()) {
     if (!allows(normalizePrefs(readState(u).notify?.value), 'tasks.due')) continue
     const hasLocal = (database().prepare('SELECT 1 FROM task_lists WHERE user_id = ? LIMIT 1').get(u.id) as unknown) !== undefined
     if (!hasLocal && !listCaldav(u).length) continue
-    let c = upcoming.get(u.id)
-    if (!c || now - c.at > REFRESH_MS) {
-      const all = await allTasks(u).catch(() => null)
-      c = { at: now, tasks: all?.tasks ?? c?.tasks ?? [], lists: all?.lists ?? c?.lists ?? [] }
-      upcoming.set(u.id, c)
-    }
-    for (const n of dueNotices(c.tasks, c.lists, now, taskPrefsOf(u))) notify(u, n)
+    await withPrivateOperation(async () => {
+      bindCaldavRequest(u)
+      const generation = caldavLinkVersion(u)
+      let c = upcoming.get(u.id)
+      if (c?.generation !== generation) c = undefined
+      if (!c || now - c.at > REFRESH_MS) {
+        const all = await allTasks(u).catch(() => null)
+        assertCaldavLink(u, generation)
+        c = { at: now, generation, tasks: all?.tasks ?? c?.tasks ?? [], lists: all?.lists ?? c?.lists ?? [] }
+        upcoming.set(u.id, c)
+      }
+      assertCaldavLink(u, generation)
+      for (const n of dueNotices(c.tasks, c.lists, now, taskPrefsOf(u))) { assertCaldavLink(u, generation); notify(u, n) }
+    }).catch(() => { /* A removed link must never notify from its previous tasks. */ })
   }
 }
 
@@ -928,3 +945,19 @@ export async function handleTasksApi(req: IncomingMessage, res: ServerResponse, 
   }
   return false
 }
+
+export const allTasks = (...args: Parameters<typeof allTasksOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return allTasksOperation(...args) })
+
+export const createTask = (...args: Parameters<typeof createTaskOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return createTaskOperation(...args) })
+
+export const updateTask = (...args: Parameters<typeof updateTaskOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return updateTaskOperation(...args) })
+
+export const deleteTask = (...args: Parameters<typeof deleteTaskOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return deleteTaskOperation(...args) })
+
+export const orderTasks = (...args: Parameters<typeof orderTasksOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return orderTasksOperation(...args) })
+
+export const createList = (...args: Parameters<typeof createListOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return createListOperation(...args) })
+
+export const updateList = (...args: Parameters<typeof updateListOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return updateListOperation(...args) })
+
+export const deleteList = (...args: Parameters<typeof deleteListOperation>) => withPrivateOperation(() => { bindCaldavRequest(args[0]); return deleteListOperation(...args) })

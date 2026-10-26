@@ -92,6 +92,7 @@
     "check:terminal-cmds": "node scripts/terminal-cmds.ts",
     "check:msh-rc": "node scripts/msh-rc.ts",
     "check:contacts": "node scripts/contacts-check.ts",
+    "check:dav-link-race": "node scripts/dav-link-race-check.ts",
     "check:tasks": "node scripts/tasks-check.ts",
     "check:launchers": "node scripts/launchers-check.ts",
     "check:pim-links": "node scripts/pim-check.ts",

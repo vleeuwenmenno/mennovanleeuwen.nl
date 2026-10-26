@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { requireStillSignedIn, type User } from './auth.ts'
-import { requirePrivateRequest, privateRequestAuthority, withoutPrivateRequest, privateSignal, bindPrivateAccess } from './privateRequest.ts'
+import { requirePrivateRequest, privateRequestAuthority, withoutPrivateRequest, bindPrivateAccess } from './privateRequest.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
-import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
+import { readCapped, rethrowEgress } from './egress.ts'
+import { davAuthority, davRequest as sharedDavRequest, type DavAuthority } from './dav.ts'
 import { HttpError } from './http.ts'
 
 // CalDAV calendars (Fastmail, Nextcloud, iCloud, Radicale...) for the Agenda widget, the clock and
@@ -18,7 +19,7 @@ import { HttpError } from './http.ts'
 
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
 /** `user` is who linked it: the server only reaches public addresses for them (server/egress.ts). */
-type Account = CaldavInfo & { password: string; user: User; generation: number }
+type Account = CaldavInfo & { password: string; user: User; generation: number; authority: DavAuthority }
 /** `shared`: someone else's calendar shared with you, or yours shared with others (CalendarServer's resourcetype marks, which Apple and Nextcloud send). */
 type Calendar = { href: string; name: string; color: string; writable: boolean; shared?: 'with-you' | 'by-you' }
 export type CaldavAttendee = { email: string; name?: string; status?: 'accepted' | 'declined' | 'tentative' | 'needs-action'; organizer?: boolean }
@@ -54,15 +55,23 @@ export function assertCaldavLink(user: User, generation: number) {
   requirePrivateRequest(user)
   if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
 }
-export function bindCaldavRequest(user: User) {
+function linkAuthority(user: User): DavAuthority {
   const generation = caldavLinkVersion(user)
-  bindPrivateAccess(() => {
-    if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
-  }, (end) => {
-    const changed = (id: number) => { if (id === user.id) end() }
-    linkChanges.add(changed)
-    return () => { linkChanges.delete(changed) }
-  })
+  return {
+    key: `caldav:${user.id}:${generation}`,
+    check: () => {
+      if (caldavLinkVersion(user) !== generation) throw new HttpError(409, 'CalDAV was reconnected or disconnected meanwhile: try again')
+    },
+    subscribe: (end) => {
+      const changed = (id: number) => { if (id === user.id) end() }
+      linkChanges.add(changed)
+      return () => { linkChanges.delete(changed) }
+    },
+  }
+}
+export function bindCaldavRequest(user: User) {
+  const authority = linkAuthority(user)
+  bindPrivateAccess(authority.check, authority.subscribe, authority.key)
 }
 function changedLink(id: number) {
   linkVersions.set(id, (linkVersions.get(id) ?? 0) + 1)
@@ -78,7 +87,7 @@ export function listCaldav(user: User): CaldavInfo[] {
 
 function accounts(user: User): Account[] {
   const rows = database().prepare('SELECT id, label, base_url, username, password FROM caldav WHERE user_id = ? ORDER BY id').all(user.id) as unknown as Row[]
-  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user, generation: caldavLinkVersion(user) }))
+  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user, generation: caldavLinkVersion(user), authority: davAuthority(user, 'caldav', r, linkAuthority(user)) }))
 }
 
 /** Finds the account's calendars (proving the URL and password work), then stores it. */
@@ -88,7 +97,7 @@ export async function addCaldav(user: User, body: { url?: string; username?: str
   const username = body.username?.trim()
   const password = body.password?.trim()
   if (!username || !password) throw new HttpError(400, 'Username and app password are required')
-  const account: Account = { id: 0, label: '', url, username, password, user, generation: caldavLinkVersion(user) }
+  const account: Account = { id: 0, label: '', url, username, password, user, generation: caldavLinkVersion(user), authority: davAuthority(user, 'caldav', undefined, linkAuthority(user)) }
   const found = await discover(account).catch((e: Error) => {
     throw new HttpError(400, e.message)
   })
@@ -133,16 +142,7 @@ function normalizeUrl(input: string): string {
 // WebDAV
 
 async function request(account: Account, method: string, url: string, init: { headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
-  assertCaldavLink(account.user, account.generation)
-  const res = await guardedFetch(account.user, url, {
-    method,
-    headers: { Authorization: `Basic ${Buffer.from(`${account.username}:${account.password}`).toString('base64')}`, 'User-Agent': 'mvlos', ...init.headers },
-    body: init.body,
-    signal: privateSignal(AbortSignal.timeout(12_000)),
-  }).catch((e) => (rethrowEgress(e), null))
-  assertCaldavLink(account.user, account.generation)
-  if (!res) throw new HttpError(502, `${new URL(url).host} did not answer`)
-  return res
+  return sharedDavRequest(account, method, url, { ...init, timeout: 12_000 })
 }
 
 async function dav(account: Account, method: 'PROPFIND' | 'REPORT', url: string, depth: '0' | '1', body: string): Promise<string> {
