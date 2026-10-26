@@ -1,0 +1,66 @@
+import type { MenuItem } from '../../os/ContextMenu'
+import type { Project, Thread } from '../../data/agents'
+
+/** What is being dragged in the sidebar. */
+export type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
+
+/** What the app's main pane shows (the sidebar marks Memory, Settings and the Image Studio when they do). */
+export type MainKind = 'thread' | 'settings' | 'memory' | 'studio'
+
+/**
+ * Everything a sidebar style needs from the app: the threads and projects, what is selected, and
+ * every action. The app (Agents.tsx) owns the state; the styles only draw it, so each one can be
+ * removed without touching the others.
+ */
+export type SideCtx = {
+  narrow: boolean
+  archived: boolean
+  q: string
+  setQ: (q: string) => void
+  /** The search, trimmed and lowercased ('' when there is none). */
+  query: string
+  listError: string | null
+  /** Every thread loaded (the archived ones in the archived view). */
+  threads: Thread[]
+  /** The threads the search lets through. */
+  shown: Thread[]
+  projects: Project[]
+  inProject: (t: Thread) => boolean
+  selected: string | null
+  mainKind: MainKind
+  /** Whether a thread has an answer that has not been looked at (this browser's memory of it). */
+  isUnread: (t: Thread) => boolean
+
+  renaming: string | null
+  setRenaming: (id: string | null) => void
+  rename: (t: Thread, title: string) => void
+  renamingProject: number | null
+  setRenamingProject: (id: number | null) => void
+  addingProject: boolean
+  setAddingProject: (on: boolean) => void
+  addProject: (name: string) => void
+  renameProject: (p: Project, name: string) => void
+  folded: number[]
+  toggleFold: (id: number) => void
+
+  drag: Drag
+  dropAt: string | null
+  dropZone: (key: string, accept: (d: NonNullable<Drag>) => boolean, onDrop: (d: NonNullable<Drag>) => void) => Record<string, unknown>
+  dragging: (d: Drag) => Record<string, unknown>
+  move: (t: Thread, projectId: number | null) => void
+  reorder: (moved: number, before: number) => void
+
+  menu: (t: Thread) => MenuItem[]
+  projectMenu: (p: Project) => MenuItem[]
+
+  open: (id: string | null, project?: number | null) => void
+  newThread: () => void
+  newProject: () => void
+  openStudio: () => void
+  openMemory: (scope?: number | null) => void
+  openSettings: () => void
+  toggleArchived: () => void
+  leaveArchived: () => void
+  /** Fold the sidebar to its rail (not offered in a narrow window). */
+  hide: () => void
+}

@@ -1885,6 +1885,25 @@ in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type f
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
 suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail or is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
+**Sidebar style.** The thread list comes in four looks, picked in Settings → Agents → General →
+Sidebar or from *Sidebar style* in the sidebar's right-click menu (a synced setting, `sidebarStyle`,
+so it follows the account; anything unknown is Classic). All four have the same features (search,
+projects, drag and drop, menus, archived view, rail, the one-pane phone layout, Up and Down to walk
+the list from the search). *Classic* is the original list. *Compact* is one dense line per thread
+with thin sticky group headers (a count each), a faint short time, and a New button beside the
+search. *Detailed* has two lines per thread: the title, wrapping to two lines, then its project or
+model and how long ago, with a bar and a badge on the left for Running, New and Failed. *Focus* has a
+New thread button, filter chips (All, Running, Unread, Stopped when something stopped, and one per
+project when there are at most four), a Running now section on top, sticky headers and a foot of icon
+buttons. Compact, Detailed and Focus mark running threads, new answers and threads that stopped on an
+error; "new" is this browser's own memory of when it last showed each thread
+([`src/apps/agentsSidebar/unread.ts`](src/apps/agentsSidebar/unread.ts)), not synced. Each style is
+a component and a CSS file of its own in [`src/apps/agentsSidebar/`](src/apps/agentsSidebar/), built
+from shared parts (`shared.tsx`) and one model (`model.ts`); the choice lives in `SIDEBAR_STYLES`
+(`src/data/agents.ts`), so a style that is not kept goes by deleting its two files, its line in
+`index.tsx` and its entry there. `pnpm check:agents-sidebar` drives all four on a desktop and on an
+emulated phone.
+
 **Past threads** lets the agent look back when you refer to an earlier conversation and the
 answer is not already in this thread or memory. The `threads` tool group is on by default,
 including for older threads; switch it off to keep a conversation from reading history.

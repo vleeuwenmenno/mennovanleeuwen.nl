@@ -320,12 +320,28 @@ export type AgentSettings = {
    * (src/data/agentFavourites.ts moves them over): read only, never changed any more.
    */
   favoriteModels: string[]
+  /** How the Agents sidebar looks (src/apps/agentsSidebar/): one of SIDEBAR_STYLES */
+  sidebarStyle: SidebarStyle
 }
+/**
+ * The looks the Agents sidebar can have, to compare for a while: the first is today's. Each one is
+ * a component of its own in src/apps/agentsSidebar/ and a block of CSS beside it, so the ones not
+ * kept can be removed with their entry here.
+ */
+export const SIDEBAR_STYLES = [
+  { id: 'classic', label: 'Classic', blurb: 'The original list: projects, then threads by day, with the time on the right.' },
+  { id: 'compact', label: 'Compact', blurb: 'One dense line per thread, thin sticky headers and a New thread button next to the search: the most threads at a glance.' },
+  { id: 'detailed', label: 'Detailed', blurb: 'Two lines per thread: a title that wraps, then its project or model and when. Running and unread threads have a status bar and badge.' },
+  { id: 'focus', label: 'Focus', blurb: 'Filter chips (All, Running, Unread, projects), a Running now section on top and icon buttons below, to see what needs you.' },
+] as const
+export type SidebarStyle = (typeof SIDEBAR_STYLES)[number]['id']
+/** Anything that is not one of the styles is the classic one. */
+export const sidebarStyleOf = (v: unknown): SidebarStyle => SIDEBAR_STYLES.find((s) => s.id === v)?.id ?? 'classic'
 /** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [] }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic' }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -346,6 +362,7 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       compactAt: COMPACT_AT.includes(Number(s.compactAt)) ? Number(s.compactAt) : 85,
       replySuggestions: s.replySuggestions !== false,
       favoriteModels: Array.isArray(s.favoriteModels) ? [...new Set(s.favoriteModels.filter((x): x is string => typeof x === 'string' && x.length <= 80))].slice(0, 50) : [],
+      sidebarStyle: sidebarStyleOf(s.sidebarStyle),
     }
   },
 })

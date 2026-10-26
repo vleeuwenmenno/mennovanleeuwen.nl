@@ -1,0 +1,225 @@
+/* Agents sidebar style "Focus" (Focus.tsx): filter chips, a Running now section, sticky headers and a
+   foot of icon buttons. Everything is under .is-side-focus; the classic rules in home.css are what it
+   adjusts. */
+
+.agt-side.is-side-focus .agt-fx-new {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 10px 8px;
+  height: 32px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.agt-side.is-side-focus .agt-fx-new:hover {
+  filter: brightness(1.12);
+}
+
+/* The chips: they wrap onto a second line when there are more than fit. */
+.agt-fx-chips {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 10px 8px;
+}
+.agt-fx-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.agt-fx-chip > span:first-child {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agt-fx-chip:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agt-fx-chip.is-none {
+  opacity: 0.6;
+}
+.agt-fx-chip.is-live:not(.is-none):not(.is-on) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.agt-fx-chip.is-warn:not(.is-none):not(.is-on) {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+.agt-fx-chip.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  opacity: 1;
+}
+.agt-fx-chip-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* Headers stay at the top: the group's, and under it the day's. */
+.agt-side.is-side-focus .agt-list {
+  padding-top: 0;
+  /* What the keyboard or a scroll brings into view stops under the sticky headers, not behind them. */
+  scroll-padding-top: 50px;
+}
+.agt-side.is-side-focus .agt-group {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin: 0 -6px;
+  padding: 0 12px;
+  /* Opaque (the sidebar's own tint is see-through), or the rows show through. */
+  background: linear-gradient(var(--panel-2), var(--panel-2)) var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.agt-side.is-side-focus .agt-group .agt-group-count {
+  margin-right: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+.agt-side.is-side-focus .agt-group .agt-mini {
+  width: 20px;
+  height: 20px;
+}
+.agt-side.is-side-focus .agt-day.agt-fx-day {
+  position: sticky;
+  top: 26px;
+  z-index: 2;
+  margin: 0 -6px;
+  padding: 3px 12px 2px;
+  background: linear-gradient(var(--panel-2), var(--panel-2)) var(--bg);
+  font-size: 10px;
+  opacity: 1;
+}
+.agt-side.is-side-focus .agt-project-threads {
+  padding-left: 8px !important;
+}
+
+/* Running now: what is answering, on top and tinted. */
+.agt-fx-live {
+  margin: 0 -6px 6px;
+  padding: 0 6px 4px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+.agt-fx-live .agt-group.is-live {
+  color: var(--accent);
+  background: linear-gradient(color-mix(in srgb, var(--accent) 7%, transparent), color-mix(in srgb, var(--accent) 7%, transparent)), linear-gradient(var(--panel-2), var(--panel-2)) var(--bg);
+}
+.agt-fx-live-count {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.agt-side.is-side-focus .agt-item.agt-fx-item {
+  gap: 9px;
+  padding: 6px 8px 6px 8px;
+}
+/* The mark in front of a title: a ring while it answers, a dot for a new answer, red for stopped. */
+.agt-fx-state {
+  flex: none;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.agt-fx-state.is-quick,
+.agt-fx-state.is-deep {
+  transform: scale(0.55);
+  background: var(--cyan);
+  opacity: 0.7;
+}
+.agt-fx-state.is-deep {
+  background: var(--magenta);
+}
+.agt-fx-state.is-running {
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  animation: agt-fx-spin 0.9s linear infinite;
+}
+.agt-fx-state.is-unread {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.agt-fx-state.is-attention {
+  background: var(--red);
+}
+@keyframes agt-fx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.agt-fx-item.is-unread .agt-item-title {
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+.agt-fx-item.is-running .agt-item-when {
+  color: var(--accent);
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agt-fx-item.is-attention .agt-item-when {
+  color: var(--red);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agt-fx-state.is-running,
+  .agt-fx-item.is-running .agt-item-when {
+    animation: none;
+  }
+}
+
+/* Icon buttons in the foot, their names in tooltips. */
+.agt-side.is-side-focus .agt-fx-foot {
+  gap: 0;
+  padding: 2px 6px;
+}
+.agt-side.is-side-focus .agt-fx-foot button {
+  height: 30px;
+  padding: 0;
+}
+
+@media (pointer: coarse) {
+  .agt-side.is-side-focus .agt-item.agt-fx-item {
+    min-height: 40px;
+    padding-right: 30px;
+  }
+  .agt-side.is-side-focus .agt-item-more {
+    visibility: visible;
+  }
+  .agt-side.is-side-focus .agt-row:hover .agt-item-when {
+    visibility: visible;
+  }
+  .agt-fx-chip {
+    padding: 5px 12px;
+  }
+  .agt-side.is-side-focus .agt-fx-new {
+    height: 40px;
+  }
+  .agt-side.is-side-focus .agt-fx-foot button {
+    height: 42px;
+  }
+}
