@@ -89,6 +89,7 @@
     "mail:mock": "node scripts/mail-mock.ts",
     "check:photos": "node scripts/photos-check.ts",
     "check:terminal-vt": "node scripts/terminal-vt.ts",
+    "check:terminal-mobile": "node scripts/terminal-mobile-e2e.ts",
     "check:terminal-cmds": "node scripts/terminal-cmds.ts",
     "check:msh-rc": "node scripts/msh-rc.ts",
     "check:contacts": "node scripts/contacts-check.ts",
