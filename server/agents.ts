@@ -3437,7 +3437,9 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
       } catch {
         outcome = ctl.signal.aborted ? 'stopped' : 'failed'
         error = ctl.signal.aborted ? undefined : 'The linked account changed while this turn was running'
-        break
+        compact = undefined
+        // Send now is an explicit handoff. Select it outside the ended operation, so the next
+        // turn gets fresh provider authority; nextAsk also rejects banned/removed accounts.
       }
       ask = nextAsk(user, thread, outcome)
       // A turn stopped halfway through a reply leaves it unsaved: the next one starts clean.
@@ -3509,6 +3511,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       const first = makeTitle(user, key, row.id)
         .catch(() => null)
         .then((title) => {
+          try { requirePrivateRequest(user) } catch { return }
           // The automatic check counts the user's messages from this first one on.
           const set = database().prepare("UPDATE agent_threads SET title = ?, title_source = 'first', title_mark = ? WHERE id = ? AND title = ?").run(title || fallback, asked.id, row.id, NEW_TITLE)
           if (set.changes) bumpTitle(row.id)

@@ -942,7 +942,8 @@ Exceptions are the public Minecraft/activity feeds, suggestions, exchange rates,
 and allow-listed public Git history; public share capabilities; GitHub/Google authentication
 callbacks, signed OnlyOffice callbacks and synchronous session discovery (`/api/me`); logout and
 self-removal; guest Empires rejoin tokens; and sealed inline Mail images, which restore their
-original session instead. Accepted Agents turns are account jobs, as described below: each turn
+original session instead. Accepted Agents turns are account jobs, as described below: **Send now** hands a cancelled turn
+to its replacement with fresh provider authority, so ending the old operation cannot strand it. Each turn
 retains provider authority while each observer's delivery remains tied to its own session.
 `pnpm check:private-authority` exercises these boundaries with held local providers and sockets.
 

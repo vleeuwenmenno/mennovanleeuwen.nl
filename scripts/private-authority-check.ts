@@ -53,6 +53,11 @@ const officeMock = createServer(async (req, res) => {
     if (req.headers.authorization === 'Bearer access-A') return res.writeHead(401).end('expired')
     return send({ data: [{ b64_json: 'aGVsbG8=' }] })
   }
+  if (path === '/api/chat') {
+    const body = JSON.parse(raw)
+    const message = { role: 'assistant', content: body.stream ? 'Queue fixture answer' : '{"title":"Queue fixture"}' }
+    return body.stream ? res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }).end(JSON.stringify({ message, done: true }) + '\n') : send({ message })
+  }
   if (path === '/api/tags') return send({ models: [{ name: 'private-model', details: {} }] })
   if (path === '/api/show') return send({ capabilities: ['completion'] })
   if (path.startsWith('/github/')) {
@@ -75,12 +80,12 @@ const officeMock = createServer(async (req, res) => {
 })
 await new Promise<void>((resolve) => officeMock.listen(0, '127.0.0.1', resolve))
 officeOrigin = `http://127.0.0.1:${(officeMock.address() as { port: number }).port}`
-Object.assign(process.env, { OPENAI_AUTH_URL: officeOrigin, CHATGPT_CODEX_URL: officeOrigin, OLLAMA_URL: officeOrigin, GOOGLE_API_URL: officeOrigin + '/google', GOOGLE_TOKEN_URL: officeOrigin + '/google-token', GOOGLE_REVOKE_URL: officeOrigin + '/revoke', GOOGLE_CLIENT_ID: 'test', GOOGLE_CLIENT_SECRET: 'test' })
+Object.assign(process.env, { OPENAI_AUTH_URL: officeOrigin, CHATGPT_CODEX_URL: officeOrigin, OLLAMA_URL: officeOrigin, OLLAMA_API_KEY: 'fixture-key', GOOGLE_API_URL: officeOrigin + '/google', GOOGLE_TOKEN_URL: officeOrigin + '/google-token', GOOGLE_REVOKE_URL: officeOrigin + '/revoke', GOOGLE_CLIENT_ID: 'test', GOOGLE_CLIENT_SECRET: 'test' })
 const dav = await startMock()
 const realFetch = globalThis.fetch
 const allowed = new Set([aProvider.origin, bProvider.origin, officeOrigin, dav.origin])
 const dispatch: { origin: string; path: string; token: string; method: string }[] = []
-type Gate = { matches: (u: URL) => boolean; tail: boolean; hit: () => void; arrived: Promise<void>; wait: Promise<void>; release: () => void; signals: AbortSignal[]; cancelled: boolean }
+type Gate = { matches: (u: URL, init?: RequestInit) => boolean; tail: boolean; hit: () => void; arrived: Promise<void>; wait: Promise<void>; release: () => void; signals: AbortSignal[]; cancelled: boolean }
 let gate: Gate | null = null
 function hold(matches: Gate['matches'], tail = false) {
   let hit!: () => void, release!: () => void
@@ -103,7 +108,7 @@ globalThis.fetch = async (input, init) => {
   dispatch.push({ origin: url.origin, path: url.pathname, token: new Headers(init?.headers).get('authorization') ?? '', method: init?.method ?? 'GET' })
   const current = gate
   const response = await realFetch(input, init)
-  if (current?.matches(url)) {
+  if (current?.matches(url, init)) {
     if (init?.signal) current.signals.push(init.signal)
     if (current.tail) {
       const bytes = Buffer.from(await response.arrayBuffer())
@@ -457,6 +462,24 @@ try {
       const calls = inputs.slice(before)
       check(`ComfyUI/cleanup/${changeBackend ? 'replacement' : 'Stop'}: only accepted prompt deleted`, !!result.error && calls.filter((r) => r.path === '/comfy-A/queue' && r.auth === 'Bearer backend-A' && r.body === JSON.stringify({ delete: ['accepted-prompt-A'] })).length === 1 && !calls.some((r) => r.path.startsWith('/comfy-B/') || r.path.endsWith('/interrupt')) && calls.filter((r) => r.path.endsWith('/prompt')).length === 1)
     }
+  }
+  if (!only || only === 'send-now') {
+    const a = account()
+    const made = await a.call('/api/agents/threads', 'POST', { mode: 'quick', model: 'test-model', permission: 'bypass' })
+    const data = await made.json() as { id: string }, thread = data.id
+    database().prepare("UPDATE agent_threads SET title='Queue fixture', title_source='manual' WHERE id=?").run(thread)
+    const g = hold((u, init) => u.pathname === '/api/chat' && JSON.parse(String(init?.body ?? '{}')).stream === true)
+    const before = inputs.length
+    const started = a.call(`/api/agents/threads/${thread}/messages`, 'POST', { text: 'first-input' }); await arrived(g)
+    const reading = collect(await started)
+    const queued = await a.call(`/api/agents/threads/${thread}/queue`, 'POST', { text: 'second-input' })
+    const item = await queued.json() as { thread: { queue: { id: string }[] } }
+    gate = null
+    const sent = await a.call(`/api/agents/threads/${thread}/queue/${item.thread.queue[0].id}/send`, 'POST'); await sent.arrayBuffer()
+    release(g); await reading; await drain()
+    const messages = database().prepare('SELECT role, content FROM agent_messages WHERE thread_id=? ORDER BY id').all(thread) as { role: string; content: string }[]
+    const calls = inputs.slice(before).filter((r) => r.path === '/api/chat' && JSON.parse(r.body).stream === true)
+    check('Agents/Send now: cancelled operation hands off replacement exactly once', sent.ok && messages.filter((m) => m.role === 'user').length === 2 && messages.some((m) => m.role === 'user' && m.content === 'second-input') && calls.length === 2 && JSON.parse(calls[1].body).messages.some((m: { role: string; content: string }) => m.role === 'user' && m.content === 'second-input'))
   }
   if (!only || only === 'office') {
     for (const kind of ['none', 'remove-absent', 'remove-set', 'concurrent-set']) {
