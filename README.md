@@ -2828,6 +2828,31 @@ from); the thread carries them as `titleSource`, `aliases` and, while a check ru
 stream is still open). `POST /api/agents/threads/:id/retitle` regenerates and answers `{thread}`;
 `…/title` still only suggests one for the rename box.
 
+**Suggested reply** (Settings → Agents → Threads → *Replies*, on by default, synced as `replySuggestions`).
+When the agent's last message ends by asking you something (a question, a choice, a request for
+permission or for missing information), the empty message box shows a suggested answer as its hint:
+`Suggested reply: "yes, go ahead" — Tab to complete, or type your own`. Tab in the empty box fills
+it in with the caret at the end, so you can change it before sending; typing anything, or an
+empty box again after typing, takes the hint away, and Tab with text in the box (or with the `/`,
+`@` or `#` list open, which Tab accepts first) does what it always did. On a touch screen, where
+there is no Tab, the hint says only the suggestion and a *Use suggested reply* button under it
+fills it in. The server thinks of it after a turn answered, in the background, never holding up
+the answer or the next queued message: one short call to the title model (Settings → Agents →
+Models, else the quick default) with the last few messages as data, answering
+`{"reply": "…"}`, or an empty reply when the last message asks nothing (finished work, a report,
+a plain statement, "let me know if you need anything"). The reply is first person, in your
+language, at most 120 characters asked for and 140 kept, one line. Nothing is asked after a turn
+that failed or was stopped, for Spotlight's quick threads, in Plan mode, while an approval waits,
+when a message is queued, or with the setting off; a failed call is silent. The suggestion is
+kept in memory with the thread (so a server restart loses it) for the message it answers, and is
+gone as soon as any newer message exists or the thread is deleted;
+`GET /api/agents/threads/:id` and the thread list carry it as `suggestedReply` (only to the
+owner) and, while it is being thought of, `suggestingReply` (windows look again until it is in; a
+stream still open gets it as a `thread` event). Pictures attached while the model pill shows
+*the usual one* are checked against that model (the one Settings names), not against nothing: the
+"can't see pictures" warning only shows when the model that will answer is known and has no vision.
+`check:agents-threads` covers the answer parsing, the gating, the delivery per account and the setting.
+
 While a turn runs, Enter in the composer queues the message (files and all) instead: queued
 messages sit over the composer in order, each with *Edit* (it goes back into the message box, files
 included; ↑ in an empty box edits the last one, Esc puts it back), *Send now* and remove. The

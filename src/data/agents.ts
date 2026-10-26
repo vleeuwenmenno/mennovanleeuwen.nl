@@ -15,7 +15,7 @@ import { isHeifFile, isRawFile, stillPicture } from './stillPicture'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[]; /** The thinking effort picked for this thread (null: as the mode has it) */ effort?: Effort | null }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** A short answer you could give to what the agent's last message asked (null: none, or the message is no longer the last) */ suggestedReply?: string | null; /** A suggested reply is being thought of, in the background */ suggestingReply?: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[]; /** The thinking effort picked for this thread (null: as the mode has it) */ effort?: Effort | null }
 /**
  * A title a thread had until `until`, newest first on the thread: the title model changed it when
  * the conversation moved on, or the user renamed it. Shown as "also known as", and found by search.
@@ -313,6 +313,8 @@ export type AgentSettings = {
   autoCompact: boolean
   /** How full, in percent of the model's context window: one of COMPACT_AT */
   compactAt: number
+  /** The empty message box suggests an answer when the agent's last message asks you something (the server thinks of it) */
+  replySuggestions: boolean
   /**
    * Where the model picker's stars were kept before they had a synced set of their own
    * (src/data/agentFavourites.ts moves them over): read only, never changed any more.
@@ -323,7 +325,7 @@ export type AgentSettings = {
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, favoriteModels: [] }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [] }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -342,6 +344,7 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       titleEvery: TITLE_EVERY.includes(Number(s.titleEvery)) ? Number(s.titleEvery) : 3,
       autoCompact: s.autoCompact !== false,
       compactAt: COMPACT_AT.includes(Number(s.compactAt)) ? Number(s.compactAt) : 85,
+      replySuggestions: s.replySuggestions !== false,
       favoriteModels: Array.isArray(s.favoriteModels) ? [...new Set(s.favoriteModels.filter((x): x is string => typeof x === 'string' && x.length <= 80))].slice(0, 50) : [],
     }
   },
