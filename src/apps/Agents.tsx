@@ -425,6 +425,8 @@ function AgentsApp({ win }: { win: WinState }) {
   // The sidebar folds to a rail of icons; remembered on this device. In a narrow window the list
   // and the conversation take turns instead, so there is nothing to fold.
   const root = useRef<HTMLDivElement>(null)
+  /** Ctrl+F asked for the thread search before that field was on screen. */
+  const findFocus = useRef(false)
   const [narrow, setNarrow] = useState(false)
   useEffect(() => {
     const el = root.current
@@ -433,6 +435,7 @@ function AgentsApp({ win }: { win: WinState }) {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return accountStorage.get(SIDEBAR_KEY) === 'collapsed'
@@ -449,6 +452,42 @@ function AgentsApp({ win }: { win: WinState }) {
     }
   }
   const rail = collapsed && !narrow
+
+  // Ctrl+F never reaches the app (the desktop takes the keypress itself), so it arrives as
+  // mvlos:find. Focus the search this window is showing. Two Agents windows stay apart because
+  // the field is looked up inside this one.
+  const focusFindField = (memory: boolean) => {
+    const winEl = root.current?.closest('.window')
+    if (!winEl) return false
+    const field = winEl.querySelector<HTMLInputElement>(memory ? 'input[aria-label="Search memory"]' : 'input[aria-label="Search threads"]')
+    if (!field) return false
+    if (document.activeElement === field) field.select()
+    else field.focus()
+    return true
+  }
+  useEffect(() => {
+    const onFind = (e: Event) => {
+      const pid = (e as CustomEvent<{ pid: number }>).detail?.pid
+      if (pid !== win.pid) return
+      const memory = main.kind === 'memory'
+      // The thread search is not on screen in the rail, or on a narrow window's chat pane.
+      // Open it first; the effect below focuses once it has been drawn.
+      if (!memory && (rail || (narrow && pane === 'chat'))) {
+        findFocus.current = true
+        if (rail) fold(false)
+        if (narrow && pane === 'chat') setPane('list')
+        return
+      }
+      focusFindField(memory)
+    }
+    window.addEventListener('mvlos:find', onFind)
+    return () => window.removeEventListener('mvlos:find', onFind)
+  }, [win.pid, main.kind, narrow, pane, rail])
+  useEffect(() => {
+    if (!findFocus.current) return
+    if (focusFindField(main.kind === 'memory')) findFocus.current = false
+  }, [pane, collapsed, narrow, main.kind])
+
   const sideWidth = sideWidthPref.use()
   // At most half the app, never under the minimum.
   const sideMax = (w: number) => Math.max(SIDE_MIN, Math.floor(w / 2))

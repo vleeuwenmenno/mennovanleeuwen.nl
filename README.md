@@ -116,6 +116,14 @@ including the terminal. Settings → Spotlight can point Ctrl+Space at All apps 
 Ctrl+K back to Spotlight. Ctrl+Space is best-effort: some OSes and input methods keep that chord,
 so the page never sees it, the same way Super never reaches a web page.
 
+**Ctrl+Q** (Cmd+Q on a Mac) closes the focused window, also best-effort: a browser that never
+delivers the key still quits. A context menu or Spotlight closes first, and an open dialog keeps
+the window. **Ctrl+F** is that window's own search when the app has one, instead of the browser's
+find: Files filters names in the open folder, PDF finds in the document, Agents focuses the thread
+search (the memory search on that view; a folded sidebar opens, and a narrow window shows the
+list), and Terminal searches the front tab's scrollback. A program that has the terminal's keys,
+such as nano, still receives Ctrl+F. Other apps keep the browser's find.
+
 The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPrefs.ts`](src/os/topbarPrefs.ts))
 holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
 notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
@@ -488,6 +496,8 @@ at its own size). The strip shows from the second tab on (or always, in the sett
 is titled after what a program in it called itself, else what runs, else its folder, and the
 window's title follows the front tab. Keys, ahead of the shell and of full-screen programs:
 
+- Ctrl+F searches this tab's scrollback (Enter and Shift+Enter step through the matches, Esc
+  closes). A full-screen program or an attached stream still gets the key.
 - Ctrl+Shift+T new tab (in the front tab's folder), Ctrl+Shift+W close it.
 - Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+PageDown / Ctrl+PageUp next and previous, Ctrl+Shift+1…9
   that tab (9 the last). Alt+1…9 stays with the workspaces. Browsers keep some of these for their
@@ -1690,7 +1700,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted, and the sidebar folds to a rail or is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail or is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Past threads** lets the agent look back when you refer to an earlier conversation and the
 answer is not already in this thread or memory. The `threads` tool group is on by default,

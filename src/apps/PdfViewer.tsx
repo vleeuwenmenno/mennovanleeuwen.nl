@@ -66,6 +66,15 @@ export function PdfViewer({ win }: { win: WinState }) {
   const root = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const findInput = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const onFind = (event: Event) => {
+      if ((event as CustomEvent<{ pid: number }>).detail.pid !== win.pid) return
+      setFind((current) => current ?? { query: '', matches: [], current: 0 })
+      requestAnimationFrame(() => findInput.current?.select())
+    }
+    window.addEventListener('mvlos:find', onFind)
+    return () => window.removeEventListener('mvlos:find', onFind)
+  }, [win.pid])
   const texts = useRef<string[] | null>(null)
   const pendingScroll = useRef<{ x: number; y: number } | null>(null)
 
