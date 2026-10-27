@@ -1,7 +1,7 @@
 import { isAdmin, maxUsers, registration, type User } from './auth.ts'
 import { database, setAppSetting } from './db.ts'
 import { HttpError } from './http.ts'
-import { usedBytes } from './quota.ts'
+import { limitMb, usedBytes } from './quota.ts'
 import { ban, deleteUser, signOutEverywhere, unban } from './users.ts'
 
 // Settings → Users, for admins (ADMIN_GITHUB_IDS): every account with what it links and how much it
@@ -67,11 +67,16 @@ export function listUsers(q: string | null, cursor: string | null): { users: Adm
 export function adminStats() {
   const { count, max, open } = registration()
   const banned = (database().prepare('SELECT COUNT(*) AS n FROM users WHERE banned_at IS NOT NULL').get() as { n: number }).n
-  return { count, max, open, banned }
+  return { count, max, open, banned, storageMb: limitMb() }
 }
 
-/** Opens or closes sign-up, and sets how many accounts may exist. */
-export function updateSettings(body: { registration?: unknown; maxUsers?: unknown }) {
+/** Opens or closes sign-up, sets how many accounts may exist, and how much room each one gets. */
+export function updateSettings(body: { registration?: unknown; maxUsers?: unknown; storageMb?: unknown }) {
+  if (body.storageMb !== undefined) {
+    const mb = Number(body.storageMb)
+    if (!Number.isInteger(mb) || mb < 1 || mb > 1_000_000) throw new HttpError(400, 'Room per account is a whole number of MB, from 1 to 1000000')
+    setAppSetting('user_storage_mb', String(mb))
+  }
   if (body.registration !== undefined) {
     if (body.registration !== 'open' && body.registration !== 'closed') throw new HttpError(400, 'Registration is open or closed')
     setAppSetting('registration', body.registration)

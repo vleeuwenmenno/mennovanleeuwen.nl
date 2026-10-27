@@ -22,7 +22,7 @@ services:
       # (not logins, which can be renamed); ADMIN_USERS is retired.
       ADMIN_GITHUB_IDS: ${ADMIN_GITHUB_IDS:-46482143}
       MAX_USERS: ${MAX_USERS:-100}
-      # The most one account may store, in MB (default 2048, 2 GB per account).
+      # The starting room per account, in MB (default 2048, 2 GB); Settings → Users changes it.
       USER_STORAGE_MB: ${USER_STORAGE_MB:-}
       # The site's public address (https://mennovanleeuwen.nl). Set it: without it the server
       # trusts each request's Host and X-Forwarded-* headers for OAuth redirects and cookies.
