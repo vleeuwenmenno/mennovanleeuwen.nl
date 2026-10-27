@@ -17,10 +17,10 @@ export type AdminUser = {
   threads: number
 }
 
-export type AdminStats = { count: number; max: number; open: boolean; banned: number }
+export type AdminStats = { count: number; max: number; open: boolean; banned: number; storageMb: number }
 
 export const adminStats = () => api<AdminStats>('/api/admin/stats')
-export const setAdminSettings = (body: { registration?: 'open' | 'closed'; maxUsers?: number }) => api<AdminStats>('/api/admin/settings', { method: 'PUT', json: body })
+export const setAdminSettings = (body: { registration?: 'open' | 'closed'; maxUsers?: number; storageMb?: number }) => api<AdminStats>('/api/admin/settings', { method: 'PUT', json: body })
 
 export function adminUsers(q: string, cursor: string | null) {
   const params = new URLSearchParams({ q, ...(cursor ? { cursor } : {}) })

@@ -6,8 +6,8 @@ import { useAccount } from '../os/account'
 import { ask } from '../os/Dialogs'
 
 // Settings → Users, only for admins (ADMIN_GITHUB_IDS on the server, which checks every request
-// itself): sign-up open or closed and the cap, then every account, searchable, with what it
-// links and how much it stores. Never what it stores.
+// itself): sign-up open or closed and the cap, the room each account gets, then every account,
+// searchable, with what it links and how much it stores. Never what it stores.
 
 const ago = (t: number | null) => (t ? timeAgo(new Date(t).toISOString()) : 'never')
 
@@ -23,6 +23,7 @@ export function UsersSettings() {
   const account = useAccount()
   const [stats, setStats] = useState<AdminStats | null>(null)
   const [cap, setCap] = useState('')
+  const [room, setRoom] = useState('')
   const [query, setQuery] = useState('')
   const [users, setUsers] = useState<AdminUser[] | null>(null)
   const [next, setNext] = useState<string | null>(null)
@@ -44,6 +45,7 @@ export function UsersSettings() {
     adminStats().then((s) => {
       setStats(s)
       setCap(String(s.max))
+      setRoom(String(s.storageMb))
     }, (e: Error) => setError(e.message))
   }, [])
 
@@ -60,6 +62,7 @@ export function UsersSettings() {
     setAdminSettings(body).then((s) => {
       setStats(s)
       setCap(String(s.max))
+      setRoom(String(s.storageMb))
     }, (e: Error) => setError(e.message))
 
   const changed = (u: AdminUser | null, id: number) => {
@@ -68,11 +71,16 @@ export function UsersSettings() {
     refreshStats()
   }
 
-  if (open) return <UserDetail u={open} onBack={() => setOpen(null)} onChange={(u) => changed(u, open.id)} />
+  if (open) return <UserDetail u={open} room={stats?.storageMb} onBack={() => setOpen(null)} onChange={(u) => changed(u, open.id)} />
 
   const submitCap = (e: FormEvent) => {
     e.preventDefault()
     void save({ maxUsers: Number(cap) })
+  }
+
+  const submitRoom = (e: FormEvent) => {
+    e.preventDefault()
+    void save({ storageMb: Number(room) })
   }
 
   return (
@@ -95,6 +103,28 @@ export function UsersSettings() {
             <form className="set-form set-form-row usr-cap" onSubmit={submitCap}>
               <input type="number" min={0} value={cap} onChange={(e) => setCap(e.target.value)} aria-label="Most accounts" />
               <button className="btn btn-small" disabled={!stats || cap === String(stats.max)}>
+                Set
+              </button>
+            </form>
+          </li>
+        </ul>
+      </section>
+
+      <section className="set-section">
+        <h4>Storage</h4>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Room per account</strong>
+              <span className="muted">
+                {stats
+                  ? `${fileSize(stats.storageMb * 1024 * 1024)} of synced settings, Agents threads with their attachments, generated images and memories. Over it, an account can only read and delete.`
+                  : '…'}
+              </span>
+            </span>
+            <form className="set-form set-form-row usr-cap" onSubmit={submitRoom}>
+              <input type="number" min={1} max={1000000} value={room} onChange={(e) => setRoom(e.target.value)} aria-label="Megabytes per account" />
+              <button className="btn btn-small" disabled={!stats || room === String(stats.storageMb)}>
                 Set
               </button>
             </form>
@@ -146,7 +176,7 @@ export function UsersSettings() {
   )
 }
 
-function UserDetail({ u, onBack, onChange }: { u: AdminUser; onBack: () => void; onChange: (u: AdminUser | null) => void }) {
+function UserDetail({ u, room, onBack, onChange }: { u: AdminUser; room?: number; onBack: () => void; onChange: (u: AdminUser | null) => void }) {
   const [reason, setReason] = useState('')
   const [banning, setBanning] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -212,7 +242,8 @@ function UserDetail({ u, onBack, onChange }: { u: AdminUser; onBack: () => void;
           <span className="set-row-text">
             <strong>Stores</strong>
             <span className="muted">
-              {fileSize(u.storageBytes)} · {u.threads} Agents {u.threads === 1 ? 'thread' : 'threads'}
+              {fileSize(u.storageBytes)}
+              {room ? ` of ${fileSize(room * 1024 * 1024)}` : ''} · {u.threads} Agents {u.threads === 1 ? 'thread' : 'threads'}
             </span>
           </span>
         </li>
