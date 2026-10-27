@@ -479,10 +479,18 @@ and files with an x bit (the picker calls them `executable`). `chmod +x test.msh
 `source file`, `. file` and `msh file` read a script without it, like a real shell, and `.game`
 files and folders need no chmod. Reading and writing are refused (`Permission denied`) only where
 `chmod` set the mode: the defaults never refuse what works today (site files list as 444 yet `cat`
-works, browser files are writable). The owner's bits apply to what you own (home, `/tmp`, Seafile,
-browser files), the "other" bits to the root-owned rest; groups are not told apart, folders'
-r and x bits are not enforced (only w, for creating and deleting inside), and `sudo` ignores all of
-it. `pnpm check:terminal-cmds` tests it.
+works, browser files are writable). The read check is in `readFileText` (`fs.ts`), which `cat`, `<`,
+`source`, `nano`, the agents' `@path` and the file viewers go through; the write check is in `writeFile`,
+`writeTmp` (`>`, `tee`, `find -fprint`, `curl -o`, `wget`) and `transfer` (`cp` and `mv` refuse a
+destination without w, and `cp` looks at every file under a folder before copying any). Who owns a path
+is one function, `ownerOf` in `modes.ts` (your handle for home, `/tmp`, `/srv/site`, Seafile and
+browser files, root for the rest); its owner bits apply to what you own and the "other" bits to the
+rest. Groups are not told apart, folders' r and x bits are not enforced (only w, for creating and
+deleting inside), and `sudo` ignores all of it, down through `find -delete` and the folders a copy
+makes. A file that replaces another (`mv`/`cp` over it) takes the new file's mode, never the old one's.
+Setuid, setgid and the sticky bit are kept and shown (`rws`, `r-S`, `t`, `T`; `a=rw` clears them, as in
+`chmod`), but setuid and setgid are display only: nothing here runs as someone else, so they grant
+nothing. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
 
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The

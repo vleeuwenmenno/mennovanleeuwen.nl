@@ -1,3 +1,4 @@
+import { HANDLE } from '../os/identity'
 import { localPref } from '../os/localPref'
 import { HOME, type Node } from './vfs'
 
@@ -24,7 +25,8 @@ import { HOME, type Node } from './vfs'
 // Execution always looks at the mode: a script without an x bit gives `Permission denied` (exit 126).
 // Reading and writing are only refused where the mode was set explicitly: the synthetic defaults
 // (site files are 444, yet `cat` works; browser files can be written) never refuse anything that
-// works today. The owner's bits apply to files the user owns (home, /tmp, Seafile, the browser's
+// works today. Setuid and setgid are only shown (s/S in ls -l): nothing here is run as someone
+// else, so they grant nothing. The owner's bits apply to files the user owns (home, /tmp, Seafile, the browser's
 // files), the "other" bits to the root-owned rest; groups are not told apart. Root (sudo) bypasses
 // all checks.
 
@@ -34,8 +36,16 @@ const BIT: Record<Access, number> = { r: 4, w: 2, x: 1 }
 
 const isUnderTmp = (abs: string) => abs.startsWith('/tmp/')
 
-/** Whether the signed-in user owns a path (`ls -l` shows their name there, root elsewhere). */
-export const userOwns = (abs: string, node: Node) => !!node.sf || !!node.browser || abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || abs.startsWith('/srv/site/')
+/**
+ * Who owns a path, for `ls -l`, find (%u, -user, -uid) and the permission checks: the user's handle
+ * for their home, /tmp, the site's copy of home (/srv/site), Seafile and the browser's files, root
+ * for everything else. `node` may be left out for a path that has none: then the path alone says.
+ */
+export const ownerOf = (abs: string, node?: Node | null): string =>
+  node?.sf || node?.browser || abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || abs.startsWith('/srv/site/') ? HANDLE : 'root'
+
+/** Whether the signed-in user owns a path. */
+export const userOwns = (abs: string, node: Node) => ownerOf(abs, node) !== 'root'
 
 /** Where files can be written: /tmp, Seafile (unless read-only), the browser's store. */
 const writable = (abs: string, node: Node) => isUnderTmp(abs) || (!!node.sf && !node.ro) || !!node.browser || node.ro === false
@@ -69,10 +79,16 @@ export const canRun = (abs: string, node: Node, root = false) => node.type === '
 
 // --- showing ---------------------------------------------------------------------------------------
 
-/** `rwxr-xr-x` from a mode, with the sticky bit as `t` or `T`. */
+/** `rwxr-xr-x` from a mode, with setuid, setgid and the sticky bit as `s`/`S` and `t`/`T`, as ls shows them. */
 export function rwx(mode: number): string {
-  const bits = [6, 3, 0].map((s) => `${mode & (4 << s) ? 'r' : '-'}${mode & (2 << s) ? 'w' : '-'}${mode & (1 << s) ? 'x' : '-'}`).join('')
-  return mode & 0o1000 ? bits.slice(0, 8) + (bits[8] === 'x' ? 't' : 'T') : bits
+  return [6, 3, 0]
+    .map((shift, i) => {
+      const special = [0o4000, 0o2000, 0o1000][i]
+      const x = mode & (1 << shift)
+      const last = special === 0o1000 ? (x ? 't' : 'T') : x ? 's' : 'S'
+      return `${mode & (4 << shift) ? 'r' : '-'}${mode & (2 << shift) ? 'w' : '-'}${mode & special ? last : x ? 'x' : '-'}`
+    })
+    .join('')
 }
 
 /** The first character of the listing: d for a folder, c and b for devices, - for a file. */
@@ -120,7 +136,10 @@ export function applyMode(spec: string, current: number, isDir: boolean): number
     else {
       // `=` replaces the bits of the classes named (or all, without who).
       const classes = (/[ua]/.test(who) ? 0o700 : 0) | (/[ga]/.test(who) ? 0o070 : 0) | (/[oa]/.test(who) ? 0o007 : 0)
-      mode = (mode & ~classes) | mask
+      // It clears the special bit of each class named too (a=rw drops setuid, setgid and sticky);
+      // a folder keeps its setuid and setgid, as in chmod, unless they are asked for.
+      const special = (/[ua]/.test(who) ? 0o4000 : 0) | (/[ga]/.test(who) ? 0o2000 : 0) | (/[oa]/.test(who) ? 0o1000 : 0)
+      mode = (mode & ~classes & ~(isDir ? special & 0o1000 : special)) | mask
     }
   }
   return mode

@@ -32,7 +32,7 @@ import { openImport, pimAppFor } from '../data/pimFiles'
 import { manPages, mountCommands } from './mount'
 import { byteCommands } from './bytecmds'
 import { byteLength } from './bytes'
-import { canRun, permString } from './modes'
+import { allows, canRun, ownerOf, permString } from './modes'
 import { chmodCommands } from './chmod'
 import { readFile } from './read'
 import { nanoCommands } from './nano'
@@ -455,7 +455,7 @@ export const commands: Record<string, Command> = {
         return rows
           .map(({ node: k, abs: kAbs }, i) => {
             const perm = permString(kAbs, k)
-            const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? HANDLE : 'root'
+            const owner = ownerOf(kAbs, k)
             return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${sizes[i].padStart(sizeWidth)}  ${colorName(k)}`
           })
           .join('\n')
@@ -1499,11 +1499,13 @@ async function ping(ctx: Ctx): Promise<string> {
   return lines.join('\n')
 }
 
-export function writeTmp(cwd: string, target: string, content: string, append: boolean) {
+/** Writes a file in /tmp. A mode set with chmod can refuse it (Permission denied, in `who`'s words); root may. */
+export function writeTmp(cwd: string, target: string, content: string, append: boolean, root = false, who = '') {
   const abs = resolvePath(cwd, target)
   if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system`)
   const name = abs.slice(5)
   const existing = tmp().children.get(name)
+  if (existing && !allows(abs, existing, 'w', root)) throw new CmdError(`${who ? `${who}: ` : ''}${target}: Permission denied`)
   const prev = existing?.type === 'file' ? existing.content() : ''
   const next = append && prev ? (prev.endsWith('\n') ? prev + content : `${prev}\n${content}`) : content
   // Writing to a file keeps its mode (chmod +x, then edit: still runs).

@@ -155,7 +155,10 @@ export function Zed({ win }: { win: WinState }) {
     for (const t of tabs) {
       const b = buffers[t]
       if (!locate(t).browser || !b || b.loading || b.text !== b.saved) continue
-      void readFileText(t).then((r) => r && setBuffers((now) => (now[t] && now[t].text === now[t].saved ? { ...now, [t]: { text: r.text, saved: r.text } } : now)))
+      readFileText(t)
+        .then((r) => r && setBuffers((now) => (now[t] && now[t].text === now[t].saved ? { ...now, [t]: { text: r.text, saved: r.text } } : now)))
+        // Refused (a mode set with chmod): the tab keeps what it has.
+        .catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeReady])

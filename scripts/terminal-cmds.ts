@@ -477,6 +477,114 @@ try {
     check((await run('cat /etc/hostname')).ok && (await run(`cat ${HOME}/README.md`)).ok, 'files nobody chmod-ed still read, although ls -l says 444')
     check(!(await run('echo x > /etc/hostname')).ok, 'and site files still cannot be written')
 
+    // Round 2: no way round a mode. Reads (readFileText: nano, @path, the viewers), writes (cp,
+    // find -fprint, curl -o all end in writeTmp), root forwarded, replaced files, special bits.
+    {
+      const fsm = (await vite.ssrLoadModule('/src/terminal/fs.ts')) as typeof import('../src/terminal/fs.ts')
+      const types = (await vite.ssrLoadModule('/src/terminal/types.ts')) as typeof import('../src/terminal/types.ts')
+      const tmpDir = vfs.lookup('/tmp') as import('../src/terminal/vfs.ts').DirNode
+      const leaf = (name: string, mode?: number): import('../src/terminal/vfs.ts').FileNode => ({ type: 'file', name, content: () => `text of ${name}`, mode })
+
+      // 1. readFileText says no, root may, and nano (which reads through it) shows the reason.
+      await run('echo secret > /tmp/perm-rd; chmod a-r /tmp/perm-rd')
+      const refused = await fsm.readFileText('/tmp/perm-rd').then(() => null, (e: Error) => e)
+      check(refused instanceof types.DeniedError && refused.message === 'Permission denied', 'readFileText: a mode without r refuses the read', String(refused))
+      eq((await fsm.readFileText('/tmp/perm-rd', true))?.text, 'secret', 'readFileText as root: the text')
+      // (Were the read let through, nano would open and wait for keys: do not wait for it.)
+      const nano = await Promise.race([run('nano /tmp/perm-rd'), new Promise<null>((r) => setTimeout(() => r(null), 3000))])
+      check(nano !== null && !nano.ok && nano.out === 'nano: /tmp/perm-rd: Permission denied', 'nano on a file without r: Permission denied, no editor', nano ? nano.out : 'it opened')
+      eq((await fsm.readFileText('/etc/hostname'))?.text, 'mvlos', 'readFileText: a default 444 site file still reads')
+      eq((await fsm.readFileText('/tmp/perm-a.txt'))?.text, 'hi', 'readFileText: a file nobody chmod-ed still reads')
+      await run('chmod u+r /tmp/perm-rd')
+      eq((await fsm.readFileText('/tmp/perm-rd'))?.text, 'secret', 'readFileText: readable again after chmod u+r')
+      // the shell's own readers
+      await run("echo 'echo ran' > /tmp/perm-xo; chmod 100 /tmp/perm-xo")
+      const noRead = await run('/tmp/perm-xo; echo status=$?')
+      check(noRead.out.includes('msh: /tmp/perm-xo: Permission denied') && noRead.out.includes('status=126') && !noRead.out.includes('ran'), 'a script with x but no r: Permission denied (a shell has to read it)', noRead.out)
+
+      // 2. Writes: cp and find -fprint onto a file without w, and a normal one still works.
+      await run('echo one > /tmp/perm-src; echo two > /tmp/perm-dst; chmod 444 /tmp/perm-dst')
+      const cp = await run('cp /tmp/perm-src /tmp/perm-dst')
+      check(!cp.ok && cp.out === "cp: cannot create regular file '/tmp/perm-dst': Permission denied", 'cp onto a 444 file: Permission denied', cp.out)
+      eq((await out('cat /tmp/perm-dst')), 'two', 'and the destination is untouched')
+      const mv = await run('mv /tmp/perm-src /tmp/perm-dst')
+      check(!mv.ok && mv.out === "mv: cannot move '/tmp/perm-src' to '/tmp/perm-dst': Permission denied" && (await run('cat /tmp/perm-src')).ok, 'mv onto a 444 file: refused, the source stays', mv.out)
+      check((await run('cp /tmp/perm-src /tmp/perm-dst', true)).ok && (await out('cat /tmp/perm-dst')) === 'one', 'root copies onto it anyway')
+      await run('chmod 644 /tmp/perm-dst')
+      check((await run('cp /tmp/perm-src /tmp/perm-dst2')).ok && (await run('cp /tmp/perm-src /tmp/perm-dst')).ok, 'a normal cp (new file, and onto a writable one) still works')
+      await run('chmod 444 /tmp/perm-dst')
+      const fprint = await run('find /etc/hostname -fprint /tmp/perm-dst')
+      check(!fprint.ok && fprint.out.includes('find: /tmp/perm-dst: Permission denied'), 'find -fprint onto a 444 file: Permission denied', fprint.out)
+      eq(await out('cat /tmp/perm-dst'), 'one', 'and the protected file is as it was')
+      check((await run('find /etc/hostname -fprint /tmp/perm-dst', true)).ok && (await out('cat /tmp/perm-dst')) === '/etc/hostname', 'root: find -fprint writes it')
+      await run('chmod 644 /tmp/perm-dst')
+      check((await run('find /etc/hostname -fprint /tmp/perm-dst')).ok, 'find -fprint onto a writable file still works')
+      await run('chmod 444 /tmp/perm-dst')
+      check((await run('echo x | tee /tmp/perm-dst')).ok === false && (await run('echo x | tee /tmp/perm-dst', true)).ok, 'tee: refused, root passes (writeFile forwards root)')
+
+      // 2b. A recursive copy looks at every file under the source, not just its root.
+      tmpDir.children.set('perm-tree', { type: 'dir', name: 'perm-tree', children: new Map([['ok.txt', leaf('ok.txt')], ['sub', { type: 'dir', name: 'sub', children: new Map([['secret.txt', leaf('secret.txt', 0o200)]]) }]]) })
+      const tree = await run('cp -r /tmp/perm-tree /tmp/perm-copy')
+      check(!tree.ok && tree.out === "cp: cannot open '/tmp/perm-tree/sub/secret.txt' for reading: Permission denied", 'cp -r with an unreadable file deep inside: refused up front', tree.out)
+      check(!tmpDir.children.has('perm-copy'), 'and nothing was copied')
+      const rootTree = await run('cp -r /tmp/perm-tree /tmp/perm-copy', true)
+      check(!rootTree.out.includes('Permission denied'), 'root is not stopped by the unreadable file', rootTree.out)
+      tmpDir.children.delete('perm-tree')
+
+      // 3. Root travels on: sudo find -delete under a parent without w.
+      const parent = (): import('../src/terminal/vfs.ts').DirNode => ({ type: 'dir', name: 'perm-par', mode: 0o500, children: new Map([['child', leaf('child')]]) })
+      tmpDir.children.set('perm-par', parent())
+      const del = await run('find /tmp/perm-par/child -delete')
+      check(!del.ok && del.out.includes('Permission denied') && (tmpDir.children.get('perm-par') as import('../src/terminal/vfs.ts').DirNode).children.has('child'), 'find -delete in a folder without w: refused, the file stays', del.out)
+      const rdel = await run('find /tmp/perm-par/child -delete', true)
+      check(rdel.ok && !(tmpDir.children.get('perm-par') as import('../src/terminal/vfs.ts').DirNode).children.has('child'), 'sudo find -delete: root gets through')
+      tmpDir.children.set('perm-par', parent())
+      check(!(await run('rm /tmp/perm-par/child')).ok && (await run('rm /tmp/perm-par/child', true)).ok, 'rm: the same, and root forwarded')
+      tmpDir.children.delete('perm-par')
+
+      // 4. A replaced file takes the new file's mode (the defaults, unless the source has its own).
+      await run("echo new > /tmp/perm-n1; echo old > /tmp/perm-n2; chmod 755 /tmp/perm-n2")
+      await run('mv /tmp/perm-n1 /tmp/perm-n2')
+      eq(await mode('/tmp/perm-n2'), '644', 'mv over an executable file: the default mode, not 755')
+      await run('echo new > /tmp/perm-n1; echo old > /tmp/perm-n3; chmod 755 /tmp/perm-n3')
+      await run('cp /tmp/perm-n1 /tmp/perm-n3')
+      eq(await mode('/tmp/perm-n3'), '644', 'cp over an executable file: the default mode')
+      await run('chmod 700 /tmp/perm-n1; cp /tmp/perm-n1 /tmp/perm-n3')
+      eq(await mode('/tmp/perm-n3'), '700', 'and the source mode, when it has one')
+
+      // 5. Special bits.
+      await run('echo x > /tmp/perm-sp')
+      await run('chmod 4755 /tmp/perm-sp')
+      eq(await row('/tmp/perm-sp'), '-rwsr-xr-x', 'setuid shows as s')
+      await run('chmod 4644 /tmp/perm-sp')
+      eq(await row('/tmp/perm-sp'), '-rwSr--r--', 'setuid without x shows as S')
+      await run('chmod 2755 /tmp/perm-sp')
+      eq(await row('/tmp/perm-sp'), '-rwxr-sr-x', 'setgid shows as s')
+      await run('chmod 1755 /tmp/perm-sp')
+      eq(await row('/tmp/perm-sp'), '-rwxr-xr-t', 'sticky shows as t')
+      await run('chmod 1644 /tmp/perm-sp')
+      eq(await row('/tmp/perm-sp'), '-rw-r--r-T', 'sticky without x shows as T')
+      eq(await out("find /tmp/perm-sp -printf '%M %m'"), '-rw-r--r-T 1644', 'find %M and %m agree')
+      await run('chmod 1755 /tmp/perm-sp; chmod a=rw /tmp/perm-sp')
+      eq(await mode('/tmp/perm-sp'), '666', 'a=rw clears the sticky bit')
+      await run('chmod 7777 /tmp/perm-sp; chmod a=rw /tmp/perm-sp')
+      eq(await mode('/tmp/perm-sp'), '666', 'a=rw clears setuid, setgid and sticky')
+      await run('chmod 7777 /tmp/perm-sp; chmod u=rw /tmp/perm-sp')
+      eq(await mode('/tmp/perm-sp'), '3677', 'u=rw clears setuid only')
+      await run('chmod 7777 /tmp/perm-sp; chmod u+s,g-s,o-t /tmp/perm-sp')
+      eq(await mode('/tmp/perm-sp'), '4777', 'u+s, g-s and o-t work one by one')
+      eq(mods.applyMode('a=rw', 0o7777, true), 0o6666, 'a folder keeps its setuid and setgid on a=rw (chmod does), but not sticky')
+
+      // 6. One owner, everywhere.
+      await run('echo x > /tmp/perm-own')
+      eq(await out('ls -l /tmp/perm-own'), `-rw-r--r--  ${vfs.HOME.split('/').pop()}       1  perm-own`, 'ls -l: your files show your handle')
+      eq((await out("find /tmp/perm-own /etc/hostname -printf '%u '")).trim(), `${vfs.HOME.split('/').pop()} root`, 'find %u says the same')
+      const browserFile = { type: 'file', name: 'b', browser: '/b', content: () => '' } as import('../src/terminal/vfs.ts').FileNode
+      eq([mods.ownerOf('/mnt/browser/b', browserFile), mods.ownerOf('/etc/hostname'), mods.ownerOf('/srv/site/cv.md'), mods.ownerOf(vfs.HOME), mods.ownerOf('/mnt/seafile/x', { ...browserFile, browser: undefined, sf: 'seafile://r/x' })], [vfs.HOME.split('/').pop(), 'root', vfs.HOME.split('/').pop(), vfs.HOME.split('/').pop(), vfs.HOME.split('/').pop()], 'ownerOf: browser files and Seafile are yours, /etc is root')
+
+      for (const f of ['rd', 'xo', 'src', 'dst', 'dst2', 'n1', 'n2', 'n3', 'sp', 'own']) await run(`rm -f /tmp/perm-${f}`)
+    }
+
     // The Seafile table: where the server has no modes.
     {
       const sf = 'seafile://repo/dir/run.msh'
@@ -508,6 +616,134 @@ try {
 
     for (const f of ['a.txt', 's.msh', 't.sh', 'b', 'c', 'm', 'n', 'o', 'p', 'q', 'r']) await run(`rm -f /tmp/perm-${f}`)
     cwd = HOME
+  }
+
+  // --- permissions on Seafile (a second module graph, with Seafile's API faked in memory) -----------
+
+  {
+    // The site's API as src/data/seafile.ts calls it, backed by a Map: one library, "Mine", as home.
+    type Item = { dir: boolean; data: string }
+    const files = new Map<string, Item>([['/', { dir: true, data: '' }]])
+    const parentOf = (p: string) => p.replace(/\/[^/]*$/, '') || '/'
+    const join = (d: string, n: string) => (d === '/' ? `/${n}` : `${d}/${n}`)
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+    const realFetch = g.fetch as typeof fetch
+    g.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      const q = url.searchParams
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : init.body
+      const post = (init.method ?? 'GET') === 'POST'
+      if (url.host === 'sf.mock') {
+        if (!post) return new Response(files.get(q.get('p')!)?.data ?? '')
+        const form = body as FormData
+        const file = form.get('file') as File
+        const path = q.get('op') === 'update' ? (form.get('target_file') as string) : join(form.get('parent_dir') as string, file.name)
+        files.set(path, { dir: false, data: await file.text() })
+        return json([{ name: file.name }])
+      }
+      switch (url.pathname) {
+        case '/api/me':
+          return json({ authEnabled: false, user: null, forges: [], seafile: { url: 'http://sf.mock', username: 'check', name: null, version: null, office: null } })
+        case '/api/seafile/libraries':
+          return json([{ id: 'repo-1', name: 'Mine', type: 'mine', owner: 'check', encrypted: false, permission: 'rw', size: 0, mtime: 0 }])
+        case '/api/seafile/dir':
+          if (post) return files.set(body.path, { dir: true, data: '' }) && json({ path: body.path })
+          return json({ perm: 'rw', entries: [...files].filter(([k]) => k !== '/' && parentOf(k) === q.get('p')).map(([k, v]) => ({ name: k.split('/').pop(), dir: v.dir, size: v.data.length, mtime: 1, id: k })) })
+        case '/api/seafile/file':
+          files.set(body.path, { dir: false, data: '' })
+          return json({ path: body.path })
+        case '/api/seafile/link':
+          return json({ url: `http://sf.mock/${q.get('op')}?op=${q.get('op')}&p=${encodeURIComponent(q.get('p')!)}` })
+        case '/api/seafile/rename': {
+          const to = join(parentOf(body.path), body.name)
+          for (const k of [...files.keys()].filter((x) => x === body.path || x.startsWith(`${body.path}/`))) {
+            files.set(to + k.slice(body.path.length), files.get(k)!)
+            files.delete(k)
+          }
+          return json({ path: to })
+        }
+        case '/api/seafile/delete':
+          for (const n of body.names as string[]) for (const k of [...files.keys()].filter((x) => x === join(body.parent, n) || x.startsWith(`${join(body.parent, n)}/`))) files.delete(k)
+          return json({})
+        case '/api/seafile/transfer':
+          for (const n of body.names as string[]) {
+            const from = join(body.from.parent, n)
+            for (const k of [...files.keys()].filter((x) => x === from || x.startsWith(`${from}/`))) {
+              files.set(join(body.to.parent, n) + k.slice(from.length), files.get(k)!)
+              if (body.op === 'move') files.delete(k)
+            }
+          }
+          return json({})
+      }
+      return json({ error: `not faked: ${url.pathname}` }, 404)
+    }
+    const vite2 = await createServer({ configFile: false, root: new URL('..', import.meta.url).pathname, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', define: { __APP_VERSION__: '"0.0.0"', __APP_COMMIT__: '"test"', __BUILD_TIME__: '"2026-01-01T00:00:00.000Z"' }, optimizeDeps: { noDiscovery: true, include: [] } })
+    try {
+      const cmds = (await vite2.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
+      const home = ((await vite2.ssrLoadModule('/src/terminal/vfs.ts')) as typeof import('../src/terminal/vfs.ts')).HOME
+      const sfMods = (await vite2.ssrLoadModule('/src/terminal/modes.ts')) as typeof import('../src/terminal/modes.ts')
+      await ((await vite2.ssrLoadModule('/src/os/account.ts')) as typeof import('../src/os/account.ts')).loadAccount()
+      let at = home
+      const sh = async (text: string, root = false) => {
+        const base = { args: [], stdin: null, cwd: at, setCwd: (p: string) => void (at = p), env: { HOME: home, USER: 'menno' }, history: [], windows: [], openApp() {}, openNewApp() {}, root, closeWindow() {}, clear() {}, exit() {}, setAccent: () => true, print() {}, tty: false, live() {}, size: { cols: 80, rows: 24 }, signal: new AbortController().signal, onKey() {} }
+        const results = await cmds.runLine(text, base as never)
+        return { out: cmds.strip(results.map((r) => r.output).join('\n')), ok: results.every((r) => r.ok) }
+      }
+      const modeAt = async (p: string) => (await sh(`find ${p} -maxdepth 0 -printf '%m'`)).out.trim()
+
+      await sh('ls ~') // the first command loads the libraries
+      await sh('echo hi > ~/perm-first.txt')
+      check(files.has('/perm-first.txt'), 'Seafile fake: a file written under ~ lands in the library', JSON.stringify([...files.keys()]))
+      eq(await modeAt('~/perm-first.txt'), '644', 'a Seafile file: 644 by default')
+      const noX = await sh('cd ~; echo "echo ran" > run.msh; ./run.msh; echo status=$?')
+      check(noX.out.includes('Permission denied') && noX.out.includes('status=126'), 'a Seafile script without x: Permission denied', noX.out)
+      await sh('chmod +x ~/run.msh')
+      eq(await modeAt('~/run.msh'), '755', 'chmod +x on a Seafile file')
+      eq((await sh('./run.msh')).out, 'ran', 'and it runs')
+      check([...store.entries()].some(([k, v]) => k.endsWith('terminal.modes') && JSON.parse(v)['seafile://repo-1/run.msh'] === 0o755), 'the mode is in the account table in localStorage, not sent to the server')
+      await sh('mv ~/run.msh ~/moved.msh')
+      eq([await modeAt('~/moved.msh'), sfMods.sfModeOf('seafile://repo-1/run.msh')], ['755', undefined], 'mv keeps the mode and leaves no entry behind')
+      // (cp into the folder it is in makes "name (1)" on Seafile, so the copies go to folders of their own.)
+      await sh('mkdir ~/d1 ~/d2 ~/d3')
+      await sh('cp ~/moved.msh ~/d1/copied.msh')
+      eq([await modeAt('~/d1/copied.msh'), await modeAt('~/moved.msh')], ['755', '755'], 'cp carries it to the copy, and the original keeps it')
+
+      // 4. Replacing an executable file: the new content is not runnable by inheritance.
+      await sh('echo "echo old" > ~/dst.msh; chmod 755 ~/dst.msh; echo "echo new" > ~/src.msh')
+      eq(await modeAt('~/dst.msh'), '755', 'the destination starts executable')
+      check((await sh('mv ~/src.msh ~/dst.msh')).ok, 'mv over it')
+      eq(await modeAt('~/dst.msh'), '644', 'mv over an executable Seafile file: the default mode')
+      const denied = await sh('./dst.msh; echo status=$?')
+      check(denied.out.includes('Permission denied') && !denied.out.includes('echo new') && denied.out.includes('status=126'), 'and the replacement does not run', denied.out)
+      await sh('echo "echo old" > ~/d2/dst2.msh; chmod 755 ~/d2/dst2.msh; echo "echo new" > ~/src2.msh')
+      await sh('cp ~/src2.msh ~/d2/dst2.msh')
+      eq(await modeAt('~/d2/dst2.msh'), '644', 'cp over an executable Seafile file: the default mode')
+      await sh('chmod 700 ~/src2.msh; echo "echo old" > ~/d3/dst3.msh; chmod 755 ~/d3/dst3.msh')
+      await sh('mv ~/src2.msh ~/d3/dst3.msh')
+      eq(await modeAt('~/d3/dst3.msh'), '700', 'a source with a mode of its own passes it on')
+
+      // A stale entry (the file was deleted somewhere else) does not come back with a new file.
+      sfMods.setSfMode('seafile://repo-1/stale-touch.msh', 0o755)
+      sfMods.setSfMode('seafile://repo-1/stale-write.msh', 0o755)
+      sfMods.setSfMode('seafile://repo-1/stale-dir', 0o700)
+      await sh('touch ~/stale-touch.msh; echo "echo x" > ~/stale-write.msh; mkdir ~/stale-dir')
+      eq([await modeAt('~/stale-touch.msh'), await modeAt('~/stale-write.msh'), await modeAt('~/stale-dir')], ['644', '644', '755'], 'touch, > and mkdir at a path with a stale entry: the defaults')
+      sfMods.setSfMode('seafile://repo-1/stale-write.msh', 0o755)
+      await sh('echo "echo y" >> ~/stale-write.msh')
+      eq(await modeAt('~/stale-write.msh'), '755', 'writing to an existing file keeps its mode')
+      await sh('rm ~/stale-write.msh')
+      eq(sfMods.sfModeOf('seafile://repo-1/stale-write.msh'), undefined, 'rm drops the entry')
+
+      // The Seafile checks that forward root: sudo cp onto a file without w.
+      await sh('echo a > ~/ro-src; echo b > ~/d1/ro-dst; chmod 444 ~/d1/ro-dst')
+      check(!(await sh('cp ~/ro-src ~/d1/ro-dst')).ok && (await sh('cp ~/ro-src ~/d1/ro-dst', true)).ok, 'cp onto a 444 Seafile file: refused, root passes')
+      await sh('chmod a-r ~/ro-src')
+      const sfRead = await sh('cat ~/ro-src')
+      check(!sfRead.ok && sfRead.out.includes('Permission denied'), 'cat on a Seafile file without r: Permission denied', sfRead.out)
+    } finally {
+      await vite2.close()
+      g.fetch = realFetch
+    }
   }
 
   // --- cmatrix ------------------------------------------------------------------------------------

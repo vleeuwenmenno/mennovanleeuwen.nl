@@ -3,7 +3,7 @@ import { browserMountPoint, getFstab, isSeafileType, libraryNames, mounts, setFs
 import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readBlob, readText, renameItem, SF, sfPath, transferItems, uploadBlob, writeText, type Entry } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
-import { CmdError } from './types'
+import { CmdError, DeniedError } from './types'
 import { writeError } from './devices'
 import { cvMode } from '../os/cvMode'
 import { keptRc, RC_NAME, RC_PATH, setKeptRc } from './rcfile'
@@ -305,9 +305,11 @@ export async function prepareFolder(abs: string) {
 }
 
 /** A Seafile file's text for an editor: fetched now, whatever its age. */
-export async function readFileText(abs: string): Promise<{ text: string; ro: boolean } | null> {
+export async function readFileText(abs: string, root = false): Promise<{ text: string; ro: boolean } | null> {
   const node = lookup(abs)
   if (!node || node.type !== 'file') return null
+  // A mode set with chmod can forbid the read; the callers that show it say so (DeniedError).
+  if (!allows(abs, node, 'r', root)) throw new DeniedError('Permission denied')
   if (node.browser) return { text: await readBrowserText(node.browser), ro: false }
   // The site's own files under the browser mount: readable, and saving makes the browser's copy.
   if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && abs !== RC_PATH && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
@@ -380,7 +382,7 @@ export async function writeFile(cwd: string, target: string, content: string, ap
     setKeptRc(append && prev ? (prev.endsWith('\n') ? prev + body : `${prev}\n${body}`) : body)
     return
   }
-  if (w.kind === 'local') return writeTmp('/', w.path, content, append)
+  if (w.kind === 'local') return writeTmp('/', w.path, content, append, root, who)
   if (w.kind === 'browser') {
     await browserFilesReady()
     const node = lookup(abs)
@@ -406,7 +408,10 @@ export async function writeFile(cwd: string, target: string, content: string, ap
     const prev = await readText(w.sf)
     text = prev && !prev.endsWith('\n') ? `${prev}\n${body}` : prev + body
   }
-  if (!e) await createFile(w.sf)
+  if (!e) {
+    dropSfModes(w.sf)
+    await createFile(w.sf)
+  }
   await writeText(w.sf, text)
   texts.set(w.sf, { text, mtime: Date.now() })
   await listDir(sfParent(w.sf)!, 0).catch(() => {})
@@ -464,6 +469,7 @@ export async function makeDir(cwd: string, arg: string, parents: boolean, root =
     if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
     await makeDir('/', parent, true, root)
   }
+  dropSfModes(sf)
   await sfMkdir(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
@@ -483,6 +489,7 @@ export async function touchFile(cwd: string, arg: string, root = false) {
   }
   const sf = writable(abs, arg, 'touch: cannot touch')
   if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
+  dropSfModes(sf)
   await createFile(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
@@ -501,7 +508,7 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
   needParent(abs, `rm: cannot remove '${arg}'`, opts.root)
   if (node.type === 'dir' && !opts.recursive && !(opts.dir && node.children.size === 0)) throw err(`rm: cannot remove '${arg}': ${opts.dir ? 'Directory not empty' : 'Is a directory'}`)
   if (abs.startsWith('/tmp/')) {
-    ;(siteLookup('/tmp') as DirNode).children.delete(baseOf(abs))
+    ;(siteLookup(parentOf(abs)) as DirNode).children.delete(baseOf(abs))
     return
   }
   if (abs === RC_PATH && node.type === 'file' && !node.sf && !node.browser) return setKeptRc(null)
@@ -539,30 +546,50 @@ export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string,
   const node = lookup(src)
   let dest = resolvePath(cwd, destArg)
   if (node && lookup(dest)?.type === 'dir') dest = join(dest, baseOf(src))
-  if (node) {
+  const kept: [string, number][] = []
+  if (node && dest !== src) {
     const kind = node.type === 'dir' ? 'directory' : 'regular file'
-    if (op === 'copy') need(src, 'r', `cp: cannot open '${srcArg}' for reading`, root)
-    else needParent(src, `mv: cannot move '${srcArg}'`, root)
-    if (dest !== src) needParent(dest, `${cmd}: cannot create ${kind} '${destArg}'`, root)
+    if (op === 'move') needParent(src, `mv: cannot move '${srcArg}'`, root)
+    needParent(dest, `${cmd}: cannot create ${kind} '${destArg}'`, root)
+    // A rename never reads the bytes; anything else (a copy, a move to another filesystem) does.
+    const renames = op === 'move' && ((!!sfOf(src) && !!sfOf(parentOf(dest))) || (!!node.browser && whereIs(parentOf(dest)).kind === 'browser'))
+    const overwritten: string[] = []
+    for (const p of walk(src, node)) {
+      const rel = p.slice(src.length)
+      const from = lookup(p)
+      const to = dest + rel
+      if (from?.mode !== undefined) kept.push([rel, from.mode])
+      if (from?.type === 'file' && !renames && !allows(p, from, 'r', root)) throw err(`${cmd}: cannot open '${srcArg}${rel}' for reading: Permission denied`)
+      const there = lookup(to)
+      if (there?.type !== 'file') {
+        if (!there) needParent(to, `${cmd}: cannot create ${from?.type === 'dir' ? 'directory' : 'regular file'} '${destArg}${rel}'`, root)
+        continue
+      }
+      if (from?.type === 'file' && !allows(to, there, 'w', root)) throw err(op === 'move' ? `mv: cannot move '${srcArg}${rel}' to '${destArg}${rel}': Permission denied` : `cp: cannot create regular file '${destArg}${rel}': Permission denied`)
+      overwritten.push(to)
+    }
+    // What is replaced takes the new file's mode: the defaults, unless the source has its own.
+    for (const to of overwritten) {
+      const at = whereIs(to)
+      if (at.kind === 'sf') dropSfModes(at.sf)
+      else if (lookup(to)?.mode !== undefined) await setMode(to, null, true).catch(() => {})
+    }
   }
-  const kept: [string, number | null][] = walk(src, node)
-    .map((p): [string, number | null] => [p.slice(src.length), lookup(p)?.mode ?? null])
-    .filter(([rel, m]) => m !== null || (rel === '' && op === 'move'))
-  await move(op, cwd, srcArg, destArg, recursive)
+  await move(op, cwd, srcArg, destArg, recursive, root)
   if (!node || dest === src) return
   const fromSf = sfOf(src)
   const toSf = whereIs(dest)
   if (fromSf && toSf.kind === 'sf') return carrySfModes(fromSf.sf, toSf.sf, op === 'copy')
   for (const [rel, mode] of kept) {
     const to = dest + rel
-    if (lookup(to)?.mode === (mode ?? undefined)) continue
+    if (lookup(to)?.mode === mode) continue
     const at = whereIs(to)
     if (at.kind === 'sf') setSfMode(at.sf, mode)
     else await setMode(to, mode, true).catch(() => {})
   }
 }
 
-async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean) {
+async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean, root: boolean) {
   const cmd = op === 'move' ? 'mv' : 'cp'
   const src = resolvePath(cwd, srcArg)
   const node = lookup(src)
@@ -607,7 +634,7 @@ async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: s
   const movable = !!fromSf || !!node.browser || src.startsWith('/tmp/')
   if (op === 'move' && (!movable || fromSf?.ro)) throw err(`mv: cannot move '${srcArg}': Read-only file system`)
   if (node.type === 'dir' && fromSf) await ensureTree(fromSf.sf, cmd, false)
-  await copyAcross(src, dest, cmd, destArg)
+  await copyAcross(src, dest, cmd, destArg, root)
   if (op === 'move') await removePath('/', src, { recursive: true, force: true, dir: false, root: true })
 }
 
@@ -619,15 +646,15 @@ async function bytesOf(node: FileNode): Promise<Blob> {
 }
 
 /** Copies a file or folder to a new place on another filesystem (the browser, Seafile, /tmp). */
-async function copyAcross(src: string, dest: string, cmd: string, destArg: string) {
+async function copyAcross(src: string, dest: string, cmd: string, destArg: string, root: boolean) {
   const node = lookup(src)
   if (!node) return
   const into = parentOf(dest)
   const w = whereIs(into)
   const cannot = (why: string) => err(`${cmd}: cannot create ${node.type === 'dir' ? 'directory' : 'regular file'} '${destArg}': ${why}`)
   if (node.type === 'dir') {
-    if (lookup(dest)?.type !== 'dir') await makeDir('/', dest, true)
-    for (const name of node.children.keys()) await copyAcross(join(src, name), join(dest, name), cmd, destArg)
+    if (lookup(dest)?.type !== 'dir') await makeDir('/', dest, true, root)
+    for (const name of node.children.keys()) await copyAcross(join(src, name), join(dest, name), cmd, destArg, root)
     return
   }
   if (lookup(dest)?.type === 'dir') throw err(`${cmd}: cannot overwrite directory '${destArg}' with non-directory`)
@@ -639,6 +666,6 @@ async function copyAcross(src: string, dest: string, cmd: string, destArg: strin
     await uploadBlob(w.sf, baseOf(dest), await bytesOf(node))
     await listDir(w.sf, 0).catch(() => {})
   } else if (w.kind === 'local' && dest.startsWith('/tmp/')) {
-    writeTmp('/', dest, await (await bytesOf(node)).text(), false)
+    writeTmp('/', dest, await (await bytesOf(node)).text(), false, root, cmd)
   } else throw cannot(w.kind === 'missing' ? 'Transport endpoint is not connected' : 'Read-only file system')
 }

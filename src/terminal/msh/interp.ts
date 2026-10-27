@@ -4,7 +4,7 @@
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
-import { CmdError, type Ctx } from '../types'
+import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
@@ -909,7 +909,7 @@ class Shell {
           const denied = readError('msh', target, node.dev, !!this.base.root)
           if (denied) throw new ShellError(denied.message.split('\n')[0].replace(/^msh: /, ''))
           if (!allows(abs, node, 'r', !!this.base.root)) throw new ShellError(`${target}: Permission denied`)
-          const text = (await readFileText(abs).catch(() => null))?.text ?? node.content()
+          const text = await this.textOf(abs, node, (why) => new ShellError(`${target}: ${why}`))
           if (r.fd === 0) next.stdin = { data: text, pos: 0 }
           continue
         }
@@ -1064,7 +1064,13 @@ class Shell {
     await prepare(this.base.cwd, 'cat', [path])
     const node = lookup(abs)
     if (node?.type !== 'file' || node.exec || node.name.endsWith('.game')) return null
-    const text = (await readFileText(abs).catch(() => null))?.text ?? node.content()
+    let text: string
+    try {
+      text = await this.textOf(abs, node, (why) => new ShellError(why))
+    } catch {
+      io.err.write(`${red(`msh: ${path}: Permission denied`)}\n`)
+      return 'refused'
+    }
     const bang = /^#!\s*(\S+)(?:\s+(\S+))?/.exec(text)
     const interp = bang ? (bang[1].endsWith('/env') ? bang[2] : bang[1].split('/').pop()) : null
     const shell = !!interp && /^(msh|sh|bash|dash|zsh|ksh|ash)$/.test(interp)
@@ -1163,7 +1169,20 @@ class Shell {
     const node = lookup(abs)
     if (node?.type !== 'file') return null
     if (!allows(abs, node, 'r', !!this.base.root)) throw new ShellError(`${who}: ${path}: Permission denied`)
-    return (await readFileText(abs).catch(() => null))?.text ?? node.content()
+    return this.textOf(abs, node, (why) => new ShellError(`${who}: ${path}: ${why}`))
+  }
+
+  /**
+   * A file's text, fetched from where it lives. A mode that forbids the read comes back as the
+   * error `denied` makes of it; any other failure falls back to the node's own text.
+   */
+  private async textOf(abs: string, node: { content: () => string }, denied: (why: string) => Error): Promise<string> {
+    try {
+      return (await readFileText(abs, !!this.base.root))?.text ?? node.content()
+    } catch (e) {
+      if (e instanceof DeniedError) throw denied(e.message)
+      return node.content()
+    }
   }
 
   /** How `type` and `command -v` describe a name. */

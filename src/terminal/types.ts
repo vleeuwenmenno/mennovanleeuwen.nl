@@ -13,6 +13,9 @@ export class CmdError extends Error {
   }
 }
 
+/** A read or write the mode forbids (set with chmod, see modes.ts): `Permission denied`. */
+export class DeniedError extends CmdError {}
+
 /** One tappable suggestion for the line being typed; touch screens show them above the keyboard. */
 export type Hint = { label: string; hint?: string; apply: () => void }
 

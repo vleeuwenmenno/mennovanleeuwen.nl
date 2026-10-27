@@ -2,7 +2,7 @@ import { HANDLE } from '../os/identity'
 import { runLine, writeTmp, type Completion } from './commands'
 import { CmdError, type Ctx } from './types'
 import { lookup, removePath, sfOf } from './fs'
-import { allows, applyMode, canRun, modeOf, permString } from './modes'
+import { allows, applyMode, canRun, modeOf, ownerOf, permString } from './modes'
 import { HOME, resolvePath, stat, type DirNode, type Node } from './vfs'
 
 // GNU find (findutils 4.10) and sharkdp's fd (10.2) over the in-memory filesystem: their options,
@@ -20,8 +20,8 @@ const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const DIR_SIZE = 4096
 
 const isUnderTmp = (abs: string) => abs.startsWith('/tmp/')
-const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || sfOf(abs) ? HANDLE : 'root')
-const idOf = (abs: string) => (owner(abs) === 'root' ? 0 : 1000)
+const owner = (abs: string, node: Node | null = lookup(abs)) => ownerOf(abs, node)
+const idOf = (abs: string, node: Node | null = lookup(abs)) => (owner(abs, node) === 'root' ? 0 : 1000)
 /** find's -type letter: d, f, or c and b for the devices in /dev. */
 const typeLetter = (node: Node) => (node.type === 'dir' ? 'd' : node.dev ? (node.dev.kind === 'char' ? 'c' : 'b') : 'f')
 /** What -executable says: a folder can be entered, a file needs an x bit (modes.ts). */
@@ -397,8 +397,8 @@ function compilePrintf(fmt: string): (e: Entry) => string {
           D: () => (fsType(abs) === 'tmpfs' ? '36' : fsType(abs) === 'proc' ? '22' : '2049'),
           f: () => baseName(e),
           F: () => fsType(abs),
-          g: () => owner(abs),
-          G: () => String(idOf(abs)),
+          g: () => owner(abs, node),
+          G: () => String(idOf(abs, node)),
           h: () => dirname,
           H: () => e.start.shown,
           i: () => String(inodeOf(abs)),
@@ -410,8 +410,8 @@ function compilePrintf(fmt: string): (e: Entry) => string {
           P: () => (e.depth === 0 ? '' : e.shown.slice(e.start.shown.replace(/\/$/, '').length + 1)),
           s: () => String(sizeOf(abs, node)),
           S: () => '1',
-          u: () => owner(abs),
-          U: () => String(idOf(abs)),
+          u: () => owner(abs, node),
+          U: () => String(idOf(abs, node)),
           y: () => (node.type === 'dir' ? 'd' : 'f'),
           Y: () => (node.type === 'dir' ? 'd' : 'f'),
           Z: () => '?',
@@ -429,7 +429,7 @@ function compilePrintf(fmt: string): (e: Entry) => string {
 /** -ls and -fls: `ls -dils`. */
 function lsLine(e: Entry) {
   const { abs, node } = e
-  return `${String(inodeOf(abs)).padStart(9)} ${String(allocated(abs, node) / 1024).padStart(6)} ${permString(abs, node)} ${String(linksOf(node)).padStart(3)} ${owner(abs).padEnd(8)} ${owner(abs).padEnd(8)} ${String(sizeOf(abs, node)).padStart(8)} ${lsDate(mtimeOf(abs, node))} ${e.shown}`
+  return `${String(inodeOf(abs)).padStart(9)} ${String(allocated(abs, node) / 1024).padStart(6)} ${permString(abs, node)} ${String(linksOf(node)).padStart(3)} ${owner(abs, node).padEnd(8)} ${owner(abs, node).padEnd(8)} ${String(sizeOf(abs, node)).padStart(8)} ${lsDate(mtimeOf(abs, node))} ${e.shown}`
 }
 
 const DATE_RE = /^(\d{4})-(\d\d)-(\d\d)(?:[ T](\d\d):(\d\d)(?::(\d\d))?)?$/
@@ -693,12 +693,12 @@ class FindParser {
       case '-group': {
         const name = this.arg(pred)
         if (!/^\d+$/.test(name) && name !== HANDLE && name !== 'root') throw new FindError(`find: '${name}' is not the name of a known ${pred === '-user' ? 'user' : 'group'}`)
-        return test((e) => (/^\d+$/.test(name) ? idOf(e.abs) === Number(name) : owner(e.abs) === name))
+        return test((e) => (/^\d+$/.test(name) ? idOf(e.abs, e.node) === Number(name) : owner(e.abs, e.node) === name))
       }
       case '-uid':
       case '-gid': {
         const cmp = parseN(this.arg(pred), pred)
-        return test((e) => cmp(idOf(e.abs)))
+        return test((e) => cmp(idOf(e.abs, e.node)))
       }
       case '-nouser':
       case '-nogroup':
@@ -777,7 +777,7 @@ class FindParser {
           if (e.abs === '/tmp' || (!isUnderTmp(e.abs) && !(node?.sf && !node.ro))) return fail('Read-only file system')
           if (node?.type === 'dir' && node.children.size) return fail('Directory not empty')
           try {
-            await removePath('/', e.abs, { recursive: false, force: true, dir: true })
+            await removePath('/', e.abs, { recursive: false, force: true, dir: true, root: !!st.ctx.root })
             return true
           } catch (err) {
             return fail((err as Error).message.replace(/^.*: /, ''))
@@ -975,7 +975,7 @@ help       Explain the various -D options`
       if (!r.ok) st.failed = true
     }
   }
-  for (const [file, chunks] of st.files) writeTmp(ctx.cwd, file, chunks.join('').replace(/\n$/, ''), false)
+  for (const [file, chunks] of st.files) writeTmp(ctx.cwd, file, chunks.join('').replace(/\n$/, ''), false, !!ctx.root, 'find')
 
   const text = [...warnings, ...st.out].join('').replace(/\n$/, '')
   if (st.failed) throw new CmdError(text, true)
@@ -1578,9 +1578,9 @@ async function fd(ctx: Ctx): Promise<string> {
         (o.within === null || mtimeOf(childAbs, child) > o.within) &&
         (o.before === null || mtimeOf(childAbs, child) < o.before)
       if (match && o.owner) {
-        const who = owner(childAbs)
+        const who = owner(childAbs, child)
         const { user, group, notUser, notGroup } = o.owner
-        const is = (want: string | undefined) => !want || want === who || want === String(idOf(childAbs))
+        const is = (want: string | undefined) => !want || want === who || want === String(idOf(childAbs, child))
         match = (notUser ? !is(user) || !user : is(user)) && (notGroup ? !is(group) || !group : is(group))
       }
       if (match) results.push({ abs: childAbs, shown: prefix + childRel, node: child })
@@ -1646,7 +1646,7 @@ async function fd(ctx: Ctx): Promise<string> {
   }
 
   if (o.listDetails) {
-    const rows = results.map((r) => [permString(r.abs, r.node), String(linksOf(r.node)), owner(r.abs), owner(r.abs), humanSize(sizeOf(r.abs, r.node)), lsDate(mtimeOf(r.abs, r.node))])
+    const rows = results.map((r) => [permString(r.abs, r.node), String(linksOf(r.node)), owner(r.abs, r.node), owner(r.abs, r.node), humanSize(sizeOf(r.abs, r.node)), lsDate(mtimeOf(r.abs, r.node))])
     const widths = [0, 1, 2, 3, 4].map((i) => Math.max(0, ...rows.map((row) => row[i].length)))
     return results
       .map((r, i) => {

@@ -166,7 +166,7 @@ async function nano(ctx: Ctx): Promise<string | void> {
     } else if (node) {
       if (node.sf && (node.size ?? 0) > MAX_TEXT) throw new CmdError(`nano: ${file}: too big to edit here (over 2 MB)`)
       try {
-        const read = await readFileText(abs)
+        const read = await readFileText(abs, !!ctx.root)
         if (!read) throw new Error('No such file or directory')
         lines = read.text.replace(/\n$/, '').split('\n')
         writable = abs === '/etc/fstab' ? !!ctx.root : !read.ro || abs.startsWith('/tmp/')
@@ -471,7 +471,7 @@ async function nano(ctx: Ctx): Promise<string | void> {
           if ((await save(v)) && p.exitAfter) return finish()
         } else if (p.kind === 'insert') {
           if (!v) return say('[ Cancelled ]')
-          const read = await readFileText(resolvePath(ctx.cwd, v)).catch((e) => {
+          const read = await readFileText(resolvePath(ctx.cwd, v), !!ctx.root).catch((e) => {
             say(`[ Error reading ${v}: ${reason(e)} ]`)
             return undefined
           })
