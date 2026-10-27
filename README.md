@@ -490,8 +490,7 @@ deleting inside), and `sudo` ignores all of it, down through `find -delete` and 
 makes. A file that replaces another (`mv`/`cp` over it) takes the new file's mode, never the old one's.
 Setuid, setgid and the sticky bit are kept and shown (`rws`, `r-S`, `t`, `T`; `a=rw` clears them, as in
 `chmod`), but setuid and setgid are display only: nothing here runs as someone else, so they grant
-nothing. The apps are the exception: Zed, Files and the other GUI apps read and save through their own
-paths, so a mode set with `chmod` does not stop them from opening or saving that file. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
+nothing. The apps are the exception on the way out: Zed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Zed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
 
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
