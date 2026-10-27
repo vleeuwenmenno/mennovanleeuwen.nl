@@ -1209,7 +1209,9 @@ dropped on an app's icon opens in that app if it opens that kind of file, and an
 Trash goes in the trash.
 
 Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
-(default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
+(default 100). Each account may store up to `USER_STORAGE_MB` (default 2048, 2 GB:
+[`server/quota.ts`](server/quota.ts)) of synced desktop state, Agents threads with their attachments, and memories. At the cap, reading and deleting
+keep working and a save is refused with a 413 that names the limit, so the account can free space first. Over the cap, or with sign-up closed, a new account gets a "We're full" (or
 "Sign-up is closed") dialog instead; existing accounts and admins can always sign in. GitHub accounts whose numeric id is in
 `ADMIN_GITHUB_IDS` (comma-separated, default `46482143`) are admins (the id never changes, a login can be renamed and taken by someone else; the old `ADMIN_USERS` is retired and grants nothing): Settings → Users lists the accounts (counts and
 sizes only, never their contents), bans, signs out and deletes them, and opens or closes sign-up.
@@ -1241,7 +1243,7 @@ Setup:
    URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
    `http://localhost:5173/api/auth/github/callback`.
 2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_GITHUB_IDS`
-   (comma-separated numeric GitHub ids; find yours at `https://api.github.com/users/<login>`), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
+   (comma-separated numeric GitHub ids; find yours at `https://api.github.com/users/<login>`), `MAX_USERS` (the starting cap; Settings → Users changes it), `USER_STORAGE_MB` (the most one account may store, default 2048, 2 GB), `PUBLIC_URL` (the site's
    address, e.g. `https://mennovanleeuwen.nl`; set it in production, since without it the server
    takes `Host` and `X-Forwarded-*` from each request, and logs a warning at startup), `SESSION_SECRET` (otherwise a random key is generated once into
    `DATA_DIR/secret.key`), `GITHUB_SCOPES` (what "Allow private" in Settings → Code hosts asks

@@ -3,10 +3,11 @@ import { database } from './db.ts'
 import { HttpError } from './http.ts'
 
 // How much of the database each account takes up, now that anyone can sign up: synced desktop
-// state, Agents threads (with their attachments) and memories. USER_STORAGE_MB (default 200)
+// state, Agents threads (with their attachments) and memories. USER_STORAGE_MB (default 2048)
 // is the most one account may hold; reads and deletes keep working when it is full.
 
-const limit = () => Math.max(1, Number(process.env.USER_STORAGE_MB) || 200) * 1024 * 1024
+const DEFAULT_LIMIT_MB = 2048
+const limit = () => Math.max(1, Number(process.env.USER_STORAGE_MB) || DEFAULT_LIMIT_MB) * 1024 * 1024
 
 /** Bytes this account stores, about: the length of every stored text. */
 export function usedBytes(userId: number): number {
