@@ -32,7 +32,8 @@ import { openImport, pimAppFor } from '../data/pimFiles'
 import { manPages, mountCommands } from './mount'
 import { byteCommands } from './bytecmds'
 import { byteLength } from './bytes'
-import { modeString } from './devices'
+import { allows, canRun, ownerOf, permString } from './modes'
+import { chmodCommands } from './chmod'
 import { readFile } from './read'
 import { nanoCommands } from './nano'
 import { skillsCommands } from './skills'
@@ -390,7 +391,7 @@ async function moveOrCopy(ctx: Ctx, op: 'move' | 'copy') {
   const dest = f.rest[f.rest.length - 1]
   const sources = f.rest.slice(0, -1)
   if (sources.length > 1 && lookup(resolvePath(ctx.cwd, dest))?.type !== 'dir') throw new CmdError(`${cmd}: target '${dest}': Not a directory`)
-  for (const s of sources) await transfer(op, ctx.cwd, s, dest, f.has('r') || f.has('R') || f.has('a'))
+  for (const s of sources) await transfer(op, ctx.cwd, s, dest, f.has('r') || f.has('R') || f.has('a'), !!ctx.root)
 }
 
 /** A shell builtin as a command, for callers that run commands without the shell. */
@@ -411,7 +412,7 @@ export const commands: Record<string, Command> = {
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
         ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'weather', 'games']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'changelog', 'git', 'heatmap', 'stars', 'contact']],
-        ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
+        ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'chmod', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
@@ -453,9 +454,8 @@ export const commands: Record<string, Command> = {
         const sizeWidth = rows.some(({ node: k }) => k.type === 'file' && k.dev) ? Math.max(6, ...sizes.map((x) => x.length)) : 6
         return rows
           .map(({ node: k, abs: kAbs }, i) => {
-            const rw = (k.sf && !k.ro) || kAbs.startsWith('/tmp/')
-            const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.dev ? modeString(k.dev) : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
-            const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? HANDLE : 'root'
+            const perm = permString(kAbs, k)
+            const owner = ownerOf(kAbs, k)
             return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${sizes[i].padStart(sizeWidth)}  ${colorName(k)}`
           })
           .join('\n')
@@ -615,7 +615,7 @@ export const commands: Record<string, Command> = {
     run: async (ctx) => {
       const files = ctx.args.filter((a) => !a.startsWith('-'))
       if (!files.length) throw new CmdError("touch: missing file operand\nTry 'touch --help' for more information.")
-      for (const a of files) await touchFile(ctx.cwd, a)
+      for (const a of files) await touchFile(ctx.cwd, a, !!ctx.root)
     },
   },
   mkdir: {
@@ -624,7 +624,7 @@ export const commands: Record<string, Command> = {
     run: async (ctx) => {
       const f = flags(ctx.args)
       if (!f.rest.length) throw new CmdError("mkdir: missing operand\nTry 'mkdir --help' for more information.")
-      for (const a of f.rest) await makeDir(ctx.cwd, a, f.has('p'))
+      for (const a of f.rest) await makeDir(ctx.cwd, a, f.has('p'), !!ctx.root)
     },
   },
   rm: {
@@ -650,7 +650,7 @@ export const commands: Record<string, Command> = {
           })
         })
       }
-      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d'), ask })
+      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d'), ask, root: !!ctx.root })
     },
   },
   rmdir: {
@@ -662,7 +662,7 @@ export const commands: Record<string, Command> = {
         const node = lookup(resolvePath(ctx.cwd, a))
         if (node && node.type !== 'dir') throw new CmdError(`rmdir: failed to remove '${a}': Not a directory`)
         if (node?.type === 'dir' && node.children.size) throw new CmdError(`rmdir: failed to remove '${a}': Directory not empty`)
-        await removePath(ctx.cwd, a, { recursive: false, force: false, dir: true })
+        await removePath(ctx.cwd, a, { recursive: false, force: false, dir: true, root: !!ctx.root })
       }
     },
   },
@@ -1358,7 +1358,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, byteCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
+Object.assign(commands, extraCommands, byteCommands, findCommands, chmodCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
 // Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
 if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).
@@ -1499,20 +1499,23 @@ async function ping(ctx: Ctx): Promise<string> {
   return lines.join('\n')
 }
 
-export function writeTmp(cwd: string, target: string, content: string, append: boolean) {
+/** Writes a file in /tmp. A mode set with chmod can refuse it (Permission denied, in `who`'s words); root may. */
+export function writeTmp(cwd: string, target: string, content: string, append: boolean, root = false, who = '') {
   const abs = resolvePath(cwd, target)
   if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system`)
   const name = abs.slice(5)
   const existing = tmp().children.get(name)
+  if (existing && !allows(abs, existing, 'w', root)) throw new CmdError(`${who ? `${who}: ` : ''}${target}: Permission denied`)
   const prev = existing?.type === 'file' ? existing.content() : ''
   const next = append && prev ? (prev.endsWith('\n') ? prev + content : `${prev}\n${content}`) : content
-  tmp().children.set(name, { type: 'file', name, content: () => next })
+  // Writing to a file keeps its mode (chmod +x, then edit: still runs).
+  tmp().children.set(name, { type: 'file', name, content: () => next, mode: existing?.mode })
 }
 
 // ---------------------------------------------------------------------------
 // The shell itself lives in msh/: it finds commands here.
 
-setShellHooks({ commands, executable: (name, cwd) => executable(name, cwd), manPage, asksHelp, suggest, strip, isAppName })
+setShellHooks({ commands, executable: (name, cwd, root) => executable(name, cwd, root), manPage, asksHelp, suggest, strip, isAppName })
 
 /** Games run from the terminal; on the text console there is no display, so one gets started. */
 function launchGame(ctx: Ctx, game?: string) {
@@ -1523,18 +1526,25 @@ function launchGame(ctx: Ctx, game?: string) {
   return `${c('yellow', 'No display on tty1.')} Starting a fresh graphical session for ${name}...`
 }
 
-/** `./tetris.game` (or just `tetris.game`) runs a game file; other files are not executable. */
-function executable(name: string, cwd: string): Command | undefined {
+/**
+ * `./tetris.game` (or just `tetris.game`) runs a game file, and /bin/ls the command itself. Anything
+ * else the shell finds here is not a script (those are msh's own, see scriptAt): without an x bit
+ * it is `Permission denied`, with one it is not something this shell can run.
+ */
+function executable(name: string, cwd: string, root = false): Command | undefined {
   const local = name.includes('/')
   if (!local && !name.endsWith('.game')) return undefined
-  const node = lookup(resolvePath(cwd, name))
+  const abs = resolvePath(cwd, name)
+  const node = lookup(abs)
   if (!node) return local ? { desc: '', run: () => { throw new CmdError(`msh: no such file or directory: ${name}`) } } : undefined
   if (node.type === 'dir') return { desc: '', run: () => { throw new CmdError(`msh: is a directory: ${name}`) } }
+  const denied = (why: string) => ({ desc: '', run: () => { throw new CmdError(`msh: ${name}: ${why}`, false, 126) } })
+  if (!canRun(abs, node, root)) return denied('Permission denied')
   // /bin/ls and friends: the command itself.
   if (node.exec && commands[node.name]) return commands[node.name]
   const game = node.open?.app === 'games' ? node.open.props?.game : undefined
   if (game) return { desc: 'play a game', run: (ctx) => launchGame(ctx, game) }
-  return { desc: '', run: () => { throw new CmdError(`msh: permission denied: ${name}`) } }
+  return denied('Exec format error')
 }
 
 function suggest(name: string) {
@@ -1582,14 +1592,15 @@ export function completions(line: string, cwd: string, aliases: Iterable<string>
   const slash = word.lastIndexOf('/')
   const dirPart = slash >= 0 ? word.slice(0, slash + 1) : ''
   const namePart = word.slice(slash + 1)
-  const dirNode = lookup(resolvePath(cwd, dirPart || '.'))
+  const dirAbs = resolvePath(cwd, dirPart || '.')
+  const dirNode = lookup(dirAbs)
   const items: Completion[] =
     dirNode?.type === 'dir'
       ? [...dirNode.children.values()]
           .filter((n) => n.name.startsWith(namePart) && (namePart.startsWith('.') || !n.name.startsWith('.')))
-          // As a command (`./te<Tab>`), only folders and things that run.
-          .filter((n) => !isFirst || n.type === 'dir' || n.name.endsWith('.game'))
-          .map((n) => (n.type === 'dir' ? { value: `${dirPart}${n.name}/`, label: `${n.name}/`, hint: 'folder' } : { value: dirPart + n.name, label: n.name, hint: fileKind(n) }))
+          // As a command (`./te<Tab>`), only folders and things that run: files with an x bit (modes.ts).
+          .filter((n) => !isFirst || n.type === 'dir' || canRun(`${dirAbs === '/' ? '' : dirAbs}/${n.name}`, n))
+          .map((n) => (n.type === 'dir' ? { value: `${dirPart}${n.name}/`, label: `${n.name}/`, hint: 'folder' } : { value: dirPart + n.name, label: n.name, hint: isFirst && fileKind(n) !== 'game' ? 'executable' : fileKind(n) }))
       : []
   if (/^\s*open\s+$/.test(before) && !dirPart) items.push(...Object.keys(APPS).filter((a) => a.startsWith(word) && !items.some((i) => i.value === a)).map((a) => ({ value: a, label: a, hint: 'app' })))
   return { before, word, items }

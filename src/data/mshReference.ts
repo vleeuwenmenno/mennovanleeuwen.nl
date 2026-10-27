@@ -13,13 +13,17 @@ so \`&\` runs in the foreground.
     msh -c 'echo hi; ls | wc -l'      run a command line
     msh -c 'echo $1' name arg         $0 is "name", $1 is "arg"
     msh script.sh a b                 run a script with arguments
-    ./script.sh a b                   the same, for a file starting with #!/bin/msh (or sh, bash)
+    ./script.sh a b                   the same, for a file starting with #!/bin/msh (or sh, bash); needs chmod +x
     echo 'ls' | msh                   read the script from stdin
     msh -n script.sh                  check the syntax only
     msh -x script.sh                  print each command before running it (set -x)
     source file  /  . file            run a file in the current shell
 
 sh and bash are names for msh too. Scripts for python, node and other interpreters do not run.
+
+A script run as a command needs its x bit, as in any shell: without it, ./script.sh prints
+\`msh: ./script.sh: Permission denied\` (status 126), and \`chmod +x script.sh\` fixes it. msh script.sh,
+source and . read it without. See man chmod.
 
 ## Command lines
 

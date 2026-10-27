@@ -4,11 +4,12 @@
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
-import { CmdError, type Ctx } from '../types'
+import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
 import { lookup, prepare, prepareFolder, readFileText, writeFile } from '../fs'
+import { allows, canRun } from '../modes'
 import { arith } from './arith'
 import { globMatch, globSource, hasGlob, unescapeGlob } from './glob'
 import { Incomplete, nestedEnd, parse, type Node, type Redirect } from './parse'
@@ -20,7 +21,7 @@ type Cmd = { run: (ctx: Ctx) => string | void | Promise<string | void> }
 /** What the shell needs from the command table (commands.ts), which imports the shell. */
 export type ShellHooks = {
   commands: Record<string, Cmd>
-  executable: (name: string, cwd: string) => Cmd | undefined
+  executable: (name: string, cwd: string, root?: boolean) => Cmd | undefined
   manPage: (name: string) => string
   asksHelp: (name: string, args: string[]) => boolean
   suggest: (name: string) => string
@@ -907,7 +908,8 @@ class Shell {
           if (node.type === 'dir') throw new ShellError(`${target}: Is a directory`)
           const denied = readError('msh', target, node.dev, !!this.base.root)
           if (denied) throw new ShellError(denied.message.split('\n')[0].replace(/^msh: /, ''))
-          const text = (await readFileText(abs).catch(() => null))?.text ?? node.content()
+          if (!allows(abs, node, 'r', !!this.base.root)) throw new ShellError(`${target}: Permission denied`)
+          const text = await this.textOf(abs, node, (why) => new ShellError(`${target}: ${why}`))
           if (r.fd === 0) next.stdin = { data: text, pos: 0 }
           continue
         }
@@ -1052,22 +1054,36 @@ class Shell {
     }
   }
 
-  /** A script's text, when `path` names one msh can run (a shebang for a shell, or .sh). */
+  /**
+   * A script's text, when `path` names one msh can run (a shebang for a shell, or .sh/.msh) and the
+   * mode lets it: a script needs its x bit (and r), or it is `Permission denied`, status 126.
+   * `source` and `msh file` read a script without that: they never come through here.
+   */
   private async scriptAt(path: string, io: Io): Promise<string | null | 'refused'> {
     const abs = resolvePath(this.base.cwd, path)
     await prepare(this.base.cwd, 'cat', [path])
     const node = lookup(abs)
     if (node?.type !== 'file' || node.exec || node.name.endsWith('.game')) return null
-    const text = (await readFileText(abs).catch(() => null))?.text ?? node.content()
-    const bang = /^#!\s*(\S+)(?:\s+(\S+))?/.exec(text)
-    const interp = bang ? (bang[1].endsWith('/env') ? bang[2] : bang[1].split('/').pop()) : null
-    if (interp && /^(msh|sh|bash|dash|zsh|ksh|ash)$/.test(interp)) return text
-    if (!bang && /\.(sh|msh|bash)$/.test(node.name)) return text
-    if (interp) {
-      io.err.write(`${red(`msh: ${path}: ${interp} is not available in MvL OS (only msh scripts run here)`)}\n`)
+    let text: string
+    try {
+      text = await this.textOf(abs, node, (why) => new ShellError(why))
+    } catch {
+      io.err.write(`${red(`msh: ${path}: Permission denied`)}\n`)
       return 'refused'
     }
-    return null
+    const bang = /^#!\s*(\S+)(?:\s+(\S+))?/.exec(text)
+    const interp = bang ? (bang[1].endsWith('/env') ? bang[2] : bang[1].split('/').pop()) : null
+    const shell = !!interp && /^(msh|sh|bash|dash|zsh|ksh|ash)$/.test(interp)
+    const script = shell || (!bang && /\.(sh|msh|bash)$/.test(node.name))
+    if (!script && !interp) return null
+    const root = !!this.base.root
+    if (!canRun(abs, node, root) || !allows(abs, node, 'r', root)) {
+      io.err.write(`${red(`msh: ${path}: Permission denied`)}\n`)
+      return 'refused'
+    }
+    if (script) return text
+    io.err.write(`${red(`msh: ${path}: ${interp} is not available in MvL OS (only msh scripts run here)`)}\n`)
+    return 'refused'
   }
 
   /** Runs a script's text in a new shell; `label` names it in errors. */
@@ -1092,7 +1108,7 @@ class Shell {
       if (script === 'refused') return 126
       if (script !== null) return this.child(name, args).runSource(script, io, name)
     }
-    const cmd = hooks.commands[name] ?? hooks.executable(name, this.base.cwd)
+    const cmd = hooks.commands[name] ?? hooks.executable(name, this.base.cwd, !!this.base.root)
     if (!cmd) {
       io.err.write(`${red(`msh: command not found: ${name}${name.length > 2 ? hooks.suggest(name) : ''}`)}\n`)
       return 127
@@ -1114,11 +1130,11 @@ class Shell {
       if (err instanceof Signal) throw err
       if (err instanceof CmdError && err.raw) {
         if (err.message) io.err.write(`${err.message}\n`)
-        return 1
+        return err.status
       }
       const msg = err instanceof CmdError ? err.message : `msh: ${(err as Error).message}`
       if (msg) io.err.write(`${red(msg)}\n`)
-      return 1
+      return err instanceof CmdError ? err.status : 1
     }
   }
 
@@ -1147,12 +1163,26 @@ class Shell {
   }
 
   /** A script file's text for msh/source, or null when there is none. */
-  async readScript(path: string): Promise<string | null> {
+  async readScript(path: string, who = 'msh'): Promise<string | null> {
     const abs = resolvePath(this.base.cwd, path)
     await prepare(this.base.cwd, 'cat', [path])
     const node = lookup(abs)
     if (node?.type !== 'file') return null
-    return (await readFileText(abs).catch(() => null))?.text ?? node.content()
+    if (!allows(abs, node, 'r', !!this.base.root)) throw new ShellError(`${who}: ${path}: Permission denied`)
+    return this.textOf(abs, node, (why) => new ShellError(`${who}: ${path}: ${why}`))
+  }
+
+  /**
+   * A file's text, fetched from where it lives. A mode that forbids the read comes back as the
+   * error `denied` makes of it; any other failure falls back to the node's own text.
+   */
+  private async textOf(abs: string, node: { content: () => string }, denied: (why: string) => Error): Promise<string> {
+    try {
+      return (await readFileText(abs, !!this.base.root))?.text ?? node.content()
+    } catch (e) {
+      if (e instanceof DeniedError) throw denied(e.message)
+      return node.content()
+    }
   }
 
   /** How `type` and `command -v` describe a name. */
@@ -1480,7 +1510,7 @@ const BUILTINS: Record<string, Builtin> = {
   },
   source: async (sh, args, io) => {
     if (!args[0]) return fail(io, 'source: filename argument required', 2)
-    const text = await sh.readScript(args[0])
+    const text = await sh.readScript(args[0], 'source')
     if (text === null) return fail(io, `source: ${args[0]}: No such file or directory`)
     const abs = resolvePath(sh.base.cwd, args[0])
     if (sh.st.running.includes(abs) || sh.st.running.length >= MAX_SOURCE_DEPTH) return fail(io, `source: ${args[0]}: already running, skipped`)

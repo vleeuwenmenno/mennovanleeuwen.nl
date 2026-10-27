@@ -31,8 +31,10 @@ export type FileNode = {
   browser?: string
   /** A device node in /dev (terminal/devices.ts): a stream or a disk, not a regular file */
   dev?: DevInfo
+  /** Permission bits set with chmod (terminal/modes.ts); absent: the default for where it lives */
+  mode?: number
 }
-export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean; browser?: string }
+export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean; browser?: string; mode?: number }
 export type Node = FileNode | DirNode
 
 export const HOME = `/home/${HANDLE}`

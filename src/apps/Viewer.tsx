@@ -32,7 +32,10 @@ function LocalViewer({ path }: { path: string }) {
   const [text, setText] = useState<string | null>(null)
   useEffect(() => {
     setText(null)
-    if (stored && kind !== 'image') void readFileText(path).then((r) => setText(r?.text ?? ''), () => setText(''))
+    if (stored && kind !== 'image') void readFileText(path).then(
+        (r) => setText(r?.text ?? ''),
+        (e: Error) => setText(`Could not open ${prettyPath(path)}: ${e.message}`),
+      )
   }, [path, stored?.size, stored?.mtime, kind])
   const src = useMemo(() => (stored ? blob.url : node?.type === 'file' && kind === 'image' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(node.content())}` : null), [node, kind, stored, blob.url])
 

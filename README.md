@@ -455,6 +455,43 @@ changed, copied from a sheet of glyphs drawn once, with the heads and their glow
 canvas, so it keeps up with 144 and 240 Hz screens. The rain runs on time, not frames, so the
 speed is the same at any refresh rate.
 
+**Permissions.** One module, [`src/terminal/modes.ts`](src/terminal/modes.ts), says what mode a path
+has, and `ls -l`, `find` (`-perm`, `-executable`, `-readable`, `-writable`, `%m`, `%M`), Tab and the
+shell all ask it, so they cannot disagree. Without a `chmod` the mode is a default from where the
+file lives: folders 755 (555 where read-only, `/tmp` itself 1777), `/bin` programs 555, files 644
+(444 for the site's files, `/etc` and read-only libraries), `.game` files the same with x, `/dev`
+nodes as above. `chmod` ([`src/terminal/chmod.ts`](src/terminal/chmod.ts)) sets one: octal (`755`),
+symbolic (`+x`, `u+w`, `go=r`, `a-rx`, `u=rwx,go=rx`, `g=u`, `X`, `t`), `-R` for folders, `-v`/`-c`/`-f`,
+`man chmod`, Tab completes its paths (and `-R`). It works where the storage can keep a mode: `/tmp`
+(on the file's node in memory, so it lasts as long as the file), files in this browser (a `mode`
+field in the file's own IndexedDB record in [`src/data/browserfs.ts`](src/data/browserfs.ts)), and
+Seafile libraries you can write to. Seafile's API has no modes, so those live in a table in this
+browser, per account (`sfModes` in `modes.ts`, keyed by Seafile path; nothing is sent to the
+server). The site's own files, `/bin`, `/etc` and read-only libraries cannot be changed
+(`Operation not permitted` or `Read-only file system`). `mv` keeps a file's mode and `cp` copies it
+(also across `/tmp`, the browser and Seafile), writing to a file keeps it, `rm` and creating a new file
+start from the default. A mode set in Seafile through anything but the terminal's `mv` and `rm`
+(Files, another device) is not followed.
+
+A script needs its x bit to run as a command: `./test.msh` or `./script.sh` without one prints
+`msh: ./test.msh: Permission denied` and exits 126, and `./te<Tab>` offers only folders, `.game` files
+and files with an x bit (the picker calls them `executable`). `chmod +x test.msh` makes it run;
+`source file`, `. file` and `msh file` read a script without it, like a real shell, and `.game`
+files and folders need no chmod. Reading and writing are refused (`Permission denied`) only where
+`chmod` set the mode: the defaults never refuse what works today (site files list as 444 yet `cat`
+works, browser files are writable). The read check is in `readFileText` (`fs.ts`), which `cat`, `<`,
+`source`, `nano`, the agents' `@path` and the file viewers go through; the write check is in `writeFile`,
+`writeTmp` (`>`, `tee`, `find -fprint`, `curl -o`, `wget`) and `transfer` (`cp` and `mv` refuse a
+destination without w, and `cp` looks at every file under a folder before copying any). Who owns a path
+is one function, `ownerOf` in `modes.ts` (your handle for home, `/tmp`, `/srv/site`, Seafile and
+browser files, root for the rest); its owner bits apply to what you own and the "other" bits to the
+rest. Groups are not told apart, folders' r and x bits are not enforced (only w, for creating and
+deleting inside), and `sudo` ignores all of it, down through `find -delete` and the folders a copy
+makes. A file that replaces another (`mv`/`cp` over it) takes the new file's mode, never the old one's.
+Setuid, setgid and the sticky bit are kept and shown (`rws`, `r-S`, `t`, `T`; `a=rw` clears them, as in
+`chmod`), but setuid and setgid are display only: nothing here runs as someone else, so they grant
+nothing. The apps are the exception on the way out: Zed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Zed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
+
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
 real ones never end; here a read gives 64 KiB at most, so `cat /dev/urandom` stops. The disks
@@ -576,7 +613,8 @@ The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish pars
 interpreter. It supports if/for/while/until/case, functions, subshells, `$(…)`, `$((…))`, the
 `${…}` forms, globbing, heredocs, redirects (`2>`, `2>&1`, `<`), `set -e/-x/-u/-o pipefail` and
 builtins like `test`/`[`, `printf`, `read`, `source`, `eval` and `getopts`. `msh -c`, `msh file`
-and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts. `man msh` shows the
+and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts (`./script.sh` needs
+`chmod +x`, see Permissions above). `man msh` shows the
 reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
 built-in `msh` skill.
 

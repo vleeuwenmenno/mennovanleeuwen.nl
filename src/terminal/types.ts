@@ -6,10 +6,15 @@ export class CmdError extends Error {
   constructor(
     message: string,
     readonly raw = false,
+    /** The exit status: 126 for a file that cannot be run, like a real shell's */
+    readonly status = 1,
   ) {
     super(message)
   }
 }
+
+/** A read or write the mode forbids (set with chmod, see modes.ts): `Permission denied`. */
+export class DeniedError extends CmdError {}
 
 /** One tappable suggestion for the line being typed; touch screens show them above the keyboard. */
 export type Hint = { label: string; hint?: string; apply: () => void }
