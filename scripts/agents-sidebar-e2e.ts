@@ -291,7 +291,7 @@ try {
       if (style === 'focus') {
         check(`${tag}: chips All, Running, Unread, Stopped and one per project`, await p.eval(`(() => { const c = [...document.querySelectorAll('.agt-fx-chip')].map((e) => e.firstChild.textContent); return ['All', 'Running', 'Unread', 'Stopped', 'Home lab', 'Thesis', 'Trip to Japan'].every((w) => c.includes(w)) })()`))
         check(`${tag}: Running now is on top`, await p.eval(`(() => { const s = document.querySelector('.agt-fx-live'); return !!s && s.querySelectorAll('.agt-row').length === 3 && s === document.querySelector('.agt-list').firstElementChild })()`))
-        check(`${tag}: the foot has icon buttons with tooltips`, await p.eval(`[...document.querySelectorAll('.agt-fx-foot button')].length === 4 && [...document.querySelectorAll('.agt-fx-foot button')].every((b) => b.title && !b.textContent.trim())`))
+        check(`${tag}: the foot has icon buttons with tooltips`, await p.eval(`[...document.querySelectorAll('.agt-fx-foot button')].length === 5 && [...document.querySelectorAll('.agt-fx-foot button')].every((b) => b.title && !(b.textContent ?? '').replace(b.querySelector('.agt-task-badge')?.textContent ?? '', '').trim())`))
         check(`${tag}: one small New thread button, on the Threads header`, !(await rect(p, '.agt-fx-new')) && !!(await rect(p, '.agt-group-row .agt-mini[aria-label="New thread"]')))
         await shot(p, `${kind}-${style}-all`)
         await tapSel(p, '.agt-fx-chip', phone, 'Running')
