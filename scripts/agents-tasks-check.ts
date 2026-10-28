@@ -607,12 +607,16 @@ try {
     tasks.updateTask(alice, lost.id, { status: 'paused' })
     const many = Array.from({ length: 230 }, (_, i) => mock.deliver({ subject: `lostcheck bulk ${i}` }))
     // Every check for those has run (the account's push state caught up), so none clears the list set below.
-    await until('the push line catches up', () => (db.prepare('SELECT push_state FROM jmap_accounts WHERE id = ?').get(home.id) as J).push_state === mock.state(), 20000)
-    await sleep(500)
+    // Polled with generous deadlines, not fixed waits: under load the checks for 230 messages take a
+    // while, and one still in flight would clear the list set below. Caught up means caught up for a
+    // whole second.
+    const caughtUp = () => (db.prepare('SELECT push_state FROM jmap_accounts WHERE id = ?').get(home.id) as J).push_state === mock.state()
+    let since = 0
+    await until('the push line catches up', () => (caughtUp() ? (since ||= Date.now()) && Date.now() - since >= 1000 : ((since = 0), false)), 60_000)
     db.prepare('UPDATE jmap_accounts SET task_retry = ? WHERE id = ?').run(JSON.stringify(many.map((e) => ({ id: e.id, at: Date.now() }))), home.id)
     tasks.updateTask(alice, lost.id, { status: 'active' })
     mock.deliver({ subject: 'lostcheck last' })
-    await until('a batch of 231 is handed over', () => pending(lost.id).length >= 231, 15000)
+    await until('a batch of 231 is handed over', () => pending(lost.id).length >= 231, 60_000)
     const bulk = new Set(pending(lost.id).map((r) => r.email_id))
     check('lost mail: more than 200 new messages are all handed over, in chunks', many.every((e) => bulk.has(e.id)))
     // Changing the trigger drops what waited (review fix), like pausing.
