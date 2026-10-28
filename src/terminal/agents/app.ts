@@ -54,6 +54,8 @@ import {
   threadMatches,
   agentSettings,
   toAttachment,
+  ALWAYS_ON_TOOLS,
+  choosableTools,
   TOOL_GROUPS,
   toolState,
   toolLabel,
@@ -513,7 +515,7 @@ export class Session {
       }
       const choices = mention.sigil === '#' ? (this.loras ?? []).map((l) => ({ name: l.name, hint: l.baseModel || 'Base model unknown' }))
         : mention.sigil === '$' ? this.skills.filter((s) => s.enabled).map((s) => ({ name: s.name, hint: s.description }))
-        : this.mentionTools.map((t) => ({ name: t.name, hint: `${t.group ?? 'Always available'} · ${!t.group || (this.thread?.tools ?? this.tools).includes(t.group) ? 'on' : 'off'}` }))
+        : this.mentionTools.map((t) => ({ name: t.name, hint: `${t.group && !ALWAYS_ON_TOOLS.includes(t.group) ? t.group : 'Always available'} · ${!t.group || ALWAYS_ON_TOOLS.includes(t.group) || (this.thread?.tools ?? this.tools).includes(t.group) ? 'on' : 'off'}` }))
       const items = choices.filter((c) => c.name.toLowerCase().includes(mention.query)).slice(0, 50).map((c) => ({ value: mentionText(mention.sigil, c.name), label: `${mention.sigil}${c.name}`, hint: c.hint }))
       return items.length ? { start: mention.start, items } : null
     }
@@ -1941,7 +1943,7 @@ export class Session {
         return true
       }
       case '/tools': {
-        const current = this.thread?.tools ?? this.tools
+        const current = choosableTools(this.thread?.tools ?? this.tools)
         const seafile = !!getAccount().seafile
         const calendar = hasCalendar(getAccount())
         if (mailAccountsNow() === null) await loadMailAccounts()
@@ -2218,7 +2220,7 @@ export class Session {
           row('permissions', { default: 'ask before each change', auto: 'auto (web reads checked)', acceptEdits: 'accept edits', plan: 'plan (read only)', bypass: 'bypass (nothing asks)' }[this.permission]),
           row('work folder', this.workdir ? this.workdir.label : 'none'),
           row('context', [this.messages.some((m) => m.role === 'compact') ? `compacted ${this.messages.filter((m) => m.role === 'compact').length}×, last ${ago(this.messages.filter((m) => m.role === 'compact').at(-1)!.createdAt)} ago` : 'not compacted', agentSettings().autoCompact ? `compacts by itself at ${agentSettings().compactAt}%` : 'compacting by itself is off'].join(' · ')),
-          row('tools', (t?.tools ?? this.tools).join(', ')),
+          row('tools', choosableTools(t?.tools ?? this.tools).join(', ')),
           row('skills', this.skills.filter((s) => s.enabled).map((s) => s.name).join(', ') || 'none'),
           row('seafile', a.seafile ? 'linked' : 'not linked (no work folders or skills)'),
           [],

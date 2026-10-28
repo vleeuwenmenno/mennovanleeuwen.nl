@@ -17,6 +17,8 @@ import { useMediaQuery } from '../os/useMediaQuery'
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
+  ALWAYS_ON_TOOLS,
+  choosableTools,
   TOOL_GROUPS,
   toolState,
   addMemory,
@@ -1869,7 +1871,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [thread?.id, answering, thread?.queue.length])
   const projectName = projects.find((p) => p.id === (thread ? thread.projectId : draftProject))?.name ?? null
   const modelOptions = models.length ? models : model ? [{ name: model, thinking: false, vision: false, contextLength: null }] : []
-  const tools = thread?.tools ?? draftTools
+  const tools = choosableTools(thread?.tools ?? draftTools)
   const activeMention = mentionAt(text, caret)
   const slashAt = /^\/([\w.-]*)$/.exec(text.slice(0, caret))
   const completion = activeMention ?? (slashAt ? { start: 0, sigil: '/', query: slashAt[1].toLowerCase() } : null)
@@ -1882,7 +1884,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const suggestions: { name: string; hint: string; lora?: LoraDetail }[] = !completion ? [] : (completion.sigil === '#'
     ? (loras ?? []).map((l) => ({ name: l.name, hint: l.title, lora: l }))
     : completion.sigil === '@'
-      ? mentionTools.map((t) => ({ name: t.name, hint: `${TOOL_GROUPS.find((g) => g.id === t.group)?.name ?? 'Always available'} · ${!t.group || tools.includes(t.group) ? 'on' : 'off'}` }))
+      ? mentionTools.map((t) => ({ name: t.name, hint: `${TOOL_GROUPS.find((g) => g.id === t.group)?.name ?? 'Always available'} · ${!t.group || ALWAYS_ON_TOOLS.includes(t.group) || tools.includes(t.group) ? 'on' : 'off'}` }))
       : [...(completion.sigil === '/' && hasConversation ? [{ name: 'compact', hint: 'Summarise the conversation to free context' }] : []), ...skills.filter((sk) => sk.enabled).map((sk) => ({ name: sk.name, hint: sk.description }))])
     .filter((s: { name: string; hint: string; lora?: LoraDetail }) => (s.lora ? `${s.name} ${s.lora.title}` : s.name).toLowerCase().includes(completion!.query)).slice(0, 50)
   const showSuggestions = !!completion && !suggestionsDismissed

@@ -511,6 +511,34 @@ export function database(): DatabaseSync {
     data TEXT
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS agent_task_jobs_due ON agent_task_jobs (due_at)')
+  // New-mail tasks: the mail that matched a task, kept per task once (task, account, message), so
+  // the same message delivered again, or seen again after a restart, never starts a second run.
+  // `run_id` is null while it waits for its run; rows go after a week. A run keeps its own copy of
+  // the mail that started it (agent_task_runs.trigger_mail); agent_tasks.mail_dropped counts mail
+  // dropped while waiting (too many, or too old), told to the next run.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_task_mail (
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL,
+    email_id TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    meta TEXT NOT NULL,
+    run_id TEXT,
+    PRIMARY KEY (task_id, account_id, email_id)
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_task_mail_waiting ON agent_task_mail (run_id, task_id, added_at)')
+  if (!cols('agent_task_runs').includes('trigger_mail')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN trigger_mail TEXT')
+  // Message-IDs of mail tasks sent (their reports, a run's mail_send), a month long: a reply to one never starts a task.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_task_sent (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, message_id)
+  )`)
+  // A mail task's hours at its cap (JSON, the latest few hour numbers): three in a row pause it.
+  if (!cols('agent_tasks').includes('mail_capped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_capped TEXT')
+  if (!cols('agent_tasks').includes('mail_dropped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_dropped INTEGER NOT NULL DEFAULT 0')
   // The Video Studio (server/agentVideo.ts): projects (the timeline, revisioned), keyframe pictures
   // (small PNGs, kept here), render jobs (run by the server, not the browser; a restart marks the
   // ones it was running interrupted) and the videos they made. The video files themselves live on
