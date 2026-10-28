@@ -2002,23 +2002,26 @@ pnpm check:agents-threads   # History search, ownership, attachment reads, bound
 The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`,
 `check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
 
-**Tasks.** A task is an agent that runs in the background, once (now or at a time) or on a
-schedule, and reports back: "every weekday at 8, look at my calendar and unread mail and tell me
-what needs me", "tell me when a new release of X is out". Every signed-in account can have up to 20
+**Tasks.** A task is an agent that runs in the background, once (now or at a time), on a
+schedule or when new mail arrives, and reports back: "every weekday at 8, look at my calendar and
+unread mail and tell me what needs me", "tell me when a new release of X is out", "when a receipt
+arrives, tell me what it was for". Every signed-in account can have up to 20
 active tasks, and each run uses only that account's own integrations and keys (an admin's server
 keys stay the admin's). The **Tasks** button at the bottom of the sidebar opens the Tasks tab
 ([`src/apps/AgentsTasks.tsx`](src/apps/AgentsTasks.tsx)), with a badge while runs go (a number) or
 wait for you (!). The terminal's `agents` command has the same as `/tasks`.
 
-- **The list**: needing you, running, scheduled, one-off, paused and completed (or expired) tasks,
-  each with its schedule, next run and last run, and Run now, Pause and Resume.
+- **The list**: needing you, running, on new mail, scheduled, one-off, paused and completed (or
+  expired) tasks, each with its schedule (or trigger and the mail waiting for it), next run and last
+  run, and Run now, Pause and Resume.
 - **A task**: what it does, when it tells you, its policy in plain words with warnings, its
   **state note** (what the agent noted for its next run; data, not instructions; editable), and
   its runs. Run now, **Dry run** (one run where every change asks), Pause, Edit, Delete.
 - **A run**: status, start, end, duration, tokens, tool calls, the policy version it ran under,
   whether it reported or stayed quiet and why, where the report went, the report, and the whole
   transcript with every tool call marked *Allowed by policy*, *Approved by you*, *Denied* or
-  *Blocked by policy*. While it runs it streams live and can be cancelled; calls it waits on are
+  *Blocked by policy*. A run started by new mail lists that mail (sender and subject, each opening
+  the message in Mail). While it runs it streams live and can be cancelled; calls it waits on are
   answered right there. **Continue in thread** opens the transcript as a normal thread to follow
   up in (`branchThread`); the run itself stays as it was.
 
@@ -2036,6 +2039,28 @@ is skipped or queued; runs missed while the server was down catch up once or are
 restart of under ten minutes is not "missed"). Tasks expire after six months unless set otherwise
 (Renew brings them back), and a task with a "Done when…" completes once the agent says it is
 done, or keeps watching if you choose. Per run: a time limit, a tool-call limit and a token limit.
+
+*New mail.* Instead of a time, a task can start when mail arrives
+([`src/data/agentTaskMail.ts`](src/data/agentTaskMail.ts)): in one of your linked accounts (and one
+the task's mail scope allows), in a mailbox (the Inbox unless you pick one), matching any mail or
+filters that all have to hold: from (addresses, or `@domain`, which includes its subdomains), To or
+Cc contains, subject contains (any case), and has an attachment or not. Mail that matches is
+collected for a window (2 minutes by default, from the first one): one mail gets a run of its own,
+several within the window share one run. At most so many runs an hour (20 by default; there is no
+15-minute floor); mail over the cap, or arriving while a run of the task goes, waits for the next
+run instead of being dropped. Waiting mail is kept per task once per message, so mail delivered
+again or seen again after a restart never starts a second run; more than 200 waiting, or older than
+a week, is dropped and the next run is told. Pausing a task drops what waits.
+[`server/jmap.ts`](server/jmap.ts) hands the new messages of every watched account to the tasks
+once per batch of changes (one fetch, whatever the number of tasks) and keeps that account's push
+line up even with mail notifications off. Never a trigger: drafts, mail in Sent, Drafts, Trash or
+Junk, and mail a task sent itself (its email reports and a run's `mail_send` carry an
+`X-MvLOS-Task` header). The run's prompt lists the mail that started it as data (id, sender,
+subject, date, mailbox; never the body), the run counts as holding private data from its first
+round, and it may read exactly those messages with `mail_read` without asking (when mail reads
+ask; never past a block or the account scope); any other mail read follows the policy. A task that
+starts on mail reads what strangers wrote by design: the editor says so, and keep changes and sends
+on Ask. Run now on such a task runs without mail.
 
 *What it may do.* Each task has its own permission policy
 ([`src/data/agentTaskPolicy.ts`](src/data/agentTaskPolicy.ts)): Allow, Ask or Block per tool group,
@@ -2079,7 +2104,7 @@ the scheduler off; the dev server only runs tasks with `AGENT_TASKS=on`:
 
 ```sh
 DATA_DIR=/tmp/mvlos-tasks AGENT_TASKS=on ./node_modules/.bin/vite --port 5251 --strictPort
-pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts
+pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts, the new-mail trigger against a stand-in JMAP server
 ```
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
