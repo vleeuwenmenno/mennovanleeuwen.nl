@@ -7,8 +7,10 @@
 //   (an address, or a domain: "@steampowered.com" also matches its subdomains), to or cc contains,
 //   subject contains (case-insensitive), and has an attachment (yes, no, or either). Within one
 //   list, any entry matching is enough.
-// - Never a trigger, whatever the filters say: mail the task reporter or a task run sent (it
-//   carries TASK_HEADER), drafts, and mail in Sent, Drafts, Trash or Junk (by their role).
+// - Never a trigger, whatever the filters say: mail a task sent (its reports, a run's mail_send:
+//   it carries TASK_HEADER, honoured only from the user's own addresses), replies to such mail (by
+//   In-Reply-To or References), automatic mail (Auto-Submitted other than "no", delivery reports,
+//   MAILER-DAEMON and postmaster), drafts, and mail in Sent, Drafts, Trash or Junk (by role).
 // - Mail that matches is collected for `windowMs` from the first one; then one run gets the batch.
 //   At most `maxPerHour` runs an hour; mail beyond that joins the next run's batch.
 
@@ -43,6 +45,17 @@ export const DEFAULT_MAX_PER_HOUR = 20
 export const MAX_PER_HOUR = 60
 /** Mailbox roles whose mail never starts a task. */
 export const NEVER_ROLES = ['sent', 'drafts', 'trash', 'junk']
+/** A new mail task's token limit per run (lower than a scheduled task's: mail can come often). */
+export const MAIL_TASK_TOKENS = 100_000
+/** Per account, for all its mail-started runs together (Settings → Apps → Agents → Tasks). */
+export const MAIL_BUDGET_RUNS = [10, 20, 30, 60, 120, 240]
+export const MAIL_BUDGET_TOKENS = [250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
+export const DEFAULT_BUDGET_RUNS = 60
+export const DEFAULT_BUDGET_TOKENS = 2_000_000
+/** At its hourly cap this many hours in a row, a mail task pauses itself. */
+export const CAPPED_HOURS = 3
+/** At most this many mails are listed in a run's prompt (the newest); the rest by id only. */
+export const PROMPT_MAILS = 30
 
 /** A new-mail trigger with the defaults, for an account. */
 export function blankMailTrigger(account: { id: number; label: string }): MailTrigger {
@@ -94,8 +107,14 @@ export type ArrivedMail = {
   /** ms */
   receivedAt: number
   draft: boolean
-  /** It carries TASK_HEADER: a task sent it */
+  /** A task sent it: TASK_HEADER verified for one of the user's tasks, from one of the user's own addresses */
   fromTask: boolean
+  /** It answers mail a task sent (In-Reply-To or References name one) */
+  replyToTask: boolean
+  /** The Auto-Submitted header (null: none) */
+  autoSubmitted: string | null
+  /** The top-level Content-Type, lower case, without parameters ("" when unknown) */
+  contentType: string
 }
 
 /** Whether "from" entry matches an address: the address itself, or its domain (and the domain's subdomains). */
@@ -110,9 +129,17 @@ export function fromMatches(entry: string, email: string): boolean {
   return host === domain || host.endsWith(`.${domain}`)
 }
 
-/** Why a message can never start a task (a task's own mail, a draft, Sent, Drafts, Trash or Junk), or null. */
+/** Senders that are mail systems, not people, at any domain. */
+const SYSTEM_SENDER = /^(mailer-daemon|postmaster)@/i
+
+/** Why a message can never start a task (a task's own mail or a reply to it, automatic mail, a draft, Sent, Drafts, Trash or Junk), or null. */
 export function neverTrigger(m: ArrivedMail, roleBoxes: Set<string>): string | null {
   if (m.fromTask) return 'sent by a task'
+  if (m.replyToTask) return 'a reply to mail a task sent'
+  const auto = (m.autoSubmitted ?? '').split(';')[0].trim().toLowerCase()
+  if (m.autoSubmitted !== null && auto !== 'no') return 'sent automatically (Auto-Submitted)'
+  if (m.contentType.split(';')[0].trim().toLowerCase() === 'multipart/report') return 'a delivery or read report'
+  if (m.from.some((a) => SYSTEM_SENDER.test(a.email.trim()))) return 'from a mail system (MAILER-DAEMON, postmaster)'
   if (m.draft) return 'a draft'
   if (m.mailboxIds.some((b) => roleBoxes.has(b))) return 'in Sent, Drafts, Trash or Junk'
   return null
@@ -148,6 +175,11 @@ export function describeMailTrigger(t: MailTrigger): string {
   const batch = t.windowMs <= 0 ? 'mail arriving together is handled together' : `mails within ${minutes(t.windowMs)} are handled together`
   return `Runs when ${parts.length ? `mail ${parts.join(', ')}` : 'any new mail'} arrives in ${where}; ${batch}, at most ${t.maxPerHour} ${t.maxPerHour === 1 ? 'run' : 'runs'} an hour`
 }
+
+/** Characters that hide, reorder or break text in a prompt line: controls, format characters (bidi included), line and paragraph separators, angle brackets of any width. */
+const UNSAFE = /[\p{C}\u2028\u2029\u0085<>\uFF1C\uFF1E\u2039\u203A\u27E8\u27E9\u3008\u3009]/gu
+/** Text from a mail, safe as one value in a prompt line. */
+export const promptText = (s: string, n: number) => s.replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim().slice(0, n)
 
 /** A mail that started a run, as the run keeps it (for its prompt and its history). */
 export type RunMailItem = { account: number; id: string; from: string; subject: string; receivedAt: number; mailbox: string }

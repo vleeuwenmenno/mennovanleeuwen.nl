@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { accounts, type User } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HttpError, json, readJson } from './http.ts'
-import { listMail, mailAccount, mailMeta, send as sendMail, setNewMailHook } from './jmap.ts'
+import { listMail, mailAccount, mailMeta, send as sendMail, setNewMailHook, taskMailTag } from './jmap.ts'
 import { notify, tellPages } from './notifier.ts'
 import { withoutPrivateRequest } from './privateRequest.ts'
 import { isShuttingDown, onShutdown } from './shutdown.ts'
@@ -41,7 +41,7 @@ import {
   type TaskStatus,
 } from '../src/data/agentTaskPolicy.ts'
 import { cleanSchedule, describeSchedule, MIN_INTERVAL_MS, nextRun, shortestGap, validZone, type Schedule } from '../src/data/agentTaskSchedule.ts'
-import { mailMatches, neverTrigger, NEVER_ROLES, type ArrivedMail, type MailTrigger, type RunMail, type RunMailItem } from '../src/data/agentTaskMail.ts'
+import { CAPPED_HOURS, DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS, MAIL_TASK_TOKENS, mailMatches, neverTrigger, NEVER_ROLES, PROMPT_MAILS, promptText, type ArrivedMail, type MailTrigger, type RunMail, type RunMailItem } from '../src/data/agentTaskMail.ts'
 
 // Background agent tasks: an agent that runs on its own, once (now or at a time) or on a schedule,
 // and reports back. Each account's tasks use only that account's own integrations and keys (an
@@ -103,6 +103,7 @@ type TaskRow = {
   created_at: number
   updated_at: number
   mail_dropped: number
+  mail_capped: string | null
 }
 type RunRow = {
   id: string
@@ -221,7 +222,10 @@ function toTask(r: TaskRow): Task {
   const { n } = db.prepare(`SELECT COUNT(*) AS n FROM agent_task_runs WHERE task_id = ? AND status IN ${ACTIVE_RUNS}`).get(r.id) as { n: number }
   const spec = specOf(r)
   const waiting = spec.schedule.kind === 'mail' ? (db.prepare('SELECT COUNT(*) AS n FROM agent_task_mail WHERE task_id = ? AND run_id IS NULL').get(r.id) as { n: number }).n : 0
-  return { ...spec, id: r.id, status: r.status as TaskStatus, stateNote: r.state_note, policyVersion: r.policy_version, nextRunAt: r.next_run_at, lastRunAt: r.last_run_at, failures: r.failures, createdFromThread: r.created_from_thread, createdAt: r.created_at, updatedAt: r.updated_at, lastRun: last ? runInfo(last) : null, active: n, mailPending: waiting }
+  const owner = spec.schedule.kind === 'mail' ? accountOf(r.user_id) : null
+  const watchedAccount = spec.schedule.kind === 'mail' ? spec.schedule.account : null
+  const gone = !!owner && !listMail(owner).some((a) => a.id === watchedAccount)
+  return { ...spec, mailAccountGone: gone, id: r.id, status: r.status as TaskStatus, stateNote: r.state_note, policyVersion: r.policy_version, nextRunAt: r.next_run_at, lastRunAt: r.last_run_at, failures: r.failures, createdFromThread: r.created_from_thread, createdAt: r.created_at, updatedAt: r.updated_at, lastRun: last ? runInfo(last) : null, active: n, mailPending: waiting }
 }
 
 /** One of the user's own tasks, by id; another account's is "no such task". */
@@ -269,11 +273,17 @@ const optionsOf = (v: unknown): TaskOptions => {
 }
 
 /** Settings → Apps → Agents: the task model, where reports go by default, and how many runs each task keeps. */
-type TaskSettings = { report: Partial<ReportTargets>; keep: number }
+type TaskSettings = { report: Partial<ReportTargets>; keep: number; mailRuns: number; mailTokens: number }
 function taskSettings(user: User): TaskSettings {
-  const v = (readState(user).agents?.value ?? {}) as { taskReport?: unknown; taskKeep?: unknown }
+  const v = (readState(user).agents?.value ?? {}) as { taskReport?: unknown; taskKeep?: unknown; taskMailRuns?: unknown; taskMailTokens?: unknown }
   const r = (v.taskReport && typeof v.taskReport === 'object' ? v.taskReport : {}) as Partial<ReportTargets>
-  return { report: r, keep: RETENTION.includes(Number(v.taskKeep)) ? Number(v.taskKeep) : 100 }
+  return {
+    report: r,
+    keep: RETENTION.includes(Number(v.taskKeep)) ? Number(v.taskKeep) : 100,
+    // The budget of all mail-started runs together, per account (Settings → Apps → Agents → Tasks).
+    mailRuns: MAIL_BUDGET_RUNS.includes(Number(v.taskMailRuns)) ? Number(v.taskMailRuns) : DEFAULT_BUDGET_RUNS,
+    mailTokens: MAIL_BUDGET_TOKENS.includes(Number(v.taskMailTokens)) ? Number(v.taskMailTokens) : DEFAULT_BUDGET_TOKENS,
+  }
 }
 
 /**
@@ -325,9 +335,14 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
     // Only one of the user's own accounts, and one the task's mail scope allows.
     const watched = schedule.account
     const acc = mail.find((a) => a.id === watched)
-    if (!acc) throw new HttpError(400, mail.length ? 'Pick one of your mail accounts for the new mail it watches' : 'Starting on new mail needs a linked mail account (Settings → Integrations → Mail)')
-    schedule = { ...schedule, accountLabel: acc.label }
-    if (policy.mail.accounts.length && !policy.mail.accounts.some((x) => x === String(acc.id) || x.toLowerCase() === acc.label.toLowerCase())) throw new HttpError(400, `${acc.label} is not one of the mail accounts the task may use: add it there, or watch another`)
+    // An account unlinked since: the task can still be changed otherwise (it simply never starts),
+    // but a changed trigger has to name an account there is.
+    const unchanged = !!base && JSON.stringify(base.schedule) === JSON.stringify(schedule)
+    if (!acc && !unchanged) throw new HttpError(400, mail.length ? 'Pick one of your mail accounts for the new mail it watches' : 'Starting on new mail needs a linked mail account (Settings → Integrations → Mail)')
+    if (acc) {
+      schedule = { ...schedule, accountLabel: acc.label }
+      if (policy.mail.accounts.length && !policy.mail.accounts.some((x) => x === String(acc.id) || x.toLowerCase() === acc.label.toLowerCase())) throw new HttpError(400, `${acc.label} is not one of the mail accounts the task may use: add it there, or watch another`)
+    }
   }
   return {
     title,
@@ -338,7 +353,8 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
     timezone,
     policy,
     report,
-    caps: has('caps') ? capsOf(v.caps) : (base?.caps ?? { ...DEFAULT_CAPS }),
+    // A new mail task starts with a lower token limit: mail can come often.
+    caps: has('caps') ? capsOf(v.caps) : (base?.caps ?? (schedule.kind === 'mail' ? { ...DEFAULT_CAPS, tokens: MAIL_TASK_TOKENS } : { ...DEFAULT_CAPS })),
     model,
     options: has('options') ? optionsOf(v.options) : (base?.options ?? { ...DEFAULT_OPTIONS }),
     expiresAt,
@@ -400,6 +416,8 @@ export function updateTask(user: User, id: string, raw: unknown): Task {
       spec.title, spec.instruction, spec.condition, spec.doneWhen, JSON.stringify(spec.schedule), spec.timezone, JSON.stringify(spec.policy), policyChanged ? 1 : 0, JSON.stringify(spec.report), JSON.stringify(spec.caps), JSON.stringify(spec.options), spec.model, spec.expiresAt, now, row.id,
     )
     if (scheduleChanged && row.status === 'active') db.prepare('UPDATE agent_tasks SET next_run_at = ? WHERE id = ?').run(planNext(row.id, spec, now), row.id)
+    // Another account, mailbox or filters: what waited was picked by the old ones.
+    if (scheduleChanged) db.prepare('DELETE FROM agent_task_mail WHERE task_id = ? AND run_id IS NULL').run(row.id), db.prepare('UPDATE agent_tasks SET mail_dropped = 0, mail_capped = NULL WHERE id = ?').run(row.id)
   }
   if (v.stateNote !== undefined) db.prepare('UPDATE agent_tasks SET state_note = ?, updated_at = ? WHERE id = ?').run(typeof v.stateNote === 'string' ? v.stateNote.slice(0, 2000) : '', now, row.id)
   if (v.status === 'paused' && row.status === 'active') {
@@ -619,11 +637,19 @@ async function steeringPlaces(user: User): Promise<{ libraries: string[]; path: 
 const openRun = (task: string, run: string) => ({ app: 'agents', props: { tab: 'tasks', task, run } })
 
 /** Text from a mail for the run's prompt: one line, nothing that could close the block it is in. */
-const mailText = (s: string, n: number) => s.replace(/[\r\n\t]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, n)
-
-/** The mail that started a run, as data in its prompt (like the state note): who, what, when, where, never the body. */
+/**
+ * The mail that started a run, as data in its system prompt (like the state note): who, what,
+ * when, where, never the body. One JSON object a line, each field cleaned of anything that hides,
+ * reorders or breaks text, the newest PROMPT_MAILS of them in full and the rest by id only. (Not in
+ * the run's first message: addresses in a user message count as given, and a subject is not.)
+ */
 function startedByMail(started: RunMail, zone: string, canRead: boolean): string {
-  const lines = started.mails.map((m) => `- message_id: ${m.account}.${m.id} | from: ${mailText(m.from, 200) || '(nobody)'} | subject: ${mailText(m.subject, 200) || '(no subject)'} | date: ${new Date(m.receivedAt).toLocaleString('en-GB', { timeZone: zone, day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} | mailbox: ${mailText(m.mailbox, 100)}`)
+  const newest = [...started.mails].sort((a, b) => b.receivedAt - a.receivedAt)
+  const shown = newest.slice(0, PROMPT_MAILS).reverse()
+  const rest = newest.slice(PROMPT_MAILS)
+  const ref = (m: RunMailItem) => promptText(`${m.account}.${m.id}`, 300)
+  const lines = shown.map((m) => JSON.stringify({ message_id: ref(m), from: promptText(m.from, 200) || '(nobody)', subject: promptText(m.subject, 200) || '(no subject)', date: new Date(m.receivedAt).toLocaleString('en-GB', { timeZone: zone, day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }), mailbox: promptText(m.mailbox, 100) }))
+  if (rest.length) lines.push(`(${rest.length} more, older, by id only: ${rest.map(ref).join(', ')})`)
   return [
     `This run was started by new mail: ${started.mails.length === 1 ? 'one message' : `${started.mails.length} messages`}.`,
     `<mail_that_started_this_run>\n${lines.join('\n')}${started.dropped ? `\n(${started.dropped} older ${started.dropped === 1 ? 'message was' : 'messages were'} dropped while waiting: too many, or older than a week)` : ''}\n</mail_that_started_this_run>`,
@@ -951,12 +977,15 @@ export function mailArrived(user: User, accountId: number, mails: ArrivedMail[],
   let added = 0
   for (const row of rows) {
     const trigger = cleanSchedule(parse(row.schedule, {})) as MailTrigger
+    let mine = 0
     for (const m of fresh) {
       if (!mailMatches(trigger, m, inbox)) continue
       const box = boxes.find((b) => b.id === (trigger.mailbox ?? inbox))?.name ?? 'Inbox'
       const meta: Omit<RunMailItem, 'account' | 'id' | 'receivedAt'> = { from: addressLine(m.from).slice(0, 300), subject: m.subject.slice(0, 300), mailbox: box }
-      if (insert.run(row.id, user.id, accountId, m.id, m.receivedAt, now, JSON.stringify(meta)).changes) (added++, changed(user.id, { task: row.id }))
+      mine += Number(insert.run(row.id, user.id, accountId, m.id, m.receivedAt, now, JSON.stringify(meta)).changes)
     }
+    // Pages are told once per task, however many mails came.
+    if (mine) (added += mine, changed(user.id, { task: row.id }))
   }
   if (added) kick()
 }
@@ -969,6 +998,7 @@ export function mailArrived(user: User, accountId: number, mails: ArrivedMail[],
  */
 function drainMail(now: number) {
   const db = database()
+  const budgets = new Map<number, boolean>()
   const waiting = db.prepare('SELECT task_id, MIN(added_at) AS oldest FROM agent_task_mail WHERE run_id IS NULL GROUP BY task_id LIMIT 200').all() as { task_id: string; oldest: number }[]
   for (const w of waiting) {
     const row = db.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(w.task_id) as TaskRow | undefined
@@ -981,27 +1011,89 @@ function drainMail(now: number) {
     const trimmed = db.prepare(`DELETE FROM agent_task_mail WHERE task_id = ? AND run_id IS NULL AND (added_at < ? OR rowid IN (SELECT rowid FROM agent_task_mail WHERE task_id = ? AND run_id IS NULL ORDER BY received_at DESC, added_at DESC LIMIT -1 OFFSET ?))`).run(row.id, now - MAIL_KEEP_MS, row.id, MAIL_WAITING_MAX).changes
     if (trimmed) db.prepare('UPDATE agent_tasks SET mail_dropped = mail_dropped + ? WHERE id = ?').run(trimmed, row.id)
     if (now - w.oldest < trigger.windowMs) continue
-    if (activeRunOf(row.id).length) continue
-    if (!accountOf(row.user_id)) continue
-    const { n } = db.prepare("SELECT COUNT(*) AS n FROM agent_task_runs WHERE task_id = ? AND trigger = 'mail' AND queued_at > ?").get(row.id, now - 3600_000) as { n: number }
-    if (n >= trigger.maxPerHour) continue
-    // Claimed like a slot: the waiting mail is this run's, only once.
-    const runId = randomUUID()
-    if (!db.prepare('UPDATE agent_task_mail SET run_id = ? WHERE task_id = ? AND run_id IS NULL').run(runId, row.id).changes) continue
-    const items = (db.prepare('SELECT * FROM agent_task_mail WHERE run_id = ? ORDER BY received_at, added_at').all(runId) as { account_id: number; email_id: string; received_at: number; meta: string }[]).map((m): RunMailItem => {
-      const meta = parse<Partial<RunMailItem>>(m.meta, {})
-      return { account: m.account_id, id: m.email_id, from: String(meta.from ?? ''), subject: String(meta.subject ?? ''), receivedAt: m.received_at, mailbox: String(meta.mailbox ?? 'Inbox') }
-    })
-    const fresh = db.prepare('SELECT mail_dropped FROM agent_tasks WHERE id = ?').get(row.id) as { mail_dropped: number }
-    db.prepare('UPDATE agent_tasks SET mail_dropped = 0 WHERE id = ?').run(row.id)
-    const mail: RunMail = { mails: items, dropped: fresh.mail_dropped }
-    queueRun(row, 'mail', { id: runId, mail: JSON.stringify(mail) })
+    const user = accountOf(row.user_id)
+    if (!user) continue
+    // One transaction from the checks to the run, so nothing else claims or starts in between.
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      startMailRun(row, trigger, user, now, budgets)
+      db.exec('COMMIT')
+    } catch (e) {
+      db.exec('ROLLBACK')
+      console.error('[tasks] mail run:', (e as Error).message)
+    }
   }
   // Mail that had its run is only remembered (so it never starts another) for a week.
   db.prepare('DELETE FROM agent_task_mail WHERE run_id IS NOT NULL AND added_at < ?').run(now - MAIL_KEEP_MS)
 }
 
-setNewMailHook({ watched: mailWatched, arrived: mailArrived })
+/** Whether an account is over the budget of its mail-started runs (runs an hour, tokens a day); it is told once a day. */
+function overBudget(user: User, now: number, budgets: Map<number, boolean>): boolean {
+  const known = budgets.get(user.id)
+  if (known !== undefined) return known
+  const db = database()
+  const s = taskSettings(user)
+  const { runs } = db.prepare("SELECT COUNT(*) AS runs FROM agent_task_runs WHERE user_id = ? AND trigger = 'mail' AND queued_at > ?").get(user.id, now - 3600_000) as { runs: number }
+  const { tokens } = db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0) AS tokens FROM agent_task_runs WHERE user_id = ? AND trigger_mail IS NOT NULL AND queued_at > ?').get(user.id, now - 86400_000) as { tokens: number }
+  const over = runs >= s.mailRuns || tokens >= s.mailTokens
+  budgets.set(user.id, over)
+  if (over)
+    notify(user, {
+      source: 'agenttasks.report',
+      title: 'Mail tasks are waiting: budget used up',
+      body: runs >= s.mailRuns ? `Your mail tasks ran ${runs} times in the last hour (at most ${s.mailRuns}). New mail waits and is handled once there is room.` : `Your mail tasks used ${Math.round(tokens / 1000)}k tokens in the last day (at most ${Math.round(s.mailTokens / 1000)}k). New mail waits and is handled once there is room.`,
+      action: { app: 'agents', props: { tab: 'tasks' } },
+      tag: 'task-mail-budget',
+      once: `task-mail-budget:${Math.floor(now / 86400_000)}`,
+    })
+  return over
+}
+
+/**
+ * A mail task ready to start (its window is over): a run for all its waiting mail, unless a run of
+ * it is going (that one keeps collecting), it is at its hourly cap (three hours in a row pause it),
+ * or the account is over its mail budget. Mail that cannot go yet keeps waiting. In a transaction (drainMail).
+ */
+function startMailRun(row: TaskRow, trigger: MailTrigger, user: User, now: number, budgets: Map<number, boolean>) {
+  const db = database()
+  if (activeRunOf(row.id).length) return
+  const { n } = db.prepare("SELECT COUNT(*) AS n FROM agent_task_runs WHERE task_id = ? AND trigger = 'mail' AND queued_at > ?").get(row.id, now - 3600_000) as { n: number }
+  if (n >= trigger.maxPerHour) {
+    const hour = Math.floor(now / 3600_000)
+    const hours = [...new Set([...parse<number[]>(row.mail_capped, []).filter(Number.isInteger), hour])].slice(-CAPPED_HOURS * 2)
+    if (Array.from({ length: CAPPED_HOURS }, (_, k) => hour - k).every((h) => hours.includes(h))) {
+      // The breaker: at its cap hour after hour is more mail than any task should handle.
+      db.prepare("UPDATE agent_tasks SET status = 'paused', next_run_at = NULL, mail_capped = NULL, updated_at = ? WHERE id = ?").run(now, row.id)
+      db.prepare('DELETE FROM agent_task_mail WHERE task_id = ? AND run_id IS NULL').run(row.id)
+      notify(user, { source: 'agenttasks.report', title: `${row.title} paused: too much mail`, body: `It was at its limit of ${trigger.maxPerHour} runs an hour for ${CAPPED_HOURS} hours in a row, so it paused itself. Check its filters, then resume it in Agents → Tasks.`, action: { app: 'agents', props: { tab: 'tasks', task: row.id } }, tag: `task-${row.id}` })
+      changed(row.user_id, { task: row.id })
+    } else db.prepare('UPDATE agent_tasks SET mail_capped = ? WHERE id = ?').run(JSON.stringify(hours), row.id)
+    return
+  }
+  if (overBudget(user, now, budgets)) return
+  // Claimed like a slot: the waiting mail is this run's, only once.
+  const runId = randomUUID()
+  if (!db.prepare('UPDATE agent_task_mail SET run_id = ? WHERE task_id = ? AND run_id IS NULL').run(runId, row.id).changes) return
+  const items = (db.prepare('SELECT * FROM agent_task_mail WHERE run_id = ? ORDER BY received_at, added_at').all(runId) as { account_id: number; email_id: string; received_at: number; meta: string }[]).map((m): RunMailItem => {
+    const meta = parse<Partial<RunMailItem>>(m.meta, {})
+    return { account: m.account_id, id: m.email_id, from: String(meta.from ?? ''), subject: String(meta.subject ?? ''), receivedAt: m.received_at, mailbox: String(meta.mailbox ?? 'Inbox') }
+  })
+  const fresh = db.prepare('SELECT mail_dropped FROM agent_tasks WHERE id = ?').get(row.id) as { mail_dropped: number }
+  db.prepare('UPDATE agent_tasks SET mail_dropped = 0 WHERE id = ?').run(row.id)
+  const mail: RunMail = { mails: items, dropped: fresh.mail_dropped }
+  queueRun(row, 'mail', { id: runId, mail: JSON.stringify(mail) })
+  // A run in this hour counts towards the budget from now on.
+  budgets.delete(user.id)
+}
+
+/** Whether a TASK_HEADER value is the tag of one of the user's tasks (server/jmap.ts; only on mail from the user's own addresses). */
+function isTaskTag(userId: number, tag: string): boolean {
+  if (!/^[0-9a-f]{40}$/.test(tag)) return false
+  const ids = database().prepare('SELECT id FROM agent_tasks WHERE user_id = ?').all(userId) as { id: string }[]
+  return ids.some((r) => taskMailTag(userId, r.id) === tag)
+}
+
+setNewMailHook({ watched: mailWatched, isTaskTag, arrived: mailArrived })
 
 let busy = false
 /** One look: expire what is past, claim what is due, send what waits, start what fits. Exported for the check script. */

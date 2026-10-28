@@ -527,6 +527,15 @@ export function database(): DatabaseSync {
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS agent_task_mail_waiting ON agent_task_mail (run_id, task_id, added_at)')
   if (!cols('agent_task_runs').includes('trigger_mail')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN trigger_mail TEXT')
+  // Message-IDs of mail tasks sent (their reports, a run's mail_send), a month long: a reply to one never starts a task.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_task_sent (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, message_id)
+  )`)
+  // A mail task's hours at its cap (JSON, the latest few hour numbers): three in a row pause it.
+  if (!cols('agent_tasks').includes('mail_capped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_capped TEXT')
   if (!cols('agent_tasks').includes('mail_dropped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_dropped INTEGER NOT NULL DEFAULT 0')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())

@@ -516,6 +516,8 @@ export type Task = TaskSpec & {
   active: number
   /** New mail collected for its next run (new-mail tasks) */
   mailPending: number
+  /** A new-mail task whose account is not linked any more: it never starts until another is picked */
+  mailAccountGone: boolean
 }
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'denied' | 'interrupted'
 export type RunVerdict = { report: boolean; reason: string; summary: string; done: boolean; state?: string }
