@@ -2044,23 +2044,50 @@ done, or keeps watching if you choose. Per run: a time limit, a tool-call limit 
 ([`src/data/agentTaskMail.ts`](src/data/agentTaskMail.ts)): in one of your linked accounts (and one
 the task's mail scope allows), in a mailbox (the Inbox unless you pick one), matching any mail or
 filters that all have to hold: from (addresses, or `@domain`, which includes its subdomains), To or
-Cc contains, subject contains (any case), and has an attachment or not. Mail that matches is
-collected for a window (2 minutes by default, from the first one): one mail gets a run of its own,
-several within the window share one run. At most so many runs an hour (20 by default; there is no
-15-minute floor); mail over the cap, or arriving while a run of the task goes, waits for the next
-run instead of being dropped. Waiting mail is kept per task once per message, so mail delivered
-again or seen again after a restart never starts a second run; more than 200 waiting, or older than
-a week, is dropped and the next run is told. Pausing a task drops what waits.
-[`server/jmap.ts`](server/jmap.ts) hands the new messages of every watched account to the tasks
-once per batch of changes (one fetch, whatever the number of tasks) and keeps that account's push
-line up even with mail notifications off. Never a trigger: drafts, mail in Sent, Drafts, Trash or
-Junk, and mail a task sent itself (its email reports and a run's `mail_send` carry an
-`X-MvLOS-Task` header). The run's prompt lists the mail that started it as data (id, sender,
-subject, date, mailbox; never the body), the run counts as holding private data from its first
-round, and it may read exactly those messages with `mail_read` without asking (when mail reads
-ask; never past a block or the account scope); any other mail read follows the policy. A task that
-starts on mail reads what strangers wrote by design: the editor says so, and keep changes and sends
-on Ask. Run now on such a task runs without mail.
+Cc contains, subject contains (any case), and has an attachment or not. Only mail delivered into the
+watched mailbox counts: mail moved there later (by you, or by a mail client's rules) does not, and
+neither does mail received more than two days before the server sees it (an import, a mailbox
+catching up). Mail that matches is collected for a window (2 minutes by default, from the first
+one): one mail gets a run of its own, several within the window share one run, which may read all
+of them. At most so many runs an hour (20 by default; there is no 15-minute floor); mail over the
+cap, or arriving while a run of the task goes, waits for the next run instead of being dropped. A
+task at its cap three hours in a row pauses itself and tells you ("paused: too much mail"). Waiting
+mail is kept per task once per message, so mail delivered again or seen again after a restart never
+starts a second run; more than 200 waiting, or older than a week, is dropped and the next run is
+told. Pausing a task, or changing its account, mailbox or filters, drops what waits. A new mail task
+starts with a 100k-token limit per run.
+
+*Budget for mail tasks.* All of an account's mail-started runs together may run 60 times an hour and
+use 2M tokens a day (in and out, the last 24 hours); both are in Settings → Apps → Agents → Tasks.
+Over either, mail tasks stop starting runs: their mail keeps waiting (nothing is dropped) and you get
+one notification a day.
+
+*How new mail gets there.* [`server/jmap.ts`](server/jmap.ts) keeps the push line of every watched
+account up (even with mail notifications off) and hands its new messages to the tasks, all of them,
+200 at a time, with one fetch per batch whatever the number of tasks. The messages still to hand over
+are saved with the account's push state, so a failed hand-over or a restart never loses them: they are
+handed over at the next check (for up to two days).
+
+*Mail loops.* Never a trigger: drafts; mail in Sent, Drafts, Trash or Junk; mail a task sent itself
+(its email reports and a run's `mail_send` carry an `X-MvLOS-Task` header whose value is a keyed hash
+of the account and the task, honoured only on mail from one of your own addresses); replies to mail a
+task sent (each gets a Message-ID of its own, remembered for a month, and In-Reply-To or References
+naming one is enough); and automatic mail: `Auto-Submitted` other than `no` (auto-replies,
+out-of-office, mailing robots), delivery and read reports (`multipart/report`), and mail from
+`MAILER-DAEMON` or `postmaster` at any domain.
+
+*What a mail-started run gets.* Its prompt lists the mail that started it as data (id, sender,
+subject, date, mailbox; never the body), one JSON object a line with anything that could hide,
+reorder or break text taken out (control and format characters, bidi controls, line separators,
+angle brackets of any width), the newest 30 in full and the rest by id. The list is in the system
+prompt, not the first message, because addresses in a user message count as given and a subject is
+written by a stranger. The run counts as holding private data from its first round, and it may read
+exactly those messages with `mail_read` without asking (when mail reads ask; never past a block or
+the account scope); any other mail read follows the policy. A task that starts on mail reads what
+strangers wrote by design: the editor says so, and keep changes and sends on Ask. Run now on such a
+task runs without mail. When the watched account is unlinked the task never starts and the Tasks tab
+says so; it can still be changed, and a changed trigger has to name a linked account (or be a
+schedule).
 
 *What it may do.* Each task has its own permission policy
 ([`src/data/agentTaskPolicy.ts`](src/data/agentTaskPolicy.ts)): Allow, Ask or Block per tool group,
