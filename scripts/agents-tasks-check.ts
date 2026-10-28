@@ -21,10 +21,10 @@ import { createServer, type ServerResponse } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { Server, check, finish, sleep } from './empires-harness.ts'
 import { cleanSchedule, fromWall, nextCron, parseCron, shortestGap, upcoming, MIN_INTERVAL_MS } from '../src/data/agentTaskSchedule.ts'
-import { CALL_VERDICTS, defaultPolicy, normalizePolicy, policySummary, TASK_TOOLS, taskDecide, toolVerdict, widens, type TaskPolicy } from '../src/data/agentTaskPolicy.ts'
+import { askArgLines, CALL_VERDICTS, defaultPolicy, normalizePolicy, policySummary, scopeResult, TASK_TOOLS, taskDecide, toolVerdict, widens, type TaskPolicy } from '../src/data/agentTaskPolicy.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 const MODEL = 'tasks-test'
@@ -95,6 +95,31 @@ const iso = (t: number | null) => (t === null ? 'null' : new Date(t).toISOString
   const s = policySummary({ ...defaultPolicy(), groups: { web: 'allow', seafile_write: 'allow' } })
   check('the summary warns about untrusted input with writes', s.warnings.some((w) => w.includes('talk it into')))
 
+  // Review fixes: Seafile calls without a library, results narrowed to the task's folders.
+  const folders: TaskPolicy = { ...defaultPolicy(), groups: { seafile: 'allow', seafile_write: 'allow' }, seafile: [{ library: 'Docs', path: '/reports', write: true }] }
+  const v = (name: string, args: J) => taskDecide(folders, { name, arguments: args }, ctx).verdict
+  check('Seafile scope: a search across every library asks', v('seafile_search', { query: 'tax' }) === 'ask')
+  check('Seafile scope: a search in a library holding a listed folder runs, in another is blocked', v('seafile_search', { query: 'tax', library: 'docs' }) === 'allow' && v('seafile_search', { query: 'tax', library: 'Private' }) === 'block')
+  check('Seafile scope: the list of libraries runs; a folder on the way to a listed one can be listed; others not', v('seafile_list', {}) === 'allow' && v('seafile_list', { library: 'Docs' }) === 'allow' && v('seafile_list', { library: 'Docs', path: '/private' }) === 'block' && v('seafile_list', { library: 'Private' }) === 'block')
+  check('Seafile scope: a change without a library is blocked', v('seafile_write', { path: '/reports/a.md', content: 'x' }) === 'block')
+  const libs = JSON.parse(scopeResult(folders, { name: 'seafile_list', arguments: {} }, JSON.stringify([{ name: 'Docs', id: 'r1' }, { name: 'Private', id: 'r2' }])))
+  check("the list of libraries shows only the task's", libs.length === 1 && libs[0].name === 'Docs')
+  const root = JSON.parse(scopeResult(folders, { name: 'seafile_list', arguments: { library: 'Docs', path: '/' } }, JSON.stringify([{ name: 'reports', folder: true }, { name: 'private', folder: true }, { name: 'secret.md' }])))
+  check('a folder listing shows only the way to the listed folders', root.length === 1 && root[0].name === 'reports')
+  const hits = JSON.parse(scopeResult(folders, { name: 'seafile_search', arguments: { query: 'tax', library: 'Docs' } }, JSON.stringify({ results: [{ library: 'Docs', path: '/reports/tax.md' }, { library: 'Docs', path: '/private/tax.md' }, { library: 'Private', path: '/reports/tax.md' }], more: 4 })))
+  check('search results are narrowed to the listed folders', hits.results.length === 1 && hits.results[0].path === '/reports/tax.md' && !('more' in hits))
+  check('an answer that cannot be narrowed is hidden', /Hidden/.test(scopeResult(folders, { name: 'seafile_search', arguments: { library: 'Docs' } }, 'not json')))
+  // The user's own ~/AGENTS.md and skills folder (Settings → Agents), wherever they are.
+  const steering = { steering: [{ libraries: ['r9', 'Home'], path: '/me/skills' }, { libraries: ['r9', 'Home'], path: '/me/AGENTS.md' }] }
+  const open2: TaskPolicy = { ...defaultPolicy(), groups: { seafile_write: 'allow' } }
+  const w = (name: string, args: J) => taskDecide(open2, { name, arguments: args }, { ...ctx, scope: steering }).verdict
+  check('a write into the skills folder asks (by library name or id)', w('seafile_write', { library: 'home', path: '/me/skills/x/SKILL.md' }) === 'ask' && w('seafile_write', { library: 'r9', path: '/me/skills/new.md' }) === 'ask')
+  check('a write to the configured prompt file asks, and so does moving or deleting a folder holding it', w('seafile_write', { library: 'Home', path: '/me/AGENTS.md', overwrite: true }) === 'ask' && w('seafile_delete', { library: 'Home', path: '/me' }) === 'ask' && w('seafile_move', { library: 'Other', path: '/x.md', to_library: 'Home', to_folder: '/me/skills' }) === 'ask')
+  check('other writes in that library still run', w('seafile_write', { library: 'Home', path: '/notes/a.md' }) === 'allow')
+  // Approving shows where a call goes first, long text last.
+  const lines = askArgLines({ content: 'x'.repeat(5000), overwrite: true, path: '/a.md', library: 'Docs', url: 'https://e.example/' })
+  check('a call to approve lists path, address and library first, long content last and clipped', lines[0][0] === 'path' && lines[1][0] === 'url' && lines.at(-1)![0] === 'content' && lines.at(-1)![1].length < 4100)
+
 }
 
 // --- the stand-in for Ollama --------------------------------------------------------------------------
@@ -110,6 +135,7 @@ const SCENARIOS: Record<string, Step[]> = {
   'ask-site': [{ calls: [{ name: 'web_fetch', arguments: { url: 'https://granted.example.org/page' } }] }, report({ report: true, reason: 'Read it', summary: 'Read the page.' })],
   blocked: [{ calls: [{ name: 'web_search', arguments: { query: 'anything' } }] }, report({ report: false, reason: 'Could not search', summary: '' })],
   slow: [{ delay: 2500, ...report({ report: false, reason: 'Slow', summary: '' }) }],
+  many: [{ calls: [1, 2, 3].map((n) => ({ name: 'web_search', arguments: { query: `q${n}` } })) }, report({ report: false, reason: 'Searched', summary: '' })],
 }
 const chats: J[] = []
 let webFetches = 0
@@ -318,6 +344,64 @@ try {
     check('cancelling a waiting run ends it', runOf(run.id).status === 'cancelled')
   }
   {
+    // Review fix: a state note makes the run hold private data from its first round.
+    const plain = await oneRun(alice, spec('ask-site', { title: 'listed, no note', policy: { ...defaultPolicy(), sites: ['granted.example.org'] } }))
+    check('a built address on a listed site runs while the run holds nothing private', plain.run.status === 'succeeded')
+    const t = tasks.createTask(alice, spec('ask-site', { title: 'listed, with note', policy: { ...defaultPolicy(), sites: ['granted.example.org'] } }))
+    tasks.updateTask(alice, t.id, { stateNote: 'last run read: alice@example.org wrote about the merger' })
+    db.prepare('UPDATE agent_tasks SET next_run_at = ? WHERE id = ?').run(fake, t.id)
+    await tasks.tick()
+    await until('the noted run stops', () => runsOf(t.id).some((r) => r.status === 'waiting' || OVER.includes(r.status)))
+    const noted = runsOf(t.id)[0]
+    check('with a state note, the same built address asks from the first round', noted.status === 'waiting')
+    tasks.cancelRun(alice, noted.id)
+  }
+  {
+    // Review fix: never more tool calls than the budget has left.
+    const { run } = await oneRun(alice, spec('many', { title: 'budget', caps: { minutes: 10, toolCalls: 1, tokens: 400_000 } }))
+    check('a reply with three calls and one call left runs one', run.status === 'succeeded' && toolMessages(run.thread_id).filter((m) => m.tool_name === 'web_search').length === 1)
+  }
+  {
+    // Review fixes: a cancelled one-off is over, running or queued.
+    const a = tasks.createTask(alice, spec('slow', { title: 'one-off, cancelled while running' }))
+    const b = tasks.createTask(alice, spec('slow', { title: 'one-off, cancelled while queued' }))
+    await tasks.tick()
+    await until('one runs, one waits', () => runsOf(a.id)[0]?.status === 'running' && runsOf(b.id)[0]?.status === 'queued')
+    tasks.cancelRun(alice, runsOf(b.id)[0].id)
+    tasks.cancelRun(alice, runsOf(a.id)[0].id)
+    await until('the running one stops', () => OVER.includes(runsOf(a.id)[0].status))
+    check('a cancelled one-off completes (running or queued)', taskRow(a.id).status === 'completed' && taskRow(b.id).status === 'completed' && runsOf(b.id)[0].status === 'cancelled')
+  }
+  {
+    // Review fix: a run whose start throws is failed, never left running (it would hold the task back).
+    const t = tasks.createTask(alice, spec('report-true', { title: 'throws' }))
+    db.prepare("UPDATE agent_tasks SET timezone = 'Not/AZone', next_run_at = ? WHERE id = ?").run(fake, t.id)
+    await tasks.tick()
+    await until('the throwing run ends', () => runsOf(t.id).some((r) => OVER.includes(r.status)))
+    check('a run that throws is marked failed', runsOf(t.id)[0].status === 'failed')
+  }
+  {
+    // Review fix: a report job that fails is kept and tried again, then given up on and said so.
+    const { run } = await oneRun(alice, spec('report-false', { title: 'email job' }))
+    const entry = randomBytes(8).toString('hex')
+    db.prepare('INSERT INTO notifications (id, user_id, source, title, at, read) VALUES (?, 1, ?, ?, ?, 0)').run(entry, 'agenttasks.report', 'email job', fake)
+    db.prepare("INSERT INTO agent_task_jobs (user_id, run_id, kind, due_at, data) VALUES (1, ?, 'email_if_unseen', ?, ?)").run(run.id, fake, JSON.stringify({ entry, account: null, title: 't', body: 'b', task: run.task_id }))
+    await tasks.runJobs(fake)
+    const kept = db.prepare('SELECT * FROM agent_task_jobs WHERE run_id = ?').get(run.id) as J | undefined
+    check('a failed email is kept, to try again later', !!kept && JSON.parse(kept.data).tries === 1 && kept.due_at > fake)
+    for (let i = 0; i < 8; i++) await tasks.runJobs(fake + (i + 1) * 3 * 3600_000)
+    check('and given up on after a few tries, saying so on the run', !db.prepare('SELECT 1 FROM agent_task_jobs WHERE run_id = ?').get(run.id) && /email failed/.test(String(runOf(run.id).delivered)))
+  }
+  {
+    // Review fix: reports go into a thread as a task report, not the agent's own words.
+    const thread = randomUUID()
+    db.prepare("INSERT INTO agent_threads (id, user_id, title, mode, model, archived, quick, created_at, updated_at) VALUES (?, 1, 'Report here', 'quick', ?, 0, 0, ?, ?)").run(thread, MODEL, fake, fake)
+    await oneRun(alice, spec('report-true', { title: 'into a thread', report: { thread: 'fixed', threadId: thread, notify: false, email: 'off', when: 'always' } }))
+    await until('the report is posted', () => !!db.prepare('SELECT 1 FROM agent_messages WHERE thread_id = ?').get(thread))
+    const roles = (db.prepare('SELECT role FROM agent_messages WHERE thread_id = ?').all(thread) as J[]).map((m) => m.role)
+    check('a report goes into a thread as a task report, never as an assistant message', roles.length === 1 && roles[0] === 'report')
+  }
+  {
     let refusedFast = false
     try { tasks.createTask(alice, spec('report-false', { schedule: { kind: 'cron', expr: '*/5 * * * *' } })) } catch { refusedFast = true }
     check('a schedule under 15 minutes is refused', refusedFast)
@@ -389,6 +473,31 @@ try {
   check("the card's edit is what was saved, reporting to the thread", !!made && made.report.thread === 'fixed' && made.report.threadId === thread.id && made.createdFromThread === thread.id)
   check("another account can't read the task over HTTP", (await api('GET', `/api/agents/tasks/${made?.id}`, undefined, otherSid)).status === 404)
 
+  // Review fix: no task tools while planning, nor in a thread with every tool off.
+  const chatTurn = async (id: string, c: J): Promise<J[]> => {
+    const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: await headers(sid), body: JSON.stringify({ text: `CHAT ${JSON.stringify(c)}`, client: { timeZone: 'Europe/Amsterdam' } }) })
+    const events: J[] = []
+    for (const line of (await res.text()).split('\n')) if (line.trim()) events.push(JSON.parse(line))
+    return events
+  }
+  const planned = (await api('POST', '/api/agents/threads', { permission: 'plan', model: MODEL })).body
+  const planEvents = await chatTurn(planned.id, call)
+  const planOffered = (chats.at(-2)?.tools ?? []).map((t: J) => t.function.name)
+  const planResult = ((await api('GET', `/api/agents/threads/${planned.id}`)).body.messages as J[]).find((m) => m.role === 'tool' && m.toolName === 'create_task')
+  check('Plan mode: create_task is not offered, a call to it asks nothing and is refused', !planOffered.includes('create_task') && !planEvents.some((e) => e.type === 'approval') && /error/.test(planResult?.content ?? ''))
+  const bare = (await api('POST', '/api/agents/threads', { permission: 'auto', model: MODEL, tools: [] })).body
+  await chatTurn(bare.id, { name: 'update_todos', arguments: { items: [] } })
+  check('a thread with every tool off is not offered the task tools', !(chats.at(-2)?.tools ?? []).some((t: J) => ['create_task', 'update_task', 'cancel_task'].includes(t.function.name)))
+
+  // Review fix: a report in a thread reaches the model as quoted data, never as its own words.
+  const reporting = (await api('POST', '/api/agents/tasks', { spec: spec('report-true', { title: 'Report into chat', report: { thread: 'fixed', threadId: thread.id, notify: false, email: 'off', when: 'always' } }) })).body
+  const endR = Date.now() + 10_000
+  while (Date.now() < endR && !((await api('GET', `/api/agents/threads/${thread.id}`)).body.messages as J[]).some((m) => m.role === 'report')) await sleep(100)
+  await chatTurn(thread.id, { name: 'update_todos', arguments: { items: [] } })
+  const sent = (chats.at(-2)?.messages ?? []) as J[]
+  check('the model reads a task report as quoted data, not as its own answer', sent.some((m) => m.role === 'user' && /<task_report>[\s\S]*There is news\./.test(m.content)) && !sent.some((m) => m.role === 'assistant' && /There is news\./.test(m.content)))
+  void reporting
+
   // A waiting run survives a restart, and goes on when approved.
   const waiting = (await api('POST', '/api/agents/tasks', { spec: spec('ask-site', { title: 'Across a restart' }) })).body
   let run: J = {}
@@ -418,14 +527,18 @@ try {
   const cont = await api('POST', `/api/agents/task-runs/${run.id}/continue`)
   check('Continue in thread makes a normal thread from the transcript', cont.status === 200 && cont.body.thread?.quick === false && cont.body.messages?.length > 0)
 
-  // A run cut off by a restart: interrupted, tried once more, not a failure.
+  // A run cut off by a restart: interrupted, tried once more, not a failure. The other account's
+  // task, paused while its run goes, is not tried again (review fix).
   const slow = (await api('POST', '/api/agents/tasks', { spec: spec('slow', { title: 'Cut off' }) })).body
+  const paused = (await api('POST', '/api/agents/tasks', { spec: spec('slow', { title: 'Cut off, paused' }) }, otherSid)).body
   const end3 = Date.now() + 10_000
   while (Date.now() < end3) {
     const runs = (await api('GET', `/api/agents/tasks/${slow.id}/runs`)).body.runs as J[]
-    if (runs[0]?.status === 'running' && runs[0]?.threadId) break
+    const other = (await api('GET', `/api/agents/tasks/${paused.id}/runs`, undefined, otherSid)).body.runs as J[]
+    if (runs[0]?.status === 'running' && runs[0]?.threadId && other[0]?.status === 'running' && other[0]?.threadId) break
     await sleep(50)
   }
+  await api('PATCH', `/api/agents/tasks/${paused.id}`, { status: 'paused' }, otherSid)
   await sleep(300)
   await server.stop()
   await server.start()
@@ -440,6 +553,9 @@ try {
   check('a run cut off by a restart is marked interrupted', cut?.status === 'interrupted')
   check('and tried once more', retry?.trigger === 'retry' && retry.status === 'succeeded')
   check('an interrupted run is not a failure', (await api('GET', `/api/agents/tasks/${slow.id}`)).body.failures === 0)
+  await sleep(1500)
+  const pausedRuns = (await api('GET', `/api/agents/tasks/${paused.id}/runs`, undefined, otherSid)).body.runs as J[]
+  check('a task paused meanwhile is not tried again after the restart', pausedRuns.length === 1 && pausedRuns[0].status === 'interrupted')
   sdb.close()
 } catch (e) {
   check(`HTTP checks threw: ${(e as Error).stack}\n${server.log.slice(-3000)}`, false)
