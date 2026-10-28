@@ -270,6 +270,9 @@ const GROUP_OF: Record<string, ToolGroup> = {
   use_skill: 'skills',
   read_skill_file: 'skills',
 }
+/** Chat threads always have these on: they are not a choice (a task run's policy still decides for its own thread). */
+const ALWAYS_ON_GROUPS: ToolGroup[] = ['web', 'skills']
+const withAlwaysOn = (groups: ToolGroup[]) => TOOL_GROUPS.filter((g) => groups.includes(g) || ALWAYS_ON_GROUPS.includes(g))
 const toolGroups = (v: unknown): ToolGroup[] | null => (Array.isArray(v) ? TOOL_GROUPS.filter((g) => v.includes(g)) : null)
 /** Groups added after threads first stored their choice as a bare list: a list from then doesn't know them, so they are on. */
 const LATER_GROUPS: ToolGroup[] = ['mail', 'images', 'gpt_images', 'threads']
@@ -700,7 +703,7 @@ export function sendQueued(user: User, id: string, qid: string): { thread: Threa
   return { thread: toThread(ownThread(user, row.id)) }
 }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: storedGroups(r.tools) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id), mailReadsUntil: mailReadsUntil(r.id), mailReadsAlways: mailReadsAlways(r.user_id), skillsOff: skillsOffOf(r.skills_off), effort: isEffort(r.effort) ? r.effort : null, suggestedReply: suggestionOf(r.id), suggestingReply: suggesting.has(r.id) })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: ((g) => (r.quick === 3 ? g : withAlwaysOn(g)))(storedGroups(r.tools) ?? [...TOOL_GROUPS]), quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id), mailReadsUntil: mailReadsUntil(r.id), mailReadsAlways: mailReadsAlways(r.user_id), skillsOff: skillsOffOf(r.skills_off), effort: isEffort(r.effort) ? r.effort : null, suggestedReply: suggestionOf(r.id), suggestingReply: suggesting.has(r.id) })
 /** Always-on skills and rule instructions switched off in a thread (its chips), as stored or as asked for. */
 const skillsOffOf = (v: unknown): string[] => {
   let list: unknown = v
@@ -1962,7 +1965,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
     )
   // Background tasks (server/agentTasks.ts): making, changing and cancelling one always asks. Not
   // while planning (read only), nor in a thread with every tool group off (a task acts on its own).
-  if (opts.permission !== 'plan' && groups.length) tools.push(...taskChatTools())
+  if (opts.permission !== 'plan' && groups.some((g) => !ALWAYS_ON_GROUPS.includes(g))) tools.push(...taskChatTools())
   if (opts.workdir) tools.push(...workdirTools())
   if (opts.terminal) tools.push(terminalTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
