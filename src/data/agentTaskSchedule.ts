@@ -1,13 +1,16 @@
 // When an agent task runs (server/agentTasks.ts, the Agents app's Tasks tab and the agents TUI's
 // /tasks): once (now or at a time), every day, on weekdays, on some days of the week at a time, or
-// by a cron line. Times are wall-clock times in the task's time zone, worked out with Intl (no
-// time zone data of our own). Shared by the browser and the server: no DOM or Node APIs here.
+// by a cron line; or, instead of a time, when new mail arrives (src/data/agentTaskMail.ts). Times
+// are wall-clock times in the task's time zone, worked out with Intl (no time zone data of our
+// own). Shared by the browser and the server: no DOM or Node APIs here.
 //
 // Daylight saving time, pinned in scripts/agents-tasks-check.ts:
 // - a time that does not exist (the clocks jump from 02:00 to 03:00) runs at the first minute
 //   that does (03:00), once, however many times of the gap the schedule names;
 // - a time that happens twice (the clocks go back from 03:00 to 02:00) runs at its first
 //   occurrence only.
+
+import { cleanMailTrigger, describeMailTrigger, type MailTrigger } from './agentTaskMail.ts'
 
 export type Schedule =
   /** One run: at a moment (ms), or as soon as it is saved (null) */
@@ -17,6 +20,8 @@ export type Schedule =
   /** `days`: 0 is Sunday, 6 Saturday */
   | { kind: 'weekly'; time: string; days: number[] }
   | { kind: 'cron'; expr: string }
+  /** Not a time: when new mail arrives (the hourly cap stands in for the 15-minute floor) */
+  | MailTrigger
 
 /** Repeating tasks run at most this often (cron included). */
 export const MIN_INTERVAL_MS = 15 * 60_000
@@ -71,9 +76,9 @@ export function parseCron(expr: string): Cron {
   return { minutes: minutes.values, hours: hours.values, days: new Set(days.values), months: new Set(months.values), weekdays: new Set(weekdays.values.map((v) => v % 7)), anyDay: days.any, anyWeekday: weekdays.any }
 }
 
-/** The cron line a picked schedule stands for (null for once). */
+/** The cron line a picked schedule stands for (null for once and for new mail). */
 export function cronOf(s: Schedule): Cron | null {
-  if (s.kind === 'once') return null
+  if (s.kind === 'once' || s.kind === 'mail') return null
   if (s.kind === 'cron') return parseCron(s.expr)
   const m = TIME.exec(s.time)
   if (!m) throw new Error('Pick a time like 08:30')
@@ -171,9 +176,10 @@ export function nextCron(c: Cron, zone: string, after: number): number | null {
   return null
 }
 
-/** The next run of a schedule after `after`, or null (a one-off that has run, a cron line that never matches). */
+/** The next run of a schedule after `after`, or null (a one-off that has run, a cron line that never matches, new mail). */
 export function nextRun(s: Schedule, zone: string, after: number): number | null {
   if (s.kind === 'once') return s.at === null ? null : s.at > after ? s.at : null
+  if (s.kind === 'mail') return null
   return nextCron(cronOf(s)!, zone, after)
 }
 
@@ -190,9 +196,9 @@ export function upcoming(s: Schedule, zone: string, after: number, n: number): n
   return out
 }
 
-/** The shortest time between two runs over the next few hundred, for the 15-minute floor (Infinity for once). */
+/** The shortest time between two runs over the next few hundred, for the 15-minute floor (Infinity for once and new mail). */
 export function shortestGap(s: Schedule, zone: string, from: number): number {
-  if (s.kind === 'once') return Infinity
+  if (s.kind === 'once' || s.kind === 'mail') return Infinity
   const runs = upcoming(s, zone, from, 300)
   let gap = Infinity
   for (let i = 1; i < runs.length; i++) gap = Math.min(gap, runs[i] - runs[i - 1])
@@ -224,8 +230,10 @@ export function cleanSchedule(v: unknown): Schedule {
       parseCron(expr)
       return { kind: 'cron', expr }
     }
+    case 'mail':
+      return cleanMailTrigger(s)
   }
-  throw new Error('Pick when it runs: once, daily, on weekdays, weekly or a cron line')
+  throw new Error('Pick when it runs: once, daily, on weekdays, weekly, a cron line, or new mail')
 }
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -243,5 +251,7 @@ export function describeSchedule(s: Schedule, zone: string): string {
       return `Every ${s.days.map((d) => WEEKDAY_LABELS[d]).join(', ')} at ${s.time}`
     case 'cron':
       return `Cron: ${s.expr}`
+    case 'mail':
+      return describeMailTrigger(s)
   }
 }

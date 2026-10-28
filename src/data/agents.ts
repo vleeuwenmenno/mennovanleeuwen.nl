@@ -1,3 +1,4 @@
+import { DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from './agentTaskMail'
 import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { useEffect, useState } from 'react'
@@ -76,11 +77,11 @@ export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim(
 /** What a thread may use, switched in the composer. */
 export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images' | 'gpt_images' | 'threads'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
+export const ALWAYS_ON_TOOLS: ToolGroup[] = ['web', 'skills']
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
   { id: 'threads', name: 'Past threads', detail: 'Look back through your earlier conversations, in every project' },
   { id: 'images', name: 'Images', detail: 'Generate and tune pictures, inspect output, and learn style profiles from feedback' },
   { id: 'gpt_images', name: 'GPT images', detail: 'Pictures and small icons for diagrams with OpenAI gpt-image, once set up in Settings → Agents → Images' },
-  { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
   { id: 'mail', name: 'Mail', detail: 'Search, read, draft, send and file email in your linked accounts; drafts, sends and changes ask you first every time; searches and reads too, unless you allow them (15 minutes in a thread, or always)', mail: true },
@@ -91,9 +92,11 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'projects', name: 'Projects', detail: 'Make and rename projects, move this thread; asks you first' },
   { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
   { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
-  { id: 'skills', name: 'Skills', detail: 'Read the skills in ~/.agents/skills and the work folder when a task calls for one' },
 ]
+/** The groups a thread can switch: every one but the always-on ones. */
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
+/** A thread's switchable groups out of its tools (which always carry the always-on ones). */
+export const choosableTools = (tools: ToolGroup[]) => tools.filter((t) => !ALWAYS_ON_TOOLS.includes(t))
 /** Why a group does nothing yet, as the hint reads when it is on (`on`, after "On, but") and when it is off (`off`, after "Turning it on needs"). */
 const TOOL_BLOCKED: Partial<Record<ToolGroup, { on: string; off: string }>> = {
   calendar: { on: 'no calendar connected (Settings → Integrations → Calendars)', off: 'a connected calendar (Settings → Integrations → Calendars)' },
@@ -328,6 +331,9 @@ export type AgentSettings = {
   taskReport: TaskReportDefaults
   /** How many runs each task keeps in its history unless it says otherwise: one of RETENTION */
   taskKeep: number
+  /** All mail-started task runs together, per hour and tokens per day (server/agentTasks.ts reads them): one of MAIL_BUDGET_RUNS / MAIL_BUDGET_TOKENS */
+  taskMailRuns: number
+  taskMailTokens: number
 }
 /** The report targets a new task starts with (Settings → Apps → Agents → Tasks). */
 export type TaskReportDefaults = { when: 'always' | 'failure' | 'condition'; thread: 'none' | 'new' | 'fixed'; notify: boolean; email: 'off' | 'always' | 'unseen' }
@@ -361,7 +367,7 @@ export const sidebarStyleOf = (v: unknown): SidebarStyle => SIDEBAR_STYLES.find(
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic', taskModel: null, taskReport: TASK_REPORT_DEFAULTS, taskKeep: 100 }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic', taskModel: null, taskReport: TASK_REPORT_DEFAULTS, taskKeep: 100, taskMailRuns: DEFAULT_BUDGET_RUNS, taskMailTokens: DEFAULT_BUDGET_TOKENS }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -386,6 +392,8 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       taskModel: typeof s.taskModel === 'string' && s.taskModel ? s.taskModel : null,
       taskReport: taskReportOf(s.taskReport),
       taskKeep: TASK_KEEP.includes(Number(s.taskKeep)) ? Number(s.taskKeep) : 100,
+      taskMailRuns: MAIL_BUDGET_RUNS.includes(Number(s.taskMailRuns)) ? Number(s.taskMailRuns) : DEFAULT_BUDGET_RUNS,
+      taskMailTokens: MAIL_BUDGET_TOKENS.includes(Number(s.taskMailTokens)) ? Number(s.taskMailTokens) : DEFAULT_BUDGET_TOKENS,
     }
   },
 })

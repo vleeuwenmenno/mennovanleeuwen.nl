@@ -715,7 +715,7 @@ it, for example `caveman-adhd` for terse answers all the time. Set up in Setting
 
 - **Always on**, a switch on each enabled skill. The skill's whole SKILL.md goes into the system
   prompt, between `<active_skill name="…">` tags, with an instruction to follow it in every reply.
-  This also works when the thread's Skills tool group is off.
+  Skills tools are always on in chat threads, so this needs no switch.
 - **Applies to**: Agents threads (on by default), Spotlight quick answers and the terminal's
   `agents` command.
 - **Per project**: turn a skill on or off for the threads in one project, whatever the global
@@ -1825,7 +1825,7 @@ than a tour of the settings, and nothing ends with an offer of further work. Whe
 chart or comparison says it better, the model draws one with a `visual` block (see *Visual blocks*
 above; the prompt's short guide is [`src/data/visual/prompt.ts`](src/data/visual/prompt.ts)), making
 the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_icons`) and naming them `icon:<slug>`. The
-composer holds the mode, the model, which tools the thread may use and attachments: text files, PDFs (their text, read in the browser with
+composer holds the mode, the model, which tools the thread may use (the Web and Skills tools are always on in chat threads and are not in the Tools menu; a task's policy still allows, asks or blocks them per task) and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
 and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP,
@@ -2002,23 +2002,26 @@ pnpm check:agents-threads   # History search, ownership, attachment reads, bound
 The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`,
 `check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
 
-**Tasks.** A task is an agent that runs in the background, once (now or at a time) or on a
-schedule, and reports back: "every weekday at 8, look at my calendar and unread mail and tell me
-what needs me", "tell me when a new release of X is out". Every signed-in account can have up to 20
+**Tasks.** A task is an agent that runs in the background, once (now or at a time), on a
+schedule or when new mail arrives, and reports back: "every weekday at 8, look at my calendar and
+unread mail and tell me what needs me", "tell me when a new release of X is out", "when a receipt
+arrives, tell me what it was for". Every signed-in account can have up to 20
 active tasks, and each run uses only that account's own integrations and keys (an admin's server
 keys stay the admin's). The **Tasks** button at the bottom of the sidebar opens the Tasks tab
 ([`src/apps/AgentsTasks.tsx`](src/apps/AgentsTasks.tsx)), with a badge while runs go (a number) or
 wait for you (!). The terminal's `agents` command has the same as `/tasks`.
 
-- **The list**: needing you, running, scheduled, one-off, paused and completed (or expired) tasks,
-  each with its schedule, next run and last run, and Run now, Pause and Resume.
+- **The list**: needing you, running, on new mail, scheduled, one-off, paused and completed (or
+  expired) tasks, each with its schedule (or trigger and the mail waiting for it), next run and last
+  run, and Run now, Pause and Resume.
 - **A task**: what it does, when it tells you, its policy in plain words with warnings, its
   **state note** (what the agent noted for its next run; data, not instructions; editable), and
   its runs. Run now, **Dry run** (one run where every change asks), Pause, Edit, Delete.
 - **A run**: status, start, end, duration, tokens, tool calls, the policy version it ran under,
   whether it reported or stayed quiet and why, where the report went, the report, and the whole
   transcript with every tool call marked *Allowed by policy*, *Approved by you*, *Denied* or
-  *Blocked by policy*. While it runs it streams live and can be cancelled; calls it waits on are
+  *Blocked by policy*. A run started by new mail lists that mail (sender and subject, each opening
+  the message in Mail). While it runs it streams live and can be cancelled; calls it waits on are
   answered right there. **Continue in thread** opens the transcript as a normal thread to follow
   up in (`branchThread`); the run itself stays as it was.
 
@@ -2036,6 +2039,55 @@ is skipped or queued; runs missed while the server was down catch up once or are
 restart of under ten minutes is not "missed"). Tasks expire after six months unless set otherwise
 (Renew brings them back), and a task with a "Done when…" completes once the agent says it is
 done, or keeps watching if you choose. Per run: a time limit, a tool-call limit and a token limit.
+
+*New mail.* Instead of a time, a task can start when mail arrives
+([`src/data/agentTaskMail.ts`](src/data/agentTaskMail.ts)): in one of your linked accounts (and one
+the task's mail scope allows), in a mailbox (the Inbox unless you pick one), matching any mail or
+filters that all have to hold: from (addresses, or `@domain`, which includes its subdomains), To or
+Cc contains, subject contains (any case), and has an attachment or not. Only mail delivered into the
+watched mailbox counts: mail moved there later (by you, or by a mail client's rules) does not, and
+neither does mail received more than two days before the server sees it (an import, a mailbox
+catching up). Mail that matches is collected for a window (2 minutes by default, from the first
+one): one mail gets a run of its own, several within the window share one run, which may read all
+of them. At most so many runs an hour (20 by default; there is no 15-minute floor); mail over the
+cap, or arriving while a run of the task goes, waits for the next run instead of being dropped. A
+task at its cap three hours in a row pauses itself and tells you ("paused: too much mail"). Waiting
+mail is kept per task once per message, so mail delivered again or seen again after a restart never
+starts a second run; more than 200 waiting, or older than a week, is dropped and the next run is
+told. Pausing a task, or changing its account, mailbox or filters, drops what waits. A new mail task
+starts with a 100k-token limit per run.
+
+*Budget for mail tasks.* All of an account's mail-started runs together may run 60 times an hour and
+use 2M tokens a day (in and out, the last 24 hours); both are in Settings → Apps → Agents → Tasks.
+Over either, mail tasks stop starting runs: their mail keeps waiting (nothing is dropped) and you get
+one notification a day.
+
+*How new mail gets there.* [`server/jmap.ts`](server/jmap.ts) keeps the push line of every watched
+account up (even with mail notifications off) and hands its new messages to the tasks, all of them,
+200 at a time, with one fetch per batch whatever the number of tasks. The messages still to hand over
+are saved with the account's push state, so a failed hand-over or a restart never loses them: they are
+handed over at the next check (for up to two days).
+
+*Mail loops.* Never a trigger: drafts; mail in Sent, Drafts, Trash or Junk; mail a task sent itself
+(its email reports and a run's `mail_send` carry an `X-MvLOS-Task` header whose value is a keyed hash
+of the account and the task, honoured only on mail from one of your own addresses); replies to mail a
+task sent (each gets a Message-ID of its own, remembered for a month, and In-Reply-To or References
+naming one is enough); and automatic mail: `Auto-Submitted` other than `no` (auto-replies,
+out-of-office, mailing robots), delivery and read reports (`multipart/report`), and mail from
+`MAILER-DAEMON` or `postmaster` at any domain.
+
+*What a mail-started run gets.* Its prompt lists the mail that started it as data (id, sender,
+subject, date, mailbox; never the body), one JSON object a line with anything that could hide,
+reorder or break text taken out (control and format characters, bidi controls, line separators,
+angle brackets of any width), the newest 30 in full and the rest by id. The list is in the system
+prompt, not the first message, because addresses in a user message count as given and a subject is
+written by a stranger. The run counts as holding private data from its first round, and it may read
+exactly those messages with `mail_read` without asking (when mail reads ask; never past a block or
+the account scope); any other mail read follows the policy. A task that starts on mail reads what
+strangers wrote by design: the editor says so, and keep changes and sends on Ask. Run now on such a
+task runs without mail. When the watched account is unlinked the task never starts and the Tasks tab
+says so; it can still be changed, and a changed trigger has to name a linked account (or be a
+schedule).
 
 *What it may do.* Each task has its own permission policy
 ([`src/data/agentTaskPolicy.ts`](src/data/agentTaskPolicy.ts)): Allow, Ask or Block per tool group,
@@ -2079,7 +2131,7 @@ the scheduler off; the dev server only runs tasks with `AGENT_TASKS=on`:
 
 ```sh
 DATA_DIR=/tmp/mvlos-tasks AGENT_TASKS=on ./node_modules/.bin/vite --port 5251 --strictPort
-pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts
+pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts, the new-mail trigger against a stand-in JMAP server
 ```
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
@@ -2520,7 +2572,7 @@ metadata records each identifier and weight; older images without that field sti
   produce an application context note with nearby installed names and leave the list unchanged.
 - `$name` attaches a skill's instructions anywhere in a message. `/name` still works at the start.
 - `@name` points at a tool for this turn. Its group and on/off state appear in the context note;
-  a mention does not enable a group or bypass permissions. Use the Tools menu or CLI `/tools`.
+  a mention does not enable a group or bypass permissions (Web and Skills tools are always on). Use the Tools menu or CLI `/tools`.
 
 Typing a sigil at the start of a token opens suggestions. Type to filter, use Up/Down to select,
 and Enter or Tab to accept; in the app, Right accepts too when the caret is at the end of the word

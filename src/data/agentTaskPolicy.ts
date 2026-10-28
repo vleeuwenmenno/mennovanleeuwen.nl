@@ -1,4 +1,5 @@
 import type { Schedule } from './agentTaskSchedule.ts'
+import type { RunMail } from './agentTaskMail.ts'
 
 // Agent tasks (server/agentTasks.ts): what a task is, and the permission policy a task's runs work
 // under. Shared by the browser (the Tasks tab's editor and its plain-words summary) and the server,
@@ -251,6 +252,8 @@ export type DecideContext = {
   /** A dry run: every change asks */
   dryRun: boolean
   scope?: CallScope
+  /** The mail that started the run, as message ids the model sees ("<account>.<id>"): mail_read of exactly these runs without asking */
+  triggerMail?: string[]
 }
 
 export type Decision = { verdict: Verdict; reason: string }
@@ -293,6 +296,9 @@ export function taskDecide(policy: TaskPolicy, call: { name: string; arguments?:
     if (rank[to] < rank[verdict]) (verdict = to), (reason = why)
   }
   const args = call.arguments ?? {}
+  // The narrow grant of a mail-triggered run: reading one of the mails that started it runs
+  // without asking (when mail reads ask); any other read follows the policy. Scopes still apply below.
+  if (call.name === 'mail_read' && verdict === 'ask' && ctx.triggerMail?.includes(argText(args, 'message_id'))) (verdict = 'allow'), (reason = 'One of the mails that started this run')
   if (call.name === 'web_fetch' || (call.name === 'find_image' && argText(args, 'page'))) {
     const url = argText(args, call.name === 'web_fetch' ? 'url' : 'page')
     const site = siteOf(url)
@@ -508,6 +514,10 @@ export type Task = TaskSpec & {
   lastRun: TaskRunInfo | null
   /** Runs going now (running, queued or waiting) */
   active: number
+  /** New mail collected for its next run (new-mail tasks) */
+  mailPending: number
+  /** A new-mail task whose account is not linked any more: it never starts until another is picked */
+  mailAccountGone: boolean
 }
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'denied' | 'interrupted'
 export type RunVerdict = { report: boolean; reason: string; summary: string; done: boolean; state?: string }
@@ -517,7 +527,9 @@ export type TaskRunInfo = {
   id: string
   taskId: string
   status: RunStatus
-  trigger: 'schedule' | 'manual' | 'dry' | 'retry' | 'catchup'
+  trigger: 'schedule' | 'manual' | 'dry' | 'retry' | 'catchup' | 'mail'
+  /** The mail that started it (new-mail tasks; a retry keeps it) */
+  mail: RunMail | null
   dry: boolean
   quiet: boolean
   reported: boolean

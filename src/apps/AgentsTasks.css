@@ -518,3 +518,44 @@
 .agt-tk-args dd {
   overflow-wrap: anywhere;
 }
+
+.agt-tk-when {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.agt-tk-mails {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.agt-tk-mail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.agt-tk-mail + .agt-tk-mail,
+.agt-tk-mails li + li {
+  margin-top: 4px;
+}
+.agt-tk-mail:hover,
+.agt-tk-mail:focus-visible {
+  border-color: var(--accent);
+}
+.agt-tk-mail span {
+  overflow-wrap: anywhere;
+}
+.agt-tk-mailtrigger > p {
+  margin-top: 8px;
+}
