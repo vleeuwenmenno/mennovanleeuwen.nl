@@ -225,6 +225,7 @@ function ownRun(user: Pick<User, 'id'>, id: string): RunRow {
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => {
+  if (v === null || v === undefined || v === '') return fallback
   const n = Math.round(Number(v))
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback
 }
