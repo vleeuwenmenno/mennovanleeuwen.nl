@@ -1,4 +1,4 @@
-import { callVerdictKind, policySummary, RUN_STATUS_LABEL, TASK_TOOLS, type Task, type TaskRunInfo } from '../../data/agentTaskPolicy'
+import { askArgLines, callVerdictKind, policySummary, RUN_STATUS_LABEL, TASK_TOOLS, type Task, type TaskRunInfo } from '../../data/agentTaskPolicy'
 import { describeSchedule } from '../../data/agentTaskSchedule'
 import { approveRun, cancelRun, getRun, listRuns, listTasks, runTask, updateTask } from '../../data/agentTasks'
 import { getThread, type AgentMessage } from '../../data/agents'
@@ -50,17 +50,27 @@ export function runLines(runs: TaskRunInfo[], zone: string, cols: number): Line[
   return runs.map((r) => clipLine([seg(`    ${r.id.slice(0, 8)} `, 'muted'), seg(runWord(r), tone(r)), seg(` ${when(r.startedAt ?? r.queuedAt, zone)}${r.reportReason ? ` · ${r.reportReason}` : r.error ? ` · ${r.error}` : ''}`, 'muted')], cols))
 }
 
+/** What a waiting run asks, in full: the call, why it asks, what the card says, the arguments (where it goes first, long text last), then how to answer. */
+export function askLines(r: TaskRunInfo, cols: number): Line[] {
+  const out: Line[] = []
+  for (const a of r.asks) {
+    out.push(...wrap([seg(`${a.summary?.title ?? TASK_TOOLS[a.name]?.label ?? a.name} (${a.name})`, 'yellow')], cols, [seg(`  waits [${a.index}] `, 'yellow')]))
+    if (a.reason) out.push(...wrap([seg(a.reason)], cols, [seg('      why: ', 'muted')]))
+    for (const [k, v] of a.summary?.rows ?? []) out.push(...wrap([seg(v)], cols, [seg(`      ${k}: `, 'muted')]))
+    if (a.summary?.body !== undefined) out.push([seg('      text:', 'muted')], ...(a.summary.body || '(no text)').split('\n').slice(0, 40).flatMap((l) => wrap([seg(l)], cols, [seg('        ')])))
+    for (const [k, v] of askArgLines(a.arguments, 1500)) out.push(...v.split('\n').slice(0, 30).flatMap((l, i) => wrap([seg(l)], cols, [seg(i ? '        ' : `      ${k}: `, 'muted')], [seg('        ')])))
+    out.push([seg(`      /tasks approve ${r.id.slice(0, 8)} ${a.index}  or  /tasks deny ${r.id.slice(0, 8)} ${a.index}`, 'muted')])
+  }
+  return out
+}
+
 const VERDICT_WORD = { allowed: 'allowed by policy', approved: 'approved by you', denied: 'denied', expired: 'denied (no answer)', blocked: 'blocked by policy' } as const
 
 /** A run: its facts, what it waits for, the report, and each tool call with how it was decided. */
 export function runDetailLines(r: TaskRunInfo, title: string, messages: AgentMessage[], cols: number): Line[] {
   const out: Line[] = [[seg(`${title} · run ${r.id.slice(0, 8)}`, 'bold')], [seg('  ', ''), seg(runWord(r), tone(r)), seg(` · ${when(r.startedAt ?? r.queuedAt)}${r.endedAt && r.startedAt ? ` · ${Math.round((r.endedAt - r.startedAt) / 1000)} s` : ''} · ${r.tokensIn + r.tokensOut} tokens · ${r.toolCalls} tool calls`, 'muted')]]
   if (r.reportReason) out.push(...wrap([seg(r.reportReason)], cols, [seg(`  ${r.reported ? 'reported: ' : 'quiet: '}`, 'muted')]))
-  for (const a of r.asks) {
-    out.push(...wrap([seg(a.summary?.title ?? TASK_TOOLS[a.name]?.label ?? a.name, 'yellow')], cols, [seg(`  waits [${a.index}] `, 'yellow')]))
-    for (const [k, v] of a.summary?.rows ?? []) out.push(...wrap([seg(v)], cols, [seg(`      ${k}: `, 'muted')]))
-    out.push([seg(`      /tasks approve ${r.id.slice(0, 8)} ${a.index}  or  /tasks deny ${r.id.slice(0, 8)} ${a.index}`, 'muted')])
-  }
+  out.push(...askLines(r, cols))
   if (r.summary) out.push([seg('  report', 'muted')], ...r.summary.split('\n').flatMap((l) => wrap([seg(l)], cols, [seg('    ')])))
   out.push([seg('  transcript', 'muted')])
   for (let i = 0; i < messages.length; i++) {
@@ -75,6 +85,11 @@ export function runDetailLines(r: TaskRunInfo, title: string, messages: AgentMes
     }
   }
   return [...out, []]
+}
+
+/** A background task's report in a thread: marked as such, never as the agent's own answer. */
+export function reportLines(content: string, cols: number): Line[] {
+  return [[seg('▍ Task report', 'cyan'), seg(' · from a background task', 'muted')], ...content.split('\n').flatMap((l) => wrap([seg(l)], cols, [seg('▍ ', 'cyan')]))]
 }
 
 /** Finds one item by id or a unique id prefix (at least 4 characters). */
@@ -108,9 +123,11 @@ export async function tasksCommand(arg: string, cols: number): Promise<Line[]> {
     const run = byPrefix(await allRuns(), ref, 'run')
     if (sub === 'cancel') return (await cancelRun(run.id), say(`Run ${run.id.slice(0, 8)} is cancelled.`, 'green'))
     if (sub === 'approve' || sub === 'deny') {
-      const { run: now } = await getRun(run.id)
-      const index = extra ? Number(extra) : now.asks.length === 1 ? now.asks[0].index : NaN
-      if (!Number.isInteger(index)) return say(now.asks.length ? `It waits for ${now.asks.length} calls: name one, like /tasks ${sub} ${run.id.slice(0, 8)} ${now.asks[0].index}` : 'It is not waiting for anything.', 'yellow')
+      const { run: now, task } = await getRun(run.id)
+      if (!now.asks.length) return say('It is not waiting for anything.', 'yellow')
+      // Never picked for you: without the call's number, it shows what waits, in full, and how to answer.
+      const index = /^\d+$/.test(extra) ? Number(extra) : NaN
+      if (!now.asks.some((a) => a.index === index)) return [[seg(`${task.title} · run ${now.id.slice(0, 8)} waits for:`, 'bold')], ...askLines(now, cols), [seg('  Name the call to answer it; nothing was approved or denied.', 'yellow')], []]
       await approveRun(run.id, index, sub === 'approve')
       return say(sub === 'approve' ? 'Allowed: the run goes on once nothing else waits.' : 'Denied: the run goes on without it.', 'green')
     }

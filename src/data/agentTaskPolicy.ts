@@ -239,6 +239,8 @@ export type CallScope = {
   own?: string[]
   /** Calendar changes: every calendar it touches (a move touches two) */
   calendars?: { id: string; name: string }[]
+  /** Seafile places that steer the agent besides AGENTS.md and friends: the user's ~/AGENTS.md and skills folder (library id and name, path). Changes there never go beyond Ask. */
+  steering?: { libraries: string[]; path: string }[]
 }
 
 export type DecideContext = {
@@ -300,15 +302,34 @@ export function taskDecide(policy: TaskPolicy, call: { name: string; arguments?:
   if (t.group === 'seafile' || t.group === 'seafile_write') {
     const write = t.group === 'seafile_write'
     const library = argText(args, 'library')
-    if (library || write) {
-      if (!seafileAllowed(policy, library, argText(args, 'path'), write)) lower('block', write ? 'Outside the folders the task may change' : 'Outside the folders the task may read')
-      if (call.name === 'seafile_move') {
+    if (policy.seafile.length) {
+      if (!library) {
+        // Changes always name their library; a search across all of them could find anything, so it
+        // asks. A list of the libraries is narrowed to the task's own (scopeResult).
+        if (write) lower('block', 'Say which library: the task may only change some folders')
+        else if (call.name === 'seafile_search') lower('ask', 'A search across every library, while the task may only see some folders: it asks')
+      } else if (call.name === 'seafile_search') {
+        if (!policy.seafile.some((f) => f.library.toLowerCase() === library.toLowerCase())) lower('block', 'Not a library the task may look in')
+      } else if (call.name === 'seafile_list') {
+        // A folder on the way to one of the task's folders can be listed: only that way shows (scopeResult).
+        const path = absPath(argText(args, 'path') || '/')
+        if (!policy.seafile.some((f) => f.library.toLowerCase() === library.toLowerCase() && (within(path, f.path) || within(f.path, path)))) lower('block', 'Outside the folders the task may read')
+      } else if (!seafileAllowed(policy, library, argText(args, 'path'), write)) lower('block', write ? 'Outside the folders the task may change' : 'Outside the folders the task may read')
+      if (call.name === 'seafile_move' && library) {
         const to = argText(args, 'to_library') || library
         if (!seafileAllowed(policy, to, argText(args, 'to_folder'), true)) lower('block', 'The target is outside the folders the task may change')
       }
     }
-    const paths = ['path', 'to_folder', 'name'].map((k) => argText(args, k)).filter(Boolean)
-    if (write && paths.some((p) => STEERING_PATH.test(p))) lower('ask', 'It changes a file that steers the agent: it asks')
+    if (write) {
+      const paths = ['path', 'to_folder', 'name'].map((k) => argText(args, k)).filter(Boolean)
+      if (paths.some((p) => STEERING_PATH.test(p))) lower('ask', 'It changes a file that steers the agent: it asks')
+      // The user's own ~/AGENTS.md and skills folder, wherever they are: a change there, or to a folder holding them, asks.
+      const lib = library.toLowerCase()
+      const targets: [string, string][] = [[lib, absPath(argText(args, 'path') || '/')]]
+      if (call.name === 'seafile_move') targets.push([(argText(args, 'to_library') || library).toLowerCase(), absPath(argText(args, 'to_folder') || '/')])
+      const hit = (ctx.scope?.steering ?? []).some((s) => targets.some(([l, p]) => s.libraries.some((x) => x.toLowerCase() === l) && (within(p, s.path) || within(s.path, p))))
+      if (hit) lower('ask', 'It changes your AGENTS.md or skills folder, which steer the agent: it asks')
+    }
   }
   if (t.group === 'calendar' && t.class === 'write' && policy.calendars.length) {
     const touched = ctx.scope?.calendars ?? []
@@ -328,6 +349,52 @@ export function taskDecide(policy: TaskPolicy, call: { name: string; arguments?:
   if (t.cap) lower(t.cap, t.class === 'egress' ? 'Mail is never sent without asking' : 'Calendar changes never happen without asking')
   if (ctx.dryRun && (t.class === 'write' || t.class === 'egress' || t.class === 'cost' || t.class === 'lasting')) lower('ask', 'Dry run: every change asks')
   return { verdict, reason }
+}
+
+/**
+ * What a Seafile call that ran gives back, narrowed to the task's folders: the list of libraries to
+ * the task's libraries, a folder listing to what lies in (or on the way to) the task's folders, and
+ * search results to those inside them. Other calls, and a task without folders, as they are.
+ */
+export function scopeResult(policy: TaskPolicy, call: { name: string; arguments?: Record<string, unknown> }, output: string): string {
+  if (!policy.seafile.length || !['seafile_list', 'seafile_search'].includes(call.name)) return output
+  let v: unknown
+  try {
+    v = JSON.parse(output)
+  } catch {
+    return JSON.stringify({ error: "Hidden: the answer could not be narrowed to the task's folders" })
+  }
+  if (v && typeof v === 'object' && !Array.isArray(v) && 'error' in v) return output
+  const args = call.arguments ?? {}
+  const sameLib = (f: SeafileScope, name: unknown, id?: unknown) => [name, id].some((x) => typeof x === 'string' && x.toLowerCase() === f.library.toLowerCase())
+  const library = argText(args, 'library')
+  if (call.name === 'seafile_list' && !library && Array.isArray(v)) return JSON.stringify(v.filter((l) => policy.seafile.some((f) => sameLib(f, (l as { name?: unknown }).name, (l as { id?: unknown }).id))))
+  if (call.name === 'seafile_list' && Array.isArray(v)) {
+    const dir = absPath(argText(args, 'path') || '/')
+    const folders = policy.seafile.filter((f) => sameLib(f, library))
+    return JSON.stringify(v.filter((e) => {
+      const full = absPath(`${dir}/${String((e as { name?: unknown }).name ?? '')}`)
+      return folders.some((f) => within(full, f.path) || within(f.path, full))
+    }))
+  }
+  if (call.name === 'seafile_search' && v && typeof v === 'object' && Array.isArray((v as { results?: unknown }).results)) {
+    const results = (v as { results: { library?: unknown; path?: unknown }[] }).results.filter((r) => policy.seafile.some((f) => sameLib(f, r.library ?? library) && within(absPath(String(r.path ?? '')), f.path)))
+    return JSON.stringify({ results, note: "Only what is inside the task's folders" })
+  }
+  return JSON.stringify({ error: "Hidden: the answer could not be narrowed to the task's folders" })
+}
+
+/** The fields that say what a call does, first (where it goes, what it reads), then the rest, with long text last and clipped. For approving a call. */
+const KEY_ARGS = ['path', 'url', 'to', 'cc', 'bcc', 'to_folder', 'to_library', 'name', 'library', 'page', 'reply_to', 'forward', 'subject', 'event_id', 'calendar', 'account', 'query', 'id', 'message_ids', 'thread_ids', 'action', 'mailbox']
+const LONG_ARGS = ['content', 'body', 'text', 'description', 'prompt']
+export function askArgLines(args: Record<string, unknown>, max = 4000): [string, string][] {
+  const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
+  const keys = Object.keys(args)
+  const order = [...KEY_ARGS.filter((k) => keys.includes(k)), ...keys.filter((k) => !KEY_ARGS.includes(k) && !LONG_ARGS.includes(k)), ...LONG_ARGS.filter((k) => keys.includes(k))]
+  return order.filter((k) => args[k] !== undefined && args[k] !== null && args[k] !== '').map((k) => {
+    const v = show(args[k])
+    return [k, v.length > max ? `${v.slice(0, max)}… (${v.length - max} more characters)` : v]
+  })
 }
 
 /** The groups that are used at all (a tool not blocked), for the run's tool set. */

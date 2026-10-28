@@ -2,7 +2,7 @@ import { localPref } from '../../os/localPref'
 import { accountGuard, TAB_ACCOUNT } from '../../os/accountSpace'
 import { artMode, artBytes, decodeArt, ART_BYTES } from './imageArt'
 import { threadsCommand, threadSearchLines } from './threads'
-import { tasksCommand } from './tasks'
+import { reportLines, tasksCommand } from './tasks'
 import { mentionAt, mentionText } from '../../data/agentMentions'
 import type { ImageLoraHint } from '../../data/imageModels'
 import { generatedImage, getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
@@ -367,6 +367,7 @@ export class Session {
     msgs.forEach((m, i) => {
       if (m.role === 'user') out.push(...userLines(m.content, w), [])
       else if (m.role === 'compact') out.push(...compactLines(m, w, this.verbose), [])
+      else if (m.role === 'report') out.push(...reportLines(m.content, w), [])
       else if (m.role === 'assistant') {
         if (m.content.trim()) out.push(...assistantLines(m.content, w), [])
         ;(m.toolCalls ?? []).forEach((c, k) => {
@@ -1717,6 +1718,10 @@ export class Session {
       else this.out([...userLines(m.content, w), []])
       return
     }
+    if (m.role === 'report') {
+      this.out([...reportLines(m.content, w), []])
+      return
+    }
     if (m.role === 'compact') {
       this.out([...compactLines(m, w, this.verbose), []])
       if (this.turn) this.turn.verb = VERBS[Math.floor(Math.random() * VERBS.length)]
@@ -2358,6 +2363,7 @@ export class Session {
         const steps = (m.toolCalls ?? []).map((c) => `- ${toolLabel(c)}`).join('\n')
         if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
       } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
+      else if (m.role === 'report') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
     }
     return `${out.join('\n\n')}\n`
   }

@@ -500,3 +500,21 @@
   right: 0;
   margin: 0;
 }
+
+/* A background task's report posted into a thread (role 'report'): a card of its own, not an answer. */
+.agt-task-report-msg {
+  border-left: 3px solid var(--accent);
+  padding: 4px 0 4px 12px;
+  margin: 6px 0;
+}
+.agt-task-report-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.agt-tk-args dd {
+  overflow-wrap: anywhere;
+}

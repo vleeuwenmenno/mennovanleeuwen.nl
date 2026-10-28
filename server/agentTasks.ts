@@ -8,6 +8,7 @@ import { notify, tellPages } from './notifier.ts'
 import { withoutPrivateRequest } from './privateRequest.ts'
 import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { readState } from './state.ts'
+import { libraries, seafileInfo } from './seafile.ts'
 import type { CallSummary } from './agentCalendar.ts'
 import { branchThread, closeRunCalls, createRunThread, deleteRunThread, followThread, ownChatThread, postTaskReport, requireTaskKey, runActive, runTaskTurn, settleRunPending, stopRun, taskModel, taskSystemPrompt, type TaskPending, type TaskUsage } from './agents.ts'
 import {
@@ -19,6 +20,7 @@ import {
   normalizePolicy,
   policySummary,
   RETENTION,
+  scopeResult,
   TASK_GROUPS,
   TASK_TOOLS,
   taskDecide,
@@ -483,7 +485,16 @@ function dispatch() {
     inFlight.set(run.id, { userId: run.user_id, ctl })
     changed(run.user_id, { task: run.task_id, run: run.id })
     void withoutPrivateRequest(() => execute(run.id, ctl))
-      .catch((e) => console.error('[tasks] run failed:', (e as Error).message))
+      .catch((e) => {
+        console.error('[tasks] run failed:', (e as Error).message)
+        // Never left running: that would hold the task's next runs back for good.
+        try {
+          const now = database().prepare('SELECT status FROM agent_task_runs WHERE id = ?').get(run.id) as { status: string } | undefined
+          if (now?.status === 'running') finish(run.id, { status: 'failed', error: (e as Error).message || 'Something went wrong' })
+        } catch (inner) {
+          database().prepare("UPDATE agent_task_runs SET status = 'failed', ended_at = ?, error = ? WHERE id = ? AND status = 'running'").run(clock(), (inner as Error).message, run.id)
+        }
+      })
       .finally(() => {
         inFlight.delete(run.id)
         dispatch()
@@ -495,9 +506,10 @@ let kickTimer: ReturnType<typeof setTimeout> | null = null
 /** Looks for work soon (a task was made, a run asked for, an answer given). */
 function kick() {
   if (!enabled || kickTimer) return
+  // Not under the request that asked: the scheduler works for every account, never as this one.
   kickTimer = setTimeout(() => {
     kickTimer = null
-    void tick()
+    withoutPrivateRequest(() => void tick())
   }, 10)
 }
 
@@ -526,6 +538,7 @@ async function execute(runId: string, ctl: AbortController) {
   }
   const tools = new Set(TOOL_NAMES.filter((n) => toolVerdict(policy, n) !== 'block'))
   const system = await taskSystemPrompt(user, { zone: spec.timezone, memories: policy.memories, tools, title: spec.title, condition: spec.condition, doneWhen: spec.doneWhen, when: spec.report.when, stateNote: task.state_note, dry: !!run.dry })
+  const steering = await steeringPlaces(user)
   const used: TaskUsage = { toolCalls: run.tool_calls, tokensIn: run.tokens_in, tokensOut: run.tokens_out, activeMs: run.active_ms }
   if (pending) db.prepare('UPDATE agent_task_runs SET pending = NULL, deadline = NULL WHERE id = ?').run(run.id)
   const result = await runTaskTurn({
@@ -535,8 +548,10 @@ async function execute(runId: string, ctl: AbortController) {
     system,
     zone: spec.timezone,
     tools,
-    decide: (call, ctx) => taskDecide(policy, call, { ...ctx, dryRun: !!run.dry }),
+    decide: (call, ctx) => taskDecide(policy, call, { ...ctx, scope: { ...ctx.scope, steering }, dryRun: !!run.dry }),
+    scopeResult: (call, output) => scopeResult(policy, call, output),
     memories: policy.memories,
+    stateNote: task.state_note,
     caps: { toolCalls: spec.caps.toolCalls, tokens: spec.caps.tokens, ms: spec.caps.minutes * 60_000 },
     used,
     signal: ctl.signal,
@@ -557,6 +572,18 @@ async function execute(runId: string, ctl: AbortController) {
   }
   if (result.outcome === 'failed') return void finish(run.id, { status: 'failed', error: result.error })
   finish(run.id, { status: 'succeeded', verdict: result.verdict, text: result.text })
+}
+
+/**
+ * Where the user's own ~/AGENTS.md and skills folder are in Seafile (Settings → Agents), by library
+ * id and name: a task's change there asks, like one to AGENTS.md anywhere.
+ */
+async function steeringPlaces(user: User): Promise<{ libraries: string[]; path: string }[]> {
+  const v = (readState(user).agents?.value ?? {}) as { promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: { repo?: unknown; path?: unknown } | null }
+  const places = [v.promptFile, v.skillsFolder].flatMap((f) => (f && typeof f.repo === 'string' && typeof f.path === 'string' && f.path.startsWith('/') ? [{ repo: f.repo, path: f.path.replace(/(.)\/+$/, '$1') }] : []))
+  if (!places.length) return []
+  const libs = seafileInfo(user) ? await libraries(user).catch(() => []) : []
+  return places.map((p) => ({ libraries: [p.repo, ...libs.filter((l) => l.id === p.repo).map((l) => l.name)], path: p.path }))
 }
 
 const openRun = (task: string, run: string) => ({ app: 'agents', props: { tab: 'tasks', task, run } })
@@ -601,15 +628,17 @@ function finish(runId: string, end: { status: 'succeeded' | 'failed' | 'cancelle
   const values: (string | number | null)[] = [failures, now, now]
   if (verdict?.state !== undefined && !run.dry) updates.push('state_note = ?'), values.push(verdict.state.slice(0, 2000))
   const done = !run.dry && end.status === 'succeeded' && verdict?.done && !spec.options.keepWatching
-  if (done || (spec.schedule.kind === 'once' && !run.dry && end.status !== 'cancelled' && task.status === 'active' && task.next_run_at === null)) updates.push("status = 'completed'", 'next_run_at = NULL')
+  // A one-off is over after its run, however it ended (cancelled too): it is not active any more.
+  if (done || (spec.schedule.kind === 'once' && !run.dry && task.status === 'active' && task.next_run_at === null)) updates.push("status = 'completed'", 'next_run_at = NULL')
   db.prepare(`UPDATE agent_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values, task.id)
 
   const user = accountOf(run.user_id)
   if (user && deliver) {
     const kind = end.status === 'denied' ? 'needs' : end.status === 'failed' ? 'failed' : 'report'
-    void report(user, task, run.id, kind, summary || reason).catch((e) => console.warn('[tasks] report failed:', (e as Error).message))
+    // Sent on its own, never as the request that ended the run (a Cancel): that one ends before the mail goes.
+    withoutPrivateRequest(() => void report(user, task, run.id, kind, summary || reason).catch((e) => console.warn('[tasks] report failed:', (e as Error).message)))
   } else if (user && end.status === 'succeeded' && !run.dry && spec.options.heartbeat !== 'off' && now - (task.last_report_at ?? task.created_at) > HEARTBEAT_MS[spec.options.heartbeat]) {
-    void report(user, task, run.id, 'heartbeat', `Still watching. Nothing to report since ${new Date(task.last_report_at ?? task.created_at).toLocaleDateString('en-GB', { timeZone: spec.timezone, day: 'numeric', month: 'short' })}.${verdict?.reason ? ` Last run: ${verdict.reason}` : ''}`).catch(() => {})
+    withoutPrivateRequest(() => void report(user, task, run.id, 'heartbeat', `Still watching. Nothing to report since ${new Date(task.last_report_at ?? task.created_at).toLocaleDateString('en-GB', { timeZone: spec.timezone, day: 'numeric', month: 'short' })}.${verdict?.reason ? ` Last run: ${verdict.reason}` : ''}`).catch(() => {}))
   }
   prune(task, user)
   changed(run.user_id, { task: task.id, run: run.id })
@@ -676,7 +705,8 @@ async function reportEmail(user: User, accountId: number | null, title: string, 
   if (!info) throw new Error('No mail account is linked')
   const acc = mailAccount(user, info.id)
   const meta = await mailMeta(acc)
-  const identity = meta.identities[0]
+  // The account's own address when it is one of its identities (an alias could forward elsewhere).
+  const identity = meta.identities.find((i) => i.email.toLowerCase() === info.username.toLowerCase()) ?? meta.identities[0]
   if (!identity) throw new Error(`${info.label} has no address to send from`)
   const origin = (process.env.PUBLIC_ORIGIN ?? '').replace(/\/+$/, '')
   const link = `${origin}/?open=agents&tab=tasks&task=${task}&run=${run}`
@@ -689,15 +719,28 @@ function addJob(userId: number, runId: string, kind: 'thread' | 'email_if_unseen
 }
 
 /** What is due later: an email when the notification is still unread, a report for a thread that was busy. */
-async function runJobs(now: number) {
+const JOB_LEASE_MS = 5 * 60_000
+const JOB_TRIES = 6
+/**
+ * What is due later: an email when the notification is still unread, a report for a thread that was
+ * busy. A job is leased (its due time moved on, compare-and-set, so only one tick takes it) and
+ * deleted only once it is done; a failure tries again later, a few times, before it is given up and
+ * the run says so. Exported for scripts/agents-tasks-check.ts.
+ */
+export async function runJobs(now: number) {
   const db = database()
-  const jobs = db.prepare('SELECT * FROM agent_task_jobs WHERE due_at <= ? ORDER BY due_at LIMIT 50').all(now) as { id: number; user_id: number; run_id: string; kind: string; data: string }[]
+  const jobs = db.prepare('SELECT * FROM agent_task_jobs WHERE due_at <= ? ORDER BY due_at LIMIT 50').all(now) as { id: number; user_id: number; run_id: string; kind: string; due_at: number; data: string }[]
   for (const job of jobs) {
-    // Taken once: whoever deletes it does it.
-    if (db.prepare('DELETE FROM agent_task_jobs WHERE id = ?').run(job.id).changes !== 1) continue
+    if (db.prepare('UPDATE agent_task_jobs SET due_at = ? WHERE id = ? AND due_at = ?').run(now + JOB_LEASE_MS, job.id, job.due_at).changes !== 1) continue
+    const done = () => void db.prepare('DELETE FROM agent_task_jobs WHERE id = ?').run(job.id)
     const user = accountOf(job.user_id)
-    if (!user) continue
+    if (!user) {
+      done()
+      continue
+    }
     const data = parse<Record<string, unknown>>(job.data, {})
+    const tries = Number(data.tries) || 0
+    const later = (ms: number) => db.prepare('UPDATE agent_task_jobs SET due_at = ?, data = ? WHERE id = ?').run(now + ms, JSON.stringify({ ...data, tries: tries + 1 }), job.id)
     const delivered = (line: string) => {
       const row = db.prepare('SELECT delivered FROM agent_task_runs WHERE id = ?').get(job.run_id) as { delivered: string | null } | undefined
       if (row) db.prepare('UPDATE agent_task_runs SET delivered = ? WHERE id = ?').run(JSON.stringify([...parse<string[]>(row.delivered, []), line]), job.run_id)
@@ -705,17 +748,23 @@ async function runJobs(now: number) {
     try {
       if (job.kind === 'email_if_unseen') {
         const read = db.prepare('SELECT read FROM notifications WHERE id = ? AND user_id = ?').get(String(data.entry), user.id) as { read: number } | undefined
-        if (read?.read) continue
+        if (read?.read) {
+          done()
+          continue
+        }
         await reportEmail(user, typeof data.account === 'number' ? data.account : null, String(data.title), String(data.body), String(data.task), job.run_id)
+        done()
         delivered('email (the notification was not seen)')
       } else if (job.kind === 'thread') {
         const posted = postTaskReport(user, typeof data.target === 'string' ? data.target : null, { title: String(data.title), model: String(data.model), text: String(data.text) })
-        const tries = Number(data.tries) || 0
-        if (posted) delivered('thread')
-        else if (tries < 60) addJob(user.id, job.run_id, 'thread', now + 60_000, { ...data, tries: tries + 1 })
-      }
+        if (posted) (done(), delivered('thread'))
+        else if (tries < 60) later(60_000)
+        else (done(), delivered('thread failed: it stayed busy for an hour'))
+      } else done()
     } catch (e) {
-      delivered(`${job.kind === 'thread' ? 'thread' : 'email'} failed: ${(e as Error).message}`)
+      // Tried again later (a mail server down for a moment), then given up on and said so.
+      if (tries + 1 < JOB_TRIES) later(Math.min(3600_000, 60_000 * 2 ** tries))
+      else (done(), delivered(`${job.kind === 'thread' ? 'thread' : 'email'} failed: ${(e as Error).message}`))
     }
   }
 }
@@ -742,9 +791,11 @@ export function approveRun(user: User, id: string, body: { index?: unknown; allo
 export function cancelRun(user: User, id: string): TaskRunInfo {
   const run = ownRun(user, id)
   if (run.status === 'queued') {
-    if (database().prepare("UPDATE agent_task_runs SET status = 'cancelled', ended_at = ?, report_reason = 'Cancelled' WHERE id = ? AND status = 'queued'").run(clock(), run.id).changes) {
+    // Taken from the queue (compare-and-set), then ended like any run: a one-off is over with it.
+    if (database().prepare("UPDATE agent_task_runs SET status = 'running', pending = NULL WHERE id = ? AND status = 'queued'").run(run.id).changes) {
       const pending = parse<TaskPending | null>(run.pending, null)
       if (pending && run.thread_id) settleRunPending(run.thread_id, pending, 'cancelled')
+      finish(run.id, { status: 'cancelled' })
     }
   } else if (run.status === 'running') {
     inFlight.get(run.id)?.ctl.abort()
@@ -844,8 +895,8 @@ export function startAgentTasks(opts: { dev?: boolean } = {}) {
     db.prepare("UPDATE agent_task_runs SET status = 'interrupted', ended_at = ?, report_reason = 'The server restarted while it ran' WHERE id = ?").run(clock(), run.id)
     if (run.thread_id) closeRunCalls(run.thread_id)
     const task = db.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(run.task_id) as TaskRow | undefined
-    // Tried once more (the policy it was started under), and not a failure.
-    if (task && run.attempt === 0) queueRun({ ...task, policy: run.policy, policy_version: run.policy_version }, 'retry', { dry: !!run.dry, attempt: 1 })
+    // Tried once more (the policy it was started under), and not a failure; not for a task paused, completed or expired meanwhile.
+    if (task && task.status === 'active' && run.attempt === 0) queueRun({ ...task, policy: run.policy, policy_version: run.policy_version }, 'retry', { dry: !!run.dry, attempt: 1 })
   }
   if (cut.length) console.log(`[tasks] ${cut.length} ${cut.length === 1 ? 'run was' : 'runs were'} cut off by a restart: marked interrupted`)
   const flag = process.env.AGENT_TASKS

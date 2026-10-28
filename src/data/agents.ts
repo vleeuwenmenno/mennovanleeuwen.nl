@@ -60,7 +60,7 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
  * Role 'compact': a compaction, its content the summary the model gets in place of everything
  * before it (the window still shows all of it, with a divider here).
  */
-export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; createdAt: number }
+export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact' | 'report'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; createdAt: number }
 /**
  * How a compaction came about (server/agents.ts): asked for with /compact (and what to focus on),
  * or by itself, when the context passed the threshold or the model said it was too long; how many

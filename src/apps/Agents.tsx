@@ -2467,6 +2467,21 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
       out.push(<div key={m.id} className="agt-act-host" data-msg={m.id}><CompactDivider m={m} />{row(m, 'Summary', [{ label: 'Copy summary', onSelect: () => copy(m.content) }])}</div>)
       continue
     }
+    // A background task's report: its own card, never the agent's answer (the model reads it as quoted data).
+    if (m.role === 'report') {
+      out.push(
+        <div key={m.id} className="agt-act-host agt-task-report-msg" data-msg={m.id} role="note" aria-label="Task report">
+          <p className="agt-task-report-head">
+            <Icon name="tasks" size={13} /> Task report <span className="muted">· from a background task, in Agents → Tasks</span>
+          </p>
+          <article className="zed-preview agt-answer">
+            <MarkdownPreview text={m.content} />
+          </article>
+          {row(m, 'Task report', [{ label: 'Copy report', onSelect: () => copy(m.content) }])}
+        </div>,
+      )
+      continue
+    }
     const calls = m.toolCalls ?? []
     const results = messages.slice(i + 1, i + 1 + calls.length).filter((r) => r.role === 'tool')
     out.push(
@@ -2951,6 +2966,7 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
       const steps = (m.toolCalls ?? []).map((c, j) => `- ${toolLabel(c, results[j]?.content)}`).join('\n')
       if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
     } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
+    else if (m.role === 'report') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
   }
   return out.join('\n\n') + '\n'
 }

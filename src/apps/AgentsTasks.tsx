@@ -8,6 +8,7 @@ import { hasCalendar, useAccount } from '../os/account'
 import { agentModels, followThread, getThread, listThreads, type AgentMessage, type Thread, type TurnEvent } from '../data/agents'
 import { approveRun, cancelRun, continueRun, createTask, deleteTask, getRun, getTask, listRuns, listTasks, runTask, taskOptions, updateTask, useTasksChanged, type TaskOptionsInfo, type TasksChange } from '../data/agentTasks'
 import {
+  askArgLines,
   callVerdictKind,
   CALL_VERDICTS,
   DEFAULT_CAPS,
@@ -455,7 +456,7 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
                   </span>
                   <span className="agt-tool-label">{a.summary?.title ?? TASK_TOOLS[a.name]?.label ?? a.name}</span>
                 </p>
-                {a.summary ? (
+                {a.summary && (
                   <dl className="agt-answers agt-ask-summary">
                     {a.summary.rows.map(([k, v], i) => (
                       <div key={i}>
@@ -464,10 +465,17 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
                       </div>
                     ))}
                   </dl>
-                ) : (
-                  <pre className="agt-tool-body">{JSON.stringify(a.arguments, null, 2).slice(0, 4000)}</pre>
                 )}
                 {a.summary?.body !== undefined && <pre className="agt-tool-body agt-ask-mail">{a.summary.body || '(no text)'}</pre>}
+                {/* The call itself: where it goes (path, address, recipients) first, long text last. */}
+                <dl className="agt-answers agt-ask-summary agt-tk-args">
+                  {askArgLines(a.arguments).map(([k, v]) => (
+                    <div key={k}>
+                      <dt>{k}</dt>
+                      <dd>{v.length > 300 || v.includes('\n') ? <pre className="agt-tool-body">{v}</pre> : v}</dd>
+                    </div>
+                  ))}
+                </dl>
                 <p className="muted agt-ask-why">{a.reason}</p>
                 <div className="agt-ask-actions">
                   <button className="btn btn-small btn-primary" disabled={busy} onClick={() => act(approveRun(run.id, a.index, true))}>
