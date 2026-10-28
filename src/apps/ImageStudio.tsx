@@ -19,6 +19,10 @@ import { RefineDialog } from './AgentsRefine'
 import { InpaintDialog } from './AgentsInpaint'
 import { UpscaleDialog } from './AgentsUpscale'
 import { Icon } from './agentsSidebar/bits'
+import { createVideoProject, videoSourceFromImage } from '../data/videoStudio'
+import { defaultProject } from '../data/videoPlan'
+import { videoSizeFor } from '../data/videoModels'
+import { useWM } from '../os/wm'
 
 // The Image Studio: a ComfyUI generation driven by hand, modelled on Diffu's Generate page. Left,
 // what to draw with (model, encoder, VAE, the family's card, LoRAs and embeddings, the prompts,
@@ -161,6 +165,7 @@ function ErrorBox({ text, onDismiss }: { text: string; onDismiss?: () => void })
 
 export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist }: { /** The threads Send to chat offers; null when chat is unavailable (no Ollama key). */ threads: Thread[] | null; /** A way back (a host's other view), or none in the Studio's own window. */ onBack?: () => void; onOpenThread: (id: string | null) => void; onSettings: () => void; assist?: (field: StudioField) => ReactNode }) {
   const form = studioForm.use()
+  const wm = useWM()
   const run = useRunner()
   const mobile = useIsMobile()
   const root = useRef<HTMLDivElement>(null)
@@ -292,6 +297,15 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
     setDraft(key, draft?.text ?? '', [...(draft?.files ?? []), file])
     onOpenThread(thread)
   }
+  // Make video…: a Video Studio project starting from this picture (ComfyUI centres it; the Studio's Change… crops it by hand).
+  const makeVideo = async (image: StudioImage) => {
+    const source = await videoSourceFromImage(image.id)
+    const project = { ...defaultProject(), ...videoSizeFor(image.width / image.height || 16 / 9, 768, 'minimax_h3') }
+    project.title = (image.settings && 'prompt' in image.settings ? image.settings.prompt : image.name).slice(0, 60) || 'Untitled video'
+    project.segments[0].firstFrame = { sourceId: source.id, name: source.name, width: source.width, height: source.height, prepared: false }
+    const made = await createVideoProject(project)
+    wm.open('videostudio', { project: made.id, t: String(Date.now()) })
+  }
   const removeImage = async (image: StudioImage) => {
     if (!(await ask({ title: 'Delete this picture?', body: 'It leaves the Studio’s history for good. Copies sent to a chat stay there.', confirm: 'Delete', danger: true }))) return
     await deleteStudioImage(image.id).then(() => {
@@ -320,7 +334,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
     </> : shown ? <>
       <p className="muted studio-caption" title={shown.name}>{shown.width} × {shown.height}{shown.settings && 'seed' in shown.settings ? ` · seed ${shown.settings.seed}` : ''}{shown.settings && 'model' in shown.settings ? ` · ${shown.settings.model.split(/[\\/]/).at(-1)}` : shown.settings ? '' : ' · uploaded'} · {new Date(shown.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</p>
       <GeneratedPicture image={asGenerated(shown)} width={shown.width || 1024} height={shown.height || 1024} pending={false} frame={frame} onView={() => setDialog({ kind: 'view', image: shown })} />
-      <ResultActions image={shown} threads={threads} disabled={false} onUse={() => shown.settings && studioForm.set((f) => formFromSettings(f, shown.settings!))} onSend={(t) => void sendToChat(shown, t).catch((e: Error) => update({ error: e.message }))} onDialog={(kind) => setDialog({ kind, image: shown })} onDelete={() => void removeImage(shown)} />
+      <ResultActions image={shown} threads={threads} disabled={false} onUse={() => shown.settings && studioForm.set((f) => formFromSettings(f, shown.settings!))} onSend={(t) => void sendToChat(shown, t).catch((e: Error) => update({ error: e.message }))} onDialog={(kind) => setDialog({ kind, image: shown })} onDelete={() => void removeImage(shown)} onVideo={() => void makeVideo(shown).catch((e: Error) => update({ error: e.message }))} />
     </> : <div className="studio-empty muted">{studio && !studio.configured ? 'Connect ComfyUI to start.' : 'Your pictures show here. Write a prompt and press Generate.'}</div>}
   </section>
   const historySection = <section className="studio-history" aria-label="History">
@@ -719,7 +733,7 @@ function AdvancedSection({ form, catalog, lastSeed, recipe, onSet, onRecipe, ass
 
 // --- the result's actions --------------------------------------------------------------------------
 
-function ResultActions({ image, threads, disabled, onUse, onSend, onDialog, onDelete }: { image: StudioImage; threads: Thread[] | null; disabled: boolean; onUse: () => void; onSend: (thread: string | null) => void; onDialog: (kind: 'refine' | 'inpaint' | 'upscale') => void; onDelete: () => void }) {
+function ResultActions({ image, threads, disabled, onUse, onSend, onDialog, onDelete, onVideo }: { image: StudioImage; threads: Thread[] | null; disabled: boolean; onUse: () => void; onSend: (thread: string | null) => void; onDialog: (kind: 'refine' | 'inpaint' | 'upscale') => void; onDelete: () => void; onVideo: () => void }) {
   const restorable = !!image.settings && image.settings.operation !== 'upscale' && image.settings.operation !== 'remove'
   const chat = (e: React.MouseEvent<HTMLButtonElement>) => openMenuAt(e.currentTarget, [
     { label: 'New thread', onSelect: () => onSend(null) },
@@ -732,6 +746,7 @@ function ResultActions({ image, threads, disabled, onUse, onSend, onDialog, onDe
     <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onDialog('refine')}>Refine…</button>
     <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onDialog('inpaint')}>Edit area…</button>
     <button type="button" className="btn btn-small" disabled={disabled} onClick={() => onDialog('upscale')}>Upscale…</button>
+    <button type="button" className="btn btn-small" disabled={disabled} onClick={onVideo} title="Start a Video Studio project with this picture as its first frame">Make video…</button>
     <a className="btn btn-small" href={image.url} download={imageFileName(image)}>Download</a>
     {image.studio && <button type="button" className="btn btn-small" onClick={onDelete}>Delete</button>}
   </div>

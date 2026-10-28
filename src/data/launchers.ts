@@ -37,7 +37,7 @@ const order = synced<string[]>('launcher-order', [], { normalize: (v) => (Array.
 /** Apps a launcher may open (X-MvL-App): the ones in this build, and on this page. */
 const APP_IDS = new Set<string>(
   (
-    ['terminal', 'files', 'viewer', 'preview', 'player', 'pdf', 'archive', 'newdoc', 'newsheet', 'newslides', 'notes', 'keys', 'projects', 'recents', 'cv', 'contact', 'games', 'zed', 'trash', 'notebook', 'settings', 'mcserver', 'calendar', 'agents', 'amp', 'tasks', 'contacts', 'photos', 'mail', 'weather', 'git', 'changelog', 'about', 'imagestudio'] satisfies AppId[]
+    ['terminal', 'files', 'viewer', 'preview', 'player', 'pdf', 'archive', 'newdoc', 'newsheet', 'newslides', 'notes', 'keys', 'projects', 'recents', 'cv', 'contact', 'games', 'zed', 'trash', 'notebook', 'settings', 'mcserver', 'calendar', 'agents', 'amp', 'tasks', 'contacts', 'photos', 'mail', 'weather', 'git', 'changelog', 'about', 'imagestudio', 'videostudio'] satisfies AppId[]
   ).filter((a) => appHere(a)),
 )
 export const isLauncherApp = (app: string) => APP_IDS.has(app)

@@ -1,0 +1,174 @@
+/* The Video Studio (VideoStudio.tsx): three columns over a timeline in a wide window; one lane at a
+   time, sheets and a bottom bar on a phone. Theme colours only. */
+.vs { position: relative; display: flex; flex-direction: column; flex: 1; height: 100%; min-width: 0; min-height: 0; background: var(--bg); color: var(--fg); font-size: 12.5px; }
+.vs-top { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.vs-top h3 { margin: 0; font-size: 14px; color: var(--fg-bright); }
+.vs-grow { flex: 1; }
+.vs-pad { padding: 12px; }
+.vs-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.vs-note { font-size: 11px; line-height: 1.45; }
+.vs-head { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); }
+.vs-sub { font-size: 12px; color: var(--fg-bright); }
+.vs-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.vs-danger { color: var(--red); }
+.vs input:not([type='checkbox']), .vs textarea { border: 1px solid var(--line-strong); background: var(--bg-dark); color: var(--fg); font: inherit; font-size: 12.5px; padding: 5px 7px; min-width: 0; }
+.vs input:focus, .vs textarea:focus { outline: none; border-color: var(--accent); }
+.vs-title { flex: 1 1 160px; max-width: 280px; font-weight: 600; }
+.vs-input { width: 100%; }
+.vs-save { font-size: 11px; }
+.vs-save.is-error { color: var(--red); }
+.vs-duration { display: inline-flex; align-items: center; gap: 4px; }
+.vs-duration input { width: 64px; }
+.vs-banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--yellow) 10%, var(--bg)); }
+
+/* --- wide: three columns, the timeline and the foot -------------------------------------------- */
+.vs-cols { display: grid; grid-template-columns: minmax(250px, 290px) minmax(0, 1fr) minmax(250px, 300px); flex: 1; min-height: 0; }
+.vs-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; padding: 10px; overflow: auto; overscroll-behavior: contain; }
+.vs-left { border-right: 1px solid var(--line); }
+.vs-right { border-left: 1px solid var(--line); }
+.vs-section { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.vs-section + .vs-section { padding-top: 10px; border-top: 1px solid var(--line); }
+.vs-foot { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); }
+
+/* keyframes */
+.vs-keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.vs-key { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.vs-key-label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-bright); }
+.vs-key-pic { display: grid; place-items: center; aspect-ratio: 16 / 10; width: 100%; padding: 0; overflow: hidden; border: 1px dashed var(--line-strong); background: var(--bg-dark); color: var(--fg); cursor: pointer; }
+.vs-key-pic:hover, .vs-key-pic:focus-visible { border-color: var(--accent); }
+.vs-key-pic img { width: 100%; height: 100%; object-fit: cover; }
+.vs-speaker { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px; align-items: center; }
+.vs-speaker input:nth-of-type(2) { grid-column: 2; }
+.vs-speaker strong { grid-row: span 2; font-size: 11px; }
+.vs-speaker button { grid-row: span 2; }
+
+/* preview */
+.vs-preview { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.vs-stage { position: relative; display: grid; place-items: center; width: 100%; max-height: 46vh; max-width: calc(46vh * 16 / 9); background: var(--bg-dark); border: 1px solid var(--line); overflow: hidden; text-align: center; }
+.vs-stage video, .vs-stage img { width: 100%; height: 100%; object-fit: contain; }
+.vs-stage > .muted { padding: 16px; }
+.vs-stage-badge { position: absolute; top: 6px; left: 6px; padding: 2px 6px; background: var(--panel-solid, var(--bg)); border: 1px solid var(--line); font-size: 11px; }
+.vs-transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vs-time { font-variant-numeric: tabular-nums; }
+.vs-prompt-text { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font: inherit; font-size: 11.5px; line-height: 1.5; padding: 8px; border: 1px solid var(--line); background: var(--bg-dark); }
+.vs-prompt-edit { width: 100%; min-height: 200px; resize: vertical; line-height: 1.5; }
+.vs-checks { margin: 0; padding-left: 16px; font-size: 11.5px; line-height: 1.5; }
+
+/* inspector */
+.vs-fields { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.vs-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 11px; color: var(--fg-bright); }
+.vs-field.is-short { width: 96px; }
+.vs-field textarea { resize: vertical; line-height: 1.45; }
+.vs-insp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vs-insp-head .vs-note { flex-basis: 100%; }
+
+/* badges: how much control an item gives */
+.vs-badge { flex: none; padding: 0 4px; border: 1px solid currentColor; font-size: 9.5px; line-height: 14px; letter-spacing: .02em; border-radius: 3px; }
+.vs-badge.is-real { color: var(--green); }
+.vs-badge.is-timed { color: var(--cyan); }
+.vs-badge.is-ordered { color: var(--yellow); }
+.vs-badge.is-hint { color: var(--magenta); }
+.vs-badge.is-off { color: var(--muted); }
+
+/* --- the timeline -------------------------------------------------------------------------------- */
+.vs-timeline { display: flex; min-height: 0; border-top: 1px solid var(--line); background: var(--bg-dark); outline: none; }
+.vs-timeline:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.vs-lane-heads { flex: none; width: 82px; border-right: 1px solid var(--line); background: var(--bg); }
+.vs-ruler-head { display: flex; gap: 2px; height: 22px; align-items: center; padding: 0 3px; border-bottom: 1px solid var(--line); }
+.vs-ruler-head .btn { padding: 0 6px; line-height: 16px; }
+.vs-lane-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 8px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.vs-add { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); background: none; color: var(--fg); cursor: pointer; }
+.vs-add:hover { border-color: var(--accent); color: var(--accent); }
+.vs-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; touch-action: pan-x; }
+.vs-track { position: relative; padding-right: 24px; }
+.vs-ruler { position: relative; height: 22px; border-bottom: 1px solid var(--line); cursor: text; }
+.vs-tick { position: absolute; top: 0; height: 100%; padding-left: 3px; border-left: 1px solid var(--line-strong); font-size: 10px; line-height: 22px; color: var(--muted); white-space: nowrap; }
+.vs-tick.is-effective { border-left-style: dashed; color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.vs-lane { position: relative; border-bottom: 1px solid var(--line); }
+.vs-item { position: absolute; top: 4px; bottom: 4px; display: flex; align-items: center; gap: 4px; padding: 0 6px; overflow: hidden; border: 1px solid var(--line-strong); background: var(--bg-light); color: var(--fg); font: inherit; font-size: 11px; text-align: left; cursor: grab; user-select: none; touch-action: pan-x; }
+.vs-item.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); z-index: 2; }
+.vs-item.is-warn { border-color: var(--yellow); }
+.vs-item.is-point { border-left: 3px solid var(--accent); }
+.vs-item.is-shot { background: color-mix(in srgb, var(--blue) 14%, var(--bg)); }
+.vs-item.is-camera { background: color-mix(in srgb, var(--cyan) 12%, var(--bg)); }
+.vs-item.is-speech { background: color-mix(in srgb, var(--green) 12%, var(--bg)); }
+.vs-item.is-sound { background: color-mix(in srgb, var(--orange) 12%, var(--bg)); }
+.vs-item.is-text { background: color-mix(in srgb, var(--magenta) 12%, var(--bg)); }
+.vs-item.is-bed { cursor: pointer; background: var(--bg); }
+.vs-item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-end-handle { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: ew-resize; }
+.vs-cut-handle { position: absolute; top: 0; left: 0; bottom: 0; width: 7px; cursor: ew-resize; background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.vs-order-line { position: absolute; top: 50%; height: 0; border-top: 1px dotted var(--accent); pointer-events: none; }
+.vs-cutline { position: absolute; top: 22px; bottom: 0; width: 0; border-left: 1px solid var(--accent); opacity: .5; pointer-events: none; }
+.vs-playhead { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--red); pointer-events: none; z-index: 3; }
+
+/* jobs and history */
+.vs-jobs { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.vs-job { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 200px) auto; align-items: center; gap: 8px; }
+.vs-job-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-meter { position: relative; display: block; height: 6px; background: var(--bg-dark); border: 1px solid var(--line); overflow: hidden; }
+.vs-meter > span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.vs-meter > span.is-unknown { width: 30% !important; animation: vs-sweep 1.4s linear infinite; }
+@keyframes vs-sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .vs-meter > span.is-unknown { animation: none; } }
+.vs-history { display: flex; align-items: center; gap: 6px; overflow-x: auto; min-height: 44px; }
+.vs-hist { flex: none; width: 64px; height: 40px; padding: 0; border: 1px solid var(--line); background: var(--bg-dark); cursor: pointer; overflow: hidden; }
+.vs-hist.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.vs-hist video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.vs-hist-actions { margin-left: auto; }
+
+/* projects */
+.vs-projects-view { overflow: auto; }
+.vs-project-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin: 0; padding: 12px; list-style: none; }
+.vs-project { display: flex; gap: 10px; width: 100%; padding: 8px; border: 1px solid var(--line); background: var(--bg-dark); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.vs-project:hover, .vs-project:focus-visible { border-color: var(--accent); }
+.vs-project-pic { flex: none; display: grid; place-items: center; width: 96px; aspect-ratio: 16 / 10; overflow: hidden; background: var(--bg); font-size: 10px; }
+.vs-project-pic img { width: 100%; height: 100%; object-fit: cover; }
+.vs-project-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vs-project-text strong { color: var(--fg-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-projects-view .vs-jobs { padding: 0 12px 12px; }
+
+/* picker and crop */
+.vs-picker { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.vs-picker-pane { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.vs-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.vs-tabs button { padding: 6px 10px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.vs-tabs button.is-active { color: var(--fg-bright); border-bottom-color: var(--accent); }
+.vs-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; width: 100%; margin: 0; padding: 0; list-style: none; }
+.vs-thumb { display: block; width: 100%; aspect-ratio: 1; padding: 0; overflow: hidden; border: 1px solid var(--line); background: var(--bg-dark); cursor: pointer; }
+.vs-thumb:hover, .vs-thumb:focus-visible { border-color: var(--accent); }
+.vs-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.vs-crop { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.vs-crop-frame { position: relative; align-self: center; overflow: hidden; border: 2px solid var(--accent); background: var(--bg-dark); cursor: grab; touch-action: none; }
+.vs-crop-frame:focus-visible { outline: 2px solid var(--fg-bright); }
+.vs-crop-frame img { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+.vs-crop-frame > .muted { position: absolute; inset: 0; display: grid; place-items: center; }
+
+/* --- narrow / phone ------------------------------------------------------------------------------ */
+.vs.is-narrow .vs-narrow-main { flex: 1; min-height: 0; overflow: auto; padding: 8px 8px calc(118px + var(--sab, 0px)); display: flex; flex-direction: column; gap: 8px; }
+.vs.is-narrow .vs-stage { max-height: 34vh; }
+.vs.is-narrow .vs-timeline { border: 1px solid var(--line); }
+.vs.is-narrow .vs-lane-heads { width: 76px; }
+/* The phone picks its lane above the timeline: the head keeps only its +. */
+.vs.is-narrow .vs-lane-head { justify-content: center; padding: 0; }
+.vs.is-narrow .vs-lane-head span { display: none; }
+.vs-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); }
+.vs-list-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 6px 10px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.vs-list li:last-child .vs-list-row { border-bottom: 0; }
+.vs-list-row.is-on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.vs-list-row.is-add { color: var(--accent); }
+.vs-list-row.is-bed { border: 1px solid var(--line); }
+.vs-list-time { flex: none; width: 46px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vs-list-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-lane-pick { justify-content: space-between; }
+.vs-bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px calc(8px + var(--sab, 0px)); border-top: 1px solid var(--line); background: var(--bg); }
+.vs-render { width: 100%; min-height: 44px; }
+.vs-bar-why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-sheet-backdrop { position: absolute; inset: 0; z-index: 5; background: color-mix(in srgb, var(--bg-dark) 55%, transparent); }
+.vs-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; flex-direction: column; gap: 10px; max-height: 78%; overflow: auto; padding: 10px 12px calc(14px + var(--sab, 0px)); border-top: 1px solid var(--line-strong); background: var(--bg); }
+.vs-sheet-head { display: flex; align-items: center; justify-content: space-between; }
+@media (pointer: coarse) {
+  .vs .btn-small { min-height: 36px; }
+  .vs-add { width: 32px; height: 28px; }
+  .vs-item { cursor: default; }
+}
