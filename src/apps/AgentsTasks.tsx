@@ -32,7 +32,7 @@ import {
   type Verdict,
 } from '../data/agentTaskPolicy'
 import { describeSchedule, upcoming, type Schedule } from '../data/agentTaskSchedule'
-import { blankMailTrigger, describeMailTrigger, MAX_PER_HOUR, MAX_WINDOW_MS, NEVER_ROLES, type MailTrigger, type RunMail } from '../data/agentTaskMail'
+import { blankMailTrigger, describeMailTrigger, MAIL_TASK_TOKENS, MAX_PER_HOUR, MAX_WINDOW_MS, NEVER_ROLES, type MailTrigger, type RunMail } from '../data/agentTaskMail'
 import { bootstrap, openMail, type Mailbox } from '../data/mail'
 
 // The Agents app's Tasks tab: background tasks (server/agentTasks.ts) that run an agent once or on a
@@ -166,6 +166,7 @@ function TaskRow({ task: t, onOpen, onChanged, enabled }: { task: Task; onOpen: 
           {t.status === 'active' && t.nextRunAt ? ` · next ${when(t.nextRunAt, t.timezone)}` : t.status === 'expired' ? ' · expired' : ''}
           {t.status === 'active' && t.mailPending > 0 ? ` · ${t.mailPending} new ${t.mailPending === 1 ? 'mail' : 'mails'} waiting` : ''}
         </span>
+        {t.mailAccountGone && <span className="t-yellow">Mail account unlinked: edit the task to pick another</span>}
         {t.lastRun && (
           <span className="agt-tk-last">
             <RunChip run={t.lastRun} /> <span className="muted">{when(t.lastRun.endedAt ?? t.lastRun.startedAt ?? t.lastRun.queuedAt, t.timezone)}</span>
@@ -271,6 +272,7 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
             {describeSchedule(task.schedule, task.timezone)} {task.schedule.kind !== 'mail' && <span className="muted">({task.timezone})</span>}
           </Fact>
           {task.status === 'active' && task.schedule.kind !== 'mail' && <Fact label="Next run">{when(task.nextRunAt, task.timezone)}</Fact>}
+          {task.mailAccountGone && <Fact label="Watch out"><span className="t-yellow">The mail account it watches is unlinked, so it never starts: edit the task to pick another.</span></Fact>}
           {task.status === 'active' && task.schedule.kind === 'mail' && <Fact label="Waiting">{task.mailPending ? `${task.mailPending} new ${task.mailPending === 1 ? 'mail' : 'mails'} for the next run` : 'No new mail yet'}</Fact>}
           <Fact label="Tells you">{task.condition ? `When: ${task.condition}` : REPORT_WHEN[task.report.when]}</Fact>
           {task.doneWhen && <Fact label="Done when">{task.doneWhen}</Fact>}
@@ -682,7 +684,12 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
     if ((w === 'mail') === (spec.schedule.kind === 'mail')) return
     const back = other.current
     other.current = spec.schedule
-    set('schedule', back ?? (w === 'mail' ? blankMailTrigger(mail[0]) : { kind: 'daily', time: '08:00' }))
+    // A mail task starts with a lower token limit (mail can come often), unless one was picked.
+    setSpec((s) => ({
+      ...s,
+      schedule: back ?? (w === 'mail' ? blankMailTrigger(mail[0]) : { kind: 'daily', time: '08:00' }),
+      caps: w === 'mail' && s.caps.tokens === DEFAULT_CAPS.tokens ? { ...s.caps, tokens: MAIL_TASK_TOKENS } : w !== 'mail' && s.caps.tokens === MAIL_TASK_TOKENS ? { ...s.caps, tokens: DEFAULT_CAPS.tokens } : s.caps,
+    }))
   }
   const next = useMemo(() => {
     try {
@@ -942,10 +949,11 @@ function MailTriggerFields({ trigger: t, accounts, policy, onChange }: { trigger
       </div>
       <p className="agt-tk-help">{describeMailTrigger(t)}. More mail than that waits for the next run.</p>
       <p className="agt-tk-warn" role="note">
-        Mail from outside starts this task and the agent reads it: a mail can try to talk it into something (send, change, delete). Keep changes and sends on Ask unless you trust everyone who can mail you.
+        Mail from outside starts this task and the agent reads it: a mail can try to talk it into something (send, change, delete). Mails arriving together are handled in one run and it may read all of them, so one bad mail can sway what it does with the others. Keep changes and sends on Ask unless you trust everyone who can mail you.
       </p>
+      {!accounts.some((a) => a.id === t.account) && <p className="agt-tk-warn" role="alert">The account it watched is unlinked: pick another, or switch to a schedule.</p>}
       <p className="muted agt-tk-help">
-        Never a trigger: drafts, mail in Sent, Drafts, Trash or Junk, and mail this task sends itself (its email reports, mail a run sends). {reads === 'block' ? 'Mail reads are blocked below, so a run only sees who wrote and the subject.' : 'A run reads the mail that started it without asking; any other mail it reads follows Mail below.'}
+        Never a trigger: drafts, mail in Sent, Drafts, Trash or Junk, mail tasks send (email reports, mail a run sends) and replies to it, automatic mail (auto-replies, bounces, delivery reports), and mail received more than two days before it shows up. Only mail delivered into the mailbox counts, not mail moved there later. {reads === 'block' ? 'Mail reads are blocked below, so a run only sees who wrote and the subject.' : 'A run reads the mail that started it without asking; any other mail it reads follows Mail below.'}
       </p>
     </div>
   )
