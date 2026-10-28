@@ -19,7 +19,7 @@ export function taskListLines(tasks: Task[], enabled: boolean, cols: number): Li
   if (!tasks.length) return [...out, [seg('  None yet. Make one in the Agents app (Tasks), or ask an agent to.', 'muted')], []]
   for (const t of tasks) {
     out.push(clipLine([seg(`  ${t.id.slice(0, 8)} `, 'muted'), seg(t.title, 'bold'), seg(`  ${t.status}`, t.status === 'active' ? 'green' : 'muted')], cols))
-    out.push(clipLine([seg(`           ${describeSchedule(t.schedule, t.timezone)}${t.status === 'active' && t.nextRunAt ? ` · next ${when(t.nextRunAt, t.timezone)}` : ''}`, 'muted')], cols))
+    out.push(clipLine([seg(`           ${describeSchedule(t.schedule, t.timezone)}${t.status === 'active' && t.nextRunAt ? ` · next ${when(t.nextRunAt, t.timezone)}` : ''}${t.status === 'active' && t.mailPending ? ` · ${t.mailPending} mail waiting` : ''}`, 'muted')], cols))
     if (t.lastRun) out.push(clipLine([seg('           last: ', 'muted'), seg(runWord(t.lastRun), tone(t.lastRun)), seg(` ${when(t.lastRun.startedAt ?? t.lastRun.queuedAt, t.timezone)} · run ${t.lastRun.id.slice(0, 8)}`, 'muted')], cols))
   }
   return [...out, [seg(`  ${TASKS_HELP}`, 'muted')], []]
@@ -31,8 +31,9 @@ export function taskLines(t: Task, runs: TaskRunInfo[], cols: number): Line[] {
   return [
     [seg(t.title, 'bold'), seg(`  ${t.id}`, 'muted')],
     ...row('status', t.status),
-    ...row('runs', `${describeSchedule(t.schedule, t.timezone)} (${t.timezone})`),
-    ...(t.status === 'active' ? row('next', when(t.nextRunAt, t.timezone)) : []),
+    ...row(t.schedule.kind === 'mail' ? 'starts' : 'runs', t.schedule.kind === 'mail' ? describeSchedule(t.schedule, t.timezone) : `${describeSchedule(t.schedule, t.timezone)} (${t.timezone})`),
+    ...(t.status === 'active' && t.schedule.kind !== 'mail' ? row('next', when(t.nextRunAt, t.timezone)) : []),
+    ...(t.status === 'active' && t.schedule.kind === 'mail' ? row('waiting', t.mailPending ? `${t.mailPending} new mail for the next run` : 'no new mail yet') : []),
     ...row('tells you', t.condition ? `when ${t.condition}` : t.report.when),
     ...(t.doneWhen ? row('done when', t.doneWhen) : []),
     ...row('does', t.instruction),
@@ -69,6 +70,11 @@ const VERDICT_WORD = { allowed: 'allowed by policy', approved: 'approved by you'
 /** A run: its facts, what it waits for, the report, and each tool call with how it was decided. */
 export function runDetailLines(r: TaskRunInfo, title: string, messages: AgentMessage[], cols: number): Line[] {
   const out: Line[] = [[seg(`${title} · run ${r.id.slice(0, 8)}`, 'bold')], [seg('  ', ''), seg(runWord(r), tone(r)), seg(` · ${when(r.startedAt ?? r.queuedAt)}${r.endedAt && r.startedAt ? ` · ${Math.round((r.endedAt - r.startedAt) / 1000)} s` : ''} · ${r.tokensIn + r.tokensOut} tokens · ${r.toolCalls} tool calls`, 'muted')]]
+  if (r.mail) {
+    out.push([seg(`  started by ${r.mail.mails.length} new ${r.mail.mails.length === 1 ? 'mail' : 'mails'}`, 'muted')])
+    for (const m of r.mail.mails.slice(0, 20)) out.push(clipLine([seg('    '), seg(m.subject || '(no subject)'), seg(` · ${m.from || '(nobody)'} · ${when(m.receivedAt)}`, 'muted')], cols))
+    if (r.mail.dropped) out.push([seg(`    ${r.mail.dropped} older dropped while waiting`, 'muted')])
+  }
   if (r.reportReason) out.push(...wrap([seg(r.reportReason)], cols, [seg(`  ${r.reported ? 'reported: ' : 'quiet: '}`, 'muted')]))
   out.push(...askLines(r, cols))
   if (r.summary) out.push([seg('  report', 'muted')], ...r.summary.split('\n').flatMap((l) => wrap([seg(l)], cols, [seg('    ')])))

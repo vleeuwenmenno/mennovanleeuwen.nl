@@ -8,6 +8,7 @@ import { ask } from '../os/Dialogs'
 import { makerOf, modelName, PROVIDER_NAMES } from '../data/agentModelNames'
 import { namedModels } from './AgentsModelPicker'
 import { TASK_KEEP } from '../data/agents'
+import { MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from '../data/agentTaskMail'
 import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, SIDEBAR_STYLES, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
@@ -61,7 +62,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, what it remembers, and how its sidebar looks.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
-  { id: 'tasks', label: 'Tasks', blurb: 'Background tasks: the model they run on unless a task names its own, where a new task’s reports go, and how many runs each one keeps.', icon: icon(<><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>) },
+  { id: 'tasks', label: 'Tasks', blurb: 'Background tasks: the model they run on unless a task names its own, where a new task’s reports go, how many runs each one keeps, and the budget of tasks started by new mail.', icon: icon(<><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>) },
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
   { id: 'images', label: 'Images', blurb: 'Pictures and diagram icons from OpenAI (an API key or Sign in with ChatGPT), and image generation with your own ComfyUI server.', icon: icon(<><rect x="3" y="3" width="18" height="18" /><path d="M3 17l6-6 4 4 3-3 5 5" /></>) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
@@ -401,6 +402,23 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           <Select className="set-select" value={settings.taskKeep} onChange={(taskKeep) => setAgentSettings({ taskKeep })} aria-label="Runs kept per task" options={TASK_KEEP.map((n) => ({ value: n, label: `${n} runs` }))} />
         </li>
       </ul>
+      <h4 className="set-subhead">Tasks started by new mail</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Runs an hour, all together</strong>
+            <span className="muted">Across every task that starts on new mail. Over it, new mail waits (nothing is dropped) and you get one notification</span>
+          </span>
+          <Select className="set-select" value={settings.taskMailRuns} onChange={(taskMailRuns) => setAgentSettings({ taskMailRuns })} aria-label="Mail-started runs an hour" options={MAIL_BUDGET_RUNS.map((n) => ({ value: n, label: `${n} runs` }))} />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Tokens a day, all together</strong>
+            <span className="muted">What the runs started by new mail may use in 24 hours, in and out together</span>
+          </span>
+          <Select className="set-select" value={settings.taskMailTokens} onChange={(taskMailTokens) => setAgentSettings({ taskMailTokens })} aria-label="Mail-started tokens a day" options={MAIL_BUDGET_TOKENS.map((n) => ({ value: n, label: n >= 1_000_000 ? `${n / 1_000_000}M tokens` : `${n / 1000}k tokens` }))} />
+        </li>
+      </ul>
       <h4 className="set-subhead">Reports of a new task</h4>
       <ul className="set-list">
         <li className="set-row">
@@ -569,7 +587,7 @@ function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: S
     { id: 'general', summary: ollama ? `Ollama Cloud connected${memories === null ? '' : ` · ${plural(memories, 'thing')} remembered`}` : 'Ollama Cloud not connected: Agents needs an API key', ...(ollama ? {} : { fix: 'Add a key', tone: 'error' as const }) },
     { id: 'models', summary: ollama && !models.length && !auto ? loading : `Quick: ${model(settings.quickModel, auto?.quick)} · Deep: ${model(settings.deepModel, auto?.deep)}` },
     { id: 'threads', summary: `${MODE_LABEL[settings.mode]} · ${settings.tools.length} of ${plural(TOOL_GROUPS.length, 'tool group')} on${settings.autoCompact ? ' · compacts long threads' : ''}${settings.replySuggestions ? ' · suggests replies' : ''}` },
-    { id: 'tasks', summary: `Model: ${model(settings.taskModel, settings.quickModel ?? auto?.quick)} · ${settings.taskKeep} runs kept` },
+    { id: 'tasks', summary: `Model: ${model(settings.taskModel, settings.quickModel ?? auto?.quick)} · ${settings.taskKeep} runs kept · mail: ${settings.taskMailRuns} runs an hour` },
     { id: 'prompt', summary: !prompt ? loading : prompt.source === 'seafile' ? 'Your own ~/AGENTS.md' : prompt.error ? `Built in: ~/AGENTS.md could not be read` : 'Built in', ...(prompt?.error ? { tone: 'warn' as const } : {}) },
     failed('permissions', mail, sites) ?? { id: 'permissions', summary: !mail || !sites ? loading : `Mail reads: ${mail && 'value' in mail && mail.value.mode === 'always' ? 'always allowed' : 'ask first'} · ${plural(sites && 'value' in sites ? sites.value.length : 0, 'web site')} allowed` },
     failed('images', images) ?? (images && 'value' in images && !images.value.url

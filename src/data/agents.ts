@@ -1,3 +1,4 @@
+import { DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from './agentTaskMail'
 import { api } from '../os/account'
 import { synced } from '../os/synced'
 import { useEffect, useState } from 'react'
@@ -328,6 +329,9 @@ export type AgentSettings = {
   taskReport: TaskReportDefaults
   /** How many runs each task keeps in its history unless it says otherwise: one of RETENTION */
   taskKeep: number
+  /** All mail-started task runs together, per hour and tokens per day (server/agentTasks.ts reads them): one of MAIL_BUDGET_RUNS / MAIL_BUDGET_TOKENS */
+  taskMailRuns: number
+  taskMailTokens: number
 }
 /** The report targets a new task starts with (Settings → Apps → Agents → Tasks). */
 export type TaskReportDefaults = { when: 'always' | 'failure' | 'condition'; thread: 'none' | 'new' | 'fixed'; notify: boolean; email: 'off' | 'always' | 'unseen' }
@@ -361,7 +365,7 @@ export const sidebarStyleOf = (v: unknown): SidebarStyle => SIDEBAR_STYLES.find(
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic', taskModel: null, taskReport: TASK_REPORT_DEFAULTS, taskKeep: 100 }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic', taskModel: null, taskReport: TASK_REPORT_DEFAULTS, taskKeep: 100, taskMailRuns: DEFAULT_BUDGET_RUNS, taskMailTokens: DEFAULT_BUDGET_TOKENS }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -386,6 +390,8 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       taskModel: typeof s.taskModel === 'string' && s.taskModel ? s.taskModel : null,
       taskReport: taskReportOf(s.taskReport),
       taskKeep: TASK_KEEP.includes(Number(s.taskKeep)) ? Number(s.taskKeep) : 100,
+      taskMailRuns: MAIL_BUDGET_RUNS.includes(Number(s.taskMailRuns)) ? Number(s.taskMailRuns) : DEFAULT_BUDGET_RUNS,
+      taskMailTokens: MAIL_BUDGET_TOKENS.includes(Number(s.taskMailTokens)) ? Number(s.taskMailTokens) : DEFAULT_BUDGET_TOKENS,
     }
   },
 })
