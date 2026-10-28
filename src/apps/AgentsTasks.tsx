@@ -32,6 +32,8 @@ import {
   type Verdict,
 } from '../data/agentTaskPolicy'
 import { describeSchedule, upcoming, type Schedule } from '../data/agentTaskSchedule'
+import { blankMailTrigger, describeMailTrigger, MAX_PER_HOUR, MAX_WINDOW_MS, NEVER_ROLES, type MailTrigger, type RunMail } from '../data/agentTaskMail'
+import { bootstrap, openMail, type Mailbox } from '../data/mail'
 
 // The Agents app's Tasks tab: background tasks (server/agentTasks.ts) that run an agent once or on a
 // schedule and report back. The list (needing you, running, scheduled, one-off, paused, done), a
@@ -101,7 +103,8 @@ export function TasksView({ focus, onBack, onOpenThread }: { focus: TasksFocus |
   const groups: { title: string; items: Task[] }[] = [
     { title: 'Needs you', items: waiting },
     { title: 'Running', items: busy },
-    { title: 'Scheduled', items: rest.filter((t) => t.status === 'active' && t.schedule.kind !== 'once') },
+    { title: 'On new mail', items: rest.filter((t) => t.status === 'active' && t.schedule.kind === 'mail') },
+    { title: 'Scheduled', items: rest.filter((t) => t.status === 'active' && t.schedule.kind !== 'once' && t.schedule.kind !== 'mail') },
     { title: 'One-off', items: rest.filter((t) => t.status === 'active' && t.schedule.kind === 'once') },
     { title: 'Paused', items: rest.filter((t) => t.status === 'paused') },
     { title: 'Completed', items: rest.filter((t) => t.status === 'completed' || t.status === 'expired') },
@@ -122,7 +125,7 @@ export function TasksView({ focus, onBack, onOpenThread }: { focus: TasksFocus |
         {!enabled && <p className="agt-tk-banner">Tasks are switched off on this server (AGENT_TASKS): they are kept, but nothing runs until they are switched on.</p>}
         {tasks && !list.length && (
           <div className="agt-tk-empty">
-            <p>Tasks run an agent in the background, once or on a schedule, and tell you what it found: “every weekday at 8, check my calendar and mail and give me a summary”, “tell me when a new release of X is out”.</p>
+            <p>Tasks run an agent in the background, once, on a schedule or when new mail arrives, and tell you what it found: “every weekday at 8, check my calendar and mail and give me a summary”, “tell me when a new release of X is out”, “when a receipt arrives, file it”.</p>
             <p className="muted">Make one here, or ask an agent in a thread to make one for you: it always asks you first.</p>
           </div>
         )}
@@ -161,6 +164,7 @@ function TaskRow({ task: t, onOpen, onChanged, enabled }: { task: Task; onOpen: 
         <span className="muted">
           {describeSchedule(t.schedule, t.timezone)}
           {t.status === 'active' && t.nextRunAt ? ` · next ${when(t.nextRunAt, t.timezone)}` : t.status === 'expired' ? ' · expired' : ''}
+          {t.status === 'active' && t.mailPending > 0 ? ` · ${t.mailPending} new ${t.mailPending === 1 ? 'mail' : 'mails'} waiting` : ''}
         </span>
         {t.lastRun && (
           <span className="agt-tk-last">
@@ -264,9 +268,10 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
         <dl className="agt-tk-facts">
           <Fact label="Status">{task.status === 'active' ? 'Active' : task.status === 'paused' ? 'Paused' : task.status === 'expired' ? 'Expired' : 'Completed'}</Fact>
           <Fact label="Runs">
-            {describeSchedule(task.schedule, task.timezone)} <span className="muted">({task.timezone})</span>
+            {describeSchedule(task.schedule, task.timezone)} {task.schedule.kind !== 'mail' && <span className="muted">({task.timezone})</span>}
           </Fact>
-          {task.status === 'active' && <Fact label="Next run">{when(task.nextRunAt, task.timezone)}</Fact>}
+          {task.status === 'active' && task.schedule.kind !== 'mail' && <Fact label="Next run">{when(task.nextRunAt, task.timezone)}</Fact>}
+          {task.status === 'active' && task.schedule.kind === 'mail' && <Fact label="Waiting">{task.mailPending ? `${task.mailPending} new ${task.mailPending === 1 ? 'mail' : 'mails'} for the next run` : 'No new mail yet'}</Fact>}
           <Fact label="Tells you">{task.condition ? `When: ${task.condition}` : REPORT_WHEN[task.report.when]}</Fact>
           {task.doneWhen && <Fact label="Done when">{task.doneWhen}</Fact>}
           <Fact label="Reports to">{to.join(', ') || 'only the run history'}</Fact>
@@ -300,7 +305,7 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
                 <RunChip run={r} />
                 <span>{when(r.startedAt ?? r.queuedAt, task.timezone)}</span>
                 <span className="muted">{r.endedAt && r.startedAt ? took(r.endedAt - r.startedAt) : r.status === 'running' ? 'running…' : ''}</span>
-                <span className="muted agt-tk-reason">{r.reportReason ?? r.error ?? ''}</span>
+                <span className="muted agt-tk-reason">{r.mail ? `${mailCount(r.mail)} · ` : ''}{r.reportReason ?? r.error ?? ''}</span>
               </button>
             </li>
           ))}
@@ -313,6 +318,30 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
         {error && <p className="t-red copyable">{error}</p>}
       </div>
     </>
+  )
+}
+
+const mailCount = (m: RunMail | null) => (m ? `${m.mails.length} ${m.mails.length === 1 ? 'mail' : 'mails'}` : 'mail')
+
+/** The mail that started a run: sender and subject, each opening the message in Mail. */
+function RunMailList({ mail, zone }: { mail: RunMail; zone: string }) {
+  return (
+    <section aria-label="The mail that started this run">
+      <h4 className="agt-tk-sub">Mail that started it</h4>
+      <ul className="agt-tk-mails">
+        {mail.mails.map((m) => (
+          <li key={`${m.account}.${m.id}`}>
+            <button type="button" className="agt-tk-mail" onClick={() => openMail(m.id, { account: m.account })} title="Open in Mail">
+              <strong>{m.subject || '(no subject)'}</strong>
+              <span className="muted">
+                {m.from || '(nobody)'} · {when(m.receivedAt, zone)} · {m.mailbox}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {mail.dropped > 0 && <p className="muted agt-tk-help">{mail.dropped} older {mail.dropped === 1 ? 'mail was' : 'mails were'} dropped while waiting (more than 200, or older than a week).</p>}
+    </section>
   )
 }
 
@@ -439,12 +468,13 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
             {tokens(run.tokensIn)} in · {tokens(run.tokensOut)} out
           </Fact>
           <Fact label="Tool calls">{run.toolCalls}</Fact>
-          <Fact label="Started by">{run.trigger === 'schedule' ? 'The schedule' : run.trigger === 'catchup' ? 'Catching up after downtime' : run.trigger === 'retry' ? 'A retry after a restart' : run.dry ? 'You (dry run)' : 'You (Run now)'}</Fact>
+          <Fact label="Started by">{run.trigger === 'schedule' ? 'The schedule' : run.trigger === 'mail' ? `New mail (${mailCount(run.mail)})` : run.trigger === 'catchup' ? 'Catching up after downtime' : run.trigger === 'retry' ? 'A retry after a restart' : run.dry ? 'You (dry run)' : 'You (Run now)'}</Fact>
           <Fact label="Policy">version {run.policyVersion}{run.policyVersion !== task.policyVersion ? ` (now ${task.policyVersion})` : ''}</Fact>
           {run.reportReason && <Fact label={run.reported ? 'Reported' : 'Quiet'}>{run.reportReason}</Fact>}
           {run.delivered.length > 0 && <Fact label="Sent to">{run.delivered.join(', ')}</Fact>}
           {run.error && <Fact label="Error">{run.error}</Fact>}
         </dl>
+        {run.mail && <RunMailList mail={run.mail} zone={task.timezone} />}
         {run.asks.length > 0 && (
           <section className="agt-tk-asks" aria-label="Waiting for you">
             <h4 className="agt-tk-sub">Waiting for you{run.deadline ? <span className="muted"> · until {when(run.deadline, task.timezone)}, then denied</span> : null}</h4>
@@ -620,7 +650,7 @@ function TaskEditorPane({ initial, options, onCancel, onSaved }: { initial: Task
   )
 }
 
-const KIND_LABEL: Record<Schedule['kind'] | 'at', string> = { once: 'Once, right away', at: 'Once, at a time', daily: 'Every day', weekdays: 'Every weekday', weekly: 'On some days of the week', cron: 'Cron line' }
+const KIND_LABEL: Record<Exclude<Schedule['kind'], 'mail'> | 'at', string> = { once: 'Once, right away', at: 'Once, at a time', daily: 'Every day', weekdays: 'Every weekday', weekly: 'On some days of the week', cron: 'Cron line' }
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const VERDICT_TEXT: Record<Verdict, string> = { allow: 'Allow', ask: 'Ask', block: 'Block' }
 const localInput = (ms: number) => {
@@ -645,6 +675,14 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
     const time = 'time' in spec.schedule ? spec.schedule.time : '08:00'
     const s: Schedule = k === 'once' ? { kind: 'once', at: null } : k === 'at' ? { kind: 'once', at: Date.now() + 3600_000 } : k === 'weekly' ? { kind: 'weekly', time, days: [1] } : k === 'cron' ? { kind: 'cron', expr: '0 8 * * 1-5' } : { kind: k as 'daily' | 'weekdays', time }
     set('schedule', s)
+  }
+  // Schedule or new mail: switching back and forth keeps what was picked on each side.
+  const other = useRef<Schedule | null>(null)
+  const pickWhen = (w: string) => {
+    if ((w === 'mail') === (spec.schedule.kind === 'mail')) return
+    const back = other.current
+    other.current = spec.schedule
+    set('schedule', back ?? (w === 'mail' ? blankMailTrigger(mail[0]) : { kind: 'daily', time: '08:00' }))
   }
   const next = useMemo(() => {
     try {
@@ -681,10 +719,27 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
 
       <fieldset className="agt-tk-set">
         <legend>When it runs</legend>
+        <div className="agt-tk-when" role="radiogroup" aria-label="What starts it">
+          {[
+            ['schedule', 'On a schedule'],
+            ['mail', 'When new mail arrives'],
+          ].map(([v, label]) => {
+            const on = (v === 'mail') === (spec.schedule.kind === 'mail')
+            return (
+              <button type="button" key={v} role="radio" aria-checked={on} className={`agt-tk-day ${on ? 'is-on' : ''}`} disabled={v === 'mail' && !mail.length} title={v === 'mail' && !mail.length ? 'Link a mail account first (Settings → Integrations → Mail)' : undefined} onClick={() => pickWhen(v)}>
+                {label}
+              </button>
+            )
+          })}
+        </div>
+        {spec.schedule.kind === 'mail' ? (
+          <MailTriggerFields trigger={spec.schedule} accounts={mail} policy={spec.policy} onChange={(t) => set('schedule', t)} />
+        ) : (
+        <>
         <div className="agt-tk-inline">
           <Select value={kind} onChange={pickKind} aria-label="When it runs" options={(Object.keys(KIND_LABEL) as (keyof typeof KIND_LABEL)[]).map((k) => ({ value: k, label: KIND_LABEL[k] }))} />
           {spec.schedule.kind === 'once' && spec.schedule.at !== null && <input type="datetime-local" value={localInput(spec.schedule.at)} onChange={(e) => e.target.value && set('schedule', { kind: 'once', at: new Date(e.target.value).getTime() })} aria-label="When" />}
-          {'time' in spec.schedule && <input type="time" value={spec.schedule.time} onChange={(e) => spec.schedule.kind !== 'once' && spec.schedule.kind !== 'cron' && set('schedule', { ...spec.schedule, time: e.target.value })} aria-label="At" />}
+          {'time' in spec.schedule && <input type="time" value={spec.schedule.time} onChange={(e) => (spec.schedule.kind === 'daily' || spec.schedule.kind === 'weekdays' || spec.schedule.kind === 'weekly') && set('schedule', { ...spec.schedule, time: e.target.value })} aria-label="At" />}
           {spec.schedule.kind === 'cron' && <input className="agt-tk-cron" value={spec.schedule.expr} onChange={(e) => set('schedule', { kind: 'cron', expr: e.target.value })} aria-label="Cron line" placeholder="minute hour day month weekday" spellCheck={false} />}
         </div>
         {spec.schedule.kind === 'weekly' && (
@@ -705,15 +760,21 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
           <input value={spec.timezone} onChange={(e) => set('timezone', e.target.value)} spellCheck={false} />
         </label>
         <p className="muted agt-tk-help">{next.error ? <span className="t-red">{next.error}</span> : next.runs.length ? `Next: ${next.runs.map((t) => when(t, spec.timezone)).join(' · ')}` : spec.schedule.kind === 'once' && spec.schedule.at === null ? 'Runs as soon as it is saved.' : 'No runs ahead.'}</p>
+        </>
+        )}
         <div className="agt-tk-grid">
-          <label className="agt-tk-field">
-            <span>A run still going when the next is due</span>
-            <Select value={spec.options.overlap} onChange={(overlap) => set('options', { ...spec.options, overlap })} options={[{ value: 'skip', label: 'Skip the next one' }, { value: 'queue', label: 'Run it after' }]} />
-          </label>
-          <label className="agt-tk-field">
-            <span>Missed while the server was down</span>
-            <Select value={spec.options.missed} onChange={(missed) => set('options', { ...spec.options, missed })} options={[{ value: 'once', label: 'Catch up once' }, { value: 'skip', label: 'Skip' }]} />
-          </label>
+          {spec.schedule.kind !== 'mail' && (
+            <>
+              <label className="agt-tk-field">
+                <span>A run still going when the next is due</span>
+                <Select value={spec.options.overlap} onChange={(overlap) => set('options', { ...spec.options, overlap })} options={[{ value: 'skip', label: 'Skip the next one' }, { value: 'queue', label: 'Run it after' }]} />
+              </label>
+              <label className="agt-tk-field">
+                <span>Missed while the server was down</span>
+                <Select value={spec.options.missed} onChange={(missed) => set('options', { ...spec.options, missed })} options={[{ value: 'once', label: 'Catch up once' }, { value: 'skip', label: 'Skip' }]} />
+              </label>
+            </>
+          )}
           <label className="agt-tk-field">
             <span>Ends</span>
             <span className="agt-tk-inline">
@@ -814,6 +875,79 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
         </button>
       </div>
     </form>
+  )
+}
+
+const listText = (xs: string[]) => xs.join(', ')
+const textList = (s: string) => s.split(/[,\n]/).map((x) => x.trim()).filter(Boolean)
+
+/** A mailbox with its parents, "Projects/Receipts". */
+function boxPath(boxes: Mailbox[], b: Mailbox): string {
+  const parts = [b.name]
+  for (let up = boxes.find((x) => x.id === b.parentId), i = 0; up && i < 10; up = boxes.find((x) => x.id === up!.parentId), i++) parts.unshift(up.name)
+  return parts.join('/')
+}
+
+/** The new-mail trigger: account, mailbox, filters, batching, in plain words, and what never starts it. */
+function MailTriggerFields({ trigger: t, accounts, policy, onChange }: { trigger: MailTrigger; accounts: { id: number; label: string }[]; policy: TaskPolicy; onChange: (t: MailTrigger) => void }) {
+  const [boxes, setBoxes] = useState<Mailbox[] | null>(null)
+  useEffect(() => {
+    let live = true
+    setBoxes(null)
+    bootstrap(t.account).then((b) => live && setBoxes(b.mailboxes), () => live && setBoxes([]))
+    return () => void (live = false)
+  }, [t.account])
+  const pickable = (boxes ?? []).filter((b) => !b.role || !NEVER_ROLES.includes(b.role)).filter((b) => b.role !== 'inbox')
+  const set = (p: Partial<MailTrigger>) => onChange({ ...t, ...p })
+  const reads = toolVerdict(policy, 'mail_read')
+  return (
+    <div className="agt-tk-mailtrigger">
+      <div className="agt-tk-grid">
+        <label className="agt-tk-field">
+          <span>Account</span>
+          <Select value={t.account} onChange={(account) => set({ account, accountLabel: accounts.find((a) => a.id === account)?.label ?? '', mailbox: null, mailboxName: 'Inbox' })} options={[...accounts.map((a) => ({ value: a.id, label: a.label })), ...(accounts.some((a) => a.id === t.account) ? [] : [{ value: t.account, label: t.accountLabel || 'An account that is gone' }])]} />
+        </label>
+        <label className="agt-tk-field">
+          <span>Mailbox</span>
+          <Select
+            value={t.mailbox ?? ''}
+            onChange={(id) => set({ mailbox: id || null, mailboxName: id ? boxPath(boxes ?? [], (boxes ?? []).find((b) => b.id === id)!) : 'Inbox' })}
+            options={[{ value: '', label: 'Inbox' }, ...pickable.map((b) => ({ value: b.id, label: boxPath(boxes ?? [], b) })), ...(t.mailbox && boxes && !pickable.some((b) => b.id === t.mailbox) ? [{ value: t.mailbox, label: t.mailboxName }] : [])]}
+          />
+        </label>
+        <label className="agt-tk-field">
+          <span>From <span className="muted">(addresses or @domains, comma-separated; empty: anyone)</span></span>
+          <input key={`f${t.account}`} defaultValue={listText(t.from)} onChange={(e) => set({ from: textList(e.target.value).map((x) => x.toLowerCase()) })} placeholder="@steampowered.com, boss@example.org" spellCheck={false} />
+        </label>
+        <label className="agt-tk-field">
+          <span>To or Cc contains <span className="muted">(any of these)</span></span>
+          <input defaultValue={listText(t.to)} onChange={(e) => set({ to: textList(e.target.value) })} placeholder="billing@" spellCheck={false} />
+        </label>
+        <label className="agt-tk-field">
+          <span>Subject contains <span className="muted">(any of these, any case)</span></span>
+          <input defaultValue={listText(t.subject)} onChange={(e) => set({ subject: textList(e.target.value) })} placeholder="invoice, receipt" />
+        </label>
+        <label className="agt-tk-field">
+          <span>Attachment</span>
+          <Select value={t.attachment} onChange={(attachment) => set({ attachment })} options={[{ value: 'any', label: "Doesn't matter" }, { value: 'yes', label: 'Has one' }, { value: 'no', label: 'Has none' }]} />
+        </label>
+        <label className="agt-tk-field">
+          <span>Handle mail together within <span className="muted">(minutes)</span></span>
+          <input type="number" min={0} max={MAX_WINDOW_MS / 60_000} step={1} value={Math.round(t.windowMs / 60_000)} onChange={(e) => set({ windowMs: Math.max(0, Math.min(MAX_WINDOW_MS, Number(e.target.value) * 60_000 || 0)) })} />
+        </label>
+        <label className="agt-tk-field">
+          <span>At most, runs an hour</span>
+          <input type="number" min={1} max={MAX_PER_HOUR} value={t.maxPerHour} onChange={(e) => set({ maxPerHour: Math.max(1, Math.min(MAX_PER_HOUR, Math.round(Number(e.target.value)) || 1)) })} />
+        </label>
+      </div>
+      <p className="agt-tk-help">{describeMailTrigger(t)}. More mail than that waits for the next run.</p>
+      <p className="agt-tk-warn" role="note">
+        Mail from outside starts this task and the agent reads it: a mail can try to talk it into something (send, change, delete). Keep changes and sends on Ask unless you trust everyone who can mail you.
+      </p>
+      <p className="muted agt-tk-help">
+        Never a trigger: drafts, mail in Sent, Drafts, Trash or Junk, and mail this task sends itself (its email reports, mail a run sends). {reads === 'block' ? 'Mail reads are blocked below, so a run only sees who wrote and the subject.' : 'A run reads the mail that started it without asking; any other mail it reads follows Mail below.'}
+      </p>
+    </div>
   )
 }
 
