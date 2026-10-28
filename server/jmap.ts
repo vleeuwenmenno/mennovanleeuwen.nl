@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { loadsRemote, readRemoteSettings, type RemoteSettings } from '../src/data/mailRemote.ts'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
+import { TASK_HEADER, type ArrivedMail } from '../src/data/agentTaskMail.ts'
 import { accounts, isAdmin, requireUser, type User } from './auth.ts'
 import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
@@ -884,11 +885,13 @@ async function discardDraftInner(acc: Linked, id: unknown) {
  * once the server has taken it, it moves to Sent and loses $draft (onSuccessUpdateEmail), and the
  * draft it came from goes. The answered message gets $answered ($forwarded for a forward).
  */
-async function sendInner(acc: Linked, d: DraftInput): Promise<{ id: string }> {
+/** `task`: the agent task the mail is from (its reports, a run's mail_send): it carries TASK_HEADER, so it never starts a task. */
+async function sendInner(acc: Linked, d: DraftInput, opts: { task?: string } = {}): Promise<{ id: string }> {
   const s = await session(acc)
   if (!s.submission) throw new HttpError(400, `${acc.label} does not allow sending with this token (it needs Submission access)`)
   const m = await meta(acc)
   const { email, identity } = draftEmail(m, d)
+  if (opts.task && /^[0-9a-f-]{36}$/.test(opts.task)) email[`header:${TASK_HEADER}:asText`] = opts.task
   if (!identity) throw new HttpError(400, 'This account has no identity to send from')
   if (!email.to && !email.cc && !email.bcc) throw new HttpError(400, 'Who is it to?')
   const drafts = m.role('drafts')!
@@ -1152,7 +1155,46 @@ async function checkChanges(l: Live) {
     metas.delete(acc.key)
     tellPages(acc.user.id, 'mail', { account: acc.id })
   }
-  if (created.length) await announce(acc, created.slice(-100))
+  if (created.length)
+    try {
+      await announce(acc, created.slice(-100))
+    } finally {
+      // Agent tasks started by new mail: their own errors never hold up notifications, nor theirs these.
+      await taskMail(acc, created.slice(-200)).catch((e) => console.error(`mail push (${acc.id}): tasks:`, (e as Error).message))
+    }
+}
+
+// New mail for agent tasks (server/agentTasks.ts registers the hook): the accounts some task
+// watches, and the new messages of those, fetched once per batch of changes, whatever the number
+// of tasks. Mail a task sent itself is marked by its header (TASK_HEADER).
+
+type NewMailHook = {
+  /** "<user id>:<account id>" of every account an active new-mail task watches */
+  watched: () => Set<string>
+  arrived: (user: User, accountId: number, mails: ArrivedMail[], boxes: { id: string; role: string | null; name: string }[]) => void
+}
+let newMailHook: NewMailHook | null = null
+export const setNewMailHook = (hook: NewMailHook) => void (newMailHook = hook)
+
+async function taskMailInner(acc: Linked, ids: string[]) {
+  if (!newMailHook || !ids.length || !newMailHook.watched().has(`${acc.user.id}:${acc.id}`)) return
+  const header = `header:${TASK_HEADER}:asText`
+  const r = await jmap(acc, [['Email/get', { ids, properties: ['id', 'mailboxIds', 'keywords', 'from', 'to', 'cc', 'subject', 'hasAttachment', 'receivedAt', header] }, 'g']])
+  const m = await meta(acc)
+  const mails: ArrivedMail[] = (r.get('g', 'Email/get').list as Json[]).map((e) => ({
+    id: String(e.id),
+    mailboxIds: Object.keys(e.mailboxIds ?? {}),
+    from: addresses(e.from),
+    to: addresses(e.to),
+    cc: addresses(e.cc),
+    subject: String(e.subject ?? ''),
+    hasAttachment: !!e.hasAttachment,
+    receivedAt: Date.parse(e.receivedAt) || 0,
+    draft: !!e.keywords?.$draft,
+    fromTask: typeof e[header] === 'string' && !!e[header].trim(),
+  }))
+  assertMail(acc)
+  newMailHook.arrived(acc.user, acc.id, mails, m.mailboxes.map((b) => ({ id: b.id, role: b.role, name: b.name })))
 }
 
 async function announceInner(acc: Linked, ids: string[]) {
@@ -1266,8 +1308,9 @@ async function stream(l: Live) {
   }
 }
 
-/** Whether a push line is worth keeping for this user: mail notifications on, or Mail used lately. */
-function useful(user: User): boolean {
+/** Whether a push line is worth keeping for this account: mail notifications on, Mail used lately, or an agent task starts on its new mail (`watched`, read once per tick). */
+function useful(user: User, accountId: number, watched: Set<string>): boolean {
+  if (watched.has(`${user.id}:${accountId}`)) return true
   if (Date.now() - (lastUse.get(user.id) ?? 0) < USE_WINDOW) return true
   return allows(normalizePrefs(readState(user).notify?.value), 'mail.new')
 }
@@ -1277,9 +1320,10 @@ export async function mailWatch() {
   const rows = table().prepare('SELECT id, user_id FROM jmap_accounts').all() as { id: number; user_id: number }[]
   const users = new Map(accounts().map((u) => [u.id, u]))
   const wanted = new Map<string, Linked>()
+  const watched = newMailHook?.watched() ?? new Set<string>()
   for (const r of rows) {
     const user = users.get(r.user_id)
-    if (user && useful(user)) { const acc = linked(user, r.id); wanted.set(acc.key, acc) }
+    if (user && useful(user, r.id, watched)) { const acc = linked(user, r.id); wanted.set(acc.key, acc) }
   }
   for (const id of [...live.keys()]) if (!wanted.has(id)) stopLive(id)
   for (const [key, acc] of wanted) {
@@ -1604,6 +1648,8 @@ const correspondents = mailOperation(correspondentsInner)
 const suggest = mailOperation(suggestInner)
 
 const announce = mailOperation(announceInner)
+
+const taskMail = mailOperation(taskMailInner)
 
 export const ownAddresses = mailOperation(ownAddressesInner)
 

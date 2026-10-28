@@ -284,7 +284,7 @@ const fail = (message: string): never => {
  * a mistake goes back to the model before the user is asked, and `run` does exactly what the card
  * says. Throws what the model should be told.
  */
-async function prepareMailCallInner(user: User, name: string, args: Record<string, unknown>, zone: string): Promise<Prepared & { summary: CallSummary }> {
+async function prepareMailCallInner(user: User, name: string, args: Record<string, unknown>, zone: string, opts: { task?: string } = {}): Promise<Prepared & { summary: CallSummary }> {
   if (!mailLinked(user)) throw new Error(MAIL_NOT_LINKED)
   const text = (k: string) => (typeof args[k] === 'string' ? (args[k] as string).trim() : '')
 
@@ -519,7 +519,8 @@ async function prepareMailCallInner(user: User, name: string, args: Record<strin
       summary: { title: sending ? `Send this ${kind}: “${clip(subject || '(no subject)', 80)}”` : `Save this ${kind} as a draft: “${clip(subject || '(no subject)', 80)}”`, rows, body },
       run: async () => {
         if (sending) {
-          const sent = await send(acc, draft)
+          // From a task run: marked as the task's own, so it never starts a task (src/data/agentTaskMail.ts).
+          const sent = await send(acc, draft, opts.task ? { task: opts.task } : {})
           return JSON.stringify({ sent: { account: acc.label, message_id: refOf(acc, sent.id), from: identity.email, to: addrs(to), ...(cc.length ? { cc: addrs(cc) } : {}), ...(bcc.length ? { bcc: addrs(bcc) } : {}), subject } })
         }
         const saved = await saveDraft(acc, draft)
@@ -591,7 +592,7 @@ async function prepareMailCallInner(user: User, name: string, args: Record<strin
   throw new Error(`There is no tool called ${name}`)
 }
 
-export const prepareMailCall: typeof prepareMailCallInner = (user, name, args, zone) => withPrivateOperation(async () => {
-  const prepared = await prepareMailCallInner(user, name, args, zone)
+export const prepareMailCall: typeof prepareMailCallInner = (user, name, args, zone, opts) => withPrivateOperation(async () => {
+  const prepared = await prepareMailCallInner(user, name, args, zone, opts)
   return { ...prepared, run: () => withPrivateOperation(() => prepared.run()) }
 })

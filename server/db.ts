@@ -509,6 +509,25 @@ export function database(): DatabaseSync {
     data TEXT
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS agent_task_jobs_due ON agent_task_jobs (due_at)')
+  // New-mail tasks: the mail that matched a task, kept per task once (task, account, message), so
+  // the same message delivered again, or seen again after a restart, never starts a second run.
+  // `run_id` is null while it waits for its run; rows go after a week. A run keeps its own copy of
+  // the mail that started it (agent_task_runs.trigger_mail); agent_tasks.mail_dropped counts mail
+  // dropped while waiting (too many, or too old), told to the next run.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_task_mail (
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL,
+    email_id TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    meta TEXT NOT NULL,
+    run_id TEXT,
+    PRIMARY KEY (task_id, account_id, email_id)
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_task_mail_waiting ON agent_task_mail (run_id, task_id, added_at)')
+  if (!cols('agent_task_runs').includes('trigger_mail')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN trigger_mail TEXT')
+  if (!cols('agent_tasks').includes('mail_dropped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_dropped INTEGER NOT NULL DEFAULT 0')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   const prepare = db.prepare.bind(db), exec = db.exec.bind(db)
