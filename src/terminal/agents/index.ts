@@ -56,6 +56,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        /threads this [words] searches this thread; without words it repeats the last search.
 
        /branch [message id] continues in a new thread; the original stays unchanged.
+       /tasks lists background tasks (agents that run on their own and report back); /tasks show,
+       runs, run, dry, pause or resume <task>, and /tasks log, approve, deny or cancel <run>.
        /help lists the commands: /resume, /threads, /branch, /images, /model, /tools, /skills, /context, /export, ….
 
 {c:bold}OPTIONS{/}

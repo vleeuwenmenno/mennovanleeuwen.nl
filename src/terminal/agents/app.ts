@@ -2,6 +2,7 @@ import { localPref } from '../../os/localPref'
 import { accountGuard, TAB_ACCOUNT } from '../../os/accountSpace'
 import { artMode, artBytes, decodeArt, ART_BYTES } from './imageArt'
 import { threadsCommand, threadSearchLines } from './threads'
+import { tasksCommand } from './tasks'
 import { mentionAt, mentionText } from '../../data/agentMentions'
 import type { ImageLoraHint } from '../../data/imageModels'
 import { generatedImage, getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
@@ -152,6 +153,7 @@ const SLASH: [string, string][] = [
   ['/compact', 'summarise the thread so far to free up context (add what to keep)'],
   ['/summary', 'what the last compaction kept: the summary the agent works from'],
   ['/memory', 'what the agent remembers (add, rm)'],
+  ['/tasks', 'background tasks: list, show, runs, run, dry, pause, resume; a run: log, approve, deny, cancel'],
   ['/status', 'account, model, folder, mode'],
   ['/export', 'save the thread as Markdown'],
   ['/copy', 'copy the last reply'],
@@ -2161,6 +2163,15 @@ export class Session {
         const last = [...this.messages].reverse().find((m) => m.role === 'compact')
         if (!last) return this.say('This thread has not been compacted. /compact does it.'), true
         this.out([...compactLines(last, w, true), []])
+        return true
+      }
+      case '/tasks':
+      case '/task': {
+        try {
+          this.out(await tasksCommand(arg, Math.max(20, this.ctx.size.cols - 1)))
+        } catch (e) {
+          this.say(`Tasks: ${(e as Error).message}`, 'red')
+        }
         return true
       }
       case '/memory':
