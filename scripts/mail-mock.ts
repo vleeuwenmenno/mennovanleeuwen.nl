@@ -435,7 +435,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
         continue
       }
       const headers = Object.fromEntries(Object.entries(c).filter(([k]) => /^header:[^:]+:asText$/.test(k)).map(([k, v]) => [k.split(':')[1], String(v)]))
-      const e = make({ from: c.from ?? [], to: c.to, cc: c.cc, subject: c.subject ?? '', text, mailbox: Object.keys(c.mailboxIds)[0], seen: !!c.keywords?.$seen, draft: !!c.keywords?.$draft, inReplyTo: c.inReplyTo?.[0], headers }, false)
+      const e = make({ from: c.from ?? [], to: c.to, cc: c.cc, subject: c.subject ?? '', text, mailbox: Object.keys(c.mailboxIds)[0], seen: !!c.keywords?.$seen, draft: !!c.keywords?.$draft, inReplyTo: c.inReplyTo?.[0], messageId: c.messageId?.[0], headers }, false)
       e.bcc = c.bcc ?? null
       e.references = c.references ?? e.references
       for (const a of files) {
