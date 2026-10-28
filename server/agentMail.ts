@@ -334,6 +334,7 @@ async function prepareMailCallInner(user: User, name: string, args: Record<strin
     }
     const place = text('mailbox') ? (where.get(accounts[0].id) ? pathOf(boxes.get(accounts[0].id)!, where.get(accounts[0].id)!) : text('mailbox')) : query ? 'Every mailbox but Trash and Junk' : 'Inbox'
     return {
+      scope: { mailAccounts: accounts.map((a) => ({ id: String(a.id), label: a.label })) },
       summary: {
         title: query ? `Search your mail for “${clip(query, 80)}”` : `Look at ${place}`,
         rows: [
@@ -387,6 +388,7 @@ async function prepareMailCallInner(user: User, name: string, args: Record<strin
     const last = messages[messages.length - 1]
     const boxes = (await mailMeta(acc)).mailboxes
     return {
+      scope: { mailAccounts: [{ id: String(acc.id), label: acc.label }] },
       summary: {
         title: `Read “${clip(clean(first.subject) || '(no subject)', 80)}”`,
         rows: [
@@ -513,6 +515,7 @@ async function prepareMailCallInner(user: User, name: string, args: Record<strin
       ...(attachments.length ? [['Attachments', attachments.map((a) => clean(a.name)).join(', ')] as [string, string]] : []),
     ]
     return {
+      scope: { mailAccounts: [{ id: String(acc.id), label: acc.label }], recipients: [...to, ...cc, ...bcc].map((a) => a.email.toLowerCase()), own: [...own] },
       summary: { title: sending ? `Send this ${kind}: “${clip(subject || '(no subject)', 80)}”` : `Save this ${kind} as a draft: “${clip(subject || '(no subject)', 80)}”`, rows, body },
       run: async () => {
         if (sending) {
@@ -575,6 +578,7 @@ async function prepareMailCallInner(user: User, name: string, args: Record<strin
       ...plans.filter((p) => p.to).map((p) => ['Move to', `${p.toPath}${plans.length > 1 ? ` in ${p.acc.label}` : ''}`] as [string, string]),
     ]
     return {
+      scope: { mailAccounts: plans.map((p) => ({ id: String(p.acc.id), label: p.acc.label })) },
       summary: { title: `${action.verb}: ${what}`, rows },
       run: async () => {
         let changed = 0

@@ -17,6 +17,7 @@ import { fxRates } from './fx.ts'
 import { privateRequestActive, runPrivateRequest } from './privateRequest.ts'
 import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafile.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
+import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
@@ -464,6 +465,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (!isShareToken(shareToken)) throw new HttpError(404, 'No such shared link')
       return deleteShare(requireUser(req), shareToken), json(res, 200, { ok: true }), true
     }
+    // Background tasks (server/agentTasks.ts): tasks, their runs, answers to what a run asks, the live view.
+    if ((path.startsWith('/api/agents/tasks') || path.startsWith('/api/agents/task-runs/')) && (await handleAgentTasksApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
     if (path === '/api/agents/mention-tools' && read) { requireUser(req); return json(res, 200, mentionTools()), true }
     if (path === '/api/agents/skill-config' && read) return json(res, 200, skillConfig(requireUser(req))), true

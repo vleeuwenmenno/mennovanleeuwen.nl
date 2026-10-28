@@ -47,7 +47,8 @@ function describe(r: Row): AdminUser {
     admin: isAdmin(r.github_id),
     services,
     storageBytes: usedBytes(r.id),
-    threads: count('SELECT COUNT(*) AS n FROM agent_threads WHERE user_id = ?'),
+    // Chat threads: not a task run's hidden transcript (quick = 3).
+    threads: count('SELECT COUNT(*) AS n FROM agent_threads WHERE user_id = ? AND quick != 3'),
   }
 }
 

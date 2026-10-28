@@ -27,6 +27,16 @@ export const NOTIFY_SOURCES: NotifySource[] = [
       { id: 'ask', label: 'Needs you', hint: 'It waits for you to allow something or answer its questions' },
     ],
   },
+  {
+    app: 'agenttasks',
+    label: 'Agent tasks',
+    icon: 'agents',
+    account: true,
+    kinds: [
+      { id: 'report', label: 'Reports', hint: 'A background task reports back, fails, or expires' },
+      { id: 'ask', label: 'Needs you', hint: 'A background task waits for you to allow a call (up to 12 hours)' },
+    ],
+  },
   { app: 'calendar', label: 'Calendar', icon: 'calendar', account: true, kinds: [{ id: 'reminder', label: 'Reminders', hint: 'An event is about to start' }] },
   { app: 'mail', label: 'Mail', icon: 'mail', account: true, kinds: [{ id: 'new', label: 'New mail', hint: 'Unread mail arrives in an Inbox' }] },
   { app: 'tasks', label: 'Tasks', icon: 'tasks', account: true, kinds: [{ id: 'due', label: 'Reminders', hint: "A task is due, or its own reminder comes (the default is set in the Tasks app's settings)" }] },

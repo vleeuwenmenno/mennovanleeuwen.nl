@@ -436,6 +436,79 @@ export function database(): DatabaseSync {
   if (!cols('agent_image_masks').includes('origin')) db.exec("ALTER TABLE agent_image_masks ADD COLUMN origin TEXT NOT NULL DEFAULT 'editor'")
   if (!cols('agent_image_masks').includes('details')) db.exec('ALTER TABLE agent_image_masks ADD COLUMN details TEXT')
   if (!cols('agent_threads').includes('image_config')) db.exec('ALTER TABLE agent_threads ADD COLUMN image_config TEXT')
+  // Agent tasks (server/agentTasks.ts): one-off and scheduled background runs of an agent, each
+  // run in a hidden thread (agent_threads.quick = 3) whose messages are its transcript. JSON
+  // columns hold the schedule, the permission policy (versioned: each run keeps the version and a
+  // copy of what it ran under), where reports go, the per-run caps and the options. A run waiting
+  // for the user keeps the calls it asks about in `pending` until `deadline`; agent_task_jobs holds
+  // what is due later (an email when a notification was not seen in time, a report for a busy thread).
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_tasks (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    condition TEXT NOT NULL DEFAULT '',
+    done_when TEXT NOT NULL DEFAULT '',
+    schedule TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    state_note TEXT NOT NULL DEFAULT '',
+    policy TEXT NOT NULL,
+    policy_version INTEGER NOT NULL DEFAULT 1,
+    report TEXT NOT NULL,
+    caps TEXT NOT NULL,
+    options TEXT NOT NULL,
+    model TEXT,
+    status TEXT NOT NULL,
+    expires_at INTEGER,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    last_report_at INTEGER,
+    failures INTEGER NOT NULL DEFAULT 0,
+    created_from_thread TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_tasks_user ON agent_tasks (user_id, created_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS agent_tasks_due ON agent_tasks (status, next_run_at)')
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_task_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    dry INTEGER NOT NULL DEFAULT 0,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    quiet INTEGER NOT NULL DEFAULT 0,
+    reported INTEGER NOT NULL DEFAULT 0,
+    report_reason TEXT,
+    summary TEXT,
+    verdict TEXT,
+    policy_version INTEGER NOT NULL,
+    policy TEXT NOT NULL,
+    queued_at INTEGER NOT NULL,
+    started_at INTEGER,
+    ended_at INTEGER,
+    active_ms INTEGER NOT NULL DEFAULT 0,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    tool_calls INTEGER NOT NULL DEFAULT 0,
+    thread_id TEXT,
+    error TEXT,
+    pending TEXT,
+    deadline INTEGER,
+    delivered TEXT
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_task_runs_task ON agent_task_runs (task_id, queued_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS agent_task_runs_status ON agent_task_runs (status)')
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_task_jobs (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES agent_task_runs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    due_at INTEGER NOT NULL,
+    data TEXT
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_task_jobs_due ON agent_task_jobs (due_at)')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   const prepare = db.prepare.bind(db), exec = db.exec.bind(db)
