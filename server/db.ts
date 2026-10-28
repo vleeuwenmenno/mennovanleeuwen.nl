@@ -17,6 +17,8 @@ import { DatabaseSync } from 'node:sqlite'
 // mode SQLite gives them. Windows has no POSIX modes, so nothing is changed there.
 
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
+/** The private data folder (0700), for modules that keep files of their own there. */
+export const dataDir = () => DATA_DIR
 const POSIX = process.platform !== 'win32'
 
 let db: DatabaseSync | null = null
@@ -509,6 +511,66 @@ export function database(): DatabaseSync {
     data TEXT
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS agent_task_jobs_due ON agent_task_jobs (due_at)')
+  // The Video Studio (server/agentVideo.ts): projects (the timeline, revisioned), keyframe pictures
+  // (small PNGs, kept here), render jobs (run by the server, not the browser; a restart marks the
+  // ones it was running interrupted) and the videos they made. The video files themselves live on
+  // disk in DATA_DIR/videos/<user>/, counted in the account's quota through agent_videos.bytes.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_video_projects (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 1,
+    title TEXT NOT NULL,
+    data TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'studio',
+    thread_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_video_projects_user ON agent_video_projects (user_id, updated_at)')
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_video_sources (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    body BLOB NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`)
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_video_jobs (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    segment INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    render TEXT NOT NULL,
+    backend_scope TEXT NOT NULL,
+    prompt_id TEXT,
+    progress TEXT,
+    error TEXT,
+    video_id TEXT,
+    origin TEXT NOT NULL DEFAULT 'studio',
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    ended_at INTEGER
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_video_jobs_user ON agent_video_jobs (user_id, created_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS agent_video_jobs_status ON agent_video_jobs (status)')
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_videos (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT,
+    job_id TEXT,
+    name TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    frames INTEGER NOT NULL,
+    fps INTEGER NOT NULL,
+    settings TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_videos_user ON agent_videos (user_id, created_at)')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   const prepare = db.prepare.bind(db), exec = db.exec.bind(db)

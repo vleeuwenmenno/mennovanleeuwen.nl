@@ -107,7 +107,7 @@ const RUN_KEYS = new Set(['input', 'batch'])
  * Closing the request cancels: the queued prompt is deleted and nothing more is saved.
  */
 export async function studioRun(req: IncomingMessage, res: ServerResponse, user: User, body: unknown) {
-  if (!imageSettings(user).url) throw new HttpError(409, 'Connect ComfyUI in Settings → Agents → Images first')
+  if (!imageSettings(user).url) throw new HttpError(409, 'Connect ComfyUI in Settings → Image & Video Studio first')
   const request = body as { input?: unknown; batch?: unknown } | null
   if (!request || typeof request !== 'object' || Array.isArray(request) || Object.keys(request).some((k) => !RUN_KEYS.has(k))) throw new HttpError(400, 'Send { input, batch }')
   const batch = request.batch ?? 1

@@ -84,6 +84,8 @@ export const TASK_TOOLS: Record<string, TaskTool> = {
   gpt_image: { group: 'gpt_images', class: 'cost', label: 'Draw a picture with gpt-image (counts against your daily limit)', default: 'block' },
   list_icons: { group: 'gpt_images', class: 'read', label: 'List your icons', default: 'allow' },
   generate_image: { group: 'images', class: 'cost', label: 'Generate a picture', default: 'block', unavailable: NO_IMAGES },
+  plan_video: { group: 'images', class: 'lasting', label: 'Plan a video', default: 'block', unavailable: NO_IMAGES },
+  render_video: { group: 'images', class: 'cost', label: 'Render a video (minutes of your GPU)', default: 'block', unavailable: NO_IMAGES },
   make_image_mask: { group: 'images', class: 'lasting', label: 'Select part of a picture', default: 'block', unavailable: NO_IMAGES },
   list_image_masks: { group: 'images', class: 'read', label: 'List masks', default: 'block', unavailable: NO_IMAGES },
   list_image_attachments: { group: 'images', class: 'read', label: 'List pictures', default: 'block', unavailable: NO_IMAGES },

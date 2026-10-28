@@ -3,7 +3,8 @@ import { appSetting, database } from './db.ts'
 import { HttpError } from './http.ts'
 
 // How much of the database each account takes up, now that anyone can sign up: synced desktop
-// state, Agents threads (with their attachments), generated images and memories. The most one
+// state, Agents threads (with their attachments), generated images and memories, and the Video
+// Studio's videos (files on disk, counted by their size). The most one
 // account may hold is the admin's setting in Settings → Users (server/admin.ts), else
 // USER_STORAGE_MB (default 2048, 2 GB); reads and deletes keep working when it is full.
 
@@ -33,7 +34,11 @@ export function usedBytes(userId: number): number {
     one('SELECT SUM(LENGTH(i.body) + IFNULL(LENGTH(i.metadata), 0)) AS n FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ?') +
     one('SELECT SUM(LENGTH(body) + LENGTH(prompt) + LENGTH(slug)) AS n FROM agent_icons WHERE user_id = ?') +
     one('SELECT SUM(LENGTH(body) + LENGTH(source_url) + IFNULL(LENGTH(page_url), 0) + LENGTH(title)) AS n FROM agent_found_images WHERE user_id = ?') +
-    one('SELECT SUM(LENGTH(text) + LENGTH(category) + IFNULL(LENGTH(image_learning), 0) + IFNULL(LENGTH(image_profile), 0)) AS n FROM agent_memories WHERE user_id = ?')
+    one('SELECT SUM(LENGTH(text) + LENGTH(category) + IFNULL(LENGTH(image_learning), 0) + IFNULL(LENGTH(image_profile), 0)) AS n FROM agent_memories WHERE user_id = ?') +
+    // The Video Studio: its projects and keyframes in the database, and its videos as files on disk.
+    one('SELECT SUM(LENGTH(data) + LENGTH(title)) AS n FROM agent_video_projects WHERE user_id = ?') +
+    one('SELECT SUM(LENGTH(body)) AS n FROM agent_video_sources WHERE user_id = ?') +
+    one('SELECT SUM(bytes + LENGTH(settings)) AS n FROM agent_videos WHERE user_id = ?')
   )
 }
 

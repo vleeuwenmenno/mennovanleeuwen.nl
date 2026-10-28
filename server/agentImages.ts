@@ -172,8 +172,8 @@ export async function saveThreadImageSettings(user: User, thread: string, value:
   return discovered ? threadImageSettings(user, thread, discovered) : discoverThreadImageSettings(user, thread)
 }
 
-async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown, optional = false) {
-  if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Agents → Images first')
+export async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown, optional = false) {
+  if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Image & Video Studio first')
   // Egress checks every request, pinning DNS for non-admins; LAN endpoints are admin-only.
   const res = await guardedFetch(user, `${s.url}${path}`, {
     method: body === undefined ? 'GET' : 'POST', redirect: 'manual',
@@ -192,7 +192,7 @@ async function request(user: User, s: ImageSettings, path: string, signal: Abort
   }
   return res
 }
-async function readJSON(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown): Promise<Record<string, any>> {
+export async function readJSON(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown): Promise<Record<string, any>> {
   const bytes = await readCapped(await request(user, s, path, signal, body), 8 * 1024 * 1024)
   try { return JSON.parse(bytes.toString()) } catch { throw new HttpError(502, 'ComfyUI returned invalid JSON') }
 }
@@ -619,7 +619,7 @@ export async function generateImage(user: User, thread: string, input: ImageInpu
   return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal, onProgress)
 }
 /** ComfyUI has no standard input-delete API. Unique input names are retained for queued/running jobs. */
-async function uploadSource(user: User, settings: ImageSettings, source: ImageSource, name: string, signal: AbortSignal) {
+export async function uploadSource(user: User, settings: ImageSettings, source: Pick<ImageSource, 'bytes' | 'mime'>, name: string, signal: AbortSignal) {
   const form = new FormData()
   form.set('image', new Blob([new Uint8Array(source.bytes)], { type: source.mime }), name)
   form.set('type', 'input'); form.set('overwrite', 'false')
@@ -634,16 +634,29 @@ async function uploadSource(user: User, settings: ImageSettings, source: ImageSo
   if (!uploaded || typeof uploaded !== 'object' || uploaded.name !== name || uploaded.subfolder !== '' || uploaded.type !== 'input') throw new HttpError(502, 'ComfyUI did not confirm the scoped source upload')
 }
 
-const active = new Set<number>()
+/**
+ * One ComfyUI job at a time per account, pictures and videos alike (server/agentVideo.ts takes
+ * the same slot): what holds it, or nothing.
+ */
+const active = new Map<number, 'image' | 'video'>()
+export const comfyJobOf = (userId: number) => active.get(userId) ?? null
+/** Takes the account's slot for a job; false when another job holds it. */
+export function claimComfyJob(userId: number, kind: 'image' | 'video'): boolean {
+  if (active.has(userId)) return false
+  active.set(userId, kind)
+  return true
+}
+export const releaseComfyJob = (userId: number) => void active.delete(userId)
+const busyMessage = (userId: number, fallback: string) => (active.get(userId) === 'video' ? 'A video is already running for this account; images wait until it is done' : fallback)
 /** `onProgress` hears where this job is (throttled to 4 a second); only the caller's own job, never another's. */
 async function executeImagePlan(user: User, thread: string, plan: ImagePlan, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
   ownImageThread(user, thread)
-  if (active.has(user.id)) throw new HttpError(409, 'An image is already generating for this account')
+  if (active.has(user.id)) throw new HttpError(409, busyMessage(user.id, 'An image is already generating for this account'))
   const current = imageSettings(user), { settings: s, workflow, parameters } = plan
   if (current.url !== s.url || current.token !== s.token) throw new HttpError(409, 'Image backend changed after planning; request a new generation approval')
   checkRoom(user, 1024 * 1024)
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
-  active.add(user.id)
+  active.set(user.id, 'image')
   let promptId: string | null = null
   // Live progress (server/comfyProgress.ts) for the caller only, at most 4 updates a second. The
   // socket is opened before the prompt is queued: ComfyUI reports a prompt to the client that queued it.
@@ -821,7 +834,7 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
 
 /** Failure cleanup is limited to the prompt already accepted at the captured backend. It must
  * survive Stop/session revocation; it neither rereads replacement credentials nor starts work. */
-async function cancelQueuedPrompt(user: User, settings: ImageSettings, prompt: string) {
+export async function cancelQueuedPrompt(user: User, settings: ImageSettings, prompt: string) {
   await withoutPrivateRequest(() => request(user, settings, '/queue', AbortSignal.timeout(3000), { delete: [prompt] }).then((r) => r.body?.cancel()).catch(() => {}))
 }
 
@@ -882,7 +895,7 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   const options = autoMaskOptions(input)
   const source = imageSource(user, input.source_image_id)
   const s = imageSettings(user)
-  if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Agents → Images first')
+  if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Image & Video Studio first')
   // The first run may download the segmentation weights, so allow as long as a generation.
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
   const schemas = await nodeSchemas(user, s, AUTO_MASK_NODES, AbortSignal.any([limit, AbortSignal.timeout(30_000)]))
@@ -892,9 +905,9 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   // Built (and validated) for every available segmenter before anything is uploaded.
   const { plans: graphs, problems } = autoMaskPlans(options, uploadName, schemas as SegmentNodeInfo)
   if (!graphs.length) throw new HttpError(409, `Automatic masks are unavailable: ${problems.join('; ')}. Ask the user to paint the area with Edit selected area instead.`)
-  if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
+  if (active.has(user.id)) throw new HttpError(409, busyMessage(user.id, 'An image job is already running for this account'))
   checkRoom(user, 256 * 1024)
-  active.add(user.id)
+  active.set(user.id, 'image')
   let result: { outputs: Map<string, Buffer>; plan: (typeof graphs)[number] } | undefined
   const failures: string[] = []
   try {
