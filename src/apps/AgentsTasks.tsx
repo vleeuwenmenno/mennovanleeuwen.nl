@@ -355,6 +355,8 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
   const run = data?.run
   const thread = run?.threadId ?? null
   const going = run?.status === 'running'
+  // Read again whenever the run moves on (an answer, the end), not only while it is followed.
+  const stage = `${run?.status}:${run?.toolCalls}:${run?.endedAt}`
   // The transcript: read once, and followed live while the run goes.
   useEffect(() => {
     if (!thread) return
@@ -373,7 +375,7 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
         .finally(() => !ctl.signal.aborted && (setLive(null), void load()))
     else getThread(thread).then((r) => setMessages(r.messages), () => {})
     return () => ctl.abort()
-  }, [thread, going, load])
+  }, [thread, going, load, stage])
   if (!data || !run)
     return (
       <>

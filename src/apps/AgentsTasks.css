@@ -393,10 +393,18 @@
   align-items: flex-start;
 }
 .agt-tk-save {
-  position: sticky;
-  bottom: 0;
   padding: 8px 0;
-  background: var(--bg);
+}
+/* A task's or run's toolbar has several buttons: they wrap under the title rather than run off. */
+.agt-toolbar:has(.agt-tk-actions) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.agt-toolbar:has(.agt-tk-actions) .agt-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The editor in a dialog, for an approval card. */
