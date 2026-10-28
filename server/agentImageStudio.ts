@@ -9,7 +9,7 @@ import { installedEmbeddings } from './agentModelIntel.ts'
 import { sourceRaster } from './agentImageSources.ts'
 import { applyPresetRules } from '../src/data/modelFamilies.ts'
 
-// The Image Studio (src/apps/AgentsStudio.tsx): the owner drives a ComfyUI generation by hand, with
+// The Image Studio (src/apps/ImageStudio.tsx): the owner drives a ComfyUI generation by hand, with
 // no agent and no approval card, the way Generate another works in a thread. Everything goes
 // through the same planner, graph builder, catalog checks, quota and one-job lock as generate_image
 // (server/agentImages.ts); this file only adds the account's Studio thread, its history and uploads.

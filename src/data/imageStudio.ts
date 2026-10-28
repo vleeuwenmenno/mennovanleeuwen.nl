@@ -1,4 +1,4 @@
-// The Image Studio's form (src/apps/AgentsStudio.tsx), as plain data: its defaults, how a saved copy
+// The Image Studio's form (src/apps/ImageStudio.tsx), as plain data: its defaults, how a saved copy
 // is read back, the recipe a model brings, what keeps Generate disabled, and the request a press
 // sends to /api/agents/images/studio/run (server/agentImageStudio.ts). No React and no browser, so
 // scripts/agents-image-studio.ts checks the same functions the Studio runs.
@@ -171,7 +171,7 @@ export function studioRunInput(form: StudioForm): RunInput {
  * needs, the size. Empty means it can run.
  */
 export function studioProblems(form: StudioForm, ctx: { configured: boolean; catalog: StudioCatalog | null; catalogError?: string; loading?: boolean }): string[] {
-  if (!ctx.configured) return ['Connect ComfyUI in Settings → Agents → Images first.']
+  if (!ctx.configured) return ['Connect ComfyUI in Settings → Image & Video Studio first.']
   if (ctx.catalogError) return [`The ComfyUI catalog could not be read: ${ctx.catalogError}`]
   if (!ctx.catalog) return [ctx.loading === false ? 'Discover the installed models first.' : 'Reading the installed models…']
   const catalog = ctx.catalog, nodes = catalog.nodes

@@ -255,6 +255,18 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  imagestudio: {
+    bg: 'linear-gradient(160deg,#bb9af7,#e0537a 60%,#ff9e64)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="9" y="11" width="30" height="24" rx="3" />
+        <circle cx="18" cy="19" r="3" />
+        <path d="M9 31l9-8 6 6 5-4 10 9" />
+        <path d="M35 6l1.2 3.3L39.5 10.5l-3.3 1.2L35 15l-1.2-3.3-3.3-1.2 3.3-1.2z" />
+      </>
+    ),
+  },
   mail: {
     bg: 'linear-gradient(160deg,#7dcfff,#2f6fd6)',
     fg: '#fff',
@@ -405,6 +417,7 @@ const HUES: Record<AppId, string> = {
   contacts: 'var(--orange)',
   tasks: 'var(--orange)',
   agents: 'var(--magenta)',
+  imagestudio: 'var(--magenta)',
   photos: 'var(--orange)',
   weather: 'var(--cyan)',
   changelog: 'var(--green)',

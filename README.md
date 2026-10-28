@@ -1929,7 +1929,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail: New thread, Search (which unfolds the sidebar with the cursor in the search), the threads as chips with their first letter, a tooltip and a mark for running, new and stopped (running and pinned first; or grouped per project), then Archived, Memory, Image Studio and Settings. It is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail: New thread, Search (which unfolds the sidebar with the cursor in the search), the threads as chips with their first letter, a tooltip and a mark for running, new and stopped (running and pinned first; or grouped per project), then Archived, Memory, Image Studio (which opens its own app) and Settings. It is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Sidebar style.** The thread list comes in four looks, picked in Settings → Agents → General →
 Sidebar or from *Sidebar style* in the sidebar's right-click menu (a synced setting, `sidebarStyle`,
@@ -2239,70 +2239,17 @@ point at stand-ins for testing.
 pnpm check:agents-openai-images   # API key, pictures kept with results, streamed previews (served while drawing, joined halfway, Stop aborts), infographic defaults, references to the edits route and Responses input_image, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback, a route that will not stream), against fakes
 ```
 
-**Image generation.** In Settings → Apps → Agents → Images (also the app's settings),
-enter your ComfyUI URL and optional bearer token, then **Save & discover models**. Select a preset
+**Image generation.** In Settings → Apps → Image & Video Studio (also Settings → Apps → Agents →
+Images, and the Agents app's own settings), enter your ComfyUI URL and optional bearer token, then **Save & discover models**. Select a preset
 and installed model, and save again. Connections belong to the signed-in account; secrets are
 stored encrypted and are never returned to the browser or model. Internal/LAN ComfyUI addresses
 are allowed only for admins, using the same DNS-pinned network guard as other integrations for
 non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
 
-**Image Studio.** Generate by hand, without an agent: **Image Studio** at the top of the Agents
-sidebar (also the rail icon, the sidebar's right-click menu, and **Open Image Studio** in
-Settings → Agents → Images). It works without an Ollama key, as it needs only ComfyUI. It is laid
-out like Diffu's Generate page. In a wide window it has three columns:
-- **Left**: the model. A quick pick lists every installed checkpoint and diffusion model by family.
-  Under it are the workflow, the model with its text encoder and VAE (Auto or Manual, as in
-  Settings), the Raw/Turbo variant for Krea2 and Z-Image, and a custom VAE for checkpoints. A
-  family card follows, with the rules the workflow follows, where the settings came from, and
-  warnings (unsupported, v-prediction). Then come LoRAs (preview, trigger words that a click adds
-  to the prompt, weight 0–2 by slider or exact number) and embeddings (+/− for the prompt or the
-  negative prompt). After those: the prompt with a token estimate (characters for the
-  long-context encoders), the negative prompt, a source picture, and the size. The source is one
-  of your generated pictures or an upload from this device, converted to PNG in the browser; it
-  sets the size and a 0.6 strength. The size has 1:1 to 21:9 buckets, width and height with a
-  shape lock and swap, and a batch of 1–8.
-- **Middle**: the picture as it is made, using the same block grid as a thread. Under it are its
-  actions: **Use these settings**, **Send to chat…** (into a new or recent thread's message box),
-  **Refine…**, **Edit area…** (inpaint or remove), **Upscale…**, **Download** and **Delete**.
-  Below them is the Studio's history.
-- **Right**: **Generate**, which turns into **Queue** while a picture runs, and **Cancel**. With the
-  reason it cannot run yet, if any (with **Copy all**). Then the queue, the seed (−1 random, Roll,
-  Last, Lock), steps, CFG, sampler and scheduler from ComfyUI's live list, denoise for a source,
-  clip skip, and a hires pass with an optional upscale model.
+**Image Studio.** Generating by hand, without an agent, is an app of its own: see
+[Image Studio](#image-studio). **Image Studio** in the Agents sidebar (the rail icon, the
+sidebar's right-click menu) opens it.
 
-In a window under 1000 px, or on a phone, the middle column comes first with the prompt above
-it. **Parameters** and **Advanced** open the two side columns as drawers, and Generate sits in a
-bar at the bottom, clear of the home indicator.
-
-The family rules are shared with the server (`presetRules`/`applyPresetRules` in
-`src/data/modelFamilies.ts`):
-- Only diffusion models get a separate encoder.
-- Turbo workflows hide the negative prompt and fix CFG at 1.
-- Clip skip and embeddings are for SD 1.5/SDXL checkpoints only.
-- Diffusion models (so Krea2 always) take model-only LoRAs.
-
-A new model on an untouched form takes its recipe straight away: model_details' Civitai example
-consensus when there is one, else the family's defaults. If you changed the sampling by hand
-since then, the Studio asks under the model heading: **Apply recommended settings** or **Keep
-current**. The form follows the account (synced, so it also works without browser storage). The
-history is the server's: Studio pictures live in a hidden per-account thread that no thread list,
-search or Spotlight shows.
-
-Runs go to `POST /api/agents/images/studio/run` (NDJSON: start, progress, image, done or error).
-It plans with the same function as generate_image: the same graph builder, catalog and asset
-checks, quota and one-job lock. It needs no approval card, like Generate another. A batch runs
-one picture after another, with a fixed seed counting up by one. Closing the request cancels
-only the Studio's own queued prompt. The other routes are:
-- `GET /api/agents/images/studio`: the thread and whether ComfyUI is connected.
-- `GET /api/agents/images/studio/images?scope=studio|all&before=`: the history, or every picture
-  of the account for picking a source.
-- `GET /api/agents/images/studio/embeddings`.
-- `POST /api/agents/images/studio/upload`: PNG, up to 12 MiB.
-- `DELETE /api/agents/images/studio/images/<id>`: Studio pictures only.
-
-```sh
-pnpm check:agents-image-studio   # Family rules, the form's request and validation, and the endpoint against a stand-in ComfyUI: owner only, graphs per family, batch, uploads, history
-```
 
 **Edit an existing image (image-to-image).** In a generated image's **Options → Edit image…**,
 Agents adds a named source chip and starts an edit prompt in the message box; describe the change
@@ -3343,6 +3290,72 @@ and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 Clicking an entry opens it in the Git app; when the app can't load it (no access, a host it doesn't
 know, no answer within a few seconds) it opens on the web instead. Ctrl-, Shift- and middle-clicks
 still open the web page in a new tab.
+
+## Image Studio
+
+**Image Studio** is its own app (its own window, in the dock's app list, the Launchpad and
+Spotlight; `open imagestudio` in the terminal). It also opens from **Image Studio** in the Agents sidebar
+(the rail icon, the sidebar's right-click menu) and **Open Image Studio** in its settings. Old links
+that asked Agents for the Studio (`/?open=agents&tab=studio`, a restored Agents window showing it)
+open the app instead. It works without an Ollama key, as it needs only ComfyUI; with a chat model,
+**Send to chat…** offers the account's threads and opens the picked one in Agents. The gear in its
+header (and the window menu) opens Settings → Apps → Image & Video Studio: the ComfyUI connection,
+the same one Agents generates with.
+
+It is laid out like Diffu's Generate page. In a wide window it has three columns:
+- **Left**: the model. A quick pick lists every installed checkpoint and diffusion model by family.
+  Under it are the workflow, the model with its text encoder and VAE (Auto or Manual, as in
+  Settings), the Raw/Turbo variant for Krea2 and Z-Image, and a custom VAE for checkpoints. A
+  family card follows, with the rules the workflow follows, where the settings came from, and
+  warnings (unsupported, v-prediction). Then come LoRAs (preview, trigger words that a click adds
+  to the prompt, weight 0–2 by slider or exact number) and embeddings (+/− for the prompt or the
+  negative prompt). After those: the prompt with a token estimate (characters for the
+  long-context encoders), the negative prompt, a source picture, and the size. The source is one
+  of your generated pictures or an upload from this device, converted to PNG in the browser; it
+  sets the size and a 0.6 strength. The size has 1:1 to 21:9 buckets, width and height with a
+  shape lock and swap, and a batch of 1–8.
+- **Middle**: the picture as it is made, using the same block grid as a thread. Under it are its
+  actions: **Use these settings**, **Send to chat…** (into a new or recent thread's message box),
+  **Refine…**, **Edit area…** (inpaint or remove), **Upscale…**, **Download** and **Delete**.
+  Below them is the Studio's history.
+- **Right**: **Generate**, which turns into **Queue** while a picture runs, and **Cancel**. With the
+  reason it cannot run yet, if any (with **Copy all**). Then the queue, the seed (−1 random, Roll,
+  Last, Lock), steps, CFG, sampler and scheduler from ComfyUI's live list, denoise for a source,
+  clip skip, and a hires pass with an optional upscale model.
+
+In a window under 1000 px, or on a phone, the middle column comes first with the prompt above
+it. **Parameters** and **Advanced** open the two side columns as drawers, and Generate sits in a
+bar at the bottom, clear of the home indicator.
+
+The family rules are shared with the server (`presetRules`/`applyPresetRules` in
+`src/data/modelFamilies.ts`):
+- Only diffusion models get a separate encoder.
+- Turbo workflows hide the negative prompt and fix CFG at 1.
+- Clip skip and embeddings are for SD 1.5/SDXL checkpoints only.
+- Diffusion models (so Krea2 always) take model-only LoRAs.
+
+A new model on an untouched form takes its recipe straight away: model_details' Civitai example
+consensus when there is one, else the family's defaults. If you changed the sampling by hand
+since then, the Studio asks under the model heading: **Apply recommended settings** or **Keep
+current**. The form follows the account (synced, so it also works without browser storage). The
+history is the server's: Studio pictures live in a hidden per-account thread that no thread list,
+search or Spotlight shows.
+
+Runs go to `POST /api/agents/images/studio/run` (NDJSON: start, progress, image, done or error).
+It plans with the same function as generate_image: the same graph builder, catalog and asset
+checks, quota and one-job lock. It needs no approval card, like Generate another. A batch runs
+one picture after another, with a fixed seed counting up by one. Closing the request cancels
+only the Studio's own queued prompt. The other routes are:
+- `GET /api/agents/images/studio`: the thread and whether ComfyUI is connected.
+- `GET /api/agents/images/studio/images?scope=studio|all&before=`: the history, or every picture
+  of the account for picking a source.
+- `GET /api/agents/images/studio/embeddings`.
+- `POST /api/agents/images/studio/upload`: PNG, up to 12 MiB.
+- `DELETE /api/agents/images/studio/images/<id>`: Studio pictures only.
+
+```sh
+pnpm check:agents-image-studio   # Family rules, the form's request and validation, and the endpoint against a stand-in ComfyUI: owner only, graphs per family, batch, uploads, history
+```
 
 ## Photos
 
