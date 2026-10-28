@@ -264,6 +264,19 @@ function taskSettings(user: User): TaskSettings {
 }
 
 /**
+ * Where a new task's reports go: Settings' defaults, where "a thread" means the thread the task was
+ * made in (none when it was made in the Tasks tab).
+ */
+function defaultReport(user: User, from: string | null): ReportTargets {
+  const d = taskSettings(user).report
+  const r = reportOf({ ...DEFAULT_REPORT, ...d })
+  const pref = d.thread ?? 'fixed'
+  if (pref === 'fixed' && from) (r.thread = 'fixed'), (r.threadId = from)
+  else if (pref === 'fixed') (r.thread = 'none'), (r.threadId = null)
+  return r
+}
+
+/**
  * A task as sent (from the editor, an approval card, or the agent's create_task), checked: a 400
  * says what is wrong. `base`: the task as it is, for a change that names only some fields.
  */
@@ -283,8 +296,7 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
   const timezone = has('timezone') ? text(v.timezone, 80) : (base?.timezone ?? 'UTC')
   if (!validZone(timezone)) throw new HttpError(400, `Unknown time zone ${timezone}`)
   if (shortestGap(schedule, timezone, clock()) < MIN_INTERVAL_MS) throw new HttpError(400, 'A task runs at most every 15 minutes')
-  const defaults = taskSettings(user).report
-  const report = reportOf(has('report') ? v.report : (base?.report ?? { ...DEFAULT_REPORT, ...defaults, ...(from ? { thread: defaults.thread === 'new' ? 'new' : 'fixed', threadId: from } : {}) }))
+  const report = has('report') ? reportOf(v.report) : (base?.report ?? defaultReport(user, from))
   if (report.thread === 'fixed' && (!report.threadId || !ownChatThread(user, report.threadId))) throw new HttpError(400, 'Pick the thread reports go to')
   const mail = listMail(user)
   if (report.email !== 'off') {
@@ -901,7 +913,7 @@ function localMoment(raw: string, zone: string): number {
 }
 
 /** What the agent's arguments say, as a task spec (over `base` for a change). */
-function specFromArgs(user: User, args: Record<string, unknown>, zone: string, thread: string, base?: TaskSpec): Record<string, unknown> {
+function specFromArgs(user: User, args: Record<string, unknown>, zone: string, thread: string | null, base?: TaskSpec): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (typeof args.title === 'string') out.title = args.title
   if (typeof args.instruction === 'string') out.instruction = args.instruction
@@ -929,8 +941,9 @@ function specFromArgs(user: User, args: Record<string, unknown>, zone: string, t
     out.policy = policy
   }
   if (typeof args.report_to === 'string' || typeof args.report_when === 'string') {
-    const r = { ...(base?.report ?? { ...DEFAULT_REPORT, ...taskSettings(user).report }) }
-    if (args.report_to === 'this_thread') (r.thread = 'fixed'), (r.threadId = thread)
+    const r = { ...(base?.report ?? defaultReport(user, thread)) }
+    if (args.report_to === 'this_thread' && thread) (r.thread = 'fixed'), (r.threadId = thread)
+    else if (args.report_to === 'this_thread') (r.thread = 'none'), (r.threadId = null)
     else if (args.report_to === 'new_thread') (r.thread = 'new'), (r.threadId = null)
     else if (args.report_to === 'notification_only') (r.thread = 'none'), (r.notify = true)
     if (args.report_when === 'always' || args.report_when === 'failure' || args.report_when === 'condition') r.when = args.report_when
@@ -963,7 +976,7 @@ function specRows(spec: TaskSpec, available?: (g: string) => boolean): [string, 
 export async function prepareTaskCall(user: User, thread: string, name: string, args: Record<string, unknown>, zone: string): Promise<{ summary: CallSummary; run: (edit?: Record<string, unknown>) => Promise<string> }> {
   const from = ownChatThread(user, thread) ? thread : null
   if (name === 'create_task') {
-    const spec = cleanSpec(user, specFromArgs(user, args, zone, from ?? thread), undefined, from)
+    const spec = cleanSpec(user, specFromArgs(user, args, zone, from), undefined, from)
     return {
       summary: { title: `Make the task “${spec.title}”`, rows: specRows(spec), body: spec.instruction, spec },
       run: async (edit) => {
@@ -975,7 +988,7 @@ export async function prepareTaskCall(user: User, thread: string, name: string, 
   const row = findTask(user, args.task)
   const before = specOf(row)
   if (name === 'update_task') {
-    const spec = cleanSpec(user, specFromArgs(user, args, zone, from ?? thread, before), before)
+    const spec = cleanSpec(user, specFromArgs(user, args, zone, from, before), before)
     const wider = widens(before.policy, spec.policy)
     return {
       summary: { title: `Change the task “${before.title}”`, rows: [...(wider ? [['Widens', 'It may do more than before'] as [string, string]] : []), ...specRows(spec)], body: spec.instruction, spec },
@@ -1001,7 +1014,7 @@ export async function prepareTaskCall(user: User, thread: string, name: string, 
 
 /** What the editor can offer: linked mail accounts, and whether calendars and Seafile are there. */
 function taskOptions(user: User) {
-  return { enabled, mail: listMail(user).map((a) => ({ id: a.id, label: a.label })), defaults: { report: { ...DEFAULT_REPORT, ...taskSettings(user).report }, keep: taskSettings(user).keep, caps: DEFAULT_CAPS, options: DEFAULT_OPTIONS } }
+  return { enabled, mail: listMail(user).map((a) => ({ id: a.id, label: a.label })), defaults: { report: defaultReport(user, null), keep: taskSettings(user).keep, caps: DEFAULT_CAPS, options: DEFAULT_OPTIONS } }
 }
 
 /** /api/agents/tasks… and /api/agents/task-runs…; answers whether it handled the request. */
