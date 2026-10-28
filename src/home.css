@@ -1924,6 +1924,18 @@ textarea.agt-q-input {
   gap: 2px;
   padding: 4px;
   border-top: 1px solid var(--line);
+  container-type: inline-size;
+}
+.agt-side-foot button > span:not(.agt-task-badge) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Four buttons in a narrow sidebar: icons only (each keeps its name as a tooltip). */
+@container (max-width: 330px) {
+  .agt-side-foot button > span:not(.agt-task-badge) {
+    display: none;
+  }
 }
 .agt-side-foot button {
   flex: 1;

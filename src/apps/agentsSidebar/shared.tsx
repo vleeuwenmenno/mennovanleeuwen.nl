@@ -307,7 +307,17 @@ export function ThreadsSection({ ctx, model, row, header, day, empty }: { ctx: S
   )
 }
 
-/** The classic foot: Archived, Memory and Settings, with their names. */
+/** Runs going (a number) and runs waiting for you (an !), on the Tasks button. */
+export function TaskBadge({ badge }: { badge: { active: number; waiting: number } }) {
+  if (!badge.active && !badge.waiting) return null
+  return (
+    <span className={`agt-task-badge ${badge.waiting ? 'is-ask' : ''}`} aria-label={badge.waiting ? `${badge.waiting} waiting for you` : `${badge.active} running`}>
+      {badge.waiting ? '!' : badge.active}
+    </span>
+  )
+}
+
+/** The classic foot: Archived, Memory, Tasks and Settings, with their names. */
 export function SideFoot({ ctx }: { ctx: SideCtx }) {
   return (
     <div className="agt-side-foot">
@@ -316,6 +326,10 @@ export function SideFoot({ ctx }: { ctx: SideCtx }) {
       </button>
       <button className={ctx.mainKind === 'memory' ? 'is-on' : ''} onClick={() => ctx.openMemory(null)} title="What the agent remembers">
         <Icon name="memory" /> <span>Memory</span>
+      </button>
+      <button className={ctx.mainKind === 'tasks' ? 'is-on' : ''} onClick={ctx.openTasks} title="Background tasks: agents that run on their own and report back">
+        <Icon name="tasks" /> <span>Tasks</span>
+        <TaskBadge badge={ctx.taskBadge} />
       </button>
       <button className={ctx.mainKind === 'settings' ? 'is-on' : ''} onClick={ctx.openSettings} title="Agents settings">
         <Icon name="gear" /> <span>Settings</span>

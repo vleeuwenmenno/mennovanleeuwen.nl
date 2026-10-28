@@ -6,6 +6,7 @@ import { allCalendars, allEvents, cleanInput, createEvent, decodeRef, deleteEven
 import { assertGoogleLink, googleLinkGeneration, googleAccount, MAX_RANGE_DAYS, type GoogleSnapshot } from './google.ts'
 import { readNotes } from './noteLinks.ts'
 import { readState } from './state.ts'
+import type { CallScope } from '../src/data/agentTaskPolicy.ts'
 import { linkMatches } from '../src/data/noteEvents.ts'
 
 // The Agents app's calendar tools: the user's connected calendars (Google Calendar and CalDAV, so
@@ -26,9 +27,9 @@ export const CALENDAR_WRITES = new Set(['calendar_create_event', 'calendar_updat
 export const CALENDAR_TOOLS = new Set(['calendar_list_calendars', 'calendar_list_events', ...CALENDAR_WRITES])
 
 /** A short summary of a change for the approval card: a headline, then label and value rows, and a text shown whole (an email's body). */
-export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; body?: string }
-/** A calendar call checked and ready: what the user is shown (for a change), and running it. */
-export type Prepared = { summary?: CallSummary; run: () => Promise<string> }
+export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; body?: string; /** create_task and update_task: the task as the server checked it, for the card's editor */ spec?: unknown }
+/** A calendar call checked and ready: what the user is shown (for a change), and running it. `scope`: what it is about, for a task's policy (src/data/agentTaskPolicy.ts). */
+export type Prepared = { summary?: CallSummary; run: () => Promise<string>; scope?: CallScope }
 
 export const NOT_CONNECTED = 'No calendar is connected. The user can connect Google Calendar or a CalDAV account (Fastmail, Nextcloud, iCloud...) in Settings → Integrations → Calendars.'
 const READ_ONLY_GOOGLE = 'Google Calendar is connected read-only, so it cannot be changed from here. The user can reconnect Google in Settings → Integrations → Calendars and allow editing events.'
@@ -459,6 +460,7 @@ async function prepareCalendarCallInner(user: User, name: string, args: Record<s
     }
     return {
       summary,
+      scope: { calendars: [{ id: calendar.id, name: calendar.name }] },
       run: async () => {
         const ref = await createEvent(user, { calendar: calendar.id, event: input })
         return JSON.stringify({ created: { id: eventId(ref), ...outcome(input, calendar, zone), ...(input.recurrence ? { repeats: input.recurrence } : {}) } })
@@ -477,6 +479,7 @@ async function prepareCalendarCallInner(user: User, name: string, args: Record<s
 
     if (name === 'calendar_delete_event')
       return {
+        scope: { calendars: [{ id: calendar.id, name: calendar.name }] },
         summary: {
           title: `Delete “${clip(now.title, 80)}”`,
           rows: [['Calendar', calendarName(calendar)], ['When', whenText(now, zone)], ...(now.location ? [['Where', now.location] as [string, string]] : []), ...scope, ...guests],
@@ -514,6 +517,7 @@ async function prepareCalendarCallInner(user: User, name: string, args: Record<s
     ]
     return {
       summary: { title: `Change “${clip(now.title, 80)}”`, rows },
+      scope: { calendars: [calendar, ...(move ? [move] : [])].map((c) => ({ id: c.id, name: c.name })) },
       run: async () => {
         await updateEvent(user, { ref, event, all, calendar: move?.id })
         return JSON.stringify({ updated: outcome(after, move ?? calendar, zone), ...(now.recurring ? { applied_to: all ? 'the whole series' : 'this occurrence' } : {}), ...(move ? { note: 'It moved, so its id changed: list the events again to change it further' } : {}) })

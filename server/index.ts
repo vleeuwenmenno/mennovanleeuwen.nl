@@ -7,6 +7,7 @@ import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:z
 import { handleApi } from './api.ts'
 import { empiresUpgrade, startEmpires } from './empires.ts'
 import { startAgents } from './agents.ts'
+import { startAgentTasks } from './agentTasks.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { startNotifications } from './watchers.ts'
 import { SECURITY, cachePurge, documentCsp } from './http.ts'
@@ -242,6 +243,8 @@ process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e)
 startEmpires()
 // Agents turns a crash cut off are marked as interrupted, and a restart marks the running ones.
 startAgents()
+// Background agent tasks: runs a restart cut off are tried again, then the scheduler starts (AGENT_TASKS=off leaves it off).
+startAgentTasks()
 
 createServer((req, res) => {
   serve(req, res).catch((e: unknown) => {

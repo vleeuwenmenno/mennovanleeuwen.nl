@@ -60,7 +60,7 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
  * Role 'compact': a compaction, its content the summary the model gets in place of everything
  * before it (the window still shows all of it, with a divider here).
  */
-export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; createdAt: number }
+export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact' | 'report'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; createdAt: number }
 /**
  * How a compaction came about (server/agents.ts): asked for with /compact (and what to focus on),
  * or by itself, when the context passed the threshold or the model said it was too long; how many
@@ -156,7 +156,7 @@ export type Question = {
 export type Form = { title: string; intro?: string; questions: Question[]; submit?: string }
 
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
-export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
+export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string; /** create_task, update_task: the task as the server checked it, for the card's editor */ spec?: unknown }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
 export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 /**
@@ -201,9 +201,9 @@ export const answerForm = (id: string, callId: string, answers: Record<string, u
  * Allows or declines a change. `always`: allow edits from now on, this command, (a web read) the
  * address's site for good, in all threads, or (a mail search or read) mail reads in this thread for
  * 15 minutes, or always (the setting in Settings → Agents → Permissions); `feedback`: why not, for the agent; `mode`: the permission mode a plan starts in
- * (exit_plan_mode).
+ * (exit_plan_mode); `edit`: a background task as changed on its card (create_task, update_task).
  */
-export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command' | 'domain' | 'mail_reads' | 'mail_reads_always'; feedback?: string; mode?: Permission } = {}) =>
+export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command' | 'domain' | 'mail_reads' | 'mail_reads_always'; feedback?: string; mode?: Permission; /** create_task, update_task: the task as edited on the card */ edit?: unknown } = {}) =>
   api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow, ...extra } })
 /** The mail tools that only read: their cards offer "allow mail reads for 15 minutes" in the thread (server/agents.ts). */
 export const MAIL_READ_TOOLS = new Set(['mail_list_accounts', 'mail_search', 'mail_read'])
@@ -322,7 +322,27 @@ export type AgentSettings = {
   favoriteModels: string[]
   /** How the Agents sidebar looks (src/apps/agentsSidebar/): one of SIDEBAR_STYLES */
   sidebarStyle: SidebarStyle
+  /** The model background tasks run on unless a task names its own (null: the Quick model); the server reads it (server/agents.ts taskModel) */
+  taskModel: string | null
+  /** Where a new task's reports go by default (server/agentTasks.ts reads it) */
+  taskReport: TaskReportDefaults
+  /** How many runs each task keeps in its history unless it says otherwise: one of RETENTION */
+  taskKeep: number
 }
+/** The report targets a new task starts with (Settings → Apps → Agents → Tasks). */
+export type TaskReportDefaults = { when: 'always' | 'failure' | 'condition'; thread: 'none' | 'new' | 'fixed'; notify: boolean; email: 'off' | 'always' | 'unseen' }
+const TASK_REPORT_DEFAULTS: TaskReportDefaults = { when: 'condition', thread: 'fixed', notify: true, email: 'off' }
+const taskReportOf = (v: unknown): TaskReportDefaults => {
+  const r = (v && typeof v === 'object' ? v : {}) as Partial<TaskReportDefaults>
+  return {
+    when: r.when === 'always' || r.when === 'failure' ? r.when : 'condition',
+    thread: r.thread === 'none' || r.thread === 'new' ? r.thread : 'fixed',
+    notify: r.notify !== false,
+    email: r.email === 'always' || r.email === 'unseen' ? r.email : 'off',
+  }
+}
+/** The history sizes Settings offers for task runs (src/data/agentTaskPolicy.ts has the same). */
+export const TASK_KEEP = [20, 50, 100, 250, 500]
 /**
  * The looks the Agents sidebar can have, to compare for a while: the first is today's. Each one is
  * a component of its own in src/apps/agentsSidebar/ and a block of CSS beside it, so the ones not
@@ -341,7 +361,7 @@ export const sidebarStyleOf = (v: unknown): SidebarStyle => SIDEBAR_STYLES.find(
 export const TITLE_EVERY = [3, 4, 6, 10]
 /** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
 export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic' }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 3, autoCompact: true, compactAt: 85, replySuggestions: true, favoriteModels: [], sidebarStyle: 'classic', taskModel: null, taskReport: TASK_REPORT_DEFAULTS, taskKeep: 100 }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -363,6 +383,9 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       replySuggestions: s.replySuggestions !== false,
       favoriteModels: Array.isArray(s.favoriteModels) ? [...new Set(s.favoriteModels.filter((x): x is string => typeof x === 'string' && x.length <= 80))].slice(0, 50) : [],
       sidebarStyle: sidebarStyleOf(s.sidebarStyle),
+      taskModel: typeof s.taskModel === 'string' && s.taskModel ? s.taskModel : null,
+      taskReport: taskReportOf(s.taskReport),
+      taskKeep: TASK_KEEP.includes(Number(s.taskKeep)) ? Number(s.taskKeep) : 100,
     }
   },
 })

@@ -691,6 +691,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - `/stats` prints the thread's stats for nerds (model and tool time, time to the first token and
   tokens per second, cache hits, tokens, calls) and its last ten turns; `/stats all` every turn
   with each model call and tool call. See *Thread stats* under Agents below.
+- `/tasks` lists background tasks; `/tasks show`, `runs`, `run`, `dry`, `pause` or `resume <task>`,
+  and `/tasks log`, `approve`, `deny` or `cancel <run>` (ids by a unique prefix). See *Tasks* under
+  Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 - On a touch screen the same completions are tappable (see *Suggestions above the keyboard*
@@ -1996,8 +1999,88 @@ which words were tried rather than invent a conversation.
 pnpm check:agents-threads   # History search, ownership, attachment reads, bounds, ranking and 20,000-message timing
 ```
 
-The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`,
+The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`,
 `check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
+
+**Tasks.** A task is an agent that runs in the background, once (now or at a time) or on a
+schedule, and reports back: "every weekday at 8, look at my calendar and unread mail and tell me
+what needs me", "tell me when a new release of X is out". Every signed-in account can have up to 20
+active tasks, and each run uses only that account's own integrations and keys (an admin's server
+keys stay the admin's). The **Tasks** button at the bottom of the sidebar opens the Tasks tab
+([`src/apps/AgentsTasks.tsx`](src/apps/AgentsTasks.tsx)), with a badge while runs go (a number) or
+wait for you (!). The terminal's `agents` command has the same as `/tasks`.
+
+- **The list**: needing you, running, scheduled, one-off, paused and completed (or expired) tasks,
+  each with its schedule, next run and last run, and Run now, Pause and Resume.
+- **A task**: what it does, when it tells you, its policy in plain words with warnings, its
+  **state note** (what the agent noted for its next run; data, not instructions; editable), and
+  its runs. Run now, **Dry run** (one run where every change asks), Pause, Edit, Delete.
+- **A run**: status, start, end, duration, tokens, tool calls, the policy version it ran under,
+  whether it reported or stayed quiet and why, where the report went, the report, and the whole
+  transcript with every tool call marked *Allowed by policy*, *Approved by you*, *Denied* or
+  *Blocked by policy*. While it runs it streams live and can be cancelled; calls it waits on are
+  answered right there. **Continue in thread** opens the transcript as a normal thread to follow
+  up in (`branchThread`); the run itself stays as it was.
+
+*Making one.* **New task** in the Tasks tab, or ask an agent: `create_task`, `update_task` and
+`cancel_task` ask you every time, in every permission mode including Bypass. The card shows the
+task as the server checked it (schedule, instruction, condition, where reports go, the policy in
+plain words) and **Change before allowing…** opens it in the editor; what you save is checked again.
+A task made in a thread reports to that thread by default.
+
+*When it runs.* Daily, weekdays or some days of the week at a time, a cron line, or once, in the
+task's time zone ([`src/data/agentTaskSchedule.ts`](src/data/agentTaskSchedule.ts)). A time the clocks
+skip runs at the first minute that exists; a time that happens twice runs the first time. At most
+every 15 minutes. Starts are spread over a few minutes per task. A run due while the last still runs
+is skipped or queued; runs missed while the server was down catch up once or are skipped (a
+restart of under ten minutes is not "missed"). Tasks expire after six months unless set otherwise
+(Renew brings them back), and a task with a "Done when…" completes once the agent says it is
+done, or keeps watching if you choose. Per run: a time limit, a tool-call limit and a token limit.
+
+*What it may do.* Each task has its own permission policy
+([`src/data/agentTaskPolicy.ts`](src/data/agentTaskPolicy.ts)): Allow, Ask or Block per tool group,
+with per-tool overrides. `taskDecide` is the only authority in a run: the thread modes, sites
+allowed for good, mail read grants and other "always allow" answers never apply. A new task may
+search the web, read pages on the sites you list, look at notes, calendars, code hosts and projects
+and read skills; mail reads, past threads and Seafile reads ask; everything else is blocked. Tools
+added in later releases start blocked for tasks that exist. Mail sends and calendar changes never go
+further than Ask, nor do writes to `AGENTS.md`, `CLAUDE.md`, `.agents/` or `.claude/`. Scopes:
+web sites (other sites ask, or never), Seafile folders (read, or also write), calendars, mail
+accounts, and mail only to you or to listed people. An address the agent built itself asks while
+private data is in the run, even on a listed site. Memories reach a run only when the task says so.
+The editor warns when a task reads what others wrote (web, mail) and can also change things, or
+reads private data and can reach outside. Not in task runs: the terminal, forms, plan mode, image
+generation, the work folder, and the task tools themselves. Policies are versioned; each run keeps
+the version it ran under.
+
+*Asking.* A call the policy asks about pauses the run: the call is kept with the run, you get an
+"Agent tasks" notification, and you answer in the Tasks tab or with `/tasks approve`. The wait
+survives restarts. After 12 hours without an answer the call is denied and the run ends with a
+"needs you" report.
+
+*Reports.* Each run ends with the agent's verdict (`task_report`): report or stay quiet, why, a
+summary, done or not, and the new state note. A task reports every run, only when something fails
+or needs you, or when its "Tell me when…" condition is met (a run that ends without a verdict
+reports). Reports go to any of: a thread (a new one each run, or one fixed thread, written only
+while it is at rest), a notification (source *Agent tasks* in Settings → Notifications, opening the
+run), and email from your own linked mail account to yourself, always or only when the notification
+was not read within 15 minutes. The email is plain text with the agent's words marked as such.
+Three failed runs in a row report whatever the task says; a run cut off by a restart is marked
+interrupted, tried once more and not counted as a failure. An optional weekly or monthly "still
+watching" note says the task is alive.
+
+*Where it runs.* On the server ([`server/agentTasks.ts`](server/agentTasks.ts)): a scheduler looks
+every 30 seconds and claims a due task with a compare-and-set, so a slot never runs twice. Runs
+have their own pool, one per account and four on the server, never taking a chat turn's place. Each
+run is a hidden thread (`quick = 3`) that no list, search or share shows; its transcript counts
+against your storage, and each task keeps its last 100 runs (Settings → Apps → Agents → Tasks: the
+task model, where a new task's reports go, and how many runs are kept). `AGENT_TASKS=off` switches
+the scheduler off; the dev server only runs tasks with `AGENT_TASKS=on`:
+
+```sh
+DATA_DIR=/tmp/mvlos-tasks AGENT_TASKS=on ./node_modules/.bin/vite --port 5251 --strictPort
+pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts
+```
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
 ([`src/apps/AgentsModelPicker.tsx`](src/apps/AgentsModelPicker.tsx)): a search box (*Search models…*,
@@ -3239,7 +3322,7 @@ them) and what was sent before, keeps the rest in the account's list (the bell, 
 device), sends it live to the account's open pages (`/api/notifications/stream`, which show it as a
 pop-up when one is in view; pages say whether they are with a heartbeat), and pushes it when no
 page is in view, unless do not disturb is on. Apps hand notifications in two ways: when something
-happens (`notify()`: an Agents answer or question, a finished unpack), or from a watcher that looks
+happens (`notify()`: an Agents answer or question, an agent task's report or question, a finished unpack), or from a watcher that looks
 every so often (`registerWatcher()`): the Minecraft server (from its pinger), new activity on
 GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), calendar
 reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event) and due

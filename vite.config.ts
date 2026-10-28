@@ -10,6 +10,7 @@ import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
 import { empiresUpgrade, startEmpires } from './server/empires.ts'
 import { startAgents } from './server/agents.ts'
+import { startAgentTasks } from './server/agentTasks.ts'
 import { startMinecraftWatch } from './server/minecraft.ts'
 import { startNotifications } from './server/watchers.ts'
 
@@ -29,6 +30,8 @@ const liveApi = (): Plugin => {
       server.httpServer?.on('upgrade', upgrade)
       startEmpires()
       startAgents()
+      // Agent tasks only run in the dev server with AGENT_TASKS=on.
+      startAgentTasks({ dev: true })
       startMinecraftWatch()
       startNotifications()
     },
@@ -37,6 +40,7 @@ const liveApi = (): Plugin => {
       server.httpServer.on('upgrade', upgrade)
       startEmpires()
       startAgents()
+      startAgentTasks()
       startMinecraftWatch()
       startNotifications()
     },

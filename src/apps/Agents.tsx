@@ -135,6 +135,9 @@ import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
 import { ImageStudio } from './AgentsStudio'
+import { TaskEditDialog, TasksView, type TasksFocus } from './AgentsTasks'
+import { useTaskBadge } from '../data/agentTasks'
+import type { TaskSpec } from '../data/agentTaskPolicy'
 import { accountStorage } from '../os/accountSpace'
 import { localPref } from '../os/localPref'
 import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
@@ -191,8 +194,8 @@ export function Agents({ win }: { win: WinState }) {
   return <AgentsApp win={win} />
 }
 
-/** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), or the Image Studio. */
-type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'studio' }
+/** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), the Image Studio, or the background tasks (a task or run in focus). */
+type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'studio' } | { kind: 'tasks'; focus: TasksFocus | null }
 
 const FOLDED_PROJECTS = 'mvlos.agents.folded'
 const readFolded = (): number[] => {
@@ -261,9 +264,11 @@ function AgentsApp({ win }: { win: WinState }) {
     const t = win.props.tab
     if (t === 'memory') setMain({ kind: 'memory', scope: null }), setPane('chat')
     else if (t === 'studio') setMain({ kind: 'studio' }), setPane('chat')
+    // A task's notification (or /?open=agents&tab=tasks&task=…&run=…): the Tasks tab, at that run.
+    else if (t === 'tasks') setMain({ kind: 'tasks', focus: { task: win.props.task || undefined, run: win.props.run || undefined } }), setPane('chat')
     else if (t === 'archived') setArchived(true), setPane('list')
     else return
-    wm.setProps(win.pid, { tab: '' })
+    wm.setProps(win.pid, { tab: '', task: '', run: '' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props.t])
 
@@ -601,6 +606,12 @@ function AgentsApp({ win }: { win: WinState }) {
     setMain({ kind: 'studio' })
     setPane('chat')
   }
+  const openTasks = () => {
+    setMain({ kind: 'tasks', focus: null })
+    setPane('chat')
+  }
+  // Runs going and runs waiting for an answer, for the Tasks tab's badge.
+  const taskBadge = useTaskBadge()
   const toggleArchived = () => {
     setArchived((a) => !a)
     fold(false)
@@ -637,6 +648,7 @@ function AgentsApp({ win }: { win: WinState }) {
         { separator: true },
         { label: 'Archived', checked: archived, onSelect: toggleArchived },
         { label: 'Memory', onSelect: () => openMemory(null) },
+        { label: 'Tasks', onSelect: openTasks },
         { label: 'Image Studio', onSelect: openStudio },
         { label: 'Settings…', onSelect: openSettings },
         { separator: true },
@@ -685,6 +697,8 @@ function AgentsApp({ win }: { win: WinState }) {
     newThread,
     newProject,
     openStudio,
+    openTasks,
+    taskBadge,
     openMemory,
     openSettings,
     toggleArchived,
@@ -732,6 +746,8 @@ function AgentsApp({ win }: { win: WinState }) {
             onOpenThread={(id) => (setArchived(false), open(id))}
             onSettings={() => (openSettings(), showAgentsSection('images'))}
           />
+        ) : main.kind === 'tasks' ? (
+          <TasksView focus={main.focus} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
         ) : main.kind === 'memory' ? (
           <MemoryView scope={main.scope} projects={projects} onScope={(scope) => setMain({ kind: 'memory', scope })} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
         ) : (
@@ -2451,6 +2467,21 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
       out.push(<div key={m.id} className="agt-act-host" data-msg={m.id}><CompactDivider m={m} />{row(m, 'Summary', [{ label: 'Copy summary', onSelect: () => copy(m.content) }])}</div>)
       continue
     }
+    // A background task's report: its own card, never the agent's answer (the model reads it as quoted data).
+    if (m.role === 'report') {
+      out.push(
+        <div key={m.id} className="agt-act-host agt-task-report-msg" data-msg={m.id} role="note" aria-label="Task report">
+          <p className="agt-task-report-head">
+            <Icon name="tasks" size={13} /> Task report <span className="muted">· from a background task, in Agents → Tasks</span>
+          </p>
+          <article className="zed-preview agt-answer">
+            <MarkdownPreview text={m.content} />
+          </article>
+          {row(m, 'Task report', [{ label: 'Copy report', onSelect: () => copy(m.content) }])}
+        </div>,
+      )
+      continue
+    }
     const calls = m.toolCalls ?? []
     const results = messages.slice(i + 1, i + 1 + calls.length).filter((r) => r.role === 'tool')
     out.push(
@@ -2635,6 +2666,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           </>
         )}
         <ApprovalPreview call={call} />
+        {(call.name === 'create_task' || call.name === 'update_task') && !!summary?.spec && <TaskCardEdit spec={summary.spec as TaskSpec} decide={approval} />}
         <ApprovalActions call={call} decide={approval} mailAlways={mailAlways} />
       </div>
     )
@@ -2729,6 +2761,22 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
         <pre className="agt-tool-body">{[`${call.name}(${JSON.stringify(call.arguments)})`, result ? (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)).slice(0, 6000) : pending ? 'Running…' : 'No result (the turn stopped).'].join('\n\n')}</pre>
       )}
     </details>
+  )
+}
+
+/** A background task the agent wants to make or change: open it in the task editor, and allow it as changed there. */
+function TaskCardEdit({ spec, decide }: { spec: TaskSpec; decide: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <p className="muted agt-ask-why">Tasks run on their own later, with what the policy above lets them do. This always asks you first, in every mode.</p>
+      <div className="agt-ask-actions">
+        <button className="btn btn-small" onClick={() => setOpen(true)}>
+          Change before allowing…
+        </button>
+      </div>
+      {open && <TaskEditDialog spec={spec} onCancel={() => setOpen(false)} onDone={(edit) => (setOpen(false), decide(true, { edit }))} />}
+    </>
   )
 }
 
@@ -2918,6 +2966,7 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
       const steps = (m.toolCalls ?? []).map((c, j) => `- ${toolLabel(c, results[j]?.content)}`).join('\n')
       if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
     } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
+    else if (m.role === 'report') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
   }
   return out.join('\n\n') + '\n'
 }

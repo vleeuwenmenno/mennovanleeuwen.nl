@@ -1,10 +1,10 @@
 import './Focus.css'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type { Thread } from '../../data/agents'
 import { Icon, Scramble, shortWhen, titlePending } from './bits'
 import type { SideCtx } from './ctx'
 import { needsAttention, STATUS_LABEL, statusOf, useSidebarModel } from './model'
-import { GroupHeader, HideButton, List, ProjectsSection, SearchBox, ThreadRow, ThreadsSection } from './shared'
+import { GroupHeader, HideButton, List, ProjectsSection, SearchBox, TaskBadge, ThreadRow, ThreadsSection } from './shared'
 
 // Focus: made to see what needs you. Chips filter the list (All, Running, Unread, Needs a look when
 // something does, and one per project when there are few), a Running now section sits on top while
@@ -18,9 +18,10 @@ const PROJECT_CHIPS = 4
 
 /** The foot: Image Studio, Archived, Memory and Settings as icons (their names are tooltips). */
 function FocusFoot({ ctx }: { ctx: SideCtx }) {
-  const button = (icon: 'studio' | 'archive' | 'memory' | 'gear', label: string, on: boolean, onClick: () => void) => (
+  const button = (icon: 'studio' | 'archive' | 'memory' | 'gear' | 'tasks', label: string, on: boolean, onClick: () => void, extra?: ReactNode) => (
     <button key={icon} className={on ? 'is-on' : ''} onClick={onClick} title={label} aria-label={label} aria-pressed={on}>
       <Icon name={icon} size={17} />
+      {extra}
     </button>
   )
   return (
@@ -28,6 +29,7 @@ function FocusFoot({ ctx }: { ctx: SideCtx }) {
       {button('studio', 'Image Studio', ctx.mainKind === 'studio', ctx.openStudio)}
       {button('archive', 'Archived threads', ctx.archived, ctx.toggleArchived)}
       {button('memory', 'Memory: what the agent remembers', ctx.mainKind === 'memory', () => ctx.openMemory(null))}
+      {button('tasks', 'Tasks: agents that run on their own', ctx.mainKind === 'tasks', ctx.openTasks, <TaskBadge badge={ctx.taskBadge} />)}
       {button('gear', 'Agents settings', ctx.mainKind === 'settings', ctx.openSettings)}
     </div>
   )

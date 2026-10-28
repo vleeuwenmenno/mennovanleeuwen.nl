@@ -5,6 +5,7 @@ import { openContextMenu } from '../../os/ContextMenu'
 import { Icon, NEW_TITLE } from './bits'
 import type { SideCtx } from './ctx'
 import { pinnedFirst, STATUS_LABEL, statusOf } from './model'
+import { TaskBadge } from './shared'
 
 // The folded sidebar, the same for every style: New thread and Search on top, then the threads as
 // small chips (running ones first, then pinned, then the newest) or, with Projects on, the
@@ -121,6 +122,10 @@ export function Rail({ ctx, onContextMenu }: { ctx: SideCtx; onContextMenu: Reac
       </button>
       <button className={`agt-icon ${mainKind === 'memory' ? 'is-on' : ''}`} onClick={() => ctx.openMemory(null)} title="Memory" aria-label="Memory">
         <Icon name="memory" />
+      </button>
+      <button className={`agt-icon agt-task-icon ${mainKind === 'tasks' ? 'is-on' : ''}`} onClick={ctx.openTasks} title="Tasks" aria-label="Tasks">
+        <Icon name="tasks" />
+        <TaskBadge badge={ctx.taskBadge} />
       </button>
       <button className={`agt-icon ${mainKind === 'studio' ? 'is-on' : ''}`} onClick={ctx.openStudio} title="Image Studio" aria-label="Image Studio">
         <Icon name="studio" />

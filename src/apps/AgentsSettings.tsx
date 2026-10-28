@@ -7,6 +7,7 @@ import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_REA
 import { ask } from '../os/Dialogs'
 import { makerOf, modelName, PROVIDER_NAMES } from '../data/agentModelNames'
 import { namedModels } from './AgentsModelPicker'
+import { TASK_KEEP } from '../data/agents'
 import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, SIDEBAR_STYLES, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
@@ -49,7 +50,7 @@ export function usePromptLocation() {
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-export type SectionId = 'overview' | 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'images' | 'skills' | 'prompt' | 'shares'
+export type SectionId = 'overview' | 'general' | 'models' | 'threads' | 'tasks' | 'permissions' | 'search' | 'images' | 'skills' | 'prompt' | 'shares'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
@@ -60,6 +61,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, what it remembers, and how its sidebar looks.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
+  { id: 'tasks', label: 'Tasks', blurb: 'Background tasks: the model they run on unless a task names its own, where a new task’s reports go, and how many runs each one keeps.', icon: icon(<><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>) },
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
   { id: 'images', label: 'Images', blurb: 'Pictures and diagram icons from OpenAI (an API key or Sign in with ChatGPT), and image generation with your own ComfyUI server.', icon: icon(<><rect x="3" y="3" width="18" height="18" /><path d="M3 17l6-6 4 4 3-3 5 5" /></>) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
@@ -70,7 +72,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
 /** The sections in groups, for the navigation. Overview stands alone, first. */
 const GROUPS: { label: string; ids: SectionId[] }[] = [
   { label: '', ids: ['overview'] },
-  { label: 'Models & threads', ids: ['general', 'models', 'threads', 'prompt'] },
+  { label: 'Models & threads', ids: ['general', 'models', 'threads', 'tasks', 'prompt'] },
   { label: 'Safety', ids: ['permissions'] },
   { label: 'Tools', ids: ['images', 'search', 'skills'] },
   { label: 'Sharing', ids: ['shares'] },
@@ -381,6 +383,58 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
 
       </>
     ),
+    tasks: (
+      <>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Task model</strong>
+            <span className="muted">What background tasks run on unless a task names its own model: a cheaper, quicker one keeps runs cheap</span>
+          </span>
+          {modelSelect(settings.taskModel, settings.quickModel ?? auto?.quick, (taskModel) => setAgentSettings({ taskModel }), 'Model for background tasks')}
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Runs kept per task</strong>
+            <span className="muted">Older runs and their transcripts are deleted; a task can keep a number of its own</span>
+          </span>
+          <Select className="set-select" value={settings.taskKeep} onChange={(taskKeep) => setAgentSettings({ taskKeep })} aria-label="Runs kept per task" options={TASK_KEEP.map((n) => ({ value: n, label: `${n} runs` }))} />
+        </li>
+      </ul>
+      <h4 className="set-subhead">Reports of a new task</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Tell me</strong>
+            <span className="muted">When a run reports: as its “Tell me when…” says, every run, or only when something fails or needs you</span>
+          </span>
+          <Select className="set-select" value={settings.taskReport.when} onChange={(when) => setAgentSettings({ taskReport: { ...settings.taskReport, when } })} aria-label="When a new task reports" options={[{ value: 'condition', label: 'When the condition is met' }, { value: 'always', label: 'Every run' }, { value: 'failure', label: 'Only on failure or needs you' }]} />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>In a thread</strong>
+            <span className="muted">The thread an agent made the task in, a new thread each run, or none</span>
+          </span>
+          <Select className="set-select" value={settings.taskReport.thread} onChange={(thread) => setAgentSettings({ taskReport: { ...settings.taskReport, thread } })} aria-label="Thread for reports of a new task" options={[{ value: 'fixed', label: 'The thread it was made in' }, { value: 'new', label: 'A new thread each run' }, { value: 'none', label: 'No thread' }]} />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Notification</strong>
+            <span className="muted">Through the notification center and push (“Agent tasks” in Settings → Notifications)</span>
+          </span>
+          <Toggle on={settings.taskReport.notify} onChange={(notify) => setAgentSettings({ taskReport: { ...settings.taskReport, notify } })} label="Notify about task reports" />
+        </li>
+        <li className={`set-row ${mailAccounts?.length ? '' : 'is-off'}`}>
+          <span className="set-row-text">
+            <strong>Email to yourself</strong>
+            <span className="muted">{mailAccounts?.length ? 'From your own mail account to yourself, always or only when the notification was not read within 15 minutes' : 'Needs a linked mail account (Settings → Integrations → Mail)'}</span>
+          </span>
+          <Select className="set-select" disabled={!mailAccounts?.length} value={settings.taskReport.email} onChange={(email) => setAgentSettings({ taskReport: { ...settings.taskReport, email } })} aria-label="Email task reports" options={[{ value: 'off', label: 'No email' }, { value: 'always', label: 'Always' }, { value: 'unseen', label: 'When not seen' }]} />
+        </li>
+      </ul>
+      <p className="muted set-help">Tasks are in the Agents app's Tasks tab and the agents command's /tasks. Each task has its own permission policy: what it may do without asking, what asks you, and what is blocked.</p>
+      </>
+    ),
     permissions: <PermissionSettings />,
     search: <WebSearchSettings />,
     images: (
@@ -515,6 +569,7 @@ function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: S
     { id: 'general', summary: ollama ? `Ollama Cloud connected${memories === null ? '' : ` · ${plural(memories, 'thing')} remembered`}` : 'Ollama Cloud not connected: Agents needs an API key', ...(ollama ? {} : { fix: 'Add a key', tone: 'error' as const }) },
     { id: 'models', summary: ollama && !models.length && !auto ? loading : `Quick: ${model(settings.quickModel, auto?.quick)} · Deep: ${model(settings.deepModel, auto?.deep)}` },
     { id: 'threads', summary: `${MODE_LABEL[settings.mode]} · ${settings.tools.length} of ${plural(TOOL_GROUPS.length, 'tool group')} on${settings.autoCompact ? ' · compacts long threads' : ''}${settings.replySuggestions ? ' · suggests replies' : ''}` },
+    { id: 'tasks', summary: `Model: ${model(settings.taskModel, settings.quickModel ?? auto?.quick)} · ${settings.taskKeep} runs kept` },
     { id: 'prompt', summary: !prompt ? loading : prompt.source === 'seafile' ? 'Your own ~/AGENTS.md' : prompt.error ? `Built in: ~/AGENTS.md could not be read` : 'Built in', ...(prompt?.error ? { tone: 'warn' as const } : {}) },
     failed('permissions', mail, sites) ?? { id: 'permissions', summary: !mail || !sites ? loading : `Mail reads: ${mail && 'value' in mail && mail.value.mode === 'always' ? 'always allowed' : 'ask first'} · ${plural(sites && 'value' in sites ? sites.value.length : 0, 'web site')} allowed` },
     failed('images', images) ?? (images && 'value' in images && !images.value.url
