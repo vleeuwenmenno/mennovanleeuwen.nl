@@ -556,3 +556,6 @@
 .agt-tk-mail span {
   overflow-wrap: anywhere;
 }
+.agt-tk-mailtrigger > p {
+  margin-top: 8px;
+}
