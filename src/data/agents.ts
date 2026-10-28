@@ -77,11 +77,11 @@ export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim(
 /** What a thread may use, switched in the composer. */
 export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills' | 'images' | 'gpt_images' | 'threads'
 /** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
+export const ALWAYS_ON_TOOLS: ToolGroup[] = ['web', 'skills']
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
   { id: 'threads', name: 'Past threads', detail: 'Look back through your earlier conversations, in every project' },
   { id: 'images', name: 'Images', detail: 'Generate and tune pictures, inspect output, and learn style profiles from feedback' },
   { id: 'gpt_images', name: 'GPT images', detail: 'Pictures and small icons for diagrams with OpenAI gpt-image, once set up in Settings → Agents → Images' },
-  { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
   { id: 'mail', name: 'Mail', detail: 'Search, read, draft, send and file email in your linked accounts; drafts, sends and changes ask you first every time; searches and reads too, unless you allow them (15 minutes in a thread, or always)', mail: true },
@@ -92,9 +92,11 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'projects', name: 'Projects', detail: 'Make and rename projects, move this thread; asks you first' },
   { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
   { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
-  { id: 'skills', name: 'Skills', detail: 'Read the skills in ~/.agents/skills and the work folder when a task calls for one' },
 ]
+/** The groups a thread can switch: every one but the always-on ones. */
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
+/** A thread's switchable groups out of its tools (which always carry the always-on ones). */
+export const choosableTools = (tools: ToolGroup[]) => tools.filter((t) => !ALWAYS_ON_TOOLS.includes(t))
 /** Why a group does nothing yet, as the hint reads when it is on (`on`, after "On, but") and when it is off (`off`, after "Turning it on needs"). */
 const TOOL_BLOCKED: Partial<Record<ToolGroup, { on: string; off: string }>> = {
   calendar: { on: 'no calendar connected (Settings → Integrations → Calendars)', off: 'a connected calendar (Settings → Integrations → Calendars)' },

@@ -715,7 +715,7 @@ it, for example `caveman-adhd` for terse answers all the time. Set up in Setting
 
 - **Always on**, a switch on each enabled skill. The skill's whole SKILL.md goes into the system
   prompt, between `<active_skill name="…">` tags, with an instruction to follow it in every reply.
-  This also works when the thread's Skills tool group is off.
+  Skills tools are always on in chat threads, so this needs no switch.
 - **Applies to**: Agents threads (on by default), Spotlight quick answers and the terminal's
   `agents` command.
 - **Per project**: turn a skill on or off for the threads in one project, whatever the global
@@ -1825,7 +1825,7 @@ than a tour of the settings, and nothing ends with an offer of further work. Whe
 chart or comparison says it better, the model draws one with a `visual` block (see *Visual blocks*
 above; the prompt's short guide is [`src/data/visual/prompt.ts`](src/data/visual/prompt.ts)), making
 the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_icons`) and naming them `icon:<slug>`. The
-composer holds the mode, the model, which tools the thread may use and attachments: text files, PDFs (their text, read in the browser with
+composer holds the mode, the model, which tools the thread may use (the Web and Skills tools are always on in chat threads and are not in the Tools menu; a task's policy still allows, asks or blocks them per task) and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
 and months, search album names, select photos, then Attach. It reads the original PNG, JPEG, WebP,
@@ -2625,7 +2625,7 @@ metadata records each identifier and weight; older images without that field sti
   produce an application context note with nearby installed names and leave the list unchanged.
 - `$name` attaches a skill's instructions anywhere in a message. `/name` still works at the start.
 - `@name` points at a tool for this turn. Its group and on/off state appear in the context note;
-  a mention does not enable a group or bypass permissions. Use the Tools menu or CLI `/tools`.
+  a mention does not enable a group or bypass permissions (Web and Skills tools are always on). Use the Tools menu or CLI `/tools`.
 
 Typing a sigil at the start of a token opens suggestions. Type to filter, use Up/Down to select,
 and Enter or Tab to accept; in the app, Right accepts too when the caret is at the end of the word
