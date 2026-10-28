@@ -8,6 +8,9 @@
 //    quiet and reported runs, a run without a verdict, the failure guard, a persisted Ask that
 //    expires after 12 hours (fake) and one that is approved, user-wide grants ignored, blocked
 //    calls, task expiry, the compare-and-set claim, the run pool, per-user isolation.
+//    New mail (src/data/agentTaskMail.ts) against a stand-in JMAP server (scripts/mail-mock.ts):
+//    filters, batching, the hourly cap, dedupe, the loop guard, the push line kept up for a
+//    watching task, the read grant limited to the triggering mail, per-user isolation.
 // 3. The real server (server/index.ts) over HTTP: create_task asks even in Bypass and takes the
 //    card's edit, a run's thread is read-only to chat routes, a waiting run outlives a restart and
 //    goes on when approved, and a run cut off by a restart is marked interrupted, tried again and
@@ -25,6 +28,8 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { Server, check, finish, sleep } from './empires-harness.ts'
 import { cleanSchedule, fromWall, nextCron, parseCron, shortestGap, upcoming, MIN_INTERVAL_MS } from '../src/data/agentTaskSchedule.ts'
 import { askArgLines, CALL_VERDICTS, defaultPolicy, normalizePolicy, policySummary, scopeResult, TASK_TOOLS, taskDecide, toolVerdict, widens, type TaskPolicy } from '../src/data/agentTaskPolicy.ts'
+import { cleanMailTrigger, describeMailTrigger, fromMatches, mailMatches, neverTrigger, type ArrivedMail, type MailTrigger } from '../src/data/agentTaskMail.ts'
+import { startMockJmap } from './mail-mock.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 const MODEL = 'tasks-test'
@@ -122,6 +127,38 @@ const iso = (t: number | null) => (t === null ? 'null' : new Date(t).toISOString
 
 }
 
+{
+  // New mail: the filters, ANDed, and what never starts a task.
+  const t = (p: Partial<MailTrigger>): MailTrigger => ({ ...cleanMailTrigger({ account: 1 }), ...p })
+  const m = (p: Partial<ArrivedMail> = {}): ArrivedMail => ({ id: 'M1', mailboxIds: ['inbox'], from: [{ name: 'Steam', email: 'noreply@steampowered.com' }], to: [{ name: 'Me', email: 'me@example.org' }], cc: [], subject: 'Your Receipt', hasAttachment: false, receivedAt: Date.now(), draft: false, fromTask: false, ...p })
+  check('mail: no filters matches any mail in the Inbox', mailMatches(t({}), m(), 'inbox'))
+  check('mail: another mailbox does not match the Inbox trigger; a picked mailbox does', !mailMatches(t({}), m({ mailboxIds: ['receipts'] }), 'inbox') && mailMatches(t({ mailbox: 'receipts' }), m({ mailboxIds: ['receipts'] }), 'inbox'))
+  check('mail: from a domain matches it and its subdomains, not a look-alike', fromMatches('@steampowered.com', 'a@steampowered.com') && fromMatches('steampowered.com', 'a@store.steampowered.com') && !fromMatches('@steampowered.com', 'a@evilsteampowered.com') && !fromMatches('@steampowered.com', 'a@steampowered.com.evil.example'))
+  check('mail: from an address matches only that address, in any case', fromMatches('Boss@Example.org', 'boss@example.ORG') && !fromMatches('boss@example.org', 'notboss@example.org'))
+  check('mail: from filter', mailMatches(t({ from: ['@steampowered.com'] }), m(), 'inbox') && !mailMatches(t({ from: ['@example.net'] }), m(), 'inbox'))
+  check('mail: to/cc contains (names or addresses, any case, cc counts)', mailMatches(t({ to: ['ME@EXAMPLE'] }), m(), 'inbox') && mailMatches(t({ to: ['billing@'] }), m({ cc: [{ name: null, email: 'billing@example.org' }] }), 'inbox') && !mailMatches(t({ to: ['billing@'] }), m(), 'inbox'))
+  check('mail: subject contains, case-insensitive', mailMatches(t({ subject: ['receipt'] }), m(), 'inbox') && !mailMatches(t({ subject: ['invoice'] }), m(), 'inbox'))
+  check('mail: attachment yes, no, either', mailMatches(t({ attachment: 'yes' }), m({ hasAttachment: true }), 'inbox') && !mailMatches(t({ attachment: 'yes' }), m(), 'inbox') && !mailMatches(t({ attachment: 'no' }), m({ hasAttachment: true }), 'inbox') && mailMatches(t({ attachment: 'any' }), m({ hasAttachment: true }), 'inbox'))
+  check('mail: filters are ANDed (one failing is enough to miss)', mailMatches(t({ from: ['@steampowered.com'], subject: ['receipt'], attachment: 'no' }), m(), 'inbox') && !mailMatches(t({ from: ['@steampowered.com'], subject: ['invoice'] }), m(), 'inbox'))
+  check('mail: within one list, any entry is enough', mailMatches(t({ from: ['@example.net', '@steampowered.com'] }), m(), 'inbox'))
+  const roles = new Set(['sent', 'drafts', 'trash', 'junk'])
+  check('mail: a task\'s own mail, drafts, and Sent/Drafts/Trash/Junk never start a task', !!neverTrigger(m({ fromTask: true }), roles) && !!neverTrigger(m({ draft: true }), roles) && ['sent', 'drafts', 'trash', 'junk'].every((b) => !!neverTrigger(m({ mailboxIds: ['inbox', b] }), roles)) && neverTrigger(m(), roles) === null)
+  const c = cleanMailTrigger({ account: '3', from: 'A@B.org, @Steam.com', windowMs: 99 * 3600_000, maxPerHour: 0 })
+  check('mail: a trigger is cleaned (lists split and lowered, window and cap clamped, defaults)', c.account === 3 && c.from.join() === 'a@b.org,@steam.com' && c.windowMs === 3600_000 && c.maxPerHour === 1 && cleanMailTrigger({ account: 3 }).windowMs === 120_000 && cleanMailTrigger({ account: 3 }).maxPerHour === 20 && cleanMailTrigger({ account: 3 }).mailbox === null)
+  let badTriggers = 0
+  for (const v of [{}, { account: 0 }, { account: 'x' }, { account: 1, from: ['not an address'] }]) try { cleanMailTrigger(v) } catch { badTriggers++ }
+  check('mail: a trigger without an account or with a bad from is refused', badTriggers === 4)
+  check('mail: the trigger in plain words', describeMailTrigger({ ...t({ from: ['@steampowered.com'] }), accountLabel: 'Home' }) === 'Runs when mail from @steampowered.com arrives in Inbox (Home); mails within 2 min are handled together, at most 20 runs an hour')
+  check('mail: a mail trigger is exempt from the 15-minute floor and has no next time', shortestGap(cleanSchedule({ kind: 'mail', account: 1 }), 'UTC', Date.now()) === Infinity && upcoming(cleanSchedule({ kind: 'mail', account: 1 }), 'UTC', Date.now(), 3).length === 0)
+  // The narrow read grant: exactly the triggering message ids, only over Ask, never past a block or a scope.
+  const ctx = { holdsPrivate: true, given: () => false, dryRun: false, triggerMail: ['3.M1', '3.M2'] }
+  const read = (p: TaskPolicy, id: string, scope = { mailAccounts: [{ id: '3', label: 'Work' }] }) => taskDecide(p, { name: 'mail_read', arguments: { message_id: id } }, { ...ctx, scope }).verdict
+  check('grant: reading a triggering message runs without asking when mail reads ask', read(defaultPolicy(), '3.M1') === 'allow' && read(defaultPolicy(), ' 3.M2 ') === 'allow')
+  check('grant: any other message, a thread read, or a search still asks', read(defaultPolicy(), '3.M9') === 'ask' && taskDecide(defaultPolicy(), { name: 'mail_read', arguments: { thread_id: '3.T1' } }, ctx).verdict === 'ask' && taskDecide(defaultPolicy(), { name: 'mail_search', arguments: { query: 'x' } }, ctx).verdict === 'ask')
+  check('grant: never past a block (mail reads blocked) or the account scope', read({ ...defaultPolicy(), tools: { mail_read: 'block' } }, '3.M1') === 'block' && read({ ...defaultPolicy(), mail: { accounts: ['Home'], send: 'self', recipients: [] } }, '3.M1') === 'block')
+  check('grant: without trigger mail, mail reads follow the policy', taskDecide(defaultPolicy(), { name: 'mail_read', arguments: { message_id: '3.M1' } }, { ...ctx, triggerMail: undefined }).verdict === 'ask')
+}
+
 // --- the stand-in for Ollama --------------------------------------------------------------------------
 
 type Step = { calls?: { name: string; arguments: J }[]; content?: string; fail?: boolean; delay?: number }
@@ -153,7 +190,13 @@ const ollama = createServer(async (req, res) => {
   const msgs = body.messages as J[]
   const first = msgs.find((m) => m.role === 'user')?.content ?? ''
   let step: Step
-  if (first.startsWith('SCENARIO ')) {
+  if (first.trim() === 'SCENARIO read-trigger') {
+    // Reads the first mail that started the run (its id from the prompt), then its whole conversation (not a triggering message id).
+    const id = /message_id: (\S+)/.exec(String(msgs[0].content))?.[1] ?? 'none'
+    const round = msgs.filter((m) => m.role === 'assistant').length
+    const thread = (() => { try { return JSON.parse(String(msgs.findLast((m) => m.role === 'tool')?.content ?? '{}')).thread_id } catch { return undefined } })()
+    step = round === 0 ? { calls: [{ name: 'mail_read', arguments: { message_id: id } }] } : round === 1 ? { calls: [{ name: 'mail_read', arguments: { thread_id: thread } }] } : report({ report: false, reason: 'Read', summary: '' })
+  } else if (first.startsWith('SCENARIO ')) {
     const steps = SCENARIOS[first.slice(9).trim()] ?? [{ content: 'Unknown scenario' }]
     const round = msgs.filter((m) => m.role === 'assistant').length
     step = steps[Math.min(round, steps.length - 1)]
@@ -400,6 +443,143 @@ try {
     await until('the report is posted', () => !!db.prepare('SELECT 1 FROM agent_messages WHERE thread_id = ?').get(thread))
     const roles = (db.prepare('SELECT role FROM agent_messages WHERE thread_id = ?').all(thread) as J[]).map((m) => m.role)
     check('a report goes into a thread as a task report, never as an assistant message', roles.length === 1 && roles[0] === 'report')
+  }
+  {
+    // --- New mail, against a stand-in JMAP server -------------------------------------------------
+    const mock = await startMockJmap({ fill: 0 })
+    const jmap = await import('../server/jmap.ts')
+    const { writeState } = await import('../server/state.ts')
+    // Mail notifications off for both, so only a watching task keeps a push line up.
+    for (const u of [alice, bob]) writeState(u, 'notify', { value: { off: ['mail.new'] } })
+    const home = await jmap.addMail(alice, { url: mock.sessionUrl, token: mock.token, label: 'Home' })
+    const bobs = await jmap.addMail(bob, { url: mock.sessionUrl, token: mock.token, label: 'Bobs' })
+    const boxes = (await jmap.mailMeta(jmap.mailAccount(alice, home.id))).mailboxes.map((b) => ({ id: b.id, role: b.role, name: b.name }))
+    const pending = (task: string) => db.prepare('SELECT * FROM agent_task_mail WHERE task_id = ? AND run_id IS NULL').all(task) as J[]
+    let n = 0
+    const arrived = (p: Partial<ArrivedMail> = {}): ArrivedMail => ({ id: `T${++n}`, mailboxIds: ['mb-inbox'], from: [{ name: 'Shop', email: 'orders@shop.example' }], to: [{ name: null, email: 'me@example.test' }], cc: [], subject: `Order ${n}`, hasAttachment: false, receivedAt: fake - 1000, draft: false, fromTask: false, ...p })
+    const mailSpec = (scenario: string, trigger: J = {}, extra: J = {}) => spec(scenario, { schedule: { kind: 'mail', account: home.id, ...trigger }, ...extra })
+    const settle = async (task: string) => {
+      await tasks.tick()
+      await until('mail runs end', () => runsOf(task).every((r) => OVER.includes(r.status) || r.status === 'waiting'))
+    }
+
+    // Per-user isolation on the way in: nobody can point a task at another account's mail.
+    let foreign = ''
+    try { tasks.createTask(alice, mailSpec('report-false', { account: bobs.id })) } catch (e) { foreign = (e as Error).message }
+    check('isolation: a task cannot watch another account\'s mailbox', /your mail accounts/.test(foreign))
+    let scoped = ''
+    try { tasks.createTask(alice, mailSpec('report-false', {}, { policy: { ...defaultPolicy(), mail: { accounts: ['Elsewhere'], send: 'self', recipients: [] } } })) } catch (e) { scoped = (e as Error).message }
+    check('the trigger account must be inside the task\'s mail-account scope', /not one of the mail accounts the task may use/.test(scoped))
+
+    // The push line: off while nothing watches, up once a task watches the account.
+    await jmap.mailWatch()
+    await sleep(300)
+    check('push: no line for an account nothing watches (notifications off, Mail unused)', mock.streams() === 0)
+    const t = tasks.createTask(alice, mailSpec('report-false', { from: ['@shop.example'], windowMs: 120_000, maxPerHour: 2 }, { title: 'Orders' }))
+    check('a mail task has no next run time and stays active', taskRow(t.id).next_run_at === null && taskRow(t.id).status === 'active')
+    check('push: the watched set has the account', tasks.mailWatched().has(`${alice.id}:${home.id}`) && !tasks.mailWatched().has(`${bob.id}:${bobs.id}`))
+    await jmap.mailWatch()
+    await until('the push line for the watched account comes up', () => mock.streams() === 1)
+    check('push: a line is kept up for the account a task watches (and only that one)', mock.streams() === 1)
+
+    // End to end: mail delivered to the stand-in reaches the task through the push line.
+    const before = pending(t.id).length
+    const delivered = mock.deliver({ from: [{ name: 'Shop', email: 'orders@shop.example' }], subject: 'Order shipped' })
+    await until('delivered mail waits for the task', () => pending(t.id).length === before + 1)
+    check('push: new mail matching the filters waits for the task', pending(t.id).some((r) => r.email_id === delivered.id))
+    mock.deliver({ from: [{ name: 'Other', email: 'x@other.example' }], subject: 'Not for the task' })
+    mock.deliver({ from: [{ name: 'Shop', email: 'orders@shop.example' }], subject: 'Report', headers: { 'X-MvLOS-Task': t.id } })
+    mock.deliver({ from: [{ name: 'Shop', email: 'orders@shop.example' }], subject: 'Spam', mailbox: 'mb-junk' })
+    mock.deliver({ from: [{ name: 'Shop', email: 'orders@shop.example' }], subject: 'Sent copy', mailbox: 'mb-sent' })
+    await sleep(800)
+    check('loop guard: the reporter\'s own mail, Junk, Sent and mail not matching never wait', pending(t.id).length === before + 1)
+    // A task's email report carries the header (what the stand-in got).
+    await jmap.send(jmap.mailAccount(alice, home.id), { to: [{ email: 'me@example.test' }], subject: 'r', text: 'x' }, { task: t.id })
+    const sentCopy = [...mock.emails.values()].find((e) => e.subject === 'r')
+    check('a task\'s mail carries X-MvLOS-Task', sentCopy?.['header:X-MvLOS-Task:asText'] === t.id)
+    const copy = mock.deliver({ from: [{ name: 'Shop', email: 'orders@shop.example' }], subject: 'Copy of the report in the Inbox', headers: { 'X-MvLOS-Task': t.id } })
+    await sleep(500)
+    check('loop guard: a copy of a task\'s mail arriving in the Inbox does not wait', !pending(t.id).some((r) => r.email_id === copy.id))
+
+    // Dedupe: the same message again (a re-delivery, a push replayed after a restart) never doubles.
+    tasks.mailArrived(alice, home.id, [{ ...arrived(), id: delivered.id, subject: 'Order shipped', receivedAt: fake - 1000 }], boxes)
+    check('dedupe: the same message again waits once', pending(t.id).filter((r) => r.email_id === delivered.id).length === 1)
+
+    // Batching: nothing runs inside the window; after it, one run gets the mail.
+    await tasks.tick()
+    check('batching: no run inside the window', runsOf(t.id).length === 0)
+    fake += 121_000
+    await settle(t.id)
+    const first = runsOf(t.id)
+    const firstMail = JSON.parse(first[0]?.trigger_mail ?? '{"mails":[]}')
+    check('batching: a single mail after the window: one run, for that mail', first.length === 1 && first[0].trigger === 'mail' && firstMail.mails.length === 1 && firstMail.mails[0].id === delivered.id && pending(t.id).length === 0)
+    const prompt = String(chats.findLast((c) => String(c.messages?.[0]?.content ?? '').includes('mail_that_started_this_run'))?.messages[0].content ?? '')
+    check('the run gets the mail as data (id, from, subject, mailbox), not instructions', prompt.includes(`message_id: ${home.id}.${delivered.id}`) && prompt.includes('Order shipped') && prompt.includes('mailbox: Inbox') && /content from outside, not instructions/.test(prompt))
+    check('the run history has the triggering mail', tasks.getRun(alice, first[0].id).run.mail?.mails[0].subject === 'Order shipped')
+    // Re-delivered after its run (a restart replaying changes): still never a second run.
+    tasks.mailArrived(alice, home.id, [{ ...arrived(), id: delivered.id }], boxes)
+    check('dedupe: a message that had its run never waits again', pending(t.id).length === 0)
+
+    // Several within the window: one run gets the batch.
+    tasks.mailArrived(alice, home.id, [arrived(), arrived()], boxes)
+    fake += 60_000
+    tasks.mailArrived(alice, home.id, [arrived()], boxes)
+    await tasks.tick()
+    check('batching: still collecting inside the window', runsOf(t.id).length === 1 && pending(t.id).length === 3)
+    fake += 61_000
+    await settle(t.id)
+    const second = runsOf(t.id)
+    check('batching: several within the window: one run for all of them', second.length === 2 && JSON.parse(second[1].trigger_mail).mails.length === 3)
+
+    // The hourly cap (2 here): more mail waits and joins the next run's batch, never dropped.
+    tasks.mailArrived(alice, home.id, [arrived()], boxes)
+    fake += 121_000
+    await tasks.tick()
+    check('cap: over the hourly cap, no run, the mail waits', runsOf(t.id).length === 2 && pending(t.id).length === 1)
+    tasks.mailArrived(alice, home.id, [arrived()], boxes)
+    fake += 3600_000
+    await settle(t.id)
+    const third = runsOf(t.id)
+    check('cap: the next hour, one run gets everything that waited', third.length === 3 && JSON.parse(third[2].trigger_mail).mails.length === 2 && pending(t.id).length === 0)
+
+    // Per-user isolation: Bob's mail never starts Alice's task, nor does mail "of" Alice's account sent as Bob.
+    tasks.mailArrived(bob, bobs.id, [arrived()], boxes)
+    tasks.mailArrived(bob, home.id, [arrived()], boxes)
+    check('isolation: another account\'s mail never reaches the task', pending(t.id).length === 0)
+
+    // Paused: mail waiting is dropped, and new mail does not wait.
+    tasks.mailArrived(alice, home.id, [arrived()], boxes)
+    tasks.updateTask(alice, t.id, { status: 'paused' })
+    tasks.mailArrived(alice, home.id, [arrived()], boxes)
+    check('a paused task collects nothing', pending(t.id).length === 0 && !tasks.mailWatched().has(`${alice.id}:${home.id}`))
+
+    // The read grant in a real run: the triggering message is read without asking, any other asks.
+    const r = tasks.createTask(alice, mailSpec('read-trigger', { windowMs: 0 }, { title: 'Reads its mail' }))
+    const toRead = mock.deliver({ from: [{ name: 'Shop', email: 'orders@shop.example' }], subject: 'Read me' })
+    tasks.mailArrived(alice, home.id, [{ ...arrived(), id: toRead.id, subject: 'Read me' }], boxes)
+    await settle(r.id)
+    const readRun = runsOf(r.id)[0]
+    const reads = readRun ? toolMessages(readRun.thread_id).filter((m) => m.tool_name === 'mail_read') : []
+    check('grant: the triggering message is read without asking', reads.length === 1 && reads[0].checked === CALL_VERDICTS.allowed && readRun.pending && /Read me/.test(reads[0].content))
+    check('grant: another message asks (the run waits on it)', readRun?.status === 'waiting' && JSON.parse(readRun.pending).calls.some((c: J) => c.call.name === 'mail_read' && c.state === 'asking'))
+    if (readRun) tasks.cancelRun(alice, readRun.id)
+    tasks.updateTask(alice, r.id, { status: 'paused' })
+
+    // Run now on a mail task: no mail, said so.
+    check('run now on a mail task has no trigger mail', tasks.runNow(alice, t.id).mail === null)
+    await until('run now ends', () => runsOf(t.id).every((x) => OVER.includes(x.status) || x.status === 'waiting'))
+
+    // A task saved before this release still loads (no mail columns written).
+    const old = randomUUID()
+    db.prepare("INSERT INTO agent_tasks (id, user_id, title, instruction, schedule, timezone, policy, report, caps, options, status, created_at, updated_at) VALUES (?, 1, 'v1 task', 'x', ?, 'UTC', '{}', '{}', '{}', '{}', 'paused', ?, ?)").run(old, JSON.stringify({ kind: 'daily', time: '09:00' }), fake, fake)
+    const loaded = tasks.getTask(alice, old)
+    check('old tasks still load (schedule kept, nothing waiting)', loaded.schedule.kind === 'daily' && loaded.mailPending === 0 && loaded.lastRun === null)
+
+    await jmap.mailWatch()
+    await until('push lines go once nothing watches', () => mock.streams() === 0)
+    jmap.removeMail(alice, home.id)
+    jmap.removeMail(bob, bobs.id)
+    await mock.close()
   }
   {
     let refusedFast = false

@@ -49,7 +49,7 @@ export type MockJmap = {
   close: () => Promise<void>
 }
 
-type SeedEmail = { from: J[]; to?: J[]; cc?: J[]; subject: string; text?: string; html?: string; mailbox?: string; at?: number; seen?: boolean; flagged?: boolean; draft?: boolean; thread?: string; attachments?: { name: string; type: string; data: Buffer | string; cid?: string; inline?: boolean }[]; calendar?: string; messageId?: string; inReplyTo?: string }
+type SeedEmail = { from: J[]; to?: J[]; cc?: J[]; subject: string; text?: string; html?: string; mailbox?: string; at?: number; seen?: boolean; flagged?: boolean; draft?: boolean; thread?: string; attachments?: { name: string; type: string; data: Buffer | string; cid?: string; inline?: boolean }[]; calendar?: string; messageId?: string; inReplyTo?: string; headers?: Record<string, string> }
 
 const tracker = 'https://tracker.example/open.gif?u=me%40example.test'
 export const HOSTILE_HTML = `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=https://evil.example/"><base href="https://evil.example/"><style>body { font-family: Georgia, serif; background: url(https://shop.example/bg.png) } .hero { color: #8a2be2; width: expression(alert('css')) } @import url(https://evil.example/x.css); @font-face { font-family: X; src: url(https://evil.example/f.woff) }</style><script>parent.document.cookie</script></head>
@@ -150,6 +150,8 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
       htmlBody: parts.html,
       attachments: parts.files,
     }
+    // Raw headers, as "header:<Name>:asText" properties (what Email/get asks for by that name).
+    for (const [k, v] of Object.entries(seed.headers ?? {})) e[`header:${k}:asText`] = v
     emails.set(eid, e)
     if (record) changed([eid], [], [])
     return e
@@ -432,7 +434,8 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
         out.notCreated[cid] = { type: 'blobNotFound' }
         continue
       }
-      const e = make({ from: c.from ?? [], to: c.to, cc: c.cc, subject: c.subject ?? '', text, mailbox: Object.keys(c.mailboxIds)[0], seen: !!c.keywords?.$seen, draft: !!c.keywords?.$draft, inReplyTo: c.inReplyTo?.[0] }, false)
+      const headers = Object.fromEntries(Object.entries(c).filter(([k]) => /^header:[^:]+:asText$/.test(k)).map(([k, v]) => [k.split(':')[1], String(v)]))
+      const e = make({ from: c.from ?? [], to: c.to, cc: c.cc, subject: c.subject ?? '', text, mailbox: Object.keys(c.mailboxIds)[0], seen: !!c.keywords?.$seen, draft: !!c.keywords?.$draft, inReplyTo: c.inReplyTo?.[0], headers }, false)
       e.bcc = c.bcc ?? null
       e.references = c.references ?? e.references
       for (const a of files) {
