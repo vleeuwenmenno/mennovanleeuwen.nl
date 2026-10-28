@@ -1,0 +1,494 @@
+/* The Agents app's Tasks tab (src/apps/AgentsTasks.tsx): the list, a task, a run, the editor. */
+
+.agt-scroll.agt-tk {
+  display: block;
+  padding: 14px 20px 28px;
+}
+.agt-tk > * {
+  max-width: 820px;
+}
+.agt-tk-banner {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--yellow);
+  color: var(--fg-bright);
+  background: var(--bg-dark);
+}
+.agt-tk-empty p {
+  margin: 0 0 8px;
+  max-width: 60ch;
+}
+.agt-tk-group {
+  margin: 0 0 16px;
+}
+.agt-tk-group h4,
+.agt-tk-sub {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.agt-tk-list,
+.agt-tk-runs,
+.agt-tk-policy,
+.agt-tk-tools {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.agt-tk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 0;
+}
+.agt-tk-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.agt-tk-main:hover,
+.agt-tk-run:hover {
+  background: var(--bg-dark);
+}
+.agt-tk-main strong {
+  color: var(--fg-bright);
+  overflow-wrap: anywhere;
+}
+.agt-tk-last {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.agt-tk-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.agt-tk-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.agt-tk-chip.is-ok {
+  border-color: var(--green);
+  color: var(--green);
+}
+.agt-tk-chip.is-bad {
+  border-color: var(--red);
+  color: var(--red);
+}
+.agt-tk-chip.is-ask {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+.agt-tk-chip.is-busy {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.agt-tk-chip.is-off {
+  color: var(--muted);
+}
+.agt-tk-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px 16px;
+  margin: 0 0 6px;
+}
+.agt-tk-facts dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.agt-tk-facts dd {
+  margin: 0;
+  color: var(--fg-bright);
+  overflow-wrap: anywhere;
+}
+.agt-tk-instruction,
+.agt-tk-msg.is-user pre {
+  margin: 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-dark);
+  border: 1px solid var(--line);
+  font-family: inherit;
+}
+.agt-tk-summary p {
+  margin: 0 0 4px;
+}
+.agt-tk-warn {
+  padding: 6px 8px;
+  border-left: 3px solid var(--yellow);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+}
+.agt-tk-help {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.agt-tk-note {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.agt-tk-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+.agt-tk-run {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.agt-tk-reason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-tk-ask {
+  margin: 0 0 10px;
+}
+.agt-tk-report {
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+}
+.agt-tk-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agt-tk-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agt-tk-msg.is-live {
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+}
+.agt-tk-thinking pre,
+.agt-tk-live-thinking {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+.agt-tk-verdict {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 11px;
+  border: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+.agt-tk-verdict.is-allowed {
+  color: var(--green);
+  border-color: var(--green);
+}
+.agt-tk-verdict.is-approved {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.agt-tk-verdict.is-denied,
+.agt-tk-verdict.is-expired {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+.agt-tk-verdict.is-blocked {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* The editor. */
+.agt-tk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agt-tk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.agt-tk-field > span:first-child {
+  font-size: 12px;
+  color: var(--muted);
+}
+.agt-tk-field input:not([type='checkbox']),
+.agt-tk-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.agt-tk-set {
+  border: 1px solid var(--line);
+  padding: 8px 12px 12px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.agt-tk-set legend {
+  padding: 0 4px;
+  color: var(--fg-bright);
+}
+.agt-tk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 14px;
+  align-items: end;
+}
+.agt-tk-wide {
+  grid-column: 1 / -1;
+}
+.agt-tk-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+}
+.agt-tk-cron {
+  font-family: var(--mono);
+  min-width: 14em;
+}
+.agt-tk-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.agt-tk-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.agt-tk-day {
+  min-width: 44px;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg);
+  cursor: pointer;
+}
+.agt-tk-day.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.agt-tk-policy > li {
+  border-bottom: 1px solid var(--line);
+  padding: 4px 0;
+}
+.agt-tk-policy > li.is-off .agt-tk-pname {
+  color: var(--muted);
+}
+.agt-tk-prow,
+.agt-tk-tools > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.agt-tk-pname {
+  border: 0;
+  background: none;
+  color: var(--fg-bright);
+  padding: 4px 0;
+  cursor: pointer;
+  text-align: left;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.agt-tk-pname:disabled {
+  cursor: default;
+}
+.agt-tk-tools {
+  margin: 2px 0 6px 18px;
+}
+.agt-tk-tools > li {
+  padding: 3px 0;
+  font-size: 13px;
+}
+.agt-tk-tools > li.is-off {
+  color: var(--muted);
+}
+.agt-tk-verdicts {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.agt-tk-verdicts button {
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.agt-tk-verdicts button + button {
+  border-left: 0;
+}
+.agt-tk-verdicts button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.agt-tk-verdicts button.is-on.is-allow {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--bg);
+}
+.agt-tk-verdicts button.is-on.is-ask {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: var(--bg);
+}
+.agt-tk-verdicts button.is-on.is-block {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--bg);
+}
+.agt-tk-scopes > summary {
+  cursor: pointer;
+  padding: 4px 0;
+  color: var(--fg-bright);
+}
+.agt-tk-scopes[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agt-tk-folders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.agt-tk-save {
+  position: sticky;
+  bottom: 0;
+  padding: 8px 0;
+  background: var(--bg);
+}
+
+/* The editor in a dialog, for an approval card. */
+.agt-tk-dialog-back {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-darker, var(--bg)) 70%, transparent);
+}
+.agt-tk-dialog {
+  width: min(760px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  box-sizing: border-box;
+}
+.agt-tk-dialog h3 {
+  margin: 0 0 10px;
+}
+
+/* Phones and narrow windows: everything in one column, buttons a thumb can hit. */
+@media (max-width: 620px) {
+  .agt-scroll.agt-tk {
+    padding: 10px 12px 24px;
+  }
+  .agt-tk-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .agt-tk-actions {
+    justify-content: flex-start;
+  }
+  .agt-tk-run {
+    grid-template-columns: auto 1fr;
+  }
+  .agt-tk-reason {
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+  .agt-tk-dialog {
+    width: 100vw;
+    max-height: 100dvh;
+    height: 100dvh;
+  }
+}
+@media (pointer: coarse) {
+  .agt-tk-verdicts button,
+  .agt-tk-day,
+  .agt-tk-pname,
+  .agt-tk-main,
+  .agt-tk-run {
+    min-height: 44px;
+  }
+  .agt-tk-check input {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+/* The Tasks button's badge in the sidebar: runs going (a number), or ! when one waits for you. */
+.agt-task-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  line-height: 1;
+  box-sizing: border-box;
+}
+.agt-task-badge.is-ask {
+  background: var(--yellow);
+  color: var(--bg);
+}
+.agt-fx-foot button,
+.agt-task-icon {
+  position: relative;
+}
+.agt-fx-foot .agt-task-badge,
+.agt-task-icon .agt-task-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  margin: 0;
+}

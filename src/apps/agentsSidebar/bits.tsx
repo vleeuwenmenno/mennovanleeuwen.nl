@@ -61,6 +61,12 @@ export const ICONS: Record<string, ReactNode> = {
     </>
   ),
   plus: <path d="M12 5v14M5 12h14" />,
+  tasks: (
+    <>
+      <circle cx="12" cy="13" r="8" />
+      <path d="M12 9v4l3 2M9 2h6" />
+    </>
+  ),
   archive: (
     <>
       <path d="M3 5h18v4H3zM5 9v10h14V9M10 13h4" />

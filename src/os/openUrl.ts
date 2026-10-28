@@ -10,7 +10,7 @@ import type { AppId } from './wm'
 
 /** What an address may say for each app: anything else in it is ignored (a link can't make the terminal run a command). */
 const PROPS: Partial<Record<AppId, string[]>> = {
-  agents: ['thread'],
+  agents: ['thread', 'tab', 'task', 'run'],
   tasks: ['task'],
   mail: ['account', 'email', 'message'],
   calendar: ['date', 'event'],
@@ -33,6 +33,9 @@ export function openFromParams(params: URLSearchParams, open: (app: AppId, props
     if (v && v.length <= 1000) props[k] = v
   }
   if (props.thread && !/^[0-9a-f-]{36}$/.test(props.thread)) delete props.thread
+  // The Agents app's Tasks tab, at a task or run (an agent task's notification): ids only.
+  for (const k of ['task', 'run'] as const) if (props[k] && !/^[0-9a-f-]{36}$/.test(props[k])) delete props[k]
+  if (props.tab && !/^[a-z]{1,20}$/.test(props.tab)) delete props.tab
   open(app, Object.keys(props).length ? { ...props, t: String(Date.now()) } : undefined)
   return true
 }

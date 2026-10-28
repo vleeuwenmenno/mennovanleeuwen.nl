@@ -3,6 +3,7 @@ import { applyChange, receive, setAccountList } from './notify'
 import { calendarChangedElsewhere } from '../data/calendar'
 import { mailChangedElsewhere } from '../data/mail'
 import { pullAll } from './synced'
+import { TASKS_EVENT } from '../data/agentTasks'
 import { accountGuard, TAB_ACCOUNT } from './accountSpace'
 
 // The live line to the server's notification hub (server/notifier.ts) while signed in: new
@@ -46,6 +47,8 @@ function connect() {
   stream.addEventListener('mail', (e) => mailChangedElsewhere(JSON.parse((e as MessageEvent).data)))
   // Synced state the server changed itself (an agent made or linked a note): load it now, not at the next poll.
   stream.addEventListener('state', () => void pullAll())
+  // An agent task or run changed (server/agentTasks.ts): the Tasks tab and its badge look again.
+  stream.addEventListener('tasks', (e) => window.dispatchEvent(new CustomEvent(TASKS_EVENT, { detail: JSON.parse((e as MessageEvent).data) })))
   document.addEventListener('visibilitychange', onVisibility)
   beat = setInterval(() => inView() && presence(), HEARTBEAT_MS)
 }
