@@ -673,28 +673,35 @@ class Shell {
 
   /** A heredoc's text: $, ` and \ work, quotes are just characters. */
   private async expandHeredoc(body: string, io: Io): Promise<string> {
-    let out = ''
+    const out = bufferSink(this.base.budget)
+    const append = (value: string | string[]) => {
+      // Avoid joining positional parameters into an uncharged intermediate string.
+      const parts = Array.isArray(value) ? value : [value]
+      for (let k = 0; k < parts.length; k++) {
+        this.checkAbort()
+        if (k) out.write(' ')
+        out.write(parts[k])
+      }
+    }
     for (let i = 0; i < body.length; ) {
       const ch = body[i]
       if (ch === '\\' && /[$`\\\n]/.test(body[i + 1] ?? '')) {
-        if (body[i + 1] !== '\n') out += body[i + 1]
+        if (body[i + 1] !== '\n') append(body[i + 1])
         i += 2
       } else if (ch === '$') {
         const { v, end } = await this.dollar(body, i, io, true)
-        out += Array.isArray(v) ? v.join(' ') : v
+        append(v)
         i = end
       } else if (ch === '`') {
         const end = nestedEnd(body, i)
-        out += await this.substitute(body.slice(i + 1, end - 1), io)
+        append(await this.substitute(body.slice(i + 1, end - 1), io))
         i = end
       } else {
-        const why = this.base.budget?.write(1, out.length)
-        if (why) throw new LimitSignal(why)
-        out += ch
+        append(ch)
         i++
       }
     }
-    return out
+    return out.text
   }
 
   /** Pathname expansion against the filesystem (Seafile folders are fetched first). */
@@ -961,6 +968,10 @@ class Shell {
       for (const r of redirs) {
         if (r.op === '<<' || r.op === '<<-') {
           const body = r.heredoc!.quoted ? r.heredoc!.body : await this.expandHeredoc(r.heredoc!.body, io)
+          if (r.heredoc!.quoted) {
+            const why = this.base.budget?.write(body.length, 0)
+            if (why) throw new LimitSignal(why)
+          }
           next.stdin = { data: body, pos: 0 }
           continue
         }
@@ -1201,17 +1212,29 @@ class Shell {
   }
 
   private async external(name: string, args: string[], io: Io): Promise<number> {
-    if (name.includes('/')) {
+    // Resolve registry identity before touching files or dispatching help. A noncanonical /bin
+    // path, a bind alias or another registered alias must pass the same gate as its target.
+    const cmd = hooks.commands[name] ?? hooks.executable(name, this.base.cwd, !!this.base.root)
+    const known = hooks.commands[name] ? name : (Object.keys(hooks.commands).find((k) => hooks.commands[k] === cmd) ?? null)
+    if (known) {
+      const denied = this.base.policy?.command(known, args, this.base.cwd)
+      if (denied) {
+        io.err.write(`${red(`msh: ${denied}`)}\n`)
+        return 126
+      }
+    } else if (name.includes('/')) {
       const script = await this.scriptAt(name, io)
       if (script === 'refused') return 126
       if (script !== null) return this.child(name, args).runSource(script, io, name)
     }
-    const cmd = hooks.commands[name] ?? hooks.executable(name, this.base.cwd, !!this.base.root)
     if (!cmd) {
       io.err.write(`${red(`msh: command not found: ${name}${name.length > 2 ? hooks.suggest(name) : ''}`)}\n`)
       return 127
     }
-    const known = hooks.commands[name] ? name : (Object.keys(hooks.commands).find((k) => hooks.commands[k] === cmd) ?? null)
+    if (this.base.policy && !known) {
+      io.err.write(`${red(`msh: ${name}: executable has no authorized registry identity`)}\n`)
+      return 126
+    }
     const stdin = io.stdin ? drain(io.stdin, true) : null
     try {
       const help = known !== null && hooks.asksHelp(known, args)

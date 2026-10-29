@@ -1,3 +1,4 @@
+import { agentGrepRefusal, parseGrepArgs } from './grepArgs'
 import { contributions, headlines, profile, projects } from '../data/profile'
 import { countFor, levels, loadContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
@@ -545,8 +546,10 @@ export const commands: Record<string, Command> = {
     desc: 'search text',
     usage: 'grep [-i] [-n] [-v] [-c] [-r] [-q] [-w] [-F] <pattern> [file|dir]',
     run: (ctx) => {
-      const f = flags(ctx.args)
-      const [pattern, ...files] = f.rest
+      const f = parseGrepArgs(ctx.args)
+      const { pattern, files } = f
+      const refused = ctx.policy && agentGrepRefusal(f)
+      if (refused) throw new CmdError(refused, false, 126)
       if (pattern === undefined) throw new CmdError('usage: grep [-i] [-n] [-v] [-r] <pattern> [file]')
       let re: RegExp
       try {
@@ -1285,11 +1288,18 @@ export const commands: Record<string, Command> = {
   calc: {
     desc: 'calculator with units and currencies',
     usage: "calc <expression>   e.g. calc 5 ft 11 in to cm · calc €20 + 15 USD in GBP · calc 1 TB in GiB",
-    run: async ({ args, stdin }) => {
+    run: async (ctx) => {
+      const { args, stdin } = ctx
       const text = (args.length ? args.join(' ') : (stdin ?? '')).trim()
       if (!text) throw new CmdError(`usage: ${commands.calc.usage}`)
       let res = smartCalc(text)
-      if (res?.kind === 'pending') res = smartCalc(text, await loadRates())
+      if (res?.kind === 'pending') res = smartCalc(text, await loadRates({
+        signal: ctx.signal,
+        authorize: () => {
+          checkActor(actorOf(ctx))
+          if (ctx.policy && !ctx.policy.grant.network) throw new CmdError('calc: fetching exchange rates needs network approval; run the currency calculation directly', false, 126)
+        },
+      }))
       if (!res || res.kind === 'pending') throw new CmdError(res ? 'calc: exchange rates are unavailable right now' : `calc: '${text}' is not something I can calculate`)
       if (res.kind === 'error') throw new CmdError(`calc: ${res.message}`)
       return [c('accent', res.value), ...res.alternatives.map((a) => c('muted', `= ${a}`)), ...(res.note ? [c('muted', res.note)] : [])].join('\n')

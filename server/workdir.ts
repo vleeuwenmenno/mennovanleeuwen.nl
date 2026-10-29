@@ -1,3 +1,5 @@
+import { posix } from 'node:path'
+import { calculatorUsesRates } from '../src/os/smartcalc.ts'
 import { Worker } from 'node:worker_threads'
 import type { User } from './auth.ts'
 import { guardedFetch } from './egress.ts'
@@ -520,7 +522,7 @@ export async function projectInstructions(user: User, w: Workdir, signal: AbortS
 const READ_ONLY = new Set([
   'ls', 'll', 'cat', 'less', 'more', 'bat', 'head', 'tail', 'wc', 'grep', 'egrep', 'sort', 'uniq', 'tree', 'pwd', 'echo', 'printf', 'stat', 'du', 'df', 'file',
   'which', 'type', 'whoami', 'id', 'date', 'cal', 'uname', 'uptime', 'hostname', 'env', 'man', 'help', 'jq', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'base64',
-  'seq', 'basename', 'dirname', 'test', '[', 'true', 'false', ':', 'cd', 'calc', 'nproc', 'free', 'ps', 'diff', 'read', 'set', 'export', 'local',
+  'seq', 'basename', 'dirname', 'test', '[', 'true', 'false', ':', 'cd', 'calc', 'units', 'bc', 'nproc', 'free', 'ps', 'diff', 'read', 'set', 'export', 'local',
   'sleep', 'findmnt', 'lsblk', 'tty', 'history', 'fastfetch', 'fortune', 'cowsay', 'figlet',
 ])
 // Not here on purpose: find and fd (-delete, -exec, fd -x in ways a word check misses), and dig,
@@ -535,7 +537,7 @@ function checksSyntax(c: { name: string; args: string[] }): boolean {
 
 /** Whether a command line only reads (so it can run without the user allowing it). */
 export function readOnlyCommand(line: string): boolean {
-  if (commandNames(line).some((n) => NETWORK_COMMANDS.has(n))) return false
+  if (terminalNeedsNetwork(line)) return false
   if (/[`]|\$\(/.test(line)) return false
   let tree
   try {
@@ -553,10 +555,28 @@ export function readOnlyCommand(line: string): boolean {
   })
 }
 
+/** Absolute /bin paths name the same built-in command after normalization. Relative script
+ * paths cannot gain network authority from their spelling; resolved operations still check it. */
+function canonicalCommand(name: string) {
+  const normalized = name.startsWith('/') ? posix.normalize(name) : name
+  return /^\/bin\/[^/]+$/.test(normalized) ? normalized.slice(5) : name
+}
+
+/** A currency expression can fetch rates; ordinary arithmetic and unit conversion cannot.
+ * Shell expansion and stdin remain subject to the actual fetch guard in the client. */
+export function terminalNeedsNetwork(line: string): boolean {
+  try {
+    return commandWords(parse(line)).some((c) => {
+      const name = canonicalCommand(c.name)
+      return NETWORK_COMMANDS.has(name) || (['calc', 'units', 'bc'].includes(name) && calculatorUsesRates(c.args.join(' ')))
+    })
+  } catch { return false }
+}
+
 /** The command names in a line, for "don't ask again for these". */
 export function commandNames(line: string): string[] {
   try {
-    return [...new Set(commandWords(parse(line)).map((c) => c.name).filter((n) => n && n !== 'function' && !/[$*?[]/.test(n)))]
+    return [...new Set(commandWords(parse(line)).map((c) => canonicalCommand(c.name)).filter((n) => n && n !== 'function' && !/[$*?[]/.test(n)))]
   } catch {
     return []
   }
@@ -598,6 +618,6 @@ export function terminalGrant(permission: Permission, line: string, access: Term
     case 'bypass':
       return { mode: permission, write: true, delete: true, network: true, steering: false }
     case 'approved':
-      return { mode: permission, write: true, delete: has(DELETE_COMMANDS), network: has(NETWORK_COMMANDS), steering: explicitlyApproved && STEERING_IN_LINE.test(line) }
+      return { mode: permission, write: true, delete: has(DELETE_COMMANDS), network: terminalNeedsNetwork(line), steering: explicitlyApproved && STEERING_IN_LINE.test(line) }
   }
 }

@@ -666,7 +666,9 @@ host shell is involved.
   steps, the time, 60,000 characters kept per stream (more is dropped and counted), 4 MiB per
   intermediate buffer (a pipe stage, a `$(…)`, a file being redirected into), 32 MiB written in all,
   1 MiB per variable, and `printf` padding capped. Formatting and expansion charge allocations
-  incrementally, before padding or concatenation. Command/script source is capped at 64,000
+  incrementally, before padding or concatenation. Heredoc literals, escapes, substitutions and
+  positional-argument arrays use the same budget; arrays are appended without an uncharged join.
+  Command/script source is capped at 64,000
   characters; field splitting is incremental and capped at 10,000 fields (IFS at 256 characters);
   agent shell patterns allow at most 256 characters and one `*`, and pattern
   substitutions operate on values of at most 4096 characters. Stop, a timeout or a spent limit ends the run at
@@ -679,7 +681,9 @@ host shell is involved.
   the shell *resolves*, never on the text of the line
   ([`src/terminal/policy.ts`](src/terminal/policy.ts)): every command after expansion (so variables,
   globs, `eval`, `source`, nested `msh`, functions and scripts are all seen as the commands they
-  become), every redirect target, every script read, every directory a glob lists, `cd`, and, in
+  become). Before preparation, dispatch or help, executable paths and aliases resolve to their
+  registered command identity and are authorized again; unknown executable handlers fail closed.
+  Checks also cover every redirect target, every script read, every directory a glob lists, `cd`, and, in
   [`fs.ts`](src/terminal/fs.ts), every file written, moved, removed or `chmod`ed.
   - Reads and writes stay inside both the work folder's terminal path and its authorized backing
     repository/path. Foreign nested mounts and bind mounts outside that backing path are refused;
@@ -695,8 +699,17 @@ host shell is involved.
     `curl`, running them directly does. `AGENTS.md`, `CLAUDE.md`, `.agents/` and `.claude/` can be
     written only when the approved line names them ([`src/data/steering.ts`](src/data/steering.ts)),
     even in Bypass; a name built from a variable is refused. Steering permission requires a fresh
-    explicit approval of this call; remembered command approvals never grant it. `git`, `changelog`
-    and `releases` are network commands too, including when reached from scripts.
+    explicit approval of this call; remembered command approvals never grant it. Both the visible
+    path and the resolved backing path are checked, so bind aliases cannot hide steering files.
+    `git`, `changelog`
+    and `releases` are network commands too, including when reached from scripts. `calc`, `units`
+    and `bc` remain usable for offline arithmetic and unit conversions. Their rate-cache misses
+    require network authority at every actual rate request; cached rates need no network. The
+    server uses the same calculator parser to ask before literal currency expressions (also when
+    rates might already be cached), and such approvals are not remembered by command name.
+    Dynamic expressions or stdin cannot obtain network authority from merely naming `calc`: run
+    the currency expression directly or use Bypass. Rate requests carry cancellation, never borrow
+    an unguarded in-flight request, and do not start fallbacks or cache late results after abort.
   - A command with no entry in the policy table's `EFFECTS` does not run (apps, `sudo`, editors,
     `watch`, `mount`, `kill`, `theme`, …; `find -exec/-delete/-fprint` and `fd -x`), and the check
     script fails when a new command is neither listed nor on its list of ones an agent never runs.
@@ -706,7 +719,9 @@ host shell is involved.
     file operations remain available. To avoid uninterruptible regex/query workloads, agents use
     literal `grep` (`-F` for metacharacters) and bounded `find` glob patterns;
     recursive `grep`, `find -regex/-iregex`, `fd` (including its ignore-file regexes), and `jq` are unavailable. Patterns are not treated as
-    file operands during preparation or authorization.
+    file operands during preparation or authorization. Grep execution, preparation and policy
+    share one argument parser, including dash-prefixed patterns, letter clusters and `--`. Agent
+    grep patterns are limited to 4096 characters.
 - *Cancellation.* Each executor registers the call before claiming it, snapshots its thread/work
   folder, and aborts on Stop, unmount, thread changes or `clientDone`. A late claim cannot start
   execution. Preparation and mutation boundaries recheck cancellation and the budget; uploads

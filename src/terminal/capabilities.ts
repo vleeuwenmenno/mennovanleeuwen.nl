@@ -90,6 +90,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
       summary: info?.desc ?? 'shell builtin',
       kind: builtins.has(name) ? ('builtin' as const) : ('command' as const),
       ...(info?.hidden ? { alias: true } : {}),
+      ...(['calc', 'units', 'bc'].includes(name) ? { conditionalNetwork: 'Exchange-rate cache misses require network authority; arithmetic, units and cached rates stay offline.' } : {}),
       usage: info?.usage ?? null,
       options,
       optionsComplete: info?.usage ? complete : false,
@@ -98,7 +99,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
     }
   })
 
-  const commands = compact && !only ? full.filter((c) => !('alias' in c)).map(({ name, group, summary, kind, options, optionsComplete, ...rest }) => ({ name, group, summary: summary.slice(0, 60), kind, options: options.map((o) => (o.takesValue ? `${o.flag} <v>` : o.flag)), ...(optionsComplete ? {} : { optionsComplete }), ...('available' in rest ? { available: rest.available, ...(rest.available && rest.restriction ? { restriction: rest.restriction } : {}) } : {}) })) : full
+  const commands = compact && !only ? full.filter((c) => !('alias' in c)).map(({ name, group, summary, kind, options, optionsComplete, ...rest }) => ({ name, group, summary: summary.slice(0, 60), kind, options: options.map((o) => (o.takesValue ? `${o.flag} <v>` : o.flag)), ...(optionsComplete ? {} : { optionsComplete }), ...('conditionalNetwork' in rest ? { conditionalNetwork: rest.conditionalNetwork } : {}), ...('available' in rest ? { available: rest.available, ...(rest.available && rest.restriction ? { restriction: rest.restriction } : {}) } : {}) })) : full
 
   const all = mounts()
   const root = grant?.root ?? null
@@ -155,7 +156,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
     },
     integrations,
     limits: ctx.budget
-      ? { maxSourceChars: 64_000, maxExpandedFields: 10_000, maxPatternChars: 256, maxPatternStars: 1, maxPatternInputChars: 4096, maxIfsChars: 256, deadline: 'cooperative; synchronous JavaScript is not preempted', timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
+      ? { maxSourceChars: 64_000, maxExpandedFields: 10_000, maxPatternChars: 256, maxPatternStars: 1, maxPatternInputChars: 4096, maxGrepPatternChars: 4096, maxIfsChars: 256, deadline: 'cooperative; synchronous JavaScript is not preempted', timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
       : null,
     sessionRights: grant ? { mode: grant.mode, write: !!root && grant.mode !== 'plan', writeApproval: ['bypass', 'acceptEdits'].includes(grant.mode) ? 'not required inside work folder' : 'required', deleteApproval: grant.mode === 'bypass' ? 'not required' : 'required', networkApproval: grant.mode === 'bypass' ? 'not required' : 'required', steeringApproval: 'fresh explicit approval always required', queryAuthority: 'permissions below apply only to this call' } : null,
     permissions: grant ? { mode: grant.mode, write: grant.write, delete: grant.delete, network: grant.network, steering: grant.steering } : null,

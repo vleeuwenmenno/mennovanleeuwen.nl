@@ -33,6 +33,8 @@ const REPO = 'https://github.com/uowuo/abaddon'
 
 const fetch_ = (url: string): Call => ({ name: 'web_fetch', arguments: { url } })
 const SCENARIOS: Record<string, Call[][]> = {
+  'remember-calc': [[{ name: 'terminal', arguments: { command: 'calc \"2 + 2\"' } }]],
+  'currency-calc': [[{ name: 'terminal', arguments: { command: 'calc 10 EUR in USD' } }]],
   'remember-tee': [[{ name: 'terminal', arguments: { command: 'tee ordinary.txt' } }]],
   'steering-tee': [[{ name: 'terminal', arguments: { command: 'tee AGENTS.md' } }]],
   // The user's own example: a repository it read, then its commits and releases.
@@ -311,6 +313,11 @@ try {
   await turn(remembered.id, 'SCENARIO steering-tee', () => ({ allow: true }), 'exec')
   check('Fresh explicit steering approval grants steering', (clients.at(-1)?.grant as { steering?: boolean })?.steering === true)
   check('Text alone cannot manufacture a steering grant', !terminalGrant('default', 'tee AGENTS.md', 'approved').steering)
+  const calcThread = await newThread({ permission: 'default', workdir })
+  await turn(calcThread.id, 'SCENARIO remember-calc', () => ({ allow: true, always: 'command' }), 'exec')
+  const beforeCurrency = clients.length
+  const currency = await turn(calcThread.id, 'SCENARIO currency-calc', () => ({ allow: false }), 'exec')
+  check('Remembering calculator use cannot silently authorize later rate requests', currency.asked.length === 1 && clients.length === beforeCurrency)
   const tp = await newThread({ permission: 'plan', workdir })
   const tpRun = await turn(tp.id, 'SCENARIO term-plan', () => ({ allow: false }), true)
   const tpGrant = clients[clients.length - 1]?.grant
@@ -322,6 +329,14 @@ try {
   for (const command of ['git show secret-data', 'changelog', 'releases']) {
     check(`Edits allowed still asks for network command ${command}`, decideTerminal(by.id, 'acceptEdits', command).decision === 'ask')
     check(`Approved ${command} receives network authority`, terminalGrant('default', command, 'approved', true).network)
+  }
+  for (const command of ['calc 10 EUR in USD', "calc '10 EUR in USD'", 'units 10 EUR in USD', 'bc 10 EUR in USD', '/bin/../bin/calc 10 EUR in USD']) {
+    check(`Currency expression asks before possible rate I/O: ${command}`, decideTerminal(by.id, 'acceptEdits', command).decision === 'ask')
+    check(`Currency expression is refused in Plan: ${command}`, decideTerminal(by.id, 'plan', command).decision === 'refuse')
+    check(`Approved currency expression gets network authority: ${command}`, terminalGrant('default', command, 'approved', true).network)
+  }
+  for (const command of ['calc 2+2', 'units 1 km in m', 'bc 15% of 80']) {
+    check(`Pure calculator remains automatic and offline: ${command}`, decideTerminal(by.id, 'default', command).decision === 'run' && !terminalGrant('default', command, 'readonly').network)
   }
   const t = by.id
   const img = { name: 'generate_image', arguments: { prompt: 'a lighthouse' } }

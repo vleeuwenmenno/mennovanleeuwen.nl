@@ -1,4 +1,5 @@
-import { sfPath } from '../data/seafile'
+import { agentGrepRefusal, parseGrepArgs } from './grepArgs'
+import { parseSf, sfPath } from '../data/seafile'
 import { whereIs, mounts } from '../data/mounts'
 import { STEERING } from '../data/steering'
 import { resolvePath } from './vfs'
@@ -108,7 +109,9 @@ export function makePolicy(grant: Grant): Policy {
     if (!grant.write) return `${abs}: this call may not change files (${grant.mode} mode)`
     if (!inside(root, abs)) return `${abs}: outside ${where}, the only place an agent writes`
     if (op === 'delete' && !grant.delete) return `${abs}: deleting needs the user's approval, and this call's text must name rm or rmdir`
-    if (STEERING.test(abs) && !grant.steering) return `${abs}: steers the agent, so it only changes when the user approves a command naming it`
+    const resolved = whereIs(abs)
+    const backingPath = resolved.kind === 'sf' ? parseSf(resolved.sf)?.p : 'path' in resolved ? resolved.path : undefined
+    if ((STEERING.test(abs) || (backingPath !== undefined && STEERING.test(backingPath))) && !grant.steering) return `${abs}: steers the agent, so it only changes when the user approves a command naming it`
     return null
   }
   const first = <T>(items: T[], check: (item: T) => string | null) => {
@@ -127,15 +130,17 @@ export function makePolicy(grant: Grant): Policy {
     write,
     cwd: (to) => read(to) ?? (!root || inside(root, to) ? null : `${to}: outside ${where}`),
     command(rawName, args, cwd) {
-      let name = rawName
+      let name = rawName.includes('/') ? resolvePath(cwd, rawName) : rawName
       if (name.includes('/')) {
         // /bin/ls is ls; a path is a script, which is read (and so confined) when it runs.
         if (name.startsWith('/bin/') && !name.slice(5).includes('/')) name = name.slice(5)
         else return /\.game$/.test(name) ? `${name}: games do not run from the agent` : read(abs(cwd, name))
       }
-      if (name === 'grep' && !args.some((a) => /^-[a-zA-Z]*F/.test(a)) && /[.*+?^${}()|[\]\\]/.test(operands(args)[0] ?? '')) return 'grep: agents use -F for patterns containing regex metacharacters (uninterruptible regex evaluation is unavailable)'
+      if (name === 'grep') {
+        const why = agentGrepRefusal(parseGrepArgs(args))
+        if (why) return why
+      }
       if (name === 'find' && (args.some((a) => ['-regex', '-iregex'].includes(a)) || args.some((a) => a.length > 256 || (a.match(/\*/g)?.length ?? 0) > 1))) return 'find: agent searches allow bounded glob patterns only, not regular expressions'
-      if (name === 'grep' && args.some((a) => /^-[a-zA-Z]*[rR]/.test(a))) return 'grep: recursive agent searches are unavailable; search individual files'
       const effect = EFFECTS[name]
       if (effect === undefined || effect === 'blocked') return `${name}: not available to an agent (requires unsupported effects or unbounded synchronous execution); \`help --json\` lists what runs`
       switch (effect) {
@@ -170,7 +175,8 @@ export function makePolicy(grant: Grant): Policy {
 /** Files a command prepares. Patterns/filters are data, never paths. */
 export function fileOperands(name: string, args: string[]): string[] {
   const words = operands(args)
-  if (['grep', 'egrep', 'jq', 'fd'].includes(name)) return words.slice(1)
+  if (name === 'grep' || name === 'egrep') return parseGrepArgs(args).files.filter((p) => p !== '-')
+  if (['jq', 'fd'].includes(name)) return words.slice(1)
   if (name === 'find') return args.slice(0, args.findIndex((a) => a.startsWith('-')) < 0 ? args.length : args.findIndex((a) => a.startsWith('-')))
   if (name === 'chmod') return words.slice(1)
   return words

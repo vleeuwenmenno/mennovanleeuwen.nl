@@ -406,6 +406,75 @@ try {
   const cwdOk = await tool('terminal', { command: 'pwd', cwd: '/tmp' })
   check(cwdOk.result?.stdout === '/tmp' && cwdOk.result?.cwd === '/tmp', 'cwd names the folder the call starts in')
 
+  // Round-two regressions, first run against f958cc5 to reproduce the review findings.
+  {
+    const previous = g.fetch
+    let requests = 0
+    g.fetch = async () => { requests++; return new Response('{}', { status: 503 }) }
+    const noFolder = grantOf({ root: null, write: false })
+    const pathGit = await result('/bin/../bin/git show private-text', noFolder)
+    check(pathGit.exit_code === 126 && requests === 0, 'R2 canonical executable cannot bypass network authority', JSON.stringify({ requests, pathGit }))
+    const pathTar = await result('/bin/../bin/tar --help', noFolder)
+    check(pathTar.exit_code === 126 && pathTar.stdout === '', 'R2 blocked executable cannot bypass policy through help', JSON.stringify(pathTar))
+    for (const name of ['calc', 'units', 'bc']) {
+      requests = 0
+      const r = await result(`${name} 10 EUR in USD`, READONLY)
+      check(r.exit_code !== 0 && requests === 0, `R2 ${name} cannot fetch rates without network authority`, JSON.stringify({ requests, r }))
+    }
+    g.fetch = previous
+  }
+  {
+    const previous = g.fetch
+    let requests = 0
+    g.fetch = async () => { requests++; return new Response('{}', { status: 503 }) }
+    for (const name of ['git', 'changelog', 'releases', 'tar', 'unzip']) {
+      for (const path of [`/bin//${name}`, `/bin/./${name}`, `/bin/../bin/${name}`]) {
+        for (const prefix of ['', 'command ', 'eval ']) {
+          const r = await result(`${prefix}${path} --help`, grantOf({ root: null, write: false }))
+          check(r.exit_code === 126 && !r.stdout && requests === 0, `resolved registry identity gates ${prefix}${path}, including help`)
+        }
+      }
+    }
+    for (const path of ['./git', '../bin/git']) {
+      const r = await execute(path + ' show private-text', '/bin', grantOf({ root: null, write: false }), AGENT_LIMITS, new AbortController().signal)
+      check(r.status === 126 && requests === 0, `relative executable ${path} is gated after resolution`)
+    }
+    eq((await result('/bin/../bin/echo pure', grantOf({ root: null }))).stdout, 'pure', 'canonical resolution preserves useful pure commands')
+    for (const command of ['calc 2 + 2', 'units 1 km in m', 'bc 15% of 80']) {
+      const r = await result(command, READONLY)
+      check(r.exit_code === 0 && requests === 0, `${command} stays useful offline`)
+    }
+    for (const line of ['calc 10 EUR in USD', "calc '10 EUR in USD'", 'units 10 EUR in USD', 'bc 10 EUR in USD', '/bin/../bin/calc 10 EUR in USD']) {
+      check(terminalGrant('default', line, 'approved', true).network, `server grants explicitly approved rate expression: ${line}`)
+      check(!readOnlyCommand(line), `server does not classify rate expression as pure: ${line}`)
+    }
+    g.fetch = previous
+  }
+  const unknownExecutable = await result('echo opaque > /tmp/opaque-executable; chmod +x /tmp/opaque-executable; /tmp/opaque-executable')
+  check(unknownExecutable.exit_code === 126 && unknownExecutable.stderr.includes('authorized registry identity'), 'unknown executable handlers fail closed after the script check')
+  const dashPattern = await result("echo '-aaaaaaaaaaaaaaaaaaaaaaaa!' | grep '-(a+)+$'", READONLY, { ...AGENT_LIMITS, timeoutMs: 50 })
+  check(dashPattern.exit_code === 126, 'R2 dash-prefixed regex is authorized using the executed pattern', JSON.stringify(dashPattern))
+  const heredoc = `x=${'a'.repeat(2000)}; wc -c <<EOF\n${'$x'.repeat(100)}\nEOF`
+  const heredocTotal = await result(heredoc, EDITS, { ...AGENT_LIMITS, maxTotal: 10_000 })
+  check(heredocTotal.terminated === 'output', 'R2 every expanded heredoc append charges total allocation', JSON.stringify(heredocTotal))
+
+  for (const args of ["'-(a+)+$'", "-- '-(a+)+$'", "'-F(a+)+$'", "-- '-(a+)+$' -F", "-n '-(a+)+$'"]) {
+    const r = await result(`echo '-aaaaaaaaaaaaaaaaaaaaaaaa!' | /bin/../bin/grep ${args}`, grantOf({ root: null }), { ...AGENT_LIMITS, timeoutMs: 50 })
+    check(r.exit_code === 126, `executed grep parser rejects regex variant ${args}`)
+  }
+  eq((await result("echo '-(a+)+$' | grep -F -- '-(a+)+$'")).stdout, '-(a+)+$', 'explicit fixed-string dash pattern still works')
+  eq((await result("echo '-(a+)+$' | grep '-(a+)+$' -F")).stdout, '-(a+)+$', 'policy and execution agree on trailing letter options')
+  const { parseGrepArgs } = await load<typeof import('../src/terminal/grepArgs.ts')>('/src/terminal/grepArgs.ts')
+  eq(parseGrepArgs(['--', '/outside', '-F']).files, ['-F'], '-- preserves a dash-prefixed filename instead of changing matching mode')
+  for (const expansion of ['$x'.repeat(100), '${x}'.repeat(100), '$(echo "$x")'.repeat(20), '`echo "$x"`'.repeat(20), '$@'.repeat(30), String.raw`\$`.repeat(6000)]) {
+    const command = `x=${'a'.repeat(2000)}; set -- "$x" "$x"; wc -c <<EOF\n${expansion}\nEOF`
+    const r = await result(command, EDITS, { ...AGENT_LIMITS, maxBuffer: 5000 })
+    check(r.terminated === 'output' && !r.stdout, `heredoc allocation bounded for ${expansion.slice(0, 28)}`)
+  }
+  const quotedDoc = await result(`wc -c <<'EOF'\n${'a'.repeat(6000)}\nEOF`, EDITS, { ...AGENT_LIMITS, maxBuffer: 5000 })
+  check(quotedDoc.terminated === 'output', 'literal quoted heredoc also obeys the intermediate-buffer bound')
+  eq((await result('x=ok; cat <<EOF\n$x $(echo sub) `echo tick`\nEOF')).stdout, 'ok sub tick', 'small heredoc substitutions remain functional')
+
   // Regression: patterns are data, not filenames. No accidental directory fetch for /outside.
   eq((await result('echo /outside | grep /outside')).stdout, '/outside', 'grep does not authorize its pattern as a file')
   for (const command of ['tar -xf review.tar -C /outside', 'unzip review.zip -d /outside', 'git show secret-data', 'changelog', 'releases']) {
@@ -428,6 +497,72 @@ try {
   const query = JSON.parse((await tool('terminal_capabilities', {}, grantOf({ mode: 'bypass', write: false }))).capabilities!)
   check(query.permissions.write === false && query.sessionRights.write === true && query.sessionRights.writeApproval.includes('not required'), 'capability query authority is distinct from Bypass session rights')
 
+  // Rates: actual fetch boundary, abort propagation, no fallback after cancellation, no
+  // borrowing somebody else's unguarded promise, and cached/offline calculations preserved.
+  {
+    const { loadRates, cachedRates } = await load<typeof import('../src/os/smartcalc.ts')>('/src/os/smartcalc.ts')
+    const previous = g.fetch
+    const permitted = grantOf({ network: true })
+    const tick = () => new Promise((r) => setTimeout(r, 0))
+    try {
+      for (const name of ['calc', 'units', 'bc']) {
+        const requests: { url: string; signal?: AbortSignal | null }[] = []
+        let release!: (r: Response) => void
+        let entered!: () => void
+        const started = new Promise<void>((r) => { entered = r })
+        g.fetch = (url: string, init?: RequestInit) => {
+          requests.push({ url, signal: init?.signal }); entered()
+          return new Promise<Response>((r) => { release = r })
+        }
+        const task = run(`${name} 10 EUR in USD`, permitted, { ...AGENT_LIMITS, timeoutMs: 100 })
+        await started
+        const stopped = await task
+        release(new Response('{}', { status: 503 })); await tick()
+        check(stopped.result?.terminated === 'timeout' && requests.length === 1 && requests[0].signal?.aborted && !cachedRates(), `${name}: timeout aborts API fetch and suppresses later fallbacks/cache writes`)
+      }
+      let release!: (r: Response) => void
+      let entered!: () => void
+      const started = new Promise<void>((r) => { entered = r })
+      let requests = 0
+      g.fetch = () => {
+        requests++
+        if (requests === 1) { entered(); return new Promise<Response>((r) => { release = r }) }
+        return Promise.resolve(new Response('{}', { status: 503 }))
+      }
+      const spotlight = loadRates()
+      await started
+      const denied = await result('calc 10 EUR in USD', READONLY, { ...AGENT_LIMITS, timeoutMs: 500 })
+      check(denied.exit_code === 126 && denied.terminated === null && requests === 1, 'unapproved calc cannot borrow an in-flight unguarded rate fetch')
+      release(new Response('{}', { status: 503 })); await spotlight
+
+      const signals: (AbortSignal | null | undefined)[] = []
+      const pending: ((r: Response) => void)[] = []
+      let fallbacks!: () => void
+      const reachedFallbacks = new Promise<void>((r) => { fallbacks = r })
+      g.fetch = (url: string, init?: RequestInit) => {
+        signals.push(init?.signal)
+        if (url === '/api/fx') return Promise.resolve(new Response('{}', { status: 503 }))
+        const response = new Promise<Response>((r) => { pending.push(r) })
+        if (pending.length === 2) fallbacks()
+        return response
+      }
+      const ctl = new AbortController()
+      const fallbackRun = run('calc 10 EUR in USD', permitted, AGENT_LIMITS, ctl.signal)
+      await reachedFallbacks; ctl.abort()
+      await fallbackRun
+      for (const resolve of pending) resolve(Response.json({ date: '2026-01-01', rates: { EUR: 1, USD: 2 } }))
+      await tick()
+      check(signals.length === 3 && signals.every((s) => s?.aborted) && !cachedRates(), 'all rate sources receive cancellation; late fallback results cannot populate cache')
+
+      requests = 0
+      g.fetch = async () => { requests++; return Response.json({ base: 'EUR', date: '2026-01-01', source: 'fixture', rates: { EUR: 1, USD: 2 } }) }
+      check((await result('calc 10 EUR in USD', permitted)).exit_code === 0 && requests === 1, 'approved rate lookup still calculates successfully')
+      for (const name of ['calc', 'units', 'bc']) {
+        check((await result(`${name} 10 EUR in USD`, READONLY)).exit_code === 0 && requests === 1, `${name} may use cached rates without network authority or new requests`)
+      }
+    } finally { g.fetch = previous }
+  }
+
   // Real delayed Seafile requests: release after timeout and verify no mutation is submitted.
   const { loadAccount } = await load<typeof import('../src/os/account.ts')>('/src/os/account.ts')
   const { loadLibraries } = await load<typeof import('../src/data/seafile.ts')>('/src/data/seafile.ts')
@@ -448,7 +583,7 @@ try {
     if (url.pathname === '/api/seafile/libraries') return Response.json(['repo', 'foreign'].map((id) => ({ id, name: id, permission: 'rw', type: 'mine' })))
     if (url.pathname === '/api/seafile/dir') {
       if (hold) { hold = false; entered?.(); await new Promise<void>((r) => { release = r }) }
-      return Response.json({ perm: 'rw', entries: [{ name: 'src', dir: true, size: 0, mtime: 1 }, { name: 'AGENTS.md', dir: false, size: 4, mtime: 1 }, { name: 'existing.txt', dir: false, size: 4, mtime: 1 }] })
+      return Response.json({ perm: 'rw', entries: [{ name: '.agents', dir: true, size: 0, mtime: 1 }, { name: '.claude', dir: true, size: 0, mtime: 1 }, { name: 'rules.md', dir: false, size: 4, mtime: 1 }, { name: 'src', dir: true, size: 0, mtime: 1 }, { name: 'AGENTS.md', dir: false, size: 4, mtime: 1 }, { name: 'existing.txt', dir: false, size: 4, mtime: 1 }] })
     }
     if (url.pathname === '/api/seafile/link') {
       if (holdLink) { holdLink = false; entered?.(); await new Promise<void>((r) => { release = r }) }
@@ -483,6 +618,23 @@ try {
     await Promise.race([linked, new Promise((_, reject) => setTimeout(() => reject(new Error('update link not reached')), 3000))])
     ctl.abort(); release!(); await write
     check(!requests.some((r) => r.method === 'POST'), 'abort during update-link lookup prevents upload POST')
+    setFstab('UUID=repo /review seafile defaults 0 0\n/review/.agents /review/innocent none bind 0 0')
+    const steeringAlias = makePolicy(sfGrant)
+    check(!!steeringAlias.write('/review/innocent/rules.md'), 'R2 steering protection follows backing identity through a bind alias')
+    requests.length = 0
+    const aliasWrite = await execute('echo injected > innocent/rules.md', '/review', sfGrant, AGENT_LIMITS, new AbortController().signal)
+    check(aliasWrite.status !== 0 && !requests.some((r) => r.method === 'POST'), 'bind alias steering write is refused before any mutation request')
+    setFstab('UUID=repo /review seafile defaults 0 0\n/review/.agents /review/innocent none bind 0 0\n/review/innocent /review/second none bind 0 0\n/review/AGENTS.md /review/ordinary.txt none bind 0 0\n/review/.claude /review/other none bind 0 0')
+    for (const target of ['/review/second/rules.md', '/review/ordinary.txt', '/review/other/rules.md']) {
+      check(!!steeringAlias.write(target), `backing steering check follows alias ${target}`)
+      check(makePolicy({ ...sfGrant, steering: true }).write(target) === null, `fresh steering authority still permits ${target}`)
+    }
+    setFstab('UUID=repo /review seafile defaults 0 0\n/bin /review/tools none bind 0 0')
+    requests.length = 0
+    const boundExec = await execute('/review/tools/git show private-text', '/review', { ...sfGrant, root: null }, AGENT_LIMITS, new AbortController().signal)
+    check(boundExec.status === 126 && requests.length === 0, 'registry identity gates executables reached through bind mounts before preparation')
+
+    setFstab('UUID=repo /review seafile defaults 0 0')
     const frozen = makePolicy(sfGrant)
     setFstab('UUID=repo /review seafile defaults 0 0\nUUID=foreign /review/foreign seafile defaults 0 0')
     check(!!frozen.read('/review/foreign/private') && !!frozen.write('/review/foreign/new') && !!frozen.tree('/review'), 'nested foreign mount cannot inherit lexical workdir rights, including traversal')

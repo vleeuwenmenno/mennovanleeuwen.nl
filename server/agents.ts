@@ -46,7 +46,7 @@ import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSk
 import { prepareTaskCall, stopTasksOf, TASK_CHAT_TOOLS, taskChatTools } from './agentTasks.ts'
 import { CALL_VERDICTS, defaultPolicy, MAX_TRUSTED_SITES, normalizePolicy, TASK_TOOLS, TOOL_NAMES, type CallScope, type Decision, type RunVerdict, type ThreadTools, type Verdict as TaskVerdict } from '../src/data/agentTaskPolicy.ts'
 import { CONTINUATIONS_PER_MESSAGE, findSubagent, overviewLine, SPAWNS_PER_MESSAGE, SUBAGENT_CAPS, SUBAGENTS_KEPT, SUBAGENTS_PER_THREAD, SUBAGENTS_PER_USER, SUBAGENTS_TOTAL, type SubagentInfo, type SubagentOverview, type SubagentStatus } from '../src/data/agentSubagents.ts'
-import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, DELETE_COMMANDS, NETWORK_COMMANDS, STEERING_IN_LINE, terminalCapabilitiesTool, terminalGrant, terminalTool, workdirOf, workdirTools, type ClientGrant, type Permission, type TerminalAccess, type Workdir } from './workdir.ts'
+import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, DELETE_COMMANDS, NETWORK_COMMANDS, STEERING_IN_LINE, terminalCapabilitiesTool, terminalGrant, terminalNeedsNetwork, terminalTool, workdirOf, workdirTools, type ClientGrant, type Permission, type TerminalAccess, type Workdir } from './workdir.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in user. Threads and their
 // messages live in SQLite; each turn runs here, on the server, calling Ollama's chat API with a
@@ -427,7 +427,7 @@ const attach = (thread: string, res: ServerResponse, how: unknown) => (how === '
 /** Command names the user said not to ask about again, by thread (until the server restarts). */
 const allowedCommands = new Map<string, { user: number; names: Set<string> }>()
 /** Commands that run other command lines, or anything at all: never "don't ask again" for these. */
-const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget'])
+const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget', 'calc', 'units', 'bc'])
 /** Commands that delete, use the network or raise rights: accepting edits does not cover them, so a line naming one waits for the user. */
 const NEEDS_CARD = new Set([...DELETE_COMMANDS, ...NETWORK_COMMANDS, 'sudo', 'su'])
 /** Whether a command line writes to a file through a redirect (> file, >> file, &> file). */
@@ -2428,7 +2428,7 @@ export function decideTerminal(thread: string, permission: Permission, line: str
   const steering = STEERING_IN_LINE.test(line)
   if (permission === 'bypass') return { decision: steering ? 'ask' : 'run', access: steering ? 'approved' : 'bypass' }
   const names = commandNames(line)
-  if (permission === 'acceptEdits' && !steering && !names.some((n) => NEEDS_CARD.has(n))) return { decision: 'run', access: 'edits' }
+  if (permission === 'acceptEdits' && !steering && !terminalNeedsNetwork(line) && !names.some((n) => NEEDS_CARD.has(n))) return { decision: 'run', access: 'edits' }
   if (steering) return { decision: 'ask', access: 'approved' }
   const ok = allowedCommands.get(thread)?.names
   if (writesFile(line) || names.some((n) => NEVER_ALWAYS.has(n))) return { decision: 'ask', access: 'approved' }

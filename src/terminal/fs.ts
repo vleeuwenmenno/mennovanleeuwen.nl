@@ -294,7 +294,7 @@ export async function prepare(cwd: string, cmd: string, args: string[], actor: A
   await ensure(cwd, cmd, null, false, actor)
   const roots: string[] = []
   for (const a of paths) {
-    if (!a || (a.startsWith('-') && a !== '-')) continue
+    if (!a || a === '-' || ((typeof actor === 'boolean' || !actor.policy) && a.startsWith('-'))) continue
     const abs = resolvePath(cwd, a)
     const dir = await ensure(abs, cmd, a, read, actor)
     if (dir || lookup(abs)?.type === 'dir') roots.push(abs)
