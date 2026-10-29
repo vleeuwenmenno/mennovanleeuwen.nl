@@ -34,9 +34,10 @@ export type TaskTool = {
   unavailable?: string
 }
 
-const NO_FOLDER = 'Tasks have no work folder yet'
+const NO_FOLDER_NOTE = ' (only when the task has a work folder)'
 const NOT_IN_TASKS = 'Not in task runs: nobody is there to answer'
 const NO_IMAGES = 'Image generation is not available in task runs yet'
+const NO_SUBAGENTS = 'Task runs do not start subagents (yet): a run in the background fanning out costs too much unseen'
 
 export const TASK_TOOLS: Record<string, TaskTool> = {
   web_search: { group: 'web', class: 'read', label: 'Search the web', default: 'allow', untrusted: true },
@@ -95,22 +96,28 @@ export const TASK_TOOLS: Record<string, TaskTool> = {
   read_image_learnings: { group: 'images', class: 'read', label: 'Read image learnings', default: 'block', unavailable: NO_IMAGES },
   save_image_learning: { group: 'images', class: 'lasting', label: 'Save an image learning', default: 'block', unavailable: NO_IMAGES },
   save_image_profile: { group: 'images', class: 'lasting', label: 'Save an image profile', default: 'block', unavailable: NO_IMAGES },
-  read_file: { group: 'files', class: 'private', label: 'Read a file', default: 'block', unavailable: NO_FOLDER },
-  list_dir: { group: 'files', class: 'private', label: 'List a folder', default: 'block', unavailable: NO_FOLDER },
-  glob: { group: 'files', class: 'private', label: 'Find files', default: 'block', unavailable: NO_FOLDER },
-  grep: { group: 'files', class: 'private', label: 'Search files', default: 'block', unavailable: NO_FOLDER },
-  write_file: { group: 'files', class: 'write', label: 'Write a file', default: 'block', unavailable: NO_FOLDER },
-  edit_file: { group: 'files', class: 'write', label: 'Edit a file', default: 'block', unavailable: NO_FOLDER },
-  multi_edit: { group: 'files', class: 'write', label: 'Edit a file', default: 'block', unavailable: NO_FOLDER },
-  make_dir: { group: 'files', class: 'write', label: 'Make a folder', default: 'block', unavailable: NO_FOLDER },
-  move_path: { group: 'files', class: 'write', label: 'Move a file', default: 'block', unavailable: NO_FOLDER },
-  delete_path: { group: 'files', class: 'write', label: 'Delete a file', default: 'block', unavailable: NO_FOLDER },
+  read_file: { group: 'files', class: 'private', label: `Read a file in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  list_dir: { group: 'files', class: 'private', label: `List a folder in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  glob: { group: 'files', class: 'private', label: `Find files in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  grep: { group: 'files', class: 'private', label: `Search files in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  write_file: { group: 'files', class: 'write', label: `Write a file in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  edit_file: { group: 'files', class: 'write', label: `Edit a file in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  multi_edit: { group: 'files', class: 'write', label: `Edit a file in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  make_dir: { group: 'files', class: 'write', label: `Make a folder in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  move_path: { group: 'files', class: 'write', label: `Move a file in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
+  delete_path: { group: 'files', class: 'write', label: `Delete a file in the work folder${NO_FOLDER_NOTE}`, default: 'block' },
   terminal: { group: 'terminal', class: 'write', label: 'Run terminal commands', default: 'block', unavailable: 'The terminal runs in your browser: not there for a run in the background' },
   ask_user: { group: 'chat', class: 'internal', label: 'Ask you with a form', default: 'block', unavailable: NOT_IN_TASKS },
   exit_plan_mode: { group: 'chat', class: 'internal', label: 'Show a plan', default: 'block', unavailable: NOT_IN_TASKS },
   create_task: { group: 'tasks', class: 'lasting', label: 'Make a task', default: 'block', unavailable: 'Tasks never make tasks' },
   update_task: { group: 'tasks', class: 'lasting', label: 'Change a task', default: 'block', unavailable: 'Tasks never change tasks' },
   cancel_task: { group: 'tasks', class: 'lasting', label: 'Cancel a task', default: 'block', unavailable: 'Tasks never cancel tasks' },
+  run_task_now: { group: 'tasks', class: 'lasting', label: 'Run a task now', default: 'block', unavailable: 'Tasks never run tasks' },
+  spawn_agent: { group: 'chat', class: 'internal', label: 'Start a subagent', default: 'block', unavailable: NO_SUBAGENTS },
+  message_agent: { group: 'chat', class: 'internal', label: 'Message a subagent', default: 'block', unavailable: NO_SUBAGENTS },
+  list_agents: { group: 'chat', class: 'internal', label: 'List subagents', default: 'block', unavailable: NO_SUBAGENTS },
+  agent_status: { group: 'chat', class: 'internal', label: "A subagent's state", default: 'block', unavailable: NO_SUBAGENTS },
+  stop_agent: { group: 'chat', class: 'internal', label: 'Stop a subagent', default: 'block', unavailable: NO_SUBAGENTS },
   update_todos: { group: 'run', class: 'internal', label: 'Keep a todo list', default: 'allow' },
   task_report: { group: 'run', class: 'internal', label: 'Say how the run went (always there)', default: 'allow' },
 }
@@ -157,6 +164,12 @@ export type TaskPolicy = {
   seen: string[]
   /** Web pages on these sites (and their www.) are read as the policy says; "*" is any site */
   sites: string[]
+  /**
+   * Sites trusted like the ones the user allowed for good in chat: their addresses are read as the
+   * policy says even when the agent built them while it holds private data (the given-address rule
+   * does not apply there). A task made from a thread starts with the user's allowed sites.
+   */
+  trustedSites: string[]
   /** Pages on other sites: ask, or never */
   otherSites: 'ask' | 'block'
   /** Seafile: only these folders (empty: anywhere), and writing only where `write` */
@@ -178,7 +191,7 @@ export const TOOL_NAMES = Object.keys(TASK_TOOLS)
 
 /** A new task's policy: read-only tools run, private reads ask, everything else is blocked. */
 export function defaultPolicy(): TaskPolicy {
-  return { tools: {}, groups: {}, seen: [...TOOL_NAMES], sites: [], otherSites: 'ask', seafile: [], calendars: [], mail: { accounts: [], send: 'self', recipients: [] }, memories: false }
+  return { tools: {}, groups: {}, seen: [...TOOL_NAMES], sites: [], trustedSites: [], otherSites: 'ask', seafile: [], calendars: [], mail: { accounts: [], send: 'self', recipients: [] }, memories: false }
 }
 
 const strings = (v: unknown, max: number, len = 200) => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string').map((x) => x.trim().slice(0, len)).filter(Boolean))].slice(0, max) : [])
@@ -192,6 +205,8 @@ const host = (raw: string) => {
   }
 }
 const EMAIL = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/
+/** As many as the user may allow for good in chat (server/agents.ts MAX_SITES). */
+export const MAX_TRUSTED_SITES = 500
 
 /** A policy as sent or stored, cleaned up: unknown tools and groups dropped, lists capped. */
 export function normalizePolicy(v: unknown): TaskPolicy {
@@ -214,6 +229,7 @@ export function normalizePolicy(v: unknown): TaskPolicy {
     groups,
     seen: Array.isArray(p.seen) ? strings(p.seen, 500, 80) : [...TOOL_NAMES],
     sites: strings(p.sites, 100, 300).map(host).filter(Boolean),
+    trustedSites: strings(p.trustedSites, MAX_TRUSTED_SITES, 300).map(host).filter((h) => h && h !== '*'),
     otherSites: p.otherSites === 'block' ? 'block' : 'ask',
     seafile,
     calendars: strings(p.calendars, 50),
@@ -303,7 +319,7 @@ export function taskDecide(policy: TaskPolicy, call: { name: string; arguments?:
     const url = argText(args, call.name === 'web_fetch' ? 'url' : 'page')
     const site = siteOf(url)
     if (site && !listedSite(policy, site)) lower(policy.otherSites, policy.otherSites === 'block' ? `${site} is not one of the task's sites` : `${site} is not one of the task's sites, so it asks`)
-    if (site && ctx.holdsPrivate && !ctx.given(url)) lower('ask', 'An address the agent built while it holds private data: it asks')
+    if (site && ctx.holdsPrivate && !ctx.given(url) && !policy.trustedSites.includes(site)) lower('ask', 'An address the agent built while it holds private data: it asks')
   }
   if (t.group === 'seafile' || t.group === 'seafile_write') {
     const write = t.group === 'seafile_write'
@@ -336,6 +352,11 @@ export function taskDecide(policy: TaskPolicy, call: { name: string; arguments?:
       const hit = (ctx.scope?.steering ?? []).some((s) => targets.some(([l, p]) => s.libraries.some((x) => x.toLowerCase() === l) && (within(p, s.path) || within(s.path, p))))
       if (hit) lower('ask', 'It changes your AGENTS.md or skills folder, which steer the agent: it asks')
     }
+  }
+  // The work folder: writes to the files that steer the agent never go further than asking.
+  if (t.group === 'files' && t.class === 'write') {
+    const paths = ['path', 'from', 'to'].map((k) => argText(args, k)).filter(Boolean)
+    if (paths.some((p) => STEERING_PATH.test(p))) lower('ask', 'It changes a file that steers the agent: it asks')
   }
   if (t.group === 'calendar' && t.class === 'write' && policy.calendars.length) {
     const touched = ctx.scope?.calendars ?? []
@@ -424,7 +445,7 @@ export function policySummary(policy: TaskPolicy, available?: (g: TaskGroup) => 
   if (ask.length) lines.push(`It asks you first to ${join(nameList(ask))}.`)
   lines.push(allow.length + ask.length ? 'Everything else is blocked.' : 'Everything else is blocked: it can only think and report.')
   const web = toolVerdict(policy, 'web_fetch') !== 'block'
-  if (web) lines.push(policy.sites.includes('*') ? 'Web pages: any site.' :policy.sites.length ? `Web pages: ${policy.sites.join(', ')}; other sites ${policy.otherSites === 'block' ? 'never' : 'ask'}.` : `Web pages: no sites listed, so every page ${policy.otherSites === 'block' ? 'is blocked' : 'asks'}.`)
+  if (web) lines.push(policy.sites.includes('*') ? `Web pages: any site${policy.trustedSites.length ? `; addresses it builds itself on ${policy.trustedSites.length <= 5 ? policy.trustedSites.join(', ') : `${policy.trustedSites.length} trusted sites`} are read like given ones` : ''}.` : policy.sites.length ? `Web pages: ${policy.sites.join(', ')}; other sites ${policy.otherSites === 'block' ? 'never' : 'ask'}.` : `Web pages: no sites listed, so every page ${policy.otherSites === 'block' ? 'is blocked' : 'asks'}.`)
   if (policy.seafile.length) lines.push(`Seafile: only ${policy.seafile.map((f) => `${f.library}${f.path === '/' ? '' : f.path}${f.write ? ' (may change)' : ''}`).join(', ')}.`)
   if (policy.calendars.length) lines.push(`Calendar changes: only in ${policy.calendars.join(', ')}.`)
   if (toolVerdict(policy, 'mail_send') !== 'block') lines.push(policy.mail.send === 'self' ? 'Mail it sends goes only to you.' : `Mail it sends goes only to you and ${policy.mail.recipients.join(', ') || 'nobody else'}.`)
@@ -445,6 +466,7 @@ export function policySummary(policy: TaskPolicy, available?: (g: TaskGroup) => 
 export function widens(prev: TaskPolicy, next: TaskPolicy): boolean {
   if (TOOL_NAMES.some((n) => rank[toolVerdict(next, n)] > rank[toolVerdict(prev, n)])) return true
   if (next.sites.some((s) => !prev.sites.includes(s)) || (prev.otherSites === 'block' && next.otherSites === 'ask')) return true
+  if (next.trustedSites.some((s) => !prev.trustedSites.includes(s))) return true
   const looser = (a: string[], b: string[]) => (a.length > 0 && b.length === 0) || b.some((x) => !a.includes(x))
   if (looser(prev.calendars, next.calendars) || looser(prev.mail.accounts, next.mail.accounts)) return true
   if (prev.seafile.length && (!next.seafile.length || next.seafile.some((f) => !prev.seafile.some((g) => g.library === f.library && g.path === f.path && (g.write || !f.write))))) return true
@@ -453,12 +475,28 @@ export function widens(prev: TaskPolicy, next: TaskPolicy): boolean {
   return !prev.memories && next.memories
 }
 
+/** Whether two policies let a task do exactly the same (verdicts and scopes; not the `seen` list). */
+export function samePolicy(a: TaskPolicy, b: TaskPolicy): boolean {
+  return !widens(a, b) && !widens(b, a) && TOOL_NAMES.every((n) => toolVerdict(a, n) === toolVerdict(b, n))
+}
+
+/**
+ * A chat thread's tools as a task's starting policy (server/agents.ts threadTaskTools): what the
+ * thread runs without asking is Allow, what it asks about is Ask, the rest is blocked; its lasting
+ * grants come along, and what never runs in the background is named.
+ */
+export type ThreadTools = { thread: string; title: string; policy: TaskPolicy; workdir: TaskSpec['workdir']; model: string; notCarried: string[] }
+
 // --- tasks and runs, as the API gives them --------------------------------------------------------
 
 /** Where a run's report goes: a thread (a new one each run, or one fixed thread), a notification, email. */
 export type ReportTargets = {
-  thread: 'none' | 'new' | 'fixed'
-  /** The fixed thread (defaults to the thread the task was made in) */
+  /**
+   * 'origin': each run continues the thread the task was made in (seeded with its context) and lands
+   * there when it is at rest, a block for a report and one muted line for quiet runs.
+   */
+  thread: 'none' | 'new' | 'fixed' | 'origin'
+  /** The fixed thread, or the thread runs continue (defaults to the thread the task was made in) */
   threadId: string | null
   notify: boolean
   /** Email to yourself from your own mail account: never, always, or only when the notification was not seen in time */
@@ -495,6 +533,8 @@ export type TaskSpec = {
   caps: TaskCaps
   /** null: Settings → Apps → Agents' task model */
   model: string | null
+  /** The Seafile folder its file tools work in (from the thread it was made in), or none */
+  workdir: { repo: string; path: string; label: string } | null
   options: TaskOptions
   /** When it stops by itself (ms; null: never) */
   expiresAt: number | null
@@ -549,6 +589,13 @@ export type TaskRunInfo = {
   deadline: number | null
   /** Where the report went */
   delivered: string[]
+  /** The model it runs on when it is not the task's (Run now on another model) */
+  model: string | null
+  /** Run #n of its task */
+  number: number | null
+  /** The chat thread it continues, and the message it landed as there */
+  originThread: string | null
+  originMessage: number | null
 }
 
 /** How a tool call in a run was decided, as its row says it (stored with the result, server/agents.ts). */

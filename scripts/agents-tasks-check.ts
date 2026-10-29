@@ -610,11 +610,19 @@ try {
     await until('the push line catches up', () => (db.prepare('SELECT push_state FROM jmap_accounts WHERE id = ?').get(home.id) as J).push_state === mock.state(), 20000)
     await sleep(500)
     db.prepare('UPDATE jmap_accounts SET task_retry = ? WHERE id = ?').run(JSON.stringify(many.map((e) => ({ id: e.id, at: Date.now() }))), home.id)
+    // Watched at the hand-over itself: what then waits is trimmed to 200 by the next tick (that is
+    // the waiting cap, checked elsewhere), which can come between two chunks.
+    const handed: string[] = []
+    const chunks: number[] = []
+    const arrivedBefore = tasks.taskMailHook.arrived
+    tasks.taskMailHook.arrived = (u, a, mails, b) => (handed.push(...mails.map((x) => x.id)), chunks.push(mails.length), arrivedBefore(u, a, mails, b))
     tasks.updateTask(alice, lost.id, { status: 'active' })
     mock.deliver({ subject: 'lostcheck last' })
-    await until('a batch of 231 is handed over', () => pending(lost.id).length >= 231, 15000)
-    const bulk = new Set(pending(lost.id).map((r) => r.email_id))
-    check('lost mail: more than 200 new messages are all handed over, in chunks', many.every((e) => bulk.has(e.id)))
+    await until('a batch of 231 is handed over', () => handed.length >= 231, 15000)
+    tasks.taskMailHook.arrived = arrivedBefore
+    const bulk = new Set(handed)
+    check('lost mail: more than 200 new messages are all handed over, in chunks', many.every((e) => bulk.has(e.id)) && chunks.length > 1 && chunks.every((n) => n <= 200))
+    await until('they wait for the task (the newest 200)', () => pending(lost.id).length === 200)
     // Changing the trigger drops what waited (review fix), like pausing.
     tasks.updateTask(alice, lost.id, { schedule: { ...taskSchedule(lost.id), subject: ['lostcheck', 'other'] } })
     check('editing the trigger drops the mail that waited', pending(lost.id).length === 0)
