@@ -48,7 +48,7 @@ try {
   await p.send('Page.navigate', { url: origin })
   await p.waitFor(`!!document.querySelector('.desktop') && !document.querySelector('.boot')`, 90_000)
   await p.eval(`(async()=>{await import('/src/data/browserfs.ts').then(m=>m.browserFilesReady());const n=await import('/src/data/notes.ts');const note=n.createNote({text:'- [ ] original'});window.__note=note.id;window.dispatchEvent(new CustomEvent('mvlos:open',{detail:{app:'widget',props:{kind:'sticky',id:note.id}}}))})()`)
-  await p.waitFor(`!!document.querySelector('.wp-editor')`)
+  await p.waitFor(`!!document.querySelector('.wp-editor') && document.querySelector('[data-package-digest]')?.dataset.packageDigest.length===64`)
   check('default Sticky loaded from package in worker', await p.eval(`document.querySelector('.wp-editor').value==='- [ ] original' && document.querySelector('[data-package-digest]').dataset.packageDigest.length===64`))
   check('system source tree visible in VFS', await p.eval(`import('/src/terminal/vfs.ts').then(m=>m.lookup('/usr/share/mvlos/widgets/sticky/src/main.js').content().includes('export function render'))`))
   // Real native input events: fast insertion, selection replacement, Enter continuation and undo.

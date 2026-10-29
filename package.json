@@ -131,7 +131,9 @@
     "empires:maps": "node scripts/empires-maps.ts",
     "start": "node server/index.ts",
     "check:widget-packages": "node scripts/widget-packages-check.ts",
-    "check:widget-packages-ui": "node scripts/widget-packages-e2e.ts"
+    "check:widget-packages-ui": "node scripts/widget-packages-e2e.ts",
+    "check:widget-lifecycle": "node scripts/widget-lifecycle-check.ts",
+    "check:widget-review-ui": "node scripts/widget-review-e2e.ts"
   },
   "dependencies": {
     "figlet": "^1.12.0",

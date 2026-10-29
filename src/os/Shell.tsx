@@ -1,3 +1,4 @@
+import { WidgetVisibility } from '../widgets/platform/visibility'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
@@ -839,7 +840,7 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
+      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
           {wm.windows.filter((w) => !mobile || w.app !== 'widget').map((w) => (
@@ -849,6 +850,7 @@ export function Shell() {
           <NoteStackSlot />
         </main>
       </div>
+      </WidgetVisibility>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

@@ -7,9 +7,15 @@ const linkOf = (item: DragItem) => {
   if (!launcher?.url || !/^https?:\/\//i.test(launcher.url)) return null
   return `[${launcher.label.replace(/[[\]]/g, '')}](${launcher.url})`
 }
-function NativeEditor({ value, write }: { value: string; write: (text: string) => void }) {
+export function NativeEditor({ value, write }: { value: string; write: (text: string, expected: string) => string }) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const composing = useRef(false)
+  const baseline = useRef(value)
+  const commit = (el: HTMLTextAreaElement) => {
+    const actual = write(el.value, baseline.current)
+    baseline.current = actual
+    if (el.value !== actual) el.value = actual
+  }
   const insert = (start: number, end: number, text: string) => {
     const el = ref.current
     if (!el) return
@@ -17,7 +23,7 @@ function NativeEditor({ value, write }: { value: string; write: (text: string) =
     el.setSelectionRange(start, end)
     // Native edit transaction preserves undo and caret. Fallback is needed in some engines.
     if (!document.execCommand('insertText', false, text)) el.setRangeText(text, start, end, 'end')
-    write(el.value)
+    commit(el)
   }
   useLayoutEffect(() => {
     const el = ref.current
@@ -28,6 +34,7 @@ function NativeEditor({ value, write }: { value: string; write: (text: string) =
       el.value = value
       el.setSelectionRange(Math.min(start, value.length), Math.min(end, value.length))
     }
+    baseline.current = value
     el.style.maxHeight = 'none'
     el.style.height = 'auto'
     el.style.height = `${Math.max(90, el.scrollHeight)}px`
@@ -40,10 +47,10 @@ function NativeEditor({ value, write }: { value: string; write: (text: string) =
       if (el && links) insert(el.value.length, el.value.length, `${el.value && !el.value.endsWith('\n') ? '\n' : ''}${links}`)
     },
   })
-  return <textarea ref={ref} className="wp-editor sticky-text selectable" aria-label="Note text" defaultValue={value} maxLength={32768} placeholder="Write something… (- [ ] makes a checklist)" spellCheck
-    onChange={e => write(e.currentTarget.value)}
+  return <textarea ref={ref} className="wp-editor sticky-text selectable" aria-label="Note text" defaultValue={value} placeholder="Write something… (- [ ] makes a checklist)" spellCheck
+    onChange={e => commit(e.currentTarget)}
     onCompositionStart={() => { composing.current = true }}
-    onCompositionEnd={e => { composing.current = false; write(e.currentTarget.value) }}
+    onCompositionEnd={e => { composing.current = false; commit(e.currentTarget) }}
     onKeyDown={e => {
       if (e.key !== 'Enter' || e.nativeEvent.isComposing || composing.current || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return
       const el = e.currentTarget
@@ -53,18 +60,13 @@ function NativeEditor({ value, write }: { value: string; write: (text: string) =
       insert(transaction.start, transaction.end, transaction.text)
     }} />
 }
-export function Renderer({ view, note, write, event }: { view: Descriptor; note?: string; write?: (text: string) => void; event: (id: string) => void }) {
-  let editorSeen = false
+export function Renderer({ view, note, write, event, actionsEnabled = true }: { view: Descriptor; note?: string; write?: (text: string, expected: string) => string; actionsEnabled?: boolean; event: (id: string) => void }) {
   const render = (node: Descriptor, path: string): ReactNode => {
     const className = `wp-${node.type} wp-${node.tone ?? 'normal'}`
     if (node.type === 'text') return <span key={path} className={className}>{node.text}</span>
-    if (node.type === 'button') return <button key={path} className={className} disabled={!node.event} onClick={() => node.event && event(node.event)}>{node.text}</button>
-    if (node.type === 'editor') {
-      if (editorSeen || note === undefined || !write) return null
-      editorSeen = true
-      return <NativeEditor key={path} value={note} write={write} />
-    }
+    if (node.type === 'button') return <button key={path} className={className} disabled={!node.event || !actionsEnabled} onClick={() => node.event && event(node.event)}>{node.text}</button>
+    if (node.type === 'editor') return null
     return <div key={path} className={className}>{node.children?.map((child, index) => render(child, `${path}.${index}`))}</div>
   }
-  return render(view, 'root')
+  return <>{note !== undefined && write && <NativeEditor key="native-editor" value={note} write={write} />}{render(view, 'root')}</>
 }

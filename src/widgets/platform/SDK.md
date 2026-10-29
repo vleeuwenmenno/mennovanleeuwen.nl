@@ -1,4 +1,4 @@
-# Widget SDK 1 (first vertical slice)
+# Widget SDK 1 / build identity 1.1 (first vertical slice)
 
 Packages are UTF-8 folders with manifest.json, src/*.js, styles/tokens.json,
 assets/*.txt or *.json, tests/*.json and README.md. System packages are immutable;
@@ -9,13 +9,18 @@ backing identities are distinct; a display path does not confer authority.
 
 JavaScript modules may import only relative src/*.js and @mvlos/widget.
 Exports: render(input) returns a descriptor; event(input, eventID) returns null or
-{type:'note.replace', text, expectedRevision}. Async entrypoints are unsupported.
+{type:'note.edit', start, end, text, expectedRevision}. start/end are UTF-16 offsets
+within the supplied window of the instance's note; inserted text is at most 32 KiB UTF-8.
+Legacy note.replace remains supported only when the projection contains the full note.
+Async entrypoints are unsupported.
 Every invocation gets a fresh bounded QuickJS WASM VM in a dedicated worker.
 No fetch, DOM, cookies, storage, host objects, npm, build hooks or timers.
 Promise jobs drain at most 16 times; remaining work fails. All handles are disposed.
 Limits: 48 files, 32 KiB/file, 128 KiB/source, 64 KiB/output, 256 nodes,
 12 descriptor levels, 8 MiB VM memory, 256 KiB stack, 40 ms VM CPU,
-3 s worker watchdog, 8 concurrent workers, 32 starts per second across the tab. Hidden/mobile desktops do not execute.
+3 s worker watchdog, 8 concurrent workers, 32 starts per second across the tab. Saturated work waits fairly (256 queued maximum, two per instance). Cancellation removes
+queued jobs and terminates active workers without consuming future start slots. Invalid input
+is distinct from capacity errors. Hidden/covered/mobile desktops do not execute.
 
 ## Descriptor vocabulary
 
@@ -25,14 +30,28 @@ URLs, arbitrary attributes, CSS or host functions. Spacing tokens: compact,
 normal, roomy in styles/tokens.json (gap and padding).
 The parent owns window/menu/theme controls. The editor is native, with immediate
 host transactions, selection, IME and native undo; events cannot preventDefault
-retroactively. Checklist transformations are package code with stale-result rejection.
+retroactively. The host keeps one stable native editor even if descriptors are pending or fail.
+Checklist transformations are package code bound to the displayed descriptor input snapshot;
+stale buttons and results cannot act on a newer revision.
 
 ## Capabilities and projections
 
-note.read: input.note = {text,revision} for this widget's one bound note.
-note.write: a revision-checked replacement of that note only.
+note.read: input.note = {text,revision,offset,next?,continues?} for this widget's one bound note.
+text is a host-owned window of at most 64 lines / 8 KiB; offset and next are absolute
+UTF-16 offsets. continues marks a window starting inside a line; it must not
+create a checklist item from that first fragment. The host's Previous/Next controls page through all content; packages
+emit at most 64 checklist buttons. The native editor always uses the full note.
+note.write: a revision-checked edit inside that window only. Both the note revision
+and full bound text must still match; replacements of partial windows are refused.
+Native edits use the same UTF-8 size policy (256 KiB for new notes, preserving
+larger legacy notes and permitting 32 KiB growth per transaction without truncation).
+The displayed view, input, page and source identity are one immutable presentation.
+Shell notesHidden/coverage eligibility, document/mobile/minimized state, grants and
+account identity are checked again at admission and completion, with layout-time
+cancellation when eligibility changes.
 weather.read: input.weather = {place,units,summary,hours,days} for the host-selected
-place only. Geocoding is a trusted user-operated control, not a package API.
+place only. Device here stays browser-local; only explicit cities sync. Visibility-aware
+refresh uses forecast age and a 15-minute timer, aborted while hidden. Geocoding is a trusted user-operated control, not a package API.
 Errors are plain bounded messages, not raw fetch responses or host objects.
 Default packages use existing instance authority. Fork activation requires explicit
 real-data opt-in. Preview always uses mocks. Revocation/logout cancels pending work.
@@ -44,7 +63,8 @@ Package grants never authorize forwarding private data to a model.
 Both defaults and forks use the same verifier, digest and loader. The digest covers
 all accepted files plus the pinned SDK/QuickJS build identity. Imported dist/ and
 build.json are discarded; snapshots are rebuilt and verified. Source saves never
-activate. Build and preview first; explicit activation binds the digest and source
+activate. Initial build-1.0 snapshots need explicit rebuild/preview/activation for
+the new build identity; imports never silently upgrade granted code. Build and preview first; explicit activation binds the digest and source
 identity. Previous revision recovery requires the current installation digest,
 so a stale device cannot silently roll back a newer installation. Configuration
 and placement are not rolled back. Missing sources/runtime are not removals.

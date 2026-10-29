@@ -1,6 +1,6 @@
 /** Widget package format. Data only: no host imports, npm resolution, HTML or build hooks. */
-export const BUILD_ID = 'mvlos-descriptors-1/quickjs-emscripten-0.32.0/release-sync'
-export const LIMITS = Object.freeze({ files: 48, sourceBytes: 128 * 1024, fileBytes: 32 * 1024, outputBytes: 64 * 1024, nodes: 256, depth: 12, memory: 8 * 1024 * 1024, stack: 256 * 1024, cpuMs: 40, jobs: 16, workers: 8 })
+export const BUILD_ID = 'mvlos-descriptors-1.1/quickjs-emscripten-0.32.0/release-sync'
+export const LIMITS = Object.freeze({ files: 48, sourceBytes: 128 * 1024, fileBytes: 32 * 1024, outputBytes: 64 * 1024, nodes: 256, depth: 12, memory: 8 * 1024 * 1024, stack: 256 * 1024, cpuMs: 40, jobs: 16, workers: 8, noteWindowBytes: 8 * 1024, noteWindowLines: 64, noteBytes: 256 * 1024 })
 export type Capability = 'note.read' | 'note.write' | 'weather.read'
 export type Manifest = {
   schema: 1; sdk: 1; id: string; name: string; entry: string
@@ -11,8 +11,8 @@ export type Files = Record<string, string>
 export type SourceIdentity = { kind: 'system'; path: string } | { kind: 'browser'; account: number; storeUUID: string; path: string } | { kind: 'seafile'; account: number; repo: string; path: string }
 export type Snapshot = { manifest: Manifest; files: Files; digest: string; build: typeof BUILD_ID }
 export type Descriptor = { type: 'column' | 'row' | 'text' | 'button' | 'editor'; text?: string; event?: string; tone?: 'normal' | 'muted' | 'accent'; children?: Descriptor[] }
-export type WidgetInput = { note?: { text: string; revision: string }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
-export type Mutation = { type: 'note.replace'; text: string; expectedRevision: string }
+export type WidgetInput = { note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
+export type Mutation = { type: 'note.replace'; text: string; expectedRevision: string } | { type: 'note.edit'; start: number; end: number; text: string; expectedRevision: string }
 const CAPABILITIES = new Set<Capability>(['note.read', 'note.write', 'weather.read'])
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 export function record(v: unknown): v is Record<string, unknown> { return !!v && typeof v === 'object' && !Array.isArray(v) }
@@ -86,8 +86,9 @@ export function descriptor(raw: unknown): Descriptor {
 export function mutation(raw: unknown): Mutation | null {
   if (raw === null) return null
   if (!record(raw)) throw new Error('Invalid effect')
-  exact(raw, ['type', 'text', 'expectedRevision'])
-  if (raw.type !== 'note.replace' || typeof raw.text !== 'string' || new TextEncoder().encode(raw.text).length > LIMITS.fileBytes || typeof raw.expectedRevision !== 'string' || raw.expectedRevision.length > 100) throw new Error('Invalid note transaction')
+  exact(raw, raw.type === 'note.edit' ? ['type', 'start', 'end', 'text', 'expectedRevision'] : ['type', 'text', 'expectedRevision'])
+  if (raw.type === 'note.edit' && (!Number.isSafeInteger(raw.start) || !Number.isSafeInteger(raw.end) || Number(raw.start) < 0 || Number(raw.end) < Number(raw.start))) throw new Error('Invalid note range')
+  if (!['note.replace', 'note.edit'].includes(String(raw.type)) || typeof raw.text !== 'string' || new TextEncoder().encode(raw.text).length > LIMITS.fileBytes || typeof raw.expectedRevision !== 'string' || raw.expectedRevision.length > 100) throw new Error('Invalid note transaction')
   return raw as Mutation
 }
 

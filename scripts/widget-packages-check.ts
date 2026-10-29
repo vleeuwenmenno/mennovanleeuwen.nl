@@ -30,7 +30,7 @@ await check('both real default folders render through same VM', () => {
   assert.match(JSON.stringify(descriptor(invokeVM(qjs, weather, input))), /Sample city/)
 })
 await check('package checklist transformation carries expected revision', () => {
-  assert.deepEqual(mutation(invokeVM(qjs, sticky, input, 'toggle:0')), { type: 'note.replace', text: '- [x] hello', expectedRevision: 'revision:1' })
+  assert.deepEqual(mutation(invokeVM(qjs, sticky, input, 'toggle:0')), { type: 'note.edit', start: 3, end: 4, text: 'x', expectedRevision: 'revision:1' })
 })
 await check('editing source changes digest and behavior', async () => {
   const changed = await code("export function render(){return {type:'text',text:'Edited source'}}")

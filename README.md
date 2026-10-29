@@ -4327,18 +4327,36 @@ build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host ob
 are exposed to packages. Snapshots hash every accepted file, manifest permissions, assets, styles
 and the pinned SDK/QuickJS build identity. Each invocation has 8 MiB heap, 256 KiB stack, a 40 ms
 interrupt deadline, 16 promise jobs and a 3 s worker watchdog; output/render/source limits and
-tab-wide concurrency/rate caps also apply. All VM handles and workers are disposed. The production
+tab-wide concurrency/rate caps also apply. Saturation waits in a cancellable, round-robin queue
+(8 running, 32 starts/second, at most 256 queued and two queued per instance); it does not
+permanently fail the ninth widget. Invalid input and queue capacity errors are distinct. All VM handles and workers are disposed. The production
 CSP adds `wasm-unsafe-eval` and self-origin workers; JavaScript `unsafe-eval` stays forbidden.
 
 The host owns immediate native note edits, selection, IME, undo, launcher-link drops and list
-continuation. The package owns checklist transformations; stale responses cannot replace newer
-text. Fork data grants bind account, backing identity, instance and source digest. They are local
+continuation. The native editor stays mounted independently of descriptor refresh/failure.
+Package buttons are bound to the exact input revision that produced their displayed labels;
+stale buttons are disabled and stale clicks/results are rejected even before React refreshes.
+Sticky projects at most 64 lines / 8 KiB at a time, with Previous/Next controls and up to 64 task
+buttons. All items remain reachable; the editor retains the full note. Packages propose bounded
+`note.edit` ranges (UTF-16 offsets, at most 32 KiB inserted UTF-8), checked against the granted
+window, full source text and revision. Legacy `note.replace` is accepted only for a complete
+small projection. Native notes support 256 KiB UTF-8; existing larger notes remain readable and
+editable without truncation (up to 32 KiB growth per edit). Fork data grants bind account, backing identity, instance and source digest. They are local
 to the live session, never imported from build files or synced approval flags. **Pause access**
 revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
 is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
 search queries come from the trusted user-operated city picker, not package code. Preview uses
 sample data, with no real writes. There is no model-forwarding, navigation, export or clipboard API.
-The desktop does no widget VM work while hidden, minimized or below the existing mobile breakpoint.
+Shell visibility owns widget work: putting notes away, covering them with a maximized window,
+minimizing, hiding the document or entering the mobile breakpoint aborts active/queued work and
+pending mutations. Showing them again renders the latest revision. **Use my location** keeps
+coordinates in browser-local memory/storage and syncs only `place: null`; explicit city choices
+still sync. A pending location result after account change cannot write settings or local here.
+Weather refreshes on visibility/resume and every 15 minutes based on forecast age, with one
+cancellable timer/request and no hidden refresh work.
+
+The SDK build identity is now descriptors 1.1. Saved snapshots from the initial unreleased 1.0
+slice need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
 
 **Migration boundary and staged gaps.** This slice adds versioned `widgets:packages:v1`
 installation records; existing `widgets`, `widgets:placed` and note stores remain authoritative.
@@ -4354,7 +4372,12 @@ broadened. This is a reviewable first slice, not completion of the six-widget pl
 `pnpm check:widget-packages` checks verifier/digest/VM attacks and native transaction rules.
 `pnpm check:widget-packages-ui` uses scratch data, synthetic accounts and muted Chromium to prove
 clone/Xed edit/build/mock/activate/recover, native input/IME/undo, stale writes, revocation, weather
-place selection and mobile preservation. Existing widget sync/layout tests cover legacy fixtures.
+place selection and mobile preservation. `pnpm check:widget-lifecycle` uses fake clocks for
+scheduler fairness/rate limiting/cancellation and forecast age/refresh, plus note paging/edit
+bounds and stale revision fixtures. `pnpm check:widget-review-ui` exercises the seven review
+regressions with synthetic accounts and muted Chromium. Existing widget sync/layout tests cover
+legacy fixtures. Live Seafile, a full storage-denied environment and non-Chromium browsers remain
+unverified; none of the staged migration/platform gaps above are marked complete.
 
 ### Weather
 
