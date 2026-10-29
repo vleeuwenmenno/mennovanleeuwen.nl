@@ -431,9 +431,9 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
         <li className="set-row">
           <span className="set-row-text">
             <strong>In a thread</strong>
-            <span className="muted">The thread an agent made the task in, a new thread each run, or none</span>
+            <span className="muted">Made in a thread: each run continues it (with its context, landing there as one block), or only its reports go there; or a new thread each run, or none</span>
           </span>
-          <Select className="set-select" value={settings.taskReport.thread} onChange={(thread) => setAgentSettings({ taskReport: { ...settings.taskReport, thread } })} aria-label="Thread for reports of a new task" options={[{ value: 'fixed', label: 'The thread it was made in' }, { value: 'new', label: 'A new thread each run' }, { value: 'none', label: 'No thread' }]} />
+          <Select className="set-select" value={settings.taskReport.thread} onChange={(thread) => setAgentSettings({ taskReport: { ...settings.taskReport, thread } })} aria-label="Thread for reports of a new task" options={[{ value: 'origin', label: 'Continue in the thread it was made in' }, { value: 'posted', label: 'Reports in the thread it was made in' }, { value: 'new', label: 'A new thread each run' }, { value: 'none', label: 'No thread' }]} />
         </li>
         <li className="set-row">
           <span className="set-row-text">

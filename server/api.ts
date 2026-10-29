@@ -20,7 +20,7 @@ import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafil
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -417,6 +417,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     const againImage = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/images\/([0-9a-f-]{36})\/again$/.exec(path)
     if (againImage && method === 'POST') return await generateAnother(res, requireUser(req), againImage[1], againImage[2]), true
+    // A thread's subagents: the list, a stream of their cards and changes, the user's message to one, Stop.
+    const subagents = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/subagents(?:\/(watch)|\/([0-9a-f-]{36})\/(message|stop))?$/.exec(path)
+    if (subagents) {
+      const [, tid, watch, child, action] = subagents
+      if (!watch && !child && read) return json(res, 200, listSubagents(requireUser(req), tid)), true
+      if (watch && read) return watchSubagents(res, requireUser(req), tid), true
+      if (action === 'message' && method === 'POST') return json(res, 200, messageSubagentAsUser(requireUser(req), tid, child, await readJson(req, 64 * 1024))), true
+      if (action === 'stop' && method === 'POST') return json(res, 200, stopSubagentAsUser(requireUser(req), tid, child)), true
+    }
     const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/stats|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread

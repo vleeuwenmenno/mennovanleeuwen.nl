@@ -8,6 +8,7 @@ import type { ImageProgress } from './imageModels'
 import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 import { effortFor, type Effort } from './agentModelNames'
 import type { ThreadStats } from './agentStats'
+import type { SubagentInfo, SubagentOverview } from './agentSubagents'
 import { isHeifFile, isRawFile, stillPicture } from './stillPicture'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
@@ -16,7 +17,9 @@ import { isHeifFile, isRawFile, stillPicture } from './stillPicture'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** A short answer you could give to what the agent's last message asked (null: none, or the message is no longer the last) */ suggestedReply?: string | null; /** A suggested reply is being thought of, in the background */ suggestingReply?: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[]; /** The thinking effort picked for this thread (null: as the mode has it) */ effort?: Effort | null }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** A short answer you could give to what the agent's last message asked (null: none, or the message is no longer the last) */ suggestedReply?: string | null; /** A suggested reply is being thought of, in the background */ suggestingReply?: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null; /** The user allows mail reads always, in every thread (Settings → Agents → Permissions) */ mailReadsAlways?: boolean; /** Always-on skills (by name) and rule instructions (rule:<id>) switched off in this thread, with its chips */ skillsOff?: string[]; /** The thinking effort picked for this thread (null: as the mode has it) */ effort?: Effort | null; /** The subagents its agent started (server/agents.ts) */ subagents?: SubagentInfo[]; /** Runs of tasks that continue this thread, going now */ taskRuns?: ThreadTaskRun[]; /** A subagent's own thread: its parent thread and name */ child?: { parent: string; name: string } | null }
+/** A run of a task that continues a thread, going now: shown as a strip in that thread (live view, Cancel, its questions). */
+export type ThreadTaskRun = { run: string; task: string; title: string; status: 'queued' | 'running' | 'waiting'; number: number | null; asks: number }
 /**
  * A title a thread had until `until`, newest first on the thread: the title model changed it when
  * the conversation moved on, or the user renamed it. Shown as "also known as", and found by search.
@@ -61,13 +64,23 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
  * Role 'compact': a compaction, its content the summary the model gets in place of everything
  * before it (the window still shows all of it, with a divider here).
  */
-export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact' | 'report'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; createdAt: number }
+export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact' | 'report' | 'agent' | 'subagent'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; meta?: MessageMeta; createdAt: number }
+/**
+ * What the app keeps about a message beyond its text (server/agents.ts): a run of a task that
+ * continues this thread (one block, its transcript in the run's own thread), the one muted line its
+ * quiet runs keep up to date, a finished subagent's overview. Role 'agent': in a subagent's thread,
+ * what its parent agent wrote; role 'subagent': in a parent's, a subagent's result.
+ */
+export type MessageMeta =
+  | { kind: 'taskRun'; task: string; run: string; title: string; number: number | null; trigger: string; status: string; reported: boolean; runThread: string | null; model: string }
+  | { kind: 'taskQuiet'; task: string; run: string; title: string; count: number; since: number; last: number }
+  | ({ kind: 'subagent' } & SubagentOverview)
 /**
  * How a compaction came about (server/agents.ts): asked for with /compact (and what to focus on),
  * or by itself, when the context passed the threshold or the model said it was too long; how many
  * messages it stands in for, and roughly how many tokens they took against the summary's.
  */
-export type Compaction = { auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[] }
+export type Compaction = { /** A task run's seed: the thread it continues */ seed?: string; auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[] }
 /** "Compacted by itself: the context was nearly full" and the like, for the divider. */
 export const compactionText = (c: Compaction | undefined) =>
   !c?.auto ? 'Conversation compacted' : c.reason === 'overflow' ? 'Conversation compacted by itself: the model said it was too long' : 'Conversation compacted by itself: the context was nearly full'
@@ -161,7 +174,7 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string; /** create_task, update_task: the task as the server checked it, for the card's editor */ spec?: unknown }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; /** A subagent's card, shown (and answered) in its parent's thread */ child?: { id: string; name: string }; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 /**
  * A gpt_image picture being drawn: a typical time for it (ms), when it started (the server's clock;
  * the window turns it into its own with `elapsed`, how long it had been drawing when the window
@@ -192,6 +205,10 @@ export type TurnEvent =
   /** A compaction began (its message follows, role 'compact'), or failed; `auto` when nobody asked for it */
   | { type: 'compact'; state: 'start' | 'failed'; auto: boolean; error?: string }
   | { type: 'done' }
+  /** In a parent thread: one of its subagents asks for (or got) an answer */
+  | { type: 'child'; child: { id: string; name: string }; event: TurnEvent }
+  /** In a parent thread: its subagents changed */
+  | { type: 'subagents'; subagents: SubagentInfo[] }
   /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
@@ -335,14 +352,18 @@ export type AgentSettings = {
   taskMailRuns: number
   taskMailTokens: number
 }
-/** The report targets a new task starts with (Settings → Apps → Agents → Tasks). */
-export type TaskReportDefaults = { when: 'always' | 'failure' | 'condition'; thread: 'none' | 'new' | 'fixed'; notify: boolean; email: 'off' | 'always' | 'unseen' }
-const TASK_REPORT_DEFAULTS: TaskReportDefaults = { when: 'condition', thread: 'fixed', notify: true, email: 'off' }
+/**
+ * The report targets a new task starts with (Settings → Apps → Agents → Tasks). `thread`: made in a
+ * thread, its runs continue it (`origin`), or only its reports are posted there (`posted`); a new
+ * thread each run, or none. 'fixed', from before runs could continue their thread, reads as `origin`.
+ */
+export type TaskReportDefaults = { when: 'always' | 'failure' | 'condition'; thread: 'none' | 'new' | 'origin' | 'posted'; notify: boolean; email: 'off' | 'always' | 'unseen' }
+const TASK_REPORT_DEFAULTS: TaskReportDefaults = { when: 'condition', thread: 'origin', notify: true, email: 'off' }
 const taskReportOf = (v: unknown): TaskReportDefaults => {
   const r = (v && typeof v === 'object' ? v : {}) as Partial<TaskReportDefaults>
   return {
     when: r.when === 'always' || r.when === 'failure' ? r.when : 'condition',
-    thread: r.thread === 'none' || r.thread === 'new' ? r.thread : 'fixed',
+    thread: r.thread === 'none' || r.thread === 'new' || r.thread === 'posted' ? r.thread : 'origin',
     notify: r.notify !== false,
     email: r.email === 'always' || r.email === 'unseen' ? r.email : 'off',
   }
@@ -531,6 +552,16 @@ export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, sig
     signal,
   })
   await readEvents(res, onEvent)
+}
+
+// Subagents (server/agents.ts): helpers a thread's agent started, each in a thread of its own.
+export const listSubagents = (thread: string) => api<{ subagents: SubagentInfo[] }>(`/api/agents/threads/${thread}/subagents`)
+/** The user writes to one of a thread's subagents: a busy one reads it at its next step, one at rest starts on it. */
+export const messageSubagent = (thread: string, child: string, text: string) => api<{ delivered: string; note: string }>(`/api/agents/threads/${thread}/subagents/${child}/message`, { method: 'POST', json: { text, client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } } })
+export const stopSubagent = (thread: string, child: string) => api(`/api/agents/threads/${thread}/subagents/${child}/stop`, { method: 'POST' })
+/** A thread's subagents as they change, and their cards (also while the thread itself is at rest), until `signal` aborts. */
+export async function watchSubagents(thread: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  await readEvents(await fetch(`/api/agents/threads/${thread}/subagents/watch`, { credentials: 'same-origin', signal }), onEvent)
 }
 
 /** Start an idle branch through this message, leaving the original untouched. */

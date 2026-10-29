@@ -559,3 +559,23 @@
 .agt-tk-mailtrigger > p {
   margin-top: 8px;
 }
+
+/* Links to a run's thread, the thread-tools line, Run on…, a run's seed from the thread it continues. */
+.agt-tk-link {
+  padding: 0 6px;
+}
+.agt-tk-sync.is-differs {
+  color: var(--yellow);
+}
+.agt-tk-runon {
+  max-width: 160px;
+}
+.agt-tk-seed summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.agt-tk-seed pre {
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+}

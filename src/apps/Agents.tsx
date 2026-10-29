@@ -17,6 +17,7 @@ import { useMediaQuery } from '../os/useMediaQuery'
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ALL_TOOLS,
+  watchSubagents,
   ALWAYS_ON_TOOLS,
   choosableTools,
   TOOL_GROUPS,
@@ -137,7 +138,8 @@ import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
 import { TaskEditDialog, TasksView, type TasksFocus } from './AgentsTasks'
-import { useTaskBadge } from '../data/agentTasks'
+import { useTaskBadge, useTasksChanged } from '../data/agentTasks'
+import { ParentMessage, SubagentResult, SubagentStrip, TaskQuietLine, TaskRunBlock, TaskRunStrip } from './AgentsSubagents'
 import type { TaskSpec } from '../data/agentTaskPolicy'
 import { accountStorage } from '../os/accountSpace'
 import { localPref } from '../os/localPref'
@@ -735,7 +737,7 @@ function AgentsApp({ win }: { win: WinState }) {
         {main.kind === 'settings' ? (
           <SettingsPane onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
         ) : main.kind === 'tasks' ? (
-          <TasksView focus={main.focus} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
+          <TasksView focus={main.focus} fromThread={selected} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
         ) : main.kind === 'memory' ? (
           <MemoryView scope={main.scope} projects={projects} onScope={(scope) => setMain({ kind: 'memory', scope })} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
         ) : (
@@ -755,6 +757,8 @@ function AgentsApp({ win }: { win: WinState }) {
             onChanged={refresh}
             onArchive={archive}
             onDelete={remove}
+            onOpenRun={(focus) => (setMain({ kind: 'tasks', focus }), setPane('chat'))}
+            onOpenThread={(id) => (setArchived(false), open(id), refresh())}
           />
         )}
       </section>
@@ -1074,9 +1078,13 @@ type ConversationProps = {
   onChanged: () => void
   onArchive: (t: Thread, archived: boolean) => void
   onDelete: (t: Thread) => void
+  /** Opens a task's run in the Tasks tab (a task that continues this thread) */
+  onOpenRun: (focus: TasksFocus) => void
+  /** Opens another thread (a subagent's work, branched) */
+  onOpenThread: (id: string) => void
 }
 
-function Conversation({ id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete }: ConversationProps) {
+function Conversation({ id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread }: ConversationProps) {
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
   // The currencies the answers mention, offered when you open an amount in one (src/os/MoneyAmount.tsx).
@@ -1177,6 +1185,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     return () => window.removeEventListener(MAIL_READS_EVENT, on)
   }, [])
 
+  // A subagent's card (or its answer), from this thread's turn stream or its subagents' watch.
+  const onChildEvent = (e: Extract<TurnEvent, { type: 'child' }>) => {
+    const c = e.event
+    if (c.type === 'approval') setApprovals((a) => (a.some((x) => x.callId === c.callId) ? a : [...a, { callId: c.callId, messageId: c.messageId, index: c.index, kind: 'approval', call: c.call, summary: c.summary, check: c.check, child: e.child }]))
+    else if (c.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== c.callId))
+  }
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
     if (e.type === 'snapshot') {
@@ -1208,6 +1222,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       if (!e.thread.running) (setLive(null), setCompacting(null))
       onChanged()
     } else if (e.type === 'queue') setThread((t) => (t ? { ...t, queue: e.queue } : t))
+    else if (e.type === 'subagents') setThread((t) => (t ? { ...t, subagents: e.subagents } : t))
+    else if (e.type === 'child') onChildEvent(e)
     // A failed turn: the thread's `interrupted` says so when it ends, with Retry (see below).
   }
 
@@ -1280,6 +1296,40 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     return () => ctl.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, busy, thread?.running, rejoin])
+
+  // Its subagents, while it has any: their changes and cards, and a turn starting from their results,
+  // also while this thread is at rest (the turn itself is then followed above).
+  const hasSubagents = !!thread?.subagents?.length
+  useEffect(() => {
+    if (!id || !hasSubagents) return
+    const ctl = new AbortController()
+    void watchSubagents(
+      id,
+      (e) => {
+        if (e.type === 'subagents') setThread((t) => (t && t.id === id ? { ...t, subagents: e.subagents } : t))
+        else if (e.type === 'child') onChildEvent(e)
+        // A turn from their results: followed while it runs; one already over (a quick one) is read again.
+        else if (e.type === 'thread' && e.thread.id === id && !sending.current) {
+          if (e.thread.running) setThread(e.thread)
+          else getThread(id).then((r) => !sending.current && (setThread(r.thread), setMessages(r.messages), setApprovals(r.pending)), () => {})
+        }
+      },
+      ctl.signal,
+    ).catch(() => {})
+    return () => ctl.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, hasSubagents])
+  // A task that continues this thread started, asks, or landed here: read the thread again (at rest only).
+  const tasksChanged = useCallback(() => {
+    if (!id || sending.current || thread?.running) return
+    getThread(id).then((r) => {
+      if (sending.current) return
+      setThread(r.thread)
+      setMessages(r.messages)
+      setApprovals(r.pending)
+    }, () => {})
+  }, [id, thread?.running])
+  useTasksChanged(tasksChanged)
 
   // Follow the answer as it grows, unless scrolled up to read; then offer a jump back down instead.
   const [scrolledUp, setScrolledUp] = useState(false)
@@ -1643,7 +1693,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // Editing one takes it into the message box (files too) and holds the queue until it is saved or
   // put back, so it is never sent halfway through a change.
   const queue = thread?.queue ?? []
-  const waiting = approvals.some((a) => a.kind !== 'client')
+  // A subagent's card waits on its own: typing here never answers it.
+  const waiting = approvals.some((a) => a.kind !== 'client' && !a.child)
   const startEdit = async (q: QueuedMessage) => {
     if (!thread || editingQ) return
     try {
@@ -2149,7 +2200,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <MoneyThread currencies={threadCurrencies}>
-          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onInpaint={(input) => void again(input.source_image_id, input)} onRefine={(input) => void again(input.source_image_id, input)} onUpscale={(input) => void again(input.source_image_id, input)} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} onEditPicture={tools.includes('gpt_images') ? (name, ref) => void editPicture(name, ref) : undefined} onEditImage={(name, sourceId) => {
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals.filter((a) => !a.child)} onOpenRun={(task, run) => onOpenRun({ task, run })} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} retry={retryAt !== null && !answering && !reconnecting && !dropped && !thread?.interrupted ? { at: retryAt, onRetry: () => void retry() } : undefined} actions={messageActions} onInpaint={(input) => void again(input.source_image_id, input)} onRefine={(input) => void again(input.source_image_id, input)} onUpscale={(input) => void again(input.source_image_id, input)} onAgain={(imageId) => void again(imageId)} imagesOn={tools.includes('images')} onEditPicture={tools.includes('gpt_images') ? (name, ref) => void editPicture(name, ref) : undefined} onEditImage={(name, sourceId) => {
             if (files.filter((f) => f.source !== 'Image-to-image source').length >= 10) { setError('Remove an attachment before selecting an image source (10 attachments maximum).'); return }
             const reference = `The user selected “${name}” as the source for an image-to-image edit. source_image_id: ${sourceId}. Use this exact owned reference with generate_image, not a URL or a new text-to-image recreation. Apply only the change requested in the user's message; this is a whole-image edit, not masked inpainting.`
             setFiles((current) => [...current.filter((f) => f.source !== 'Image-to-image source'), { name: `${name} (image source)`, source: 'Image-to-image source', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
@@ -2200,6 +2251,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         )}
       </div>
 
+      {thread && <TaskRunStrip thread={thread} onOpenRun={(task, run) => onOpenRun({ task, run })} onError={setError} />}
+      {thread && <SubagentStrip thread={thread} approvals={approvals} onDecide={(callId, allow) => decide(callId, allow)} onOpenThread={onOpenThread} onError={setError} />}
       {!!thread?.todos.length && (
         <TodoChip
           todos={thread.todos}
@@ -2408,7 +2461,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved }: { onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved, onOpenRun }: { /** Opens a task's run (a task that continues this thread landed here) */ onOpenRun: (task: string, run: string) => void; onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const [maskSource, setMaskSource] = useState<InpaintSource | null>(null)
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
@@ -2453,6 +2506,25 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
     if (m.role === 'tool') continue // drawn with the call that asked for it
     if (m.role === 'compact') {
       out.push(<div key={m.id} className="agt-act-host" data-msg={m.id}><CompactDivider m={m} />{row(m, 'Summary', [{ label: 'Copy summary', onSelect: () => copy(m.content) }])}</div>)
+      continue
+    }
+    // A task that continues this thread: one block per run that reported, one muted line for its quiet runs.
+    if (m.role === 'report' && m.meta?.kind === 'taskQuiet') {
+      out.push(<TaskQuietLine key={m.id} m={m} onOpenRun={onOpenRun} />)
+      continue
+    }
+    if (m.role === 'report' && m.meta?.kind === 'taskRun') {
+      out.push(<TaskRunBlock key={m.id} m={m} onOpenRun={onOpenRun} actions={row(m, 'Task run', [{ label: 'Copy report', onSelect: () => copy(m.content) }])} />)
+      continue
+    }
+    // A finished subagent's overview and answer: data from another agent, never this agent's own words.
+    if (m.role === 'subagent') {
+      out.push(<SubagentResult key={m.id} m={m} actions={row(m, 'Subagent result', [{ label: 'Copy', onSelect: () => copy(m.content) }])} />)
+      continue
+    }
+    // In a subagent's own work (opened as a thread): what its parent agent wrote to it.
+    if (m.role === 'agent') {
+      out.push(<ParentMessage key={m.id} m={m} />)
       continue
     }
     // A background task's report: its own card, never the agent's answer (the model reads it as quoted data).
@@ -2974,7 +3046,9 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
       const steps = (m.toolCalls ?? []).map((c, j) => `- ${toolLabel(c, results[j]?.content)}`).join('\n')
       if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
     } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
-    else if (m.role === 'report') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
+    else if (m.role === 'report' && m.meta?.kind !== 'taskQuiet') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
+    else if (m.role === 'subagent') out.push(`## Subagent\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
+    else if (m.role === 'agent') out.push(`## Parent agent\n\n${m.content}`)
   }
   return out.join('\n\n') + '\n'
 }

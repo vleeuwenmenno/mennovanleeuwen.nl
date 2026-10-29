@@ -2000,7 +2000,7 @@ which words were tried rather than invent a conversation.
 pnpm check:agents-threads   # History search, ownership, attachment reads, bounds, ranking and 20,000-message timing
 ```
 
-The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`,
+The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`, `check:agents-subagents`,
 `check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
 
 **Tasks.** A task is an agent that runs in the background, once (now or at a time), on a
@@ -2018,7 +2018,7 @@ wait for you (!). The terminal's `agents` command has the same as `/tasks`.
 - **A task**: what it does, when it tells you, its policy in plain words with warnings, its
   **state note** (what the agent noted for its next run; data, not instructions; editable), and
   its runs. Run now, **Dry run** (one run where every change asks), Pause, Edit, Delete.
-- **A run**: status, start, end, duration, tokens, tool calls, the policy version it ran under,
+- **A run**: run #n, status, start, end, duration, tokens, tool calls, the model (when it was not the task's), the policy version it ran under,
   whether it reported or stayed quiet and why, where the report went, the report, and the whole
   transcript with every tool call marked *Allowed by policy*, *Approved by you*, *Denied* or
   *Blocked by policy*. A run started by new mail lists that mail (sender and subject, each opening
@@ -2026,11 +2026,34 @@ wait for you (!). The terminal's `agents` command has the same as `/tasks`.
   answered right there. **Continue in thread** opens the transcript as a normal thread to follow
   up in (`branchThread`); the run itself stays as it was.
 
-*Making one.* **New task** in the Tasks tab, or ask an agent: `create_task`, `update_task` and
-`cancel_task` ask you every time, in every permission mode including Bypass. The card shows the
-task as the server checked it (schedule, instruction, condition, where reports go, the policy in
-plain words) and **Change before allowing…** opens it in the editor; what you save is checked again.
-A task made in a thread reports to that thread by default.
+*Making one.* **New task** in the Tasks tab, or ask an agent: `create_task`, `update_task`,
+`cancel_task` and `run_task_now` ask you every time, in every permission mode including Bypass. The
+card shows the task as the server checked it (schedule, instruction, condition, where reports go,
+the policy in plain words, the model) and **Change before allowing…** opens it in the editor; what
+you save is checked again.
+
+*Made in a thread.* A task made in a thread (the agent's `create_task`, or New task while a thread
+is open) starts with that thread's tools: a snapshot taken then, not live. Each tool the thread has
+on (its groups, and web and skills, which chat threads always have) gets the verdict the thread
+would give it in Ask first, whatever the thread's mode (Bypass, Auto and Edits allowed never carry
+over; Plan counts as Ask first): what runs without asking is Allow, what asks is Ask, and what the
+thread has off is blocked. Only lasting grants come along: mail reads allowed always, and the sites
+allowed for good, which become the task's trusted sites (any site may be read; on a trusted one also
+an address the agent built while it holds private data). The 15-minute mail read grant, commands
+allowed in a terminal and Auto's check do not. What costs (gpt-image) or lasts beyond the run
+(memories, notes, projects, kept photos) asks, though the thread runs it. The thread's
+work folder comes along: reads Allow, writes and deletes Ask, `AGENTS.md`, `CLAUDE.md`, `.agents/`
+and `.claude/` never further than Ask, nor your own ~/AGENTS.md and skills folder when the work folder holds them. The card says "Tools: Same as this thread" and names what
+does not come along (the terminal, image generation). The editor says whether the task's tools still
+match its thread's, with **Use thread's tools again**; `update_task` with `use_thread_tools` does the
+same (only in the thread the task was made in), and its card says when that widens what the task may do. Its model is the thread's, unless one
+is named. Tasks made in the Tasks tab with no thread open keep the safe defaults below.
+
+*A model of its own.* The editor picks from your models; `create_task` and `update_task` take
+`model` ("run my morning brief on GLM from now on"), and the card shows the change ("A → B"). A
+model is checked when the task is saved: its provider has to be set up, and when your model list
+answers it has to be on it (a list that does not answer does not block a save). **Run on…** next to
+Run now, or `run_task_now` with a model, runs it once on another model; the task keeps its own.
 
 *When it runs.* Daily, weekdays or some days of the week at a time, a cron line, or once, in the
 task's time zone ([`src/data/agentTaskSchedule.ts`](src/data/agentTaskSchedule.ts)). A time the clocks
@@ -2103,8 +2126,8 @@ accounts, and mail only to you or to listed people. An address the agent built i
 private data is in the run, even on a listed site. Memories reach a run only when the task says so.
 The editor warns when a task reads what others wrote (web, mail) and can also change things, or
 reads private data and can reach outside. Not in task runs: the terminal, forms, plan mode, image
-generation, the work folder, and the task tools themselves. Policies are versioned; each run keeps
-the version it ran under.
+generation, subagents, and the task tools themselves; the work folder only when the task has one.
+Policies are versioned (a new work folder too); each run keeps the version it ran under.
 
 *Asking.* A call the policy asks about pauses the run: the call is kept with the run, you get an
 "Agent tasks" notification, and you answer in the Tasks tab or with `/tasks approve`. The wait
@@ -2114,10 +2137,27 @@ survives restarts. After 12 hours without an answer the call is denied and the r
 *Reports.* Each run ends with the agent's verdict (`task_report`): report or stay quiet, why, a
 summary, done or not, and the new state note. A task reports every run, only when something fails
 or needs you, or when its "Tell me when…" condition is met (a run that ends without a verdict
-reports). Reports go to any of: a thread (a new one each run, or one fixed thread, written only
-while it is at rest), a notification (source *Agent tasks* in Settings → Notifications, opening the
-run), and email from your own linked mail account to yourself, always or only when the notification
-was not read within 15 minutes. The email is plain text with the agent's words marked as such.
+reports). Reports go to any of: a thread (a new one each run, one fixed thread written only while
+it is at rest, or the thread it continues, below), a notification (source *Agent tasks* in Settings
+→ Notifications, opening the run), and email from your own linked mail account to yourself, always
+or only when the notification was not read within 15 minutes.
+
+*Continue in the thread it was made in* (the default for a task made in a thread; Settings → Apps →
+Agents → Tasks can make it "Reports in the thread it was made in" instead). Each run still runs in a
+hidden thread of its own under the task's policy and model (never as the chat thread, which a task
+never sets running), seeded with that thread's context: its last compaction's summary and its
+latest messages, as data, tool results shortened as compaction does, within an eighth of the run's
+token cap (or the summary and about 16k tokens of messages, whichever is smaller). A seeded run holds
+private data from its first round. While it runs the
+thread shows a strip: the task, run #n and its state, with the run live, its questions to answer
+(Allow or Deny, kept across restarts like any run's) and Cancel. Once the thread is at rest the run
+lands there as one block: "Task: title · run #n · trigger", the report, what it used, and its
+transcript on demand. The next message in the thread carries on with that block in context (the
+model reads it as a task report: data). A thread busy when the run ended gets it when it is at rest
+(tried each minute for a day). Quiet runs land as one muted line, kept up to date in place
+("checked 14× — nothing new · since …") while it is the thread's last message, never sent to the
+model, and sending nothing else. A thread deleted or archived since: the run starts fresh, its report
+goes to a new thread, and the run history says so. The email is plain text with the agent's words marked as such.
 Three failed runs in a row report whatever the task says; a run cut off by a restart is marked
 interrupted, tried once more and not counted as a failure. An optional weekly or monthly "still
 watching" note says the task is alive.
@@ -2132,7 +2172,54 @@ the scheduler off; the dev server only runs tasks with `AGENT_TASKS=on`:
 
 ```sh
 DATA_DIR=/tmp/mvlos-tasks AGENT_TASKS=on ./node_modules/.bin/vite --port 5251 --strictPort
-pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts, the new-mail trigger against a stand-in JMAP server
+pnpm check:agents-tasks   # schedules and DST, the policy table and caps, the scheduler with a fake clock, restarts, the new-mail trigger against a stand-in JMAP server, the thread-made policy, runs that continue their thread, the model per task
+```
+
+**Subagents.** An agent in a chat thread can start helpers that work on their own, alongside it
+([`src/data/agentSubagents.ts`](src/data/agentSubagents.ts), [`src/apps/AgentsSubagents.tsx`](src/apps/AgentsSubagents.tsx)):
+`spawn_agent` (a name, a complete instruction, optionally a model and fewer tools, and whether it
+may change files in the work folder) starts one at once, without asking; `message_agent` writes to
+one; `list_agents` and `agent_status` look; `stop_agent` stops one. In Plan mode only the looking
+ones are offered, and task runs never start subagents. Each subagent is a hidden child thread
+(`quick = 4`) of its parent, run through the same turn loop.
+
+- *What it may do*: the parent's tool groups or fewer (checked again each round against the
+  parent's as they are now), under the stricter of the mode it was started with and the parent's
+  current one, each round. Never forms, plans, the terminal, task or subagent tools (one level
+  deep), pictures or project changes; the work folder only reads unless started with
+  `write_files`. What the parent writes to it is saved as the parent agent's message (role
+  `agent`), never as yours, and its prompt says so: its `remember` asks you every time. It holds
+  private data when its parent does, and the addresses its parent was given count as given to it.
+- *Its cards* wait in its own thread, so typing in the parent never answers them, and show in the
+  parent labelled with its name, Allow or Decline only (nothing "from now on"); they push as the
+  parent's when nobody looks.
+- *Its result* counts as private data in the parent (it may hold what the subagent read), as does
+  a task report in a thread: from then on an address the agent built asks, there and in the
+  subagents it starts afterwards. When it finishes, its overview (state, time, tokens, tool calls by name) and its
+  final answer go into the parent's inbox (`agent_inbox`): nobody writes into a running thread. A
+  working parent reads it at its next round boundary, after its tool results are saved, as data
+  (role `subagent`); a parent at rest starts a turn for it a moment later (results finishing close
+  together go as one), tried again while all your chat turns are busy. Such a turn adds no message of
+  yours and sends no "answered" push. A message to a busy subagent waits for its next step the same
+  way; to one at rest it starts a turn.
+- *Limits*: 4 working per thread, 6 per account and 24 on the server, a pool of their own (never
+  your two chat turns); per message of yours at most 8 started and 6 turns from results, so a
+  parent → result → message loop stops; per subagent turn 60 tool calls, 20 minutes and 1.5M tokens.
+  A thread keeps its last 30.
+- *Stop, delete, rewind, restart*: Stop in the parent stops its subagents (their overviews come in
+  with your next message); deleting it deletes them; archiving keeps them; a rewind drops the ones
+  started for the messages it removes, with their results still on the way, and so does Retry (which
+keeps the budget that message used); a restart marks working
+  ones interrupted and the parent still gets an overview saying so (nothing starts by itself then).
+- *In the window*: a Subagents strip above the message box, each with its state and usage, its work
+  live, a box to write to it, Stop, and **Open as thread** (a branch of its work). Their changes and
+  cards also come while the thread is at rest (`GET /api/agents/threads/<id>/subagents/watch`). Chat
+  routes never write to a subagent's thread; it can be read, followed and branched.
+- *In the terminal*: `/subagents` lists them, `show <id>`, `msg <id> <text>` and `stop <id>` (an id,
+  the start of one, or a name); their cards come up on the thread's stream, labelled.
+
+```sh
+pnpm check:agents-subagents   # the /subagents command, then against a stand-in model: spawning, tools a subset, the stricter mode, agent messages, inherited addresses, cards in the parent, message_agent, results at a round boundary, continuations (merged, retried on 429), the caps, Stop, delete, rewind, a restart, closed chat routes, isolation
 ```
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker

@@ -1,6 +1,6 @@
 import { api } from '../os/account'
 import { useCallback, useEffect, useState } from 'react'
-import type { Task, TaskRunInfo, TaskSpec } from './agentTaskPolicy'
+import type { Task, TaskRunInfo, TaskSpec, ThreadTools } from './agentTaskPolicy'
 import type { AgentMessage, Thread } from './agents'
 
 // The Agents app's side of background tasks (server/agentTasks.ts): the tasks, their runs, answers
@@ -11,16 +11,18 @@ import type { AgentMessage, Thread } from './agents'
 export const TASKS_EVENT = 'mvlos:agent-tasks'
 export type TasksChange = { task?: string; run?: string; deleted?: boolean }
 
-export type TaskOptionsInfo = { enabled: boolean; mail: { id: number; label: string }[]; defaults: { report: TaskSpec['report']; keep: number; caps: TaskSpec['caps']; options: TaskSpec['options'] } }
+/** What the editor can offer; with `thread`, that thread's tools as a task's policy (New task while it is open, "Use thread's tools again"). */
+export type TaskOptionsInfo = { enabled: boolean; mail: { id: number; label: string }[]; defaults: { report: TaskSpec['report']; keep: number; caps: TaskSpec['caps']; options: TaskSpec['options'] }; thread?: ThreadTools }
 
 export const listTasks = () => api<{ tasks: Task[]; enabled: boolean }>('/api/agents/tasks')
-export const taskOptions = () => api<TaskOptionsInfo>('/api/agents/tasks/options')
+export const taskOptions = (thread?: string | null) => api<TaskOptionsInfo>(`/api/agents/tasks/options${thread ? `?thread=${thread}` : ''}`)
 export const getTask = (id: string) => api<Task>(`/api/agents/tasks/${id}`)
 export const createTask = (spec: Partial<TaskSpec>, from: string | null = null) => api<Task>('/api/agents/tasks', { method: 'POST', json: { spec, from } })
 /** Any fields of the task, its state note, or `status` ('paused' or 'active') to pause and resume it. */
 export const updateTask = (id: string, patch: Partial<TaskSpec> & { stateNote?: string; status?: 'paused' | 'active' }) => api<Task>(`/api/agents/tasks/${id}`, { method: 'PATCH', json: patch })
 export const deleteTask = (id: string) => api(`/api/agents/tasks/${id}`, { method: 'DELETE' })
-export const runTask = (id: string, dry = false) => api<TaskRunInfo>(`/api/agents/tasks/${id}/run`, { method: 'POST', json: { dry } })
+/** Run now (a dry run: every change asks), on the task's model or, this once, on `model`. */
+export const runTask = (id: string, dry = false, model?: string | null) => api<TaskRunInfo>(`/api/agents/tasks/${id}/run`, { method: 'POST', json: { dry, ...(model ? { model } : {}) } })
 export const listRuns = (id: string, before?: number) => api<{ runs: TaskRunInfo[]; more: boolean }>(`/api/agents/tasks/${id}/runs${before ? `?before=${before}` : ''}`)
 export const getRun = (id: string) => api<{ run: TaskRunInfo; task: Task }>(`/api/agents/task-runs/${id}`)
 export const approveRun = (id: string, index: number, allow: boolean) => api<TaskRunInfo>(`/api/agents/task-runs/${id}/approve`, { method: 'POST', json: { index, allow } })

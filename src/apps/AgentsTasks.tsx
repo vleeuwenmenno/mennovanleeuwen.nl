@@ -19,6 +19,7 @@ import {
   policySummary,
   RETENTION,
   RUN_STATUS_LABEL,
+  samePolicy,
   TASK_GROUPS,
   TASK_TOOLS,
   toolVerdict,
@@ -29,6 +30,7 @@ import {
   type TaskPolicy,
   type TaskRunInfo,
   type TaskSpec,
+  type ThreadTools,
   type Verdict,
 } from '../data/agentTaskPolicy'
 import { describeSchedule, upcoming, type Schedule } from '../data/agentTaskSchedule'
@@ -60,7 +62,7 @@ function RunChip({ run }: { run: TaskRunInfo }) {
 }
 
 /** The Tasks tab: the list, a task, a run, or the editor, one at a time (a stack, like on a phone). */
-export function TasksView({ focus, onBack, onOpenThread }: { focus: TasksFocus | null; onBack: () => void; onOpenThread: (id: string) => void }) {
+export function TasksView({ focus, fromThread, onBack, onOpenThread }: { focus: TasksFocus | null; /** The thread open when the tab was: New task starts from its tools, model and folder, and continues it */ fromThread?: string | null; onBack: () => void; onOpenThread: (id: string) => void }) {
   const [tasks, setTasks] = useState<Task[] | null>(null)
   const [enabled, setEnabled] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -82,19 +84,20 @@ export function TasksView({ focus, onBack, onOpenThread }: { focus: TasksFocus |
   }, [])
   useEffect(load, [load])
   useTasksChanged(useCallback((_c: TasksChange) => (load(), setVersion((v) => v + 1)), [load]))
-  const options = useTaskOptions()
+  const options = useTaskOptions(fromThread)
 
   if (editing)
     return (
       <TaskEditorPane
         initial={editing === 'new' ? null : editing}
         options={options}
+        from={editing === 'new' ? (options?.thread?.thread ?? null) : null}
         onCancel={() => setEditing(null)}
         onSaved={(t) => (setEditing(null), setTask(t.id), load())}
       />
     )
   if (run) return <RunView id={run} version={version} onBack={() => setRun(null)} onOpenThread={onOpenThread} onTask={(id) => (setRun(null), setTask(id))} />
-  if (task) return <TaskView id={task} version={version} onBack={() => setTask(null)} onRun={setRun} onEdit={(t) => setEditing(t)} onDeleted={() => (setTask(null), load())} />
+  if (task) return <TaskView id={task} version={version} onBack={() => setTask(null)} onRun={setRun} onEdit={(t) => setEditing(t)} onDeleted={() => (setTask(null), load())} onOpenThread={onOpenThread} />
 
   const list = tasks ?? []
   const waiting = list.filter((t) => t.lastRun?.status === 'waiting')
@@ -149,11 +152,30 @@ export function TasksView({ focus, onBack, onOpenThread }: { focus: TasksFocus |
   )
 }
 
-function useTaskOptions(): TaskOptionsInfo | null {
+/** What the editor can offer; with `thread`, that thread's tools as a task's policy. */
+function useTaskOptions(thread?: string | null): TaskOptionsInfo | null {
   const [o, setO] = useState<TaskOptionsInfo | null>(null)
-  useEffect(() => void taskOptions().then(setO, () => {}), [])
+  useEffect(() => void taskOptions(thread).then(setO, () => {}), [thread])
   return o
 }
+
+/** The models the account can pick, by name, once. */
+function useModelNames(): string[] {
+  const [models, setModels] = useState<string[]>([])
+  useEffect(() => void agentModels().then((m) => setModels(m.map((x) => x.name)), () => {}), [])
+  return models
+}
+
+/** Run now on another model, this once: a picker that runs as soon as one is picked. */
+function RunOnModel({ task, disabled, onRun }: { task: Task; disabled: boolean; onRun: (model: string) => void }) {
+  const models = useModelNames()
+  if (!models.length) return null
+  return <Select className="agt-tk-runon" value="" disabled={disabled} onChange={(m) => m && onRun(m)} aria-label="Run now on another model" options={[{ value: '', label: 'Run on…' }, ...models.filter((m) => m !== task.model).map((m) => ({ value: m, label: m }))]} />
+}
+
+/** Where a task's reports go, in words. */
+const reportsTo = (r: TaskSpec['report']) =>
+  [r.thread === 'new' ? 'a new thread each run' : r.thread === 'origin' ? 'the thread it was made in: each run continues it' : r.thread === 'fixed' ? 'a thread' : '', r.notify ? 'a notification' : '', r.email === 'always' ? 'email to you' : r.email === 'unseen' ? 'email when the notification is not read in time' : ''].filter(Boolean)
 
 function TaskRow({ task: t, onOpen, onChanged, enabled }: { task: Task; onOpen: () => void; onChanged: () => void; enabled: boolean }) {
   const act = (p: Promise<unknown>) => void p.then(onChanged, (e: Error) => void tell({ title: 'That did not work', body: e.message }))
@@ -198,7 +220,7 @@ function TaskRow({ task: t, onOpen, onChanged, enabled }: { task: Task; onOpen: 
 
 const REPORT_WHEN = { always: 'Every run', failure: 'Only when something fails or needs you', condition: 'When the condition is met' } as const
 
-function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: string; version: number; onBack: () => void; onRun: (id: string) => void; onEdit: (t: Task) => void; onDeleted: () => void }) {
+function TaskView({ id, version, onBack, onRun, onEdit, onDeleted, onOpenThread }: { id: string; version: number; onBack: () => void; onRun: (id: string) => void; onEdit: (t: Task) => void; onDeleted: () => void; onOpenThread: (id: string) => void }) {
   const [task, setTask] = useState<Task | null>(null)
   const [runs, setRuns] = useState<TaskRunInfo[]>([])
   const [more, setMore] = useState(false)
@@ -228,7 +250,7 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
     if (!(await ask({ title: `Delete “${task.title}”?`, body: 'The task and all its runs are gone for good. Pause it instead to keep its history.', confirm: 'Delete', danger: true }))) return
     deleteTask(task.id).then(onDeleted, (e: Error) => setError(e.message))
   }
-  const to = [task.report.thread === 'new' ? 'a new thread each run' : task.report.thread === 'fixed' ? 'a thread' : '', task.report.notify ? 'a notification' : '', task.report.email === 'always' ? 'email to you' : task.report.email === 'unseen' ? 'email when the notification is not read in time' : ''].filter(Boolean)
+  const to = reportsTo(task.report)
   return (
     <>
       <div className="nb-toolbar agt-toolbar">
@@ -246,6 +268,7 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
               <button className="btn btn-small" disabled={task.active > 0} onClick={() => act(runTask(task.id, true))} title="One run where every change asks you first">
                 Dry run
               </button>
+              <RunOnModel task={task} disabled={task.active > 0} onRun={(m) => act(runTask(task.id, false, m))} />
             </>
           )}
           {task.status === 'active' ? (
@@ -276,8 +299,19 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
           {task.status === 'active' && task.schedule.kind === 'mail' && <Fact label="Waiting">{task.mailPending ? `${task.mailPending} new ${task.mailPending === 1 ? 'mail' : 'mails'} for the next run` : 'No new mail yet'}</Fact>}
           <Fact label="Tells you">{task.condition ? `When: ${task.condition}` : REPORT_WHEN[task.report.when]}</Fact>
           {task.doneWhen && <Fact label="Done when">{task.doneWhen}</Fact>}
-          <Fact label="Reports to">{to.join(', ') || 'only the run history'}</Fact>
+          <Fact label="Reports to">
+            {to.join(', ') || 'only the run history'}
+            {(task.report.thread === 'origin' || task.report.thread === 'fixed') && task.report.threadId && (
+              <>
+                {' '}
+                <button className="btn btn-small agt-tk-link" onClick={() => onOpenThread(task.report.threadId!)}>
+                  Open the thread
+                </button>
+              </>
+            )}
+          </Fact>
           <Fact label="Model">{task.model ?? 'The task model from Settings'}</Fact>
+          {task.workdir && <Fact label="Work folder">{task.workdir.label}</Fact>}
           <Fact label="Ends">{task.expiresAt ? when(task.expiresAt, task.timezone) : 'Never'}</Fact>
           {task.failures > 0 && <Fact label="Failures">{task.failures} in a row</Fact>}
         </dl>
@@ -305,9 +339,12 @@ function TaskView({ id, version, onBack, onRun, onEdit, onDeleted }: { id: strin
             <li key={r.id}>
               <button className="agt-tk-run" onClick={() => onRun(r.id)}>
                 <RunChip run={r} />
-                <span>{when(r.startedAt ?? r.queuedAt, task.timezone)}</span>
+                <span>
+                  {r.number ? <span className="muted">#{r.number} </span> : null}
+                  {when(r.startedAt ?? r.queuedAt, task.timezone)}
+                </span>
                 <span className="muted">{r.endedAt && r.startedAt ? took(r.endedAt - r.startedAt) : r.status === 'running' ? 'running…' : ''}</span>
-                <span className="muted agt-tk-reason">{r.mail ? `${mailCount(r.mail)} · ` : ''}{r.reportReason ?? r.error ?? ''}</span>
+                <span className="muted agt-tk-reason">{r.mail ? `${mailCount(r.mail)} · ` : ''}{r.model ? `on ${r.model} · ` : ''}{r.reportReason ?? r.error ?? ''}</span>
               </button>
             </li>
           ))}
@@ -470,7 +507,15 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
             {tokens(run.tokensIn)} in · {tokens(run.tokensOut)} out
           </Fact>
           <Fact label="Tool calls">{run.toolCalls}</Fact>
-          <Fact label="Started by">{run.trigger === 'schedule' ? 'The schedule' : run.trigger === 'mail' ? `New mail (${mailCount(run.mail)})` : run.trigger === 'catchup' ? 'Catching up after downtime' : run.trigger === 'retry' ? 'A retry after a restart' : run.dry ? 'You (dry run)' : 'You (Run now)'}</Fact>
+          <Fact label="Started by">{run.trigger === 'schedule' ? 'The schedule' : run.trigger === 'mail' ? `New mail (${mailCount(run.mail)})` : run.trigger === 'catchup' ? 'Catching up after downtime' : run.trigger === 'retry' ? 'A retry after a restart' : run.dry ? 'You (dry run)' : 'You (Run now)'}{run.number ? ` · run #${run.number}` : ''}</Fact>
+          <Fact label="Model">{run.model ? `${run.model} (this run only)` : (task.model ?? 'The task model from Settings')}</Fact>
+          {run.originThread && (
+            <Fact label="Continues">
+              <button className="btn btn-small agt-tk-link" onClick={() => onOpenThread(run.originThread!)}>
+                {run.originMessage ? 'Open where it landed' : 'Open the thread'}
+              </button>
+            </Fact>
+          )}
           <Fact label="Policy">version {run.policyVersion}{run.policyVersion !== task.policyVersion ? ` (now ${task.policyVersion})` : ''}</Fact>
           {run.reportReason && <Fact label={run.reported ? 'Reported' : 'Quiet'}>{run.reportReason}</Fact>}
           {run.delivered.length > 0 && <Fact label="Sent to">{run.delivered.join(', ')}</Fact>}
@@ -538,14 +583,21 @@ function RunView({ id, version, onBack, onOpenThread, onTask }: { id: string; ve
 }
 
 /** The run's messages: the instruction, the agent's words, and each tool call with how it was decided and what came back. */
-function Transcript({ messages, live }: { messages: AgentMessage[]; live: { content: string; thinking: string } | null }) {
+export function Transcript({ messages, live, userLabel = 'Instruction' }: { messages: AgentMessage[]; live: { content: string; thinking: string } | null; /** What a user message is here: a run's instruction, or (a subagent's) the user writing to it */ userLabel?: string }) {
   const out: ReactNode[] = []
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
-    if (m.role === 'user')
+    if (m.role === 'compact' && m.compact?.seed)
+      out.push(
+        <details key={m.id} className="agt-tk-msg agt-tk-seed">
+          <summary className="muted">Context from the thread it continues</summary>
+          <pre>{m.content}</pre>
+        </details>,
+      )
+    else if (m.role === 'user' || m.role === 'agent')
       out.push(
         <div key={m.id} className="agt-tk-msg is-user">
-          <span className="muted">Instruction</span>
+          <span className="muted">{m.role === 'agent' ? 'From the parent agent' : userLabel}</span>
           <pre>{m.content}</pre>
         </div>,
       )
@@ -611,8 +663,13 @@ function Transcript({ messages, live }: { messages: AgentMessage[]; live: { cont
 
 // --- the editor -----------------------------------------------------------------------------------
 
-/** A task to start from: a new one, with Settings' defaults. */
+/**
+ * A task to start from: a new one, with Settings' defaults; made while a thread is open, with that
+ * thread's tools (a snapshot), work folder and model, its runs continuing it.
+ */
 export function blankSpec(options: TaskOptionsInfo | null): TaskSpec {
+  const t = options?.thread
+  const report = { ...DEFAULT_REPORT, ...(options?.defaults.report ?? {}) }
   return {
     title: '',
     instruction: '',
@@ -620,22 +677,26 @@ export function blankSpec(options: TaskOptionsInfo | null): TaskSpec {
     doneWhen: '',
     schedule: { kind: 'daily', time: '08:00' },
     timezone: ZONE,
-    policy: defaultPolicy(),
-    report: { ...DEFAULT_REPORT, ...(options?.defaults.report ?? {}), threadId: null },
+    policy: t ? structuredClone(t.policy) : defaultPolicy(),
+    report: t && report.threadId === t.thread ? report : { ...report, thread: report.thread === 'origin' || report.thread === 'fixed' ? 'none' : report.thread, threadId: null },
     caps: { ...DEFAULT_CAPS },
-    model: null,
+    model: t?.model ?? null,
+    workdir: t?.workdir ?? null,
     options: { ...DEFAULT_OPTIONS },
     expiresAt: Date.now() + DEFAULT_EXPIRY_MS,
   }
 }
 
-function TaskEditorPane({ initial, options, onCancel, onSaved }: { initial: Task | null; options: TaskOptionsInfo | null; onCancel: () => void; onSaved: (t: Task) => void }) {
+function TaskEditorPane({ initial, options, from, onCancel, onSaved }: { initial: Task | null; options: TaskOptionsInfo | null; from: string | null; onCancel: () => void; onSaved: (t: Task) => void }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // A task made in a thread: that thread's tools as they are now, to compare with and take again.
+  const made = useTaskOptions(initial?.createdFromThread ?? null)
+  const threadTools = initial ? (initial.createdFromThread ? (made?.thread ?? null) : null) : (options?.thread ?? null)
   const save = (spec: TaskSpec) => {
     setBusy(true)
     setError(null)
-    ;(initial ? updateTask(initial.id, spec) : createTask(spec)).then(onSaved, (e: Error) => (setError(e.message), setBusy(false)))
+    ;(initial ? updateTask(initial.id, spec) : createTask(spec, from)).then(onSaved, (e: Error) => (setError(e.message), setBusy(false)))
   }
   return (
     <>
@@ -646,7 +707,7 @@ function TaskEditorPane({ initial, options, onCancel, onSaved }: { initial: Task
         <span className="agt-title">{initial ? `Edit “${initial.title}”` : 'New task'}</span>
       </div>
       <div className="agt-scroll agt-tk">
-        <TaskEditor initial={initial ?? blankSpec(options)} options={options} busy={busy} error={error} saveLabel={initial ? 'Save' : 'Make the task'} onSave={save} onCancel={onCancel} />
+        {options ? <TaskEditor initial={initial ?? blankSpec(options)} options={options} threadTools={threadTools} busy={busy} error={error} saveLabel={initial ? 'Save' : 'Make the task'} onSave={save} onCancel={onCancel} /> : <p className="muted">Loading…</p>}
       </div>
     </>
   )
@@ -662,16 +723,16 @@ const localInput = (ms: number) => {
 }
 
 /** The task editor: what it does, when, what it may do, where reports go, its limits. */
-export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, onCancel }: { initial: TaskSpec; options: TaskOptionsInfo | null; busy?: boolean; error?: string | null; saveLabel: string; onSave: (spec: TaskSpec) => void; onCancel: () => void }) {
+export function TaskEditor({ initial, options, threadTools, busy, error, saveLabel, onSave, onCancel }: { initial: TaskSpec; options: TaskOptionsInfo | null; /** The thread it was made in, its tools as they are now: "differs · Use thread's tools again" */ threadTools?: ThreadTools | null; busy?: boolean; error?: string | null; saveLabel: string; onSave: (spec: TaskSpec) => void; onCancel: () => void }) {
   const [spec, setSpec] = useState<TaskSpec>(() => structuredClone(initial))
   const set = <K extends keyof TaskSpec>(k: K, v: TaskSpec[K]) => setSpec((s) => ({ ...s, [k]: v }))
   const setPolicy = (p: Partial<TaskPolicy>) => setSpec((s) => ({ ...s, policy: { ...s.policy, ...p } }))
   const [threads, setThreads] = useState<Thread[]>([])
-  const [models, setModels] = useState<string[]>([])
-  useEffect(() => {
-    listThreads(false).then(setThreads, () => {})
-    agentModels().then((m) => setModels(m.map((x) => x.name)), () => {})
-  }, [])
+  const models = useModelNames()
+  useEffect(() => void listThreads(false).then(setThreads, () => {}), [])
+  // The thread a task continues or reports to: the one it was made in, kept as an option while it is set.
+  const origin = spec.report.threadId ?? threadTools?.thread ?? null
+  const sameTools = !!threadTools && samePolicy(spec.policy, threadTools.policy) && JSON.stringify(spec.workdir) === JSON.stringify(threadTools.workdir)
   const kind = spec.schedule.kind === 'once' && spec.schedule.at !== null ? 'at' : spec.schedule.kind
   const pickKind = (k: string) => {
     const time = 'time' in spec.schedule ? spec.schedule.time : '08:00'
@@ -805,8 +866,14 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
             <span>In a thread</span>
             <Select
               value={spec.report.thread === 'fixed' ? `t:${spec.report.threadId ?? ''}` : spec.report.thread}
-              onChange={(v) => set('report', v.startsWith('t:') ? { ...spec.report, thread: 'fixed', threadId: v.slice(2) || null } : { ...spec.report, thread: v as 'none' | 'new', threadId: null })}
-              options={[{ value: 'none', label: 'No thread' }, { value: 'new', label: 'A new thread each run' }, ...threads.slice(0, 50).map((t) => ({ value: `t:${t.id}`, label: `Thread: ${t.title}` })), ...(spec.report.thread === 'fixed' && spec.report.threadId && !threads.some((t) => t.id === spec.report.threadId) ? [{ value: `t:${spec.report.threadId}`, label: 'The thread it was made in' }] : [])]}
+              onChange={(v) => set('report', v.startsWith('t:') ? { ...spec.report, thread: 'fixed', threadId: v.slice(2) || null } : v === 'origin' ? { ...spec.report, thread: 'origin', threadId: origin } : { ...spec.report, thread: v as 'none' | 'new', threadId: null })}
+              options={[
+                ...(origin ? [{ value: 'origin', label: 'Continue in the thread it was made in' }] : []),
+                { value: 'none', label: 'No thread' },
+                { value: 'new', label: 'A new thread each run' },
+                ...threads.slice(0, 50).map((t) => ({ value: `t:${t.id}`, label: `Reports in: ${t.title}` })),
+                ...(spec.report.thread === 'fixed' && spec.report.threadId && !threads.some((t) => t.id === spec.report.threadId) ? [{ value: `t:${spec.report.threadId}`, label: 'Reports in the thread it was made in' }] : []),
+              ]}
             />
           </label>
           <label className="agt-tk-check">
@@ -838,7 +905,30 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
 
       <fieldset className="agt-tk-set">
         <legend>What it may do</legend>
-        <PolicyEditor policy={spec.policy} onChange={setPolicy} mail={mail} />
+        {threadTools && (
+          <p className={`agt-tk-help agt-tk-sync ${sameTools ? '' : 'is-differs'}`}>
+            {sameTools ? (
+              <>Same tools as the thread “{threadTools.title}”{spec.workdir ? `, with its work folder ${spec.workdir.label}` : ''}.</>
+            ) : (
+              <>
+                Differs from the thread “{threadTools.title}”.{' '}
+                <button type="button" className="btn btn-small" onClick={() => setSpec((s) => ({ ...s, policy: structuredClone(threadTools.policy), workdir: threadTools.workdir }))}>
+                  Use thread's tools again
+                </button>
+              </>
+            )}
+            {threadTools.notCarried.length > 0 && <span className="muted"> Not in background runs: {threadTools.notCarried.join(', ')}.</span>}
+          </p>
+        )}
+        {spec.workdir && (
+          <p className="agt-tk-help">
+            Work folder: {spec.workdir.label}{' '}
+            <button type="button" className="btn btn-small" onClick={() => set('workdir', null)} aria-label="No work folder">
+              Remove
+            </button>
+          </p>
+        )}
+        <PolicyEditor policy={spec.policy} onChange={setPolicy} mail={mail} folder={!!spec.workdir} />
         <PolicySummary policy={spec.policy} />
       </fieldset>
 
@@ -859,12 +949,7 @@ export function TaskEditor({ initial, options, busy, error, saveLabel, onSave, o
           </label>
           <label className="agt-tk-field">
             <span>Model</span>
-            <input list="agt-tk-models" value={spec.model ?? ''} onChange={(e) => set('model', e.target.value.trim() || null)} placeholder="The task model from Settings" spellCheck={false} />
-            <datalist id="agt-tk-models">
-              {models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
+            <Select value={spec.model ?? ''} onChange={(m) => set('model', m || null)} aria-label="The model its runs use" options={[{ value: '', label: 'The task model from Settings' }, ...models.map((m) => ({ value: m, label: m })), ...(spec.model && !models.includes(spec.model) ? [{ value: spec.model, label: `${spec.model} (not offered now)` }] : [])]} />
           </label>
           <label className="agt-tk-field">
             <span>Runs kept</span>
@@ -977,10 +1062,10 @@ function Verdicts({ value, onChange, cap, disabled, label, mixed }: { value: Ver
 
 const HIDDEN_GROUPS = new Set<TaskGroup>(['run'])
 
-function PolicyEditor({ policy, onChange, mail }: { policy: TaskPolicy; onChange: (p: Partial<TaskPolicy>) => void; mail: { id: number; label: string }[] }) {
+function PolicyEditor({ policy, onChange, mail, folder }: { policy: TaskPolicy; onChange: (p: Partial<TaskPolicy>) => void; mail: { id: number; label: string }[]; /** Whether the task has a work folder (its file tools are only there with one) */ folder: boolean }) {
   const [open, setOpen] = useState<TaskGroup | null>(null)
   const account = useAccount()
-  const linked = (g: TaskGroup) => (g === 'mail' ? mail.length > 0 : g === 'calendar' ? hasCalendar(account) : g === 'seafile' || g === 'seafile_write' ? !!account.seafile : true)
+  const linked = (g: TaskGroup) => (g === 'mail' ? mail.length > 0 : g === 'calendar' ? hasCalendar(account) : g === 'seafile' || g === 'seafile_write' ? !!account.seafile : g === 'files' ? folder : true)
   const sites = useRef(policy.sites.join('\n'))
   return (
     <>
@@ -1003,7 +1088,7 @@ function PolicyEditor({ policy, onChange, mail }: { policy: TaskPolicy; onChange
                     {usable.length ? (open === g.id ? '▾' : '▸') : ''}
                   </span>
                   {g.name}
-                  {!usable.length ? <span className="muted"> · not in tasks</span> : !linked(g.id) ? <span className="muted"> · not linked</span> : value === null ? <span className="muted"> · mixed</span> : null}
+                  {!usable.length ? <span className="muted"> · not in tasks</span> : !linked(g.id) ? <span className="muted"> · {g.id === 'files' ? 'no work folder' : 'not linked'}</span> : value === null ? <span className="muted"> · mixed</span> : null}
                 </button>
                 {usable.length > 0 && <Verdicts value={value} mixed onChange={setGroup} label={`${g.name}: allow, ask or block`} />}
               </div>
@@ -1107,7 +1192,7 @@ export function TaskEditDialog({ spec, onDone, onCancel }: { spec: TaskSpec; onD
     <div className="agt-tk-dialog-back" onClick={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="agt-tk-dialog" role="dialog" aria-modal="true" aria-label="Change the task before allowing it">
         <h3>Change the task, then allow it</h3>
-        <TaskEditor initial={spec} options={options} saveLabel="Allow with these changes" onSave={onDone} onCancel={onCancel} />
+        <TaskEditor initial={{ ...spec, workdir: spec.workdir ?? null }} options={options} saveLabel="Allow with these changes" onSave={onDone} onCancel={onCancel} />
       </div>
     </div>
   )

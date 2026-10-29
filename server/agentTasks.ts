@@ -10,7 +10,8 @@ import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { readState } from './state.ts'
 import { libraries, seafileInfo } from './seafile.ts'
 import type { CallSummary } from './agentCalendar.ts'
-import { branchThread, closeRunCalls, createRunThread, deleteRunThread, followThread, ownChatThread, postTaskReport, requireTaskKey, runActive, runTaskTurn, settleRunPending, stopRun, taskModel, taskSystemPrompt, type TaskPending, type TaskUsage } from './agents.ts'
+import { branchThread, checkTaskModel, closeRunCalls, continuableThread, createRunThread, deleteRunThread, followThread, ownChatThread, postTaskReport, postTaskRun, requireTaskKey, runActive, runTaskTurn, seedRunThread, settleRunPending, stopRun, taskModel, taskSystemPrompt, threadTaskTools, type TaskPending, type TaskUsage } from './agents.ts'
+import { workdirOf } from './workdir.ts'
 import {
   DEFAULT_CAPS,
   DEFAULT_EXPIRY_MS,
@@ -20,6 +21,7 @@ import {
   normalizePolicy,
   policySummary,
   RETENTION,
+  samePolicy,
   scopeResult,
   TASK_GROUPS,
   TASK_TOOLS,
@@ -39,6 +41,7 @@ import {
   type TaskRunInfo,
   type TaskSpec,
   type TaskStatus,
+  type ThreadTools,
 } from '../src/data/agentTaskPolicy.ts'
 import { cleanSchedule, describeSchedule, MIN_INTERVAL_MS, nextRun, shortestGap, validZone, type Schedule } from '../src/data/agentTaskSchedule.ts'
 import { CAPPED_HOURS, DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS, MAIL_TASK_TOKENS, mailMatches, neverTrigger, NEVER_ROLES, PROMPT_MAILS, promptText, type ArrivedMail, type MailTrigger, type RunMail, type RunMailItem } from '../src/data/agentTaskMail.ts'
@@ -104,6 +107,7 @@ type TaskRow = {
   updated_at: number
   mail_dropped: number
   mail_capped: string | null
+  workdir: string | null
 }
 type RunRow = {
   id: string
@@ -133,6 +137,10 @@ type RunRow = {
   deadline: number | null
   delivered: string | null
   trigger_mail: string | null
+  model: string | null
+  number: number | null
+  origin_thread: string | null
+  origin_message: number | null
 }
 
 const RUNS_PER_USER = 1
@@ -142,6 +150,8 @@ const TICK_MS = Math.max(200, Number(process.env.AGENT_TASKS_TICK_MS) || 30_000)
 /** Due while the server restarted (a deploy): not missed, it runs as usual. */
 const GRACE_MS = 10 * 60_000
 const ASK_WAIT_MS = () => Math.max(1000, Number(process.env.AGENT_TASKS_ASK_MS) || 12 * 3600_000)
+/** How soon a run that continues a busy thread tries to land there again (AGENT_TASKS_RETRY_MS for the checks). */
+const BUSY_RETRY_MS = () => Math.max(200, Number(process.env.AGENT_TASKS_RETRY_MS) || 60_000)
 const UNSEEN_MS = () => Math.max(1000, Number(process.env.AGENT_TASKS_UNSEEN_MS) || 15 * 60_000)
 const FAILURE_GUARD = 3
 /** Scheduled runs start up to this much after their time, the same for each task, so tasks set to the same minute do not all start at once. */
@@ -180,6 +190,7 @@ function specOf(r: TaskRow): TaskSpec {
     report: reportOf(parse(r.report, {})),
     caps: capsOf(parse(r.caps, {})),
     model: r.model,
+    workdir: workdirOf(parse(r.workdir, null)),
     options: optionsOf(parse(r.options, {})),
     expiresAt: r.expires_at,
   }
@@ -212,6 +223,10 @@ function runInfo(r: RunRow): TaskRunInfo {
     deadline: r.status === 'waiting' ? r.deadline : null,
     delivered: parse<string[]>(r.delivered, []),
     mail: parse<RunMail | null>(r.trigger_mail, null),
+    model: r.model ?? null,
+    number: r.number ?? null,
+    originThread: r.origin_thread ?? null,
+    originMessage: r.origin_message ?? null,
   }
 }
 
@@ -249,7 +264,7 @@ const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => {
 function reportOf(v: unknown): ReportTargets {
   const r = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   return {
-    thread: r.thread === 'new' || r.thread === 'fixed' ? r.thread : 'none',
+    thread: r.thread === 'new' || r.thread === 'fixed' || r.thread === 'origin' ? r.thread : 'none',
     threadId: typeof r.threadId === 'string' && /^[0-9a-f-]{36}$/.test(r.threadId) ? r.threadId : null,
     notify: r.notify !== false,
     email: r.email === 'always' || r.email === 'unseen' ? r.email : 'off',
@@ -288,14 +303,17 @@ function taskSettings(user: User): TaskSettings {
 
 /**
  * Where a new task's reports go: Settings' defaults, where "a thread" means the thread the task was
- * made in (none when it was made in the Tasks tab).
+ * made in (none when it was made in the Tasks tab). Made in a thread, its runs continue that thread
+ * unless Settings says otherwise.
  */
 function defaultReport(user: User, from: string | null): ReportTargets {
   const d = taskSettings(user).report
-  const r = reportOf({ ...DEFAULT_REPORT, ...d })
-  const pref = d.thread ?? 'fixed'
-  if (pref === 'fixed' && from) (r.thread = 'fixed'), (r.threadId = from)
-  else if (pref === 'fixed') (r.thread = 'none'), (r.threadId = null)
+  const set = (d as { thread?: unknown }).thread
+  const r = reportOf({ ...DEFAULT_REPORT, ...d, thread: set === 'new' || set === 'none' ? set : 'none' })
+  // Settings: 'posted' (only the reports go to that thread), 'new', 'none', else (and 'fixed', from
+  // before runs could continue their thread) its runs continue the thread it was made in.
+  const pref = set === 'posted' ? 'fixed' : set === 'new' || set === 'none' ? set : 'origin'
+  if ((pref === 'fixed' || pref === 'origin') && from) (r.thread = pref), (r.threadId = from)
   return r
 }
 
@@ -321,6 +339,8 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
   if (shortestGap(schedule, timezone, clock()) < MIN_INTERVAL_MS) throw new HttpError(400, 'A task runs at most every 15 minutes')
   const report = has('report') ? reportOf(v.report) : (base?.report ?? defaultReport(user, from))
   if (report.thread === 'fixed' && (!report.threadId || !ownChatThread(user, report.threadId))) throw new HttpError(400, 'Pick the thread reports go to')
+  // Continuing a thread: the one it was made in. Gone later, its runs fall back to a new thread each.
+  if (report.thread === 'origin' && (!report.threadId || (!ownChatThread(user, report.threadId) && report.threadId !== base?.report.threadId))) throw new HttpError(400, 'Runs continue the thread a task was made in: make it from that thread, or pick where reports go')
   const mail = listMail(user)
   if (report.email !== 'off') {
     if (!mail.length) throw new HttpError(400, 'Email reports need a linked mail account (Settings → Integrations → Mail)')
@@ -328,6 +348,10 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
   }
   const model = has('model') ? (v.model === null || v.model === '' ? null : text(v.model, 80)) : (base?.model ?? null)
   if (model !== null && !/^[\w.:/-]{1,80}$/.test(model)) throw new HttpError(400, 'Bad model name')
+  // A model of its own: one the account can run (its provider is set up). Whether it is in the
+  // account's list is checked where that can be asked (checkSpecModel), without blocking a save when the list does not answer.
+  if (model !== null && model !== base?.model) requireTaskKey(user, model)
+  const workdir = has('workdir') ? workdirOf(v.workdir) : (base?.workdir ?? null)
   const expiresAt = has('expiresAt') ? (v.expiresAt === null ? null : Number(v.expiresAt)) : base ? base.expiresAt : clock() + DEFAULT_EXPIRY_MS
   if (expiresAt !== null && !Number.isFinite(expiresAt)) throw new HttpError(400, 'Bad expiry')
   const policy = has('policy') ? normalizePolicy(v.policy) : (base?.policy ?? defaultPolicy())
@@ -356,9 +380,17 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
     // A new mail task starts with a lower token limit: mail can come often.
     caps: has('caps') ? capsOf(v.caps) : (base?.caps ?? (schedule.kind === 'mail' ? { ...DEFAULT_CAPS, tokens: MAIL_TASK_TOKENS } : { ...DEFAULT_CAPS })),
     model,
+    workdir,
     options: has('options') ? optionsOf(v.options) : (base?.options ?? { ...DEFAULT_OPTIONS }),
     expiresAt,
   }
+}
+
+/** A task's own model checked against the account's models (when their list answers), before it is saved. */
+export async function checkSpecModel(user: User, raw: unknown, base?: TaskSpec) {
+  const v = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const model = typeof v.model === 'string' && v.model.trim() ? v.model.trim() : null
+  if (model && model !== base?.model) await checkTaskModel(user, model)
 }
 
 /** When a task runs next, from `after` (null: a one-off that ran, or a schedule with no more runs). */
@@ -392,8 +424,8 @@ export function createTask(user: User, raw: unknown, from: string | null = null)
   const next = planNext(id, spec, now)
   const thread = from && ownChatThread(user, from) ? from : null
   database()
-    .prepare('INSERT INTO agent_tasks (id, user_id, title, instruction, condition, done_when, schedule, timezone, state_note, policy, policy_version, report, caps, options, model, status, expires_at, next_run_at, created_from_thread, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'\', ?, 1, ?, ?, ?, ?, \'active\', ?, ?, ?, ?, ?)')
-    .run(id, user.id, spec.title, spec.instruction, spec.condition, spec.doneWhen, JSON.stringify(spec.schedule), spec.timezone, JSON.stringify(spec.policy), JSON.stringify(spec.report), JSON.stringify(spec.caps), JSON.stringify(spec.options), spec.model, spec.expiresAt, next, thread, now, now)
+    .prepare('INSERT INTO agent_tasks (id, user_id, title, instruction, condition, done_when, schedule, timezone, state_note, policy, policy_version, report, caps, options, model, status, expires_at, next_run_at, created_from_thread, created_at, updated_at, workdir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'\', ?, 1, ?, ?, ?, ?, \'active\', ?, ?, ?, ?, ?, ?)')
+    .run(id, user.id, spec.title, spec.instruction, spec.condition, spec.doneWhen, JSON.stringify(spec.schedule), spec.timezone, JSON.stringify(spec.policy), JSON.stringify(spec.report), JSON.stringify(spec.caps), JSON.stringify(spec.options), spec.model, spec.expiresAt, next, thread, now, now, spec.workdir ? JSON.stringify(spec.workdir) : null)
   changed(user.id, { task: id })
   kick()
   return getTask(user, id)
@@ -406,14 +438,16 @@ export function updateTask(user: User, id: string, raw: unknown): Task {
   const db = database()
   const now = clock()
   const before = specOf(row)
-  const fields = ['title', 'instruction', 'condition', 'doneWhen', 'schedule', 'timezone', 'policy', 'report', 'caps', 'model', 'options', 'expiresAt']
+  const fields = ['title', 'instruction', 'condition', 'doneWhen', 'schedule', 'timezone', 'policy', 'report', 'caps', 'model', 'workdir', 'options', 'expiresAt']
   let spec = before
   if (fields.some((k) => v[k] !== undefined)) {
     spec = cleanSpec(user, v, before)
     const policyChanged = JSON.stringify(spec.policy) !== JSON.stringify(before.policy)
     const scheduleChanged = JSON.stringify(spec.schedule) !== JSON.stringify(before.schedule) || spec.timezone !== before.timezone
-    db.prepare('UPDATE agent_tasks SET title = ?, instruction = ?, condition = ?, done_when = ?, schedule = ?, timezone = ?, policy = ?, policy_version = policy_version + ?, report = ?, caps = ?, options = ?, model = ?, expires_at = ?, updated_at = ? WHERE id = ?').run(
-      spec.title, spec.instruction, spec.condition, spec.doneWhen, JSON.stringify(spec.schedule), spec.timezone, JSON.stringify(spec.policy), policyChanged ? 1 : 0, JSON.stringify(spec.report), JSON.stringify(spec.caps), JSON.stringify(spec.options), spec.model, spec.expiresAt, now, row.id,
+    // A new work folder widens what the task may reach, like a policy change: a new version.
+    const folderChanged = JSON.stringify(spec.workdir) !== JSON.stringify(before.workdir)
+    db.prepare('UPDATE agent_tasks SET title = ?, instruction = ?, condition = ?, done_when = ?, schedule = ?, timezone = ?, policy = ?, policy_version = policy_version + ?, report = ?, caps = ?, options = ?, model = ?, workdir = ?, expires_at = ?, updated_at = ? WHERE id = ?').run(
+      spec.title, spec.instruction, spec.condition, spec.doneWhen, JSON.stringify(spec.schedule), spec.timezone, JSON.stringify(spec.policy), policyChanged || folderChanged ? 1 : 0, JSON.stringify(spec.report), JSON.stringify(spec.caps), JSON.stringify(spec.options), spec.model, spec.workdir ? JSON.stringify(spec.workdir) : null, spec.expiresAt, now, row.id,
     )
     if (scheduleChanged && row.status === 'active') db.prepare('UPDATE agent_tasks SET next_run_at = ? WHERE id = ?').run(planNext(row.id, spec, now), row.id)
     // Another account, mailbox or filters: what waited was picked by the old ones.
@@ -466,23 +500,31 @@ export function getRun(user: User, id: string): { run: TaskRunInfo; task: Task }
 /** Runs going on this server, by run: whose, and how to stop it. */
 const inFlight = new Map<string, { userId: number; ctl: AbortController }>()
 
-function queueRun(task: TaskRow, trigger: TaskRunInfo['trigger'], opts: { dry?: boolean; attempt?: number; id?: string; mail?: string | null } = {}): string {
+function queueRun(task: TaskRow, trigger: TaskRunInfo['trigger'], opts: { dry?: boolean; attempt?: number; id?: string; mail?: string | null; model?: string | null; number?: number | null } = {}): string {
   const id = opts.id ?? randomUUID()
-  database()
-    .prepare("INSERT INTO agent_task_runs (id, task_id, user_id, status, trigger, dry, attempt, policy_version, policy, queued_at, trigger_mail) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)")
-    .run(id, task.id, task.user_id, trigger, opts.dry ? 1 : 0, opts.attempt ?? 0, task.policy_version, task.policy, clock(), opts.mail ?? null)
+  const db = database()
+  // Run #n of its task (a retry keeps its number), and the thread it continues, when it does.
+  const number = opts.number ?? (db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM agent_task_runs WHERE task_id = ?').get(task.id) as { n: number }).n
+  const report = reportOf(parse(task.report, {}))
+  const origin = report.thread === 'origin' ? report.threadId : null
+  db
+    .prepare("INSERT INTO agent_task_runs (id, task_id, user_id, status, trigger, dry, attempt, policy_version, policy, queued_at, trigger_mail, model, number, origin_thread) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, task.id, task.user_id, trigger, opts.dry ? 1 : 0, opts.attempt ?? 0, task.policy_version, task.policy, clock(), opts.mail ?? null, opts.model ?? null, number, origin)
   changed(task.user_id, { task: task.id, run: id })
   return id
 }
 
 const activeRunOf = (taskId: string) => database().prepare(`SELECT id, status FROM agent_task_runs WHERE task_id = ? AND status IN ${ACTIVE_RUNS} ORDER BY queued_at`).all(taskId) as { id: string; status: string }[]
 
-/** Run now (or a dry run: every change asks). */
-export function runNow(user: User, id: string, body: { dry?: unknown } = {}): TaskRunInfo {
+/** Run now (or a dry run: every change asks), on the task's model or, this once, on another (`model`). */
+export function runNow(user: User, id: string, body: { dry?: unknown; model?: unknown } = {}): TaskRunInfo {
   const row = ownTask(user, id)
   if (!enabled) throw new HttpError(409, 'Tasks are switched off on this server (AGENT_TASKS)')
   if (activeRunOf(row.id).length) throw new HttpError(409, 'A run of this task is going: wait for it, or cancel it')
-  const runId = queueRun(row, body.dry === true ? 'dry' : 'manual', { dry: body.dry === true })
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
+  if (model !== null && !/^[\w.:/-]{1,80}$/.test(model)) throw new HttpError(400, 'Bad model name')
+  if (model) requireTaskKey(user, model)
+  const runId = queueRun(row, body.dry === true ? 'dry' : 'manual', { dry: body.dry === true, model })
   kick()
   return runInfo(ownRun(user, runId))
 }
@@ -567,22 +609,32 @@ async function execute(runId: string, ctl: AbortController) {
   const pending = parse<TaskPending | null>(run.pending, null)
   let model: string
   try {
-    model = await taskModel(user, spec.model)
+    model = await taskModel(user, run.model ?? spec.model)
     requireTaskKey(user, model)
   } catch (e) {
     return void finish(run.id, { status: 'failed', error: (e as Error).message })
   }
+  // A task that continues its thread: the thread it was made in, while it is there.
+  let origin = run.origin_thread
+  if (origin && !continuableThread(user, origin)) {
+    db.prepare('UPDATE agent_task_runs SET origin_thread = NULL, delivered = ? WHERE id = ?').run(JSON.stringify(['The thread it continues is gone or archived: this run starts fresh, and its report goes to a new thread']), run.id)
+    origin = null
+  }
+  let seeded = false
   let thread = run.thread_id
   if (!thread) {
     const day = new Date(clock()).toLocaleString('en-GB', { timeZone: spec.timezone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-    thread = createRunThread(user, { title: `${spec.title} · ${day}`, model, groups: usedGroups(policy) })
+    thread = createRunThread(user, { title: `${spec.title} · ${day}`, model, groups: usedGroups(policy), workdir: spec.workdir })
     db.prepare('UPDATE agent_task_runs SET thread_id = ? WHERE id = ?').run(thread, run.id)
+    // Its context first: the thread's summary and its latest messages, as data.
+    if (origin) seeded = await seedRunThread(user, thread, origin, model, spec.caps.tokens).catch((e) => (console.warn('[tasks] seeding a run:', (e as Error).message), false))
     changed(user.id, { task: task.id, run: run.id })
-  }
+  } else seeded = !!origin
+  const continues = origin ? ((db.prepare('SELECT title FROM agent_threads WHERE id = ?').get(origin) as { title: string } | undefined)?.title ?? 'a thread') : undefined
   const tools = new Set(TOOL_NAMES.filter((n) => toolVerdict(policy, n) !== 'block'))
   const started = parse<RunMail | null>(run.trigger_mail, null)
   const triggerMail = started ? started.mails.map((m) => `${m.account}.${m.id}`) : []
-  const system = await taskSystemPrompt(user, { zone: spec.timezone, memories: policy.memories, tools, title: spec.title, condition: spec.condition, doneWhen: spec.doneWhen, when: spec.report.when, stateNote: task.state_note, dry: !!run.dry, ...(started ? { startedBy: startedByMail(started, spec.timezone, tools.has('mail_read')) } : spec.schedule.kind === 'mail' ? { startedBy: 'No mail started this run: it was started by hand. Look for what the task is about yourself.' } : {}) })
+  const system = await taskSystemPrompt(user, { zone: spec.timezone, memories: policy.memories, tools, title: spec.title, condition: spec.condition, doneWhen: spec.doneWhen, when: spec.report.when, stateNote: task.state_note, dry: !!run.dry, workdir: spec.workdir, ...(continues ? { continues } : {}), ...(started ? { startedBy: startedByMail(started, spec.timezone, tools.has('mail_read')) } : spec.schedule.kind === 'mail' ? { startedBy: 'No mail started this run: it was started by hand. Look for what the task is about yourself.' } : {}) })
   const steering = await steeringPlaces(user)
   const used: TaskUsage = { toolCalls: run.tool_calls, tokensIn: run.tokens_in, tokensOut: run.tokens_out, activeMs: run.active_ms }
   if (pending) db.prepare('UPDATE agent_task_runs SET pending = NULL, deadline = NULL WHERE id = ?').run(run.id)
@@ -593,12 +645,13 @@ async function execute(runId: string, ctl: AbortController) {
     system,
     zone: spec.timezone,
     tools,
-    decide: (call, ctx) => taskDecide(policy, call, { ...ctx, scope: { ...ctx.scope, steering }, dryRun: !!run.dry, triggerMail }),
+    decide: (call, ctx) => taskDecide(policy, call, { ...ctx, scope: { ...ctx.scope, steering }, dryRun: !!run.dry, triggerMail, ...(spec.workdir ? { workdir: spec.workdir } : {}) }),
     scopeResult: (call, output) => scopeResult(policy, call, output),
     memories: policy.memories,
     stateNote: task.state_note,
-    // The mail's senders and subjects are in the prompt: private from the first round.
-    privateFromStart: !!started,
+    // The mail's senders and subjects are in the prompt, or the thread it continues is: private from the first round.
+    privateFromStart: !!started || seeded,
+    workdir: spec.workdir,
     taskId: task.id,
     caps: { toolCalls: spec.caps.toolCalls, tokens: spec.caps.tokens, ms: spec.caps.minutes * 60_000 },
     used,
@@ -702,6 +755,12 @@ function finish(runId: string, end: { status: 'succeeded' | 'failed' | 'cancelle
   db.prepare(`UPDATE agent_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values, task.id)
 
   const user = accountOf(run.user_id)
+  // A task that continues its thread: every run lands there (once it is at rest), a report as a
+  // block, a quiet run on the task's one muted line. A cancelled or dry run does not.
+  if (user && spec.report.thread === 'origin' && !run.dry && (deliver || end.status === 'succeeded')) {
+    const fresh = db.prepare('SELECT * FROM agent_task_runs WHERE id = ?').get(run.id) as RunRow
+    withoutPrivateRequest(() => landInThread(user, task, fresh, !deliver, summary || reason))
+  }
   if (user && deliver) {
     const kind = end.status === 'denied' ? 'needs' : end.status === 'failed' ? 'failed' : 'report'
     // Sent on its own, never as the request that ended the run (a Cancel): that one ends before the mail goes.
@@ -733,7 +792,8 @@ async function report(user: User, task: TaskRow, runId: string, kind: 'report' |
   const title = kind === 'needs' ? `${spec.title} needs you` : kind === 'failed' ? `${spec.title} failed` : kind === 'heartbeat' ? `${spec.title}: still watching` : spec.title
   const delivered: string[] = []
   const model = await taskModel(user, spec.model).catch(() => '')
-  if (spec.report.thread !== 'none') {
+  // Continuing its thread, the run landed there already (landInThread).
+  if (spec.report.thread !== 'none' && spec.report.thread !== 'origin') {
     const message = `**${title}**\n\n${body}\n\n_From the task “${spec.title}”: its runs are in Agents → Tasks._`
     try {
       const posted = postTaskReport(user, spec.report.thread === 'fixed' ? spec.report.threadId : null, { title, model, text: message })
@@ -759,7 +819,9 @@ async function report(user: User, task: TaskRow, runId: string, kind: 'report' |
     addJob(user.id, runId, 'email_if_unseen', clock() + UNSEEN_MS(), { entry: entry.id, account: spec.report.emailAccount, title, body, task: task.id })
     delivered.push('email if not seen in time')
   }
-  db.prepare('UPDATE agent_task_runs SET delivered = ? WHERE id = ?').run(JSON.stringify(delivered), runId)
+  // After what is there already (where a run that continues its thread landed, or that its thread was gone).
+  const had = db.prepare('SELECT delivered FROM agent_task_runs WHERE id = ?').get(runId) as { delivered: string | null } | undefined
+  db.prepare('UPDATE agent_task_runs SET delivered = ? WHERE id = ?').run(JSON.stringify([...parse<string[]>(had?.delivered ?? null, []), ...delivered]), runId)
   db.prepare('UPDATE agent_tasks SET last_report_at = ? WHERE id = ?').run(clock(), task.id)
   changed(user.id, { task: task.id, run: runId })
 }
@@ -784,7 +846,60 @@ async function reportEmail(user: User, accountId: number | null, title: string, 
   await sendMail(acc, { identityId: identity.id, to: [{ name: identity.name || null, email: identity.email }], subject: `[Agent task] ${title}`.slice(0, 300), text }, { task })
 }
 
-function addJob(userId: number, runId: string, kind: 'thread' | 'email_if_unseen', due: number, data: Record<string, unknown>) {
+const TRIGGER_LABEL: Record<TaskRunInfo['trigger'], string> = { schedule: 'on schedule', manual: 'run by hand', dry: 'dry run', retry: 'tried again after a restart', catchup: 'catching up', mail: 'new mail' }
+
+/**
+ * A finished run of a task that continues its thread, landed in that thread while it is at rest (a
+ * job tries again while it answers): a report as one block, a quiet run on the task's muted line.
+ * The thread gone or archived: a report goes to a new thread instead, and the run history says so.
+ */
+function landInThread(user: User, task: TaskRow, run: RunRow, quiet: boolean, body: string) {
+  const spec = specOf(task)
+  const verdict = parse<RunVerdict | null>(run.verdict, null)
+  const calls = database().prepare("SELECT tool_name, COUNT(*) AS n FROM agent_messages WHERE thread_id = ? AND role = 'tool' AND tool_name IS NOT NULL AND tool_name != 'task_report' GROUP BY tool_name ORDER BY n DESC").all(run.thread_id ?? '') as { tool_name: string; n: number }[]
+  const head = `Task “${spec.title}”, run #${run.number ?? '?'} (${TRIGGER_LABEL[run.trigger as TaskRunInfo['trigger']] ?? run.trigger}${run.status === 'failed' ? ', failed' : run.status === 'denied' ? ', needs you' : ''})`
+  const used = calls.length ? `
+
+It used: ${calls.map((c) => (c.n > 1 ? `${c.tool_name} ×${c.n}` : c.tool_name)).join(', ')}.` : ''
+  const text = `${head}
+
+${(verdict?.summary || body).trim()}${used}`
+  const data = { origin: run.origin_thread ?? spec.report.threadId, quiet, text, meta: { task: task.id, run: run.id, title: spec.title, number: run.number, trigger: run.trigger, status: run.status, runThread: run.thread_id, model: run.model ?? spec.model ?? '' }, at: run.ended_at ?? clock() }
+  const delivered = (line: string, message?: number) => {
+    const row = database().prepare('SELECT delivered FROM agent_task_runs WHERE id = ?').get(run.id) as { delivered: string | null } | undefined
+    database().prepare('UPDATE agent_task_runs SET delivered = ?, origin_message = COALESCE(?, origin_message) WHERE id = ?').run(JSON.stringify([...parse<string[]>(row?.delivered ?? null, []), line]), message ?? null, run.id)
+  }
+  if (!run.origin_thread) {
+    // It was gone when the run started (execute said so): a report goes to a new thread.
+    if (!quiet) {
+      try {
+        if (postTaskReport(user, null, { title: spec.title, model: data.meta.model, text: `**${spec.title}**
+
+${text}` })) delivered('a new thread')
+      } catch (e) {
+        delivered(`thread failed: ${(e as Error).message}`)
+      }
+    }
+    return
+  }
+  try {
+    const id = postTaskRun(user, run.origin_thread, data)
+    if (id !== null) delivered(quiet ? 'the thread it continues (quiet line)' : 'the thread it continues', id)
+    else (addJob(user.id, run.id, 'origin', clock() + BUSY_RETRY_MS(), { ...data, tries: 0 }), delivered(quiet ? 'the thread it continues, when it is at rest (quiet line)' : 'the thread it continues, when it is at rest'))
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) {
+      if (!quiet) {
+        const id = postTaskReport(user, null, { title: spec.title, model: data.meta.model, text: `**${spec.title}**
+
+${text}` })
+        delivered(id ? 'a new thread (the thread it continued is gone or archived)' : 'nowhere: the thread it continued is gone')
+      } else delivered('nowhere: the thread it continued is gone')
+    } else delivered(`thread failed: ${(e as Error).message}`)
+  }
+  changed(user.id, { task: task.id, run: run.id })
+}
+
+function addJob(userId: number, runId: string, kind: 'thread' | 'email_if_unseen' | 'origin', due: number, data: Record<string, unknown>) {
   database().prepare('INSERT INTO agent_task_jobs (user_id, run_id, kind, due_at, data) VALUES (?, ?, ?, ?, ?)').run(userId, runId, kind, due, JSON.stringify(data))
 }
 
@@ -825,6 +940,23 @@ export async function runJobs(now: number) {
         await reportEmail(user, typeof data.account === 'number' ? data.account : null, String(data.title), String(data.body), String(data.task), job.run_id)
         done()
         delivered('email (the notification was not seen)')
+      } else if (job.kind === 'origin') {
+        // The thread a run continues, busy when it ended: tried each minute for a day.
+        let id: number | null = null
+        try {
+          id = postTaskRun(user, String(data.origin), data as Parameters<typeof postTaskRun>[2])
+        } catch (e) {
+          if ((e as { status?: number }).status !== 404) throw e
+          done()
+          delivered(data.quiet ? 'nowhere: the thread it continued is gone' : 'thread failed: the thread it continued is gone')
+          continue
+        }
+        if (id !== null) {
+          done()
+          delivered(data.quiet ? 'the thread it continues (quiet line)' : 'the thread it continues')
+          db.prepare('UPDATE agent_task_runs SET origin_message = ? WHERE id = ?').run(id, job.run_id)
+        } else if (tries < 1440) later(BUSY_RETRY_MS())
+        else (done(), delivered('thread failed: it stayed busy for a day'))
       } else if (job.kind === 'thread') {
         const posted = postTaskReport(user, typeof data.target === 'string' ? data.target : null, { title: String(data.title), model: String(data.model), text: String(data.text) })
         if (posted) (done(), delivered('thread'))
@@ -1137,7 +1269,7 @@ export function startAgentTasks(opts: { dev?: boolean } = {}) {
     if (run.thread_id) closeRunCalls(run.thread_id)
     const task = db.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(run.task_id) as TaskRow | undefined
     // Tried once more (the policy it was started under), and not a failure; not for a task paused, completed or expired meanwhile.
-    if (task && task.status === 'active' && run.attempt === 0) queueRun({ ...task, policy: run.policy, policy_version: run.policy_version }, 'retry', { dry: !!run.dry, attempt: 1, mail: run.trigger_mail })
+    if (task && task.status === 'active' && run.attempt === 0) queueRun({ ...task, policy: run.policy, policy_version: run.policy_version }, 'retry', { dry: !!run.dry, attempt: 1, mail: run.trigger_mail, model: run.model, number: run.number })
   }
   if (cut.length) console.log(`[tasks] ${cut.length} ${cut.length === 1 ? 'run was' : 'runs were'} cut off by a restart: marked interrupted`)
   const flag = process.env.AGENT_TASKS
@@ -1152,7 +1284,7 @@ export function startAgentTasks(opts: { dev?: boolean } = {}) {
 
 // --- the agent's own task tools, in chat threads ------------------------------------------------------
 
-export const TASK_CHAT_TOOLS = new Set(['create_task', 'update_task', 'cancel_task'])
+export const TASK_CHAT_TOOLS = new Set(['create_task', 'update_task', 'cancel_task', 'run_task_now'])
 
 type ToolDef = { type: 'function'; function: { name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required?: string[] } } }
 const def = (name: string, description: string, properties: Record<string, unknown>, required: string[] = []): ToolDef => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } })
@@ -1186,7 +1318,8 @@ const specProps = {
   allow: { type: 'array', items: { type: 'string' }, description: `Tools or groups that run without asking (${TASK_GROUPS.filter((g) => !['chat', 'tasks', 'run', 'files', 'terminal', 'images'].includes(g.id)).map((g) => g.id).join(', ')}, or tool names). Mail sends and calendar changes always ask.` },
   ask: { type: 'array', items: { type: 'string' }, description: 'Tools or groups that ask the user each time' },
   sites: { type: 'array', items: { type: 'string' }, description: 'Web sites it may read without asking, like github.com' },
-  report_to: { type: 'string', enum: ['this_thread', 'new_thread', 'notification_only'], description: 'Where reports go besides a notification (default: this thread)' },
+  report_to: { type: 'string', enum: ['continue_here', 'this_thread', 'new_thread', 'notification_only'], description: 'continue_here (default when made in a thread): each run continues this thread, with its context, and lands here as one block (quiet runs as one muted line); this_thread: only the reports are posted here; new_thread: a new thread each run; notification_only' },
+  model: str("The model its runs use, by id (default: this thread's model). The user can ask for another one any time (update_task)"),
   report_when: { type: 'string', enum: ['condition', 'always', 'failure'], description: 'condition (default): when the condition is met; always: every run; failure: only when something fails' },
 }
 
@@ -1194,8 +1327,9 @@ const specProps = {
 export function taskChatTools(): ToolDef[] {
   return [
     def('create_task', 'Make a background task: an agent that runs on its own, once or on a schedule, and reports back (a notification, this thread). The user is always asked first and can change it on the card. Use it when the user asks for something to happen later, regularly, or to be watched ("tell me when…").', specProps, ['title', 'instruction', 'schedule']),
-    def('update_task', 'Change one of the user\'s background tasks (by id or exact title); give only what changes. Always asked first.', { task: str('The task id or exact title'), ...specProps }, ['task']),
+    def('update_task', 'Change one of the user\'s background tasks (by id or exact title); give only what changes, like a new model ("run it on <model> from now on"). Always asked first.', { task: str('The task id or exact title'), ...specProps, use_thread_tools: { type: 'boolean', description: "Give the task this thread's tools again (and its work folder), as they are now" } }, ['task']),
     def('cancel_task', "Stop one of the user's background tasks for good (by id or exact title). Always asked first.", { task: str('The task id or exact title') }, ['task']),
+    def('run_task_now', "Run one of the user's background tasks once now (by id or exact title), optionally on another model just this once. Always asked first.", { task: str('The task id or exact title'), model: str('A model id for this run only (default: the task\'s)') }, ['task']),
   ]
 }
 
@@ -1218,9 +1352,17 @@ function localMoment(raw: string, zone: string): number {
   return guess - offset
 }
 
-/** What the agent's arguments say, as a task spec (over `base` for a change). */
-function specFromArgs(user: User, args: Record<string, unknown>, zone: string, thread: string | null, base?: TaskSpec): Record<string, unknown> {
+/**
+ * What the agent's arguments say, as a task spec (over `base` for a change). `tools`: the thread's
+ * tools as a policy (threadTaskTools): a new task made in a thread starts from them, and a change
+ * with use_thread_tools takes them again; the agent's allow, ask and sites go on top.
+ */
+function specFromArgs(user: User, args: Record<string, unknown>, zone: string, thread: string | null, base?: TaskSpec, tools?: ThreadTools | null): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  if (typeof args.model === 'string' && args.model.trim()) out.model = args.model.trim()
+  else if (!base && tools) out.model = tools.model
+  const resync = !!base && args.use_thread_tools === true && !!tools
+  if ((!base || resync) && tools) (out.policy = structuredClone(tools.policy)), (out.workdir = tools.workdir)
   if (typeof args.title === 'string') out.title = args.title
   if (typeof args.instruction === 'string') out.instruction = args.instruction
   if (typeof args.condition === 'string') out.condition = args.condition
@@ -1244,11 +1386,15 @@ function specFromArgs(user: User, args: Record<string, unknown>, zone: string, t
     out.schedule = s
   }
   if (Array.isArray(args.allow) || Array.isArray(args.ask) || Array.isArray(args.sites)) {
-    const policy: TaskPolicy = structuredClone(base?.policy ?? defaultPolicy())
+    const policy: TaskPolicy = structuredClone((out.policy as TaskPolicy | undefined) ?? base?.policy ?? defaultPolicy())
     const put = (names: unknown, v: 'allow' | 'ask') => {
       for (const n of Array.isArray(names) ? names : []) {
         const name = String(n)
-        if (TASK_GROUPS.some((g) => g.id === name)) policy.groups[name as keyof TaskPolicy['groups']] = v
+        if (TASK_GROUPS.some((g) => g.id === name)) {
+          // A whole group, as the editor sets one: its tools' own verdicts go.
+          policy.groups[name as keyof TaskPolicy['groups']] = v
+          for (const [n, t] of Object.entries(TASK_TOOLS)) if (t.group === name) delete policy.tools[n]
+        }
         else if (TASK_TOOLS[name]) policy.tools[name] = v
         else throw new Error(`Unknown tool or group "${name.slice(0, 40)}"`)
       }
@@ -1260,8 +1406,8 @@ function specFromArgs(user: User, args: Record<string, unknown>, zone: string, t
   }
   if (typeof args.report_to === 'string' || typeof args.report_when === 'string') {
     const r = { ...(base?.report ?? defaultReport(user, thread)) }
-    if (args.report_to === 'this_thread' && thread) (r.thread = 'fixed'), (r.threadId = thread)
-    else if (args.report_to === 'this_thread') (r.thread = 'none'), (r.threadId = null)
+    if ((args.report_to === 'this_thread' || args.report_to === 'continue_here') && thread) (r.thread = args.report_to === 'continue_here' ? 'origin' : 'fixed'), (r.threadId = thread)
+    else if (args.report_to === 'this_thread' || args.report_to === 'continue_here') (r.thread = 'none'), (r.threadId = null)
     else if (args.report_to === 'new_thread') (r.thread = 'new'), (r.threadId = null)
     else if (args.report_to === 'notification_only') (r.thread = 'none'), (r.notify = true)
     if (args.report_when === 'always' || args.report_when === 'failure' || args.report_when === 'condition') r.when = args.report_when
@@ -1271,10 +1417,19 @@ function specFromArgs(user: User, args: Record<string, unknown>, zone: string, t
 }
 
 const REPORT_WHEN = { always: 'Every run', failure: 'Only when something fails or needs you', condition: 'When the condition is met' } as const
-function specRows(spec: TaskSpec, available?: (g: string) => boolean): [string, string][] {
+/**
+ * The task on an approval card. `tools`: the thread it was made in (or changed from), to say whether
+ * the task has the same tools and what does not come along; `before`: the task as it is, for a
+ * change of model ("A → B").
+ */
+function specRows(spec: TaskSpec, available?: (g: string) => boolean, o: { tools?: ThreadTools | null; before?: TaskSpec } = {}): [string, string][] {
   const s = policySummary(spec.policy, available as never)
-  const to = [spec.report.thread === 'new' ? 'a new thread each run' : spec.report.thread === 'fixed' ? (spec.report.threadId ? 'this thread' : 'a thread') : '', spec.report.notify ? 'a notification' : '', spec.report.email === 'always' ? 'email to you' : spec.report.email === 'unseen' ? 'email when the notification is not seen' : ''].filter(Boolean)
+  const to = [spec.report.thread === 'new' ? 'a new thread each run' : spec.report.thread === 'origin' ? 'this thread: each run continues it (quiet runs as one line)' : spec.report.thread === 'fixed' ? (spec.report.threadId ? 'this thread' : 'a thread') : '', spec.report.notify ? 'a notification' : '', spec.report.email === 'always' ? 'email to you' : spec.report.email === 'unseen' ? 'email when the notification is not seen' : ''].filter(Boolean)
+  const same = o.tools ? samePolicy(spec.policy, o.tools.policy) && JSON.stringify(spec.workdir) === JSON.stringify(o.tools.workdir) : false
+  const modelName = (m: string | null) => m ?? 'the task model from Settings'
   return [
+    ...(o.tools ? [['Tools', same ? `Same as this thread${spec.workdir ? `, with its work folder ${spec.workdir.label}` : ''}` : "Not the same as this thread's (see May)"] as [string, string]] : []),
+    ...(o.tools?.notCarried.length ? [['Not in background runs', `${o.tools.notCarried.join(', ')}: they need you there`] as [string, string]] : []),
     ['Runs', spec.schedule.kind === 'mail' ? describeSchedule(spec.schedule, spec.timezone) : `${describeSchedule(spec.schedule, spec.timezone)} (${spec.timezone})`],
     ...(spec.schedule.kind === 'mail' ? [['Watch out', 'It starts on mail from anyone who matches, and reads it: a mail could try to talk it into something. Keep changes and sends on Ask.'] as [string, string]] : []),
     ['Tell you', spec.condition ? `When: ${spec.condition}` : REPORT_WHEN[spec.report.when]],
@@ -1282,7 +1437,8 @@ function specRows(spec: TaskSpec, available?: (g: string) => boolean): [string, 
     ['Reports to', to.join(', ') || 'only the run history'],
     ['May', s.lines.join(' ')],
     ...s.warnings.map((w) => ['Watch out', w] as [string, string]),
-    ['Model', spec.model ?? 'The task model from Settings'],
+    ['Model', o.before && o.before.model !== spec.model ? `${modelName(o.before.model)} → ${modelName(spec.model)}` : (spec.model ?? 'The task model from Settings')],
+    ...(spec.workdir && !same ? [['Work folder', spec.workdir.label] as [string, string]] : []),
     ['Ends', spec.expiresAt ? new Date(spec.expiresAt).toLocaleDateString('en-GB', { timeZone: spec.timezone, day: 'numeric', month: 'short', year: 'numeric' }) : 'Never'],
   ]
 }
@@ -1313,13 +1469,17 @@ async function mailboxByName(user: User, out: Record<string, unknown>) {
  */
 export async function prepareTaskCall(user: User, thread: string, name: string, args: Record<string, unknown>, zone: string): Promise<{ summary: CallSummary; run: (edit?: Record<string, unknown>) => Promise<string> }> {
   const from = ownChatThread(user, thread) ? thread : null
+  // The thread's tools, as a task's starting policy (a snapshot taken now).
+  const tools = from ? threadTaskTools(user, from) : null
   if (name === 'create_task') {
-    const raw = specFromArgs(user, args, zone, from)
+    const raw = specFromArgs(user, args, zone, from, undefined, tools)
     await mailboxByName(user, raw)
+    await checkSpecModel(user, raw)
     const spec = cleanSpec(user, raw, undefined, from)
     return {
-      summary: { title: `Make the task “${spec.title}”`, rows: specRows(spec), body: spec.instruction, spec },
+      summary: { title: `Make the task “${spec.title}”`, rows: specRows(spec, undefined, { tools }), body: spec.instruction, spec },
       run: async (edit) => {
+        if (edit) await checkSpecModel(user, edit)
         const t = createTask(user, edit ? cleanSpec(user, edit, undefined, from) : spec, from)
         return JSON.stringify({ created: { id: t.id, title: t.title, next_run: t.nextRunAt ? new Date(t.nextRunAt).toISOString() : null, note: 'It shows in Agents → Tasks, with every run.' } })
       },
@@ -1328,15 +1488,32 @@ export async function prepareTaskCall(user: User, thread: string, name: string, 
   const row = findTask(user, args.task)
   const before = specOf(row)
   if (name === 'update_task') {
-    const raw = specFromArgs(user, args, zone, from, before)
+    // A task takes the tools of the thread it was made in again, from that thread only: another
+    // thread's tools are not what the user agreed to for it.
+    if (args.use_thread_tools === true && (!from || from !== row.created_from_thread)) throw new Error(row.created_from_thread ? `use_thread_tools only works in the thread the task was made in. Change the task's tools with allow, ask and sites here, or ask in that thread.` : 'This task was not made in a thread, so it has no thread tools to take again. Change its tools with allow, ask and sites.')
+    const raw = specFromArgs(user, args, zone, from, before, tools)
     await mailboxByName(user, raw)
+    await checkSpecModel(user, raw, before)
     const spec = cleanSpec(user, raw, before)
-    const wider = widens(before.policy, spec.policy)
+    const wider = widens(before.policy, spec.policy) || (!!spec.workdir && JSON.stringify(spec.workdir) !== JSON.stringify(before.workdir))
     return {
-      summary: { title: `Change the task “${before.title}”`, rows: [...(wider ? [['Widens', 'It may do more than before'] as [string, string]] : []), ...specRows(spec)], body: spec.instruction, spec },
+      summary: { title: `Change the task “${before.title}”`, rows: [...(wider ? [['Widens', 'It may do more than before'] as [string, string]] : []), ...specRows(spec, undefined, { tools: args.use_thread_tools === true ? tools : null, before })], body: spec.instruction, spec },
       run: async (edit) => {
+        if (edit) await checkSpecModel(user, edit, before)
         const t = updateTask(user, row.id, edit ? cleanSpec(user, edit, before) : spec)
         return JSON.stringify({ updated: { id: t.id, title: t.title, next_run: t.nextRunAt ? new Date(t.nextRunAt).toISOString() : null } })
+      },
+    }
+  }
+  if (name === 'run_task_now') {
+    const model = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : null
+    if (model) await checkTaskModel(user, model)
+    const usual = await taskModel(user, before.model).catch(() => before.model ?? 'the task model')
+    return {
+      summary: { title: `Run the task “${before.title}” now`, rows: [['Model', model && model !== usual ? `${model}, this once (usually ${usual})` : usual], ['Reports to', before.report.thread === 'origin' ? 'the thread it continues' : before.report.thread === 'none' ? 'only the run history' : 'where the task says'], ['May', policySummary(before.policy).lines.join(' ')]] },
+      run: async () => {
+        const r = runNow(user, row.id, { model })
+        return JSON.stringify({ started: { run: r.id, task: row.id, title: row.title, model: model ?? usual, note: 'It runs in the background; the result comes as the task reports.' } })
       },
     }
   }
@@ -1355,8 +1532,11 @@ export async function prepareTaskCall(user: User, thread: string, name: string, 
 // --- the API -------------------------------------------------------------------------------------
 
 /** What the editor can offer: linked mail accounts, and whether calendars and Seafile are there. */
-function taskOptions(user: User) {
-  return { enabled, mail: listMail(user).map((a) => ({ id: a.id, label: a.label })), defaults: { report: defaultReport(user, null), keep: taskSettings(user).keep, caps: DEFAULT_CAPS, options: DEFAULT_OPTIONS } }
+function taskOptions(user: User, q: URLSearchParams) {
+  // ?thread=: a thread's tools as a task's policy, for New task while it is open and "Use thread's tools again".
+  const thread = q.get('thread')
+  const tools = thread && /^[0-9a-f-]{36}$/.test(thread) && ownChatThread(user, thread) ? threadTaskTools(user, thread) : null
+  return { enabled, mail: listMail(user).map((a) => ({ id: a.id, label: a.label })), defaults: { report: defaultReport(user, tools ? tools.thread : null), keep: taskSettings(user).keep, caps: DEFAULT_CAPS, options: DEFAULT_OPTIONS }, ...(tools ? { thread: tools } : {}) }
 }
 
 /** /api/agents/tasks… and /api/agents/task-runs…; answers whether it handled the request. */
@@ -1366,17 +1546,26 @@ export async function handleAgentTasksApi(req: IncomingMessage, res: ServerRespo
   if (path === '/api/agents/tasks' && read) return json(res, 200, listTasks(user)), true
   if (path === '/api/agents/tasks' && method === 'POST') {
     const body = await readJson<{ spec?: unknown; from?: unknown }>(req, 64 * 1024)
+    await checkSpecModel(user, body.spec)
     return json(res, 200, createTask(user, body.spec, typeof body.from === 'string' ? body.from : null)), true
   }
-  if (path === '/api/agents/tasks/options' && read) return json(res, 200, taskOptions(user)), true
+  if (path === '/api/agents/tasks/options' && read) return json(res, 200, taskOptions(user, url.searchParams)), true
   const task = /^\/api\/agents\/tasks\/([0-9a-f-]{36})(\/runs|\/run)?$/.exec(path)
   if (task) {
     const [, id, sub] = task
     if (!sub && read) return json(res, 200, getTask(user, id)), true
-    if (!sub && method === 'PATCH') return json(res, 200, updateTask(user, id, await readJson(req, 64 * 1024))), true
+    if (!sub && method === 'PATCH') {
+      const patch = await readJson(req, 64 * 1024)
+      await checkSpecModel(user, patch, specOf(ownTask(user, id)))
+      return json(res, 200, updateTask(user, id, patch)), true
+    }
     if (!sub && method === 'DELETE') return deleteTask(user, id), json(res, 200, { ok: true }), true
     if (sub === '/runs' && read) return json(res, 200, listRuns(user, id, url.searchParams)), true
-    if (sub === '/run' && method === 'POST') return json(res, 200, runNow(user, id, await readJson(req, 1024))), true
+    if (sub === '/run' && method === 'POST') {
+      const body = await readJson<{ dry?: unknown; model?: unknown }>(req, 1024)
+      if (typeof body.model === 'string' && body.model.trim()) await checkTaskModel(user, body.model.trim())
+      return json(res, 200, runNow(user, id, body)), true
+    }
   }
   const run = /^\/api\/agents\/task-runs\/([0-9a-f-]{36})(\/approve|\/cancel|\/continue|\/follow)?$/.exec(path)
   if (run) {

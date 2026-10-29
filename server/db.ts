@@ -539,6 +539,54 @@ export function database(): DatabaseSync {
   // A mail task's hours at its cap (JSON, the latest few hour numbers): three in a row pause it.
   if (!cols('agent_tasks').includes('mail_capped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_capped TEXT')
   if (!cols('agent_tasks').includes('mail_dropped')) db.exec('ALTER TABLE agent_tasks ADD COLUMN mail_dropped INTEGER NOT NULL DEFAULT 0')
+  // A task's work folder ({repo, path, label}, JSON; null: none), taken from the thread it was made in.
+  if (!cols('agent_tasks').includes('workdir')) db.exec('ALTER TABLE agent_tasks ADD COLUMN workdir TEXT')
+  // A run's own model (Run now on another model; null: the task's), its number within the task
+  // (run #n), and the chat thread it continues (report "Continue in the thread it was made in"):
+  // the thread whose context it was seeded with, and the message it landed as there.
+  if (!cols('agent_task_runs').includes('model')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN model TEXT')
+  if (!cols('agent_task_runs').includes('number')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN number INTEGER')
+  if (!cols('agent_task_runs').includes('origin_thread')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN origin_thread TEXT')
+  if (!cols('agent_task_runs').includes('origin_message')) db.exec('ALTER TABLE agent_task_runs ADD COLUMN origin_message INTEGER')
+  db.exec('CREATE INDEX IF NOT EXISTS agent_task_runs_origin ON agent_task_runs (origin_thread, status)')
+  // What the app keeps about a message beyond its text (JSON): a task run's block or quiet line in
+  // the thread it continues, a subagent's overview in its parent's thread.
+  if (!cols('agent_messages').includes('meta')) db.exec('ALTER TABLE agent_messages ADD COLUMN meta TEXT')
+  // Subagents (server/agents.ts): a hidden child thread (agent_threads.quick = 4) a chat agent
+  // started, owned by its parent thread, with its name, the model and mode it was spawned with and
+  // what it may use. `spawned_after`: the parent's user message it was spawned under (a rewind to
+  // it or before drops the child and its late results). `status`: running, idle, stopped, failed
+  // or interrupted. agent_inbox: what waits for a thread to read at its next round boundary, so
+  // nobody writes into a running thread: a child's result for its parent, a message for a busy child.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_subagents (
+    id TEXT PRIMARY KEY REFERENCES agent_threads(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    parent_thread TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    spec TEXT NOT NULL,
+    spawned_after INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    started_at INTEGER,
+    ended_at INTEGER,
+    active_ms INTEGER NOT NULL DEFAULT 0,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    tool_calls INTEGER NOT NULL DEFAULT 0,
+    last_output TEXT,
+    error TEXT
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_subagents_parent ON agent_subagents (parent_thread, created_at)')
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_inbox (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_inbox_thread ON agent_inbox (thread_id, id)')
   // The Video Studio (server/agentVideo.ts): projects (the timeline, revisioned), keyframe pictures
   // (small PNGs, kept here), render jobs (run by the server, not the browser; a restart marks the
   // ones it was running interrupted) and the videos they made. The video files themselves live on

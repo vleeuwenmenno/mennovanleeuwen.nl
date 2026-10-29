@@ -3,6 +3,7 @@ import { accountGuard, TAB_ACCOUNT } from '../../os/accountSpace'
 import { artMode, artBytes, decodeArt, ART_BYTES } from './imageArt'
 import { threadsCommand, threadSearchLines } from './threads'
 import { reportLines, tasksCommand } from './tasks'
+import { subagentLines, subagentsCommand, SUBAGENTS_HELP } from './subagents'
 import { mentionAt, mentionText } from '../../data/agentMentions'
 import type { ImageLoraHint } from '../../data/imageModels'
 import { generatedImage, getImageLoras, getImageProfiles, getImageProfilePin, pinImageProfile, saveImageProfile, deleteImageProfile, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings } from '../../data/agentImages'
@@ -20,6 +21,7 @@ import {
   editQueued,
   expiryText,
   followThread,
+  watchSubagents,
   interruptionText,
   isDropped,
   retryTurn,
@@ -120,7 +122,7 @@ export type SessionOptions = {
 
 type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client'; /** An image job's status line: "Step 12 of 30 · 40%" */ detail?: string }
 /** `summary`: what the change does, from the server, where the call alone doesn't say (a calendar change). */
-type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary; check?: string }
+type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary; check?: string; /** A subagent's card, answered here: Yes or No only */ child?: { id: string; name: string } }
 type Asked = { callId: string; messageId: number; index: number; form: Form }
 type PickItem = { value: string; label: string; hint?: string; checked?: boolean }
 type Option = { label: string; hint?: string; run: () => void }
@@ -156,6 +158,7 @@ const SLASH: [string, string][] = [
   ['/summary', 'what the last compaction kept: the summary the agent works from'],
   ['/memory', 'what the agent remembers (add, rm)'],
   ['/tasks', 'background tasks: list, show, runs, run, dry, pause, resume; a run: log, approve, deny, cancel'],
+  ['/subagents', "this thread's subagents: list, show, msg, stop"],
   ['/status', 'account, model, folder, mode'],
   ['/export', 'save the thread as Markdown'],
   ['/copy', 'copy the last reply'],
@@ -195,6 +198,8 @@ export class Session {
   /** Image jobs under way: which call each one is, for its progress events */
   private imageJobs = new Map<string, { messageId: number; index: number }>()
   private approvals: Approval[] = []
+  /** Watching this thread's subagents (their cards and changes, also while it is at rest) */
+  private watching: { thread: string; ctl: AbortController } | null = null
   private asked: Asked[] = []
   private modal: Modal | null = null
   /** A queued message being edited in the prompt (the queue waits meanwhile), and what the prompt held before. */
@@ -274,6 +279,7 @@ export class Session {
     this.closed = true
     this.resetOutput()
     this.follow?.abort()
+    this.watching?.ctl.abort()
     if (this.timer) clearInterval(this.timer)
     if (this.editingQ && this.thread) void releaseQueued(this.thread.id, this.editingQ.id).catch(() => {})
     this.ctx.onKey(null)
@@ -369,7 +375,8 @@ export class Session {
     msgs.forEach((m, i) => {
       if (m.role === 'user') out.push(...userLines(m.content, w), [])
       else if (m.role === 'compact') out.push(...compactLines(m, w, this.verbose), [])
-      else if (m.role === 'report') out.push(...reportLines(m.content, w), [])
+      else if (m.role === 'report') out.push(...reportLines(m.content, w, m.meta), [])
+      else if (m.role === 'subagent' || m.role === 'agent') out.push(...subagentLines(m, w), [])
       else if (m.role === 'assistant') {
         if (m.content.trim()) out.push(...assistantLines(m.content, w), [])
         ;(m.toolCalls ?? []).forEach((c, k) => {
@@ -639,6 +646,11 @@ export class Session {
     const call = a.call ?? { name: 'change', arguments: {} }
     const sarg = (k: string) => (typeof call.arguments?.[k] === 'string' ? (call.arguments[k] as string) : '')
     const allow = (extra: Parameters<typeof answerApproval>[3] = {}) => () => void this.answer(a, true, extra)
+    // A subagent's card: what it is, labelled with its name; only Yes or No (nothing "from now on").
+    if (a.child) {
+      const base = this.approvalSpec({ ...a, child: undefined }, w)
+      return { title: `Subagent “${a.child.name}” · ${base.title}`, preview: base.preview, question: base.question, options: [{ label: 'Yes', run: allow() }, { label: 'No, and tell it what to do differently', hint: 'esc', run: () => this.modal?.kind === 'approval' && ((this.modal.feedback = ''), this.draw()) }] }
+    }
     const no: Option = { label: 'No, and tell the agent what to do differently', hint: 'esc', run: () => this.modal?.kind === 'approval' && ((this.modal.feedback = ''), this.draw()) }
     const inner = w - 4
     const file = sarg('path').split('/').pop() || sarg('path')
@@ -708,7 +720,7 @@ export class Session {
     } else {
       body.push([seg(spec.question, 'bold')])
       spec.options.forEach((o, i) => body.push([seg(i === m.sel ? '❯ ' : '  ', 'accent'), seg(`${i + 1}. ${o.label}`, i === m.sel ? 'accent' : undefined), ...(o.hint ? [seg(` (${o.hint})`, 'muted')] : [])]))
-      body.push([], [seg(`or just type to tell it what to do instead${this.approvals.length + this.asked.length > 1 ? ` (answers all ${this.approvals.length + this.asked.length} waiting)` : ''}`, 'muted')])
+      body.push([], [seg(m.a.child ? 'or just type to decline and tell the subagent why' : `or just type to tell it what to do instead${this.approvals.length + this.asked.length > 1 ? ` (answers all ${this.approvals.length + this.asked.length} waiting)` : ''}`, 'muted')])
     }
     return box(body, w, { color: 'yellow', title: spec.title })
   }
@@ -739,6 +751,8 @@ export class Session {
       return true
     }
     const spec = this.approvalSpec(m.a, this.w())
+    // A subagent's card: typing declines it with what is typed (it never answers the thread's own).
+    if (m.a.child && ((k.length === 1 && !/^[0-9 ]$/.test(k)) || k === 'Text' || k === 'Paste')) return (m.feedback = k.length === 1 ? k : (text ?? '').replace(/\s+/g, ' ')), this.draw(), true
     if ((k.length === 1 && !/^[0-9 ]$/.test(k)) || k === 'Text' || k === 'Paste') return this.startOverride(k.length === 1 ? k : (text ?? '')), true
     if (k === 'ArrowUp' || k === '^P') m.sel = (m.sel - 1 + spec.options.length) % spec.options.length
     else if (k === 'ArrowDown' || k === '^N' || k === 'Tab') m.sel = (m.sel + 1) % spec.options.length
@@ -1537,6 +1551,7 @@ export class Session {
     this.turn = null
     this.liveCalls = []
     this.overriding = false
+    this.watchChildren()
     this.draw()
   }
 
@@ -1597,7 +1612,7 @@ export class Session {
         }
         for (const p of e.pending) {
           const call = this.messages.find((m) => m.id === p.messageId)?.toolCalls?.[p.index] ?? p.call ?? null
-          if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check })
+          if (p.kind === 'approval' && !this.approvals.some((a) => a.callId === p.callId)) this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check, ...(p.child ? { child: p.child } : {}) })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
           else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
           this.setCallState(p.messageId, p.index, p.kind === 'image' ? 'running' : p.kind === 'question' ? 'question' : p.kind)
@@ -1693,9 +1708,58 @@ export class Session {
         } else if (e.state === 'failed' && e.auto) this.say(`Could not compact the conversation: ${e.error ?? 'something went wrong'}`, 'yellow')
         this.draw()
         break
+      case 'subagents': {
+        const before = this.thread?.subagents?.filter((s) => s.status === 'running').length ?? 0
+        if (this.thread) this.thread = { ...this.thread, subagents: e.subagents }
+        const now = e.subagents.filter((s) => s.status === 'running').length
+        if (now !== before) this.notice = now ? `${now} ${now === 1 ? 'subagent works' : 'subagents work'} · /subagents to look` : 'Subagents done · their results come to the agent'
+        this.watchChildren()
+        this.draw()
+        break
+      }
+      case 'child': {
+        const c = e.event
+        if (c.type === 'approval' && !this.approvals.some((a) => a.callId === c.callId)) {
+          this.approvals.push({ callId: c.callId, messageId: c.messageId, index: c.index, call: c.call ?? null, summary: c.summary, check: c.check, child: e.child })
+          this.next()
+        } else if (c.type === 'approved') {
+          this.approvals = this.approvals.filter((a) => a.callId !== c.callId)
+          if (this.modal?.kind === 'approval' && this.modal.a.callId === c.callId) this.modal = null
+          this.next()
+        }
+        break
+      }
       case 'done':
         break
     }
+  }
+
+  /**
+   * Watches this thread's subagents while it has any: their cards (to answer here), their changes,
+   * and a turn this thread starts from their results while nobody asked (it is followed then).
+   */
+  private watchChildren() {
+    const t = this.thread
+    if (!t?.subagents?.length || this.closed) return
+    if (this.watching?.thread === t.id) return
+    this.watching?.ctl.abort()
+    const ctl = new AbortController()
+    this.watching = { thread: t.id, ctl }
+    void watchSubagents(
+      t.id,
+      (e) => {
+        if (this.thread?.id !== t.id) return
+        if (e.type === 'thread') {
+          this.thread = e.thread
+          // A turn from its subagents' results: followed like one this terminal asked for.
+          if (e.thread.running && !this.turn) void this.followTurn()
+          this.draw()
+        } else this.onEvent(e)
+      },
+      ctl.signal,
+    )
+      .catch(() => {})
+      .finally(() => this.watching?.ctl === ctl && (this.watching = null))
   }
 
   /** An image job's progress on its call's status line (ComfyUI's step and percentage, or its place in the queue). */
@@ -1721,7 +1785,11 @@ export class Session {
       return
     }
     if (m.role === 'report') {
-      this.out([...reportLines(m.content, w), []])
+      this.out([...reportLines(m.content, w, m.meta), []])
+      return
+    }
+    if (m.role === 'subagent' || m.role === 'agent') {
+      this.out([...subagentLines(m, w), []])
       return
     }
     if (m.role === 'compact') {
@@ -2172,6 +2240,15 @@ export class Session {
         this.out([...compactLines(last, w, true), []])
         return true
       }
+      case '/subagents': {
+        if (!this.thread) return this.say('No thread yet: ask something first, the agent starts subagents itself.'), true
+        try {
+          this.out(await subagentsCommand(this.thread, `/subagents ${arg}`.trim(), Math.max(20, this.ctx.size.cols - 1)))
+        } catch (e) {
+          this.say(`Subagents: ${(e as Error).message} · ${SUBAGENTS_HELP}`, 'red')
+        }
+        return true
+      }
       case '/tasks':
       case '/task': {
         try {
@@ -2350,6 +2427,7 @@ export class Session {
       this.loadSkills()
       if (thread.running) void this.followTurn()
       else if (pending.length) this.onEvent({ type: 'snapshot', thread, messages, pending, live: null })
+      this.watchChildren()
       this.draw()
     } catch (e) {
       this.say(`Could not open it: ${(e as Error).message}`, 'red')
@@ -2365,7 +2443,8 @@ export class Session {
         const steps = (m.toolCalls ?? []).map((c) => `- ${toolLabel(c)}`).join('\n')
         if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
       } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
-      else if (m.role === 'report') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
+      else if (m.role === 'report' && m.meta?.kind !== 'taskQuiet') out.push(`## Task report\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
+      else if (m.role === 'subagent') out.push(`## Subagent\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}`)
     }
     return `${out.join('\n\n')}\n`
   }
