@@ -2,6 +2,14 @@ import { CmdError } from './types'
 
 /** Explicit integration metadata: these commands access private account data, never pure data. */
 export const APP_DATA_POLICY = Object.freeze({ command: 'mvl', agentDefault: 'deny', access: 'authenticated-network-read', resources: ['notes', 'calendar', 'background-tasks'] } as const)
+export type AppDataGrant = { network?: boolean; appDataRead?: readonly string[] }
+/** Resource grants must come from server approval, never command text or shell variables. */
+export function appDataDenial(args: string[], grant: AppDataGrant): string | null {
+  const resource = ({ notes: 'notes', calendar: 'calendar', tasks: 'background-tasks' } as Record<string, string>)[args[0]]
+  if (!resource || !Object.hasOwn({ notes: 1, calendar: 1, tasks: 1 }, args[0])) return 'mvl: unknown read-only resource'
+  if (grant.network !== true || !Array.isArray(grant.appDataRead) || !grant.appDataRead.includes(resource)) return `mvl: explicit ${resource} read authorization required`
+  return null
+}
 export type AppDataGet = (path: string, signal: AbortSignal) => Promise<unknown>
 const usage = 'mvl notes | mvl calendar FROM TO | mvl tasks (dates: YYYY-MM-DD or ISO timestamp; end exclusive, maximum 366 days)'
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}

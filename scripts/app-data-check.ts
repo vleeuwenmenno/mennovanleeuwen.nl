@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'vite'
 const vite = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' })
 try {
-  const { readAppData, APP_DATA_POLICY } = await vite.ssrLoadModule('/src/terminal/appData.ts')
+  const { readAppData, appDataDenial, APP_DATA_POLICY } = await vite.ssrLoadModule('/src/terminal/appData.ts')
   const signal = new AbortController().signal
   const paths: string[] = []
   const get = async (path: string) => { paths.push(path); return { notes: { value: [{ id: '1', text: '{c:red}literal{/}', updated: 1 }, { id: '2', deleted: 1 }, { id: '3', purged: true }] }, unrelatedSecret: 'never output' } }
@@ -23,5 +23,12 @@ try {
   const during = new AbortController()
   await assert.rejects(readAppData(['notes'], during.signal, async () => { during.abort(); return { notes: { value: [{ text: 'late private output' }] } } }), (e: { status: number }) => e.status === 130)
   assert.equal(APP_DATA_POLICY.agentDefault, 'deny')
+  assert.ok(appDataDenial(['notes'], {}))
+  assert.ok(appDataDenial(['notes'], { network: true }))
+  assert.ok(appDataDenial(['notes'], { appDataRead: ['notes'] }))
+  assert.ok(appDataDenial(['notes'], { network: true, appDataRead: ['calendar'] }))
+  assert.equal(appDataDenial(['notes'], { network: true, appDataRead: ['notes'] }), null)
+  assert.equal(appDataDenial(['tasks'], { network: true, appDataRead: ['background-tasks'] }), null)
+  assert.ok(appDataDenial(['constructor'], { network: true, appDataRead: ['notes'] }))
   console.log('PASS app data: reads, projection, markup, validation, authorization errors, cancellation')
 } finally { await vite.close() }

@@ -6091,3 +6091,12 @@ behavior or add it to a pure-command allowlist.
 
 `pnpm check:app-data` exercises JSON output, range validation, safe literal markup,
 server-error propagation, and cancellation before and after asynchronous reads.
+
+Agent integration with the separate `src/terminal/policy.ts` branch requires a
+server-issued `appDataRead` resource list (`notes`, `calendar`, `background-tasks`)
+and `network: true`. `appDataDenial(args, grant)` implements the resource gate;
+the command wrapper also applies it whenever a policy is present. The policy's
+resolved-command gate must call it, the server must validate and forward these
+explicit grants, and capabilities must describe them before enabling `mvl`. The
+existing broad network grant alone is deliberately insufficient. No server grant
+or `EFFECTS` enablement is introduced by this independent branch.
