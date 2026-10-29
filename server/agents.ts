@@ -1794,7 +1794,7 @@ function videoTools(): ToolDef[] {
       aspect: { type: 'string', description: 'e.g. 16:9, 9:16, 1:1; default the first frame\'s shape, else 16:9' },
       source_image_id: str('Optional first frame: an image id from list_generated_images, or attachment:<message>:<n> from list_image_attachments'),
       last_image_id: str('Optional last frame (H3 only), same ids'),
-      project_id: str('Optional: replace this earlier plan_video project instead of making a new one'),
+      project_id: str('Optional: replace a plan_video project made earlier in this thread (any other id makes a new project). Not in Plan mode.'),
       plan: {
         type: 'object',
         properties: {
@@ -2313,7 +2313,8 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
   // Making a mask writes only a mask (no approval card, like a read), but Plan still refuses it like the other image writes.
   if (name === 'make_image_mask') return permission === 'plan' ? 'refuse' : 'run'
   // A video plan only saves a draft project; a render is minutes of the user's GPU: it always asks, in every mode, and Plan refuses it.
-  if (name === 'plan_video') return 'run'
+  // Plan mode may draft a new one, but not replace an earlier plan (that changes what is there).
+  if (name === 'plan_video') return permission === 'plan' && call.arguments?.project_id !== undefined ? 'refuse' : 'run'
   if (name === 'render_video') return permission === 'plan' ? 'refuse' : 'ask'
   // OpenAI pictures spend the account's own key or plan and its daily cap: they run, except in Plan.
   if (name === 'gpt_image') return permission === 'plan' ? 'refuse' : 'run'

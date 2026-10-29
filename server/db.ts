@@ -563,8 +563,11 @@ export function database(): DatabaseSync {
     body BLOB NOT NULL,
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    origin_id TEXT
   )`)
+  // The picture a keyframe was copied from (an image id or attachment:…), so a second copy reuses it.
+  if (!cols('agent_video_sources').includes('origin_id')) db.exec('ALTER TABLE agent_video_sources ADD COLUMN origin_id TEXT')
   db.exec(`CREATE TABLE IF NOT EXISTS agent_video_jobs (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

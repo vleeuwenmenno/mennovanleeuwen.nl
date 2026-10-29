@@ -4,7 +4,7 @@ import { bindResponse, type User } from './auth.ts'
 import { database } from './db.ts'
 import { HttpError, json, readJson, SECURITY } from './http.ts'
 import { checkRoom } from './quota.ts'
-import { imageSettings, prepareImageGeneration, type ImageInput } from './agentImages.ts'
+import { holdComfyForImages, imageSettings, prepareImageGeneration, type ImageInput } from './agentImages.ts'
 import { installedEmbeddings } from './agentModelIntel.ts'
 import { sourceRaster } from './agentImageSources.ts'
 import { applyPresetRules } from '../src/data/modelFamilies.ts'
@@ -133,6 +133,8 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   const live = bindResponse(res, user.id)
   if (!live) return forget(user.id, ctl)
   const send = (e: Record<string, unknown>) => { if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`) }
+  // A batch's pictures follow each other: no video render starts on this account in between.
+  const release = holdComfyForImages(user.id)
   try {
     for (let i = 0; i < batch; i++) {
       if (i > 0) plan = await prepareImageGeneration(user, thread, runInput(i), ctl.signal)
@@ -145,6 +147,7 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   } catch (e) {
     send(ctl.signal.aborted ? { type: 'done', cancelled: true } : { type: 'error', error: e instanceof Error ? e.message : 'Generation failed' })
   } finally {
+    release()
     forget(user.id, ctl)
     res.end()
   }

@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
@@ -231,8 +231,15 @@ const schemas = fakeSchemas()
 const graphs: any[] = []
 const deletions: string[] = []
 const uploads: string[] = []
+/** hold: video prompts never finish; holdImage: picture prompts never finish. */
 let hold = false
+let holdImage = false
 let videoBytes = 256 * 1024
+/** How /view sends a video: whole (with its length), slow (a first piece, then waits for releaseSlow), or chunked (no length). */
+let viewMode: 'whole' | 'slow' | 'chunked' = 'whole'
+let releaseSlow: () => void = () => {}
+const promptGraphs = new Map<string, any>()
+const isVideo = (g: any) => Object.values(g).some((n: any) => n.class_type === 'SaveVideo')
 let jobs = 0
 const mp4 = () => {
   const b = Buffer.alloc(videoBytes, 7)
@@ -263,15 +270,35 @@ const comfy = createServer((req, res) => {
       return send({ name, subfolder: '', type: 'input' })
     }
     if (path === '/prompt') {
-      graphs.push(JSON.parse(raw).prompt)
-      return send({ prompt_id: `job-${++jobs}` })
+      const graph = JSON.parse(raw).prompt
+      graphs.push(graph)
+      promptGraphs.set(`job-${++jobs}`, graph)
+      return send({ prompt_id: `job-${jobs}` })
     }
-    if (path.startsWith('/history/') && hold) return send({})
     if (path.startsWith('/history/')) {
       const id = path.split('/').pop()!
+      const graph = promptGraphs.get(id) ?? {}
+      if (isVideo(graph) ? hold : holdImage) return send({})
+      if (!isVideo(graph)) {
+        const save = Object.entries(graph).find(([, n]: any) => n.class_type === 'SaveImage')?.[0] ?? '9'
+        return send({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { [save]: { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } } } })
+      }
       return send({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { save: { images: [{ filename: 'MvL_H3_00001_.mp4', subfolder: 'video', type: 'output' }], animated: [true] } } } })
     }
-    if (path === '/view') return res.writeHead(200, { 'Content-Type': 'video/mp4' }).end(mp4())
+    if (path === '/view' && new URL(req.url!, 'http://fixture').searchParams.get('filename')?.endsWith('.png')) return res.writeHead(200, { 'Content-Type': 'image/png' }).end(png)
+    if (path === '/view') {
+      const body = mp4()
+      if (viewMode === 'whole') return res.writeHead(200, { 'Content-Type': 'video/mp4' }).end(body)
+      if (viewMode === 'chunked') {
+        res.writeHead(200, { 'Content-Type': 'video/mp4' })
+        for (let i = 0; i < body.length; i += 1024 * 1024) res.write(body.subarray(i, i + 1024 * 1024))
+        return res.end()
+      }
+      res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': String(body.length) })
+      res.write(body.subarray(0, 64 * 1024))
+      releaseSlow = () => res.end(body.subarray(64 * 1024))
+      return
+    }
     if (path === '/queue' && req.method === 'POST') {
       deletions.push(...JSON.parse(raw).delete)
       return send({})
@@ -311,6 +338,17 @@ const until = async (id: string, statuses: string[], ms = 15_000) => {
   }
 }
 const pngData = png.toString('base64')
+const waitFor = async (what: string, test: () => boolean | Promise<boolean>, ms = 15_000) => {
+  const end = Date.now() + ms
+  while (!(await test())) {
+    if (Date.now() > end) throw new Error(`timed out: ${what}`)
+    await sleep(50)
+  }
+}
+const picture = { preset: 'sdxl', model: 'SDXL/studio.safetensors', prompt: 'p', steps: 4, cfg: 6, sampler: 'euler', scheduler: 'normal', width: 512, height: 512 }
+/** An Image Studio run, read to its end: its NDJSON events. */
+const studioRun = (batch = 1) => call('POST', '/api/agents/images/studio/run', { input: picture, batch }).then(async (r) => (await r.text()).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+const parts = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.part')) : [])
 
 // Signed in only.
 assert.ok([401, 403].includes((await call('GET', '/api/video/projects', undefined, null)).status))
@@ -385,36 +423,70 @@ try {
   hold = true
   const held = await ok('POST', `/api/video/projects/${id}/render`, {})
   await until(held.id, ['running'])
-  // The one ComfyUI slot is the account's: the Image Studio waits while a video renders.
-  const studio = await call('POST', '/api/agents/images/studio/run', { input: { preset: 'sdxl', model: 'SDXL/studio.safetensors', prompt: 'p', steps: 4, cfg: 6, sampler: 'euler', scheduler: 'normal', width: 512, height: 512 }, batch: 1 })
-  const studioText = await studio.text()
-  assert.match(studioText, /already running for this account/, 'an image waits for the video')
-  const cancelled = await ok('DELETE', `/api/video/jobs/${held.id}`)
-  void cancelled
+  const heldPrompt = `job-${jobs}`
+  // The one ComfyUI slot is the account's: a picture asked for during a render waits for it, and does not fail.
+  const before = graphs.length
+  const waitingPicture = studioRun()
+  await sleep(800)
+  assert.equal(graphs.length, before, 'the picture waits: nothing sent to ComfyUI while the video holds the slot')
+  await ok('DELETE', `/api/video/jobs/${held.id}`)
   const after = await until(held.id, ['cancelled'])
   assert.match(after.error, /Cancelled/)
-  assert.ok(deletions.includes(`job-${jobs}`), 'its queued prompt is deleted from ComfyUI')
+  assert.ok(deletions.includes(heldPrompt), 'its queued prompt is deleted from ComfyUI')
+  const waited = await waitingPicture
+  assert.ok(waited.some((e) => e.type === 'image') && !waited.some((e) => e.type === 'error'), `the waiting picture is made once the slot is free: ${JSON.stringify(waited.at(-1))}`)
   assert.equal((await ok('GET', `/api/video/videos?project=${id}`)).videos.length, 1, 'nothing kept')
+  // An Image Studio batch keeps the slot between its pictures: a render queued meanwhile starts after it.
+  holdImage = true
+  const g0 = graphs.length
+  const batch = studioRun(2)
+  await waitFor('the first picture of the batch is sent', () => graphs.length > g0)
+  const between = await ok('POST', `/api/video/projects/${id}/render`, {})
+  holdImage = false
+  await waitFor('the second picture is sent', () => graphs.filter((g) => !isVideo(g)).length >= graphs.filter((g, i) => i < g0 && !isVideo(g)).length + 2)
+  const batchEvents = await batch
+  assert.equal(batchEvents.filter((e) => e.type === 'image').length, 2, JSON.stringify(batchEvents.at(-1)))
+  assert.ok(!batchEvents.some((e) => e.type === 'error'), 'no picture of the batch fails')
+  hold = false
+  assert.equal((await until(between.id, ['done', 'failed'])).status, 'done')
+  const sent = graphs.slice(g0).map((g) => isVideo(g))
+  assert.ok(sent.indexOf(true) > sent.lastIndexOf(false), `the render was sent only after both pictures: ${sent.join(',')}`)
+  hold = true
 
   // A restart: the running job is marked interrupted, not lost and not resubmitted.
   const cut = await ok('POST', `/api/video/projects/${id}/render`, {})
   await until(cut.id, ['running'])
   const submitted = jobs
+  writeFileSync(join(dir, 'leftover.part'), 'half a video')
   await server.stop()
   await server.start()
+  assert.deepEqual(parts(dir), [], 'a restart removes half-written downloads')
   const interrupted = await job(cut.id)
   assert.equal(interrupted.status, 'interrupted'); assert.match(interrupted.error, /restarted/)
   await sleep(500)
   assert.equal(jobs, submitted, 'nothing resubmitted after the restart')
   hold = false
-  console.log('PASS jobs: cancel deletes only our prompt and keeps nothing; the Image Studio waits for a running video; a restart marks the running render interrupted without resubmitting')
+  // Cancelled while the video downloads: the download stops, its file goes, the slot is free again.
+  viewMode = 'slow'
+  const slow = await ok('POST', `/api/video/projects/${id}/render`, {})
+  await until(slow.id, ['saving'])
+  await waitFor('a half-written download', () => parts(dir).length > 0)
+  await ok('DELETE', `/api/video/jobs/${slow.id}`)
+  assert.equal((await until(slow.id, ['cancelled', 'failed', 'done'])).status, 'cancelled')
+  assert.deepEqual(parts(dir), [], 'the half-written file is removed')
+  releaseSlow()
+  viewMode = 'whole'
+  assert.equal((await until((await ok('POST', `/api/video/projects/${id}/render`, {})).id, ['done', 'failed'])).status, 'done', 'the slot was let go')
+  console.log('PASS jobs: cancel deletes only our prompt and keeps nothing; a picture waits for a running render instead of failing, and a Studio batch keeps the slot between its pictures; a restart marks the running render interrupted without resubmitting and removes half-written files; a cancel mid-download removes the file and frees the slot')
 
   // A queue limit per account.
   hold = true
+  const posts = await Promise.all(Array.from({ length: 6 }, () => call('POST', `/api/video/projects/${id}/render`, {})))
   const queued: string[] = []
-  for (let i = 0; i < 4; i++) queued.push((await ok('POST', `/api/video/projects/${id}/render`, {})).id)
-  const fifth = await call('POST', `/api/video/projects/${id}/render`, {})
-  assert.equal(fifth.status, 429)
+  for (const r of posts) if (r.status === 200) queued.push((await r.json()).id)
+  else assert.equal(r.status, 429)
+  assert.equal(queued.length, 4, 'six at once: four queued, two refused')
+  assert.equal((await ok('GET', '/api/video/jobs?active=1')).jobs.length, 4)
   for (const q of queued) await ok('DELETE', `/api/video/jobs/${q}`)
   for (const q of queued) await until(q, ['cancelled'])
   hold = false
@@ -428,10 +500,36 @@ try {
   const big = await ok('POST', `/api/video/projects/${id}/render`, {})
   const failed = await until(big.id, ['failed', 'done'])
   assert.equal(failed.status, 'failed'); assert.match(failed.error, /storage is full.*was not kept/)
-  assert.deepEqual(readdirSync(dir).filter((f) => !f.endsWith('.mp4') || f !== `${vid}.mp4`), [], 'no half-written or refused file left')
+  const files = () => readdirSync(dir).filter((f) => f !== `${vid}.mp4` && !(f.endsWith('.mp4') && existsSync(join(dir, f)) && (Date.now() - 0) > 0 && (database().prepare('SELECT 1 FROM agent_videos WHERE id = ?').get(f.replace('.mp4', '')))))
+  assert.deepEqual(files(), [], 'no half-written or refused file left')
+  // Without a length up front: the download stops at the room the account has.
+  viewMode = 'chunked'
+  const chunked = await until((await ok('POST', `/api/video/projects/${id}/render`, {})).id, ['failed', 'done'])
+  assert.equal(chunked.status, 'failed'); assert.match(chunked.error, /storage is full.*was not kept/)
+  assert.deepEqual(files(), [], 'nothing left of the refused stream')
+  viewMode = 'whole'
   database().prepare("DELETE FROM app_settings WHERE key = 'user_storage_mb'").run()
   videoBytes = 256 * 1024
-  console.log('PASS limits: four renders per account at a time; storage refused before queueing (estimate) and at save time (real size), leaving no file')
+  console.log('PASS limits: four renders per account at a time, also when asked for at once; storage refused before queueing (estimate), before reading (announced size) and while streaming (no size), leaving no file')
+
+  // Keyframes: the same picture copied again is the same keyframe; ones nothing uses are swept.
+  const thread = '33333333-3333-4333-8333-333333333333', imageId = '44444444-4444-4444-8444-444444444444'
+  database().prepare("INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, quick) VALUES (?, 1, 'x', 'quick', '', 0, ?, ?, 0)").run(thread, Date.now(), Date.now())
+  database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at) VALUES (?, ?, ?, ?, ?)').run(imageId, thread, 'made.png', png, Date.now())
+  const copy1 = await ok('POST', '/api/video/sources', { image_id: imageId })
+  const copy2 = await ok('POST', '/api/video/sources', { image_id: imageId })
+  assert.equal(copy2.id, copy1.id, 'copied again: the same keyframe')
+  assert.equal((await call('POST', '/api/video/sources', { image_id: imageId }, 1)).status, 404, 'not another account\'s picture')
+  const loose = await ok('POST', '/api/video/sources', { name: 'loose.png', data: pngData })
+  const fresh = await ok('POST', '/api/video/sources', { name: 'fresh.png', data: pngData })
+  database().prepare('UPDATE agent_video_sources SET created_at = ? WHERE id IN (?, ?, ?)').run(Date.now() - 2 * 3600_000, loose.id, copy1.id, src.id)
+  const cur = await ok('GET', `/api/video/projects/${id}`)
+  await ok('PUT', `/api/video/projects/${id}`, { revision: cur.revision, project: cur.project })
+  assert.equal((await call('GET', `/api/video/sources/${loose.id}`)).status, 404, 'an old keyframe nothing uses is swept on save')
+  assert.equal((await call('GET', `/api/video/sources/${copy1.id}`)).status, 404)
+  assert.equal((await call('GET', `/api/video/sources/${src.id}`)).status, 200, 'the project\'s keyframe stays')
+  assert.equal((await call('GET', `/api/video/sources/${fresh.id}`)).status, 200, 'a just-uploaded keyframe stays (not saved into its project yet)')
+  console.log('PASS keyframes: a picture copied again reuses its keyframe; old keyframes no project or render uses are swept on save, the project\'s and fresh uploads stay')
 
   // LTX: first frame only; the project drops a last frame.
   const l = await ok('PUT', `/api/video/projects/${id}`, { revision: (await ok('GET', `/api/video/projects/${id}`)).revision, project: { ...p, family: 'ltx25', width: 1280, height: 704, segments: [{ ...p.segments[0], duration: 5 }] } })
@@ -456,8 +554,27 @@ try {
     assert.equal(decide(t, mode, { name: 'plan_video', arguments: {} }, 1), 'run', `plan_video runs in ${mode}`)
   }
   assert.equal(decide(t, 'plan', { name: 'render_video', arguments: {} }, 1), 'refuse')
-  assert.equal(decide(t, 'plan', { name: 'plan_video', arguments: {} }, 1), 'run', 'planning a video is fine in Plan mode')
-  console.log('PASS agent tools: plan_video saves an editable project and returns plan errors; render_video asks in every mode (Bypass too) and Plan refuses it')
+  assert.equal(decide(t, 'plan', { name: 'plan_video', arguments: {} }, 1), 'run', 'planning a new video is fine in Plan mode')
+  assert.equal(decide(t, 'plan', { name: 'plan_video', arguments: { project_id: planned.project_id } }, 1), 'refuse', 'Plan mode does not replace an earlier plan')
+  // plan_video replaces only a plan this thread's agent made; any other id gets a new project.
+  const orbit = { duration: 6, plan: { style: 'Live-action', soundscape: 'wind', shots: [{ start: 0, end: 6, framing: 'the ship', moments: [{ action: 'It drifts' }] }] } }
+  const again = planVideoTool(owner, 't', { ...orbit, title: 'Orbit 2', project_id: planned.project_id })
+  assert.equal(again.project_id, planned.project_id); assert.equal(again.replaced, true)
+  const elsewhere = planVideoTool(owner, 'thread-y', { ...orbit, project_id: planned.project_id })
+  assert.notEqual(elsewhere.project_id, planned.project_id); assert.equal(elsewhere.replaced, false)
+  const studioTitle = (await ok('GET', `/api/video/projects/${id}`)).project.title
+  const notTheirs = planVideoTool(owner, 't', { ...orbit, title: 'Overwrite?', project_id: id })
+  assert.notEqual(notTheirs.project_id, id); assert.equal((await ok('GET', `/api/video/projects/${id}`)).project.title, studioTitle, 'a Studio project is never overwritten by an agent')
+  assert.equal((await ok('GET', `/api/video/projects/${planned.project_id}`)).project.title, 'Orbit 2')
+  // The approval card shows the whole prompt, not the first 4000 characters.
+  const { prepareRenderTool } = await import('../server/agentVideo.ts')
+  const long = defaultProject()
+  long.segments[0].lanes.action = Array.from({ length: 6 }, (_, i) => ({ id: `l${i}`, at: i, text: `${'A long, carefully described beat of action. '.repeat(25)}${i}` }))
+  const longId = (await ok('POST', '/api/video/projects', { project: long })).id
+  const card = await prepareRenderTool(owner, { project_id: longId }, AbortSignal.timeout(20_000))
+  const fullPrompt = compileProject(long).prompt
+  assert.ok(fullPrompt.length > 4000); assert.equal(card.summary.body, fullPrompt)
+  console.log('PASS agent tools: plan_video saves an editable project and returns plan errors, replaces only its own thread\'s plans (never in Plan mode); render_video asks in every mode (Bypass too) with the whole prompt on its card, and Plan refuses it')
 } finally {
   await server.dispose()
   comfy.close()

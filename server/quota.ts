@@ -42,6 +42,9 @@ export function usedBytes(userId: number): number {
   )
 }
 
+/** Bytes the account can still store before its limit. */
+export const roomLeft = (userId: number) => Math.max(0, limit() - usedBytes(userId))
+
 /** Refuses a save of about `adding` more bytes when the account would go over its limit. */
 export function checkRoom(user: User, adding: number) {
   if (usedBytes(user.id) + adding > limit()) throw new HttpError(413, `Your storage is full (${limitLabel()}): delete old threads or attachments first`)

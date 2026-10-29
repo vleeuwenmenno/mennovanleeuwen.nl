@@ -1,10 +1,12 @@
 import { randomInt, randomUUID } from 'node:crypto'
-import { chmodSync, createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { accounts, type User } from './auth.ts'
-import { cancelQueuedPrompt, claimComfyJob, imageBackendScope, imageSettings, readJSON, releaseComfyJob, request, uploadSource } from './agentImages.ts'
+import { cancelQueuedPrompt, claimComfyJob, imagesFirst, imageBackendScope, imageSettings, readJSON, releaseComfyJob, request, uploadSource } from './agentImages.ts'
 import { imageSource, sourceRaster } from './agentImageSources.ts'
 import { buildVideoGraph, fitVideoNodes, nodeChoices, videoGraphProblem, type VideoNodeSchema, type VideoRender } from './agentVideoGraphs.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition } from './comfyProgress.ts'
@@ -12,7 +14,7 @@ import { database, dataDir, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { withoutPrivateRequest } from './privateRequest.ts'
-import { checkRoom } from './quota.ts'
+import { checkRoom, limitLabel, roomLeft } from './quota.ts'
 import { pushToUser } from './webpush.ts'
 import type { ImageProgress } from '../src/data/imageModels.ts'
 import { effectiveSeconds, emptyVideoModels, FAMILY_LABEL, FAMILY_RULES, H3_NODES, H3_SAMPLING, JOB_ACTIVE, LTX_NODES, missingVideoModels, resolveVideoModels, VIDEO_FAMILIES, VIDEO_FPS, VIDEO_NODES, videoFrameCount, videoParameterProblem, type VideoCatalog, type VideoFamily, type VideoJobStatus, type VideoModelSettings } from '../src/data/videoModels.ts'
@@ -128,12 +130,12 @@ export async function videoCatalog(user: User, signal: AbortSignal = AbortSignal
 type SourceRow = { id: string; name: string; mime: string; body: Uint8Array; width: number; height: number }
 const sourceView = (r: Omit<SourceRow, 'body'>) => ({ id: r.id, name: r.name, width: r.width, height: r.height, url: `/api/video/sources/${r.id}` })
 
-function insertSource(user: User, name: string, bytes: Buffer) {
+function insertSource(user: User, name: string, bytes: Buffer, origin: string | null = null) {
   const raster = sourceRaster(bytes, SOURCE_MAX)
   checkRoom(user, bytes.length)
   const id = randomUUID()
   const clean = name.replace(/[^\w. -]+/g, '-').slice(0, 120) || 'picture'
-  database().prepare('INSERT INTO agent_video_sources (id, user_id, name, mime, body, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, user.id, clean, raster.mime, bytes, raster.width, raster.height, Date.now())
+  database().prepare('INSERT INTO agent_video_sources (id, user_id, name, mime, body, width, height, created_at, origin_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, user.id, clean, raster.mime, bytes, raster.width, raster.height, Date.now(), origin)
   return sourceView({ id, name: clean, mime: raster.mime, width: raster.width, height: raster.height })
 }
 
@@ -149,8 +151,35 @@ export function uploadVideoSource(user: User, body: unknown) {
 
 /** A copy of one of the account's own pictures (a generated image id or attachment:<message>:<n>), as a keyframe. */
 export function videoSourceFromImage(user: User, id: unknown) {
+  // The same picture copied again (Make video… twice, a second plan) is the copy made before.
+  if (typeof id === 'string') {
+    const kept = database().prepare('SELECT id, name, mime, width, height FROM agent_video_sources WHERE user_id = ? AND origin_id = ? ORDER BY created_at DESC LIMIT 1').get(user.id, id) as Omit<SourceRow, 'body'> | undefined
+    if (kept) return sourceView(kept)
+  }
   const source = imageSource(user, id)
-  return insertSource(user, source.name, source.bytes)
+  return insertSource(user, source.name, source.bytes, typeof id === 'string' ? id : null)
+}
+
+/** How long a keyframe nothing uses yet is kept: one just uploaded is saved into its project a moment later. */
+const SOURCE_GRACE_MS = 60 * 60_000
+/**
+ * Deletes the account's keyframes that no project and no waiting or running render uses (and that
+ * are older than SOURCE_GRACE_MS): a changed or removed keyframe stops counting against the quota.
+ */
+export function sweepSources(userId: number, now = Date.now()) {
+  const db = database()
+  const used = new Set<string>()
+  for (const r of db.prepare('SELECT data FROM agent_video_projects WHERE user_id = ?').all(userId) as { data: string }[]) {
+    for (const seg of normalizeProject(JSON.parse(r.data)).segments) for (const k of [seg.firstFrame, seg.lastFrame]) if (k) used.add(k.sourceId)
+  }
+  for (const r of db.prepare(`SELECT render FROM agent_video_jobs WHERE user_id = ? AND status IN (${JOB_ACTIVE.map(() => '?').join(', ')})`).all(userId, ...JOB_ACTIVE) as { render: string }[]) {
+    const render = JSON.parse(r.render) as { first?: string | null; last?: string | null }
+    for (const k of [render.first, render.last]) if (k) used.add(k)
+  }
+  const old = db.prepare('SELECT id FROM agent_video_sources WHERE user_id = ? AND created_at < ?').all(userId, now - SOURCE_GRACE_MS) as { id: string }[]
+  const gone = old.filter((r) => !used.has(r.id))
+  for (const r of gone) db.prepare('DELETE FROM agent_video_sources WHERE id = ? AND user_id = ?').run(r.id, userId)
+  return gone.length
 }
 
 function ownSource(user: User, id: string): SourceRow {
@@ -213,12 +242,14 @@ export function saveProject(user: User, id: string, body: unknown) {
   if (data.length > PROJECT_MAX) throw new HttpError(413, 'This project is too large')
   checkRoom(user, Math.max(0, data.length - row.data.length))
   database().prepare('UPDATE agent_video_projects SET revision = revision + 1, title = ?, data = ?, updated_at = ? WHERE id = ? AND user_id = ?').run(project.title, data, Date.now(), id, user.id)
+  sweepSources(user.id)
   return projectView(ownProject(user, id))
 }
 
 export function deleteProject(user: User, id: string) {
   ownProject(user, id)
   database().prepare('DELETE FROM agent_video_projects WHERE id = ? AND user_id = ?').run(id, user.id)
+  sweepSources(user.id)
 }
 
 // --- rendering ------------------------------------------------------------------------------------
@@ -277,7 +308,8 @@ export async function prepareRender(user: User, projectId: string, signal: Abort
       ['Seed', String(seed)],
       ['Runs on', 'your ComfyUI; takes minutes of its GPU'],
     ] as [string, string][],
-    body: compiled.prompt.slice(0, 4000),
+    // The whole prompt (at most 16 000 characters): the card scrolls it.
+    body: compiled.prompt,
   }
   return { project: row, render, summary, scope: imageBackendScope(user, settings) }
 }
@@ -298,11 +330,14 @@ function ownJob(user: User, id: string): JobRow {
   return row
 }
 
+const activeJobs = (userId: number) => (database().prepare(`SELECT COUNT(*) AS n FROM agent_video_jobs WHERE user_id = ? AND status IN (${JOB_ACTIVE.map(() => '?').join(', ')})`).get(userId, ...JOB_ACTIVE) as { n: number }).n
+
 /** Queues a render of a project (checked by prepareRender first); the worker starts it when the account's ComfyUI slot is free. */
 export async function startRender(user: User, projectId: string, origin: 'studio' | 'agent', signal: AbortSignal, prepared?: Awaited<ReturnType<typeof prepareRender>>) {
-  const waiting = (database().prepare(`SELECT COUNT(*) AS n FROM agent_video_jobs WHERE user_id = ? AND status IN (${JOB_ACTIVE.map(() => '?').join(', ')})`).get(user.id, ...JOB_ACTIVE) as { n: number }).n
-  if (waiting >= MAX_QUEUED) throw new HttpError(429, `${MAX_QUEUED} renders are already waiting or running: let one finish, or cancel one`)
+  if (activeJobs(user.id) >= MAX_QUEUED) throw new HttpError(429, `${MAX_QUEUED} renders are already waiting or running: let one finish, or cancel one`)
   const p = prepared ?? (await prepareRender(user, projectId, signal))
+  // Counted again with nothing awaited before the insert: parallel requests cannot pass the limit together.
+  if (activeJobs(user.id) >= MAX_QUEUED) throw new HttpError(429, `${MAX_QUEUED} renders are already waiting or running: let one finish, or cancel one`)
   const id = randomUUID()
   database().prepare('INSERT INTO agent_video_jobs (id, user_id, project_id, segment, status, render, backend_scope, origin, created_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)').run(id, user.id, projectId, 'queued', JSON.stringify(p.render), p.scope, origin, Date.now())
   // The worker is not the request's: it keeps going when the tab (and this request) closes.
@@ -354,7 +389,8 @@ function pump() {
     let waiting = false
     for (const job of queued) {
       if ([...running.values()].some((r) => r.user === job.user_id)) { waiting = true; continue }
-      if (!claimComfyJob(job.user_id, 'video')) { waiting = true; continue }
+      // Pictures go first: one waiting for the slot, or an Image Studio batch between its pictures.
+      if (imagesFirst(job.user_id) || !claimComfyJob(job.user_id, 'video')) { waiting = true; continue }
       const ctl = new AbortController()
       running.set(job.id, { user: job.user_id, ctl })
       void runJob(job, ctl).finally(() => {
@@ -458,7 +494,8 @@ async function runJob(job: JobRow, ctl: AbortController) {
         try {
           checkRoom(user, bytes)
         } catch (e) {
-          throw new HttpError(413, `${(e as Error).message}. The finished video (${Math.round(bytes / 1024 / 1024)} MB) was not kept.`)
+          rmSync(partial, { force: true })
+          throw new HttpError(413, `${(e as Error).message}. The finished video (${Math.ceil(bytes / 1024 / 1024)} MB) was not kept.`)
         }
         renameSync(partial, videoFile(user.id, id))
         partial = null
@@ -489,7 +526,11 @@ async function runJob(job: JobRow, ctl: AbortController) {
   }
 }
 
-/** Streams ComfyUI's video to `path`, at most OUTPUT_MAX, and checks it is an MP4 (an ftyp box first). */
+/**
+ * Streams ComfyUI's video to `path` through one pipeline (so a full disk, a broken connection or a
+ * cancel all end it, and the file goes): at most OUTPUT_MAX and never more than the account has room
+ * for (refused before reading when ComfyUI says the size up front), and an MP4 (an ftyp box first).
+ */
 async function download(user: User, s: ReturnType<typeof imageSettings>, filename: string, subfolder: string, path: string, signal: AbortSignal): Promise<number> {
   const params = new URLSearchParams({ filename, subfolder, type: 'output' })
   const res = await guardedFetch(user, `${s.url}/view?${params}`, { redirect: 'manual', headers: s.token ? { Authorization: `Bearer ${s.token}` } : {}, signal: AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)]) })
@@ -497,20 +538,35 @@ async function download(user: User, s: ReturnType<typeof imageSettings>, filenam
     await res.body?.cancel().catch(() => {})
     throw new HttpError(502, `ComfyUI answered ${res.status} for the video`)
   }
-  const out = createWriteStream(path, { mode: 0o600 })
+  const room = roomLeft(user.id)
+  const full = (bytes: number) => new HttpError(413, `Your storage is full (${limitLabel()}): delete old videos or threads first. The finished video (${Math.ceil(bytes / 1024 / 1024)} MB) was not kept.`)
+  const announced = Number(res.headers.get('content-length'))
+  if (Number.isFinite(announced) && announced > OUTPUT_MAX) {
+    await res.body.cancel().catch(() => {})
+    throw new HttpError(413, `The video is larger than ${OUTPUT_MAX / 1024 / 1024} MB`)
+  }
+  if (Number.isFinite(announced) && announced > room) {
+    await res.body.cancel().catch(() => {})
+    throw full(announced)
+  }
+  const cap = Math.min(OUTPUT_MAX, room)
   let size = 0
   let head = Buffer.alloc(0)
-  try {
-    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+  const guard = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
       size += chunk.length
-      if (size > OUTPUT_MAX) throw new HttpError(413, `The video is larger than ${OUTPUT_MAX / 1024 / 1024} MB`)
-      if (head.length < 12) head = Buffer.concat([head, Buffer.from(chunk)]).subarray(0, 12)
-      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r))
-    }
-  } finally {
-    await new Promise<void>((r) => out.end(r))
+      if (size > cap) return done(cap < OUTPUT_MAX ? full(size) : new HttpError(413, `The video is larger than ${OUTPUT_MAX / 1024 / 1024} MB`))
+      if (head.length < 12) head = Buffer.concat([head, chunk]).subarray(0, 12)
+      done(null, chunk)
+    },
+  })
+  try {
+    await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), guard, createWriteStream(path, { mode: 0o600 }), { signal })
+    if (head.length < 12 || head.toString('ascii', 4, 8) !== 'ftyp') throw new HttpError(502, 'ComfyUI did not return an MP4 video')
+  } catch (error) {
+    rmSync(path, { force: true })
+    throw error
   }
-  if (head.length < 12 || head.toString('ascii', 4, 8) !== 'ftyp') throw new HttpError(502, 'ComfyUI did not return an MP4 video')
   return size
 }
 
@@ -518,9 +574,21 @@ async function download(user: User, s: ReturnType<typeof imageSettings>, filenam
 export function recoverVideoJobs() {
   withoutPrivateRequest(() => {
     database().prepare(`UPDATE agent_video_jobs SET status = 'interrupted', error = ?, ended_at = ?, progress = NULL WHERE status IN ('uploading', 'running', 'saving')`).run('The server restarted during this render. ComfyUI may still finish it, but the video was not collected: render again.', Date.now())
-    // Half-written downloads of those jobs.
+    // Half-written downloads of those jobs (nothing is downloading yet: the worker starts below).
+    const root = join(dataDir(), 'videos')
+    if (existsSync(root)) {
+      for (const user of readdirSync(root, { withFileTypes: true })) {
+        if (!user.isDirectory()) continue
+        for (const f of readdirSync(join(root, user.name))) if (f.endsWith('.part')) rmSync(join(root, user.name, f), { force: true })
+      }
+    }
     pump()
   })
+  // Keyframes nothing uses any more, for every account, now and then (saves and deletes sweep their own).
+  const sweep = () => withoutPrivateRequest(() => {
+    for (const r of database().prepare('SELECT DISTINCT user_id FROM agent_video_sources').all() as { user_id: number }[]) sweepSources(r.user_id)
+  })
+  setInterval(sweep, 6 * 3600_000).unref()
 }
 
 // --- videos --------------------------------------------------------------------------------------
@@ -568,6 +636,8 @@ export function sendVideo(req: IncomingMessage, res: ServerResponse, user: User,
   if (head) return void res.end()
   const stream = createReadStream(file, { start, end })
   res.on('close', () => stream.destroy())
+  // A file that went away or a read error mid-way: end the response rather than leave it hanging.
+  stream.on('error', () => res.destroy())
   stream.pipe(res)
 }
 
@@ -606,6 +676,11 @@ export function planVideoTool(user: User, thread: string, args: Record<string, u
   const checked = validateVideoPromptPlan(args.plan, { duration, hasFirstFrame, hasLastFrame })
   if (!checked.ok) throw new HttpError(400, checked.error)
   const ratio = typeof args.aspect === 'string' && /^\d{1,2}:\d{1,2}$/.test(args.aspect) ? Number(args.aspect.split(':')[0]) / Number(args.aspect.split(':')[1]) : 16 / 9
+  // Only a project this thread's agent made can be replaced; anything else gets a new project.
+  // Checked before any picture is copied.
+  const replace = typeof args.project_id === 'string' && UUID.test(args.project_id)
+    ? (database().prepare("SELECT id, revision FROM agent_video_projects WHERE id = ? AND user_id = ? AND origin = 'agent' AND thread_id = ?").get(args.project_id, user.id, thread) as { id: string; revision: number } | undefined)
+    : undefined
   const frame = (id: unknown): Keyframe | null => {
     if (id === undefined) return null
     const s = videoSourceFromImage(user, id)
@@ -625,10 +700,11 @@ export function planVideoTool(user: User, thread: string, args: Record<string, u
     style: checked.value.style, speakers: checked.value.speakers, soundscape: checked.value.soundscape, music: checked.value.music ?? '',
     segments: [{ ...base.segments[0], duration, firstFrame: first, lastFrame: last, lanes: lanesFromPlan(checked.value) }],
   }
-  const saved = typeof args.project_id === 'string' ? saveProject(user, args.project_id, { revision: ownProject(user, args.project_id).revision, project }) : createProject(user, { project }, 'agent', thread)
+  const saved = replace ? saveProject(user, replace.id, { revision: replace.revision, project }) : createProject(user, { project }, 'agent', thread)
   const compiled = compileProject(saved.project)
   return {
     project_id: saved.id,
+    ...(typeof args.project_id === 'string' ? { replaced: !!replace, ...(replace ? {} : { note: 'project_id was not a plan of this thread: a new project was made instead.' }) } : {}),
     title: saved.project.title,
     family: FAMILY_LABEL[family],
     duration,

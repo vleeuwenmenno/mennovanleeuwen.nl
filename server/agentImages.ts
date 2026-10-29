@@ -646,12 +646,67 @@ export function claimComfyJob(userId: number, kind: 'image' | 'video'): boolean 
   active.set(userId, kind)
   return true
 }
-export const releaseComfyJob = (userId: number) => void active.delete(userId)
-const busyMessage = (userId: number, fallback: string) => (active.get(userId) === 'video' ? 'A video is already running for this account; images wait until it is done' : fallback)
+/** Image work waiting for a video to let go of the slot, per account (woken by releaseComfyJob). */
+const waiters = new Map<number, Set<() => void>>()
+/** Image work under way that must not be interrupted by a video (an Image Studio batch), per account. */
+const imageHolds = new Map<number, number>()
+export function releaseComfyJob(userId: number) {
+  active.delete(userId)
+  for (const wake of [...(waiters.get(userId) ?? [])]) wake()
+}
+/** While held, the video worker starts nothing on this account: a batch's pictures follow each other. */
+export function holdComfyForImages(userId: number): () => void {
+  imageHolds.set(userId, (imageHolds.get(userId) ?? 0) + 1)
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    const n = (imageHolds.get(userId) ?? 1) - 1
+    if (n > 0) imageHolds.set(userId, n)
+    else imageHolds.delete(userId)
+  }
+}
+/** Whether pictures go first: one is waiting for the slot, or a batch holds the account (server/agentVideo.ts pump). */
+export const imagesFirst = (userId: number) => (waiters.get(userId)?.size ?? 0) > 0 || imageHolds.has(userId)
+/** How long a picture waits for a running video: the longest a render may take, and a minute. */
+const videoWaitMs = () => (Math.max(1, Number(process.env.VIDEO_DEADLINE_MIN) || 30) + 1) * 60_000
+/**
+ * Waits while a video render holds the account's slot (pictures never fail because of a video);
+ * the worker starts no new video while a picture waits. Another picture holding it is still a 409.
+ */
+async function waitForVideo(userId: number, signal: AbortSignal, onWait?: () => void) {
+  if (active.get(userId) !== 'video') return
+  onWait?.()
+  const limit = AbortSignal.any([signal, AbortSignal.timeout(videoWaitMs())])
+  const set = waiters.get(userId) ?? new Set<() => void>()
+  waiters.set(userId, set)
+  let wake = () => {}
+  const woken = () => wake()
+  limit.addEventListener('abort', woken)
+  try {
+    // Stays registered until the picture runs, so the worker that just let go starts no new video.
+    while (active.get(userId) === 'video' && !limit.aborted) {
+      await new Promise<void>((resolve) => {
+        wake = resolve
+        set.add(resolve)
+      })
+      set.delete(wake)
+    }
+  } finally {
+    set.delete(wake)
+    if (!set.size) waiters.delete(userId)
+    limit.removeEventListener('abort', woken)
+  }
+  if (limit.aborted) {
+    signal.throwIfAborted()
+    throw new HttpError(504, 'A video render on this account held the ComfyUI slot for too long; try the picture again')
+  }
+}
 /** `onProgress` hears where this job is (throttled to 4 a second); only the caller's own job, never another's. */
 async function executeImagePlan(user: User, thread: string, plan: ImagePlan, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
   ownImageThread(user, thread)
-  if (active.has(user.id)) throw new HttpError(409, busyMessage(user.id, 'An image is already generating for this account'))
+  await waitForVideo(user.id, signal, () => onProgress?.({ phase: 'queued' }))
+  if (active.has(user.id)) throw new HttpError(409, 'An image is already generating for this account')
   const current = imageSettings(user), { settings: s, workflow, parameters } = plan
   if (current.url !== s.url || current.token !== s.token) throw new HttpError(409, 'Image backend changed after planning; request a new generation approval')
   checkRoom(user, 1024 * 1024)
@@ -905,7 +960,8 @@ export async function makeImageMask(user: User, thread: string, input: AutoMaskI
   // Built (and validated) for every available segmenter before anything is uploaded.
   const { plans: graphs, problems } = autoMaskPlans(options, uploadName, schemas as SegmentNodeInfo)
   if (!graphs.length) throw new HttpError(409, `Automatic masks are unavailable: ${problems.join('; ')}. Ask the user to paint the area with Edit selected area instead.`)
-  if (active.has(user.id)) throw new HttpError(409, busyMessage(user.id, 'An image job is already running for this account'))
+  await waitForVideo(user.id, signal)
+  if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
   checkRoom(user, 256 * 1024)
   active.set(user.id, 'image')
   let result: { outputs: Map<string, Buffer>; plan: (typeof graphs)[number] } | undefined

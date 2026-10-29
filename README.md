@@ -3441,7 +3441,9 @@ filter, then pictures sent in threads), **Files** (Seafile or this browser's fil
 device** (a file input; a picture can also be dropped on a slot or pasted). Then the clip's frame
 is laid over the picture: drag it (or the arrow keys) to keep the right part. The browser crops it
 to the clip's exact size and sends a PNG; the server keeps keyframes as the account's own pictures,
-so a project still renders after the thread it came from is gone. A keyframe made at another size
+so a project still renders after the thread it came from is gone. The same picture copied again
+reuses its keyframe, and keyframes no project or waiting render uses are deleted (after an hour,
+when a project is saved or deleted, and every few hours) so they stop counting against the quota. A keyframe made at another size
 (after a size change, or from an agent's plan) is centre-cropped by ComfyUI and the slot says so.
 
 **The timeline.** Lanes under a ruler: **Shots** (each one a cut, with its framing and transition),
@@ -3474,7 +3476,9 @@ the model show it). The server compiles and checks again before every render.
 
 **Renders.** **Render** saves the project and queues a job on the server, which runs it when the
 account's ComfyUI slot is free: one job at a time per account, shared with the Image Studio and
-generate_image (an image waits while a video renders, and the other way round). The job goes on
+generate_image. A picture asked for during a render waits for it (it does not fail; it gives up
+after the render deadline), and pictures go first: no render starts while one waits, nor between the
+pictures of an Image Studio batch. The job goes on
 with the window or the tab closed. A bar shows where it is (waiting in ComfyUI's queue, loading,
 sampling n of N, upscaling and refining for LTX, decoding, saving) with **Cancel**, and a
 notification (also a push on devices that allow it) says when it is done or failed. At most four
@@ -3486,7 +3490,9 @@ A render stops after `VIDEO_DEADLINE_MIN` (default 30) minutes.
 **Videos.** Kept as files, `DATA_DIR/videos/<user>/<id>.mp4` (folders 0700, files 0600), checked to
 be MP4 and at most 512 MB, and counted in the account's storage quota with its projects and
 keyframes: a render is refused before it is queued when the estimate does not fit, and its video is
-not kept when the real file does not. The history under the timeline lists the project's videos;
+not kept when the real file does not (refused before reading when ComfyUI gives the size, and
+stopped while streaming when it does not). A download that fails or is cancelled leaves no file, and
+a server start removes half-written ones. The history under the timeline lists the project's videos;
 the preview plays the selected one (muted by default; the playhead follows it). **Open in Player**,
 **Download** and **Delete** act on it. Deleting a project keeps its videos; deleting the account
 removes the folder.
@@ -3499,10 +3505,13 @@ list (tap one to edit it in a sheet, or + Add at the playhead), the sound beds, 
 **Agents.** With Images on in a thread and ComfyUI connected, an agent can **plan_video**: a clip
 (MiniMax H3 or LTX, a length, an optional first or last frame from the thread's pictures) as a
 shot plan. The server checks it and returns any error for the agent to fix; a valid plan is saved
-as a Video Studio project and the thread shows **Open in Video Studio**. Nothing renders then.
+as a Video Studio project and the thread shows **Open in Video Studio**. Nothing renders then. With
+`project_id` it replaces a plan it made earlier in the same thread (any other project gets a new
+one instead, so a Studio project is never overwritten); Plan mode may draft a new plan but not
+replace one.
 **render_video** queues a render of such a project: it always asks first (in every mode, Bypass
 included, with the card showing model, length, size, keyframes, seed and the prompt), and Plan mode
-refuses it. Background tasks never get either tool.
+refuses it. The card shows the whole prompt. Background tasks never get either tool.
 
 Routes (`server/agentVideo.ts`, all the signed-in account's own; another account's id answers 404):
 - `GET /api/video`, `GET /api/video/catalog` (what ComfyUI has, and the files each model resolves to), `GET|PUT /api/video/models`.
