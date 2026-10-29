@@ -1,3 +1,4 @@
+import { checkDownload, downloadText } from './download'
 import { HANDLE } from '../os/identity'
 import { contributions, profile, projects } from '../data/profile'
 import { ansiToMarkup, plain, rainbow } from './ansi'
@@ -167,26 +168,35 @@ async function curl(ctx: Ctx): Promise<string> {
     )
   }
 
-  const status = `${protocolOf(res.url)} ${res.status}${STATUS_TEXT[res.status] ? ` ${STATUS_TEXT[res.status]}` : ''}`
-  const headerBlock = [status, ...[...res.headers].map(([k, v]) => `${k}: ${v}`)].join('\n')
-  if (verbose) ctx.print(c('muted', `< ${headerBlock.replace(/\n/g, '\n< ')}\n<\n* (a browser only shows the headers a site exposes to other sites)`))
-  if (res.redirected && verbose) ctx.print(c('muted', `* Followed redirect to ${res.url}`))
-  if (fail && res.status >= 400) throw new CmdError(silent && !showErrors ? '' : `curl: (22) The requested URL returned error: ${res.status}`, true)
-  if (head || verb === 'HEAD') return headerBlock + '\n'
+  try {
+    checkDownload(ctx, signal)
+    const status = `${protocolOf(res.url)} ${res.status}${STATUS_TEXT[res.status] ? ` ${STATUS_TEXT[res.status]}` : ''}`
+    const headerBlock = [status, ...[...res.headers].map(([k, v]) => `${k}: ${v}`)].join('\n')
+    if (verbose) ctx.print(c('muted', `< ${headerBlock.replace(/\n/g, '\n< ')}\n<\n* (a browser only shows the headers a site exposes to other sites)`))
+    if (res.redirected && verbose) ctx.print(c('muted', `* Followed redirect to ${res.url}`))
+    if ((fail && res.status >= 400) || head || verb === 'HEAD') {
+      if (fail && res.status >= 400) throw new CmdError(silent && !showErrors ? '' : `curl: (22) The requested URL returned error: ${res.status}`, true)
+      return headerBlock + '\n'
+    }
 
-  const type = res.headers.get('content-type') ?? ''
-  const file = output ?? (remoteName ? url.pathname.split('/').filter(Boolean).pop() || 'index.html' : null)
-  if (file) {
-    const body = await res.text()
-    writeTmp(ctx.cwd, file.includes('/') ? file : `/tmp/${file}`, body, false, actorOf(ctx), 'curl')
-    return silent ? '' : c('muted', `  % Total    % Received  Xferd\n100 ${human(body.length).padStart(6)}  100 ${human(body.length).padStart(6)}   saved to ${file.includes('/') ? file : `/tmp/${file}`}`)
+    const type = res.headers.get('content-type') ?? ''
+    const file = output ?? (remoteName ? url.pathname.split('/').filter(Boolean).pop() || 'index.html' : null)
+    if (file && file !== '-') {
+      const body = await downloadText(res, ctx, signal)
+      checkDownload(ctx, signal)
+      writeTmp(ctx.cwd, file.includes('/') ? file : `/tmp/${file}`, body, false, actorOf(ctx), 'curl')
+      return silent ? '' : c('muted', `  % Total    % Received  Xferd\n100 ${human(body.length).padStart(6)}  100 ${human(body.length).padStart(6)}   saved to ${file.includes('/') ? file : `/tmp/${file}`}`)
+    }
+    if (isBinary(type) && file !== '-') {
+      return `Warning: Binary output can mess up your terminal. Use "--output -" to tell curl to output it to your terminal anyway, or consider "--output <FILE>" to save to a file.`
+    }
+    const body = await downloadText(res, ctx, signal)
+    const rendered = ctx.tty ? (body.includes('\x1b[') ? ansiToMarkup(body) : plain(body)) : body.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    return (include ? headerBlock + '\n\n' : '') + rendered
+  } finally {
+    // Also discard responses that arrive after cancellation or an expired budget.
+    void res.body?.cancel().catch(() => {})
   }
-  if (isBinary(type)) {
-    return `Warning: Binary output can mess up your terminal. Use "--output -" to tell curl to output it to your terminal anyway, or consider "--output <FILE>" to save to a file.`
-  }
-  const body = await res.text()
-  const rendered = ctx.tty ? (body.includes('\x1b[') ? ansiToMarkup(body) : plain(body)) : body.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-  return (include ? headerBlock + '\n\n' : '') + rendered
 }
 
 function splitHeader(h: string): [string, string] {
@@ -232,12 +242,21 @@ async function wget(ctx: Ctx): Promise<string> {
     if (ctx.signal.aborted) return ''
     throw new CmdError(`failed: ${(err as Error).message}.\n${c('muted', '  The site does not allow requests from web pages (CORS).')}`, true)
   }
-  const body = await res.text()
-  if (toStdout) return ctx.tty ? (body.includes('\x1b[') ? ansiToMarkup(body) : plain(body)) : body
-  const name = url.pathname.split('/').filter(Boolean).pop() || 'index.html'
-  writeTmp(ctx.cwd, `/tmp/${name}`, body, false, actorOf(ctx), 'wget')
-  if (quiet) return ''
-  return `${res.status} ${STATUS_TEXT[res.status] ?? ''}\nLength: ${body.length} (${human(body.length)}) [${res.headers.get('content-type') ?? 'text/plain'}]\nSaving to: ‘/tmp/${name}’\n\n/tmp/${name}       100%[===================>]  ${human(body.length).padStart(6)}  --.-KB/s    in 0s\n\n${when} - ‘/tmp/${name}’ saved [${body.length}/${body.length}]`
+  try {
+    checkDownload(ctx)
+    if (!res.ok) {
+      throw new CmdError(`wget: server returned ${res.status}`)
+    }
+    const body = await downloadText(res, ctx)
+    if (toStdout) return ctx.tty ? (body.includes('\x1b[') ? ansiToMarkup(body) : plain(body)) : body
+    const name = url.pathname.split('/').filter(Boolean).pop() || 'index.html'
+    checkDownload(ctx)
+    writeTmp(ctx.cwd, `/tmp/${name}`, body, false, actorOf(ctx), 'wget')
+    if (quiet) return ''
+    return `${res.status} ${STATUS_TEXT[res.status] ?? ''}\nLength: ${body.length} (${human(body.length)}) [${res.headers.get('content-type') ?? 'text/plain'}]\nSaving to: ‘/tmp/${name}’\n\n/tmp/${name}       100%[===================>]  ${human(body.length).padStart(6)}  --.-KB/s    in 0s\n\n${when} - ‘/tmp/${name}’ saved [${body.length}/${body.length}]`
+  } finally {
+    void res.body?.cancel().catch(() => {})
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -538,6 +538,22 @@ enumerable accessors; getters and `toJSON` hooks are never called. Shared object
 references are allowed and counted per occurrence. Pass parsed data, not proxies
 or executable host objects. Policy contexts require the shared budget.
 
+Downloads from `curl` and `wget` in budgeted runs are read incrementally. Both
+incoming bytes and decoded UTF-16 text charge the shared budget before retention;
+each response must fit the intermediate-buffer limit. File output has the same
+accounting as stdout and is persisted only after the complete response passes
+budget and cancellation checks. UTF-8 characters split across chunks are decoded
+correctly; malformed UTF-8 uses replacement characters, matching `Response.text`.
+HTTP failures with `curl --fail`, and all unsuccessful wget responses, cancel the
+body without saving it. `curl -o -` writes to stdout. Interrupted or oversized
+responses never leave a partial downloaded file.
+
+Command preparation uses actual file operands. String operations such as
+`basename /outside/file.txt`, `dirname /outside/file.txt`, and `calc 10 / 2` do not
+read those strings as paths. Data-only commands skip filesystem preparation after
+the cancellation check; file readers separate option values from real operands,
+and real reads/writes still pass their operation-level policy checks.
+
 Agent terminal calls in both the Agents app and the `agents` command enable
 `jq-safe` and keep rich `jq` blocked. Its evaluator and response decoder charge
 the same step/output budget as pipelines, nested scripts and substitutions.
@@ -756,6 +772,12 @@ session state and subscriptions. `launchDebug(line, base, label?)` returns `{ se
 and follows normal `runLine` execution; callers must supply their existing permission context.
 `runCapturedStreams(source, base, filename?)` returns distinct `{ stdout, stderr, status }`;
 `runCaptured` retains its existing combined-output API. `set -x` trace goes to stderr.
+
+File-backed debugger locations use absolute, normalized source paths for navigation
+and breakpoints. This applies to `source`, nested `msh file`, and executable scripts,
+including relative paths after `cd`. Session display labels and script `$0` retain
+their existing spelling; normalizing source identity does not rewrite invocation
+arguments. Inline commands and substitutions keep their `-c` coordinates.
 
 Stepping is command-granular, not expression-level or step-over/step-out. Command substitution
 and alias expansions currently use their own `-c` coordinates. Breakpoints are filename/line

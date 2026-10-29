@@ -64,6 +64,47 @@ try {
     for (let i = 0; i < 200; i++) { if (test()) return; await new Promise(r => setTimeout(r, 5)) }
     throw new Error('debug checkpoint timeout')
   }
+  await runLine("echo 'echo child' > /tmp/review-child.sh", base())
+  const relative = launchDebug('source review-child.sh', base())
+  await wait(() => relative.session.current.state === 'paused')
+  relative.session.step(); await wait(() => relative.session.current.state === 'paused')
+  eq(relative.session.current.location.filename, '/tmp/review-child.sh', 'review: sourced relative file has canonical debugger identity')
+  relative.session.cancel(); await relative.done
+  await runLine("printf '#!/bin/msh\\necho \"$0\"\\necho done\\n' > /tmp/review-canonical.sh; chmod +x /tmp/review-canonical.sh", base())
+  await runLine("echo 'source review-canonical.sh' > /tmp/review-wrapper.sh", base())
+  await runLine("echo 'msh review-canonical.sh' > /tmp/review-nested-msh.sh", base())
+  await runLine("echo './review-canonical.sh' > /tmp/review-nested-exec.sh", base())
+  for (const [command, arg0] of [
+    ['source review-canonical.sh', 'msh'],
+    ['msh review-canonical.sh', 'review-canonical.sh'],
+    ['./review-canonical.sh', './review-canonical.sh'],
+    ['msh review-wrapper.sh', 'review-wrapper.sh'],
+    ['msh review-nested-msh.sh', 'review-canonical.sh'],
+    ['msh review-nested-exec.sh', './review-canonical.sh'],
+    ['cd /; source tmp/review-canonical.sh', 'msh'],
+    ['cd /; msh tmp/review-canonical.sh', 'tmp/review-canonical.sh'],
+    ['cd /; ./tmp/review-canonical.sh', './tmp/review-canonical.sh'],
+  ]) {
+    const displayed: string[] = []
+    const debugRun = launchDebug(command, { ...base(), print: (text: string) => displayed.push(text) }, 'display label')
+    debugRun.session.breakpoint('/tmp/review-canonical.sh', 2)
+    await wait(() => debugRun.session.current.state === 'paused')
+    debugRun.session.continue()
+    await wait(() => debugRun.session.current.state === 'paused' || debugRun.session.done)
+    eq([debugRun.session.current.state, debugRun.session.current.location.filename, debugRun.session.current.location.line], ['paused', '/tmp/review-canonical.sh', 2], `canonical absolute breakpoint: ${command}`)
+    eq(debugRun.session.current.label, 'display label', 'canonical source identity does not rewrite session display label')
+    if (!debugRun.session.done) {
+      // The compound file list can share line 2 with its first command. Step until line 3.
+      for (let i = 0; i < 4 && debugRun.session.current.location.line !== 3; i++) {
+        debugRun.session.step(); await wait(() => debugRun.session.current.state === 'paused' || debugRun.session.done)
+      }
+      eq([debugRun.session.current.location.filename, debugRun.session.current.location.line], ['/tmp/review-canonical.sh', 3], `step preserves canonical source identity: ${command}`)
+      debugRun.session.breakpoint('/tmp/review-canonical.sh', 2)
+      debugRun.session.continue()
+    }
+    await debugRun.done
+    check(displayed.join('\n') === arg0 + '\ndone' && debugRun.session.current.state === 'completed', `script $0 remains invocation spelling: ${command}`, displayed.join('\n'))
+  }
   const snapshotBudget = new Budget({ ...AGENT_LIMITS, maxTotal: 10 })
   const snapshotRun = launchDebug('echo never', { ...base(), budget: snapshotBudget })
   await snapshotRun.done

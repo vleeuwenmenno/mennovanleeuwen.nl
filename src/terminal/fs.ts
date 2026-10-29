@@ -9,7 +9,7 @@ import { cvMode } from '../os/cvMode'
 import { keptRc, RC_NAME, RC_PATH, setKeptRc } from './rcfile'
 import { HOME, kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
 import { allows, carrySfModes, dropSfModes, setSfMode, sfModeOf, userOwns, type Access } from './modes'
-import { fileOperands, type Policy } from './policy'
+import { fileOperands, hasNoFileOperands, type Policy } from './policy'
 import type { Budget } from './limits'
 
 // The filesystem as the terminal sees it: the site's own files (vfs.ts), with whatever /etc/fstab
@@ -279,7 +279,7 @@ async function ensureTree(root: string, cmd: string, read: boolean, actor: Actor
 export async function prepare(cwd: string, cmd: string, args: string[], actor: Actor = false) {
   checkActor(actor)
   // Data operands are never filesystem paths; cancellation still precedes this return.
-  if (cmd === 'jq-safe' || cmd === 'mvl') return
+  if (hasNoFileOperands(cmd)) return
   const paths = typeof actor === 'boolean' || !actor.policy ? args : fileOperands(cmd, args)
   if (typeof actor !== 'boolean' && actor.policy) {
     for (const path of [cwd, ...paths.map((p) => resolvePath(cwd, p))]) {

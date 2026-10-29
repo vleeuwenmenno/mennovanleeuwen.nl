@@ -166,8 +166,7 @@ export function makePolicy(grant: Grant): Policy {
         }
         case 'write':
         case 'delete': {
-          const ops = operands(args)
-          if (name === 'chmod') ops.shift()
+          const ops = fileOperands(name, args)
           if (name === 'cp') return first(ops.slice(0, -1), (a) => read(abs(cwd, a))) ?? first(ops.slice(-1), (a) => write(abs(cwd, a)))
           return first(ops, (a) => write(abs(cwd, a), effect === 'delete' ? 'delete' : 'write'))
         }
@@ -177,13 +176,72 @@ export function makePolicy(grant: Grant): Policy {
   }
 }
 
-/** Files a command prepares. Patterns/filters are data, never paths. */
+/** Data-only commands have no filesystem preparation, including their cwd. Script/file reads
+ * performed by shell builtins explicitly prepare as cat/ls; downloads check the actual write. */
+export function hasNoFileOperands(name: string): boolean {
+  return ['pure', 'network', 'resource'].includes(EFFECTS[name])
+}
+
+/** Files a command actually consumes. This follows MvL's parsers, not GNU option guesses.
+ * Unknown/blocked commands retain conservative preparation; agent dispatch denies them first. */
 export function fileOperands(name: string, args: string[]): string[] {
-  if (name === 'jq-safe' || name === 'mvl') return []
-  const words = operands(args)
+  if (hasNoFileOperands(name)) return []
   if (name === 'grep' || name === 'egrep') return parseGrepArgs(args).files.filter((p) => p !== '-')
+  // cat aliases take literal names (no option parser). '-' alone denotes stdin.
+  if (['cat', 'less', 'more', 'bat'].includes(name)) return args.filter(a => a !== '-')
+  if (name === 'rmdir') return args
+  if (name === 'tree') return args.slice(0, 1)
+  if (name === 'cd') return args.slice(0, 1).filter(a => a !== '-')
+  // These commands use commands.ts's letter-only flags parser; --foo is a filename.
+  if (['ls', 'll', 'wc', 'sort', 'uniq', 'mkdir', 'cp', 'mv', 'rm', 'tee'].includes(name)) return args.filter(a => !/^-[a-zA-Z]+$/.test(a))
+  if (name === 'du') {
+    const files: string[] = []
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]
+      if (a === '--') { files.push(...args.slice(i + 1)); break }
+      if (a === '-d') { i++; continue }
+      if (/^--max-depth=/.test(a) || /^-d\d+$/.test(a) || /^-[a-zA-Z]+$/.test(a)) continue
+      if (['--help', '--all', '--total', '--summarize', '--one-file-system', '--human-readable', '--bytes', '--apparent-size'].includes(a)) continue
+      // du's parser treats other words (even dash-prefixed ones) as paths.
+      files.push(a)
+    }
+    return files
+  }
+  if (['head', 'tail', 'xxd', 'hexdump', 'od'].includes(name)) {
+    const files: string[] = []
+    const values: Record<string, readonly string[]> = {
+      head: ['-n', '-c', '--lines', '--bytes'], tail: ['-n', '-c', '--lines', '--bytes'],
+      xxd: ['-cols', '-len', '-groupsize', '-seek'], hexdump: ['-s', '-n'],
+      od: ['-A', '-t', '-N', '-j'],
+    }
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]
+      if (a === '--' && ['head', 'tail', 'xxd'].includes(name)) {
+        files.push(...args.slice(i + 1).filter(p => p !== '-')); break
+      }
+      if (values[name].includes(a)) { i++; continue }
+      if (name === 'xxd' && a.startsWith('-') && !['-p', '-ps', '-postscript', '-plain', '-r', '-revert', '-u', '-uppercase'].includes(a)) {
+        // In an xxd short-option bundle c/l/g/s consume the suffix or the next word.
+        const at = [...a].findIndex((ch, k) => k > 0 && 'clgs'.includes(ch))
+        if (at === a.length - 1) i++
+        continue
+      }
+      if (!a.startsWith('-')) files.push(a)
+    }
+    return files
+  }
+  const words = operands(args)
   if (['jq', 'fd'].includes(name)) return words.slice(1)
   if (name === 'find') return args.slice(0, args.findIndex((a) => a.startsWith('-')) < 0 ? args.length : args.findIndex((a) => a.startsWith('-')))
-  if (name === 'chmod') return words.slice(1)
+  if (name === 'chmod') {
+    let end = false, mode = false
+    return args.filter(a => {
+      if (!end && a === '--') { end = true; return false }
+      if (!end && (/^-[Rcfv]+$/.test(a) || ['--recursive', '--changes', '--silent', '--quiet', '--verbose'].includes(a))) return false
+      if (!mode) { mode = true; return false }
+      return true
+    })
+  }
+  // touch and checksums discard all dash-prefixed words; test's caller supplies file paths.
   return words
 }

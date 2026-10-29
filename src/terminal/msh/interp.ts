@@ -1225,14 +1225,15 @@ class Shell {
     return 'refused'
   }
 
-  /** Runs a script's text in a new shell; `label` names it in errors. */
-  async runSource(src: string, io: Io, label: string): Promise<number> {
+  /** Parse file-backed text under its absolute source identity for breakpoints/navigation.
+   * Non-file text keeps its display label (-c, stdin, regression fixtures); $0 is separate. */
+  async runSource(src: string, io: Io, label: string, sourcePath = label): Promise<number> {
     if (this.base.budget && src.length > 64_000) throw new LimitSignal(this.base.budget.stop('memory'))
     let tree: Node
     try {
-      tree = parse(src, label)
+      tree = parse(src, sourcePath)
     } catch (e) {
-      io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, label, e))}`)}\n`)
+      io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, sourcePath, e))}`)}\n`)
       return 2
     }
     try {
@@ -1261,7 +1262,7 @@ class Shell {
     } else if (name.includes('/')) {
       const script = await this.scriptAt(name, io)
       if (script === 'refused') return 126
-      if (script !== null) return this.child(name, args).runSource(script, io, name)
+      if (script !== null) return this.child(name, args).runSource(script, io, name, resolvePath(this.base.cwd, name))
     }
     if (!cmd) {
       io.err.write(`${red(`msh: command not found: ${name}${name.length > 2 ? hooks.suggest(name) : ''}`)}\n`)
@@ -1680,7 +1681,7 @@ const BUILTINS: Record<string, Builtin> = {
     if (args.length > 1) sh.st.positional = args.slice(1)
     sh.st.running.push(abs)
     try {
-      return await sh.runSource(text, io, args[0])
+      return await sh.runSource(text, io, args[0], abs)
     } finally {
       sh.st.running.pop()
       if (args.length > 1) sh.st.positional = savedArgs
@@ -1840,6 +1841,7 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   let i = 0
   let src: string | null = null
   let label = 'msh'
+  let sourcePath: string | undefined
   let check = false
   let trace = false
   let errexit = false
@@ -1872,6 +1874,7 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
     if (a === '--') i++
     const file = args[i]
     if (file === undefined) break
+    sourcePath = resolvePath(sh.base.cwd, file)
     src = await sh.readScript(file)
     if (src === null) return fail(io, `${file}: No such file or directory`, 127)
     label = file
@@ -1897,13 +1900,13 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   const child = sh.child(arg0, positional)
   child.st.opts.x = trace
   child.st.opts.e = errexit
-  if (label === '-c') return child.runSource(src, io, label)
+  if (label === '-c') return child.runSource(src, io, label, sourcePath)
   // A script that starts itself again (msh ~/.mvshrc inside ~/.mvshrc) is refused, not looped.
   const abs = resolvePath(sh.base.cwd, label)
   if (sh.st.running.includes(abs) || sh.st.running.length >= MAX_SOURCE_DEPTH) return fail(io, `${label}: already running, skipped`)
   sh.st.running.push(abs)
   try {
-    return await child.runSource(src, io, label)
+    return await child.runSource(src, io, label, sourcePath)
   } finally {
     sh.st.running.pop()
   }

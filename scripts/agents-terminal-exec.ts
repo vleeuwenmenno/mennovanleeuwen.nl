@@ -101,6 +101,102 @@ try {
     check(cancelled.result?.terminated === 'cancelled' && !exists('jq-cancel-after'), 'timer-driven cancellation interrupts actual agent jq-safe work')
   } finally { globalThis.fetch = fetchBefore }
 
+  // Review regressions: real command entry points, not source-text assertions.
+  const downloadFetch = globalThis.fetch
+  try {
+    globalThis.fetch = async () => new Response('x'.repeat(20_000))
+    const network = { ...EDITS, network: true }
+    const small = { ...AGENT_LIMITS, maxBuffer: 1000, maxTotal: 10_000 }
+    for (const command of ['curl -s', 'curl -s -o /tmp/review-budget-bypass', 'curl -s -o -', 'wget -q', 'wget -q -O-']) {
+      const over = await result(`${command} https://example.com/review-download`, network, small)
+      check(over.terminated === 'output' && !exists('review-budget-bypass') && !exists('review-download'), `review: bounded stdout/file response: ${command}`, JSON.stringify(over))
+    }
+    let cancelledBodies = 0
+    const streamed = (chunks: Uint8Array[], status = 200) => new Response(new ReadableStream({
+      pull(controller) { const chunk = chunks.shift(); if (chunk) controller.enqueue(chunk); else controller.close() },
+      cancel() { cancelledBodies++ },
+    }), { status })
+    const bytes = new TextEncoder().encode('café 😀')
+    for (const [command, file] of [['curl -s', ''], ['curl -s -o /tmp/review-unicode', 'review-unicode'], ['wget -q -O-', ''], ['wget -q', 'review-unicode-wget']]) {
+      globalThis.fetch = async () => streamed([...bytes].map(n => new Uint8Array([n])))
+      const r = await result(`${command} https://example.com/review-unicode-wget`, network)
+      eq(file ? text(file) : r.stdout, 'café 😀', `split UTF-8 survives streamed ${command}`)
+      eq(r.exit_code, 0, `successful download status: ${command}`)
+    }
+    globalThis.fetch = async () => streamed([new Uint8Array([0xe2]), new Uint8Array([0x28, 0xa1])])
+    eq((await result('curl -s https://example.com/invalid-utf8', network)).stdout, '�(�', 'invalid UTF-8 keeps Response.text replacement behavior')
+    globalThis.fetch = async () => streamed([new TextEncoder().encode('😀'.repeat(300))])
+    check((await result('wget -q https://example.com/review-multibyte', network, small)).terminated === 'output' && !exists('review-multibyte'), 'byte buffer budget applies before UTF-8 decoding')
+    globalThis.fetch = async () => streamed(Array.from({ length: 9 }, () => new TextEncoder().encode('x'.repeat(100))))
+    check((await result('curl -s -o /tmp/review-total https://example.com/data', network, { ...small, maxTotal: 1200 })).terminated === 'output' && !exists('review-total'), 'decoded text and bytes charge total even when each buffer fits')
+    for (const command of ['curl -s -f -o /tmp/review-http-error', 'wget -q']) {
+      globalThis.fetch = async () => streamed([new TextEncoder().encode('x'.repeat(20_000))], 500)
+      const before = cancelledBodies
+      const r = await result(`${command} https://example.com/review-http-error`, network, small)
+      check(r.exit_code !== 0 && !exists('review-http-error') && cancelledBodies > before, `HTTP failure discards body without persistence: ${command}`)
+    }
+    globalThis.fetch = async () => streamed([new TextEncoder().encode('x'.repeat(20_000))], 500)
+    check((await result('curl -s -o /tmp/review-error-body https://example.com/data', network, small)).terminated === 'output' && !exists('review-error-body'), 'curl without --fail still bounds error response body')
+    globalThis.fetch = async () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('partial')); c.error(new Error('broken stream')) } }))
+    check((await result('curl -s -o /tmp/review-stream-error https://example.com/data', network)).exit_code !== 0 && !exists('review-stream-error'), 'stream errors never persist partial files')
+    for (const command of ['curl -s -o /tmp/review-abort', 'wget -q']) {
+      const ctl = new AbortController()
+      globalThis.fetch = async () => new Response(new ReadableStream({ start(c) { c.enqueue(bytes); setTimeout(() => ctl.abort(), 5) }, cancel() { cancelledBodies++ } }))
+      const before = cancelledBodies
+      const r = await run(`${command} https://example.com/review-abort`, network, AGENT_LIMITS, ctl.signal)
+      await new Promise(r => setTimeout(r, 0))
+      check(r.result?.terminated === 'cancelled' && !exists('review-abort') && cancelledBodies > before, `cancellation releases pending stream and suppresses persistence: ${command}`)
+    }
+    await result('echo original > /tmp/review-preserved')
+    globalThis.fetch = async () => new Response('x'.repeat(20_000))
+    await result('curl -s -o /tmp/review-preserved https://example.com/data', network, small)
+    eq(text('review-preserved'), 'original', 'failed download preserves existing file content')
+    const lateCtl = new AbortController()
+    let releaseFetch!: () => void
+    const beforeLate = cancelledBodies
+    globalThis.fetch = () => new Promise<Response>(resolve => { releaseFetch = () => resolve(streamed([bytes])) })
+    const late = run('curl -s -o /tmp/review-late https://example.com/data', network, AGENT_LIMITS, lateCtl.signal)
+    while (!releaseFetch) await new Promise(r => setTimeout(r, 0))
+    lateCtl.abort(); await late; releaseFetch()
+    await new Promise(r => setTimeout(r, 0))
+    check(!exists('review-late') && cancelledBodies > beforeLate, 'late fetch completion cancels body without persisting output')
+  } finally { globalThis.fetch = downloadFetch }
+  for (const [command, expected] of [['basename /outside/file.txt', 'file.txt'], ['dirname /outside/file.txt', '/outside'], ['calc 10 / 2', '5']]) {
+    const r = await result(command, READONLY)
+    check(r.exit_code === 0 && r.stdout.includes(expected), `review: string operand is not a path: ${command}`, JSON.stringify(r))
+  }
+
+  const { fileOperands } = await load<typeof import('../src/terminal/policy.ts')>('/src/terminal/policy.ts')
+  for (const [name, args, want] of [
+    ['head', ['-n', '2', '--', '/tmp/data'], ['/tmp/data']],
+    ['tail', ['--bytes', '+2', '/tmp/data'], ['/tmp/data']],
+    ['xxd', ['-pc', '4', '-s', '-2', '/tmp/data'], ['/tmp/data']],
+    ['hexdump', ['-n', '4', '-s', '2', '/tmp/data'], ['/tmp/data']],
+    ['od', ['-A', 'x', '-t', 'x1', '-N', '4', '/tmp/data'], ['/tmp/data']],
+    ['du', ['-d', '2', '/tmp'], ['/tmp']],
+    ['find', ['/tmp', '-name', '/outside/pattern'], ['/tmp']],
+    ['cat', ['--literal', '-'], ['--literal']],
+    ['sort', ['-n', '/tmp/data'], ['/tmp/data']],
+    ['chmod', ['-R', '-x', '/tmp/data'], ['/tmp/data']],
+  ] as [string, string[], string[]][]) eq(fileOperands(name, args), want, `actual operand semantics: ${name}`)
+  for (const command of ['basename /outside/file.txt .txt', 'dirname /outside/file.txt', 'calc 10 / 2', 'units 10 / 2', 'bc 10 / 2', 'printf /outside/value', 'echo /outside/value | cowsay']) {
+    const r = await result(command, READONLY)
+    check(r.exit_code === 0, `data arguments reach actual command: ${command}`, JSON.stringify(r))
+  }
+
+  for (const command of ['du --/../../etc', 'ls --/../../etc', 'tree -/../../etc', 'cat -/../../etc']) {
+    check((await result(command, READONLY)).exit_code !== 0, `dash-prefixed real path cannot escape: ${command}`)
+  }
+  // Cancellation still precedes the data-command preparation fast path.
+  const { prepare, actorOf: preparationActor } = await load<typeof import('../src/terminal/fs.ts')>('/src/terminal/fs.ts')
+  const { Budget } = await load<typeof import('../src/terminal/limits.ts')>('/src/terminal/limits.ts')
+  const stoppedSignal = AbortSignal.abort()
+  const { makePolicy: preparationPolicy } = await load<typeof import('../src/terminal/policy.ts')>('/src/terminal/policy.ts')
+  for (const command of ['basename', 'calc', 'curl', 'jq-safe', 'mvl']) {
+    const actor = preparationActor({ root: false, policy: preparationPolicy(READONLY), budget: new Budget(AGENT_LIMITS), signal: stoppedSignal })
+    check(await prepare('/tmp', command, ['/outside/data'], actor).then(() => false, () => true), `prepare checks cancellation before ${command} data early-return`)
+  }
+
   // --- running ------------------------------------------------------------------------------------
 
   const out = await result('echo out; echo err >&2')
