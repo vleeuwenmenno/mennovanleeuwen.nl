@@ -102,7 +102,19 @@ async function quiet(p: P, label: string) {
   check(label + ': zero store saves and sync PUTs', r.saves.widgets === 0 && r.saves.windows === 0 && !r.puts['widgets:placed'] && !r.puts['windows:desktop'], r)
 }
 async function drag(p: P, pid: number, dx: number, dy: number, edge = false) {
-  const at = await p.eval<{ x: number; y: number }>(`(() => { const e = document.querySelector('[data-pid="${pid}"] ${edge ? '.rz-e' : '.note-grip'}'); const r = e.getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2; if (document.elementFromPoint(x, y)?.closest('.window') !== e.closest('.window')) throw new Error('drag grip covered'); return { x, y } })()`)
+  const at = await p.eval<{ x: number; y: number }>(`(() => {
+    const e = document.querySelector('[data-pid="${pid}"] ${edge ? '.rz-e' : '.note-grip'}')
+    const r = e.getBoundingClientRect()
+    const hit = (x, y) => { const target = document.elementFromPoint(x, y); return target === e || e.contains(target) }
+    const x = r.x + r.width / 2, y = r.y + r.height / 2
+    if (hit(x, y)) return { x, y }
+    // A rotated or short-screen handle can have its midpoint outside the viewport.
+    // Use an actual exposed point of the handle, never a programmatic drag event.
+    for (let y = Math.max(1, r.top + 1); y < Math.min(innerHeight - 1, r.bottom); y += 2)
+      for (let x = Math.max(1, r.left + 1); x < Math.min(innerWidth - 1, r.right); x += 2)
+        if (hit(x, y)) return { x, y }
+    throw new Error('no exposed drag handle')
+  })()`)
   await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y })
   await p.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', buttons: 1, clickCount: 1 })
   for (let i = 1; i <= 8; i++) {
@@ -207,10 +219,10 @@ try {
         const r = button.getBoundingClientRect(), top = document.querySelector('.topbar').getBoundingClientRect().bottom
         const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
         const grip = widget.querySelector('.note-grip').getBoundingClientRect()
-        return { tilt: widget.style.getPropertyValue('--widget-tilt'), hitClass: hit?.className, top, y: r.y, bottom: r.bottom, right: r.right, x: r.x, hit: hit === button || button.contains(hit), gripTop: grip.top,
+        return { tilt: widget.style.getPropertyValue('--widget-tilt'), hitClass: hit?.className, top, y: r.y, bottom: r.bottom, right: r.right, x: r.x, hit: hit === button || button.contains(hit), gripTop: grip.top, gripBottom: grip.bottom, gripLeft: grip.left, gripRight: grip.right, viewportWidth: innerWidth, viewportHeight: innerHeight,
           ok: r.y >= top && r.bottom <= innerHeight && r.x >= 0 && r.right <= innerWidth && (hit === button || button.contains(hit)) }
       })()`)
-      check('wide tilt ' + tilt + ': ' + label + ' close reachable', result.ok && result.gripTop >= result.top, result)
+      check('wide tilt ' + tilt + ': ' + label + ' close reachable', result.ok && result.tilt === `${tilt}deg` && result.gripTop >= result.top && result.gripBottom <= result.viewportHeight && result.gripLeft >= 0 && result.gripRight <= result.viewportWidth, result)
     }
     await reachable('load')
     const baseline = await api('widgets:placed')
@@ -228,6 +240,26 @@ try {
     await drag(W, pid, 900, 0, true)
     await reachable('east resize')
     await load(W); await reachable('resized reload')
+    // Full rotated grip and close control must fit at every edge, not just the top.
+    for (const [vw, vh, uiScale] of [[3840, 2160, 1], [3840, 2160, 2], [3840, 200, 1], [3840, 200, 2]]) {
+      await scale(W, uiScale); await resize(W, vw, vh)
+      for (const [edge, x, y] of [['top-left', -500, -500], ['top-right', 5000, -500], ['bottom-left', 24, vh / uiScale - 140], ['bottom-right', 5000, 5000]] as const) {
+        const at = Math.max(Date.now(), (await api('widgets:placed')).places.wide.at) + 1000
+        const edgeSet = { ...wide, places: { wide: { ...wide.places.wide, x, y, w: 3792, vw: vw / uiScale, vh: vh / uiScale, at } } }
+        await api('widgets:placed', edgeSet); await load(W)
+        await reachable(`${vw}x${vh} scale ${uiScale} ${edge}`)
+        check('edge fitting preserves preferred geometry', isDeepStrictEqual((await api('widgets:placed')).places.wide, edgeSet.places.wide))
+      }
+      // Widen from the bottom edge, exercising the same constraints during pointer resize.
+      const at = Math.max(Date.now(), (await api('widgets:placed')).places.wide.at) + 1000
+      const edgeSet = { ...wide, places: { wide: { ...wide.places.wide, x: 24, y: vh / uiScale - 140, w: 200, vw: vw / uiScale, vh: vh / uiScale, at } } }
+      await api('widgets:placed', edgeSet); await load(W)
+      await reachable('bottom before widening')
+      await drag(W, (await widgets(W))[0].pid, 3000, 0, true)
+      await reachable('bottom after widening')
+      await load(W); await reachable('bottom widened reload')
+    }
+    await scale(W, 1); await resize(W, 1600, 900)
     wide.places.wide.at = Math.max(Date.now(), (await api('widgets:placed')).places.wide.at) + 1000
     await api('widgets:placed', wide)
   }

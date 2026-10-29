@@ -443,12 +443,13 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         g.y = top
         g.h = d.y + d.h - top
       }
-      // Keep the origin unless a wider rotated grip needs more clearance below the bar.
-      if (win.app === 'widget' && g.w !== undefined) {
-        const fitted = fitWidget({ x: g.x ?? d.x, y: d.y, w: g.w, h: d.h }, viewW(), viewH())
-        g.w = d.edge.includes('w') ? fitted.w : Math.max(1, Math.min(g.w, viewW() - d.x - 24))
-        if (d.edge.includes('w')) g.x = fitted.x
-        g.y = fitWidget({ x: g.x ?? d.x, y: g.y ?? d.y, w: g.w, h: d.h }, viewW(), viewH()).y
+      // Use the same complete control envelope for pointer resizing and viewport fitting.
+      if (win.app === 'widget') {
+        const width = d.edge.includes('e') ? Math.min(g.w ?? d.w, viewW() - d.x - 24) : (g.w ?? d.w)
+        const fitted = fitWidget({ x: g.x ?? d.x, y: g.y ?? d.y, w: width, h: g.h ?? d.h }, viewW(), viewH())
+        g.x = fitted.x
+        g.y = fitted.y
+        g.w = fitted.w
       }
       // Resizing a snapped window makes it a normal one again.
       wm.setGeometry(win.pid, { ...g, snap: undefined, restore: undefined })
