@@ -1401,8 +1401,15 @@ seeking; every answer has `nosniff` and a sandboxing CSP). The chip's download b
 menu and *Download all* still download. Other attachments (Office files and the rest) download as
 before. Attachments save to Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
-Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
-conversation, each with a way back.
+Ctrl+Enter to send (a setting). The dividers between mailboxes, conversations and the reading pane
+drag (mouse, touch or the arrow keys on a focused divider, Shift for bigger steps; a double click
+resets), and the widths are kept per account in this browser. Mail measures its own window, not the
+screen: when the reading pane would get less than 380 px beside the other two, opening a
+conversation shows it alone, with a Back to the conversations (the mailboxes stay beside the list),
+and in a window under 720 px or on a phone it shows one pane at a time: mailboxes, list,
+conversation, each with a way back. Once any conversation is selected (by its checkbox, a long
+press, or Ctrl/Cmd/Shift+click), a plain click on a row takes it in or out of the selection instead
+of opening it, down to the last one; nothing opens until the selection is empty.
 
 Mail draws its icons itself ([`src/apps/mail/icons.tsx`](src/apps/mail/icons.tsx)): thin line
 drawings in the text colour, so they follow the theme. Mailboxes get one by their role (Inbox,
