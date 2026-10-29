@@ -1,4 +1,4 @@
-/* The Image Studio (AgentsStudio.tsx): three columns in a wide window; in a narrow one the middle
+/* The Image Studio (ImageStudio.tsx): three columns in a wide window; in a narrow one the middle
    column with the prompt, two drawers and a Generate bar at the bottom. Theme colours only. */
 .studio { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg); color: var(--fg); }
 .studio-top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }

@@ -1,6 +1,6 @@
 import { stillPicture } from '../data/stillPicture'
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import './AgentsStudio.css'
+import './ImageStudio.css'
 import { IMAGE_SETTINGS_EVENT, deleteStudioImage, getImageCatalog, getLoraDetails, getStudio, getStudioEmbeddings, getStudioImages, getStudioModelDetails, loraPreviewUrl, runStudio, uploadStudioImage, type GeneratedImage, type LoraDetail, type MaskedEditInput, type ModelDetails, type RefineImageInput, type StudioImage, type UpscaleImageInput } from '../data/agentImages'
 import { applyRecipe, defaultStudioForm, formFromSettings, normalizeStudioForm, sourceSize, STEP_PRESETS, STUDIO_LIMITS, studioProblems, studioRecipe, studioRunInput, studioSamplers, studioSchedulers, variantPreset, type StudioCatalog, type StudioForm, type StudioRecipe, type StudioSource } from '../data/imageStudio'
 import { isTurbo, presetRules, promptTokens, SIZE_LIMITS, sizeBuckets } from '../data/modelFamilies'
@@ -18,6 +18,7 @@ import { GeneratedPicture, Lightbox } from './AgentsImages'
 import { RefineDialog } from './AgentsRefine'
 import { InpaintDialog } from './AgentsInpaint'
 import { UpscaleDialog } from './AgentsUpscale'
+import { Icon } from './agentsSidebar/bits'
 
 // The Image Studio: a ComfyUI generation driven by hand, modelled on Diffu's Generate page. Left,
 // what to draw with (model, encoder, VAE, the family's card, LoRAs and embeddings, the prompts,
@@ -158,7 +159,7 @@ function ErrorBox({ text, onDismiss }: { text: string; onDismiss?: () => void })
 
 // --- the Studio --------------------------------------------------------------------------------
 
-export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist }: { /** The threads Send to chat offers; null when chat is unavailable (no Ollama key). */ threads: Thread[] | null; onBack: () => void; onOpenThread: (id: string | null) => void; onSettings: () => void; assist?: (field: StudioField) => ReactNode }) {
+export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist }: { /** The threads Send to chat offers; null when chat is unavailable (no Ollama key). */ threads: Thread[] | null; /** A way back (a host's other view), or none in the Studio's own window. */ onBack?: () => void; onOpenThread: (id: string | null) => void; onSettings: () => void; assist?: (field: StudioField) => ReactNode }) {
   const form = studioForm.use()
   const run = useRunner()
   const mobile = useIsMobile()
@@ -333,9 +334,10 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
   </section>
 
   const head = <header className="studio-top">
-    {(!columns || mobile) && <button type="button" className="btn btn-small" onClick={onBack} aria-label="Back to threads" title="Back to threads">‹</button>}
+    {onBack && (!columns || mobile) && <button type="button" className="btn btn-small" onClick={onBack} aria-label="Back" title="Back">‹</button>}
     <h3>Image Studio</h3>
     <span className="studio-grow" />
+    <button type="button" className="btn btn-small studio-gear" onClick={onSettings} title="Settings: ComfyUI connection and models" aria-label="Settings"><Icon name="gear" size={15} /></button>
     {!columns && <>
       <button type="button" className={`btn btn-small ${drawer === 'params' ? 'btn-primary' : ''}`} aria-expanded={drawer === 'params'} onClick={() => setDrawer(drawer === 'params' ? null : 'params')}>Parameters</button>
       <button type="button" className={`btn btn-small ${drawer === 'advanced' ? 'btn-primary' : ''}`} aria-expanded={drawer === 'advanced'} onClick={() => setDrawer(drawer === 'advanced' ? null : 'advanced')}>Advanced</button>
@@ -645,7 +647,7 @@ function ActionSection({ problems, live, queue, paused, error, batch, onGenerate
       {live && <button type="button" className="btn studio-cancel" onClick={cancelRun}>Cancel</button>}
     </span>
     {blocked && <p className="studio-reason muted" role="status">{problems[0]}{problems.length > 1 && !compact ? <> <button type="button" className="studio-link" onClick={() => copy(problems.join('\n'))}>Copy all {problems.length}</button></> : null}</p>}
-    {!configured && <button type="button" className="btn btn-small" onClick={onSettings}>Open Images settings</button>}
+    {!configured && <button type="button" className="btn btn-small" onClick={onSettings}>Open settings</button>}
     {!compact && live && <p className="muted" role="status">Running: {live.job.label}{live.total > 1 ? ` (${live.index + 1} of ${live.total})` : ''}</p>}
     {paused && queue.length > 0 && <p className="studio-reason muted" role="status">Queue paused. <button type="button" className="studio-link" onClick={resumeQueue}>Resume</button></p>}
     {(!compact || paused) && queue.length > 0 && <QueueList queue={queue} />}

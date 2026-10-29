@@ -25,6 +25,7 @@ import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import { Agents } from '../apps/Agents'
+import { ImageStudioApp } from '../apps/ImageStudioApp'
 import { Mail, mailMenu } from '../apps/mail/Mail'
 import { Photos } from '../apps/photos/Photos'
 import { TasksApp } from '../apps/tasks/Tasks'
@@ -100,6 +101,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   contacts: { title: 'Contacts', dock: 'Contacts', blurb: 'Your people: on this site, Fastmail, iCloud and other CardDAV', size: [920, 620], render: (w) => <ContactsApp win={w} />, menu: settingsMenu('Contacts', 'contacts') },
   tasks: { title: 'Tasks', dock: 'Tasks', blurb: 'Reminders and to-dos: your CalDAV lists, or lists on this site', size: [880, 600], render: (w) => <TasksApp win={w} /> },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
+  imagestudio: { title: 'Image Studio', dock: 'Image Studio', blurb: 'Generate pictures by hand with your own ComfyUI', size: [1180, 760], render: (w) => <ImageStudioApp win={w} />, menu: settingsMenu('Image Studio', 'studio') },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} />, menu: settingsMenu('Notebook', 'notebook') },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },

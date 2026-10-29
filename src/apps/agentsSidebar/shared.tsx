@@ -54,7 +54,7 @@ export function ArchivedTitle({ ctx }: { ctx: SideCtx }) {
 export function StudioLink({ ctx }: { ctx: SideCtx }) {
   if (ctx.archived) return null
   return (
-    <button className={`agt-item agt-studio-link ${ctx.mainKind === 'studio' ? 'is-active' : ''}`} onClick={ctx.openStudio} title="Generate pictures with your ComfyUI by hand, without an agent">
+    <button className="agt-item agt-studio-link" onClick={ctx.openStudio} title="Generate pictures with your ComfyUI by hand, without an agent">
       <Icon name="studio" />
       <span className="agt-item-title">Image Studio</span>
     </button>

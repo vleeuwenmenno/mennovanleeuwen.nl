@@ -62,7 +62,7 @@ const catalog: StudioCatalog = {
   assert.equal(variantPreset('krea2_turbo', 'raw', 'x'), 'krea2_raw')
   assert.equal(variantPreset('sdxl', 'turbo', 'x'), 'sdxl')
   // Problems, most basic first; an empty list means Generate can run.
-  assert.deepEqual(studioProblems(d, { configured: false, catalog: null }), ['Connect ComfyUI in Settings → Agents → Images first.'])
+  assert.deepEqual(studioProblems(d, { configured: false, catalog: null }), ['Connect ComfyUI in Settings → Image & Video Studio first.'])
   assert.match(studioProblems(d, { configured: true, catalog: null, catalogError: 'offline' })[0], /could not be read: offline/)
   assert.match(studioProblems(d, { configured: true, catalog })[0], /Write a prompt/)
   const ready = { ...d, prompt: 'a lighthouse', sampler: 'dpmpp_2m', scheduler: 'karras' }

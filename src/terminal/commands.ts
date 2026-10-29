@@ -131,6 +131,8 @@ const APPS: Record<string, AppId> = {
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
+  imagestudio: 'imagestudio',
+  'image-studio': 'imagestudio',
   settings: 'settings',
   mcserver: 'mcserver',
 }
@@ -175,6 +177,7 @@ const APP_NAMES: Record<AppId, string> = {
   changelog: 'changelog',
   git: 'git',
   about: 'about',
+  imagestudio: 'image-studio',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

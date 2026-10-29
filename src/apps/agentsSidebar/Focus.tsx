@@ -26,7 +26,7 @@ function FocusFoot({ ctx }: { ctx: SideCtx }) {
   )
   return (
     <div className="agt-side-foot agt-fx-foot">
-      {button('studio', 'Image Studio', ctx.mainKind === 'studio', ctx.openStudio)}
+      {button('studio', 'Image Studio', false, ctx.openStudio)}
       {button('archive', 'Archived threads', ctx.archived, ctx.toggleArchived)}
       {button('memory', 'Memory: what the agent remembers', ctx.mainKind === 'memory', () => ctx.openMemory(null))}
       {button('tasks', 'Tasks: agents that run on their own', ctx.mainKind === 'tasks', ctx.openTasks, <TaskBadge badge={ctx.taskBadge} />)}
