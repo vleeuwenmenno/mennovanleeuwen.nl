@@ -1322,7 +1322,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       (e) => {
         if (e.type === 'subagents') setThread((t) => (t && t.id === id ? { ...t, subagents: e.subagents } : t))
         else if (e.type === 'child') onChildEvent(e)
-        else if (e.type === 'thread' && e.thread.id === id) setThread((t) => (t && !sending.current ? e.thread : t))
+        // A turn from their results: followed while it runs; one already over (a quick one) is read again.
+        else if (e.type === 'thread' && e.thread.id === id && !sending.current) {
+          if (e.thread.running) setThread(e.thread)
+          else getThread(id).then((r) => !sending.current && (setThread(r.thread), setMessages(r.messages), setApprovals(r.pending)), () => {})
+        }
       },
       ctl.signal,
     ).catch(() => {})
