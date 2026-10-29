@@ -759,36 +759,112 @@ and parser for highlighting and syntax diagnostics. Diagnostics show filename, l
 and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
 Nothing is executed to lint a file.
 
-**Debug saved file** launches `msh 'path'` through the normal command table, file reads and
-permission checks, using the project directory. Save changes first: this executes the saved
-file and can perform the same actions as running it in Terminal. The debugger starts paused
-at the launch command; **Step** enters the script. **Continue** runs until a breakpoint,
-**Step** stops before the next command/compound command, **Pause** requests a stop at the next
-checkpoint, and **Stop** aborts the session, including an awaited pause. Pauses show source
-location, status and variables. Click the location to open it. **Breakpoint line N** toggles
-a breakpoint at the editor caret; the breakpoint list shows its filename and line.
+**Running and debugging.** The editor bar of every open file has the debugger toolbar: Run
+(or Continue while paused), Pause, Stop, Step Over, Step Into and Step Out, followed by the
+session state (not running, running, paused with its reason and location, completed or failed
+with the exit status, or stopped). The keys are the familiar ones:
 
-**Attach debug session** lists only explicitly opted-in sessions in this page. It does not
-inspect ordinary terminals, agents, other browser tabs or server processes. Xed cancels its
-own sessions when its window closes; attaching does not transfer lifetime ownership.
+| Key | Action |
+| --- | --- |
+| F5 | Run the active script, or continue when paused |
+| Shift+F5 | Stop |
+| F6 | Pause at the next command |
+| F9 | Toggle a breakpoint on the caret's line |
+| F10 | Step over (when nothing runs: start and stop at the first command) |
+| F11 | Step into (likewise) |
+| Shift+F11 | Step out |
+
+Xed takes these keys only while its window is focused (the window manager's focused window),
+whether or not the caret is in the text; another app's text field keeps them. In a focused Xed
+window F5 and Shift+F5 are always Xed's, so a page reload cannot throw away unsaved edits;
+there F5 on a file that cannot run says why in the status bar. Outside Xed, F5 is left to the
+browser. F6, F9, F10 and F11 are taken only in an msh file or while a session is selected.
+A browser may keep some function keys for itself (F11 for full screen in some browsers): the
+toolbar buttons do the same, and their tooltips and `aria-keyshortcuts` name the keys. Alt+1…9
+are not used.
+
+Run launches `msh 'path'` through the normal command table, file reads and permission checks,
+in the project folder. It runs the saved file: when the editor has unsaved changes the button
+reads **Save & Run** and saves first, and if saving fails nothing runs. Run stops only at
+breakpoints; Step Over or Step Into while nothing runs starts the script and stops at its first
+command. Only msh scripts run (`.msh`, `.sh`, or an msh shebang); there is no way to run other
+files, and arguments cannot be passed yet.
+
+**Stepping** is per command: simple commands, `(( ))`, and the heads of `for` and `case`.
+Lists, pipelines, groups and `if`/`while` are made of commands that stop on their own, so one
+place is never stopped at twice. The session keeps a call stack of scripts (the launched file,
+`source`, `msh file`, `./script`), function calls and `$(…)` substitutions, which crosses the
+interpreter's child shells. Step Into stops at the next command anywhere, Step Over at the next
+command in the same frame or one it returns to, and Step Out at the first command after the
+current function, sourced file or substitution returns. `$(…)` text has no file of its own, so
+stepping passes over it into what it calls (a function stepped into from `$(f)` shows in its
+own file). Pause stops at the next command; a long-running external command pauses when it
+returns.
+
+**Breakpoints** are set by clicking the gutter left of a line number (tapping on touch screens)
+or with F9. They belong to canonical absolute paths, are shared by every Xed window in the page
+and are not saved. The Breakpoints list shows them all with a checkbox to disable or enable
+each, a link to the line, and a remove button. A breakpoint on a line without a command (a
+comment, `done`, a blank line) is drawn hollow and flagged as never stopping. Editing a file
+moves its breakpoints with their text and removes those on deleted lines; renaming or deleting
+a file in the project panel takes its breakpoints along. A breakpoint fires on a line event,
+as in Python's debugger: when execution reaches another line, or jumps back to an earlier
+point on a line (a loop), so `a=1; b=2` stops once and a loop line stops on every iteration.
+Sessions Xed starts use these breakpoints; another session only does after it is attached.
+
+**While paused** the current line gets a highlight and a gutter arrow, separate from the
+breakpoint dot, and a pause in another file opens that file's tab and scrolls to it without
+moving the caret or selection of the file you are in. The panel under the editor (resizable
+from its top edge, shown and hidden with the bug button in the status bar) has **Output**,
+**Variables** (arguments, the function's `local` names and the other variables of the pause),
+**Watch**, **Breakpoints**, **Call stack** (click a frame to see its line) and **Problems**
+(syntax diagnostics, also marked in the gutter). Hovering a variable in the editor shows its
+value at the pause; with a keyboard or on a touch screen, putting the caret on a variable shows
+it in the panel. Values are only shown while paused, from the pause's snapshot: when the
+session resumes or ends they are cleared rather than shown as if current, and a hover on a
+file that is not in the paused call stack says so.
+
+**Watches** are read from the snapshot and never evaluated as shell: a name, `$name`,
+`${name}`, `${#name}`, `$1`…, `$#`, `$@` and `$?`, with plain text around them. Command and
+arithmetic substitution, backticks and `${x:-…}`-style operators are refused, so a watch
+cannot run anything or change a variable. At most 20 watches of 200 characters; values are
+built up to 4096 characters and shown up to 1000.
+
+**Unsaved and changed source.** A session remembers a hash of each file it parsed. When the
+editor's text of a file differs from what the session is running (edited while paused, or
+changed on disk), the panel says so and the paused line is drawn as stale; stop and run again
+to use the new text.
+
+**Sessions.** The session picker lists only explicitly opted-in sessions in this page. It does
+not inspect ordinary terminals, agents, other browser tabs or server processes. Choosing a
+session Xed did not start attaches to it: Xed shows its pauses and it starts stopping at the
+editor's breakpoints, but its output stays with whoever started it, and Xed does not take over
+its lifetime. Xed cancels its own sessions when its window closes. With several Xed windows,
+each has its own session and panel; the keys go to the focused one.
+
 The registry holds at most 16 sessions (evicting completed ones), each with at most 256
-breakpoints and 256 displayed variables, capped at 4096 characters each. Output retains the
-last 32 KB. Debug launches also bound interpreter capture and screen chunks to 32768 UTF-16
-code units, streaming partial lines when needed; ordinary `runLine` output remains unlimited
-unless its optional `captureLimit` is supplied. Controls wrap on phones and use the active theme.
+breakpoints and 256 displayed variables and 64 arguments, capped at 4096 characters each; the
+editor keeps at most 256 breakpoints. Output retains the last 32 KB. Debug launches also bound
+interpreter capture and screen chunks to 32768 UTF-16 code units, streaming partial lines when
+needed; ordinary `runLine` output remains unlimited unless its optional `captureLimit` is
+supplied. The toolbar and panel use the active theme, wrap to phone widths and have 36 px touch
+targets on touch screens.
 
 Xed debug launches use the shared execution budget (60 seconds including pauses,
 100,000 steps and the normal intermediate/total-output limits by default). Stop
 or deadline expiry releases a paused checkpoint; continuing cannot bypass file
-policy or resume mutations after exhaustion. The bounded debug screen keeps its
-existing 32,768-character tail. Rich jq remains interactive-only outside bounded
+policy or resume mutations after exhaustion. Rich jq remains interactive-only outside bounded
 debug runs; use `jq-safe` while debugging. `check:msh-debug` covers cancellation,
 paused deadlines, policy and shared JSON accounting.
 
 There is one interpreter. `parse.ts` adds token offsets and command `span` metadata;
-`interp.ts` awaits optional `Base.debug.checkpoint` hooks before execution. `debug.ts` owns
-session state and subscriptions. `launchDebug(line, base, label?)` returns `{ session, done }`
+`interp.ts` awaits optional `Base.debug.checkpoint` hooks before each command and reports
+frames with `enter`. `debug.ts` owns session state, frames, step modes, the editor breakpoints
+and subscriptions; `watch.ts` evaluates watches and finds the variable under a hover.
+`launchDebug(line, base, label?, { start?, editorBreakpoints? })` returns `{ session, done }`
 and follows normal `runLine` execution; callers must supply their existing permission context.
+`start` is `'first'` (the default: stop before the first command, the launch line), `'run'`
+(breakpoints only) or `{ entry: path }` (the first command of that file).
 `runCapturedStreams(source, base, filename?)` returns distinct `{ stdout, stderr, status }`;
 `runCaptured` retains its existing combined-output API. `set -x` trace goes to stderr.
 
@@ -796,20 +872,24 @@ File-backed debugger locations use absolute, normalized source paths for navigat
 and breakpoints. This applies to `source`, nested `msh file`, and executable scripts,
 including relative paths after `cd`. Session display labels and script `$0` retain
 their existing spelling; normalizing source identity does not rewrite invocation
-arguments. Inline commands and substitutions keep their `-c` coordinates.
+arguments, and error messages keep their file, line, column and expression. Inline commands,
+substitutions and alias expansions keep their `-c` coordinates.
 
-Stepping is command-granular, not expression-level or step-over/step-out. Command substitution
-and alias expansions currently use their own `-c` coordinates. Breakpoints are filename/line
-based, can stop more than once on a loop line, and do not move when text is edited. Long-running
-commands pause only when they return to a checkpoint; Stop uses their normal abort signal.
 The debug panel does not supply interactive stdin or a full terminal for fullscreen commands;
-use Xed's terminal panel for those. The initial launch location is `-c`, followed by the file's
-own source coordinates. Variable snapshots can contain script secrets, just as Terminal output
-can; they stay in this page and are not persisted.
+use Xed's terminal panel for those. Variable snapshots can contain script secrets, just as
+Terminal output can; they stay in this page and are not persisted. Watches and breakpoints are
+not persisted either.
 
-Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams;
-`pnpm check:xed-debug-ui` drives the actual editor through the repository's muted Chromium
-harness against a caller-started scratch dev server (`XED_TEST_PORT`, default 5276).
+Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams,
+including step into/over/out across functions, sourced files and substitutions, line events,
+editor breakpoints and watches. `pnpm check:xed-debug-ui` drives the actual editor through the
+repository's muted Chromium harness against a caller-started scratch dev server
+(`XED_TEST_PORT`, default 5276): gutter clicks and taps, the Breakpoints list, F5/F6/F9/F10/F11
+with focus inside and outside the text, two Xed windows, the paused marker and source reveal,
+watches and hover, stale-source warnings, save before run, attach, stop and window close, a
+phone-sized touch screen, and that F5 outside Xed is not taken. Headless Chromium has no reload
+accelerator, so that last check proves the key is not cancelled rather than that the page
+reloads.
 
 ### The shell, agents and skills
 

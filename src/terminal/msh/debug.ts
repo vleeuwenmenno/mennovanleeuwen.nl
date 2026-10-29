@@ -1,5 +1,5 @@
 import type { Budget } from '../limits'
-import type { SourceSpan } from './parse'
+import type { Node, SourceSpan } from './parse'
 
 export type DebugState = 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
 /** Why the session stopped: the first command, a step, a breakpoint or a pause request. */
@@ -34,6 +34,32 @@ const MAX_VALUE = 4096
 const MAX_ARGS = 64
 const MAX_FRAMES = 128
 const MAX_SOURCES = 64
+
+/**
+ * The nodes the debugger stops before: simple commands, (( )), and for/case heads. Lists, pipelines,
+ * groups and if/while are made of commands that stop on their own, so no place is stopped at twice.
+ */
+export const STOP_NODES: ReadonlySet<Node['t']> = new Set<Node['t']>(['simple', 'arith', 'for', 'case'])
+
+/** The lines of a parsed file that have a command to stop at (a breakpoint elsewhere never stops). */
+export function commandLines(tree: Node): Set<number> {
+  const lines = new Set<number>()
+  const walk = (n: Node | null | undefined) => {
+    if (!n || lines.size > 100_000) return
+    if (n.span && STOP_NODES.has(n.t)) lines.add(n.span.line)
+    switch (n.t) {
+      case 'list': for (const it of n.items) walk(it.node); break
+      case 'pipeline': for (const c of n.cmds) walk(c); break
+      case 'andor': walk(n.first); for (const [, c] of n.rest) walk(c); break
+      case 'group': case 'subshell': case 'for': case 'func': walk(n.body); break
+      case 'while': walk(n.cond); walk(n.body); break
+      case 'if': for (const [c, b] of n.clauses) { walk(c); walk(b) } walk(n.else); break
+      case 'case': for (const arm of n.arms) walk(arm.body); break
+    }
+  }
+  walk(tree)
+  return lines
+}
 
 const sessions = new Map<string, DebugSession>()
 const listeners = new Set<() => void>()
@@ -103,15 +129,15 @@ export function removeBreakpoints(path?: string, line?: number) {
   emit()
 }
 /**
- * Lines of `path` were edited: `from` (1-based) was the first changed line, `removed` lines went and
- * `added` came in their place. Breakpoints below move with their text; those on removed lines go.
+ * Lines of `path` were edited: from line `from` (1-based) on, `removed` lines went and `added` came in
+ * their place. Breakpoints below move with their text; those on removed lines go.
  */
 export function shiftBreakpoints(path: string, from: number, removed: number, added: number) {
   const lines = editorPoints.get(path)
   if (!lines || removed === added) return
   const next = new Map<number, boolean>()
   for (const [line, enabled] of lines) {
-    if (line < from || (line === from && added > 0)) next.set(line, enabled)
+    if (line < from) next.set(line, enabled)
     else if (line >= from + removed) next.set(line - removed + added, enabled)
     else editorCount--
   }

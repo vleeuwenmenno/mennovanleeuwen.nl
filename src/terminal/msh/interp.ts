@@ -5,7 +5,7 @@ import { reserve, textWork } from '../bounds'
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
-import { DebugSession, type DebugStart } from './debug'
+import { DebugSession, STOP_NODES, type DebugStart } from './debug'
 import { diagnostic, formatDiagnostic } from './analysis'
 import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
@@ -380,9 +380,6 @@ function printf(fmt: string, args: string[], budget?: Budget): string {
 }
 
 type Builtin = (sh: Shell, args: string[], io: Io) => number | Promise<number>
-
-/** The nodes a debugger stops before (see exec). */
-const STOPS = new Set<Node['t']>(['simple', 'arith', 'for', 'case'])
 
 class Shell {
   /** The status of the last $(…) in the current command, for a line of assignments only */
@@ -832,9 +829,7 @@ class Shell {
   async exec(n: Node, io: Io, cond = false): Promise<number> {
     this.checkAbort()
     if (n.span) this.location = n.span
-    // Stops are at commands: simple commands, (( )), and for/case heads. Lists, pipelines, groups and
-    // if/while are made of commands that stop on their own, so one place is never stopped at twice.
-    if (n.span && this.base.debug && STOPS.has(n.t)) {
+    if (n.span && this.base.debug && STOP_NODES.has(n.t)) {
       await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal, this.base.budget, { args: this.st.positional, locals: this.st.locals[this.st.locals.length - 1]?.keys() })
       this.checkAbort()
       if (this.base.debug.abort.signal.aborted) throw new AbortSignal_()
