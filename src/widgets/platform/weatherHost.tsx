@@ -52,32 +52,35 @@ export function WeatherControls({ id, refresh, eligible }: { id: string; refresh
     </form>}
   </div>
 }
-export function usePackageForecast(id: string, enabled: boolean, tick: number, eligible: () => boolean) {
+export function usePackageForecast(id: string, enabled: boolean, tick: number, lifecycle: string, eligible: () => boolean) {
   const config = useWidgetConfig(id, { place: null as Place | null, units: 'c' })
   const here = useLocalHere()
   const place = config.place ?? here
-  const [value, setValue] = useState<{ key: string; forecast: Forecast } | null>(null)
-  const [error, setError] = useState('')
+  const [value, setValue] = useState<{ key: string; lifecycle: string; forecast: Forecast } | null>(null)
+  const [error, setError] = useState<{ key: string; lifecycle: string; message: string } | null>(null)
   const key = `${place?.lat}:${place?.lon}:${config.units}`
+  // eligible closes over this lifecycle's account, runtime revision and grant. Its function
+  // identity changes on ordinary renders; only the stable lifecycle key restarts the loop.
   useLayoutEffect(() => {
     if (!enabled || !place || !Number.isFinite(place.lat) || !Number.isFinite(place.lon)) return
     let live = true
     const stop = startForecastRefresh(async signal => {
       try {
         const forecast = await fetchForecast(place.lat, place.lon, config.units === 'f' ? 'f' : 'c', signal)
-        if (live && eligible() && !signal.aborted) { setValue({ key, forecast }); setError('') }
+        if (live && eligible() && !signal.aborted) { setValue({ key, lifecycle, forecast }); setError(null) }
         return forecast
       } catch (error) {
-        if (live && eligible() && !signal.aborted) setError('Forecast unavailable')
+        if (live && eligible() && !signal.aborted) setError({ key, lifecycle, message: 'Forecast unavailable' })
         throw error
       }
     }, () => live && eligible())
     return () => { live = false; stop() }
-  }, [enabled, key, tick])
+  }, [enabled, key, tick, lifecycle])
   return useMemo<WidgetInput>(() => {
-    const forecast = value?.key === key ? value.forecast : null
-    if (!forecast || !place) return { error: error || (place ? 'Loading forecast…' : 'Choose a place above.') }
+    const forecast = value?.key === key && value.lifecycle === lifecycle ? value.forecast : null
+    const message = error?.key === key && error.lifecycle === lifecycle ? error.message : ''
+    if (!forecast || !place) return { error: message || (place ? 'Loading forecast…' : 'Choose a place above.') }
     return { weather: { place: place.name.slice(0, 150), units: config.units, summary: `${describe(forecast.now.code, forecast.now.day).icon} ${Math.round(forecast.now.temp)}° · ${describe(forecast.now.code, forecast.now.day).text}`,
       hours: forecast.hours.slice(1, 7).map(h => `${h.time} ${Math.round(h.temp)}°`), days: forecast.days.slice(1, 4).map(d => `${weekday(d.date)} ${Math.round(d.max)}° / ${Math.round(d.min)}°`) } }
-  }, [value, key, place?.name, error])
+  }, [value, key, place?.name, error, lifecycle])
 }

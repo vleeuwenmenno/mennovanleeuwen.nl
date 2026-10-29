@@ -38,8 +38,11 @@ stale buttons and results cannot act on a newer revision.
 
 note.read: input.note = {text,revision,offset,next?,continues?} for this widget's one bound note.
 text is a host-owned window of at most 64 lines / 8 KiB; offset and next are absolute
-UTF-16 offsets. continues marks a window starting inside a line; it must not
-create a checklist item from that first fragment. The host's Previous/Next controls page through all content; packages
+UTF-16 offsets. continues marks a window whose first line already has preceding non-whitespace
+content; it must not create a checklist item from that first fragment. Pages prefer
+complete-line boundaries. Oversized lines use code-point chunks with forward progress;
+whitespace-only indentation is split before its first content token where needed,
+so checklist prefixes stay reachable without enlarging the window. The host's Previous/Next controls page through all content; packages
 emit at most 64 checklist buttons. The native editor always uses the full note.
 note.write: a revision-checked edit inside that window only. Both the note revision
 and full bound text must still match; replacements of partial windows are refused.
@@ -51,7 +54,10 @@ account identity are checked again at admission and completion, with layout-time
 cancellation when eligibility changes.
 weather.read: input.weather = {place,units,summary,hours,days} for the host-selected
 place only. Device here stays browser-local; only explicit cities sync. Visibility-aware
-refresh uses forecast age and a 15-minute timer, aborted while hidden. Geocoding is a trusted user-operated control, not a package API.
+refresh uses forecast age and a 15-minute timer, aborted while hidden. Account
+hydration, instance/runtime revision and grant changes restart the refresh loop using
+a stable lifecycle identity; ordinary renders do not. Results and errors remain
+bound to that identity, so late replies cannot populate a different lifecycle. Geocoding is a trusted user-operated control, not a package API.
 Errors are plain bounded messages, not raw fetch responses or host objects.
 Default packages use existing instance authority. Fork activation requires explicit
 real-data opt-in. Preview always uses mocks. Revocation/logout cancels pending work.

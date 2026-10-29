@@ -52,12 +52,12 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const [pages, setPages] = useState<number[]>([0])
   const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
   const permitted = revision && hasGrant(id, revision)
-  const identity = JSON.stringify([account.status, account.user?.id, revision?.source, revision?.snapshot.digest, current?.generation, consent])
+  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, current?.generation, consent])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
   const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && !isMobile() && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
   const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasGrant(id, revision) && installations.get()[id]?.generation === current?.generation
-  const weather = usePackageForecast(id, kind === 'weather' && visible && !!permitted && !!revision?.snapshot.manifest.capabilities.includes('weather.read'), tick, () => validNow())
+  const weather = usePackageForecast(id, kind === 'weather' && visible && !!permitted && !!revision?.snapshot.manifest.capabilities.includes('weather.read'), tick, identity, () => validNow())
   const start = Math.min(pages[pages.length - 1], note?.text.length ?? 0)
   const input = useMemo<WidgetInput>(() => kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start])
   useEffect(() => {

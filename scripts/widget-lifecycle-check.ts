@@ -110,6 +110,50 @@ await check('254+ checklist items page under descriptor cap with an editor on ev
     assert.equal(new Set(tasks).size, count); assert.equal(tasks.length, count)
   }
 })
+await check('byte-boundary pages retain every checklist start and original edit offsets', () => {
+  const fixtures = [
+    'x'.repeat(8187) + '\n- [ ] Target\n- [ ] Last',
+    '界'.repeat(2728) + '\n- [ ] Target\n- [ ] Last',
+    '😀'.repeat(2046) + '\n- [ ] Target\n- [ ] Last',
+    '- [ ] Target' + 'x'.repeat(20000) + '\n- [ ] Last',
+    ' '.repeat(8187) + '- [ ] Target\n- [ ] Last',
+    ' '.repeat(8192 + 8187) + '- [ ] Target\n- [ ] Last',
+    '\t'.repeat(20000) + '- [ ] Target\n- [ ] Last',
+    'x'.repeat(20000) + '\n- [ ] Target\n- [ ] Last',
+    '\u0000'.repeat(20000) + '\n- [ ] Target\n- [ ] Last',
+    '\n'.repeat(64) + '- [ ] Target\n- [ ] Last',
+  ]
+  for (const text of fixtures) {
+    const note = { text, updated: 1 }, bound = { text, revision: noteRevision({text,updated:1}) }
+    const markers = [text.indexOf('[ ] Target') + 1, text.indexOf('[ ] Last') + 1]
+    const edits: number[] = []
+    let offset = 0, joined = '', pages = 0
+    for (;;) {
+      const projection = projectNote(note, offset)
+      assert.equal(projection.offset, offset)
+      assert(new TextEncoder().encode(projection.text).length <= LIMITS.noteWindowBytes)
+      assert(projection.text.split('\n').length <= LIMITS.noteWindowLines + 1)
+      assert(!/[\uD800-\uDBFF]$/.test(projection.text))
+      assert(new TextEncoder().encode(JSON.stringify({note:projection})).length < LIMITS.outputBytes)
+      joined += projection.text
+      const view = descriptor(invokeVM(qjs,snapshot,{note:projection}))
+      for (const button of nodes(view).filter(node=>node.type==='button')) {
+        const edit=mutation(invokeVM(qjs,snapshot,{note:projection},button.event))!
+        assert.equal(edit.type,'note.edit')
+        if(edit.type!=='note.edit')throw Error('range edit required')
+        edits.push(edit.start)
+        assert(markers.includes(edit.start))
+        assert.equal(applyPackageEdit(note,bound,projection,edit),text.slice(0,edit.start)+'x'+text.slice(edit.end))
+      }
+      if(projection.next===undefined)break
+      assert(projection.next>offset, 'every page makes forward progress')
+      offset=projection.next
+      assert(++pages<100, 'bounded fixture reaches the end')
+    }
+    assert.equal(joined,text)
+    assert.deepEqual(edits.sort((a,b)=>a-b),markers, 'each task is reachable exactly once')
+  }
+})
 await check('descriptor A never transforms X after prepend, including same-length/counter ties', () => {
   const note = { text: '- [ ] A\n- [ ] B', updated: 1 }
   const projection = projectNote(note), bound = { text: note.text, revision: noteRevision(note) }

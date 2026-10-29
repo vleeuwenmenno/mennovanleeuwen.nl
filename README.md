@@ -4337,7 +4337,9 @@ continuation. The native editor stays mounted independently of descriptor refres
 Package buttons are bound to the exact input revision that produced their displayed labels;
 stale buttons are disabled and stale clicks/results are rejected even before React refreshes.
 Sticky projects at most 64 lines / 8 KiB at a time, with Previous/Next controls and up to 64 task
-buttons. All items remain reachable; the editor retains the full note. Packages propose bounded
+buttons. Pages retain complete lines when possible. Oversized lines remain bounded
+and make Unicode-safe progress, including long indentation whose checklist prefix
+would otherwise straddle a byte boundary. All items remain reachable; the editor retains the full note. Packages propose bounded
 `note.edit` ranges (UTF-16 offsets, at most 32 KiB inserted UTF-8), checked against the granted
 window, full source text and revision. Legacy `note.replace` is accepted only for a complete
 small projection. Native notes support 256 KiB UTF-8; existing larger notes remain readable and
@@ -4353,7 +4355,10 @@ pending mutations. Showing them again renders the latest revision. **Use my loca
 coordinates in browser-local memory/storage and syncs only `place: null`; explicit city choices
 still sync. A pending location result after account change cannot write settings or local here.
 Weather refreshes on visibility/resume and every 15 minutes based on forecast age, with one
-cancellable timer/request and no hidden refresh work.
+cancellable timer/request and no hidden refresh work. Its stable lifecycle identity includes
+the instance, account status/identity, runtime revision and grant epoch: hydration or authority
+changes abort/restart the loop, while ordinary renders do not trigger fetch loops. Results and
+errors are scoped to the same lifecycle.
 
 The SDK build identity is now descriptors 1.1. Saved snapshots from the initial unreleased 1.0
 slice need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
@@ -4376,7 +4381,10 @@ place selection and mobile preservation. `pnpm check:widget-lifecycle` uses fake
 scheduler fairness/rate limiting/cancellation and forecast age/refresh, plus note paging/edit
 bounds and stale revision fixtures. `pnpm check:widget-review-ui` exercises the seven review
 regressions with synthetic accounts and muted Chromium. Existing widget sync/layout tests cover
-legacy fixtures. Live Seafile, a full storage-denied environment and non-Chromium browsers remain
+legacy fixtures. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
+check hydration, same-identity renders, runtime changes, grant revocation/re-grant and account
+authority loss/recovery, including stale cancellation. Lifecycle VM tests also exercise checklist
+prefixes at byte boundaries, oversized single lines and exact original edit offsets. Live Seafile, a full storage-denied environment and non-Chromium browsers remain
 unverified; none of the staged migration/platform gaps above are marked complete.
 
 ### Weather
