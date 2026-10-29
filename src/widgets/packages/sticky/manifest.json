@@ -1,0 +1,1 @@
+{"schema":1,"sdk":1,"id":"sticky","name":"Sticky note","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":260,"height":240},"capabilities":["note.read","note.write"]}
