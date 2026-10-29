@@ -405,6 +405,63 @@ try {
   await inWin('v', `W.querySelector('[aria-label="Close"]').click()`)
   await page.waitFor(`!document.querySelector('.zed')`)
 
+  // --- multi-digit positional parameters: real Variables, Watch, caret and pointer paths ------------
+  const args = ['first', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'tenth', ...Array.from({ length: 55 }, (_, i) => `extra${i + 11}`)]
+  const positional = 'f() {\n  : "$10 ${10}"\n}\nf ' + args.join(' ')
+  const positionalPath = '/tmp/xed-args.msh'
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', ${JSON.stringify(positionalPath)}, ${JSON.stringify(positional)}, false)
+    window.xedDebug.toggleBreakpoint(${JSON.stringify(positionalPath)}, 2)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: ${JSON.stringify(positionalPath)}, root: '/tmp', t: '12' } } }))
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-args.msh')`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a')
+  await A(`W.querySelector('.zed').focus()`)
+  await key('F5'); await waitState('Paused (breakpoint) · xed-args.msh:2')
+  await tab('Variables')
+  const argRows = await A<{ name: string; value: string }[]>(`return [...W.querySelectorAll('.xed-vars tr')].filter(r => r.querySelector('.xed-var-tag')?.textContent === 'argument').map(r => ({ name: r.querySelector('.xed-var-name').textContent, value: r.querySelector('.xed-var-value').textContent }))`)
+  expect(argRows.length === 64 && argRows[9].name === '${10}' && argRows[9].value === 'tenth' && argRows[63].name === '${64}' && argRows[63].value === 'extra64', 'Variables labels argument 10 as ${10}, shows tenth and keeps exactly 64 arguments', argRows)
+  const omitted = await A<string>(`return W.querySelector('.xed-dbg-omitted')?.textContent`)
+  expect(omitted.includes('65 arguments; the first 64 are kept.'), 'Variables reports the real count and snapshot limit', omitted)
+  await A(`const row = W.querySelectorAll('.xed-vars tr')[9]; row.querySelector('button').click()`)
+  await tab('Watch')
+  watched = await watchText()
+  expect(watched.length === 1 && watched[0].startsWith('${10} = tenth'), 'argument 10 row Watch adds ${10}, reading tenth rather than first0', watched)
+  await addWatch('${65}')
+  await addWatch('$10')
+  await addWatch('$#')
+  watched = await watchText()
+  expect(watched[1].startsWith('${65}') && watched[1].includes('not captured (only the first 64 arguments are kept)') && !watched[1].includes('not set'), 'watching argument 65 reports uncaptured, not unset', watched)
+  expect(watched[2].startsWith('$10 = first0') && watched[3].startsWith('$# = 65'), 'watch expansion preserves unbraced $10 and the real argument count', watched)
+  const unbraced = positional.indexOf('$10'), braced = positional.indexOf('${10}')
+  for (const [offset, expected] of [[unbraced, '$1 = first'], [unbraced + 1, '$1 = first'], [braced, '${10} = tenth']] as const) {
+    await caretAt(offset)
+    await page.waitFor(`document.querySelector('.window[data-test="a"] .xed-dbg-caret')?.textContent.includes(${JSON.stringify(expected)})`, 5000)
+    pass(`caret at offset ${offset} inspects ${expected}`)
+  }
+  await caretAt(unbraced + 2)
+  await page.waitFor(`!document.querySelector('.window[data-test="a"] .xed-dbg-caret')`, 5000)
+  pass('caret on the literal 0 suffix of $10 has no variable')
+  // Measure the current textarea font, then move the real pointer to each character on line 2.
+  const hoverArg = async (offset: number, expected: string | null) => {
+    const point = await A<{ x: number; y: number }>(`
+      const t = W.querySelector('textarea.zed-input'), r = t.getBoundingClientRect()
+      const c = document.createElement('canvas').getContext('2d'), s = getComputedStyle(t); c.font = s.fontSize + ' ' + s.fontFamily
+      const w = c.measureText('0'.repeat(100)).width / 100
+      return { x: r.x + (${offset - positional.indexOf('\n') - 1} + 0.3) * w, y: r.y + ${PAD} + ${LINE} + ${LINE / 2} }`)
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y })
+    await page.waitFor(expected === null ? `!document.querySelector('.window[data-test="a"] .xed-hover')` : `document.querySelector('.window[data-test="a"] .xed-hover')?.textContent.startsWith(${JSON.stringify(expected)})`, 5000)
+  }
+  await hoverArg(unbraced, '$1 = first')
+  await hoverArg(unbraced + 1, '$1 = first')
+  await hoverArg(unbraced + 2, null)
+  await hoverArg(braced, '${10} = tenth')
+  pass('pointer hover reads $1 in $10, ignores its literal 0 and reads ${10} as tenth')
+  await key('F5', MODS.shift); await waitState('Stopped')
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
   // --- phone: touch taps on the gutter and controls, fitting the width --------------------------------
   await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
   await page.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })

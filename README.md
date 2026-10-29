@@ -836,7 +836,8 @@ session resumes or ends they are cleared rather than shown as if current, and a 
 file that is not in the paused call stack says so.
 
 **Watches** are read from the snapshot and never evaluated as shell: a name, `$name`,
-`${name}`, `${#name}`, `$1`…, `$#`, `$@` and `$?`, with plain text around them. Command and
+`${name}`, `${#name}`, `$1`…`$9`, `${10}` and higher, `$#`, `$@` and `$?`, with plain text around them.
+As in msh, `$10` means `$1` followed by `0`; use `${10}` for the tenth argument. Command and
 arithmetic substitution, backticks and `${x:-…}`-style operators are refused, so a watch
 cannot run anything or change a variable. At most 20 watches of 200 characters; values are
 built up to 4096 characters and shown up to 1000. Snapshots are bounded (below), but keep what
