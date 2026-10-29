@@ -443,6 +443,55 @@ mounts: the account's quota and usage (`/api/seafile/quota`), and each library's
 what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
 mounts, Seafile's included.
 
+### jq: a practical JSON subset
+
+The browser's `jq` extends the small parser in [src/terminal/jq.ts](src/terminal/jq.ts);
+it is **not full jq**. It supports field/index paths (`.user.name`, `.["odd.key"]`,
+`.[0]`, `.[-1]`), slices, optional access (`.name?`), iteration (`.[]`), pipes,
+arrays, object construction, `map`, `select`, comparisons, boolean filters, and
+`//` for missing/null/false values. Missing fields yield `null`; wrong input types
+raise errors unless the access uses `?`. Object reads use only own JSON properties;
+`__proto__`, `constructor`, and `prototype` remain ordinary data keys.
+
+Examples in msh (single quotes keep the shell from expanding filter variables):
+
+```sh
+cat people.json | jq '[.[] | select(.active and .score >= 2) | {name, score}]'
+cat response.json | jq '.user.name'
+jq -nc --arg name 'Ada "Lovelace"' --argjson tags '["math","code"]' '{name: $name, tags: $tags}'
+jq -nc --arg key 'odd.key' --arg value 'safe text' '{($key): $value}'
+cat encoded.json | jq 'fromjson | .name'
+cat response.json | jq -r 'tojson'
+```
+
+`--arg NAME VALUE` binds a literal string; `--argjson NAME JSON` parses one JSON
+value, including objects, arrays, booleans, and null. Use these with constructors
+instead of concatenating JSON text. Values never become filter source. Variable
+names use letters, digits, and underscores, cannot start with a digit, and cannot
+be `ENV` (reserved). Bindings are local to each command; `expr as $name | body`
+can temporarily shadow them. Constructors accept literal keys, shorthand
+`{name}` / `{$name}`, variable keys (`{$key: value}`), or parenthesized string keys;
+non-string keys are errors.
+`fromjson` parses a JSON string; `tojson` serializes a value, escaping its contents.
+
+Options: `-r` / `--raw-output` prints strings without JSON quotes; `-c` /
+`--compact-output` removes JSON indentation; `-n` / `--null-input` constructs
+from null; `-s` / `--slurp` collects input documents into one array; `-M` /
+`--monochrome-output` disables terminal colors. Short flags combine (`-ncr`).
+Supply one optional input file, or `-` for stdin; otherwise input comes from a
+pipe. Multiple JSON documents are accepted; empty stdin produces no values.
+Use `--` before a filter beginning with `-`. Unknown options, malformed JSON,
+undefined variables, invalid constructor keys, and malformed filters report errors.
+Serialized JSON escapes braces inside strings so literal terminal markup such as
+`{c:red}` survives pipes and redirects; JSON parsing restores the original data.
+Raw `-r` text retains the terminal's existing markup behavior.
+
+This subset also retains common sorting, aggregation, string, entry-conversion,
+and arithmetic helpers. It does not implement assignments/update operators,
+`def`, `reduce`, modules, streaming mode, or all upstream jq flags and overloads.
+`pnpm check:jq` covers the documented workflows, option parsing, invalid inputs,
+prototype-key handling, and literal-markup round trips.
+
 `cmatrix` ([`src/terminal/cmatrix.ts`](src/terminal/cmatrix.ts)) is the film's rain: mirrored
 half-width katakana with digits and a few symbols, a glowing head, a trail that fades through a
 dozen shades into the background, characters that flicker while they fade, drops at their own

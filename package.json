@@ -94,6 +94,7 @@
     "check:photos": "node scripts/photos-check.ts",
     "check:terminal-vt": "node scripts/terminal-vt.ts",
     "check:terminal-mobile": "node scripts/terminal-mobile-e2e.ts",
+    "check:jq": "node scripts/jq-check.ts",
     "check:terminal-cmds": "node scripts/terminal-cmds.ts",
     "check:app-data": "node scripts/app-data-check.ts",
     "check:msh-rc": "node scripts/msh-rc.ts",
