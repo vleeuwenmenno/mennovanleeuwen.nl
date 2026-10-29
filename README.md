@@ -775,7 +775,9 @@ with the exit status, or stopped). The keys are the familiar ones:
 | Shift+F11 | Step out |
 
 Xed takes these keys only while its window is focused (the window manager's focused window),
-whether or not the caret is in the text; another app's text field keeps them. In a focused Xed
+whether or not the caret is in the text; another app's text field keeps them. They are caught
+before anything inside the Xed window sees them, so a program in Xed's terminal panel (nano,
+say) does not take F5 from the debugger; every other key still reaches it. In a focused Xed
 window F5 and Shift+F5 are always Xed's, so a page reload cannot throw away unsaved edits;
 there F5 on a file that cannot run says why in the status bar. Outside Xed, F5 is left to the
 browser. F6, F9, F10 and F11 are taken only in an msh file or while a session is selected.
@@ -785,7 +787,12 @@ are not used.
 
 Run launches `msh 'path'` through the normal command table, file reads and permission checks,
 in the project folder. It runs the saved file: when the editor has unsaved changes the button
-reads **Save & Run** and saves first, and if saving fails nothing runs. Run stops only at
+reads **Save & Run** and saves first, and if saving fails nothing runs. While the save is on
+its way (Seafile and browser-kept files take a moment) the state reads "Saving before the run"
+and Stop cancels the run. The run does not start if the window closed in the meantime, another
+file was brought to the front, or the text was edited during the save (it would run the older
+saved copy): the status bar says so, and F5 again saves and runs the new text. A second F5
+before the run has started is ignored, so one press is one run. Run stops only at
 breakpoints; Step Over or Step Into while nothing runs starts the script and stops at its first
 command. Only msh scripts run (`.msh`, `.sh`, or an msh shebang); there is no way to run other
 files, and arguments cannot be passed yet.
@@ -814,12 +821,16 @@ Sessions Xed starts use these breakpoints; another session only does after it is
 
 **While paused** the current line gets a highlight and a gutter arrow, separate from the
 breakpoint dot, and a pause in another file opens that file's tab and scrolls to it without
-moving the caret or selection of the file you are in. The panel under the editor (resizable
+moving the caret or selection of the file you are in. Each file keeps its selection when the
+debugger moves to another file and back (stepping into a function in another file and out
+again leaves the caller's selection where it was), and the editor keeps the keyboard focus if it
+had it. The panel under the editor (resizable
 from its top edge, shown and hidden with the bug button in the status bar) has **Output**,
 **Variables** (arguments, the function's `local` names and the other variables of the pause),
 **Watch**, **Breakpoints**, **Call stack** (click a frame to see its line) and **Problems**
 (syntax diagnostics, also marked in the gutter). Hovering a variable in the editor shows its
-value at the pause; with a keyboard or on a touch screen, putting the caret on a variable shows
+value at the pause (the value is read from the current pause when drawn; a step or choosing
+another session hides it until the pointer moves); with a keyboard or on a touch screen, putting the caret on a variable shows
 it in the panel. Values are only shown while paused, from the pause's snapshot: when the
 session resumes or ends they are cleared rather than shown as if current, and a hover on a
 file that is not in the paused call stack says so.
@@ -889,8 +900,13 @@ editor breakpoints and watches. `pnpm check:xed-debug-ui` drives the actual edit
 repository's muted Chromium harness against a caller-started scratch dev server
 (`XED_TEST_PORT`, default 5276): gutter clicks and taps, the Breakpoints list, F5/F6/F9/F10/F11
 with focus inside and outside the text, two Xed windows, the paused marker and source reveal,
-watches and hover, stale-source warnings, save before run, attach, stop and window close, a
-phone-sized touch screen, and that F5 outside Xed is not taken. Headless Chromium has no reload
+watches and hover (also across a session switch), stale-source warnings, save before run
+(closing the window, Stop, edits and a double F5 while the save is pending), the caller's
+selection after stepping out of another file, F5 with nano focused in the terminal panel,
+attach, stop and window close, a phone-sized touch screen, and that F5 outside Xed is not
+taken. The save-before-run checks use a file in /tmp, whose save is quick; they act within the
+same task so the save's await is still pending, which is the same gap a slower Seafile or
+browser save has. Headless Chromium has no reload
 accelerator, so that last check proves the key is not cancelled rather than that the page
 reloads.
 

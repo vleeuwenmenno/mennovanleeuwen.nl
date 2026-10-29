@@ -710,12 +710,16 @@ export function Zed({ win }: { win: WinState }) {
   const edit = (value: string) => {
     if (!active) return
     if (buf && breakpointsIn(active).size) followEdit(active, buf.text, value)
+    dbg.edited(active, value)
     setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], text: value } }))
   }
 
+  /** Each file's last selection, so the debugger can show another file and come back without losing it. */
+  const carets = useRef(new Map<string, { start: number; end: number }>())
   const track = () => {
     const el = text.current
     if (!el) return
+    if (active && active !== SEARCH) carets.current.set(active, { start: el.selectionStart, end: el.selectionEnd })
     const before = el.value.slice(0, el.selectionStart)
     const line = before.split('\n').length - 1
     setCursor({ line, col: before.length - before.lastIndexOf('\n') - 1 })
@@ -730,19 +734,39 @@ export function Zed({ win }: { win: WinState }) {
 
   // --- the msh debugger ------------------------------------------------------------------------------
   useSyncExternalStore(subscribeDebug, debugRevision)
-  const [revealAt, setRevealAt] = useState<{ path: string; line: number } | null>(null)
-  /** A pause in some file: its tab comes to the front (opened if needed) and scrolls to the line. The caret stays. */
+  /** switched: another file's editor replaces this one; focus: the editor had the keyboard focus. */
+  const [revealAt, setRevealAt] = useState<{ path: string; line: number; switched: boolean; focus: boolean } | null>(null)
+  /**
+   * A pause in some file: its tab comes to the front (opened if needed) and scrolls to the line. The
+   * file's own selection comes back when it is shown again (stepping out to the caller), and the
+   * editor keeps the keyboard focus if it had it.
+   */
   const revealSource = (raw: string, line: number) => {
     const path = normalize(raw)
+    const el = text.current
+    const switched = path !== active
+    const focus = !!el && document.activeElement === el
+    if (switched && el && active && active !== SEARCH) carets.current.set(active, { start: el.selectionStart, end: el.selectionEnd })
     if (!tabs.includes(path)) openFile(path)
     else setActive(path)
     setViews((v) => (v[path] === 'preview' ? { ...v, [path]: 'edit' } : v))
-    setRevealAt({ path, line })
+    setRevealAt((r) => ({ path, line, switched: switched || (!!r && r.switched), focus: focus || (!!r && r.focus) }))
   }
   const revealLoading = !!revealAt && !!buffers[revealAt.path]?.loading
   useEffect(() => {
     const view = editor.current
     if (!revealAt || revealAt.path !== active || !view || revealLoading) return
+    const el = text.current
+    if (revealAt.switched && el) {
+      const saved = carets.current.get(revealAt.path)
+      if (saved) {
+        const n = el.value.length
+        el.setSelectionRange(Math.min(saved.start, n), Math.min(saved.end, n))
+        const before = el.value.slice(0, el.selectionStart)
+        setCursor({ line: before.split('\n').length - 1, col: before.length - before.lastIndexOf('\n') - 1 })
+      }
+      if (revealAt.focus) el.focus({ preventScroll: true })
+    }
     const top = PAD + revealAt.line * LINE
     if (top < view.scrollTop + LINE || top + LINE * 2 > view.scrollTop + view.clientHeight) view.scrollTop = Math.max(0, top - view.clientHeight / 2)
     setRevealAt(null)
@@ -791,7 +815,6 @@ export function Zed({ win }: { win: WinState }) {
       e.preventDefault()
       e.stopPropagation()
     }
-    if (debugKey(e)) return
     if (mod && e.shiftKey && key === 'f') {
       handled()
       openSearch()
@@ -845,15 +868,24 @@ export function Zed({ win }: { win: WinState }) {
   // but leave typing in another app's field (Spotlight, say) alone.
   const keys = useRef(onKey)
   keys.current = onKey
+  const debugKeys = useRef(debugKey)
+  debugKeys.current = debugKey
   useEffect(() => {
     if (wm.focusedPid !== win.pid) return
-    const listen = (e: globalThis.KeyboardEvent) => {
+    const outside = () => {
       const el = document.activeElement
-      if (el && !rootEl.current?.contains(el) && el.matches('input, textarea, [contenteditable]')) return
-      keys.current(e)
+      return !!el && !rootEl.current?.contains(el) && el.matches('input, textarea, [contenteditable]')
     }
+    const listen = (e: globalThis.KeyboardEvent) => !outside() && keys.current(e)
+    // The debugger's keys are caught on the way down, before anything inside Xed (the terminal panel
+    // running nano, say) can take them; every other key is left to the normal order.
+    const debug = (e: globalThis.KeyboardEvent) => !outside() && debugKeys.current(e)
+    window.addEventListener('keydown', debug, true)
     window.addEventListener('keydown', listen)
-    return () => window.removeEventListener('keydown', listen)
+    return () => {
+      window.removeEventListener('keydown', debug, true)
+      window.removeEventListener('keydown', listen)
+    }
   }, [wm.focusedPid, win.pid])
 
   const closePicker = () => {

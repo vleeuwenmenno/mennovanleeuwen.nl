@@ -59,13 +59,34 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   const [tab, setTab] = useState<Tab>('output')
   const [height, setHeight] = useState(220)
   const [watches, setWatches] = useState<string[]>([])
-  const [hover, setHover] = useState<{ x: number; y: number; inspect: Inspect } | null>(null)
+  /** Where the pointer rests on a variable, and which pause and file it was over. The value is never kept here. */
+  const [hover, setHover] = useState<{ x: number; y: number; name: string; pause: string; path: string } | null>(null)
   const owned = useRef<DebugSession[]>([])
   const starting = useRef(false)
-  useEffect(() => () => { for (const s of owned.current) s.cancel() }, [])
+  /** A run waiting for its save: shown, and Stop cancels it. */
+  const [saving, setSaving] = useState(false)
+  // A save before a run is awaited; these say, after it, whether the run should still start: the
+  // window is still open, nothing cancelled or restarted it, and the file is still the one asked for.
+  const alive = useRef(true)
+  const generation = useRef(0)
+  const latest = useRef({ path, text })
+  latest.current = { path, text }
+  /** The editor calls this as text is typed, before React draws it, so a save in flight sees the edit. */
+  const edited = (file: string, value: string) => { if (file === latest.current.path) latest.current = { path: file, text: value } }
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      generation.current++
+      for (const s of owned.current) s.cancel()
+    }
+  }, [])
 
   const sessions = debugSessions()
   const session = sessions.find(s => s.id === selected) ?? null
+  /** The session shown, also right after a launch in the same event (before React draws again). */
+  const shownSession = useRef(session)
+  shownSession.current = session
   const snap = session?.current ?? null
   const state: DebugUiState = snap?.state ?? 'idle'
   const paused = state === 'paused'
@@ -93,22 +114,33 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   }, [paused, snap?.id, snap?.pauses])
 
   const launch = async (start: DebugStart) => {
-    if (live || starting.current) return
+    // One run at a time per window, also for a key pressed twice before React draws again.
+    if (starting.current || (shownSession.current && !shownSession.current.done)) return
     if (runnable || !path) return say(runnable ?? 'Nothing to run')
+    const target = path
+    const gen = ++generation.current
     starting.current = true
     try {
       if (dirty) {
-        say(`Saving ${fileName(path)} before running it…`)
-        if (!(await save())) return say(`Not run: ${fileName(path)} could not be saved, and running would use the old saved text`)
+        const before = text
+        setSaving(true)
+        say(`Saving ${fileName(target)} before running it…`)
+        const ok = await save()
+        if (!alive.current) return // the window closed while saving: nothing starts
+        if (gen !== generation.current) return say(`Not run: cancelled while ${fileName(target)} was being saved`)
+        if (!ok) return say(`Not run: ${fileName(target)} could not be saved, and running would use the old saved text`)
+        if (latest.current.path !== target) return say(`Not run: another file was opened while ${fileName(target)} was being saved`)
+        if (latest.current.text !== before) return say(`Not run: ${fileName(target)} changed while it was being saved. Run again to save and run the new text`)
       }
       setOutput('')
       let cwd = root
-      const result = launchDebug(`msh ${quote(path)}`, {
+      const result = launchDebug(`msh ${quote(target)}`, {
         cwd, setCwd: p => { cwd = p }, env: { HOME, PWD: root, SHELL: '/bin/msh' }, history: [], windows: wm.windows,
         openApp: wm.open, openNewApp: wm.openNew, closeWindow: wm.close, clear() {}, exit() {}, setAccent,
         print: s => setOutput(o => (o + s + '\n').slice(-OUTPUT_LIMIT)), live() {}, size: { cols: 80, rows: 24 }, onKey() {}, signal: new AbortController().signal,
-      }, path, { start, editorBreakpoints: true })
+      }, target, { start, editorBreakpoints: true })
       owned.current = [...owned.current.filter(s => !s.done), result.session]
+      shownSession.current = result.session
       select(result.session.id)
       setOpen(true)
       setTab('output')
@@ -118,6 +150,7 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
       setOpen(true)
     } finally {
       starting.current = false
+      if (alive.current) setSaving(false)
     }
   }
 
@@ -128,7 +161,13 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
     stepInto: () => (paused ? session!.stepInto() : !live && path ? void launch({ entry: path }) : undefined),
     stepOut: () => paused && session!.stepOut(),
     pause: () => state === 'running' && session!.pause(),
-    stop: () => live && session!.cancel(),
+    /** Stops the session, or a run still waiting for its save. */
+    stop: () => {
+      if (live) return session!.cancel()
+      if (!starting.current) return
+      generation.current++
+      say('Run cancelled')
+    },
     attach: (id: string) => {
       select(id)
       const s = debugSessions().find(x => x.id === id)
@@ -151,24 +190,25 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   const atCaret = paused && msh ? variableAt(text, caret) : null
   const caretInspect = atCaret ? inspect(atCaret) : null
 
-  /** Mouse over the editor while paused: the variable under the pointer, from the pause's snapshot. */
+  // A hover belongs to one pause of one session in one file: another session, a step, or another
+  // tab hides it until the pointer moves again. Its value is read from the current snapshot when drawn.
+  const pauseKey = paused && snap ? `${snap.id}:${snap.pauses}` : ''
+  /** Mouse over the editor while paused: the variable under the pointer. */
   const hoverAt = (e: ReactMouseEvent<HTMLTextAreaElement>) => {
-    if (!paused || !msh) return hover && setHover(null)
+    if (!paused || !msh || !path) return hover && setHover(null)
     const el = e.currentTarget
     const offset = offsetAt(el, e.clientX, e.clientY, lineHeight, pad)
     const name = offset === null ? null : variableAt(el.value, offset)
-    const found = name ? inspect(name) : null
-    if (!found) return hover && setHover(null)
+    if (!name) return hover && setHover(null)
     const box = el.getBoundingClientRect()
     const scale = box.width / (el.offsetWidth || 1)
-    const next = { x: (e.clientX - box.left) / scale, y: Math.floor(((e.clientY - box.top) / scale - pad) / lineHeight) * lineHeight + pad + lineHeight, inspect: found }
-    if (!hover || hover.inspect.name !== name || hover.y !== next.y || Math.abs(hover.x - next.x) > 40) setHover(next)
+    const next = { x: (e.clientX - box.left) / scale, y: Math.floor(((e.clientY - box.top) / scale - pad) / lineHeight) * lineHeight + pad + lineHeight, name, pause: pauseKey, path }
+    if (!hover || hover.name !== name || hover.pause !== pauseKey || hover.path !== path || hover.y !== next.y || Math.abs(hover.x - next.x) > 40) setHover(next)
   }
-  useEffect(() => { if (!paused) setHover(null) }, [paused])
-
-  const hoverTip = hover && paused ? (
+  const hovered = hover && hover.pause === pauseKey && hover.path === path ? inspect(hover.name) : null
+  const hoverTip = hover && hovered ? (
     <div className="xed-hover" role="tooltip" style={{ left: hover.x, top: hover.y }}>
-      <InspectLine inspect={hover.inspect} differs={differs} />
+      <InspectLine inspect={hovered} differs={differs} />
     </div>
   ) : null
 
@@ -184,7 +224,7 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   }
 
   return {
-    session, snap, state, paused, live, owner, msh, runnable, dirty, differs, pausedLine, sessions, selected,
+    session, snap, state, paused, live, owner, msh, runnable, dirty, saving, edited, differs, pausedLine, sessions, selected,
     output, setOutput, open, setOpen, tab, setTab, height, setHeight, watches, setWatches, addWatch,
     caretInspect, hoverAt, hoverOut: () => setHover(null), hoverTip, inStack, actions,
   }
@@ -254,6 +294,7 @@ const ICONS = {
 
 export function stateText(ctl: XedDebugCtl) {
   const s = ctl.snap
+  if (ctl.saving && !ctl.live) return 'Saving before the run'
   switch (ctl.state) {
     case 'idle': return 'Not running'
     case 'running': return 'Running'
@@ -271,6 +312,7 @@ export function stateText(ctl: XedDebugCtl) {
 /** The state in a few characters, for phones: the full text stays in the title and for screen readers. */
 function shortState(ctl: XedDebugCtl) {
   const s = ctl.snap
+  if (ctl.saving && !ctl.live) return 'Saving'
   switch (ctl.state) {
     case 'idle': return 'Idle'
     case 'running': return 'Running'
@@ -282,7 +324,7 @@ function shortState(ctl: XedDebugCtl) {
 
 export function XedDebugToolbar({ ctl }: { ctl: XedDebugCtl }) {
   const { state, paused, live, runnable, actions } = ctl
-  const canStart = !live && !runnable
+  const canStart = !live && !runnable && !ctl.saving
   const runLabel = paused ? 'Continue' : 'Run'
   const runTitle = paused ? 'Continue (F5)' : runnable ?? (ctl.state === 'running' ? 'Running' : `Run ${ctl.msh ? 'this script' : ''} until a breakpoint (F5)${canStart && ctl.dirty ? '. Saves the file first' : ''}`)
   return (
@@ -292,7 +334,7 @@ export function XedDebugToolbar({ ctl }: { ctl: XedDebugCtl }) {
         <span className="xed-dbg-label">{paused ? 'Continue' : ctl.state === 'running' ? 'Running' : ctl.dirty && canStart ? 'Save & Run' : 'Run'}</span>
       </button>
       <button className="xed-dbg-btn" onClick={actions.pause} disabled={state !== 'running'} title="Pause at the next command (F6)" aria-label="Pause" aria-keyshortcuts="F6"><Icon d={ICONS.pause} fill /></button>
-      <button className="xed-dbg-btn is-stop" onClick={actions.stop} disabled={!live} title="Stop (Shift+F5)" aria-label="Stop" aria-keyshortcuts="Shift+F5"><Icon d={ICONS.stop} fill /></button>
+      <button className="xed-dbg-btn is-stop" onClick={actions.stop} disabled={!live && !ctl.saving} title="Stop (Shift+F5)" aria-label="Stop" aria-keyshortcuts="Shift+F5"><Icon d={ICONS.stop} fill /></button>
       <span className="xed-dbg-sep" aria-hidden />
       <button className="xed-dbg-btn" onClick={actions.stepOver} disabled={!paused && !canStart} title={paused ? 'Step over: the next command here, running calls to the end (F10)' : 'Start and stop at the first command (F10)'} aria-label="Step over" aria-keyshortcuts="F10"><Icon d={ICONS.over} /></button>
       <button className="xed-dbg-btn" onClick={actions.stepInto} disabled={!paused && !canStart} title={paused ? 'Step into: the next command, inside functions and sourced files (F11)' : 'Start and stop at the first command (F11)'} aria-label="Step into" aria-keyshortcuts="F11"><Icon d={ICONS.into} /></button>

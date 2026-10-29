@@ -43,9 +43,10 @@ try {
   const waitState = (prefix: string, tag = 'a') => page.waitFor(`document.querySelector('.window[data-test="${tag}"] .xed-dbg-state .xed-dbg-long')?.textContent.startsWith(${JSON.stringify(prefix)})`, 15000)
   const MODS = { alt: 1, ctrl: 2, meta: 4, shift: 8 }
   const CODES: Record<string, number> = { F5: 116, F6: 117, F9: 120, F10: 121, F11: 122 }
-  // Keys go through CDP like a real keyboard; `prevented` reports whether the page cancelled the default.
+  // Keys go through CDP like a real keyboard; `prevented` reports whether the page cancelled the default
+  // (read after dispatch, from a capture listener on window so no handler can hide the event from it).
   const key = async (k: string, mods = 0) => {
-    await page.eval(`window.xedKeyLog = []; window.xedKeyHook ||= (addEventListener('keydown', e => setTimeout(() => window.xedKeyLog.push({ key: e.key, prevented: e.defaultPrevented }))), true)`)
+    await page.eval(`window.xedKeyLog = []; window.xedKeyHook ||= (addEventListener('keydown', e => setTimeout(() => window.xedKeyLog.push({ key: e.key, prevented: e.defaultPrevented })), true), true)`)
     for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: k, code: k, windowsVirtualKeyCode: CODES[k], modifiers: mods })
     await sleep(60)
     return page.eval<{ key: string; prevented: boolean }[]>('window.xedKeyLog')
@@ -115,7 +116,7 @@ try {
   pass('list remove and enable work through real checkbox/button clicks')
 
   // --- F5 with focus outside the textarea runs the saved script to the breakpoint -------------------
-  await caretAt(5, 15) // a selection in this file must survive pausing in it
+  await caretAt(4, 12) // a selection in this file must survive pausing in it, and stepping into another file and out
   await A(`W.querySelector('.zed').focus()`)
   expect(await page.eval(`document.activeElement === document.querySelector('.window[data-test="a"] .zed')`), 'focus is on the Xed window, not in the editor')
   const f5 = await key('F5')
@@ -123,7 +124,7 @@ try {
   await waitState('Paused (breakpoint) · xed-main.msh:4')
   const paused = await A(`return { gutter: W.querySelector('.zed-gutter').children[3].className, hl: W.querySelector('.zed-pause-hl')?.style.top, sel: [W.querySelector('textarea.zed-input').selectionStart, W.querySelector('textarea.zed-input').selectionEnd], out: W.querySelector('.xed-dbg-output')?.textContent ?? '' }`)
   expect(paused.gutter.includes('is-paused') && paused.gutter.includes('has-bp') && paused.hl === `${PAD + 3 * LINE}px` && paused.out === '', 'paused line has its arrow and background, separate from the breakpoint dot; nothing printed yet', paused)
-  expect(JSON.stringify(paused.sel) === '[5,15]', 'pausing in the open file keeps its selection', paused.sel)
+  expect(JSON.stringify(paused.sel) === '[4,12]', 'pausing in the open file keeps its selection', paused.sel)
   const runLabel = await A<string>(`return W.querySelector('.xed-dbg-btn.is-run').getAttribute('aria-label')`)
   expect(runLabel === 'Continue', 'Run button reads Continue while paused')
 
@@ -175,6 +176,10 @@ try {
   expect((await key('F11', MODS.shift))[0].prevented, 'Shift+F11 is taken by Xed')
   await waitState('Paused (step) · xed-main.msh:5')
   expect((await activeFile()) === 'xed-main.msh' && !(await A(`return !!W.querySelector('.xed-hover')`)), 'step out returns to the caller in main; stale hover cleared', await activeFile())
+  // Review 3: the caller's selection (set before the run) is back, and the editor kept the keyboard
+  // focus it had in the function's file.
+  await page.waitFor(`(() => { const t = document.querySelector('.window[data-test="a"] textarea.zed-input'); return t && t.selectionStart === 4 && t.selectionEnd === 12 && document.activeElement === t })()`, 5000)
+  pass('stepping into another file and out restores the caller selection 4–12 and the editor focus')
   await tab('Output')
   expect((await A<string>(`return W.querySelector('.xed-dbg-output').textContent`)) === 'hello world\n', 'greet really ran during step out')
   await key('F10'); await waitState('Paused (step) · xed-main.msh:6')
@@ -246,6 +251,31 @@ try {
   await inWin('b', `W.querySelector('[aria-label="Close"]').click()`)
   await page.waitFor(`document.querySelectorAll('.zed').length === 1`)
 
+  // --- review 2: nano in Xed's own terminal panel does not swallow the debugger's F5 --------------------
+  await A(`W.querySelector('.zed').focus()`)
+  await key('F5'); await waitState('Paused (breakpoint) · xed-main.msh:5')
+  await A(`W.querySelector('[aria-label="Toggle terminal panel"]').click()`)
+  await page.waitFor(`!!document.querySelector('.window[data-test="a"] .zed-dock .t-input input, .window[data-test="a"] .zed-dock .t-input textarea')`)
+  const termInput = `W.querySelector('.zed-dock .t-input input, .zed-dock .t-input textarea')`
+  await A(`${termInput}.focus()`)
+  await page.send('Input.insertText', { text: 'nano /tmp/xed-nano.txt' })
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}) })
+  await page.waitFor(`document.querySelector('.window[data-test="a"] .zed-dock')?.textContent.includes('Exit')`, 10000)
+  const terminalFocused = await A(`return W.querySelector('.zed-dock').contains(document.activeElement)`)
+  const inNano = await key('F5')
+  await waitState('Paused (breakpoint) · xed-main.msh:10')
+  const dock = await A<string>(`return W.querySelector('.zed-dock').textContent`)
+  expect(terminalFocused && !!inNano.find(k => k.key === 'F5')?.prevented && !/file to insert/i.test(dock), 'with nano focused in the terminal panel, F5 continues the paused script instead of reaching nano', { terminalFocused, inNano, nano: /file to insert/i.test(dock) })
+  // Other keys still reach nano: typing goes into its buffer, Ctrl+X asks to save.
+  await page.send('Input.insertText', { text: 'q' })
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'x', code: 'KeyX', windowsVirtualKeyCode: 88, modifiers: MODS.ctrl })
+  await page.waitFor(`/save modified buffer/i.test(document.querySelector('.window[data-test="a"] .zed-dock').textContent)`, 5000)
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'n', code: 'KeyN', windowsVirtualKeyCode: 78, ...(type === 'keyDown' ? { text: 'n' } : {}) })
+  await page.waitFor(`!document.querySelector('.window[data-test="a"] .zed-dock').textContent.includes('Save modified')`, 5000)
+  pass('non-debugger keys still go to nano in the terminal panel')
+  await key('F5', MODS.shift); await waitState('Stopped')
+  await A(`W.querySelector('[aria-label="Hide the terminal panel"]').click()`)
+
   // --- attach to a session started outside Xed ------------------------------------------------------
   const externalLaunch = () => page.eval(`(async () => {
     const fs = await import('/src/terminal/fs.ts')
@@ -276,6 +306,36 @@ try {
   await waitState('Completed')
   const external = await page.eval(`({ output: window.xedExternalOutput.join('\\n'), state: window.xedExternal.session.current.state, ok: window.xedExternalResults[0].ok })`)
   expect(external.output === 'external\nfinished' && external.state === 'completed' && external.ok, 'attached external script completes with its own output', external)
+  // Review 4: a hover shown for one session never shows its value after switching to another.
+  await page.eval(`(async () => {
+    const fs = await import('/src/terminal/fs.ts')
+    const { launchDebug } = await import('/src/terminal/msh/interp.ts')
+    await fs.writeFile('/tmp', '/tmp/xed-hover.msh', 'x=$1\\necho "$x"', false)
+    const base = () => ({ cwd: '/tmp', setCwd() {}, env: { HOME: '/home/menno', PWD: '/tmp' }, history: [], windows: [], openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent() { return true }, print() {}, live() {}, size: { cols: 80, rows: 24 }, onKey() {}, signal: new AbortController().signal })
+    // Separate environments: one terminal's environment refuses to run a script that is already running in it.
+    window.xedHover = ['one', 'two'].map(v => { const r = launchDebug('msh /tmp/xed-hover.msh ' + v, base(), 'hover ' + v, { start: 'run' }); r.session.breakpoint('/tmp/xed-hover.msh', 2); return r })
+  })()`)
+  await page.waitFor(`window.xedHover.every(r => r.session.current.state === 'paused')`)
+  await attach('window.xedHover[0].session.id')
+  await waitState('Paused (breakpoint) · xed-hover.msh:2')
+  await page.waitFor(`document.querySelector('.window[data-test="a"] .zed-tab.is-active')?.textContent.includes('xed-hover.msh')`)
+  const xAt = await A<{ x: number; y: number }>(`
+    const t = W.querySelector('textarea.zed-input'), r = t.getBoundingClientRect()
+    const c = document.createElement('canvas').getContext('2d'); const s = getComputedStyle(t); c.font = s.fontSize + ' ' + s.fontFamily
+    const w = c.measureText('0'.repeat(100)).width / 100
+    return { x: r.x + 7.5 * w, y: r.y + ${PAD} + ${LINE} + ${LINE / 2} }`)
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: xAt.x, y: xAt.y })
+  await page.waitFor(`document.querySelector('.window[data-test="a"] .xed-hover')?.textContent.startsWith('x = one')`, 5000)
+  await attach('window.xedHover[1].session.id')
+  await sleep(300)
+  const afterSwitch = await A<string | null>(`return W.querySelector('.xed-hover')?.textContent ?? null`)
+  expect(afterSwitch === null || !afterSwitch.includes('one'), 'switching the session picker without moving the pointer drops the old session\'s hover value', afterSwitch)
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: xAt.x + 1, y: xAt.y })
+  await page.waitFor(`document.querySelector('.window[data-test="a"] .xed-hover')?.textContent.startsWith('x = two')`, 5000)
+  pass('moving the pointer again shows the newly selected session\'s value')
+  await page.eval(`window.xedHover.forEach(r => r.session.cancel())`)
+  await attach("''")
+
   // Closing Xed cancels its own paused run and leaves an attached one paused.
   await externalLaunch()
   await page.waitFor(`window.xedExternal.session.current.state === 'paused'`)
@@ -290,6 +350,60 @@ try {
   await page.eval('window.xedExternal.session.continue()')
   await page.waitFor('window.xedExternalFinished')
   pass('external session completes after Xed closed')
+
+  // --- review 1: a run waiting for its save -------------------------------------------------------------
+  // F5 on an unsaved file awaits the save before launching. Everything below happens in one task, so
+  // the next step lands while that await is pending (with /tmp the save itself is quick; Seafile and
+  // browser-kept files take longer, which only widens the same gap).
+  const slow = '/tmp/xed-slow.msh'
+  await page.eval(`window.xedFs.writeFile('/tmp', ${JSON.stringify(slow)}, 'while true; do n=1; sleep 0.2; done', false)`)
+  const runsOf = () => page.eval<number>(`window.xedDebug.debugSessions().filter(s => s.current.label === ${JSON.stringify(slow)}).length`)
+  const openSlow = async (tag: string, t: string) => {
+    await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: ${JSON.stringify(slow)}, root: '/tmp', t: '${t}' } } }))`)
+    await page.waitFor(`!!document.querySelector('.zed .xed-dbg-bar')`)
+    await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = '${tag}'`)
+    await page.waitFor(`document.querySelector('.window[data-test="${tag}"]').classList.contains('is-focused')`)
+  }
+  const f5Now = `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true, cancelable: true }))`
+  const statusOf = (tag: string) => inWin<string>(tag, `return W.querySelector('.zed-status-msg').textContent`)
+  await openSlow('u', '10')
+  const before = await runsOf()
+  await edit('while true; do n=2; sleep 0.2; done', 'u')
+  // F5 starts the save-and-run; the window closes (React unmounts it right after the click) before
+  // the awaited save comes back.
+  await inWin('u', `${f5Now}; W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+  await sleep(800)
+  const leaked = await page.eval<string[]>(`window.xedDebug.debugSessions().filter(s => s.current.label === ${JSON.stringify(slow)} && !s.done).map(s => s.id + ':' + s.current.state)`)
+  expect((await runsOf()) === before && !leaked.length, 'a window closed while F5 waits for its save starts no run afterwards (nothing left running unowned)', { before, after: await runsOf(), leaked })
+  await page.eval(`window.xedDebug.debugSessions().filter(s => s.current.label === ${JSON.stringify(slow)}).forEach(s => s.cancel())`)
+  expect((await page.eval<string>(`window.xedFs.lookup(${JSON.stringify(slow)}).content()`)).includes('n=2'), 'the save itself still completed')
+  await openSlow('v', '11')
+  const base2 = await runsOf()
+  await edit('while true; do n=3; sleep 0.2; done', 'v')
+  await inWin('v', `${f5Now}; window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', shiftKey: true, bubbles: true, cancelable: true }))`)
+  await sleep(600)
+  expect((await runsOf()) === base2 && (await statusOf('v')).includes('cancelled'), 'Shift+F5 while the save is pending cancels the run', await statusOf('v'))
+  await edit('while true; do n=4; sleep 0.2; done', 'v')
+  await inWin('v', `${f5Now}
+    const e = W.querySelector('textarea.zed-input')
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(e, 'while true; do n=5; sleep 0.2; done')
+    e.dispatchEvent(new Event('input', { bubbles: true }))`)
+  await sleep(600)
+  expect((await runsOf()) === base2 && (await statusOf('v')).includes('changed while it was being saved'), 'text typed while the save is pending is not run from the older saved copy', await statusOf('v'))
+  await inWin('v', `${f5Now}; ${f5Now}`)
+  await waitState('Running', 'v')
+  await sleep(300)
+  expect((await runsOf()) === base2 + 1, 'two F5 presses in the same event start exactly one run', { base2, after: await runsOf() })
+  await page.eval(`document.querySelector('.window[data-test="v"] textarea.zed-input').focus()`)
+  await key('F5', MODS.shift); await waitState('Stopped', 'v')
+  await inWin('v', `${f5Now}; ${f5Now}`)
+  await waitState('Running', 'v')
+  await sleep(300)
+  expect((await runsOf()) === base2 + 2, 'also with nothing to save (no await at all), two F5 presses start one run', { base2, after: await runsOf() })
+  await key('F5', MODS.shift); await waitState('Stopped', 'v')
+  await inWin('v', `W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
 
   // --- phone: touch taps on the gutter and controls, fitting the width --------------------------------
   await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
