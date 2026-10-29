@@ -222,11 +222,11 @@ try {
     const sb = await shown(B)
     check('A and B show the same four widgets after a refresh', sa.titles.length === 4 && sa.titles.join() === sb.titles.join(), { sa: sa.titles, sb: sb.titles })
 
-    // 6. A phone shows them stacked, without errors.
+    // 6. A phone hides widgets without deleting their placements.
     const C = await browser(U1, 390, 800)
     await load(C)
     const sc = await shown(C)
-    check('phone: shows the same four widgets', sc.titles.join() === sa.titles.join(), sc.titles)
+    check('phone: hides all widgets', sc.titles.length === 0, sc.titles)
     check('phone: no page errors', C.errors.length === 0, C.errors)
 
     // 6b. Two tabs of one browser: signing out in tab 1 must not let tab 2 write account 1's state.

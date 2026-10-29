@@ -13015,3 +13015,10 @@ html {
     font-size: max(16px, 1em) !important;
   }
 }
+
+/* Widget content can grow without moving its grip or any neighbouring widget. */
+.window.chrome-note.widget .window-body {
+  max-height: var(--widget-body-max);
+  overflow: auto;
+  overscroll-behavior: contain;
+}

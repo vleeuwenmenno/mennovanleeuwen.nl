@@ -4064,24 +4064,16 @@ taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync`
 these rules in memory. `PORT=5273 node scripts/widgets-sync-e2e.ts` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
-A big screen puts a widget where it was put, moved along when its own screen is another size (a
-widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
-added on a phone gets the usual spot for a new widget there. Phones and big screens share the
-set; a phone only changes a widget's place in its column.
-
-Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser. It
-nudges desktop widgets and notes into nearby available space when a smaller viewport or larger
-UI scale crowds them together. The display layout accounts for measured content sizes, tape and
-resting note slants. It never saves these automatic offsets: returning to a larger screen restores
-its layout, and other devices keep their canonical placements. Dragging or resizing saves only
-the widget you changed, not its nudged neighbours. This browser remembers which item was moved
-last, separately for each account, so the same item keeps priority after a reload. That priority
-never syncs, and a removed widget's priority does not transfer to a new placement. If browser
-storage is blocked, priority lasts for the current page only. Phones keep their existing column layout.
-Placement is deterministic and bounded; if no space fits, an item keeps its fitted position and
-can still overlap. Turn the option off to keep intentional overlaps.
-`pnpm check:ui-scale` checks scale geometry, overlay bounds, sidebar dragging, high-scale
-placement persistence, and local collision handling without sync writes in muted Chromium.
+Desktop widgets overlap freely. Dragging, resizing or growing one never pushes another aside;
+clicking a widget brings it forward using the normal window stacking order. Multiple instances
+of the same kind are intentional. Width resizing keeps the grip fixed, and long content scrolls
+inside the card so controls stay reachable. Offscreen saved positions are fitted independently;
+shrinking the viewport never overwrites preferred geometry, which returns when it grows again.
+All widgets (including sticky widgets) are hidden below the existing 720 px mobile breakpoint.
+Their instances, settings and desktop positions remain saved for the return to desktop.
+`pnpm check:ui-scale` checks scale geometry, overlay bounds and sidebar dragging;
+`pnpm check:widget-layout` checks independent placement, resizing and mobile transitions in muted
+Chromium using synthetic data. `pnpm check:widget-geometry` checks fitting without a browser.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the set when that layout is loaded or arrives from the
@@ -4115,12 +4107,11 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones the notes and widgets go one under the other down a desktop that scrolls. Hold one by
-its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
+On phones desktop widgets are hidden; the built-in headline and shortcut notes remain in a
+scrolling column. Hold one by its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
 desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
 *Move up*, *Move down* and *Move to top*. The order is part of the
-phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)), and for widgets part of their
-synced set; on a big screen notes stay wherever they were put.
+phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay wherever they were put.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
 (*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
