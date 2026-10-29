@@ -1,0 +1,161 @@
+/* Subagents and tasks that continue a thread (src/apps/AgentsSubagents.tsx): the strips above the
+   message box, and how their results land in the thread. Colours from the theme only. */
+
+.agt-sub-strip {
+  margin: 0 12px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-dark);
+  max-height: 45vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.agt-sub-strip.is-phone {
+  margin: 0 6px 6px;
+  max-height: 55vh;
+}
+.agt-sub-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 10px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.agt-sub-head:focus-visible,
+.agt-sub-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.agt-sub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px;
+}
+.agt-sub-list > li + li {
+  border-top: 1px solid var(--line);
+}
+.agt-sub-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+}
+.agt-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 4px 10px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.agt-sub-row:hover {
+  background: var(--bg);
+}
+.agt-sub-row strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+.agt-sub-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.agt-sub-panel {
+  padding: 4px 10px 8px;
+}
+.agt-sub-meta {
+  margin: 0 0 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.agt-sub-transcript {
+  max-height: 30vh;
+  overflow: auto;
+  border-left: 2px solid var(--line);
+  padding-left: 8px;
+}
+.agt-sub-say {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.agt-sub-say input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.agt-sub-card {
+  margin: 4px 10px 8px;
+}
+.agt-sub-card .agt-ask-actions .btn {
+  min-height: 32px;
+}
+
+/* A finished subagent's result in the parent's thread (role 'subagent'): data, folded. */
+.agt-sub-result {
+  border-left: 3px solid var(--line-strong);
+  padding: 2px 0 2px 12px;
+  margin: 6px 0;
+}
+.agt-sub-result summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.agt-sub-parent .agt-sub-from {
+  margin: 0 0 2px;
+  font-size: 11px;
+}
+
+/* A run of a task that continues the thread, landed: header with Open run, the report, what it did. */
+.agt-task-run-block .agt-task-report-head {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.agt-task-run-transcript summary {
+  min-height: 28px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.agt-task-quiet {
+  margin: 4px 0;
+  font-size: 12px;
+}
+.agt-task-quiet summary {
+  min-height: 28px;
+  cursor: pointer;
+}
+.agt-task-quiet p {
+  margin: 2px 0 4px 14px;
+}

@@ -308,10 +308,12 @@ function taskSettings(user: User): TaskSettings {
  */
 function defaultReport(user: User, from: string | null): ReportTargets {
   const d = taskSettings(user).report
-  const r = reportOf({ ...DEFAULT_REPORT, ...d })
-  const pref = d.thread ?? 'origin'
+  const set = (d as { thread?: unknown }).thread
+  const r = reportOf({ ...DEFAULT_REPORT, ...d, thread: set === 'new' || set === 'none' ? set : 'none' })
+  // Settings: 'posted' (only the reports go to that thread), 'new', 'none', else (and 'fixed', from
+  // before runs could continue their thread) its runs continue the thread it was made in.
+  const pref = set === 'posted' ? 'fixed' : set === 'new' || set === 'none' ? set : 'origin'
   if ((pref === 'fixed' || pref === 'origin') && from) (r.thread = pref), (r.threadId = from)
-  else if (pref === 'fixed' || pref === 'origin') (r.thread = 'none'), (r.threadId = null)
   return r
 }
 

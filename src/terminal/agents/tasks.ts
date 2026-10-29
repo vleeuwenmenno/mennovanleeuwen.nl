@@ -1,7 +1,7 @@
 import { askArgLines, callVerdictKind, policySummary, RUN_STATUS_LABEL, TASK_TOOLS, type Task, type TaskRunInfo } from '../../data/agentTaskPolicy'
 import { describeSchedule } from '../../data/agentTaskSchedule'
 import { approveRun, cancelRun, getRun, listRuns, listTasks, runTask, updateTask } from '../../data/agentTasks'
-import { getThread, type AgentMessage } from '../../data/agents'
+import { getThread, type AgentMessage, type MessageMeta } from '../../data/agents'
 import { clipLine, seg, wrap, type Line } from './text'
 
 // /tasks in the agents command: background tasks (server/agentTasks.ts) as lines. The same API
@@ -93,9 +93,15 @@ export function runDetailLines(r: TaskRunInfo, title: string, messages: AgentMes
   return [...out, []]
 }
 
-/** A background task's report in a thread: marked as such, never as the agent's own answer. */
-export function reportLines(content: string, cols: number): Line[] {
-  return [[seg('▍ Task report', 'cyan'), seg(' · from a background task', 'muted')], ...content.split('\n').flatMap((l) => wrap([seg(l)], cols, [seg('▍ ', 'cyan')]))]
+/**
+ * A background task's report in a thread: marked as such, never as the agent's own answer. A run of
+ * a task that continues the thread has its header; its quiet runs are one muted line.
+ */
+export function reportLines(content: string, cols: number, meta?: MessageMeta): Line[] {
+  if (meta?.kind === 'taskQuiet') return [[seg(`· ${content}`, 'muted')]]
+  const head: Line = meta?.kind === 'taskRun' ? [seg(`▍ Task: ${meta.title}`, 'cyan'), seg(` · run #${meta.number ?? '?'} · /tasks log ${meta.run.slice(0, 8)}`, 'muted')] : [seg('▍ Task report', 'cyan'), seg(' · from a background task', 'muted')]
+  const body = meta?.kind === 'taskRun' ? content.replace(/^Task “[^”]*”, run #[^\n]*\n\n/, '') : content
+  return [head, ...body.split('\n').flatMap((l) => wrap([seg(l)], cols, [seg('▍ ', 'cyan')]))]
 }
 
 /** Finds one item by id or a unique id prefix (at least 4 characters). */

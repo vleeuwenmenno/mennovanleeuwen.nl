@@ -3587,6 +3587,12 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
     if (e.type === 'question') away('agents.ask', { title: `Agents asks: ${e.form.title}`, body: titleNow(), tag: `agents-ask-${thread}` })
   }
   sinks.set(thread, send)
+  // Windows watching its subagents learn it answers now (a turn from their results starts unasked).
+  const watchers = () => {
+    const row = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+    if (row) for (const w of childWatchers.get(thread) ?? []) w.send({ type: 'thread', thread: toThread(row) })
+  }
+  watchers()
   let ask: Ask | null = first
   let outcome: Outcome = 'stopped'
   let error: string | undefined
@@ -3632,6 +3638,7 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
     // Gone when it was deleted while answering.
     const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
     if (after) send({ type: 'thread', thread: toThread(after) })
+    watchers()
     res?.end()
     for (const f of followers.get(thread) ?? []) f.close()
     followers.delete(thread)
