@@ -8,22 +8,44 @@ export const MAX_WATCH_LENGTH = 200
 const MAX_RESULT = 4096
 export const WATCH_DISPLAY = 1000
 
-export type WatchSnapshot = { variables: Readonly<Record<string, string>>; args: readonly string[] }
+/**
+ * A pause's bounded snapshot. `cut`, `argCount` and `variableCount` say what the bounds left out (see
+ * DebugSnapshot): a cut value still reports its real length, and an entry past the bound is "not
+ * captured" rather than "not set".
+ */
+export type WatchSnapshot = {
+  variables: Readonly<Record<string, string>>; args: readonly string[]
+  cut?: { variables: Readonly<Record<string, number>>; args: Readonly<Record<number, number>> }
+  argCount?: number; variableCount?: number
+}
+/** `truncated`: the value shown is shorter than the real one (cut in the snapshot, or past the result bound). */
 export type WatchResult = { ok: true; value: string; truncated: boolean } | { ok: false; error: string }
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+/** A looked-up value, with its real length when the snapshot only kept the start of it. */
+type Piece = { value: string; length: number; truncated: boolean }
+const piece = (value: string, length = value.length): Piece => ({ value, length, truncated: length > value.length })
 
-function lookup(ref: string, snap: WatchSnapshot | null): string | { error: string } {
-  if (!snap) return ''
+function lookup(ref: string, snap: WatchSnapshot | null): Piece | { error: string } {
+  if (!snap) return piece('')
+  const argCount = snap.argCount ?? snap.args.length
   if (/^\d+$/.test(ref)) {
     const n = Number(ref)
     if (n === 0) return { error: '$0 is not captured at a pause' }
-    return n <= snap.args.length ? snap.args[n - 1] : { error: `$${ref} is not set` }
+    if (n <= snap.args.length) return piece(snap.args[n - 1], snap.cut?.args[n - 1])
+    if (n <= argCount) return { error: `$${ref} is not captured (only the first ${snap.args.length} arguments are kept)` }
+    return { error: `$${ref} is not set` }
   }
-  if (ref === '#') return String(snap.args.length)
-  if (ref === '@' || ref === '*') return snap.args.join(' ')
-  if (!Object.hasOwn(snap.variables, ref)) return { error: ref === '?' ? '$? is not captured' : `${ref} is not set at this pause` }
-  return snap.variables[ref]
+  if (ref === '#') return piece(String(argCount))
+  if (ref === '@' || ref === '*') {
+    const value = snap.args.join(' ')
+    const cut = argCount > snap.args.length || snap.args.some((_, i) => snap.cut?.args[i] !== undefined)
+    return { value, length: value.length, truncated: cut }
+  }
+  if (Object.hasOwn(snap.variables, ref)) return piece(snap.variables[ref], snap.cut?.variables[ref])
+  const captured = Object.keys(snap.variables).length
+  if ((snap.variableCount ?? captured) > captured) return { error: `${ref} is not captured (only ${captured} of ${snap.variableCount} variables are kept)` }
+  return { error: ref === '?' ? '$? is not captured' : `${ref} is not set at this pause` }
 }
 
 /** Checks an expression without a snapshot: null when it is allowed, or why not. */
@@ -36,24 +58,27 @@ export function evaluateWatch(input: string, snap: WatchSnapshot | null): WatchR
   const expr = input.trim()
   if (!expr) return { ok: false, error: 'Empty expression' }
   if (expr.length > MAX_WATCH_LENGTH) return { ok: false, error: `Longer than ${MAX_WATCH_LENGTH} characters` }
-  if (NAME.test(expr)) return finish(lookup(expr, snap))
-  let out = ''
+  if (NAME.test(expr)) return finish([lookup(expr, snap)])
+  const parts: (Piece | { error: string })[] = []
+  let size = 0
   let i = 0
-  while (i < expr.length) {
+  while (i < expr.length && size <= MAX_RESULT) {
     const c = expr[i]
     if (c === '`') return { ok: false, error: 'Command substitution is never run in a watch' }
     if (c === '\\') {
-      out += expr[i + 1] ?? ''
+      parts.push(piece(expr[i + 1] ?? ''))
       i += 2
+      size++
       continue
     }
     if (c !== '$') {
-      out += c
+      parts.push(piece(c))
       i++
+      size++
       continue
     }
     const next = expr[i + 1]
-    let value: string | { error: string }
+    let value: Piece | { error: string }
     if (next === '(') return { ok: false, error: expr[i + 2] === '(' ? 'Arithmetic is not evaluated in a watch' : 'Command substitution is never run in a watch' }
     if (next === '{') {
       const close = expr.indexOf('}', i + 2)
@@ -63,7 +88,8 @@ export function evaluateWatch(input: string, snap: WatchSnapshot | null): WatchR
       const ref = length ? inner.slice(1) : inner
       if (!NAME.test(ref) && !/^\d+$/.test(ref) && !(!length && /^[#@*?]$/.test(ref))) return { ok: false, error: 'Only ${name} and ${#name} are read in a watch' }
       value = lookup(ref, snap)
-      if (length && typeof value === 'string') value = String(value.length)
+      // ${#name} is the real length, also of a value the snapshot cut.
+      if (length && !('error' in value)) value = piece(String(value.length))
       i = close + 1
     } else if (next !== undefined && /[A-Za-z_]/.test(next)) {
       let end = i + 2
@@ -74,20 +100,27 @@ export function evaluateWatch(input: string, snap: WatchSnapshot | null): WatchR
       value = lookup(next, snap)
       i += 2
     } else {
-      out += '$'
+      parts.push(piece('$'))
       i++
+      size++
       continue
     }
-    if (typeof value !== 'string') return { ok: false, error: value.error }
-    out += value
-    if (out.length > MAX_RESULT) break
+    if ('error' in value) return { ok: false, error: value.error }
+    parts.push(value)
+    size += value.value.length
   }
-  return finish(out)
+  return finish(parts, i < expr.length)
 }
 
-function finish(value: string | { error: string }): WatchResult {
-  if (typeof value !== 'string') return { ok: false, error: value.error }
-  return { ok: true, value: value.slice(0, MAX_RESULT), truncated: value.length > MAX_RESULT }
+function finish(parts: (Piece | { error: string })[], unfinished = false): WatchResult {
+  let value = ''
+  let truncated = unfinished
+  for (const p of parts) {
+    if ('error' in p) return { ok: false, error: p.error }
+    value += p.value
+    truncated ||= p.truncated
+  }
+  return { ok: true, value: value.slice(0, MAX_RESULT), truncated: truncated || value.length > MAX_RESULT }
 }
 
 /**

@@ -828,7 +828,10 @@ file that is not in the paused call stack says so.
 `${name}`, `${#name}`, `$1`…, `$#`, `$@` and `$?`, with plain text around them. Command and
 arithmetic substitution, backticks and `${x:-…}`-style operators are refused, so a watch
 cannot run anything or change a variable. At most 20 watches of 200 characters; values are
-built up to 4096 characters and shown up to 1000.
+built up to 4096 characters and shown up to 1000. Snapshots are bounded (below), but keep what
+the bounds left out: `${#x}` and `$#` give the script's real length and count, a cut value is
+marked as cut with its real length, and an argument or variable past the bound reads as "not
+captured" rather than "not set". The Variables view says the same.
 
 **Unsaved and changed source.** A session remembers a hash of each file it parsed. When the
 editor's text of a file differs from what the session is running (edited while paused, or

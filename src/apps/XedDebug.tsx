@@ -233,7 +233,7 @@ function InspectLine({ inspect, differs }: { inspect: Inspect; differs?: boolean
   const r = inspect.result
   return <>
     <span className="xed-var-name">{inspect.name}</span>
-    {r.ok ? <> = <span className="xed-var-value">{shown(r.value) || <span className="muted">(empty)</span>}</span>{(r.value.length > WATCH_DISPLAY || ('truncated' in r && r.truncated)) && <span className="muted"> ({r.value.length}{'truncated' in r && r.truncated ? '+' : ''} characters)</span>}</> : <span className="xed-var-error"> {r.error}</span>}
+    {r.ok ? <> = <span className="xed-var-value">{shown(r.value) || <span className="muted">(empty)</span>}</span>{(r.value.length > WATCH_DISPLAY || r.truncated) && <span className="muted"> ({r.truncated ? `cut; ${r.value.length} characters kept` : `${r.value.length} characters`})</span>}</> : <span className="xed-var-error"> {r.error}</span>}
     {differs && <span className="xed-var-note">The editor text differs from what is running</span>}
   </>
 }
@@ -344,12 +344,18 @@ export function XedDebugPanel({ ctl, path, caretLine, diagnostics, commands, jum
     else {
       const locals = new Set(snap.locals)
       const names = Object.keys(snap.variables).sort((a, b) => Number(locals.has(b)) - Number(locals.has(a)) || a.localeCompare(b))
-      body = <table className="xed-vars selectable" aria-label="Variables at this pause">
+      body = <><table className="xed-vars selectable" aria-label="Variables at this pause">
         <tbody>
-          {snap.args.map((v, i) => <VarRow key={`$${i + 1}`} name={`$${i + 1}`} tag="argument" value={v} onWatch={() => ctl.addWatch(`$${i + 1}`)} />)}
-          {names.map(k => <VarRow key={k} name={k} tag={locals.has(k) ? 'local' : undefined} value={snap.variables[k]} onWatch={() => ctl.addWatch(k)} />)}
+          {snap.args.map((v, i) => <VarRow key={`$${i + 1}`} name={`$${i + 1}`} tag="argument" value={v} length={snap.cut.args[i]} onWatch={() => ctl.addWatch(`$${i + 1}`)} />)}
+          {names.map(k => <VarRow key={k} name={k} tag={locals.has(k) ? 'local' : undefined} value={snap.variables[k]} length={snap.cut.variables[k]} onWatch={() => ctl.addWatch(k)} />)}
         </tbody>
       </table>
+      {(snap.argCount > snap.args.length || snap.variableCount > names.length) && (
+        <p className="xed-dbg-empty xed-dbg-omitted">
+          {snap.argCount > snap.args.length && `${snap.argCount} arguments; the first ${snap.args.length} are kept. `}
+          {snap.variableCount > names.length && `${snap.variableCount} variables; ${names.length} are kept.`}
+        </p>
+      )}</>
     }
   } else if (tab === 'watch') {
     body = <WatchList ctl={ctl} />
@@ -421,10 +427,15 @@ function notPaused(ctl: XedDebugCtl) {
   return 'The session has ended; values from its last pause are cleared.'
 }
 
-function VarRow({ name, value, tag, onWatch }: { name: string; value: string; tag?: string; onWatch: () => void }) {
+/** `length`: the real length of a value the snapshot cut at 4096 characters. */
+function VarRow({ name, value, tag, length, onWatch }: { name: string; value: string; tag?: string; length?: number; onWatch: () => void }) {
+  const real = length ?? value.length
   return <tr>
     <th scope="row"><span className="xed-var-name">{name}</span>{tag && <span className="xed-var-tag">{tag}</span>}</th>
-    <td className="xed-var-value" title={value.length > WATCH_DISPLAY ? `${value.length} characters` : undefined}>{shown(value) || <span className="muted">(empty)</span>}</td>
+    <td className="xed-var-value" title={real > WATCH_DISPLAY ? `${real} characters` : undefined}>
+      {shown(value) || <span className="muted">(empty)</span>}
+      {real > WATCH_DISPLAY && <span className="muted"> ({real} characters{length !== undefined ? `, ${value.length} kept` : ''})</span>}
+    </td>
     <td><button className="xed-link" onClick={onWatch} aria-label={`Watch ${name}`}>Watch</button></td>
   </tr>
 }

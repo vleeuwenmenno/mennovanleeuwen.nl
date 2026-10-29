@@ -302,6 +302,25 @@ try {
   const src = 'name=1\necho "$name ${other} ${#len} $1"\nlocal kept\nfor item in a; do :; done\nplain word'
   const off = (needle: string, d = 0) => src.indexOf(needle) + d
   eq([watch.variableAt(src, 1), watch.variableAt(src, off('$name', 2)), watch.variableAt(src, off('$name')), watch.variableAt(src, off('${other}', 3)), watch.variableAt(src, off('${#len}', 4)), watch.variableAt(src, off('$1', 1)), watch.variableAt(src, off('kept', 1)), watch.variableAt(src, off('item', 1)), watch.variableAt(src, off('word', 1))], ['name', 'name', 'name', 'other', 'len', '$1', 'kept', 'item', null], 'hover finds variable references and assignments only')
+  // Bounded snapshots keep real lengths and counts: ${#x} and $# are the script's, not the bound's.
+  const args65 = Array.from({ length: 65 }, (_, i) => i + 1).join(' ')
+  await runLine(`printf '%s\n' 'x=$(printf "%05000d" 0)' 'for i in $(seq 300); do export "v$i=1"; done' 'zlast=end' 'f() {' '  : "$#"' '}' 'f ${args65}' > /tmp/watch-bounds.sh`, base())
+  const bounds = launchDebug('msh /tmp/watch-bounds.sh', base(), 'bounds', { start: 'run' })
+  bounds.session.breakpoint('/tmp/watch-bounds.sh', 5)
+  await wait(() => bounds.session.current.state === 'paused' || bounds.session.done)
+  const bsnap = bounds.session.current
+  eq([bsnap.state, bsnap.location?.line, bsnap.argCount, bsnap.args.length, bsnap.cut.variables.x, bsnap.variables.x?.length, bsnap.variableCount > 300], ['paused', 5, 65, 64, 5000, 4096, true], 'real pause: 5000-character x and 65 arguments are bounded with their real length and count kept')
+  eq(watch.evaluateWatch('${#x}:$#', bsnap), { ok: true, value: '5000:65', truncated: false }, 'watch ${#x}:$# reports the real 5000:65, not the bounds')
+  const cutX = watch.evaluateWatch('x', bsnap)
+  check(cutX.ok && cutX.value.length === 4096 && cutX.truncated, 'a cut variable is marked truncated', JSON.stringify(cutX).slice(0, 120))
+  const at65 = watch.evaluateWatch('${65}', bsnap), at66 = watch.evaluateWatch('${66}', bsnap), all = watch.evaluateWatch('$@', bsnap)
+  check(!at65.ok && at65.error.includes('not captured') && !at66.ok && at66.error.includes('not set'), '${65} is "not captured" (past the bound), ${66} is "not set"', JSON.stringify([at65, at66]))
+  check(all.ok && all.truncated, '$@ is marked truncated when arguments were left out')
+  const late = watch.evaluateWatch('zlast', bsnap), never = watch.evaluateWatch('nosuchvar', bsnap)
+  check(!late.ok && late.error.includes('not captured') && !never.ok && never.error.includes('not captured'), 'past 256 variables a missing name is "not captured", never claimed unset', JSON.stringify([late, never]))
+  bounds.session.cancel(); await bounds.done
+  const small = { variables: { y: 'ab' }, args: ['p'], cut: { variables: {}, args: {} }, argCount: 1, variableCount: 1 }
+  eq([watch.evaluateWatch('nosuch', small), watch.evaluateWatch('$2', small)], [{ ok: false, error: 'nosuch is not set at this pause' }, { ok: false, error: '$2 is not set' }], 'with nothing left out, missing names and arguments are "not set"')
   for (let i = 0; i < 30; i++) { const s = new DebugSession('bounded'); s.finish(0) }
   eq(debugSessions().length, 16, 'registry remains bounded')
 } finally { await vite.close() }

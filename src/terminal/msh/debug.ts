@@ -13,6 +13,14 @@ export type DebugSnapshot = {
   variables: Readonly<Record<string, string>>; status?: number; breakpoints: readonly string[]
   /** Positional parameters of the paused frame ($1…), bounded like variables. */
   args: readonly string[]
+  /**
+   * What the bounds left out, so a viewer never mistakes a cut value or a missing entry for the real
+   * thing: the original length of each value cut at 4096 characters (variables by name, arguments by
+   * index from 0), how many arguments there were, and how many variables (captured or not).
+   */
+  cut: { variables: Readonly<Record<string, number>>; args: Readonly<Record<number, number>> }
+  argCount: number
+  variableCount: number
   /** Names made `local` by the innermost function at the pause. */
   locals: readonly string[]
   /** Innermost first. Empty unless paused. */
@@ -29,9 +37,10 @@ type Frame = { kind: FrameKind; name: string; filename: string; call?: SourceSpa
 
 const MAX_SESSIONS = 16
 const MAX_POINTS = 256
-const MAX_VARS = 256
-const MAX_VALUE = 4096
-const MAX_ARGS = 64
+export const SNAPSHOT_LIMITS = { variables: 256, value: 4096, args: 64 } as const
+const MAX_VARS = SNAPSHOT_LIMITS.variables
+const MAX_VALUE = SNAPSHOT_LIMITS.value
+const MAX_ARGS = SNAPSHOT_LIMITS.args
 const MAX_FRAMES = 128
 const MAX_SOURCES = 64
 
@@ -183,7 +192,7 @@ export class DebugSession {
       sessions.delete(old.id)
     }
     this.mode = start === 'first' ? { kind: 'into' } : start === 'run' ? { kind: 'run' } : { kind: 'entry', filename: start.entry }
-    this.snapshot = { id: this.id, label, state: 'running', variables: {}, breakpoints: [], args: [], locals: [], frames: [], pauses: 0 }
+    this.snapshot = { id: this.id, label, state: 'running', variables: {}, breakpoints: [], args: [], cut: { variables: {}, args: {} }, argCount: 0, variableCount: 0, locals: [], frames: [], pauses: 0 }
     sessions.set(this.id, this)
     emit()
   }
@@ -279,20 +288,26 @@ export class DebugSession {
     if (!reason) return
     if (this.snapshot.pauses === 0 && reason === 'step' && mode.kind === 'into') reason = 'entry'
     const copy: Record<string, string> = Object.create(null)
+    const cutVars: Record<string, number> = Object.create(null)
     let count = 0, held = 0
     for (const k in variables) {
       if (!Object.hasOwn(variables, k)) continue
-      if (count++ >= MAX_VARS) break
-      const value = variables[k].slice(0, MAX_VALUE)
+      // Past the bound, variables are only counted (no copy, no charge), so a lookup can say "not captured".
+      if (count++ >= MAX_VARS) continue
+      const full = variables[k]
+      const value = full.slice(0, MAX_VALUE)
       if (budget?.step() || budget?.write(k.length + value.length, held)) return
       held += k.length + value.length
       copy[k] = value
+      if (full.length > MAX_VALUE) cutVars[k] = full.length
     }
     const args: string[] = []
+    const cutArgs: Record<number, number> = Object.create(null)
     for (const a of extra?.args?.slice(0, MAX_ARGS) ?? []) {
       const value = a.slice(0, MAX_VALUE)
       if (budget?.write(value.length, held)) return
       held += value.length
+      if (a.length > MAX_VALUE) cutArgs[args.length] = a.length
       args.push(value)
     }
     const locals = [...(extra?.locals ?? [])].slice(0, MAX_VARS)
@@ -307,6 +322,7 @@ export class DebugSession {
         this.snapshot = {
           ...this.snapshot, state: 'paused', reason, pauses: this.snapshot.pauses + 1,
           location: { ...location, expression: location.expression.slice(0, MAX_VALUE) }, variables: copy, args, locals, frames: this.stack(location),
+          cut: { variables: cutVars, args: cutArgs }, argCount: extra?.args?.length ?? 0, variableCount: count,
         }
         emit()
       })
