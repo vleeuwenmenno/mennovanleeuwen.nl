@@ -532,7 +532,7 @@ JSON, inherited keys, budget exhaustion, and timer-driven cancellation during wo
 modify its policy or enable commands there. Keep `EFFECTS.jq = 'blocked'`. After
 integrating and testing, add only `'jq-safe': 'pure'` to `EFFECTS`, and return `[]`
 for `fileOperands('jq-safe', args)` (every argument is data, never a filename).
-Also add `if (cmd === 'jq-safe') return` immediately after `checkActor(actor)`
+Preserve this branch's `jq-safe`/`mvl` no-filesystem early return immediately after `checkActor(actor)`
 in `fs.ts`'s `prepare`, before operand discovery, policy path checks or filesystem
 loading. Merely adding `SELF_SERVED` is insufficient: path checks run before it.
 The normal shell command-policy check still applies. These changes are required
@@ -6158,3 +6158,9 @@ resolved-command gate must call it, the server must validate and forward these
 explicit grants, and capabilities must describe them before enabling `mvl`. The
 existing broad network grant alone is deliberately insufficient. No server grant
 or `EFFECTS` enablement is introduced by this independent branch.
+
+Both `mvl` and `jq-safe` bypass filesystem preparation because none of their
+arguments are filenames. When combining with the security branch, keep its actor
+cancellation check before this early return and return no file operands for both.
+`mvl` still performs its own explicit resource check and authenticated GET; this
+preparation exception does not authorize either command in the agent policy.

@@ -265,6 +265,9 @@ async function ensureTree(root: string, cmd: string, read: boolean) {
  * tree and -r. Throws the command's own error for a locked library or a lost connection.
  */
 export async function prepare(cwd: string, cmd: string, args: string[]) {
+  // These commands accept data arguments only; never interpret them as filesystem paths.
+  // When combining with the actor-policy branch, retain its checkActor before this return.
+  if (cmd === 'jq-safe' || cmd === 'mvl') return
   // The browser's files load once, right after sign-in; the first command waits for that.
   if (browserMountPoint()) await browserFilesReady()
   if (!usesSeafile() || !getAccount().seafile || SELF_SERVED.has(cmd)) return
