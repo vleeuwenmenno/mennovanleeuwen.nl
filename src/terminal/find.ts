@@ -1,7 +1,7 @@
 import { HANDLE } from '../os/identity'
 import { runLine, writeTmp, type Completion } from './commands'
 import { CmdError, type Ctx } from './types'
-import { lookup, removePath, sfOf } from './fs'
+import { actorOf, lookup, removePath, sfOf } from './fs'
 import { allows, applyMode, canRun, modeOf, ownerOf, permString } from './modes'
 import { HOME, resolvePath, stat, type DirNode, type Node } from './vfs'
 
@@ -777,7 +777,7 @@ class FindParser {
           if (e.abs === '/tmp' || (!isUnderTmp(e.abs) && !(node?.sf && !node.ro))) return fail('Read-only file system')
           if (node?.type === 'dir' && node.children.size) return fail('Directory not empty')
           try {
-            await removePath('/', e.abs, { recursive: false, force: true, dir: true, root: !!st.ctx.root })
+            await removePath('/', e.abs, { recursive: false, force: true, dir: true, root: actorOf(st.ctx) })
             return true
           } catch (err) {
             return fail((err as Error).message.replace(/^.*: /, ''))
@@ -975,7 +975,7 @@ help       Explain the various -D options`
       if (!r.ok) st.failed = true
     }
   }
-  for (const [file, chunks] of st.files) writeTmp(ctx.cwd, file, chunks.join('').replace(/\n$/, ''), false, !!ctx.root, 'find')
+  for (const [file, chunks] of st.files) writeTmp(ctx.cwd, file, chunks.join('').replace(/\n$/, ''), false, actorOf(ctx), 'find')
 
   const text = [...warnings, ...st.out].join('').replace(/\n$/, '')
   if (st.failed) throw new CmdError(text, true)

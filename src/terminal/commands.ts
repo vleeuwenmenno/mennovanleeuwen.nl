@@ -1,3 +1,4 @@
+import { agentGrepRefusal, parseGrepArgs } from './grepArgs'
 import { contributions, headlines, profile, projects } from '../data/profile'
 import { countFor, levels, loadContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
@@ -25,7 +26,7 @@ import { asWebAddress } from '../os/linkPreview'
 import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
-import { lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
+import { actorOf, checkActor, type Actor, lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
 import { loadLibraries, getLibraries, openSeafile, sfPath } from '../data/seafile'
 import { importFileOf } from '../data/fileOps'
 import { openImport, pimAppFor } from '../data/pimFiles'
@@ -42,7 +43,8 @@ import { vtCommands } from './vt/demo'
 import { tarCommands } from './tar'
 import { unzipCommands } from './unzip'
 import { MEDIA_APP } from '../data/media'
-import { aliasesOf, runLine, setShellHooks } from './msh/interp'
+import { aliasesOf, runLine, setShellHooks, SHELL_BUILTINS } from './msh/interp'
+import { capabilities, HELP_GROUPS } from './capabilities'
 import { meansPath, shellQuote } from './words'
 import { MSH_MAN } from '../data/mshReference'
 
@@ -397,7 +399,7 @@ async function moveOrCopy(ctx: Ctx, op: 'move' | 'copy') {
   const dest = f.rest[f.rest.length - 1]
   const sources = f.rest.slice(0, -1)
   if (sources.length > 1 && lookup(resolvePath(ctx.cwd, dest))?.type !== 'dir') throw new CmdError(`${cmd}: target '${dest}': Not a directory`)
-  for (const s of sources) await transfer(op, ctx.cwd, s, dest, f.has('r') || f.has('R') || f.has('a'), !!ctx.root)
+  for (const s of sources) await transfer(op, ctx.cwd, s, dest, f.has('r') || f.has('R') || f.has('a'), actorOf(ctx))
 }
 
 /** A shell builtin as a command, for callers that run commands without the shell. */
@@ -413,26 +415,29 @@ function viaShell(name: string): Command['run'] {
 export const commands: Record<string, Command> = {
   help: {
     desc: 'list commands',
-    run: () => {
-      const groups: [string, string[]][] = [
-        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
-        ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'weather', 'games']],
-        ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'changelog', 'git', 'heatmap', 'stars', 'contact']],
-        ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'chmod', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
-        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
-        ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
-        ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
-        ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'alias', 'unalias', 'type', 'sleep', 'seq', 'basename', 'dirname']],
-        ['Agents', ['agents', 'skills']],
-        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
-        ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
-      ]
+    usage: 'help [--json [command]]',
+    run: (ctx) => {
+      // The machine view (what this session can do, as JSON) comes from the same registry as the list below.
+      if (ctx.args[0] === '--json' || ctx.args[0] === '-j') {
+        if (ctx.args.length > 2) throw new CmdError('usage: help [--json [command]]')
+        const only = ctx.args[1]
+        if (only && !commands[only] && !SHELL_BUILTINS.includes(only)) throw new CmdError(`help: no command called ${only}`)
+        // On a screen it is indented to read; piped (or in an agent's call, whose output is capped) it is one compact line.
+        const json = JSON.stringify(capabilities(commands, ctx, only), null, ctx.tty ? 2 : undefined)
+        if (ctx.raw) return void ctx.raw(`${json}\n`)
+        return json
+      }
+      if (ctx.args.length) throw new CmdError(`help: ${ctx.args[0]}: no such option. Try: help --json, man <command>`)
+      const listed = new Set(HELP_GROUPS.flatMap(([, names]) => names))
+      const more = Object.keys(commands).filter((n) => !commands[n].hidden && !listed.has(n))
+      const groups: [string, string[]][] = more.length ? [...HELP_GROUPS, ['More', more]] : HELP_GROUPS
       return [
         ...groups.map(([g, cmds]) => `${c('accent', g.padEnd(9))} ${cmds.map((n) => c('green', n)).join('  ')}`),
         '',
         `Pipes work: ${c('cyan', 'cat cv.md | grep -i go')}   Writes go to /tmp: ${c('cyan', 'echo hi > /tmp/x')}`,
         `Scripts too: ${c('cyan', 'for f in *; do echo $f; done')}   The shell's syntax: ${c('cyan', 'man msh')}`,
         `Shortcuts: ${c('cyan', "alias ll='ls -l'")}. Put alias lines in ${c('cyan', '~/.mvshrc')} (${c('cyan', 'nano ~/.mvshrc')}) and every terminal runs them at start.`,
+        `For programs: ${c('cyan', 'help --json')} says what this session can do (commands and their options, mounts, limits) as JSON.`,
         `${c('muted', 'Tab completes, ↑/↓ walks history, Ctrl+L clears, `man <cmd>` explains one.')}`,
       ].join('\n')
     },
@@ -541,8 +546,10 @@ export const commands: Record<string, Command> = {
     desc: 'search text',
     usage: 'grep [-i] [-n] [-v] [-c] [-r] [-q] [-w] [-F] <pattern> [file|dir]',
     run: (ctx) => {
-      const f = flags(ctx.args)
-      const [pattern, ...files] = f.rest
+      const f = parseGrepArgs(ctx.args)
+      const { pattern, files } = f
+      const refused = ctx.policy && agentGrepRefusal(f)
+      if (refused) throw new CmdError(refused, false, 126)
       if (pattern === undefined) throw new CmdError('usage: grep [-i] [-n] [-v] [-r] <pattern> [file]')
       let re: RegExp
       try {
@@ -557,6 +564,7 @@ export const commands: Record<string, Command> = {
       const match = (l: string) => re.test(l) !== f.has('v')
 
       if (f.has('r') || files.some((p) => lookup(resolvePath(ctx.cwd, p))?.type === 'dir')) {
+        if (ctx.policy) throw new CmdError('grep: recursive agent searches are unavailable; search individual files')
         const roots = files.length ? files : ['.']
         const out: string[] = []
         for (const r of roots) {
@@ -621,7 +629,7 @@ export const commands: Record<string, Command> = {
     run: async (ctx) => {
       const files = ctx.args.filter((a) => !a.startsWith('-'))
       if (!files.length) throw new CmdError("touch: missing file operand\nTry 'touch --help' for more information.")
-      for (const a of files) await touchFile(ctx.cwd, a, !!ctx.root)
+      for (const a of files) await touchFile(ctx.cwd, a, actorOf(ctx))
     },
   },
   mkdir: {
@@ -630,7 +638,7 @@ export const commands: Record<string, Command> = {
     run: async (ctx) => {
       const f = flags(ctx.args)
       if (!f.rest.length) throw new CmdError("mkdir: missing operand\nTry 'mkdir --help' for more information.")
-      for (const a of f.rest) await makeDir(ctx.cwd, a, f.has('p'), !!ctx.root)
+      for (const a of f.rest) await makeDir(ctx.cwd, a, f.has('p'), actorOf(ctx))
     },
   },
   rm: {
@@ -656,7 +664,7 @@ export const commands: Record<string, Command> = {
           })
         })
       }
-      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d'), ask, root: !!ctx.root })
+      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d'), ask, root: actorOf(ctx) })
     },
   },
   rmdir: {
@@ -668,7 +676,7 @@ export const commands: Record<string, Command> = {
         const node = lookup(resolvePath(ctx.cwd, a))
         if (node && node.type !== 'dir') throw new CmdError(`rmdir: failed to remove '${a}': Not a directory`)
         if (node?.type === 'dir' && node.children.size) throw new CmdError(`rmdir: failed to remove '${a}': Directory not empty`)
-        await removePath(ctx.cwd, a, { recursive: false, force: false, dir: true, root: !!ctx.root })
+        await removePath(ctx.cwd, a, { recursive: false, force: false, dir: true, root: actorOf(ctx) })
       }
     },
   },
@@ -688,7 +696,7 @@ export const commands: Record<string, Command> = {
     run: async (ctx) => {
       const f = flags(ctx.args)
       const text = ctx.stdin ?? ''
-      for (const file of f.rest) await writeFile(ctx.cwd, file, text, f.has('a'), !!ctx.root, 'tee')
+      for (const file of f.rest) await writeFile(ctx.cwd, file, text, f.has('a'), actorOf(ctx), 'tee')
       return text
     },
   },
@@ -1280,11 +1288,18 @@ export const commands: Record<string, Command> = {
   calc: {
     desc: 'calculator with units and currencies',
     usage: "calc <expression>   e.g. calc 5 ft 11 in to cm · calc €20 + 15 USD in GBP · calc 1 TB in GiB",
-    run: async ({ args, stdin }) => {
+    run: async (ctx) => {
+      const { args, stdin } = ctx
       const text = (args.length ? args.join(' ') : (stdin ?? '')).trim()
       if (!text) throw new CmdError(`usage: ${commands.calc.usage}`)
       let res = smartCalc(text)
-      if (res?.kind === 'pending') res = smartCalc(text, await loadRates())
+      if (res?.kind === 'pending') res = smartCalc(text, await loadRates({
+        signal: ctx.signal,
+        authorize: () => {
+          checkActor(actorOf(ctx))
+          if (ctx.policy && !ctx.policy.grant.network) throw new CmdError('calc: fetching exchange rates needs network approval; run the currency calculation directly', false, 126)
+        },
+      }))
       if (!res || res.kind === 'pending') throw new CmdError(res ? 'calc: exchange rates are unavailable right now' : `calc: '${text}' is not something I can calculate`)
       if (res.kind === 'error') throw new CmdError(`calc: ${res.message}`)
       return [c('accent', res.value), ...res.alternatives.map((a) => c('muted', `= ${a}`)), ...(res.note ? [c('muted', res.note)] : [])].join('\n')
@@ -1506,8 +1521,12 @@ async function ping(ctx: Ctx): Promise<string> {
 }
 
 /** Writes a file in /tmp. A mode set with chmod can refuse it (Permission denied, in `who`'s words); root may. */
-export function writeTmp(cwd: string, target: string, content: string, append: boolean, root = false, who = '') {
+export function writeTmp(cwd: string, target: string, content: string, append: boolean, actor: Actor = false, who = '') {
+  checkActor(actor)
+  const root = typeof actor === 'boolean' ? actor : actor.root
   const abs = resolvePath(cwd, target)
+  const refused = typeof actor === 'boolean' ? null : actor.policy?.write(abs)
+  if (refused) throw new CmdError(refused)
   if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system`)
   const name = abs.slice(5)
   const existing = tmp().children.get(name)

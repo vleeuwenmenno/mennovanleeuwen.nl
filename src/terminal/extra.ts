@@ -5,7 +5,7 @@ import { md5, sha } from './hash'
 import { jq, JqError } from './jq'
 import { CmdError, type Ctx } from './types'
 import { cmatrix, USAGE as CMATRIX_USAGE } from './cmatrix'
-import { lookup } from './fs'
+import { actorOf, lookup } from './fs'
 import { readFile as readText } from './read'
 import { age, lookup as siteLookup, resolvePath, walk as siteWalk, type Node } from './vfs'
 import { runLine, writeTmp } from './commands'
@@ -177,7 +177,7 @@ async function curl(ctx: Ctx): Promise<string> {
   const file = output ?? (remoteName ? url.pathname.split('/').filter(Boolean).pop() || 'index.html' : null)
   if (file) {
     const body = await res.text()
-    writeTmp(ctx.cwd, file.includes('/') ? file : `/tmp/${file}`, body, false, !!ctx.root, 'curl')
+    writeTmp(ctx.cwd, file.includes('/') ? file : `/tmp/${file}`, body, false, actorOf(ctx), 'curl')
     return silent ? '' : c('muted', `  % Total    % Received  Xferd\n100 ${human(body.length).padStart(6)}  100 ${human(body.length).padStart(6)}   saved to ${file.includes('/') ? file : `/tmp/${file}`}`)
   }
   if (isBinary(type)) {
@@ -234,7 +234,7 @@ async function wget(ctx: Ctx): Promise<string> {
   const body = await res.text()
   if (toStdout) return ctx.tty ? (body.includes('\x1b[') ? ansiToMarkup(body) : plain(body)) : body
   const name = url.pathname.split('/').filter(Boolean).pop() || 'index.html'
-  writeTmp(ctx.cwd, `/tmp/${name}`, body, false, !!ctx.root, 'wget')
+  writeTmp(ctx.cwd, `/tmp/${name}`, body, false, actorOf(ctx), 'wget')
   if (quiet) return ''
   return `${res.status} ${STATUS_TEXT[res.status] ?? ''}\nLength: ${body.length} (${human(body.length)}) [${res.headers.get('content-type') ?? 'text/plain'}]\nSaving to: ‘/tmp/${name}’\n\n/tmp/${name}       100%[===================>]  ${human(body.length).padStart(6)}  --.-KB/s    in 0s\n\n${when} - ‘/tmp/${name}’ saved [${body.length}/${body.length}]`
 }

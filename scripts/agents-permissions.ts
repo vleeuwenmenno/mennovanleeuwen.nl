@@ -33,6 +33,10 @@ const REPO = 'https://github.com/uowuo/abaddon'
 
 const fetch_ = (url: string): Call => ({ name: 'web_fetch', arguments: { url } })
 const SCENARIOS: Record<string, Call[][]> = {
+  'remember-calc': [[{ name: 'terminal', arguments: { command: 'calc \"2 + 2\"' } }]],
+  'currency-calc': [[{ name: 'terminal', arguments: { command: 'calc 10 EUR in USD' } }]],
+  'remember-tee': [[{ name: 'terminal', arguments: { command: 'tee ordinary.txt' } }]],
+  'steering-tee': [[{ name: 'terminal', arguments: { command: 'tee AGENTS.md' } }]],
   // The user's own example: a repository it read, then its commits and releases.
   example: [[fetch_(REPO)], [fetch_(`${REPO}/commits/master`), fetch_(`${REPO}/releases`)]],
   // A path part nobody gave it, which could carry something: the safety check decides. One address
@@ -58,6 +62,10 @@ const SCENARIOS: Record<string, Call[][]> = {
   // Ask first with a work folder: an edit and a delete ask.
   edits: [[{ name: 'edit_file', arguments: { path: 'a.md', old_string: 'x', new_string: 'y' } }, { name: 'delete_path', arguments: { path: 'b.md' } }]],
   plan: [[{ name: 'exit_plan_mode', arguments: { plan: '1. Do the thing' } }]],
+  // The terminal's round trip: a call answered with a structured result, then the capability query.
+  term: [[{ name: 'terminal', arguments: { command: 'echo hi > out.txt', timeout_seconds: 999 } }], [{ name: 'terminal_capabilities', arguments: {} }]],
+  // Plan: a line that only reads runs (with a read-only grant), one that writes is refused.
+  'term-plan': [[{ name: 'terminal', arguments: { command: 'ls' } }, { name: 'terminal', arguments: { command: 'touch x' } }]],
 }
 
 // --- The stand-in for Ollama ----------------------------------------------------------------------
@@ -125,7 +133,8 @@ const now = Date.now()
 database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (1, 1, ?, ?, ?, ?)').run(LOGIN, encrypt('none'), now, now)
 database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(sid), now, now + 86400_000)
 // The decisions themselves, for what the stand-in cannot reach (a calendar).
-const { decide, clearedByRules } = await import('../server/agents.ts')
+const { decide, decideTerminal, clearedByRules } = await import('../server/agents.ts')
+const { terminalGrant, terminalTool, terminalCapabilitiesTool } = await import('../server/workdir.ts')
 await server.start()
 
 const api = async (method: string, path: string, body?: unknown) => {
@@ -147,9 +156,9 @@ const threadOf = (id: string) => getJson<{ thread: Thread; messages: Saved[] }>(
  * One turn, read as it streams: each approval is answered by `answer` (declined when it says
  * nothing), a terminal call gets an output. Answers the approvals asked and the turn's tool results.
  */
-async function turn(id: string, text: string, answer: (a: Approval) => Answer = () => ({ allow: false }), terminal = false) {
+async function turn(id: string, text: string, answer: (a: Approval) => Answer = () => ({ allow: false }), terminal: boolean | 'exec' = false) {
   const asked: Approval[] = []
-  const res = await api('POST', `/api/agents/threads/${id}/messages`, { text, ...(terminal ? { client: { terminal: true } } : {}) })
+  const res = await api('POST', `/api/agents/threads/${id}/messages`, { text, ...(terminal === 'exec' ? { client: { exec: true } } : terminal ? { client: { terminal: true } } : {}) })
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -169,13 +178,24 @@ async function turn(id: string, text: string, answer: (a: Approval) => Answer = 
         asked.push(e as Approval)
         void api('POST', `/api/agents/threads/${id}/approve`, { callId: e.callId, ...answer(e as Approval) }).catch((err: Error) => check(`answering an approval worked (${err.message})`, false))
       }
-      if (e.type === 'client') void api('POST', `/api/agents/threads/${id}/result`, { callId: e.callId, output: 'done', status: 0 }).catch((err: Error) => check(`answering a terminal call worked (${err.message})`, false))
+      if (e.type === 'client') {
+        const ev = e as unknown as { callId: string; call: Call; grant: unknown }
+        clients.push({ name: ev.call.name, grant: ev.grant })
+        // Two windows: the first to ask for a call may run it, the second may not.
+        const claims = [await api('POST', `/api/agents/threads/${id}/claim`, { callId: ev.callId }).then((r) => r.json() as Promise<{ ok: boolean }>), await api('POST', `/api/agents/threads/${id}/claim`, { callId: ev.callId }).then((r) => r.json() as Promise<{ ok: boolean }>)]
+        claimed.push(claims.map((c) => c.ok))
+        const body = ev.call.name === 'terminal_capabilities' ? { output: 'capabilities', status: 0, capabilities: JSON.stringify({ session: { kind: 'agent' } }) } : ev.call.name === 'terminal' && String(ev.call.arguments.command) === 'echo hi > out.txt' ? { output: 'hi\nwarn', status: 3, result: { exit_code: 3, stdout: 'hi', stderr: 'warn', duration_ms: 12, truncated: { stdout: 5, stderr: 0 }, terminated: 'timeout', cwd: '/x' } } : { output: 'done', status: 0 }
+        void api('POST', `/api/agents/threads/${id}/result`, { callId: ev.callId, ...body }).catch((err: Error) => check(`answering a terminal call worked (${err.message})`, false))
+      }
     }
   }
   const t = await threadOf(id)
   const last = t.messages.map((m) => m.role).lastIndexOf('user')
   return { asked, error, thread: t.thread, tools: t.messages.slice(last + 1).filter((m) => m.role === 'tool') }
 }
+/** The terminal calls a window was asked to run, with the grant each came with, and how two windows' claims went. */
+const clients: { name: string; grant: unknown }[] = []
+const claimed: boolean[][] = []
 const urlOf = (a: Approval) => String(a.call?.arguments?.url ?? '')
 
 try {
@@ -277,9 +297,47 @@ try {
   const term = byRun.tools.find((m) => m.toolName === 'terminal')
   check(`Bypass: rm ran in the terminal without asking (got ${term?.content})`, !!term && /"exit_code":0/.test(term.content))
   check('Bypass: the web read says it was not checked', byRun.tools.some((m) => m.toolName === 'web_fetch' && m.checked === 'Not checked: Bypass is on'))
+  const tm = await newThread({ permission: 'bypass', workdir })
+  const tmRun = await turn(tm.id, 'SCENARIO term', () => ({ allow: false }), 'exec')
+  const tmOut = JSON.parse(tmRun.tools.find((m) => m.toolName === 'terminal')?.content ?? 'null') as Record<string, unknown> | null
+  check(`Terminal round trip: the model gets exit_code, stdout, stderr, duration, truncated and terminated (got ${JSON.stringify(tmOut)})`, !!tmOut && tmOut.exit_code === 3 && tmOut.stdout === 'hi' && tmOut.stderr === 'warn' && tmOut.duration_ms === 12 && JSON.stringify(tmOut.truncated) === '{"stdout":5,"stderr":0}' && tmOut.terminated === 'timeout')
+  check('Terminal round trip: the Agents app (exec) runs it too, without being a terminal', tmOut !== null)
+  check('Terminal round trip: terminal_capabilities hands back the window’s JSON as it is', tmRun.tools.find((m) => m.toolName === 'terminal_capabilities')?.content === '{"session":{"kind":"agent"}}')
+  check('Terminal round trip: only the first window to claim a call may run it', claimed.length >= 2 && claimed.every((c) => c[0] === true && c[1] === false))
+  check(`Terminal round trip: Bypass sends a grant to write, delete and use the network (got ${JSON.stringify(clients[clients.length - 2]?.grant)})`, JSON.stringify(clients[clients.length - 2]?.grant) === '{"mode":"bypass","write":true,"delete":true,"network":true,"steering":false}')
+  const remembered = await newThread({ permission: 'default', workdir })
+  await turn(remembered.id, 'SCENARIO remember-tee', () => ({ allow: true, always: 'command' }), 'exec')
+  const beforeSteering = clients.length
+  const deniedSteering = await turn(remembered.id, 'SCENARIO steering-tee', () => ({ allow: false }), 'exec')
+  check('Remembered tee still asks fresh approval for AGENTS.md; declining sends no execution', deniedSteering.asked.length === 1 && clients.length === beforeSteering)
+  await turn(remembered.id, 'SCENARIO steering-tee', () => ({ allow: true }), 'exec')
+  check('Fresh explicit steering approval grants steering', (clients.at(-1)?.grant as { steering?: boolean })?.steering === true)
+  check('Text alone cannot manufacture a steering grant', !terminalGrant('default', 'tee AGENTS.md', 'approved').steering)
+  const calcThread = await newThread({ permission: 'default', workdir })
+  await turn(calcThread.id, 'SCENARIO remember-calc', () => ({ allow: true, always: 'command' }), 'exec')
+  const beforeCurrency = clients.length
+  const currency = await turn(calcThread.id, 'SCENARIO currency-calc', () => ({ allow: false }), 'exec')
+  check('Remembering calculator use cannot silently authorize later rate requests', currency.asked.length === 1 && clients.length === beforeCurrency)
+  const tp = await newThread({ permission: 'plan', workdir })
+  const tpRun = await turn(tp.id, 'SCENARIO term-plan', () => ({ allow: false }), true)
+  const tpGrant = clients[clients.length - 1]?.grant
+  check(`Terminal in Plan: ls runs with a read-only grant (got ${JSON.stringify(tpGrant)})`, JSON.stringify(tpGrant) === '{"mode":"plan","write":false,"delete":false,"network":false,"steering":false}')
+  check('Terminal in Plan: touch is refused', tpRun.tools.filter((m) => m.toolName === 'terminal').some((m) => /Plan mode|did not run|refus|read/i.test(m.content) && !/"exit_code"/.test(m.content)))
   const ed = await newThread({ permission: 'default', workdir })
   const edRun = await turn(ed.id, 'SCENARIO edits', () => ({ allow: false }))
   check(`Ask first with a work folder: the edit and the delete asked (asked ${edRun.asked.length})`, edRun.asked.length === 2)
+  for (const command of ['git show secret-data', 'changelog', 'releases']) {
+    check(`Edits allowed still asks for network command ${command}`, decideTerminal(by.id, 'acceptEdits', command).decision === 'ask')
+    check(`Approved ${command} receives network authority`, terminalGrant('default', command, 'approved', true).network)
+  }
+  for (const command of ['calc 10 EUR in USD', "calc '10 EUR in USD'", 'units 10 EUR in USD', 'bc 10 EUR in USD', '/bin/../bin/calc 10 EUR in USD']) {
+    check(`Currency expression asks before possible rate I/O: ${command}`, decideTerminal(by.id, 'acceptEdits', command).decision === 'ask')
+    check(`Currency expression is refused in Plan: ${command}`, decideTerminal(by.id, 'plan', command).decision === 'refuse')
+    check(`Approved currency expression gets network authority: ${command}`, terminalGrant('default', command, 'approved', true).network)
+  }
+  for (const command of ['calc 2+2', 'units 1 km in m', 'bc 15% of 80']) {
+    check(`Pure calculator remains automatic and offline: ${command}`, decideTerminal(by.id, 'default', command).decision === 'run' && !terminalGrant('default', command, 'readonly').network)
+  }
   const t = by.id
   const img = { name: 'generate_image', arguments: { prompt: 'a lighthouse' } }
   check('Images: generate_image runs without asking by default', decide(t, 'default', img, 1) === 'run' && decide(t, 'auto', img, 1) === 'run')
@@ -310,6 +368,29 @@ try {
   check('Auto: rm in the terminal asks', decide(t, 'auto', { name: 'terminal', arguments: { command: 'rm -rf build' } }) === 'ask')
   check('Auto: a file edit asks', decide(t, 'auto', { name: 'edit_file', arguments: { path: 'a.md' } }) === 'ask')
   check('Plan: a file edit is refused', decide(t, 'plan', { name: 'edit_file', arguments: { path: 'a.md' } }) === 'refuse')
+
+  // 10b. The terminal tool: what runs, what asks, and the grant each call gets (the terminal enforces it
+  // on what the shell resolves: src/terminal/policy.ts, checked by scripts/agents-terminal-exec.ts).
+  const line = (command: string) => ({ name: 'terminal', arguments: { command } })
+  const grantOf = (mode: 'default' | 'auto' | 'acceptEdits' | 'plan' | 'bypass', command: string) => terminalGrant(mode, command, decideTerminal(t, mode, command).access, true)
+  check('Terminal: msh -n script.sh only reads, so it runs in every mode', (['default', 'auto', 'acceptEdits', 'plan', 'bypass'] as const).every((m) => decide(t, m, line('msh -n potato-flight-check.sh')) === 'run'))
+  check('Terminal: running a script asks in Ask first, is refused in Plan', decide(t, 'default', line('msh potato-flight-check.sh')) === 'ask' && decide(t, 'plan', line('msh potato-flight-check.sh')) === 'refuse')
+  check('Terminal: with edits allowed a script runs without asking', decide(t, 'acceptEdits', line('msh potato-flight-check.sh')) === 'run' && decide(t, 'acceptEdits', line('chmod +x x.sh && ./x.sh > out.txt')) === 'run')
+  check('Terminal: with edits allowed, rm, curl and sudo still ask', ['rm x', 'curl https://example.com', 'sudo ls', 'ping -c 1 host', 'rmdir d'].every((c) => decide(t, 'acceptEdits', line(c)) === 'ask'))
+  check('Terminal: with edits allowed a line naming AGENTS.md or .claude still asks', decide(t, 'acceptEdits', line('echo x > AGENTS.md')) === 'ask' && decide(t, 'acceptEdits', line('echo x > .claude/settings.json')) === 'ask')
+  check('Terminal: help --json and terminal_capabilities run in every mode', (['default', 'plan', 'bypass'] as const).every((m) => decide(t, m, line('help --json')) === 'run' && decide(t, m, { name: 'terminal_capabilities', arguments: {} }) === 'run'))
+  const g = (mode: Parameters<typeof grantOf>[0], c: string) => { const x = grantOf(mode, c); return `${x.write ? 'w' : '-'}${x.delete ? 'd' : '-'}${x.network ? 'n' : '-'}${x.steering ? 's' : '-'}` }
+  check('Grant: a read-only line can write nothing, in every mode', (['default', 'plan', 'acceptEdits', 'bypass'] as const).every((m) => g(m, 'cat a.md | grep x') === '----'))
+  check('Grant: edits allowed writes in the work folder and nothing else', g('acceptEdits', 'msh build.sh') === 'w---')
+  check('Grant: Bypass may write, delete and use the network, not steering files', g('bypass', 'msh build.sh') === 'wdn-')
+  check('Grant: an approved line gets what its text names: rm deletes, curl reaches out', g('default', 'rm old.txt') === 'wd--' && g('default', 'curl https://example.com') === 'w-n-')
+  check('Grant: an approved msh line gets neither (the script cannot rm or curl)', g('default', 'msh clean.sh') === 'w---')
+  check('Grant: only a line naming AGENTS.md gets the steering grant', g('default', 'echo x > AGENTS.md') === 'w--s' && g('bypass', 'echo x > .agents/skills/a.md') === 'w--s')
+  check('Grant: a command named by a variable is not named', g('default', 'c=rm; $c old.txt') === 'w---')
+  check('Grant: the mode is carried along for the capability report', grantOf('plan', 'ls').mode === 'plan')
+  const toolProps = Object.keys(terminalTool().function.parameters.properties)
+  check('Terminal tool: command, description, cwd and timeout_seconds', ['command', 'description', 'cwd', 'timeout_seconds'].every((k) => toolProps.includes(k)))
+  check('Terminal tool: terminal_capabilities takes an optional command', Object.keys(terminalCapabilitiesTool().function.parameters.properties).join() === 'command' && !(terminalCapabilitiesTool().function.parameters.required ?? []).length)
 
   // 11. Allow <site>: remembered for all threads, exact site (www. too, not subdomains), until removed.
   const s1 = await newThread({ permission: 'default' })

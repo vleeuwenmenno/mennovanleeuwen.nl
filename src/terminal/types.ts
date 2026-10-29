@@ -1,5 +1,7 @@
 import type { AppId, WinState } from '../os/wm'
 import type { TermPort } from './vt/session'
+import type { Budget } from './limits'
+import type { Policy } from './policy'
 
 /** A failure the shell prints as-is (in red, unless `raw` says the message is already formatted). */
 export class CmdError extends Error {
@@ -50,6 +52,10 @@ export type Ctx = {
   raw?: (text: string) => void
   /** Running as root (sudo, for the signed-in user): may write /etc/fstab and mount */
   root?: boolean
+  /** An agent's terminal call: what it may do (src/terminal/policy.ts), checked where it happens. Absent in the user's own terminal. */
+  policy?: Policy
+  /** An agent's terminal call: what bounds it (src/terminal/limits.ts), shared by everything the call starts. */
+  budget?: Budget
   /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
   /** `alt`: the alternate screen, like nano's: only this block shows while it is up */
   /** `hideInput`: the program draws its own prompt in the block, so the shell's stays out of sight */

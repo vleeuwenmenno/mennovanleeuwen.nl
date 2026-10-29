@@ -19,6 +19,10 @@ so \`&\` runs in the foreground.
     msh -x script.sh                  print each command before running it (set -x)
     source file  /  . file            run a file in the current shell
 
+\`help --json\` prints what this terminal can do as JSON: the shell and version, every command with the
+options its usage line names (no others exist), the mounts, the execution limits and, for an agent,
+what the call may do. Check it before assuming a Linux flag.
+
 sh and bash are names for msh too. Scripts for python, node and other interpreters do not run.
 
 A script run as a command needs its x bit, as in any shell: without it, ./script.sh prints

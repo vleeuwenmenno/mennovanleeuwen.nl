@@ -8,7 +8,8 @@ import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
-import { lookup, prepare, prepareFolder, readFileText, writeFile } from '../fs'
+import { lookup, prepare, prepareFolder, readFileText, writeFile, actorOf } from '../fs'
+import { Budget, type Stop } from '../limits'
 import { allows, canRun } from '../modes'
 import { arith } from './arith'
 import { globMatch, globSource, hasGlob, unescapeGlob } from './glob'
@@ -40,12 +41,25 @@ export const aliasLine = (name: string, value: string) => `alias ${name}='${valu
 const red = (s: string) => `{c:red}${s}{/}`
 /** Deepest chain of files that source or run each other */
 const MAX_SOURCE_DEPTH = 16
+/** What `msh --version` and the capability report say */
+export const MSH_VERSION = '2.0'
+/** The widest field printf pads to: a format cannot ask for a gigabyte */
+const MAX_PAD = 100_000
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** A word that can be an alias: no quotes, escapes or expansions in it */
 const ALIAS_WORD = /^[^\s'"\\$`=/|&;()<>{}!*?[\]~#]+$/
 const nullSink: Sink = { tty: false, write: () => {} }
-const bufferSink = () => {
-  const sink = { tty: false, text: '', write: (t: string) => void (sink.text += t) }
+/** A buffer for a pipe, $(…) or a redirect; within an agent's call it counts against the call's budget. */
+const bufferSink = (budget?: Budget) => {
+  const sink = {
+    tty: false,
+    text: '',
+    write: (t: string) => {
+      const why = budget?.write(t.length, sink.text.length)
+      if (why) throw new LimitSignal(why)
+      sink.text += t
+    },
+  }
   return sink
 }
 
@@ -70,6 +84,12 @@ class ExitSignal extends Signal {
   }
 }
 class AbortSignal_ extends Signal {}
+/** A call ran out of its budget (steps, time, output, memory): it stops, and nothing catches this. */
+class LimitSignal extends Signal {
+  constructor(readonly why: Stop) {
+    super()
+  }
+}
 /** An error the shell itself reports (bad substitution, unbound variable): the command fails. */
 class ShellError extends Error {}
 
@@ -137,6 +157,7 @@ const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, '\\$&')
 /** Words being built up during expansion: what they say, and as a glob pattern. */
 type Field = { text: string; pat: string; glob: boolean; quoted: boolean }
 class Fields {
+  constructor(private budget?: Budget) {}
   out: Field[] = []
   cur: Field | null = null
   private get f() {
@@ -145,6 +166,8 @@ class Fields {
   /** Text as written (`quoted`: no globbing, and an empty word still counts). */
   lit(s: string, quoted: boolean) {
     const f = this.f
+    const why = this.budget?.step() ?? this.budget?.write(s.length * 2, f.text.length + f.pat.length)
+    if (why) throw new LimitSignal(why)
     f.text += s
     f.pat += quoted ? escapeGlob(s) : s
     if (quoted) f.quoted = true
@@ -154,16 +177,23 @@ class Fields {
   split(s: string, ifs: string) {
     if (!s) return
     if (!ifs) return this.lit(s, false)
+    if (this.budget && ifs.length > 256) throw new LimitSignal(this.budget.stop('memory'))
     const white = [...ifs].filter((ch) => /\s/.test(ch)).join('').replace(/[\]\\^-]/g, '\\$&')
     const hard = [...ifs].filter((ch) => !/\s/.test(ch)).join('').replace(/[\]\\^-]/g, '\\$&')
-    const sep = new RegExp(hard ? `[${white}]*[${hard}][${white}]*|[${white}]+` : `[${white}]+`)
-    const parts = s.split(sep)
-    parts.forEach((p, i) => {
-      if (i > 0) this.end()
-      if (p) this.lit(p, false)
-      else if (i > 0 && i < parts.length - 1 && hard) this.lit('', true)
-    })
-    if (parts[parts.length - 1] === '' && parts.length > 1) this.end()
+    const sep = new RegExp(hard ? `[${white}]*[${hard}][${white}]*|[${white}]+` : `[${white}]+`, 'g')
+    // Do not allocate s.split(...) in full before the budget can stop expansion.
+    let start = 0, index = 0
+    let match: RegExpExecArray | null
+    while ((match = sep.exec(s))) {
+      if (index > 0) this.end()
+      const part = s.slice(start, match.index)
+      if (part) this.lit(part, false)
+      else if (index > 0 && hard) this.lit('', true)
+      start = sep.lastIndex
+      index++
+    }
+    if (index > 0) this.end()
+    if (start < s.length) this.lit(s.slice(start), false)
   }
   /** "$@": one word per item, the first and last joined to what is around them. */
   list(items: string[]) {
@@ -173,6 +203,7 @@ class Fields {
     })
   }
   end() {
+    if (this.budget && this.out.length >= 10_000) throw new LimitSignal(this.budget.stop('memory'))
     if (this.cur && (this.cur.text || this.cur.quoted)) this.out.push(this.cur)
     this.cur = null
   }
@@ -215,7 +246,9 @@ function escapes(s: string): { text: string; stop: boolean } {
 }
 
 /** printf(1): the format is reused while arguments are left. */
-function printf(fmt: string, args: string[]): string {
+function printf(fmt: string, args: string[], budget?: Budget): string {
+  const reserve = (n: number) => { const why = budget?.step() ?? budget?.write(n, out.length); if (why) throw new LimitSignal(why) }
+
   let out = ''
   let ai = 0
   for (let pass = 0; pass < 1000; pass++) {
@@ -225,23 +258,27 @@ function printf(fmt: string, args: string[]): string {
       if (ch === '\\') {
         const m = /^\\([0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)/.exec(fmt.slice(i))![0]
         const r = escapes(m)
+        reserve(r.text.length)
         out += r.text
         if (r.stop) return out
         i += m.length - 1
         continue
       }
       if (ch !== '%') {
+        reserve(1)
         out += ch
         continue
       }
       const m = /^%([-+ 0#]*)(\d+|\*)?(?:\.(\d+|\*))?([sbcdiouxXfFeEgG%])/.exec(fmt.slice(i))
       if (!m) {
+        reserve(1)
         out += ch
         continue
       }
       i += m[0].length - 1
       const [, flagStr, widthRaw, precRaw, conv] = m
       if (conv === '%') {
+        reserve(1)
         out += '%'
         continue
       }
@@ -249,8 +286,10 @@ function printf(fmt: string, args: string[]): string {
         if (ai < args.length) used = true
         return args[ai++] ?? ''
       }
-      const width = widthRaw === '*' ? parseInt(next(), 10) || 0 : widthRaw ? parseInt(widthRaw, 10) : 0
+      const width = Math.min(widthRaw === '*' ? parseInt(next(), 10) || 0 : widthRaw ? parseInt(widthRaw, 10) : 0, MAX_PAD)
       const prec = precRaw === '*' ? parseInt(next(), 10) : precRaw !== undefined ? parseInt(precRaw, 10) : undefined
+      if (budget && prec !== undefined && prec > budget.limits.maxBuffer) throw new LimitSignal(budget.stop('output'))
+      if (prec !== undefined && prec > MAX_PAD) throw new ShellError('printf: precision too large')
       const arg = next()
       const num = () => {
         const t = arg.trim()
@@ -302,6 +341,7 @@ function printf(fmt: string, args: string[]): string {
           s = num().toFixed(prec ?? 6)
           if (flagStr.includes('+') && !s.startsWith('-')) s = `+${s}`
       }
+      reserve(Math.max(s.length, width))
       if (s.length < width) {
         if (flagStr.includes('-')) s = s.padEnd(width)
         else if (flagStr.includes('0') && /[diouxXfFeEgG]/.test(conv)) {
@@ -370,6 +410,8 @@ class Shell {
 
   setVar(name: string, value: string) {
     if (!NAME.test(name)) throw new ShellError(`${name}: not a valid identifier`)
+    const why = this.base.budget?.variable(value.length)
+    if (why) throw new LimitSignal(why)
     this.st.vars[name] = value
   }
 
@@ -442,6 +484,7 @@ class Shell {
       case '##':
       case '%':
       case '%%': {
+        if (this.base.budget && value.length > 4096) throw new LimitSignal(this.base.budget.stop('memory'))
         const pat = await this.expandPattern(word, io)
         const greedy = op.length === 2
         const src = globSource(pat, greedy)
@@ -457,6 +500,7 @@ class Shell {
       }
       case '/':
       case '//': {
+        if (this.base.budget && value.length > 4096) throw new LimitSignal(this.base.budget.stop('memory'))
         const slash = word.indexOf('/')
         const pat = await this.expandPattern(slash < 0 ? word : word.slice(0, slash), io)
         const rep = slash < 0 ? '' : await this.expandString(word.slice(slash + 1), io)
@@ -464,6 +508,8 @@ class Shell {
         const anchor = pat.startsWith('#') ? '^' : pat.startsWith('%') ? '$' : ''
         const src = globSource(anchor ? pat.slice(1) : pat)
         const re = new RegExp(anchor === '^' ? `^(?:${src})` : anchor === '$' ? `(?:${src})$` : src, op === '//' ? 'g' : '')
+        const why = this.base.budget?.write((value.length + 1) * rep.length, value.length)
+        if (why) throw new LimitSignal(why)
         return value.replace(re, () => rep)
       }
       case ':': {
@@ -482,7 +528,7 @@ class Shell {
   /** $(…) and `…`: runs in a subshell and gives what it printed, trailing newlines removed. */
   private async substitute(src: string, io: Io): Promise<string> {
     const sub = this.subshell()
-    const out = bufferSink()
+    const out = bufferSink(this.base.budget)
     let status: number
     try {
       status = await sub.exec(parse(src), { out, err: io.err, stdin: null })
@@ -582,18 +628,23 @@ class Shell {
   /** Words of a command: expanded, split and globbed. */
   async expandWords(words: string[], io: Io): Promise<string[]> {
     const out: string[] = []
+    const append = (text: string) => {
+      if (this.base.budget && out.length >= 10_000) throw new LimitSignal(this.base.budget.stop('memory'))
+      out.push(text)
+    }
     for (const raw of words) {
-      const f = new Fields()
+      this.checkAbort()
+      const f = new Fields(this.base.budget)
       await this.expandInto(raw, io, f, true)
       for (const field of f.done()) {
         if (field.glob) {
           const hits = await this.glob(field.pat)
           if (hits.length) {
-            out.push(...hits)
+            for (const hit of hits) append(hit)
             continue
           }
         }
-        out.push(field.text)
+        append(field.text)
       }
     }
     return out
@@ -601,7 +652,7 @@ class Shell {
 
   /** One word as one string: assignments, redirect targets, `case` words. */
   async expandString(raw: string, io: Io, arithmetic = false): Promise<string> {
-    const f = new Fields()
+    const f = new Fields(this.base.budget)
     await this.expandInto(raw, io, f, false, arithmetic)
     return f
       .done()
@@ -610,41 +661,52 @@ class Shell {
   }
 
   /** A word as a pattern: quoted parts match themselves. */
+  private boundedPattern(pattern: string) {
+    if (this.base.budget && (pattern.length > 256 || (pattern.match(/\*/g)?.length ?? 0) > 1)) throw new ShellError('msh: agent patterns are limited to 256 characters and one *')
+    return pattern
+  }
   async expandPattern(raw: string, io: Io): Promise<string> {
-    const f = new Fields()
+    const f = new Fields(this.base.budget)
     await this.expandInto(raw, io, f, false)
-    return f
-      .done()
-      .map((x) => x.pat)
-      .join(' ')
+    return this.boundedPattern(f.done().map((x) => x.pat).join(' '))
   }
 
   /** A heredoc's text: $, ` and \ work, quotes are just characters. */
   private async expandHeredoc(body: string, io: Io): Promise<string> {
-    let out = ''
+    const out = bufferSink(this.base.budget)
+    const append = (value: string | string[]) => {
+      // Avoid joining positional parameters into an uncharged intermediate string.
+      const parts = Array.isArray(value) ? value : [value]
+      for (let k = 0; k < parts.length; k++) {
+        this.checkAbort()
+        if (k) out.write(' ')
+        out.write(parts[k])
+      }
+    }
     for (let i = 0; i < body.length; ) {
       const ch = body[i]
       if (ch === '\\' && /[$`\\\n]/.test(body[i + 1] ?? '')) {
-        if (body[i + 1] !== '\n') out += body[i + 1]
+        if (body[i + 1] !== '\n') append(body[i + 1])
         i += 2
       } else if (ch === '$') {
         const { v, end } = await this.dollar(body, i, io, true)
-        out += Array.isArray(v) ? v.join(' ') : v
+        append(v)
         i = end
       } else if (ch === '`') {
         const end = nestedEnd(body, i)
-        out += await this.substitute(body.slice(i + 1, end - 1), io)
+        append(await this.substitute(body.slice(i + 1, end - 1), io))
         i = end
       } else {
-        out += ch
+        append(ch)
         i++
       }
     }
-    return out
+    return out.text
   }
 
   /** Pathname expansion against the filesystem (Seafile folders are fetched first). */
   private async glob(pat: string): Promise<string[]> {
+    this.boundedPattern(pat)
     const absolute = pat.startsWith('/')
     const dirsOnly = pat.endsWith('/')
     const segs = pat.split('/').filter((s, k) => s || k === 0)
@@ -662,7 +724,11 @@ class Shell {
       const re = new RegExp(`^${globSource(seg)}$`)
       const next: typeof found = []
       for (const x of found) {
-        await prepareFolder(x.abs)
+        // A call confined to a folder cannot list what is outside it by globbing either (echo /etc/*).
+        if (this.base.policy?.read(x.abs)) continue
+        if (this.base.policy) await prepare(x.abs, 'ls', [], actorOf(this.base))
+        else await prepareFolder(x.abs)
+        this.checkAbort()
         const node = lookup(x.abs)
         if (node?.type !== 'dir') continue
         const names = [...node.children.keys()].sort((a, b) => a.localeCompare(b, 'en'))
@@ -682,6 +748,7 @@ class Shell {
     const base: Base = { ...this.base }
     const st: State = { ...this.st, vars: { ...this.st.vars }, funcs: new Map(this.st.funcs), opts: { ...this.st.opts }, positional: [...this.st.positional], locals: [], aliases: new Map(this.st.aliases) }
     base.setCwd = (p) => {
+      this.guardCwd(p)
       base.cwd = p
       st.vars.PWD = p
     }
@@ -711,7 +778,16 @@ class Shell {
     throw e
   }
 
+  /** cd somewhere the call's policy keeps it out of: the command fails. */
+  guardCwd(to: string) {
+    const why = this.base.policy?.cwd(to)
+    if (why) throw new CmdError(`cd: ${why}`)
+  }
+
+  /** One step of the run: charged to the budget, and the end of it when it is spent or the call is cancelled. */
   private checkAbort() {
+    const why = this.base.budget?.step()
+    if (why) throw new LimitSignal(why)
     if (this.base.signal.aborted) throw new AbortSignal_()
   }
 
@@ -750,7 +826,7 @@ class Shell {
         let failed = 0
         for (let k = 0; k < n.cmds.length; k++) {
           const last = k === n.cmds.length - 1
-          const out = last ? io.out : bufferSink()
+          const out = last ? io.out : bufferSink(this.base.budget)
           status = await this.exec(n.cmds[k], { out, err: io.err, stdin }, true)
           if (status !== 0) failed = status
           if (!last) stdin = { data: hooks.strip((out as { text: string }).text), pos: 0 }
@@ -838,6 +914,7 @@ class Shell {
       case 'case':
         return this.redirected(n.redirs, io, async (io2) => {
           const word = await this.expandString(n.word, io2)
+          if (this.base.budget && word.length > 4096) throw new LimitSignal(this.base.budget.stop('memory'))
           for (const arm of n.arms)
             for (const p of arm.patterns) if (globMatch(await this.expandPattern(p, io2), word)) return arm.body ? this.exec(arm.body, io2, cond) : 0
           return 0
@@ -871,6 +948,17 @@ class Shell {
     return status
   }
 
+  /** A redirect or script read the call's policy refuses fails like any other bad redirect. */
+  private mayRead(abs: string) {
+    const why = this.base.policy?.read(abs)
+    if (why) throw new ShellError(why)
+  }
+
+  private mayWrite(target: string) {
+    const why = this.base.policy?.write(resolvePath(this.base.cwd, target))
+    if (why) throw new ShellError(why)
+  }
+
   /** Runs `fn` with redirections in place; files are written once it is done. */
   private async redirected(redirs: Redirect[], io: Io, fn: (io: Io) => Promise<number>): Promise<number> {
     if (!redirs.length) return fn(io)
@@ -880,6 +968,10 @@ class Shell {
       for (const r of redirs) {
         if (r.op === '<<' || r.op === '<<-') {
           const body = r.heredoc!.quoted ? r.heredoc!.body : await this.expandHeredoc(r.heredoc!.body, io)
+          if (r.heredoc!.quoted) {
+            const why = this.base.budget?.write(body.length, 0)
+            if (why) throw new LimitSignal(why)
+          }
           next.stdin = { data: body, pos: 0 }
           continue
         }
@@ -894,7 +986,8 @@ class Shell {
             else if (r.fd === 1) next.out = to
           } else if (r.op === '>&' && r.fd === 1) {
             // `>& file` is &> file.
-            const sink = bufferSink()
+            this.mayWrite(target)
+            const sink = bufferSink(this.base.budget)
             files.push({ target, append: false, sink })
             next.out = next.err = sink
           }
@@ -902,7 +995,8 @@ class Shell {
         }
         if (r.op === '<') {
           const abs = resolvePath(this.base.cwd, target)
-          await prepare(this.base.cwd, 'cat', [target])
+          this.mayRead(abs)
+          await prepare(this.base.cwd, 'cat', [target], actorOf(this.base))
           const node = lookup(abs)
           if (!node) throw new ShellError(`${target}: No such file or directory`)
           if (node.type === 'dir') throw new ShellError(`${target}: Is a directory`)
@@ -914,11 +1008,12 @@ class Shell {
           continue
         }
         // > >> >| &>
+        this.mayWrite(target)
         const written = target === '/dev/null' ? null : lookup(resolvePath(this.base.cwd, target))
         const refused = written?.type === 'file' ? writeError('msh', target, written.dev, !!this.base.root) : null
         if (refused) throw new ShellError(refused.message.replace(/^msh: /, ''))
         // The character devices swallow what is written to them.
-        const sink = target === '/dev/null' || (written?.type === 'file' && written.dev) ? null : bufferSink()
+        const sink = target === '/dev/null' || (written?.type === 'file' && written.dev) ? null : bufferSink(this.base.budget)
         if (sink) files.push({ target, append: r.op === '>>', sink })
         const to = sink ?? nullSink
         if (r.op === '&>') next.out = next.err = to
@@ -936,9 +1031,10 @@ class Shell {
     try {
       status = await fn(next)
     } finally {
-      for (const f of files) {
+      // A call that ran out of budget or was cancelled writes nothing more.
+      for (const f of this.base.budget?.stopped ? [] : files) {
         try {
-          await writeFile(this.base.cwd, f.target, hooks.strip(f.sink.text).replace(/\n$/, ''), f.append, !!this.base.root)
+          await writeFile(this.base.cwd, f.target, hooks.strip(f.sink.text).replace(/\n$/, ''), f.append, actorOf(this.base))
         } catch (e) {
           io.err.write(`${red(e instanceof CmdError ? e.message : `msh: ${(e as Error).message}`)}\n`)
           status = 1
@@ -1009,6 +1105,13 @@ class Shell {
     try {
       const fn = skipFunctions ? undefined : this.st.funcs.get(name)
       if (fn) return await this.call(name, fn, args, io)
+      // What the call may do is judged here, on the command as it resolved: the same for a typed line, eval, source, a script or a function body.
+      // A name that is no command at all falls through to "command not found".
+      const denied = BUILTINS[name] || name.includes('/') || name.endsWith('.game') || hooks.commands[name] ? this.base.policy?.command(name, args, this.base.cwd) : null
+      if (denied) {
+        io.err.write(`${red(`msh: ${denied}`)}\n`)
+        return 126
+      }
       const b = BUILTINS[name]
       if (b) {
         try {
@@ -1061,7 +1164,12 @@ class Shell {
    */
   private async scriptAt(path: string, io: Io): Promise<string | null | 'refused'> {
     const abs = resolvePath(this.base.cwd, path)
-    await prepare(this.base.cwd, 'cat', [path])
+    const outside = this.base.policy?.read(abs)
+    if (outside) {
+      io.err.write(`${red(`msh: ${outside}`)}\n`)
+      return 'refused'
+    }
+    await prepare(this.base.cwd, 'cat', [path], actorOf(this.base))
     const node = lookup(abs)
     if (node?.type !== 'file' || node.exec || node.name.endsWith('.game')) return null
     let text: string
@@ -1088,6 +1196,7 @@ class Shell {
 
   /** Runs a script's text in a new shell; `label` names it in errors. */
   async runSource(src: string, io: Io, label: string): Promise<number> {
+    if (this.base.budget && src.length > 64_000) throw new LimitSignal(this.base.budget.stop('memory'))
     let tree: Node
     try {
       tree = parse(src)
@@ -1103,25 +1212,38 @@ class Shell {
   }
 
   private async external(name: string, args: string[], io: Io): Promise<number> {
-    if (name.includes('/')) {
+    // Resolve registry identity before touching files or dispatching help. A noncanonical /bin
+    // path, a bind alias or another registered alias must pass the same gate as its target.
+    const cmd = hooks.commands[name] ?? hooks.executable(name, this.base.cwd, !!this.base.root)
+    const known = hooks.commands[name] ? name : (Object.keys(hooks.commands).find((k) => hooks.commands[k] === cmd) ?? null)
+    if (known) {
+      const denied = this.base.policy?.command(known, args, this.base.cwd)
+      if (denied) {
+        io.err.write(`${red(`msh: ${denied}`)}\n`)
+        return 126
+      }
+    } else if (name.includes('/')) {
       const script = await this.scriptAt(name, io)
       if (script === 'refused') return 126
       if (script !== null) return this.child(name, args).runSource(script, io, name)
     }
-    const cmd = hooks.commands[name] ?? hooks.executable(name, this.base.cwd, !!this.base.root)
     if (!cmd) {
       io.err.write(`${red(`msh: command not found: ${name}${name.length > 2 ? hooks.suggest(name) : ''}`)}\n`)
       return 127
     }
-    const known = hooks.commands[name] ? name : (Object.keys(hooks.commands).find((k) => hooks.commands[k] === cmd) ?? null)
+    if (this.base.policy && !known) {
+      io.err.write(`${red(`msh: ${name}: executable has no authorized registry identity`)}\n`)
+      return 126
+    }
     const stdin = io.stdin ? drain(io.stdin, true) : null
     try {
       const help = known !== null && hooks.asksHelp(known, args)
       if (known && !help) {
         // `open photos` starts the app: no need to look for a folder of that name in Seafile.
         const looked = known === 'cd' && !args.length ? [HOME] : known === 'open' ? args.filter((a) => !hooks.isAppName(a, this.base.cwd)) : args
-        await prepare(this.base.cwd, known, looked)
+        await prepare(this.base.cwd, known, looked, actorOf(this.base))
       }
+      this.checkAbort()
       io.out.flush?.()
       const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty, raw: (t) => io.out.write(t) })) ?? '')
       if (out) io.out.write(out.endsWith('\n') ? out : `${out}\n`)
@@ -1140,6 +1262,8 @@ class Shell {
 
   /** `read` from the keyboard: a line typed at the terminal. */
   readKeyboard(prompt: string): Promise<string | null> {
+    // Nobody types at an agent's call: `read` with no input sees the end of it.
+    if (this.base.policy) return Promise.resolve(null)
     return new Promise((resolve) => {
       let buf = ''
       const draw = () => this.base.live(`${prompt}${buf}{c:inverse} {/}`)
@@ -1165,7 +1289,9 @@ class Shell {
   /** A script file's text for msh/source, or null when there is none. */
   async readScript(path: string, who = 'msh'): Promise<string | null> {
     const abs = resolvePath(this.base.cwd, path)
-    await prepare(this.base.cwd, 'cat', [path])
+    const outside = this.base.policy?.read(abs)
+    if (outside) throw new ShellError(`${who}: ${outside}`)
+    await prepare(this.base.cwd, 'cat', [path], actorOf(this.base))
     const node = lookup(abs)
     if (node?.type !== 'file') return null
     if (!allows(abs, node, 'r', !!this.base.root)) throw new ShellError(`${who}: ${path}: Permission denied`)
@@ -1178,7 +1304,7 @@ class Shell {
    */
   private async textOf(abs: string, node: { content: () => string }, denied: (why: string) => Error): Promise<string> {
     try {
-      return (await readFileText(abs, !!this.base.root))?.text ?? node.content()
+      return (await readFileText(abs, !!this.base.root, actorOf(this.base)))?.text ?? node.content()
     } catch (e) {
       if (e instanceof DeniedError) throw denied(e.message)
       return node.content()
@@ -1215,7 +1341,7 @@ async function test(sh: Shell, argv: string[], io: Io, bracket: boolean): Promis
   const BINARY = new Set(['=', '==', '!=', '<', '>', '-eq', '-ne', '-lt', '-le', '-gt', '-ge', '-nt', '-ot'])
   // Files the test looks at, fetched first (Seafile).
   const paths = args.filter((_, k) => k > 0 && UNARY_FILE.has(args[k - 1]))
-  if (paths.length) await prepare(sh.base.cwd, 'test', paths).catch(() => {})
+  if (paths.length) await prepare(sh.base.cwd, 'test', paths, actorOf(sh.base)).catch(() => {})
   const node = (p: string) => lookup(resolvePath(sh.base.cwd, p))
   const int = (s: string) => {
     if (!/^\s*-?\d+\s*$/.test(s)) throw new ShellError(`test: ${s}: integer expression expected`)
@@ -1358,9 +1484,9 @@ const BUILTINS: Record<string, Builtin> = {
     io.out.write(newline ? `${s}\n` : s)
     return 0
   },
-  printf: (_sh, args, io) => {
+  printf: (sh, args, io) => {
     if (!args.length) return fail(io, 'printf: usage: printf format [arguments]', 2)
-    io.out.write(settle(printf(args[0], args.slice(1))))
+    io.out.write(settle(printf(args[0], args.slice(1), sh.base.budget)))
     return 0
   },
   test: (sh, args, io) => test(sh, args, io, false),
@@ -1694,7 +1820,7 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
       break
     }
     if (a === '--version') {
-      io.out.write('msh 2.0 (MvL OS shell)\n')
+      io.out.write(`msh ${MSH_VERSION} (MvL OS shell)\n`)
       return 0
     }
     if (a === '--help' || a === '-h') {
@@ -1719,7 +1845,7 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   }
   if (src === null) {
     if (!io.stdin) {
-      io.out.write("msh 2.0 is the shell you are typing in. Run a line with msh -c 'echo hi', a script with msh file.sh, or read man msh.\n")
+      io.out.write(`msh ${MSH_VERSION} is the shell you are typing in. Run a line with msh -c 'echo hi', a script with msh file.sh, or read man msh.\n`)
       return 0
     }
     src = drain(io.stdin)
@@ -1752,6 +1878,8 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
 function topShell(shell: Base, interactive: boolean): Shell {
   const base: Base = { ...shell }
   base.setCwd = (p) => {
+    const why = shell.policy?.cwd(p)
+    if (why) throw new CmdError(`cd: ${why}`)
     base.cwd = p
     shell.env.PWD = p
     shell.setCwd(p)
@@ -1816,7 +1944,7 @@ export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
 
 /**
  * Runs a script the way `msh -c` does, with everything it prints collected as plain text (no
- * terminal: ls lists one name per line). For the agents' terminal tool.
+ * terminal: ls lists one name per line), stdout and stderr together.
  */
 export async function runCaptured(src: string, shell: Base): Promise<{ output: string; status: number }> {
   const sh = topShell({ ...shell, env: { ...shell.env }, print: () => {} }, false)
@@ -1824,6 +1952,81 @@ export async function runCaptured(src: string, shell: Base): Promise<{ output: s
   const status = await sh.runSource(src, { out, err: out, stdin: null }, '-c')
   return { output: hooks.strip(out.text).replace(/\n$/, ''), status }
 }
+
+export type AgentRun = {
+  stdout: string
+  stderr: string
+  status: number
+  /** Why the run was cut short: out of time, cancelled, out of steps, too much output or memory */
+  termination: Stop | null
+  /** Characters of each stream that were dropped because they were over the limit */
+  truncated: { stdout: number; stderr: number }
+  steps: number
+}
+
+/** A sink for one of a run's two streams: keeps the first `cap` characters, counts the rest. */
+function capSink(budget: Budget, cap: number) {
+  const sink = {
+    tty: false,
+    text: '',
+    dropped: 0,
+    write(t: string) {
+      const plain = hooks.strip(t)
+      const why = budget.write(plain.length, 0)
+      if (why) throw new LimitSignal(why)
+      const room = Math.max(0, cap - sink.text.length)
+      sink.text += plain.slice(0, room)
+      sink.dropped += Math.max(0, plain.length - room)
+    },
+  }
+  return sink
+}
+
+/**
+ * An agent's terminal call: a fresh shell (its own environment, so no aliases, functions or
+ * variables from any other call or from a terminal), the same interpreter as the terminal's, the
+ * output kept as stdout and stderr apart, and the run bounded by `shell.budget` and checked against
+ * `shell.policy`. `done` never rejects: a run that is stopped comes back with its termination.
+ * `snapshot` is what has been printed so far, for a caller that has to give up on a run that does
+ * not come back (a command waiting on something that ignores the signal).
+ */
+export function startAgent(src: string, shell: Base & { budget: Budget }): { done: Promise<AgentRun>; snapshot: (termination: Stop) => AgentRun } {
+  const budget = shell.budget
+  const sh = topShell({ ...shell, env: { ...shell.env }, print: () => {} }, false)
+  const out = capSink(budget, budget.limits.maxOutput)
+  const err = capSink(budget, budget.limits.maxOutput)
+  const result = (status: number, termination: Stop | null): AgentRun => ({
+    stdout: out.text.replace(/\n$/, ''),
+    stderr: err.text.replace(/\n$/, ''),
+    status: termination && status === 0 ? STOP_STATUS[termination] : status,
+    termination,
+    truncated: { stdout: out.dropped, stderr: err.dropped },
+    steps: budget.steps,
+  })
+  const done = (async () => {
+    let status: number
+    let termination: Stop | null = null
+    try {
+      status = await sh.runSource(src, { out, err, stdin: null }, '-c')
+    } catch (e) {
+      if (e instanceof LimitSignal) termination = e.why
+      else if (e instanceof AbortSignal_) termination = 'cancelled'
+      else err.write(`${red(`msh: ${(e as Error)?.message ?? e}`)}\n`)
+      status = termination ? STOP_STATUS[termination] : 1
+    }
+    return result(status, termination ?? budget.stopped)
+  })()
+  return {
+    done,
+    snapshot: (termination) => {
+      budget.stop(termination)
+      return result(STOP_STATUS[termination], termination)
+    },
+  }
+}
+
+/** The exit status of a run that was stopped: 124 for time (as timeout(1)), 130 for Ctrl+C, 125 for the other limits. */
+const STOP_STATUS: Record<Stop, number> = { timeout: 124, cancelled: 130, steps: 125, output: 125, memory: 125 }
 
 /** The aliases of a terminal session (its environment object), for completion, which and the rc. */
 export const aliasesOf = (env: Record<string, string>): ReadonlyMap<string, string> => kept.get(env)?.aliases ?? new Map()

@@ -46,7 +46,7 @@ import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSk
 import { prepareTaskCall, stopTasksOf, TASK_CHAT_TOOLS, taskChatTools } from './agentTasks.ts'
 import { CALL_VERDICTS, defaultPolicy, MAX_TRUSTED_SITES, normalizePolicy, TASK_TOOLS, TOOL_NAMES, type CallScope, type Decision, type RunVerdict, type ThreadTools, type Verdict as TaskVerdict } from '../src/data/agentTaskPolicy.ts'
 import { CONTINUATIONS_PER_MESSAGE, findSubagent, overviewLine, SPAWNS_PER_MESSAGE, SUBAGENT_CAPS, SUBAGENTS_KEPT, SUBAGENTS_PER_THREAD, SUBAGENTS_PER_USER, SUBAGENTS_TOTAL, type SubagentInfo, type SubagentOverview, type SubagentStatus } from '../src/data/agentSubagents.ts'
-import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
+import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, DELETE_COMMANDS, NETWORK_COMMANDS, STEERING_IN_LINE, terminalCapabilitiesTool, terminalGrant, terminalNeedsNetwork, terminalTool, workdirOf, workdirTools, type ClientGrant, type Permission, type TerminalAccess, type Workdir } from './workdir.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in user. Threads and their
 // messages live in SQLite; each turn runs here, on the server, calling Ollama's chat API with a
@@ -272,6 +272,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
   move_thread: 'projects',
   ...Object.fromEntries(FILE_TOOLS.map((t) => [t, 'files'])),
   terminal: 'terminal',
+  terminal_capabilities: 'terminal',
   use_skill: 'skills',
   read_skill_file: 'skills',
 }
@@ -385,7 +386,7 @@ const titling = new Set<string>()
 const checkingTitle = new Set<string>()
 
 /** A change waiting for the user: which reply asked for it (message and call index) and how to answer; `summary` says what it does where the call alone doesn't (a calendar change). */
-type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; /** Shown in a parent thread: the subagent whose call it is */ child?: { id: string; name: string }; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn: its estimate and how many previews there are so far */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; /** A web read the automatic check would not clear: what it said */ check?: string; resolve: (answer: unknown) => void }
+type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; /** Shown in a parent thread: the subagent whose call it is */ child?: { id: string; name: string }; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn: its estimate and how many previews there are so far */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; /** A web read the automatic check would not clear: what it said */ check?: string; /** A terminal call for a window to run: what it may do, and whether a window has taken it */ grant?: ClientGrant; claimed?: boolean; resolve: (answer: unknown) => void }
 export type PendingApproval = Omit<Pending, 'resolve'>
 /** `expected`: a typical drawing time (ms) for the estimate; `elapsed`: how long it has been drawing, when a window joins. */
 export type GptDrawing = { expected: number; startedAt: number; elapsed?: number; previews: number }
@@ -406,11 +407,29 @@ const attachTerminal = (thread: string, res: ServerResponse) => {
     if (n > 0) terminals.set(thread, n)
     else terminals.delete(thread)
   })
+  attachExecutor(thread, res)
 }
+/**
+ * Windows that can run the terminal tool, by thread: the agents command, and the Agents app (which is
+ * not a terminal, so skills and the context keep treating its threads as the app's).
+ */
+const executors = new Map<string, number>()
+function attachExecutor(thread: string, res: ServerResponse) {
+  executors.set(thread, (executors.get(thread) ?? 0) + 1)
+  res.on('close', () => {
+    const n = (executors.get(thread) ?? 1) - 1
+    if (n > 0) executors.set(thread, n)
+    else executors.delete(thread)
+  })
+}
+/** How a window says it attaches: `terminal` (the agents command) or `exec` (the app, running the terminal tool only). */
+const attach = (thread: string, res: ServerResponse, how: unknown) => (how === 'terminal' ? attachTerminal(thread, res) : how === 'exec' ? attachExecutor(thread, res) : undefined)
 /** Command names the user said not to ask about again, by thread (until the server restarts). */
 const allowedCommands = new Map<string, { user: number; names: Set<string> }>()
 /** Commands that run other command lines, or anything at all: never "don't ask again" for these. */
-const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget'])
+const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget', 'calc', 'units', 'bc'])
+/** Commands that delete, use the network or raise rights: accepting edits does not cover them, so a line naming one waits for the user. */
+const NEEDS_CARD = new Set([...DELETE_COMMANDS, ...NETWORK_COMMANDS, 'sudo', 'su'])
 /** Whether a command line writes to a file through a redirect (> file, >> file, &> file). */
 const writesFile = (line: string) => /(^|[^<>&0-9])(\d?>{1,2}|&>)\s*(?!&|\/dev\/null\b)\S/.test(line)
 onUserGone((id) => {
@@ -955,11 +974,39 @@ export function approve(user: User, id: string, body: { callId?: string; allow?:
 }
 
 /** What the terminal printed for a terminal tool call it ran. */
-export function clientResult(user: User, id: string, body: { callId?: string; output?: unknown; status?: unknown }) {
+export function clientResult(user: User, id: string, body: { callId?: string; output?: unknown; status?: unknown; result?: unknown; capabilities?: unknown }) {
   const row = ownThread(user, id)
   const p = (pending.get(row.id) ?? []).find((x) => x.callId === body.callId && x.kind === 'client')
   if (!p) throw new HttpError(404, 'Nothing is waiting for that')
-  p.resolve({ output: String(body.output ?? '').slice(0, 200_000), status: Number.isInteger(body.status) ? Number(body.status) : 1 })
+  const answer: ClientAnswer = { output: String(body.output ?? '').slice(0, 200_000), status: Number.isInteger(body.status) ? Number(body.status) : 1 }
+  const r = body.result as Partial<TerminalAnswer> | null | undefined
+  if (r && typeof r === 'object' && p.call?.name === 'terminal') {
+    const tr = (r.truncated ?? {}) as { stdout?: unknown; stderr?: unknown }
+    answer.result = {
+      exit_code: Number.isInteger(r.exit_code) ? Number(r.exit_code) : answer.status,
+      stdout: String(r.stdout ?? '').slice(0, 200_000),
+      stderr: String(r.stderr ?? '').slice(0, 200_000),
+      duration_ms: count(r.duration_ms),
+      truncated: { stdout: count(tr.stdout), stderr: count(tr.stderr) },
+      terminated: typeof r.terminated === 'string' && TERMINATIONS.has(r.terminated) ? r.terminated : null,
+      cwd: String(r.cwd ?? '').slice(0, 1000),
+    }
+  }
+  if (typeof body.capabilities === 'string' && p.call?.name === 'terminal_capabilities') answer.capabilities = body.capabilities.slice(0, 200_000)
+  p.resolve(answer)
+}
+
+/**
+ * A window asks to run a waiting terminal call. Only the first to ask may: with the Agents app and
+ * the agents command both open on a thread, the call still runs once.
+ */
+export function claimClientCall(user: User, id: string, body: { callId?: string }): { ok: boolean } {
+  const row = ownThread(user, id)
+  const p = (pending.get(row.id) ?? []).find((x) => x.callId === body.callId && x.kind === 'client')
+  if (!p) throw new HttpError(404, 'Nothing is waiting for that')
+  if (p.claimed) return { ok: false }
+  p.claimed = true
+  return { ok: true }
 }
 
 /** The user's answers to a form the agent asked (or `skip`, to say no answer is coming). */
@@ -2050,7 +2097,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   // while planning (read only), nor in a thread with every tool group off (a task acts on its own).
   if (opts.permission !== 'plan' && groups.some((g) => !ALWAYS_ON_GROUPS.includes(g))) tools.push(...taskChatTools())
   if (opts.workdir) tools.push(...workdirTools())
-  if (opts.terminal) tools.push(terminalTool())
+  if (opts.terminal) tools.push(terminalTool(), terminalCapabilitiesTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
   if (opts.subagents) tools.push(...subagentTools(opts.subagents === 'read'))
   // update_todos and ask_user belong to no group: they are always there. Planning only reads.
@@ -2113,7 +2160,7 @@ function givenUrls(thread: string, pages = true): Set<string> {
   return given
 }
 
-const PRIVATE_TOOLS = new Set(['search_threads', 'read_thread', 'search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'list_generated_images', 'save_generated_image', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS, ...MAIL_TOOLS])
+const PRIVATE_TOOLS = new Set(['search_threads', 'read_thread', 'search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'list_generated_images', 'save_generated_image', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', 'terminal_capabilities', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS, ...MAIL_TOOLS])
 /** Whether the model has anything private in front of it: memories, private tool results, attachments. */
 function holdsPrivate(user: User, thread: string): boolean {
   if (listMemories(user).length) return true
@@ -2324,9 +2371,6 @@ const NEEDS_APPROVAL = new Set(['generate_image', 'render_video', 'save_generate
 const changes = (name: string) => NEEDS_APPROVAL.has(name) || NOTE_LINK_WRITES.has(name) || MAIL_WRITES.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
 const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
 
-/** A command line that names a file steering the agent: even Bypass asks before it runs. */
-const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
-
 /**
  * Whether a call runs, waits for the user, or is refused, by the thread's permission mode: plan
  * mode only reads; accepting edits lets the file tools write in the work folder (deleting still
@@ -2347,16 +2391,8 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
     if (MAIL_WRITES.has(name)) return permission === 'plan' ? 'refuse' : 'ask'
     return mailReadsUntil(thread) || (user !== undefined && mailReadsAlways(user)) ? 'run' : 'ask'
   }
-  if (name === 'terminal') {
-    const line = argString(call.arguments ?? {}, 'command')
-    if (readOnlyCommand(line)) return 'run'
-    if (permission === 'plan') return 'refuse'
-    if (permission === 'bypass') return STEERING_IN_LINE.test(line) ? 'ask' : 'run'
-    const names = commandNames(line)
-    const ok = allowedCommands.get(thread)?.names
-    if (writesFile(line) || names.some((n) => NEVER_ALWAYS.has(n))) return 'ask'
-    return names.length && ok && names.every((n) => ok.has(n)) ? 'run' : 'ask'
-  }
+  if (name === 'terminal_capabilities') return 'run'
+  if (name === 'terminal') return decideTerminal(thread, permission, argString(call.arguments ?? {}, 'command')).decision
   // Making a mask writes only a mask (no approval card, like a read), but Plan still refuses it like the other image writes.
   if (name === 'make_image_mask') return permission === 'plan' ? 'refuse' : 'run'
   // A video plan only saves a draft project; a render is minutes of the user's GPU: it always asks, in every mode, and Plan refuses it.
@@ -2376,6 +2412,27 @@ export function decide(thread: string, permission: Permission, call: ToolCall, u
   if (paths.some((p) => STEERING.test(p))) return 'ask'
   if (permission === 'bypass') return CALENDAR_WRITES.has(name) || NOTE_LINK_WRITES.has(name) ? 'ask' : 'run'
   return FILE_WRITES.has(name) && permission === 'acceptEdits' ? 'run' : 'ask'
+}
+
+/**
+ * A terminal call: whether it runs, waits or is refused, and what the call may do once it runs (see
+ * terminalGrant). Read-only lines run in every mode (Plan too) and only read; a line that changes
+ * something is refused in Plan, runs in Bypass (except when it names a steering file), runs when
+ * edits are accepted so long as it does not name a command that deletes or uses the network, and
+ * otherwise waits for the user, unless they said not to ask again for each of its commands. What the
+ * shell then resolves is checked against the grant, not against this text (src/terminal/policy.ts).
+ */
+export function decideTerminal(thread: string, permission: Permission, line: string): { decision: 'run' | 'ask' | 'refuse'; access: TerminalAccess } {
+  if (readOnlyCommand(line)) return { decision: 'run', access: 'readonly' }
+  if (permission === 'plan') return { decision: 'refuse', access: 'readonly' }
+  const steering = STEERING_IN_LINE.test(line)
+  if (permission === 'bypass') return { decision: steering ? 'ask' : 'run', access: steering ? 'approved' : 'bypass' }
+  const names = commandNames(line)
+  if (permission === 'acceptEdits' && !steering && !terminalNeedsNetwork(line) && !names.some((n) => NEEDS_CARD.has(n))) return { decision: 'run', access: 'edits' }
+  if (steering) return { decision: 'ask', access: 'approved' }
+  const ok = allowedCommands.get(thread)?.names
+  if (writesFile(line) || names.some((n) => NEVER_ALWAYS.has(n))) return { decision: 'ask', access: 'approved' }
+  return { decision: names.length && ok && names.every((n) => ok.has(n)) ? 'run' : 'ask', access: 'approved' }
 }
 
 const setPermission = (thread: string, p: Permission) => database().prepare('UPDATE agent_threads SET permission = ? WHERE id = ?').run(p, thread)
@@ -3072,10 +3129,10 @@ function folderLines(t: Thread, terminal: boolean, instructions: { name: string;
     )
   if (terminal)
     lines.push(
-      "The terminal tool runs a command line in msh, the MvL OS shell (POSIX sh with if/for/while/case, functions, $(…), pipes and redirects), in the user's own terminal, in the work folder. Its commands are MvL OS's, not Linux's: there is no git, python, node or package manager; man <command> and help tell what there is, and man msh the shell's syntax. Prefer the file tools for reading and changing files.",
+      "The terminal tool runs a command line in msh, the MvL OS shell (POSIX sh with if/for/while/case, functions, $(…), pipes and redirects), the same interpreter as the user's terminal, in the work folder. Every call starts a fresh shell: files you write stay, variables and `cd` do not. Its commands are MvL OS's, not Linux's: there is no git, python, node or package manager, and a command has only the options its usage names. Call terminal_capabilities (or run `help --json`) for the exact commands, options, mounts, limits and what this thread may do before relying on a flag. To make a script: write_file it, check it with `msh -n script.sh`, run it with `msh script.sh`, and fix what its stderr and exit code say. Reads and writes are confined to the work folder; a run is stopped after its timeout (timeout_seconds, 60 by default). Prefer the file tools for reading and changing single files.",
     )
   if (t.permission === 'plan') lines.push('Plan mode is on: you can only read. Look around until you understand the task, then call exit_plan_mode with a clear plan and wait for the user. Do not try to change anything before that.')
-  else if (t.permission === 'acceptEdits' && t.workdir) lines.push('Edits are allowed: file changes in the work folder go through without asking; deleting, and terminal commands that change something, still ask.')
+  else if (t.permission === 'acceptEdits' && t.workdir) lines.push('Edits are allowed: file changes in the work folder go through without asking, and so do terminal commands that only write there (a script you wrote, a redirect); deleting, the network and the files that steer you still ask.')
   else if (t.permission === 'bypass')
     lines.push(
       `Bypass is on: your tool calls run without the user allowing each one, including file edits, deletes, terminal commands, note changes and web reads, so be careful and do only what the task needs. Calendar changes, mail drafts, sends and changes, ${t.mailReadsAlways || t.mailReadsUntil ? '' : 'every mail search and read, '}and writes to AGENTS.md, CLAUDE.md, .agents/ or .claude/, still wait for the user.${t.mailReadsAlways ? ' Mail searches and reads run without asking: the user always allows them.' : t.mailReadsUntil ? ` Mail searches and reads run without asking until ${clock(t.mailReadsUntil, zone)}, as the user allowed in this thread.` : ''}`,
@@ -3504,11 +3561,11 @@ function askOwner(thread: string, messageId: number, index: number, call: ToolCa
  * Hands a terminal tool call to the terminal running the agents command and waits for what it
  * printed (null when no terminal is attached, the turn stops, or after three minutes).
  */
-function askClient(thread: string, messageId: number, index: number, call: ToolCall, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<{ output: string; status: number } | null> {
-  if (!terminals.get(thread)) return Promise.resolve(null)
+function askClient(thread: string, messageId: number, index: number, call: ToolCall, signal: AbortSignal, send: (e: TurnEvent) => void, grant: ClientGrant): Promise<ClientAnswer | null> {
+  if (!executors.get(thread)) return Promise.resolve(null)
   return new Promise((resolve) => {
     const callId = randomUUID()
-    const done = (r: { output: string; status: number } | null) => {
+    const done = (r: ClientAnswer | null) => {
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
       const left = (pending.get(thread) ?? []).filter((p) => p.callId !== callId)
@@ -3518,11 +3575,31 @@ function askClient(thread: string, messageId: number, index: number, call: ToolC
       resolve(r)
     }
     const onAbort = () => done(null)
-    const timer = setTimeout(() => done(null), 3 * 60_000)
+    const timer = setTimeout(() => done(null), 3 * 60_000 + 15_000)
     signal.addEventListener('abort', onAbort)
-    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'client', call, resolve: (a) => done((a as { output: string; status: number } | null) ?? null) }])
-    send({ type: 'client', callId, messageId, index, call })
+    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'client', call, grant, resolve: (a) => done((a as ClientAnswer | null) ?? null) }])
+    send({ type: 'client', callId, messageId, index, call, grant })
   })
+}
+
+/** What a window sends back for a terminal call: the plain text, the exit status and the structured answer. */
+type ClientAnswer = { output: string; status: number; result?: TerminalAnswer; capabilities?: string }
+type TerminalAnswer = { exit_code: number; stdout: string; stderr: string; duration_ms: number; truncated: { stdout: number; stderr: number }; terminated: string | null; cwd: string }
+
+const TERMINATIONS = new Set(['timeout', 'cancelled', 'steps', 'output', 'memory'])
+const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0)
+
+/** The terminal's answer as the model reads it: each stream apart, clipped to `room`, with what was cut said in numbers. */
+function terminalOutput(r: ClientAnswer, room: number): string {
+  const t = r.result
+  if (!t) return JSON.stringify({ exit_code: r.status, stdout: clip(r.output, room), stderr: '', terminated: null })
+  const cut = (text: string, dropped: number) => {
+    const kept = text.length > room ? text.slice(0, room) : text
+    return { text: kept, dropped: dropped + (text.length - kept.length) }
+  }
+  const out = cut(t.stdout, t.truncated.stdout)
+  const err = cut(t.stderr, t.truncated.stderr)
+  return JSON.stringify({ exit_code: t.exit_code, stdout: out.text, stderr: err.text, duration_ms: t.duration_ms, truncated: { stdout: out.dropped, stderr: err.dropped }, terminated: t.terminated, cwd: t.cwd })
 }
 
 /** Shows the user a form and waits for the answers (none when stopped, skipped, or after 30 minutes; what they said instead when they wrote in the message box). */
@@ -3556,7 +3633,7 @@ export type TurnEvent =
   /** `check`: a web read the automatic check (Auto) would not clear, and what it said */
   | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
   /** A terminal tool call for the terminal to run (then clientDone, when it is answered or given up) */
-  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
+  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall; grant: ClientGrant }
   | { type: 'clientDone'; callId: string }
   | { type: 'approved'; callId: string; allow: boolean }
   | { type: 'question'; callId: string; messageId: number; index: number; form: Form }
@@ -3587,7 +3664,7 @@ type TurnResult = { outcome: Outcome; error?: string; compact?: { instructions?:
  * it is done and messages are queued, the next one is answered on the same stream, and so on. The
  * turn goes on when the window goes away; Stop ends it, and what was finished by then stays saved.
  */
-export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown; client?: { terminal?: unknown; timeZone?: unknown } }) {
+export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown; client?: { terminal?: unknown; exec?: unknown; timeZone?: unknown } }) {
   const row = ownThread(user, id)
   const ask = askFrom(user, body)
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
@@ -3602,6 +3679,7 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
+  else if (body.client?.exec === true) attachExecutor(row.id, res)
   await runChain(user, row.id, ask, res, fromTerminal)
 }
 
@@ -3776,7 +3854,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     // subagent's is narrowed to its parent's as it is now (tools, mode, work folder).
     const current = () => (childRow ? childView(toThread(ownThread(user, row.id, true)), childRow) : toThread(ownThread(user, row.id)))
     send({ type: 'thread', thread: current() })
-    const toolsNow = (t: Thread) => (childRow ? childTools(user, t, childRow) : toolsFor(user, t.tools, t.projectId !== null, { workdir: !!t.workdir, terminal: fromTerminal || terminals.has(row.id), permission: t.permission, ...(row.quick === 0 ? { subagents: t.permission === 'plan' ? 'read' : 'all' } : {}) }))
+    const toolsNow = (t: Thread) => (childRow ? childTools(user, t, childRow) : toolsFor(user, t.tools, t.projectId !== null, { workdir: !!t.workdir, terminal: fromTerminal || executors.has(row.id), permission: t.permission, ...(row.quick === 0 ? { subagents: t.permission === 'plan' ? 'read' : 'all' } : {}) }))
     // Where mail read grants come from: a subagent goes by its parent's.
     const grants = childRow ? childRow.parent_thread : row.id
     // A subagent's usage (its overview) and its caps per turn, like a task run's.
@@ -4044,6 +4122,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             try { calendar = await prepareRenderTool(user, c.arguments ?? {}, ctl.signal) }
             catch (e) { if (ctl.signal.aborted) throw e; return JSON.stringify({ error: (e as Error).message }) }
           }
+          let explicitlyApproved = false
           if (decision === 'ask' || unknownPage) {
             const v = await waiting(index, askOwner(row.id, assistant, index, c, ctl.signal, send, calendar?.summary, checkSaid))
             if (c.name === 'exit_plan_mode') {
@@ -4056,6 +4135,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             }
             if (!v.allow)
               return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : v.feedback ? `The user declined this and said: ${v.feedback}` : MAIL_TOOLS.has(c.name) ? 'The user did not allow this mail call, so nothing was read or changed. Ask what they want instead.' : 'The user declined this change. Ask what they want instead, or try another way.' })
+            explicitlyApproved = true
             // Mail reads for a while (approve set it, from this read's card): every window shows the chip.
             if ((v.always === 'mail_reads' || v.always === 'mail_reads_always') && MAIL_READS.has(c.name)) send({ type: 'thread', thread: current() })
             if (v.always === 'edits' && FILE_WRITES.has(c.name)) {
@@ -4076,10 +4156,14 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               allowedCommands.set(row.id, entry)
             }
           }
-          if (c.name === 'terminal') {
-            const r = await askClient(row.id, assistant, index, c, ctl.signal, send)
-            if (!r) return JSON.stringify({ error: 'No terminal ran this: the terminal tool works while the agents command runs in the MvL OS terminal.' })
-            return JSON.stringify({ exit_code: r.status, output: clip(r.output, MODES[mode].pageChars * 2) })
+          if (c.name === 'terminal' || c.name === 'terminal_capabilities') {
+            const line = argString(c.arguments ?? {}, 'command')
+            const grant = terminalGrant(current().permission, line, c.name === 'terminal' ? decideTerminal(row.id, current().permission, line).access : 'readonly', explicitlyApproved)
+            const r = await askClient(row.id, assistant, index, c, ctl.signal, send, grant)
+            const none = 'No window ran this: the terminal tool works while the Agents app is open on this thread, or the agents command runs in the MvL OS terminal.'
+            if (!r) return JSON.stringify({ error: none })
+            if (c.name === 'terminal_capabilities') return r.capabilities === undefined ? JSON.stringify({ error: r.output || none }) : clip(r.capabilities, 48_000)
+            return terminalOutput(r, MODES[mode].pageChars * 2)
           }
           if (c.name === 'use_skill' || c.name === 'read_skill_file') {
             try {
@@ -4224,11 +4308,11 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
  * thread as it is now, the reply being written so far, then the turn's events as they happen,
  * until it ends. A thread that is not answering gets its snapshot and the end straight away.
  */
-export function followThread(res: ServerResponse, user: User, id: string, terminal = false) {
+export function followThread(res: ServerResponse, user: User, id: string, client: string | null = null) {
   const row = ownThread(user, id, true)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   if (!bindResponse(res, user.id)) return
-  if (terminal) attachTerminal(row.id, res)
+  attach(row.id, res, client)
   const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
   const { thread, messages, pending: waiting } = getThread(user, row.id)
   const live = partial.get(row.id)
@@ -4336,7 +4420,7 @@ export function messagePicture(user: User, id: string, messageId: string, index:
  * message. Queued messages run after it, as after any answer. A /compact that failed or was cut
  * short is compacted again instead.
  */
-export async function retryTurn(res: ServerResponse, user: User, id: string, body: { client?: { terminal?: unknown; timeZone?: unknown } }) {
+export async function retryTurn(res: ServerResponse, user: User, id: string, body: { client?: { terminal?: unknown; exec?: unknown; timeZone?: unknown } }) {
   const row = ownThread(user, id)
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
   // A /compact that failed or was cut short: compacting again is what is retried, and nothing goes.
@@ -4364,6 +4448,7 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
   }
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
+  else if (body.client?.exec === true) attachExecutor(row.id, res)
   await runChain(user, row.id, ask, res, fromTerminal)
 }
 
@@ -4934,7 +5019,7 @@ type SubagentSpec = { instruction: string; model: string; permission: Permission
 
 const SUBAGENT_TOOLS = new Set(['spawn_agent', 'message_agent', 'stop_agent', 'list_agents', 'agent_status'])
 /** Never in a subagent: what needs the user there (forms, plans, the terminal), what lasts beyond its job, and more subagents (one level deep). */
-const CHILD_NEVER = new Set(['exit_plan_mode', 'ask_user', 'terminal', ...TASK_CHAT_TOOLS, ...SUBAGENT_TOOLS, 'move_thread', 'create_project', 'rename_project', 'plan_video', 'render_video'])
+const CHILD_NEVER = new Set(['exit_plan_mode', 'ask_user', 'terminal', 'terminal_capabilities', ...TASK_CHAT_TOOLS, ...SUBAGENT_TOOLS, 'move_thread', 'create_project', 'rename_project', 'plan_video', 'render_video'])
 /** Groups a subagent never gets in v1 (pictures and videos land in a thread nobody looks at, renders cost the user's GPU, the terminal is the parent's window). */
 const CHILD_GROUPS_NEVER: ToolGroup[] = ['terminal', 'images', 'gpt_images']
 

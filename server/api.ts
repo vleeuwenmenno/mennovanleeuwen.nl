@@ -20,7 +20,7 @@ import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafil
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, claimClientCall, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -426,7 +426,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (action === 'message' && method === 'POST') return json(res, 200, messageSubagentAsUser(requireUser(req), tid, child, await readJson(req, 64 * 1024))), true
       if (action === 'stop' && method === 'POST') return json(res, 200, stopSubagentAsUser(requireUser(req), tid, child)), true
     }
-    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/stats|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/claim|\/title|\/retitle|\/context|\/stats|\/queue|\/override|\/retry|\/rewind|\/branch|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread
       if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
@@ -436,8 +436,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const user = requireUser(req)
         return await runTurn(res, user, tid, await readJson(req, 16 * 1024 * 1024)), true
       }
-      if (sub === '/follow' && read) return followThread(res, requireUser(req), tid, url.searchParams.get('client') === 'terminal'), true
-      if (sub === '/result' && method === 'POST') return clientResult(requireUser(req), tid, await readJson(req, 512 * 1024)), json(res, 200, { ok: true }), true
+      if (sub === '/follow' && read) return followThread(res, requireUser(req), tid, url.searchParams.get('client')), true
+      if (sub === '/result' && method === 'POST') return clientResult(requireUser(req), tid, await readJson(req, 1024 * 1024)), json(res, 200, { ok: true }), true
+      if (sub === '/claim' && method === 'POST') return json(res, 200, claimClientCall(requireUser(req), tid, await readJson(req, 4 * 1024))), true
       if (sub === '/stop' && method === 'POST') return stopThread(requireUser(req), tid), json(res, 200, { ok: true }), true
       if (sub === '/title' && method === 'POST') return json(res, 200, await suggestTitle(requireUser(req), tid)), true
       if (sub === '/retitle' && method === 'POST') return json(res, 200, await regenerateTitle(requireUser(req), tid)), true
