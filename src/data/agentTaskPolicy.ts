@@ -272,6 +272,8 @@ export type DecideContext = {
   scope?: CallScope
   /** The mail that started the run, as message ids the model sees ("<account>.<id>"): mail_read of exactly these runs without asking */
   triggerMail?: string[]
+  /** The task's work folder (a Seafile library and folder): its file tools' paths are relative to it */
+  workdir?: { repo: string; path: string }
 }
 
 export type Decision = { verdict: Verdict; reason: string }
@@ -355,10 +357,18 @@ export function taskDecide(policy: TaskPolicy, call: { name: string; arguments?:
       if (hit) lower('ask', 'It changes your AGENTS.md or skills folder, which steer the agent: it asks')
     }
   }
-  // The work folder: writes to the files that steer the agent never go further than asking.
+  // The work folder: writes to the files that steer the agent never go further than asking, and
+  // neither do writes into the user's own ~/AGENTS.md or skills folder when the work folder holds them
+  // (or is inside them): the paths are relative to the work folder, in its library.
   if (t.group === 'files' && t.class === 'write') {
     const paths = ['path', 'from', 'to'].map((k) => argText(args, k)).filter(Boolean)
     if (paths.some((p) => STEERING_PATH.test(p))) lower('ask', 'It changes a file that steers the agent: it asks')
+    const w = ctx.workdir
+    if (w) {
+      const full = paths.length ? paths.map((p) => absPath(`${w.path}/${p}`.replace(/\/+/g, '/'))) : [absPath(w.path)]
+      const lib = w.repo.toLowerCase()
+      if ((ctx.scope?.steering ?? []).some((s) => s.libraries.some((x) => x.toLowerCase() === lib) && full.some((p) => within(p, s.path) || within(s.path, p)))) lower('ask', 'It changes your AGENTS.md or skills folder, which steer the agent: it asks')
+    }
   }
   if (t.group === 'calendar' && t.class === 'write' && policy.calendars.length) {
     const touched = ctx.scope?.calendars ?? []

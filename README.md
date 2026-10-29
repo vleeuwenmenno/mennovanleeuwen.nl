@@ -2040,12 +2040,13 @@ over; Plan counts as Ask first): what runs without asking is Allow, what asks is
 thread has off is blocked. Only lasting grants come along: mail reads allowed always, and the sites
 allowed for good, which become the task's trusted sites (any site may be read; on a trusted one also
 an address the agent built while it holds private data). The 15-minute mail read grant, commands
-allowed in a terminal and Auto's check do not. Pictures that cost (gpt-image) ask. The thread's
+allowed in a terminal and Auto's check do not. What costs (gpt-image) or lasts beyond the run
+(memories, notes, projects, kept photos) asks, though the thread runs it. The thread's
 work folder comes along: reads Allow, writes and deletes Ask, `AGENTS.md`, `CLAUDE.md`, `.agents/`
-and `.claude/` never further than Ask. The card says "Tools: Same as this thread" and names what
+and `.claude/` never further than Ask, nor your own ~/AGENTS.md and skills folder when the work folder holds them. The card says "Tools: Same as this thread" and names what
 does not come along (the terminal, image generation). The editor says whether the task's tools still
 match its thread's, with **Use thread's tools again**; `update_task` with `use_thread_tools` does the
-same, and its card says when that widens what the task may do. Its model is the thread's, unless one
+same (only in the thread the task was made in), and its card says when that widens what the task may do. Its model is the thread's, unless one
 is named. Tasks made in the Tasks tab with no thread open keep the safe defaults below.
 
 *A model of its own.* The editor picks from your models; `create_task` and `update_task` take
@@ -2145,7 +2146,9 @@ or only when the notification was not read within 15 minutes.
 Agents → Tasks can make it "Reports in the thread it was made in" instead). Each run still runs in a
 hidden thread of its own under the task's policy and model (never as the chat thread, which a task
 never sets running), seeded with that thread's context: its last compaction's summary and its
-latest messages, as much as fits about half the run's model window, as data. While it runs the
+latest messages, as data, tool results shortened as compaction does, within an eighth of the run's
+token cap (or the summary and about 16k tokens of messages, whichever is smaller). A seeded run holds
+private data from its first round. While it runs the
 thread shows a strip: the task, run #n and its state, with the run live, its questions to answer
 (Allow or Deny, kept across restarts like any run's) and Cancel. Once the thread is at rest the run
 lands there as one block: "Task: title · run #n · trigger", the report, what it used, and its
@@ -2190,7 +2193,9 @@ ones are offered, and task runs never start subagents. Each subagent is a hidden
 - *Its cards* wait in its own thread, so typing in the parent never answers them, and show in the
   parent labelled with its name, Allow or Decline only (nothing "from now on"); they push as the
   parent's when nobody looks.
-- *Its result*: when it finishes, its overview (state, time, tokens, tool calls by name) and its
+- *Its result* counts as private data in the parent (it may hold what the subagent read), as does
+  a task report in a thread: from then on an address the agent built asks, there and in the
+  subagents it starts afterwards. When it finishes, its overview (state, time, tokens, tool calls by name) and its
   final answer go into the parent's inbox (`agent_inbox`): nobody writes into a running thread. A
   working parent reads it at its next round boundary, after its tool results are saved, as data
   (role `subagent`); a parent at rest starts a turn for it a moment later (results finishing close
@@ -2203,7 +2208,8 @@ ones are offered, and task runs never start subagents. Each subagent is a hidden
   A thread keeps its last 30.
 - *Stop, delete, rewind, restart*: Stop in the parent stops its subagents (their overviews come in
   with your next message); deleting it deletes them; archiving keeps them; a rewind drops the ones
-  started for the messages it removes, with their results still on the way; a restart marks working
+  started for the messages it removes, with their results still on the way, and so does Retry (which
+keeps the budget that message used); a restart marks working
   ones interrupted and the parent still gets an overview saying so (nothing starts by itself then).
 - *In the window*: a Subagents strip above the message box, each with its state and usage, its work
   live, a box to write to it, Stop, and **Open as thread** (a branch of its work). Their changes and

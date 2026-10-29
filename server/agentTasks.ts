@@ -627,7 +627,7 @@ async function execute(runId: string, ctl: AbortController) {
     thread = createRunThread(user, { title: `${spec.title} · ${day}`, model, groups: usedGroups(policy), workdir: spec.workdir })
     db.prepare('UPDATE agent_task_runs SET thread_id = ? WHERE id = ?').run(thread, run.id)
     // Its context first: the thread's summary and its latest messages, as data.
-    if (origin) seeded = await seedRunThread(user, thread, origin, model).catch((e) => (console.warn('[tasks] seeding a run:', (e as Error).message), false))
+    if (origin) seeded = await seedRunThread(user, thread, origin, model, spec.caps.tokens).catch((e) => (console.warn('[tasks] seeding a run:', (e as Error).message), false))
     changed(user.id, { task: task.id, run: run.id })
   } else seeded = !!origin
   const continues = origin ? ((db.prepare('SELECT title FROM agent_threads WHERE id = ?').get(origin) as { title: string } | undefined)?.title ?? 'a thread') : undefined
@@ -645,7 +645,7 @@ async function execute(runId: string, ctl: AbortController) {
     system,
     zone: spec.timezone,
     tools,
-    decide: (call, ctx) => taskDecide(policy, call, { ...ctx, scope: { ...ctx.scope, steering }, dryRun: !!run.dry, triggerMail }),
+    decide: (call, ctx) => taskDecide(policy, call, { ...ctx, scope: { ...ctx.scope, steering }, dryRun: !!run.dry, triggerMail, ...(spec.workdir ? { workdir: spec.workdir } : {}) }),
     scopeResult: (call, output) => scopeResult(policy, call, output),
     memories: policy.memories,
     stateNote: task.state_note,
@@ -1488,6 +1488,9 @@ export async function prepareTaskCall(user: User, thread: string, name: string, 
   const row = findTask(user, args.task)
   const before = specOf(row)
   if (name === 'update_task') {
+    // A task takes the tools of the thread it was made in again, from that thread only: another
+    // thread's tools are not what the user agreed to for it.
+    if (args.use_thread_tools === true && (!from || from !== row.created_from_thread)) throw new Error(row.created_from_thread ? `use_thread_tools only works in the thread the task was made in. Change the task's tools with allow, ask and sites here, or ask in that thread.` : 'This task was not made in a thread, so it has no thread tools to take again. Change its tools with allow, ask and sites.')
     const raw = specFromArgs(user, args, zone, from, before, tools)
     await mailboxByName(user, raw)
     await checkSpecModel(user, raw, before)
