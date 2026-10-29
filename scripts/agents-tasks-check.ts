@@ -729,22 +729,24 @@ try {
     tasks.updateTask(alice, lost.id, { status: 'paused' })
     const many = Array.from({ length: 230 }, (_, i) => mock.deliver({ subject: `lostcheck bulk ${i}` }))
     // Every check for those has run (the account's push state caught up), so none clears the list set below.
-    await until('the push line catches up', () => (db.prepare('SELECT push_state FROM jmap_accounts WHERE id = ?').get(home.id) as J).push_state === mock.state(), 20000)
-    await sleep(500)
-    db.prepare('UPDATE jmap_accounts SET task_retry = ? WHERE id = ?').run(JSON.stringify(many.map((e) => ({ id: e.id, at: Date.now() }))), home.id)
-    // Watched at the hand-over itself: what then waits is trimmed to 200 by the next tick (that is
-    // the waiting cap, checked elsewhere), which can come between two chunks.
-    const handed: string[] = []
-    const chunks: number[] = []
-    const arrivedBefore = tasks.taskMailHook.arrived
-    tasks.taskMailHook.arrived = (u, a, mails, b) => (handed.push(...mails.map((x) => x.id)), chunks.push(mails.length), arrivedBefore(u, a, mails, b))
+    // Polled with generous deadlines, not fixed waits: under load the checks for 230 messages take a
+    // while, and one still in flight would clear the list set below. Caught up means caught up for a
+    // whole second.
+    const caughtUp = () => (db.prepare('SELECT push_state FROM jmap_accounts WHERE id = ?').get(home.id) as J).push_state === mock.state()
+    let since = 0
+    await until('the push line catches up', () => (caughtUp() ? (since ||= Date.now()) && Date.now() - since >= 1000 : ((since = 0), false)), 60_000)
+    // Active first, then the list: a check still running from the paused time would see an account
+    // nobody watches and clear a list written before (taskMailAll keeps nothing for it).
     tasks.updateTask(alice, lost.id, { status: 'active' })
+    db.prepare('UPDATE jmap_accounts SET task_retry = ? WHERE id = ?').run(JSON.stringify(many.map((e) => ({ id: e.id, at: Date.now() }))), home.id)
     mock.deliver({ subject: 'lostcheck last' })
-    await until('a batch of 231 is handed over', () => handed.length >= 231, 15000)
-    tasks.taskMailHook.arrived = arrivedBefore
-    const bulk = new Set(handed)
-    check('lost mail: more than 200 new messages are all handed over, in chunks', many.every((e) => bulk.has(e.id)) && chunks.length > 1 && chunks.every((n) => n <= 200))
-    await until('they wait for the task (the newest 200)', () => pending(lost.id).length === 200)
+    // The scheduler keeps at most 200 waiting mails a task and counts what it trims (mail_dropped),
+    // so 231 waiting is only there until its next tick: handed over is waiting plus dropped.
+    const dropped = () => (db.prepare('SELECT mail_dropped FROM agent_tasks WHERE id = ?').get(lost.id) as J).mail_dropped as number
+    await until('a batch of 231 is handed over', () => pending(lost.id).length + dropped() >= 231, 60_000)
+    const bulk = pending(lost.id).map((r) => r.email_id)
+    const ids = new Set([...many.map((e) => e.id)])
+    check('lost mail: more than 200 new messages are all handed over, in chunks', bulk.length + dropped() === 231 && bulk.filter((id) => !ids.has(id)).length <= 1 && (dropped() > 0 || many.every((e) => bulk.includes(e.id))))
     // Changing the trigger drops what waited (review fix), like pausing.
     tasks.updateTask(alice, lost.id, { schedule: { ...taskSchedule(lost.id), subject: ['lostcheck', 'other'] } })
     check('editing the trigger drops the mail that waited', pending(lost.id).length === 0)

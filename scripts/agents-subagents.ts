@@ -52,6 +52,8 @@ const { encrypt } = await import('../server/db.ts')
   check('the overview line names state, time, tokens and tools', overviewLine({ id: 'x', name: 'n', status: 'idle', ms: 80_000, tokens: 12_300, toolCalls: 3, tools: { web_search: 2, web_fetch: 1 } }) === 'Done · 1m 20s · 12.3k tokens · 3 tool calls (web_search ×2, web_fetch)')
   const open = { ...defaultPolicy(), tools: { spawn_agent: 'allow', message_agent: 'allow', list_agents: 'allow', agent_status: 'allow', stop_agent: 'allow', run_task_now: 'allow' } as J }
   const ctx = { holdsPrivate: false, given: () => false, dryRun: false }
+  const video = { ...defaultPolicy(), groups: { images: 'allow' }, tools: { plan_video: 'allow', render_video: 'allow' } as J }
+  check('task runs never plan or render videos, whatever the policy says', ['plan_video', 'render_video'].every((n) => TASK_TOOLS[n]?.unavailable && toolVerdict(video as never, n) === 'block' && taskDecide(video as never, { name: n }, ctx).verdict === 'block'))
   check('task runs never start or reach subagents, nor run tasks, whatever the policy says', ['spawn_agent', 'message_agent', 'list_agents', 'agent_status', 'stop_agent', 'run_task_now'].every((n) => TASK_TOOLS[n]?.unavailable && toolVerdict(open, n) === 'block' && taskDecide(open, { name: n }, ctx).verdict === 'block'))
 }
 
@@ -252,6 +254,13 @@ try {
     check("a subagent's tools are a subset of its parent's", offered.length > 0 && offered.every((n) => parentOffered.includes(n)))
     check('a subagent never gets forms, plans, the terminal, task or subagent tools', !offered.some((n) => ['ask_user', 'exit_plan_mode', 'terminal', 'create_task', 'update_task', 'run_task_now', 'spawn_agent', 'message_agent', 'list_agents', 'move_thread', 'create_project'].includes(n)))
     check('the parent is offered the subagent tools', ['spawn_agent', 'message_agent', 'stop_agent', 'list_agents', 'agent_status'].every((n) => parentOffered.includes(n)))
+    // A parent with Images (and so the video tools) on: its subagents get neither.
+    const imaging = await newThread({ tools: ['notes', 'images', 'gpt_images'] })
+    const iv = await say(imaging.id, spawnArgs('CHILD tools', { name: 'no pictures' }))
+    const ivOut = JSON.parse(iv.find((e) => e.type === 'message' && e.message.toolName === 'spawn_agent')?.message.content ?? '{}')
+    await settle(imaging.id)
+    const ivTools = requests.find((r) => r.thread === ivOut.id)?.tools ?? []
+    check('a subagent never gets Images or GPT images, nor plan_video or render_video', !ivOut.tools?.includes('images') && !ivOut.tools?.includes('gpt_images') && ivOut.tools?.includes('notes') && !ivTools.some((n) => ['plan_video', 'render_video', 'generate_image', 'gpt_image'].includes(n)))
     const wider = await say(parent.id, spawnArgs('CHILD quick', { name: 'wider', tools: ['mail'] }))
     check('asking for a tool the parent does not have is refused', /not on in this thread/.test(wider.find((e) => e.type === 'message' && e.message.toolName === 'spawn_agent')?.message.content ?? ''))
     const narrow = await say(parent.id, spawnArgs('CHILD tools', { name: 'narrow', tools: ['notes'] }))

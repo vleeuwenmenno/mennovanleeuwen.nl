@@ -6,7 +6,7 @@ import type { ThreadSelection } from './selection'
 export type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
 
 /** What the app's main pane shows (the sidebar marks Memory, Settings and the Image Studio when they do). */
-export type MainKind = 'thread' | 'settings' | 'memory' | 'studio' | 'tasks'
+export type MainKind = 'thread' | 'settings' | 'memory' | 'tasks'
 
 /** What can be done to the selected threads at once (see select.tsx for the bar that offers it). */
 export type Bulk = {

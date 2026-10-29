@@ -1917,7 +1917,8 @@ stored encrypted, see [`server/websearch.ts`](server/websearch.ts)), Ollama's we
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
-Stop) and `remember`/`update_memory`. A group with nothing behind it yet is greyed in that menu and
+Stop), `remember`/`update_memory`, and with Images on, `plan_video` and `render_video` (a clip for
+the [Video Studio](#video-studio); every render asks first, Plan mode refuses it). A group with nothing behind it yet is greyed in that menu and
 says why (Mail before an account is linked, Calendar before one is connected, Work folder before one
 is chosen, Terminal outside the `agents` command); it can be switched off but not on. Memory is yours (every thread) or a project's (that
 project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
@@ -1929,7 +1930,7 @@ the conversation (choice, multiple choice, yes or no, text, number, rating, date
 several questions at once), and its turn waits for the answers. Each question type is one renderer
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
-suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail: New thread, Search (which unfolds the sidebar with the cursor in the search), the threads as chips with their first letter, a tooltip and a mark for running, new and stopped (running and pinned first; or grouped per project), then Archived, Memory, Image Studio and Settings. It is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
+suggestion), archived and deleted. Ctrl+F focuses the thread search, or the memory search when that view is open. The sidebar folds to a rail: New thread, Search (which unfolds the sidebar with the cursor in the search), the threads as chips with their first letter, a tooltip and a mark for running, new and stopped (running and pinned first; or grouped per project), then Archived, Memory, Image Studio (which opens its own app) and Settings. It is resized by dragging its right edge (or the arrow keys on the focused handle; double-click or Enter resets it; 180 px up to half the window; remembered per browser, no handle in the one-pane layout). While a turn runs or waits for an answer, unavailable composer controls and session chips are muted and skipped by keyboard focus; Stop remains active.
 
 **Sidebar style.** The thread list comes in four looks, picked in Settings → Agents → General →
 Sidebar or from *Sidebar style* in the sidebar's right-click menu (a synced setting, `sidebarStyle`,
@@ -2372,70 +2373,17 @@ point at stand-ins for testing.
 pnpm check:agents-openai-images   # API key, pictures kept with results, streamed previews (served while drawing, joined halfway, Stop aborts), infographic defaults, references to the edits route and Responses input_image, the icon library, the cap, and the ChatGPT sign-in (risk gate, PKCE, pasted callback, refresh, retry, Responses fallback, a route that will not stream), against fakes
 ```
 
-**Image generation.** In Settings → Apps → Agents → Images (also the app's settings),
-enter your ComfyUI URL and optional bearer token, then **Save & discover models**. Select a preset
+**Image generation.** In Settings → Apps → Image & Video Studio (also Settings → Apps → Agents →
+Images, and the Agents app's own settings), enter your ComfyUI URL and optional bearer token, then **Save & discover models**. Select a preset
 and installed model, and save again. Connections belong to the signed-in account; secrets are
 stored encrypted and are never returned to the browser or model. Internal/LAN ComfyUI addresses
 are allowed only for admins, using the same DNS-pinned network guard as other integrations for
 non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
 
-**Image Studio.** Generate by hand, without an agent: **Image Studio** at the top of the Agents
-sidebar (also the rail icon, the sidebar's right-click menu, and **Open Image Studio** in
-Settings → Agents → Images). It works without an Ollama key, as it needs only ComfyUI. It is laid
-out like Diffu's Generate page. In a wide window it has three columns:
-- **Left**: the model. A quick pick lists every installed checkpoint and diffusion model by family.
-  Under it are the workflow, the model with its text encoder and VAE (Auto or Manual, as in
-  Settings), the Raw/Turbo variant for Krea2 and Z-Image, and a custom VAE for checkpoints. A
-  family card follows, with the rules the workflow follows, where the settings came from, and
-  warnings (unsupported, v-prediction). Then come LoRAs (preview, trigger words that a click adds
-  to the prompt, weight 0–2 by slider or exact number) and embeddings (+/− for the prompt or the
-  negative prompt). After those: the prompt with a token estimate (characters for the
-  long-context encoders), the negative prompt, a source picture, and the size. The source is one
-  of your generated pictures or an upload from this device, converted to PNG in the browser; it
-  sets the size and a 0.6 strength. The size has 1:1 to 21:9 buckets, width and height with a
-  shape lock and swap, and a batch of 1–8.
-- **Middle**: the picture as it is made, using the same block grid as a thread. Under it are its
-  actions: **Use these settings**, **Send to chat…** (into a new or recent thread's message box),
-  **Refine…**, **Edit area…** (inpaint or remove), **Upscale…**, **Download** and **Delete**.
-  Below them is the Studio's history.
-- **Right**: **Generate**, which turns into **Queue** while a picture runs, and **Cancel**. With the
-  reason it cannot run yet, if any (with **Copy all**). Then the queue, the seed (−1 random, Roll,
-  Last, Lock), steps, CFG, sampler and scheduler from ComfyUI's live list, denoise for a source,
-  clip skip, and a hires pass with an optional upscale model.
+**Image Studio.** Generating by hand, without an agent, is an app of its own: see
+[Image Studio](#image-studio). **Image Studio** in the Agents sidebar (the rail icon, the
+sidebar's right-click menu) opens it.
 
-In a window under 1000 px, or on a phone, the middle column comes first with the prompt above
-it. **Parameters** and **Advanced** open the two side columns as drawers, and Generate sits in a
-bar at the bottom, clear of the home indicator.
-
-The family rules are shared with the server (`presetRules`/`applyPresetRules` in
-`src/data/modelFamilies.ts`):
-- Only diffusion models get a separate encoder.
-- Turbo workflows hide the negative prompt and fix CFG at 1.
-- Clip skip and embeddings are for SD 1.5/SDXL checkpoints only.
-- Diffusion models (so Krea2 always) take model-only LoRAs.
-
-A new model on an untouched form takes its recipe straight away: model_details' Civitai example
-consensus when there is one, else the family's defaults. If you changed the sampling by hand
-since then, the Studio asks under the model heading: **Apply recommended settings** or **Keep
-current**. The form follows the account (synced, so it also works without browser storage). The
-history is the server's: Studio pictures live in a hidden per-account thread that no thread list,
-search or Spotlight shows.
-
-Runs go to `POST /api/agents/images/studio/run` (NDJSON: start, progress, image, done or error).
-It plans with the same function as generate_image: the same graph builder, catalog and asset
-checks, quota and one-job lock. It needs no approval card, like Generate another. A batch runs
-one picture after another, with a fixed seed counting up by one. Closing the request cancels
-only the Studio's own queued prompt. The other routes are:
-- `GET /api/agents/images/studio`: the thread and whether ComfyUI is connected.
-- `GET /api/agents/images/studio/images?scope=studio|all&before=`: the history, or every picture
-  of the account for picking a source.
-- `GET /api/agents/images/studio/embeddings`.
-- `POST /api/agents/images/studio/upload`: PNG, up to 12 MiB.
-- `DELETE /api/agents/images/studio/images/<id>`: Studio pictures only.
-
-```sh
-pnpm check:agents-image-studio   # Family rules, the form's request and validation, and the endpoint against a stand-in ComfyUI: owner only, graphs per family, batch, uploads, history
-```
 
 **Edit an existing image (image-to-image).** In a generated image's **Options → Edit image…**,
 Agents adds a named source chip and starts an edit prompt in the message box; describe the change
@@ -3476,6 +3424,189 @@ and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 Clicking an entry opens it in the Git app; when the app can't load it (no access, a host it doesn't
 know, no answer within a few seconds) it opens on the web instead. Ctrl-, Shift- and middle-clicks
 still open the web page in a new tab.
+
+## Image Studio
+
+**Image Studio** is its own app (its own window, in the dock's app list, the Launchpad and
+Spotlight; `open imagestudio` in the terminal). It also opens from **Image Studio** in the Agents sidebar
+(the rail icon, the sidebar's right-click menu) and **Open Image Studio** in its settings. Old links
+that asked Agents for the Studio (`/?open=agents&tab=studio`, a restored Agents window showing it)
+open the app instead. It works without an Ollama key, as it needs only ComfyUI; with a chat model,
+**Send to chat…** offers the account's threads and opens the picked one in Agents. The gear in its
+header (and the window menu) opens Settings → Apps → Image & Video Studio: the ComfyUI connection,
+the same one Agents generates with.
+
+It is laid out like Diffu's Generate page. In a wide window it has three columns:
+- **Left**: the model. A quick pick lists every installed checkpoint and diffusion model by family.
+  Under it are the workflow, the model with its text encoder and VAE (Auto or Manual, as in
+  Settings), the Raw/Turbo variant for Krea2 and Z-Image, and a custom VAE for checkpoints. A
+  family card follows, with the rules the workflow follows, where the settings came from, and
+  warnings (unsupported, v-prediction). Then come LoRAs (preview, trigger words that a click adds
+  to the prompt, weight 0–2 by slider or exact number) and embeddings (+/− for the prompt or the
+  negative prompt). After those: the prompt with a token estimate (characters for the
+  long-context encoders), the negative prompt, a source picture, and the size. The source is one
+  of your generated pictures or an upload from this device, converted to PNG in the browser; it
+  sets the size and a 0.6 strength. The size has 1:1 to 21:9 buckets, width and height with a
+  shape lock and swap, and a batch of 1–8.
+- **Middle**: the picture as it is made, using the same block grid as a thread. Under it are its
+  actions: **Use these settings**, **Send to chat…** (into a new or recent thread's message box),
+  **Refine…**, **Edit area…** (inpaint or remove), **Upscale…**, **Make video…** (a
+  [Video Studio](#video-studio) project starting from it), **Download** and **Delete**.
+  Below them is the Studio's history.
+- **Right**: **Generate**, which turns into **Queue** while a picture runs, and **Cancel**. With the
+  reason it cannot run yet, if any (with **Copy all**). Then the queue, the seed (−1 random, Roll,
+  Last, Lock), steps, CFG, sampler and scheduler from ComfyUI's live list, denoise for a source,
+  clip skip, and a hires pass with an optional upscale model.
+
+In a window under 1000 px, or on a phone, the middle column comes first with the prompt above
+it. **Parameters** and **Advanced** open the two side columns as drawers, and Generate sits in a
+bar at the bottom, clear of the home indicator.
+
+The family rules are shared with the server (`presetRules`/`applyPresetRules` in
+`src/data/modelFamilies.ts`):
+- Only diffusion models get a separate encoder.
+- Turbo workflows hide the negative prompt and fix CFG at 1.
+- Clip skip and embeddings are for SD 1.5/SDXL checkpoints only.
+- Diffusion models (so Krea2 always) take model-only LoRAs.
+
+A new model on an untouched form takes its recipe straight away: model_details' Civitai example
+consensus when there is one, else the family's defaults. If you changed the sampling by hand
+since then, the Studio asks under the model heading: **Apply recommended settings** or **Keep
+current**. The form follows the account (synced, so it also works without browser storage). The
+history is the server's: Studio pictures live in a hidden per-account thread that no thread list,
+search or Spotlight shows.
+
+Runs go to `POST /api/agents/images/studio/run` (NDJSON: start, progress, image, done or error).
+It plans with the same function as generate_image: the same graph builder, catalog and asset
+checks, quota and one-job lock. It needs no approval card, like Generate another. A batch runs
+one picture after another, with a fixed seed counting up by one. Closing the request cancels
+only the Studio's own queued prompt. The other routes are:
+- `GET /api/agents/images/studio`: the thread and whether ComfyUI is connected.
+- `GET /api/agents/images/studio/images?scope=studio|all&before=`: the history, or every picture
+  of the account for picking a source.
+- `GET /api/agents/images/studio/embeddings`.
+- `POST /api/agents/images/studio/upload`: PNG, up to 12 MiB.
+- `DELETE /api/agents/images/studio/images/<id>`: Studio pictures only.
+
+```sh
+pnpm check:agents-image-studio   # Family rules, the form's request and validation, and the endpoint against a stand-in ComfyUI: owner only, graphs per family, batch, uploads, history
+```
+
+## Video Studio
+
+**Video Studio** (its own app: the dock's app list, the Launchpad, Spotlight, `open videostudio`
+in the terminal, `/?open=videostudio&project=<id>`) turns a picture into a video clip on the
+account's own ComfyUI, the same connection as the Image Studio (Settings → Apps → Image & Video
+Studio). It also opens from **Make video…** under an Image Studio picture, and from **Open in
+Video Studio** under an agent's video plan. Without ComfyUI connected it says so and links to the
+settings.
+
+**Models.** Two, with their hard rules (shared by browser and server, `src/data/videoModels.ts`,
+ported from Diffu):
+
+| | MiniMax H3 (default) | LTX 2.5 Distilled |
+|---|---|---|
+| Length | 5–15 s; frames round up to 17k + 5 at 24 fps (5 s plays 5.17 s; the ruler shows the real end) | whole seconds 1–15; seconds × 24 + 1 frames |
+| Size | multiples of 32 (768p 16:9 is 1344 × 768) | multiples of 64, 128–2048 (its first stage runs at half size) |
+| Keyframes | first and last frame | first frame |
+| Sound | made with the picture: speech, sound, soundscape, music | made with the picture |
+
+Size is picked as an aspect ratio (21:9 to 9:16) and a tier (360p to 1080p). Which model files each
+runs with (video model, text encoder, video and audio VAE, H3's optional Turbo LoRA, LTX's latent
+upscaler) is set in Settings → Apps → Image & Video Studio → **Video**; Automatic takes an installed
+file whose name says the model.
+
+**Keyframes.** A slot for the first frame (and the last, for H3). **+ add** or **Change…** opens a
+picker: **Studio & agents** (every generated picture, newest first, with an Image Studio only
+filter, then pictures sent in threads), **Files** (Seafile or this browser's files) or **This
+device** (a file input; a picture can also be dropped on a slot or pasted). Then the clip's frame
+is laid over the picture: drag it (or the arrow keys) to keep the right part. The browser crops it
+to the clip's exact size and sends a PNG; the server keeps keyframes as the account's own pictures,
+so a project still renders after the thread it came from is gone. The same picture copied again
+reuses its keyframe, and keyframes no project or waiting render uses are deleted (after an hour,
+when a project is saved or deleted, and every few hours) so they stop counting against the quota. A keyframe made at another size
+(after a size change, or from an agent's plan) is centre-cropped by ComfyUI and the slot says so.
+
+**The timeline.** Lanes under a ruler: **Shots** (each one a cut, with its framing and transition),
+**Action**, **Camera** (MiniMax's 20 moves, small/large, slow/fast, a target), **Speech** (a
+speaker, the exact line, language, delivery, voice-over), **Sound**, **Text** (visible in the
+frame), and **Bed** (soundscape and music for the whole clip). **Style** and **Speakers** (up to
+four, who and what the voice sounds like) are on the left. With a mouse: drag an item to move it,
+its right edge to give it an end, a shot's left edge to move its cut; double-click a lane (or its
++) to add; right-click for Edit, Duplicate, Cut a shot here, Delete. Everything snaps to 0.25 s and
+to the cuts. Keyboard on the timeline: ←/→ nudge 0.1 s (Shift: 1 s), Delete removes, **S** cuts a
+shot at the playhead, Space plays, Enter edits, Esc deselects. Ctrl+wheel and − + zoom. The
+selected item's fields are in the **Inspector** on the right.
+
+Every item carries a badge that says how much control it really gives:
+- **Real**: a model input (the first frame; H3's last frame). **Off**: not used by this model (LTX's last frame).
+- **Timed**: written with its timestamp, so the model cuts close to it (H3's shots: `[Shot 2] At 00:04.000`).
+- **Ordered**: inside a shot only the order reaches the model, not the exact time (action, camera, speech, sound; LTX's shots). The selected item draws a dotted line back to its shot's start.
+- **Hint**: prompt words the model may follow (visible text, the beds).
+
+**The prompt.** The lanes compile to a plan (`compileProject` in `src/data/videoPlan.ts`): items
+fall in the shot that holds their start; each action starts a moment and the camera, speech, sound
+and text before the next action join it; at most six moments a shot (more merge, with a warning).
+The plan is then checked like an agent's (shots tile the clip, at least a second each, at most six,
+speakers exist, keyframes anchored) and written in MiniMax's base-mode format (H3: the keyframe
+instruction line, `integrated_multimodal_description`, `overall_soundscape`, `non_diegetic_music`)
+or as one chronological paragraph (LTX). **Prompt** shows it; **Edit as text** writes it by hand
+instead (the lanes are then unused, until **Back to the timeline**). Warnings point at what will not
+come out as drawn: an item crossing a cut, merged moments, and "no X" phrasing (naming a thing makes
+the model show it). The server compiles and checks again before every render.
+
+**Renders.** **Render** saves the project and queues a job on the server, which runs it when the
+account's ComfyUI slot is free: one job at a time per account, shared with the Image Studio and
+generate_image. A picture asked for during a render waits for it (it does not fail; it gives up
+after the render deadline), and pictures go first: no render starts while one waits, nor between the
+pictures of an Image Studio batch. The job goes on
+with the window or the tab closed. A bar shows where it is (waiting in ComfyUI's queue, loading,
+sampling n of N, upscaling and refining for LTX, decoding, saving) with **Cancel**, and a
+notification (also a push on devices that allow it) says when it is done or failed. At most four
+renders wait per account. Cancel deletes only the job's own queued prompt (never `/interrupt`): a
+render ComfyUI already started may finish there, but its video is not kept. A server restart marks
+renders it was running **interrupted** (they are not resubmitted); queued ones start when it is back.
+A render stops after `VIDEO_DEADLINE_MIN` (default 30) minutes.
+
+**Videos.** Kept as files, `DATA_DIR/videos/<user>/<id>.mp4` (folders 0700, files 0600), checked to
+be MP4 and at most 512 MB, and counted in the account's storage quota with its projects and
+keyframes: a render is refused before it is queued when the estimate does not fit, and its video is
+not kept when the real file does not (refused before reading when ComfyUI gives the size, and
+stopped while streaming when it does not). A download that fails or is cancelled leaves no file, and
+a server start removes half-written ones. The history under the timeline lists the project's videos;
+the preview plays the selected one (muted by default; the playhead follows it). **Open in Player**,
+**Download** and **Delete** act on it. Deleting a project keeps its videos; deleting the account
+removes the folder.
+
+**On a phone** (or a window under 1000 px) the preview comes first, then the render bar and one lane
+at a time (picked above the timeline; pinch zooms, a long-press opens an item's menu), its items as a
+list (tap one to edit it in a sheet, or + Add at the playhead), the sound beds, and the history.
+**Keyframes**, **Style** and **Prompt** open as sheets from the bottom bar, above **Render**.
+
+**Agents.** With Images on in a thread and ComfyUI connected, an agent can **plan_video**: a clip
+(MiniMax H3 or LTX, a length, an optional first or last frame from the thread's pictures) as a
+shot plan. The server checks it and returns any error for the agent to fix; a valid plan is saved
+as a Video Studio project and the thread shows **Open in Video Studio**. Nothing renders then. With
+`project_id` it replaces a plan it made earlier in the same thread (any other project gets a new
+one instead, so a Studio project is never overwritten); Plan mode may draft a new plan but not
+replace one.
+**render_video** queues a render of such a project: it always asks first (in every mode, Bypass
+included, with the card showing model, length, size, keyframes, seed and the prompt), and Plan mode
+refuses it. The card shows the whole prompt. Background tasks never get either tool.
+
+Routes (`server/agentVideo.ts`, all the signed-in account's own; another account's id answers 404):
+- `GET /api/video`, `GET /api/video/catalog` (what ComfyUI has, and the files each model resolves to), `GET|PUT /api/video/models`.
+- `GET|POST /api/video/projects`, `GET|PUT|DELETE /api/video/projects/<id>` (PUT names the revision it is based on; an older one answers 409 with the current project), `POST /api/video/projects/<id>/render`.
+- `POST /api/video/sources` (`{ name, data }` with a base64 PNG, or `{ image_id }` for a copy of one of the account's pictures), `GET /api/video/sources/<id>`, `GET /api/video/pictures` (pictures sent in threads).
+- `GET /api/video/jobs?active=1`, `GET|DELETE /api/video/jobs/<id>` (DELETE cancels).
+- `GET /api/video/videos?project=`, `DELETE /api/video/videos/<id>`, `GET|HEAD /api/video/media/<id>` (byte ranges: 206, suffix and open-ended ranges, 416).
+
+Not in this version: clips longer than one generation (chained segments), stitching (no ffmpeg in
+the image), LTX last frames and mid keyframes, camera LoRAs, and your own audio.
+
+```sh
+pnpm check:video-studio   # frame and size rules, the lane compiler and its badges, the H3 and LTX graphs and schema checks, and the server against a stand-in ComfyUI: render, cancel, restart (interrupted), the shared slot, queue and quota limits, byte ranges, owner-only routes, and the agent tools' permissions
+```
 
 ## Photos
 

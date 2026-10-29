@@ -255,6 +255,29 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  imagestudio: {
+    bg: 'linear-gradient(160deg,#bb9af7,#e0537a 60%,#ff9e64)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="9" y="11" width="30" height="24" rx="3" />
+        <circle cx="18" cy="19" r="3" />
+        <path d="M9 31l9-8 6 6 5-4 10 9" />
+        <path d="M35 6l1.2 3.3L39.5 10.5l-3.3 1.2L35 15l-1.2-3.3-3.3-1.2 3.3-1.2z" />
+      </>
+    ),
+  },
+  videostudio: {
+    bg: 'linear-gradient(160deg,#ff9e64,#e0537a 55%,#7a4fd0)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="8" y="13" width="24" height="22" rx="3" />
+        <path d="M32 21l8-5v16l-8-5z" />
+        <path d="M8 29h24M14 35v-6M20 35v-6M26 35v-6" />
+      </>
+    ),
+  },
   mail: {
     bg: 'linear-gradient(160deg,#7dcfff,#2f6fd6)',
     fg: '#fff',
@@ -405,6 +428,8 @@ const HUES: Record<AppId, string> = {
   contacts: 'var(--orange)',
   tasks: 'var(--orange)',
   agents: 'var(--magenta)',
+  imagestudio: 'var(--magenta)',
+  videostudio: 'var(--orange)',
   photos: 'var(--orange)',
   weather: 'var(--cyan)',
   changelog: 'var(--green)',

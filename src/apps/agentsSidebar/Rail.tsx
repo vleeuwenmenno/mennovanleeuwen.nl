@@ -127,7 +127,7 @@ export function Rail({ ctx, onContextMenu }: { ctx: SideCtx; onContextMenu: Reac
         <Icon name="tasks" />
         <TaskBadge badge={ctx.taskBadge} />
       </button>
-      <button className={`agt-icon ${mainKind === 'studio' ? 'is-on' : ''}`} onClick={ctx.openStudio} title="Image Studio" aria-label="Image Studio">
+      <button className="agt-icon" onClick={ctx.openStudio} title="Image Studio" aria-label="Image Studio">
         <Icon name="studio" />
       </button>
       <button className={`agt-icon ${mainKind === 'settings' ? 'is-on' : ''}`} onClick={ctx.openSettings} title="Settings" aria-label="Settings">

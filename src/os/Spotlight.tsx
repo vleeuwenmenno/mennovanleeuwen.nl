@@ -43,6 +43,12 @@ import { THEMES } from './omarchyThemes'
 import { ACCENTS, setAccent, setMode, setTheme, themeLabel, themeSettings } from './theme'
 import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
+/** More words that find an app than its name. */
+const APP_KEYWORDS: Partial<Record<AppId, string>> = {
+  imagestudio: 'comfyui generate picture image diffusion stable diffusion flux sdxl draw',
+  videostudio: 'comfyui video clip movie animate image to video timeline minimax h3 ltx render',
+}
+
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
@@ -682,6 +688,7 @@ export function Spotlight() {
       if (app === 'mail' && account.status !== 'user') continue // the user's own mail
       if (app === 'contacts' && account.status !== 'user') continue // the user's own contacts
       if (app === 'agents' && account.status !== 'user') continue // runs on the user's Ollama key
+      if ((app === 'imagestudio' || app === 'videostudio') && account.status !== 'user') continue // runs on the user's own ComfyUI
       if (app === 'tasks' && account.status !== 'user') continue // the user's own lists
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
@@ -690,7 +697,7 @@ export function Spotlight() {
         group: 'Apps',
         title: meta.dock,
         subtitle: open ? `${meta.blurb} · ${open} open` : meta.blurb,
-        keywords: `${app} app open`,
+        keywords: `${app} app open${APP_KEYWORDS[app] ? ` ${APP_KEYWORDS[app]}` : ''}`,
         icon: <AppIcon app={app} size={28} />,
         run: () => wm.open(app),
         alt: SINGLE_INSTANCE.has(app) ? undefined : { label: 'New window', run: () => wm.openNew(app) },

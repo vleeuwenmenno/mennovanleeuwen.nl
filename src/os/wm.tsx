@@ -13,7 +13,7 @@ import { opensMaximized } from './windowPrefs'
 import { newTab } from './powerState'
 import { rememberedWorkspace, moveTabWorkspace, startTabWorkspaces, stopTabWorkspaces, tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from './tabWorkspaces'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail' | 'weather' | 'git' | 'changelog' | 'about'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail' | 'weather' | 'git' | 'changelog' | 'about' | 'imagestudio' | 'videostudio'
 
 export type WinState = {
   pid: number
@@ -95,7 +95,14 @@ export type GeometryPatch = Partial<Geometry> & { snap?: SnapZone; restore?: Geo
 export type Geometry = { x: number; y: number; w: number; h: number }
 
 /** Apps that only ever have one window; everything else can be opened again with "New window". */
-export const SINGLE_INSTANCE = new Set<AppId>(['amp', 'notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge', 'weather', 'changelog', 'about'])
+export const SINGLE_INSTANCE = new Set<AppId>(['amp', 'notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge', 'weather', 'changelog', 'about', 'imagestudio', 'videostudio'])
+
+/**
+ * Views that became apps of their own: the Image Studio was a tab of Agents, so an old link or
+ * button asking Agents for `tab: 'studio'` opens the Image Studio app instead.
+ */
+export const movedApp = (app: AppId, props?: WinState['props']): [AppId, WinState['props'] | undefined] =>
+  app === 'agents' && props?.tab === 'studio' ? ['imagestudio', props.t ? { t: props.t } : undefined] : [app, props]
 
 /** Apps where opening always means a new one (New Document makes a new file each time); `create` says it is fresh. */
 export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])
@@ -906,6 +913,7 @@ export function WindowManagerProvider({
   // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
+      ;[app, props] = movedApp(app, props)
       takeOver(app, props)
       const maximized = opensMaximized()
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length), maximized })
@@ -920,6 +928,7 @@ export function WindowManagerProvider({
   )
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
+      ;[app, props] = movedApp(app, props)
       if (SINGLE_INSTANCE.has(app)) takeOver(app, props)
       const maximized = opensMaximized()
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length), maximized })

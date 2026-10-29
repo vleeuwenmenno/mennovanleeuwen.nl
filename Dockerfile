@@ -50,6 +50,8 @@ COPY src/data/noteEvents.ts src/data/noteClock.ts ./src/data/
 COPY src/data/rawImage.ts ./src/data/
 # Agent tasks: the permission policy table (the server's only authority over a run's calls) and schedule math; subagents' limits.
 COPY src/data/agentTaskPolicy.ts src/data/agentTaskSchedule.ts src/data/agentTaskMail.ts src/data/agentSubagents.ts ./src/data/
+# The Video Studio: frame and size rules, and the prompt plan with its timeline compiler (the server checks every render).
+COPY src/data/videoModels.ts src/data/videoPlan.ts ./src/data/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
 RUN mkdir -p /app/data && chown node:node /app/data
 ENV DATA_DIR=/app/data

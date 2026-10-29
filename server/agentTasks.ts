@@ -1225,9 +1225,7 @@ function isTaskTag(userId: number, tag: string): boolean {
   return ids.some((r) => taskMailTag(userId, r.id) === tag)
 }
 
-/** What server/jmap.ts hands new mail to (an object, so scripts/agents-tasks-check.ts can watch the hand-over itself). */
-export const taskMailHook = { watched: mailWatched, isTaskTag, arrived: mailArrived }
-setNewMailHook(taskMailHook)
+setNewMailHook({ watched: mailWatched, isTaskTag, arrived: mailArrived })
 
 let busy = false
 /** One look: expire what is past, claim what is due, send what waits, start what fits. Exported for the check script. */

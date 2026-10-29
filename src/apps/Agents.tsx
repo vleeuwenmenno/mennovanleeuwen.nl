@@ -137,7 +137,6 @@ import { readObservation } from '../data/imageObservations'
 import { MarkdownPreview } from './Zed'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
-import { ImageStudio } from './AgentsStudio'
 import { TaskEditDialog, TasksView, type TasksFocus } from './AgentsTasks'
 import { useTaskBadge, useTasksChanged } from '../data/agentTasks'
 import { ParentMessage, SubagentResult, SubagentStrip, TaskQuietLine, TaskRunBlock, TaskRunStrip } from './AgentsSubagents'
@@ -157,11 +156,12 @@ type Live = { content: string; thinking: string }
 export function Agents({ win }: { win: WinState }) {
   const account = useAccount()
   const wm = useWM()
-  // The Image Studio needs ComfyUI, not Ollama: without an Ollama key it opens on its own.
-  const [studioOnly, setStudioOnly] = useState(win.props.tab === 'studio')
-  // Opened for it again later (Settings → Images → Open Image Studio) on a window already showing the key screen.
+  // The Image Studio has its own window now: a window restored with the old view asks for that.
   useEffect(() => {
-    if (win.props.tab === 'studio') setStudioOnly(true)
+    if (win.props.tab !== 'studio') return
+    wm.setProps(win.pid, { tab: '' })
+    wm.open('imagestudio', { t: String(Date.now()) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props.t, win.props.tab])
   if (account.status === 'loading') return <div className="nb-blank muted">Loading…</div>
   if (account.status !== 'user')
@@ -177,12 +177,6 @@ export function Agents({ win }: { win: WinState }) {
     )
   // Without an Ollama key, a ChatGPT sign-in or an OpenAI key is enough: those threads run on OpenAI's models.
   const canChat = !!account.integrations.ollama || !!account.integrations.openai
-  if (!canChat && studioOnly)
-    return (
-      <div className="studio-alone">
-        <ImageStudio threads={null} onBack={() => setStudioOnly(false)} onOpenThread={() => setStudioOnly(false)} onSettings={() => wm.open('settings', { section: 'agents', t: String(Date.now()) })} />
-      </div>
-    )
   if (!canChat)
     return (
       <div className="nb-blank">
@@ -190,7 +184,7 @@ export function Agents({ win }: { win: WinState }) {
         <button className="btn btn-primary" onClick={() => wm.open('settings', { section: 'integrations', t: String(Date.now()) })}>
           Open Settings → Integrations
         </button>
-        <button className="btn" onClick={() => setStudioOnly(true)} title="Generate pictures with your own ComfyUI; no Ollama key needed">
+        <button className="btn" onClick={() => wm.open('imagestudio', { t: String(Date.now()) })} title="Generate pictures with your own ComfyUI; no Ollama key needed">
           Open Image Studio
         </button>
       </div>
@@ -198,8 +192,8 @@ export function Agents({ win }: { win: WinState }) {
   return <AgentsApp win={win} />
 }
 
-/** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), the Image Studio, or the background tasks (a task or run in focus). */
-type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'studio' } | { kind: 'tasks'; focus: TasksFocus | null }
+/** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), or the background tasks (a task or run in focus). */
+type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'tasks'; focus: TasksFocus | null }
 
 const FOLDED_PROJECTS = 'mvlos.agents.folded'
 const readFolded = (): number[] => {
@@ -215,7 +209,8 @@ function AgentsApp({ win }: { win: WinState }) {
   const [threads, setThreads] = useState<Thread[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [q, setQ] = useState('')
-  const [selected, setSelected] = useState<string | null>(win.props.thread ?? null)
+  // `thread: 'new'` asks for a new thread (the Image Studio's Send to chat → New thread).
+  const [selected, setSelected] = useState<string | null>(win.props.thread && win.props.thread !== 'new' ? win.props.thread : null)
   // Which conversation is shown. Not the same as `selected`: a new thread gets its id from its
   // first message and keeps streaming into the same view.
   const [view, setView] = useState(() => win.props.thread ?? 'new')
@@ -252,7 +247,8 @@ function AgentsApp({ win }: { win: WinState }) {
     if (!id || !t || consumed.current === t) return
     consumed.current = t
     setArchived(false)
-    if (id !== selected) open(id)
+    if (id === 'new') open(null)
+    else if (id !== selected) open(id)
     refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props.t])
@@ -267,7 +263,6 @@ function AgentsApp({ win }: { win: WinState }) {
   useEffect(() => {
     const t = win.props.tab
     if (t === 'memory') setMain({ kind: 'memory', scope: null }), setPane('chat')
-    else if (t === 'studio') setMain({ kind: 'studio' }), setPane('chat')
     // A task's notification (or /?open=agents&tab=tasks&task=…&run=…): the Tasks tab, at that run.
     else if (t === 'tasks') setMain({ kind: 'tasks', focus: { task: win.props.task || undefined, run: win.props.run || undefined } }), setPane('chat')
     else if (t === 'archived') setArchived(true), setPane('list')
@@ -606,10 +601,8 @@ function AgentsApp({ win }: { win: WinState }) {
     setMain({ kind: 'memory', scope })
     setPane('chat')
   }
-  const openStudio = () => {
-    setMain({ kind: 'studio' })
-    setPane('chat')
-  }
+  // The Image Studio is an app of its own.
+  const openStudio = () => wm.open('imagestudio', { t: String(Date.now()) })
   const openTasks = () => {
     setMain({ kind: 'tasks', focus: null })
     setPane('chat')
@@ -743,13 +736,6 @@ function AgentsApp({ win }: { win: WinState }) {
       <section className="nb-main">
         {main.kind === 'settings' ? (
           <SettingsPane onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
-        ) : main.kind === 'studio' ? (
-          <ImageStudio
-            threads={threads}
-            onBack={() => (setMain({ kind: 'thread' }), setPane('list'))}
-            onOpenThread={(id) => (setArchived(false), open(id))}
-            onSettings={() => (openSettings(), showAgentsSection('images'))}
-          />
         ) : main.kind === 'tasks' ? (
           <TasksView focus={main.focus} fromThread={selected} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
         ) : main.kind === 'memory' ? (
@@ -2587,12 +2573,32 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           )
           // Masks the agent made or listed show as tinted pictures, each with Edit mask.
           const masks = (c.name === 'make_image_mask' || c.name === 'list_image_masks') && results[j] ? agentMasks(results[j].content) : []
-          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
+          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{(c.name === 'plan_video' || c.name === 'render_video') && results[j] && <VideoStudioLink result={results[j].content} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
         })}
       </Fragment>,
     )
   }
   return <>{out}{maskSource && threadId && <InpaintDialog image={maskSource} threadId={threadId} disabled={answering} onClose={() => setMaskSource(null)} onInpaint={input => { setMaskSource(null); onInpaint(input) }} />}</>
+}
+
+/** Under plan_video and render_video: the project, opened in the Video Studio. */
+function VideoStudioLink({ result }: { result: string }) {
+  const wm = useWM()
+  let project = ''
+  try {
+    const r = JSON.parse(result) as { project_id?: unknown }
+    if (typeof r.project_id === 'string' && /^[0-9a-f-]{36}$/.test(r.project_id)) project = r.project_id
+  } catch {
+    /* not JSON: an error text */
+  }
+  if (!project) return null
+  return (
+    <div className="agt-video-link">
+      <button type="button" className="btn btn-small" onClick={() => wm.open('videostudio', { project, t: String(Date.now()) })}>
+        Open in Video Studio
+      </button>
+    </div>
+  )
 }
 
 /**
