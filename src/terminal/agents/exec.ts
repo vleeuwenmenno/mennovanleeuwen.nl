@@ -3,7 +3,7 @@ import type { ClientGrant, Workdir } from '../../data/agents'
 import { HANDLE } from '../../os/identity'
 import { capabilities } from '../capabilities'
 import { commands } from '../commands'
-import { lookup, prepare } from '../fs'
+import { lookup, prepare, actorOf } from '../fs'
 import { AGENT_LIMITS, Budget, MAX_TIMEOUT_MS, type Limits, type Stop } from '../limits'
 import { startAgent } from '../msh/interp'
 import { makePolicy, type Grant } from '../policy'
@@ -85,7 +85,7 @@ function headless(cwd: string, grant: Grant, budget: Budget, signal: AbortSignal
 }
 
 /** The folder a call starts in: the work folder, or a folder inside it named by `cwd`. */
-async function startDir(workdir: { label: string } | null, base: string, wanted: unknown): Promise<{ cwd: string } | { error: string }> {
+async function startDir(workdir: { label: string } | null, base: string, wanted: unknown, ctx: ReturnType<typeof headless>): Promise<{ cwd: string } | { error: string }> {
   if (wanted === undefined || wanted === null || wanted === '') return { cwd: base }
   if (typeof wanted !== 'string') return { error: 'cwd is a folder inside the work folder, as text' }
   // The folder as the terminal shows it (~/Projects/x/sub) or relative to the work folder.
@@ -93,7 +93,11 @@ async function startDir(workdir: { label: string } | null, base: string, wanted:
   const raw = wanted.trim().startsWith('~') ? HOME + wanted.trim().slice(1) : wanted.trim()
   const abs = resolvePath(label && raw.startsWith(label) ? '/' : base, raw)
   if (workdir && abs !== base && !abs.startsWith(base === '/' ? '/' : `${base}/`)) return { error: `cwd ${wanted} is outside the work folder` }
-  await prepare(abs, 'ls', []).catch(() => {})
+  ctx.signal.throwIfAborted()
+  const refused = ctx.policy.cwd(abs)
+  if (refused) return { error: refused }
+  await prepare(abs, 'ls', [], actorOf(ctx))
+  ctx.signal.throwIfAborted()
   const node = lookup(abs)
   if (!node) return { error: `cwd ${wanted}: No such file or directory` }
   if (node.type !== 'dir') return { error: `cwd ${wanted}: Not a directory` }
@@ -108,14 +112,14 @@ async function startDir(workdir: { label: string } | null, base: string, wanted:
 export async function runAgentCall(req: { name: string; arguments: Record<string, unknown>; workdir: Workdir | null; fallbackDir: string; grant?: ClientGrant; signal: AbortSignal }): Promise<CallAnswer> {
   const base = req.workdir ? workdirPath(req.workdir) : req.fallbackDir
   if (!base) return failed(`The work folder ${req.workdir?.label} is not mounted here (check /etc/fstab).`, '/')
-  return runInFolder({ name: req.name, arguments: req.arguments, folder: req.workdir ? { path: base, label: req.workdir.label } : null, fallbackDir: base, grant: req.grant, signal: req.signal })
+  return runInFolder({ name: req.name, arguments: req.arguments, folder: req.workdir ? { path: base, label: req.workdir.label, backing: { repo: req.workdir.repo, path: req.workdir.path } } : null, fallbackDir: base, grant: req.grant, signal: req.signal })
 }
 
 /** The part of a call that needs the folder as a terminal path (the check script runs it on folders that are not in Seafile). */
-export async function runInFolder(req: { name: string; arguments: Record<string, unknown>; folder: { path: string; label: string } | null; fallbackDir: string; grant?: ClientGrant; signal: AbortSignal }): Promise<CallAnswer> {
+export async function runInFolder(req: { name: string; arguments: Record<string, unknown>; folder: { path: string; label: string; backing?: { repo: string; path: string } } | null; fallbackDir: string; grant?: ClientGrant; signal: AbortSignal }): Promise<CallAnswer> {
   const { arguments: args, folder } = req
   const base = folder ? folder.path : req.fallbackDir
-  const grant: Grant = { ...(req.grant ?? READ_ONLY), root: folder ? base : null }
+  const grant: Grant = { ...(req.grant ?? READ_ONLY), root: folder ? base : null, backing: folder?.backing }
 
   if (req.name === 'terminal_capabilities') {
     const budget = new Budget(AGENT_LIMITS)
@@ -128,15 +132,13 @@ export async function runInFolder(req: { name: string; arguments: Record<string,
 
   const command = typeof args.command === 'string' ? args.command : ''
   if (!command.trim()) return failed('msh: no command given', base, 2)
-  const start = await startDir(folder, base, args.cwd)
-  if ('error' in start) return failed(`msh: ${start.error}`, base, 2)
   const seconds = Number(args.timeout_seconds)
   const timeoutMs = Number.isFinite(seconds) && seconds > 0 ? Math.min(MAX_TIMEOUT_MS, Math.max(1000, seconds * 1000)) : AGENT_LIMITS.timeoutMs
-  return execute(command, start.cwd, grant, { ...AGENT_LIMITS, timeoutMs }, req.signal)
+  return execute(command, base, grant, { ...AGENT_LIMITS, timeoutMs }, req.signal, args.cwd)
 }
 
 /** Runs a command line under a grant and limits (split out so the check script can use small limits). */
-export async function execute(command: string, cwd: string, grant: Grant, limits: Limits, outer: AbortSignal): Promise<CallAnswer> {
+export async function execute(command: string, cwd: string, grant: Grant, limits: Limits, outer: AbortSignal, wanted?: unknown): Promise<CallAnswer> {
   const ctl = new AbortController()
   let timedOut = false
   const timer = setTimeout(() => {
@@ -148,14 +150,36 @@ export async function execute(command: string, cwd: string, grant: Grant, limits
   if (outer.aborted) ctl.abort()
   const t0 = performance.now()
   try {
-    const run = startAgent(command, headless(cwd, grant, new Budget(limits), ctl.signal))
-    // A command that never answers (and ignores the signal) is given up on shortly after the limit.
-    const gaveUp = new Promise<'gave up'>((resolve) => ctl.signal.addEventListener('abort', () => setTimeout(() => resolve('gave up'), 1500)))
-    const r = await Promise.race([run.done, gaveUp])
-    const done = r === 'gave up' ? run.snapshot(timedOut ? 'timeout' : 'cancelled') : r
+    const budget = new Budget(limits)
+    const ctx = headless(cwd, grant, budget, ctl.signal)
+    let run: ReturnType<typeof startAgent> | undefined
+    const task = async () => {
+      ctx.signal.throwIfAborted()
+      if (command.length > 64_000) { budget.stop('memory'); return null }
+      const start = await startDir(grant.root ? { label: grant.root } : null, cwd, wanted, ctx)
+      ctx.signal.throwIfAborted()
+      if ('error' in start) throw new Error(start.error)
+      cwd = start.cwd
+      ctx.cwd = cwd
+      ctx.env.PWD = cwd
+      run = startAgent(command, ctx)
+      return await run.done
+    }
+    const gaveUp = new Promise<null>((resolve) => {
+      if (ctl.signal.aborted) resolve(null)
+      else ctl.signal.addEventListener('abort', () => resolve(null), { once: true })
+    })
+    const r = await Promise.race([task().catch((e) => {
+      if (ctl.signal.aborted) return null
+      throw e
+    }), gaveUp])
+    const reason = budget.stopped ?? (timedOut ? 'timeout' : 'cancelled')
+    const done = r ?? run?.snapshot(reason) ?? { status: reason === 'timeout' ? 124 : reason === 'cancelled' ? 130 : 125, stdout: '', stderr: '', truncated: { stdout: 0, stderr: 0 }, termination: reason }
     const terminated = done.termination ?? (ctl.signal.aborted ? (timedOut ? 'timeout' : 'cancelled') : null)
     const result: TerminalResult = { exit_code: terminated && !done.termination ? (timedOut ? 124 : 130) : done.status, stdout: done.stdout, stderr: done.stderr, duration_ms: Math.round(performance.now() - t0), truncated: done.truncated, terminated, cwd }
     return { output: text(result), status: result.exit_code, result }
+  } catch (e) {
+    return failed(`msh: ${(e as Error).message}`, cwd, 2)
   } finally {
     clearTimeout(timer)
     outer.removeEventListener('abort', stop)

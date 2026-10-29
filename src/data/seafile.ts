@@ -320,8 +320,11 @@ async function linkFor(path: string, op: 'download' | 'upload' | 'update'): Prom
 }
 
 /** A file's text, straight from Seafile's file server. */
-export async function readText(path: string): Promise<string> {
-  const res = await fetch(await fileLink(path, 'download'))
+export async function readText(path: string, guard?: { signal?: AbortSignal; check: () => void }): Promise<string> {
+  guard?.check()
+  const link = await fileLink(path, 'download')
+  guard?.check()
+  const res = await fetch(link, { signal: guard?.signal })
   if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
   return res.text()
 }
@@ -334,27 +337,29 @@ export async function readBlob(path: string): Promise<Blob> {
 }
 
 /** Puts bytes in a Seafile folder under `name`, replacing a file of that name (copying into Seafile). */
-export async function uploadBlob(folder: string, name: string, blob: Blob) {
+export async function uploadBlob(folder: string, name: string, blob: Blob, guard?: { signal?: AbortSignal; check: () => void }) {
   const at = parseSf(folder)!
   const link = await fileLink(folder, 'upload')
   const form = new FormData()
   form.append('parent_dir', at.p)
   form.append('replace', '1')
   form.append('file', blob, name)
-  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form })
+  guard?.check()
+  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form, signal: guard?.signal })
   if (!res.ok) throw new Error((await res.text().catch(() => '')) || `Seafile answered ${res.status}`)
   refreshDirs(folder)
 }
 
 /** Overwrites a file with new text (the editor's save). */
-export async function writeText(path: string, text: string) {
+export async function writeText(path: string, text: string, guard?: { signal?: AbortSignal; check: () => void }) {
   const at = parseSf(path)!
   const dir = at.p.split('/').slice(0, -1).join('/') || '/'
   const link = await fileLink(sfPath(at.repo, dir), 'update')
   const form = new FormData()
   form.append('file', new Blob([text], { type: 'text/plain' }), at.p.split('/').pop()!)
   form.append('target_file', at.p)
-  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form })
+  guard?.check()
+  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form, signal: guard?.signal })
   if (!res.ok) throw new Error((await res.text().catch(() => '')) || `Seafile answered ${res.status}`)
   refreshDirs(sfPath(at.repo, dir))
 }

@@ -1,3 +1,5 @@
+import { sfPath } from '../data/seafile'
+import { whereIs, mounts } from '../data/mounts'
 import { STEERING } from '../data/steering'
 import { resolvePath } from './vfs'
 
@@ -10,13 +12,16 @@ import { resolvePath } from './vfs'
 //
 // Nothing is granted silently: a call may write only in the work folder, delete only when its text
 // names rm or rmdir, use the network only when its text names a network command, and touch the
-// files that steer the agent (AGENTS.md, CLAUDE.md, .agents/, .claude/) only when its text names them.
+// files that steer the agent (AGENTS.md, CLAUDE.md, .agents/, .claude/) only after fresh explicit approval.
+// Archive and bulk directory mutations fail closed; lexical paths alone never establish identity.
 
 export type Grant = {
   /** The thread's permission mode, for the capability report */
   mode: string
   /** The work folder as a terminal path; null when the thread has none */
   root: string | null
+  /** Immutable backing identity from the server's work folder. */
+  backing?: { repo: string; path: string }
   /** May write inside the work folder */
   write: boolean
   /** May delete inside the work folder (rm, rmdir) */
@@ -33,6 +38,7 @@ export interface Policy {
   /** A command as the shell resolved it (name and arguments after expansion). */
   command(name: string, args: string[], cwd: string): string | null
   read(abs: string): string | null
+  tree(abs: string): string | null
   write(abs: string, op?: 'write' | 'delete'): string | null
   /** Moving the working directory there. */
   cwd(abs: string): string | null
@@ -53,10 +59,10 @@ export const EFFECTS: Record<string, Effect> = {
   // Information about the session and plain computation.
   help: 'pure', man: 'pure', pwd: 'pure', whoami: 'pure', id: 'pure', hostname: 'pure', uname: 'pure', date: 'pure', uptime: 'pure', history: 'pure', env: 'pure', which: 'pure', clear: 'pure', tty: 'pure', stty: 'pure',
   fastfetch: 'pure', neofetch: 'pure', fortune: 'pure', cowsay: 'pure', figlet: 'pure', lolcat: 'pure', cal: 'pure', calc: 'pure', units: 'pure', bc: 'pure', seq: 'pure', basename: 'pure', dirname: 'pure',
-  df: 'pure', free: 'pure', nproc: 'pure', lscpu: 'pure', ip: 'pure', ifconfig: 'pure', xrandr: 'pure', findmnt: 'pure', lsblk: 'pure', ps: 'pure', git: 'pure', changelog: 'pure', releases: 'pure',
+  df: 'pure', free: 'pure', nproc: 'pure', lscpu: 'pure', ip: 'pure', ifconfig: 'pure', xrandr: 'pure', findmnt: 'pure', lsblk: 'pure', ps: 'pure', git: 'network', changelog: 'network', releases: 'network',
   // Commands that read the files they are given (and the shell's own `cd`).
-  cd: 'read', ls: 'read', ll: 'read', cat: 'read', less: 'read', more: 'read', bat: 'read', head: 'read', tail: 'read', wc: 'read', grep: 'read', sort: 'read', uniq: 'read', tree: 'read', du: 'read', find: 'read', fd: 'read',
-  jq: 'read', sha1sum: 'read', sha256sum: 'read', sha384sum: 'read', sha512sum: 'read', md5sum: 'read', xxd: 'read', hexdump: 'read', od: 'read', tar: 'read', unzip: 'read',
+  cd: 'read', ls: 'read', ll: 'read', cat: 'read', less: 'read', more: 'read', bat: 'read', head: 'read', tail: 'read', wc: 'read', grep: 'read', sort: 'read', uniq: 'read', tree: 'read', du: 'read', find: 'read', fd: 'blocked',
+  jq: 'blocked', sha1sum: 'read', sha256sum: 'read', sha384sum: 'read', sha512sum: 'read', md5sum: 'read', xxd: 'read', hexdump: 'read', od: 'read', tar: 'blocked', unzip: 'blocked',
   // Commands that write what they are given.
   touch: 'write', mkdir: 'write', tee: 'write', cp: 'write', mv: 'write', chmod: 'write',
   rm: 'delete', rmdir: 'delete',
@@ -78,13 +84,26 @@ const operands = (args: string[]) => args.filter((a) => a !== '-' && !a.startsWi
 
 export function makePolicy(grant: Grant): Policy {
   const root = grant.root
+  const original = root ? whereIs(root) : null
+  const identity = (abs: string) => {
+    if (!root || HARMLESS_DEVICES.has(abs)) return null
+    const at = whereIs(abs)
+    const expected = grant.backing ? { kind: 'sf', sf: sfPath(grant.backing.repo, grant.backing.path) } : original
+    // Compare backing paths, not mount labels. A nested bind can escape even in the same repo.
+    const key = (w: typeof original | typeof expected) => w?.kind === 'sf' ? w.sf : w && 'path' in w ? w.path : null
+    const base = key(expected), path = key(at)
+    return expected?.kind === at.kind && base !== null && path !== null && inside(base, path) ? null : `${abs}: backing filesystem is outside the authorized work folder`
+  }
   const where = root ? `the work folder (${root})` : 'a work folder'
   const read = (abs: string): string | null => {
+    if (identity(abs)) return identity(abs)
     if (!root || inside(root, abs) || HARMLESS_DEVICES.has(abs)) return null
     return `${abs}: outside ${where}`
   }
   const write = (abs: string, op: 'write' | 'delete' = 'write'): string | null => {
     if (abs === '/dev/null') return null
+    if (identity(abs)) return identity(abs)
+    if (whereIs(abs).kind === 'browser') return `${abs}: agent writes to browser storage are unavailable; use a Seafile work folder`
     if (!root) return `${abs}: this thread has no work folder, so nothing can be written`
     if (!grant.write) return `${abs}: this call may not change files (${grant.mode} mode)`
     if (!inside(root, abs)) return `${abs}: outside ${where}, the only place an agent writes`
@@ -104,8 +123,9 @@ export function makePolicy(grant: Grant): Policy {
   return {
     grant,
     read,
+    tree: (abs) => read(abs) ?? first(mounts().filter((m) => inside(abs, m.target)), (m) => read(m.target)),
     write,
-    cwd: (to) => (!root || inside(root, to) ? null : `${to}: outside ${where}`),
+    cwd: (to) => read(to) ?? (!root || inside(root, to) ? null : `${to}: outside ${where}`),
     command(rawName, args, cwd) {
       let name = rawName
       if (name.includes('/')) {
@@ -113,8 +133,11 @@ export function makePolicy(grant: Grant): Policy {
         if (name.startsWith('/bin/') && !name.slice(5).includes('/')) name = name.slice(5)
         else return /\.game$/.test(name) ? `${name}: games do not run from the agent` : read(abs(cwd, name))
       }
+      if (name === 'grep' && !args.some((a) => /^-[a-zA-Z]*F/.test(a)) && /[.*+?^${}()|[\]\\]/.test(operands(args)[0] ?? '')) return 'grep: agents use -F for patterns containing regex metacharacters (uninterruptible regex evaluation is unavailable)'
+      if (name === 'find' && (args.some((a) => ['-regex', '-iregex'].includes(a)) || args.some((a) => a.length > 256 || (a.match(/\*/g)?.length ?? 0) > 1))) return 'find: agent searches allow bounded glob patterns only, not regular expressions'
+      if (name === 'grep' && args.some((a) => /^-[a-zA-Z]*[rR]/.test(a))) return 'grep: recursive agent searches are unavailable; search individual files'
       const effect = EFFECTS[name]
-      if (effect === undefined || effect === 'blocked') return `${name}: not available to an agent (it opens apps, takes over the screen, or changes the session); \`help --json\` lists what runs`
+      if (effect === undefined || effect === 'blocked') return `${name}: not available to an agent (requires unsupported effects or unbounded synchronous execution); \`help --json\` lists what runs`
       switch (effect) {
         case 'pure':
           return null
@@ -129,7 +152,7 @@ export function makePolicy(grant: Grant): Policy {
             return first(paths, (a) => read(abs(cwd, a)))
           }
           if (name === 'cd' && !operands(args).length) return root ? `cd: with no folder it goes home, outside ${where}` : null
-          return first(operands(args), (a) => read(abs(cwd, a)))
+          return first(fileOperands(name, args), (a) => read(abs(cwd, a)))
         }
         case 'write':
         case 'delete': {
@@ -142,4 +165,13 @@ export function makePolicy(grant: Grant): Policy {
       return null
     },
   }
+}
+
+/** Files a command prepares. Patterns/filters are data, never paths. */
+export function fileOperands(name: string, args: string[]): string[] {
+  const words = operands(args)
+  if (['grep', 'egrep', 'jq', 'fd'].includes(name)) return words.slice(1)
+  if (name === 'find') return args.slice(0, args.findIndex((a) => a.startsWith('-')) < 0 ? args.length : args.findIndex((a) => a.startsWith('-')))
+  if (name === 'chmod') return words.slice(1)
+  return words
 }

@@ -665,11 +665,14 @@ host shell is involved.
   call starts (pipeline stages, `$(…)`, subshells, sourced files, nested `msh`): 100,000 interpreter
   steps, the time, 60,000 characters kept per stream (more is dropped and counted), 4 MiB per
   intermediate buffer (a pipe stage, a `$(…)`, a file being redirected into), 32 MiB written in all,
-  1 MiB per variable, and `printf` padding capped. Stop, a timeout or a spent limit ends the run at
+  1 MiB per variable, and `printf` padding capped. Formatting and expansion charge allocations
+  incrementally, before padding or concatenation. Command/script source is capped at 64,000
+  characters; field splitting is incremental and capped at 10,000 fields (IFS at 256 characters);
+  agent shell patterns allow at most 256 characters and one `*`, and pattern
+  substitutions operate on values of at most 4096 characters. Stop, a timeout or a spent limit ends the run at
   the next step (a sleep is cut at once) and nothing is written after it, redirect files included.
-  Not covered: a single command that never returns and never looks at the signal is given up on
-  1.5 s after the limit (its output so far is returned), and a pathological regular expression in
-  `grep`/`jq` runs on the page's thread like it does in the terminal.
+  Cancellation returns the partial result promptly; suspended preparation cannot resume a write.
+  These are cooperative limits, with the constraints described below.
 - *Permissions, where they happen.* The server decides whether a call runs, waits or is refused
   (`decideTerminal` in [`server/agents.ts`](server/agents.ts)) and sends a grant with it
   (`terminalGrant` in [`server/workdir.ts`](server/workdir.ts)); the terminal then enforces it on what
@@ -678,8 +681,10 @@ host shell is involved.
   globs, `eval`, `source`, nested `msh`, functions and scripts are all seen as the commands they
   become), every redirect target, every script read, every directory a glob lists, `cd`, and, in
   [`fs.ts`](src/terminal/fs.ts), every file written, moved, removed or `chmod`ed.
-  - Reads and writes stay inside the work folder (a thread with no folder reads anything the terminal
-    can and writes nothing); `/dev/null` and the byte devices are fine.
+  - Reads and writes stay inside both the work folder's terminal path and its authorized backing
+    repository/path. Foreign nested mounts and bind mounts outside that backing path are refused;
+    a work folder containing one currently fails closed for filesystem operations. A thread with no folder reads anything the terminal
+    can and writes nothing; `/dev/null` and the byte devices are fine.
   - A call writes only if its mode lets it: a line that only looks (a fixed allowlist, plus `msh -n
     file`) runs in every mode, Plan too, with a read-only grant; **Edits allowed** runs any other
     line that does not name `rm`/`rmdir`, a network command or `sudo`, writing in the work folder;
@@ -689,11 +694,27 @@ host shell is involved.
     needs one that names the network command: `msh x.sh` does not give `x.sh` the right to `rm` or
     `curl`, running them directly does. `AGENTS.md`, `CLAUDE.md`, `.agents/` and `.claude/` can be
     written only when the approved line names them ([`src/data/steering.ts`](src/data/steering.ts)),
-    even in Bypass; a name built from a variable is refused.
+    even in Bypass; a name built from a variable is refused. Steering permission requires a fresh
+    explicit approval of this call; remembered command approvals never grant it. `git`, `changelog`
+    and `releases` are network commands too, including when reached from scripts.
   - A command with no entry in the policy table's `EFFECTS` does not run (apps, `sudo`, editors,
     `watch`, `mount`, `kill`, `theme`, …; `find -exec/-delete/-fprint` and `fd -x`), and the check
     script fails when a new command is neither listed nor on its list of ones an agent never runs.
-    A refusal is `msh: …` on stderr with status 126 and says which rule.
+    A command refusal is `msh: …` on stderr with status 126 and says which rule. Archive commands
+    (`tar`, `unzip`), directory transfers/removal, and writes to browser storage are unavailable to
+    agents until their complete operation/descendant checks are supported. Individual Seafile
+    file operations remain available. To avoid uninterruptible regex/query workloads, agents use
+    literal `grep` (`-F` for metacharacters) and bounded `find` glob patterns;
+    recursive `grep`, `find -regex/-iregex`, `fd` (including its ignore-file regexes), and `jq` are unavailable. Patterns are not treated as
+    file operands during preparation or authorization.
+- *Cancellation.* Each executor registers the call before claiming it, snapshots its thread/work
+  folder, and aborts on Stop, unmount, thread changes or `clientDone`. A late claim cannot start
+  execution. Preparation and mutation boundaries recheck cancellation and the budget; uploads
+  recheck after link lookup and receive the abort signal. Pending read requests can still settle,
+  but cannot start a later mutation. Already submitted remote mutations cannot be rolled back.
+  Execution is cooperative on the browser thread, not a worker/process hard deadline: checks
+  bound known expensive formatting, expansion and pattern workloads, but cannot preempt arbitrary
+  synchronous JavaScript inside a command.
 - *Writing and checking a script*: the agent writes `potato-flight-check.sh` with `write_file`, checks
   it with `msh -n potato-flight-check.sh` (parse only, so it never asks), runs `msh
   potato-flight-check.sh`, reads the real stderr and exit code, fixes it and runs it again. With
@@ -706,15 +727,19 @@ form; with `command` one command's usage, options and manual). It is built from 
 human `help` listing uses the same groups (anything no group names goes under *More*). It reports
 the shell (`msh` and its version, builtins, syntax, redirects, expansions, options, what is not
 supported), every command and builtin with its group, usage and **only the options its usage line
-names** (`optionsComplete: false` when the line sends you to `--help` or `man`; nothing is borrowed
+names** (`optionsComplete: false` for every usage-derived list, which can omit supported flags; nothing is borrowed
 from Linux), the mounts with their writability, the integrations (Seafile, the browser's files, the
 network, apps) and the session. In an agent's call it describes that call: `session.kind: "agent"`,
-the `limits` it runs under, its `permissions` (the grant), where it may read and write (`filesystem.agent`),
+the `limits` it runs under, its `permissions` (this call's grant), separate `sessionRights` describing
+available rights and approval requirements (a read-only capability query does not make Bypass read-only), where it may read and write (`filesystem.agent`),
 and per command whether it may run (`available`, `restriction`); in the user's terminal `limits` and
 `permissions` are `null`. Piped, or inside an agent call, the JSON is one compact line.
 `pnpm check:agents-terminal-exec` tests all of this (running, limits, isolation, script milestone,
-nested bypass attempts, capabilities, the two windows); `check:agents-permissions` covers the server's
-decisions and grants.
+nested bypass attempts, capabilities, delayed-request cancellation and the shared executor);
+`check:agents-executor-lifecycle` mounts the Agents executor hook in React StrictMode and exercises
+Stop, unmount, thread changes and `clientDone` during pending claims and actual shell execution.
+`check:agents-permissions` covers the server's decisions and grants, including remembered steering
+command approval.
 
 `agents` ([`src/terminal/agents/`](src/terminal/agents)) is the Agents app as a coding-agent CLI.
 In a folder on Seafile, that folder becomes the thread's work folder:

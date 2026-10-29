@@ -8,7 +8,7 @@ import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
-import { lookup, prepare, prepareFolder, readFileText, writeFile } from '../fs'
+import { lookup, prepare, prepareFolder, readFileText, writeFile, actorOf } from '../fs'
 import { Budget, type Stop } from '../limits'
 import { allows, canRun } from '../modes'
 import { arith } from './arith'
@@ -157,6 +157,7 @@ const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, '\\$&')
 /** Words being built up during expansion: what they say, and as a glob pattern. */
 type Field = { text: string; pat: string; glob: boolean; quoted: boolean }
 class Fields {
+  constructor(private budget?: Budget) {}
   out: Field[] = []
   cur: Field | null = null
   private get f() {
@@ -165,6 +166,8 @@ class Fields {
   /** Text as written (`quoted`: no globbing, and an empty word still counts). */
   lit(s: string, quoted: boolean) {
     const f = this.f
+    const why = this.budget?.step() ?? this.budget?.write(s.length * 2, f.text.length + f.pat.length)
+    if (why) throw new LimitSignal(why)
     f.text += s
     f.pat += quoted ? escapeGlob(s) : s
     if (quoted) f.quoted = true
@@ -174,16 +177,23 @@ class Fields {
   split(s: string, ifs: string) {
     if (!s) return
     if (!ifs) return this.lit(s, false)
+    if (this.budget && ifs.length > 256) throw new LimitSignal(this.budget.stop('memory'))
     const white = [...ifs].filter((ch) => /\s/.test(ch)).join('').replace(/[\]\\^-]/g, '\\$&')
     const hard = [...ifs].filter((ch) => !/\s/.test(ch)).join('').replace(/[\]\\^-]/g, '\\$&')
-    const sep = new RegExp(hard ? `[${white}]*[${hard}][${white}]*|[${white}]+` : `[${white}]+`)
-    const parts = s.split(sep)
-    parts.forEach((p, i) => {
-      if (i > 0) this.end()
-      if (p) this.lit(p, false)
-      else if (i > 0 && i < parts.length - 1 && hard) this.lit('', true)
-    })
-    if (parts[parts.length - 1] === '' && parts.length > 1) this.end()
+    const sep = new RegExp(hard ? `[${white}]*[${hard}][${white}]*|[${white}]+` : `[${white}]+`, 'g')
+    // Do not allocate s.split(...) in full before the budget can stop expansion.
+    let start = 0, index = 0
+    let match: RegExpExecArray | null
+    while ((match = sep.exec(s))) {
+      if (index > 0) this.end()
+      const part = s.slice(start, match.index)
+      if (part) this.lit(part, false)
+      else if (index > 0 && hard) this.lit('', true)
+      start = sep.lastIndex
+      index++
+    }
+    if (index > 0) this.end()
+    if (start < s.length) this.lit(s.slice(start), false)
   }
   /** "$@": one word per item, the first and last joined to what is around them. */
   list(items: string[]) {
@@ -193,6 +203,7 @@ class Fields {
     })
   }
   end() {
+    if (this.budget && this.out.length >= 10_000) throw new LimitSignal(this.budget.stop('memory'))
     if (this.cur && (this.cur.text || this.cur.quoted)) this.out.push(this.cur)
     this.cur = null
   }
@@ -235,7 +246,9 @@ function escapes(s: string): { text: string; stop: boolean } {
 }
 
 /** printf(1): the format is reused while arguments are left. */
-function printf(fmt: string, args: string[]): string {
+function printf(fmt: string, args: string[], budget?: Budget): string {
+  const reserve = (n: number) => { const why = budget?.step() ?? budget?.write(n, out.length); if (why) throw new LimitSignal(why) }
+
   let out = ''
   let ai = 0
   for (let pass = 0; pass < 1000; pass++) {
@@ -245,23 +258,27 @@ function printf(fmt: string, args: string[]): string {
       if (ch === '\\') {
         const m = /^\\([0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)/.exec(fmt.slice(i))![0]
         const r = escapes(m)
+        reserve(r.text.length)
         out += r.text
         if (r.stop) return out
         i += m.length - 1
         continue
       }
       if (ch !== '%') {
+        reserve(1)
         out += ch
         continue
       }
       const m = /^%([-+ 0#]*)(\d+|\*)?(?:\.(\d+|\*))?([sbcdiouxXfFeEgG%])/.exec(fmt.slice(i))
       if (!m) {
+        reserve(1)
         out += ch
         continue
       }
       i += m[0].length - 1
       const [, flagStr, widthRaw, precRaw, conv] = m
       if (conv === '%') {
+        reserve(1)
         out += '%'
         continue
       }
@@ -271,6 +288,7 @@ function printf(fmt: string, args: string[]): string {
       }
       const width = Math.min(widthRaw === '*' ? parseInt(next(), 10) || 0 : widthRaw ? parseInt(widthRaw, 10) : 0, MAX_PAD)
       const prec = precRaw === '*' ? parseInt(next(), 10) : precRaw !== undefined ? parseInt(precRaw, 10) : undefined
+      if (budget && prec !== undefined && prec > budget.limits.maxBuffer) throw new LimitSignal(budget.stop('output'))
       if (prec !== undefined && prec > MAX_PAD) throw new ShellError('printf: precision too large')
       const arg = next()
       const num = () => {
@@ -323,6 +341,7 @@ function printf(fmt: string, args: string[]): string {
           s = num().toFixed(prec ?? 6)
           if (flagStr.includes('+') && !s.startsWith('-')) s = `+${s}`
       }
+      reserve(Math.max(s.length, width))
       if (s.length < width) {
         if (flagStr.includes('-')) s = s.padEnd(width)
         else if (flagStr.includes('0') && /[diouxXfFeEgG]/.test(conv)) {
@@ -465,6 +484,7 @@ class Shell {
       case '##':
       case '%':
       case '%%': {
+        if (this.base.budget && value.length > 4096) throw new LimitSignal(this.base.budget.stop('memory'))
         const pat = await this.expandPattern(word, io)
         const greedy = op.length === 2
         const src = globSource(pat, greedy)
@@ -480,6 +500,7 @@ class Shell {
       }
       case '/':
       case '//': {
+        if (this.base.budget && value.length > 4096) throw new LimitSignal(this.base.budget.stop('memory'))
         const slash = word.indexOf('/')
         const pat = await this.expandPattern(slash < 0 ? word : word.slice(0, slash), io)
         const rep = slash < 0 ? '' : await this.expandString(word.slice(slash + 1), io)
@@ -487,6 +508,8 @@ class Shell {
         const anchor = pat.startsWith('#') ? '^' : pat.startsWith('%') ? '$' : ''
         const src = globSource(anchor ? pat.slice(1) : pat)
         const re = new RegExp(anchor === '^' ? `^(?:${src})` : anchor === '$' ? `(?:${src})$` : src, op === '//' ? 'g' : '')
+        const why = this.base.budget?.write((value.length + 1) * rep.length, value.length)
+        if (why) throw new LimitSignal(why)
         return value.replace(re, () => rep)
       }
       case ':': {
@@ -605,18 +628,23 @@ class Shell {
   /** Words of a command: expanded, split and globbed. */
   async expandWords(words: string[], io: Io): Promise<string[]> {
     const out: string[] = []
+    const append = (text: string) => {
+      if (this.base.budget && out.length >= 10_000) throw new LimitSignal(this.base.budget.stop('memory'))
+      out.push(text)
+    }
     for (const raw of words) {
-      const f = new Fields()
+      this.checkAbort()
+      const f = new Fields(this.base.budget)
       await this.expandInto(raw, io, f, true)
       for (const field of f.done()) {
         if (field.glob) {
           const hits = await this.glob(field.pat)
           if (hits.length) {
-            out.push(...hits)
+            for (const hit of hits) append(hit)
             continue
           }
         }
-        out.push(field.text)
+        append(field.text)
       }
     }
     return out
@@ -624,7 +652,7 @@ class Shell {
 
   /** One word as one string: assignments, redirect targets, `case` words. */
   async expandString(raw: string, io: Io, arithmetic = false): Promise<string> {
-    const f = new Fields()
+    const f = new Fields(this.base.budget)
     await this.expandInto(raw, io, f, false, arithmetic)
     return f
       .done()
@@ -633,13 +661,14 @@ class Shell {
   }
 
   /** A word as a pattern: quoted parts match themselves. */
+  private boundedPattern(pattern: string) {
+    if (this.base.budget && (pattern.length > 256 || (pattern.match(/\*/g)?.length ?? 0) > 1)) throw new ShellError('msh: agent patterns are limited to 256 characters and one *')
+    return pattern
+  }
   async expandPattern(raw: string, io: Io): Promise<string> {
-    const f = new Fields()
+    const f = new Fields(this.base.budget)
     await this.expandInto(raw, io, f, false)
-    return f
-      .done()
-      .map((x) => x.pat)
-      .join(' ')
+    return this.boundedPattern(f.done().map((x) => x.pat).join(' '))
   }
 
   /** A heredoc's text: $, ` and \ work, quotes are just characters. */
@@ -659,6 +688,8 @@ class Shell {
         out += await this.substitute(body.slice(i + 1, end - 1), io)
         i = end
       } else {
+        const why = this.base.budget?.write(1, out.length)
+        if (why) throw new LimitSignal(why)
         out += ch
         i++
       }
@@ -668,6 +699,7 @@ class Shell {
 
   /** Pathname expansion against the filesystem (Seafile folders are fetched first). */
   private async glob(pat: string): Promise<string[]> {
+    this.boundedPattern(pat)
     const absolute = pat.startsWith('/')
     const dirsOnly = pat.endsWith('/')
     const segs = pat.split('/').filter((s, k) => s || k === 0)
@@ -687,7 +719,9 @@ class Shell {
       for (const x of found) {
         // A call confined to a folder cannot list what is outside it by globbing either (echo /etc/*).
         if (this.base.policy?.read(x.abs)) continue
-        await prepareFolder(x.abs)
+        if (this.base.policy) await prepare(x.abs, 'ls', [], actorOf(this.base))
+        else await prepareFolder(x.abs)
+        this.checkAbort()
         const node = lookup(x.abs)
         if (node?.type !== 'dir') continue
         const names = [...node.children.keys()].sort((a, b) => a.localeCompare(b, 'en'))
@@ -873,6 +907,7 @@ class Shell {
       case 'case':
         return this.redirected(n.redirs, io, async (io2) => {
           const word = await this.expandString(n.word, io2)
+          if (this.base.budget && word.length > 4096) throw new LimitSignal(this.base.budget.stop('memory'))
           for (const arm of n.arms)
             for (const p of arm.patterns) if (globMatch(await this.expandPattern(p, io2), word)) return arm.body ? this.exec(arm.body, io2, cond) : 0
           return 0
@@ -950,7 +985,7 @@ class Shell {
         if (r.op === '<') {
           const abs = resolvePath(this.base.cwd, target)
           this.mayRead(abs)
-          await prepare(this.base.cwd, 'cat', [target])
+          await prepare(this.base.cwd, 'cat', [target], actorOf(this.base))
           const node = lookup(abs)
           if (!node) throw new ShellError(`${target}: No such file or directory`)
           if (node.type === 'dir') throw new ShellError(`${target}: Is a directory`)
@@ -988,7 +1023,7 @@ class Shell {
       // A call that ran out of budget or was cancelled writes nothing more.
       for (const f of this.base.budget?.stopped ? [] : files) {
         try {
-          await writeFile(this.base.cwd, f.target, hooks.strip(f.sink.text).replace(/\n$/, ''), f.append, { root: !!this.base.root, policy: this.base.policy })
+          await writeFile(this.base.cwd, f.target, hooks.strip(f.sink.text).replace(/\n$/, ''), f.append, actorOf(this.base))
         } catch (e) {
           io.err.write(`${red(e instanceof CmdError ? e.message : `msh: ${(e as Error).message}`)}\n`)
           status = 1
@@ -1123,7 +1158,7 @@ class Shell {
       io.err.write(`${red(`msh: ${outside}`)}\n`)
       return 'refused'
     }
-    await prepare(this.base.cwd, 'cat', [path])
+    await prepare(this.base.cwd, 'cat', [path], actorOf(this.base))
     const node = lookup(abs)
     if (node?.type !== 'file' || node.exec || node.name.endsWith('.game')) return null
     let text: string
@@ -1150,6 +1185,7 @@ class Shell {
 
   /** Runs a script's text in a new shell; `label` names it in errors. */
   async runSource(src: string, io: Io, label: string): Promise<number> {
+    if (this.base.budget && src.length > 64_000) throw new LimitSignal(this.base.budget.stop('memory'))
     let tree: Node
     try {
       tree = parse(src)
@@ -1182,8 +1218,9 @@ class Shell {
       if (known && !help) {
         // `open photos` starts the app: no need to look for a folder of that name in Seafile.
         const looked = known === 'cd' && !args.length ? [HOME] : known === 'open' ? args.filter((a) => !hooks.isAppName(a, this.base.cwd)) : args
-        await prepare(this.base.cwd, known, looked)
+        await prepare(this.base.cwd, known, looked, actorOf(this.base))
       }
+      this.checkAbort()
       io.out.flush?.()
       const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty, raw: (t) => io.out.write(t) })) ?? '')
       if (out) io.out.write(out.endsWith('\n') ? out : `${out}\n`)
@@ -1231,7 +1268,7 @@ class Shell {
     const abs = resolvePath(this.base.cwd, path)
     const outside = this.base.policy?.read(abs)
     if (outside) throw new ShellError(`${who}: ${outside}`)
-    await prepare(this.base.cwd, 'cat', [path])
+    await prepare(this.base.cwd, 'cat', [path], actorOf(this.base))
     const node = lookup(abs)
     if (node?.type !== 'file') return null
     if (!allows(abs, node, 'r', !!this.base.root)) throw new ShellError(`${who}: ${path}: Permission denied`)
@@ -1244,7 +1281,7 @@ class Shell {
    */
   private async textOf(abs: string, node: { content: () => string }, denied: (why: string) => Error): Promise<string> {
     try {
-      return (await readFileText(abs, !!this.base.root))?.text ?? node.content()
+      return (await readFileText(abs, !!this.base.root, actorOf(this.base)))?.text ?? node.content()
     } catch (e) {
       if (e instanceof DeniedError) throw denied(e.message)
       return node.content()
@@ -1281,7 +1318,7 @@ async function test(sh: Shell, argv: string[], io: Io, bracket: boolean): Promis
   const BINARY = new Set(['=', '==', '!=', '<', '>', '-eq', '-ne', '-lt', '-le', '-gt', '-ge', '-nt', '-ot'])
   // Files the test looks at, fetched first (Seafile).
   const paths = args.filter((_, k) => k > 0 && UNARY_FILE.has(args[k - 1]))
-  if (paths.length) await prepare(sh.base.cwd, 'test', paths).catch(() => {})
+  if (paths.length) await prepare(sh.base.cwd, 'test', paths, actorOf(sh.base)).catch(() => {})
   const node = (p: string) => lookup(resolvePath(sh.base.cwd, p))
   const int = (s: string) => {
     if (!/^\s*-?\d+\s*$/.test(s)) throw new ShellError(`test: ${s}: integer expression expected`)
@@ -1424,9 +1461,9 @@ const BUILTINS: Record<string, Builtin> = {
     io.out.write(newline ? `${s}\n` : s)
     return 0
   },
-  printf: (_sh, args, io) => {
+  printf: (sh, args, io) => {
     if (!args.length) return fail(io, 'printf: usage: printf format [arguments]', 2)
-    io.out.write(settle(printf(args[0], args.slice(1))))
+    io.out.write(settle(printf(args[0], args.slice(1), sh.base.budget)))
     return 0
   },
   test: (sh, args, io) => test(sh, args, io, false),

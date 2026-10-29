@@ -25,8 +25,7 @@ import { asWebAddress } from '../os/linkPreview'
 import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
-import type { Policy } from './policy'
-import { actorOf, lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
+import { actorOf, checkActor, type Actor, lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
 import { loadLibraries, getLibraries, openSeafile, sfPath } from '../data/seafile'
 import { importFileOf } from '../data/fileOps'
 import { openImport, pimAppFor } from '../data/pimFiles'
@@ -562,6 +561,7 @@ export const commands: Record<string, Command> = {
       const match = (l: string) => re.test(l) !== f.has('v')
 
       if (f.has('r') || files.some((p) => lookup(resolvePath(ctx.cwd, p))?.type === 'dir')) {
+        if (ctx.policy) throw new CmdError('grep: recursive agent searches are unavailable; search individual files')
         const roots = files.length ? files : ['.']
         const out: string[] = []
         for (const r of roots) {
@@ -1511,7 +1511,8 @@ async function ping(ctx: Ctx): Promise<string> {
 }
 
 /** Writes a file in /tmp. A mode set with chmod can refuse it (Permission denied, in `who`'s words); root may. */
-export function writeTmp(cwd: string, target: string, content: string, append: boolean, actor: boolean | { root: boolean; policy?: Policy } = false, who = '') {
+export function writeTmp(cwd: string, target: string, content: string, append: boolean, actor: Actor = false, who = '') {
+  checkActor(actor)
   const root = typeof actor === 'boolean' ? actor : actor.root
   const abs = resolvePath(cwd, target)
   const refused = typeof actor === 'boolean' ? null : actor.policy?.write(abs)

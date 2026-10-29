@@ -35,8 +35,8 @@ export type CommandOption = { flag: string; takesValue: boolean }
 
 /**
  * The options a usage line names: `[-a] [-l]` gives -a and -l, `[-vzkO]` gives each letter, `-c count`
- * and `[--model m]` take a value. Only what the line says; `complete` is false when the line sends the
- * reader elsewhere (`--help`, `man`), so the list is a floor and not the whole story.
+ * and `[--model m]` take a value. Usage text is not a parser schema: `complete` is always false.
+ * Supported long options and aliases may be absent; the manual remains the detailed reference.
  */
 export function optionsOf(usage: string | undefined): { options: CommandOption[]; complete: boolean } {
   if (!usage) return { options: [], complete: false }
@@ -45,11 +45,11 @@ export function optionsOf(usage: string | undefined): { options: CommandOption[]
   for (const m of usage.matchAll(re)) {
     const flag = m[1]
     // After `usage: cmd`, a word that names the argument (-c count) is the flag's value, not a word of its own.
-    const value = m[2] !== undefined && m[3] !== undefined && !/^(file|path|dir|command)/.test(m[3]) ? true : flag.includes('=')
+    const value = m[2] !== undefined && m[3] !== undefined ? true : m[0].includes('=')
     if (flag.startsWith('--') || flag.length === 2) options.set(flag, value || options.get(flag) === true)
     else for (const ch of flag.slice(1)) options.set(`-${ch}`, options.get(`-${ch}`) ?? false)
   }
-  return { options: [...options].map(([flag, takesValue]) => ({ flag, takesValue })), complete: !/--help|\bman\b|\(.*help/.test(usage) }
+  return { options: [...options].map(([flag, takesValue]) => ({ flag, takesValue })), complete: false }
 }
 
 /** msh's language, as this build has it (man msh has the detail). Each line is true of the interpreter in msh/. */
@@ -155,11 +155,12 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
     },
     integrations,
     limits: ctx.budget
-      ? { timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
+      ? { maxSourceChars: 64_000, maxExpandedFields: 10_000, maxPatternChars: 256, maxPatternStars: 1, maxPatternInputChars: 4096, maxIfsChars: 256, deadline: 'cooperative; synchronous JavaScript is not preempted', timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
       : null,
+    sessionRights: grant ? { mode: grant.mode, write: !!root && grant.mode !== 'plan', writeApproval: ['bypass', 'acceptEdits'].includes(grant.mode) ? 'not required inside work folder' : 'required', deleteApproval: grant.mode === 'bypass' ? 'not required' : 'required', networkApproval: grant.mode === 'bypass' ? 'not required' : 'required', steeringApproval: 'fresh explicit approval always required', queryAuthority: 'permissions below apply only to this call' } : null,
     permissions: grant ? { mode: grant.mode, write: grant.write, delete: grant.delete, network: grant.network, steering: grant.steering } : null,
     notes: [
-      'Commands are MvL OS’s own, not a Linux system’s: only the options listed in each command’s usage exist.',
+      'Commands are MvL OS’s own, not a Linux system’s: option lists are partial usage hints, not a complete parser schema.',
       ...(policy ? ['A command the policy refuses answers `msh: …` on stderr with status 126; the reason says which rule.'] : []),
     ],
   }

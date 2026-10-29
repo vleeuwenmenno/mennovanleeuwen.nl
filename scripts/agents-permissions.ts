@@ -33,6 +33,8 @@ const REPO = 'https://github.com/uowuo/abaddon'
 
 const fetch_ = (url: string): Call => ({ name: 'web_fetch', arguments: { url } })
 const SCENARIOS: Record<string, Call[][]> = {
+  'remember-tee': [[{ name: 'terminal', arguments: { command: 'tee ordinary.txt' } }]],
+  'steering-tee': [[{ name: 'terminal', arguments: { command: 'tee AGENTS.md' } }]],
   // The user's own example: a repository it read, then its commits and releases.
   example: [[fetch_(REPO)], [fetch_(`${REPO}/commits/master`), fetch_(`${REPO}/releases`)]],
   // A path part nobody gave it, which could carry something: the safety check decides. One address
@@ -301,6 +303,14 @@ try {
   check('Terminal round trip: terminal_capabilities hands back the window’s JSON as it is', tmRun.tools.find((m) => m.toolName === 'terminal_capabilities')?.content === '{"session":{"kind":"agent"}}')
   check('Terminal round trip: only the first window to claim a call may run it', claimed.length >= 2 && claimed.every((c) => c[0] === true && c[1] === false))
   check(`Terminal round trip: Bypass sends a grant to write, delete and use the network (got ${JSON.stringify(clients[clients.length - 2]?.grant)})`, JSON.stringify(clients[clients.length - 2]?.grant) === '{"mode":"bypass","write":true,"delete":true,"network":true,"steering":false}')
+  const remembered = await newThread({ permission: 'default', workdir })
+  await turn(remembered.id, 'SCENARIO remember-tee', () => ({ allow: true, always: 'command' }), 'exec')
+  const beforeSteering = clients.length
+  const deniedSteering = await turn(remembered.id, 'SCENARIO steering-tee', () => ({ allow: false }), 'exec')
+  check('Remembered tee still asks fresh approval for AGENTS.md; declining sends no execution', deniedSteering.asked.length === 1 && clients.length === beforeSteering)
+  await turn(remembered.id, 'SCENARIO steering-tee', () => ({ allow: true }), 'exec')
+  check('Fresh explicit steering approval grants steering', (clients.at(-1)?.grant as { steering?: boolean })?.steering === true)
+  check('Text alone cannot manufacture a steering grant', !terminalGrant('default', 'tee AGENTS.md', 'approved').steering)
   const tp = await newThread({ permission: 'plan', workdir })
   const tpRun = await turn(tp.id, 'SCENARIO term-plan', () => ({ allow: false }), true)
   const tpGrant = clients[clients.length - 1]?.grant
@@ -309,6 +319,10 @@ try {
   const ed = await newThread({ permission: 'default', workdir })
   const edRun = await turn(ed.id, 'SCENARIO edits', () => ({ allow: false }))
   check(`Ask first with a work folder: the edit and the delete asked (asked ${edRun.asked.length})`, edRun.asked.length === 2)
+  for (const command of ['git show secret-data', 'changelog', 'releases']) {
+    check(`Edits allowed still asks for network command ${command}`, decideTerminal(by.id, 'acceptEdits', command).decision === 'ask')
+    check(`Approved ${command} receives network authority`, terminalGrant('default', command, 'approved', true).network)
+  }
   const t = by.id
   const img = { name: 'generate_image', arguments: { prompt: 'a lighthouse' } }
   check('Images: generate_image runs without asking by default', decide(t, 'default', img, 1) === 'run' && decide(t, 'auto', img, 1) === 'run')
@@ -343,7 +357,7 @@ try {
   // 10b. The terminal tool: what runs, what asks, and the grant each call gets (the terminal enforces it
   // on what the shell resolves: src/terminal/policy.ts, checked by scripts/agents-terminal-exec.ts).
   const line = (command: string) => ({ name: 'terminal', arguments: { command } })
-  const grantOf = (mode: 'default' | 'auto' | 'acceptEdits' | 'plan' | 'bypass', command: string) => terminalGrant(mode, command, decideTerminal(t, mode, command).access)
+  const grantOf = (mode: 'default' | 'auto' | 'acceptEdits' | 'plan' | 'bypass', command: string) => terminalGrant(mode, command, decideTerminal(t, mode, command).access, true)
   check('Terminal: msh -n script.sh only reads, so it runs in every mode', (['default', 'auto', 'acceptEdits', 'plan', 'bypass'] as const).every((m) => decide(t, m, line('msh -n potato-flight-check.sh')) === 'run'))
   check('Terminal: running a script asks in Ask first, is refused in Plan', decide(t, 'default', line('msh potato-flight-check.sh')) === 'ask' && decide(t, 'plan', line('msh potato-flight-check.sh')) === 'refuse')
   check('Terminal: with edits allowed a script runs without asking', decide(t, 'acceptEdits', line('msh potato-flight-check.sh')) === 'run' && decide(t, 'acceptEdits', line('chmod +x x.sh && ./x.sh > out.txt')) === 'run')

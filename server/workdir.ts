@@ -535,6 +535,7 @@ function checksSyntax(c: { name: string; args: string[] }): boolean {
 
 /** Whether a command line only reads (so it can run without the user allowing it). */
 export function readOnlyCommand(line: string): boolean {
+  if (commandNames(line).some((n) => NETWORK_COMMANDS.has(n))) return false
   if (/[`]|\$\(/.test(line)) return false
   let tree
   try {
@@ -576,16 +577,17 @@ export type ClientGrant = { mode: string; write: boolean; delete: boolean; netwo
 export type TerminalAccess = 'readonly' | 'edits' | 'bypass' | 'approved'
 
 export const DELETE_COMMANDS: ReadonlySet<string> = new Set(['rm', 'rmdir'])
-export const NETWORK_COMMANDS: ReadonlySet<string> = new Set(['curl', 'wget', 'ping', 'dig', 'host', 'nslookup', 'whois', 'minecraft', 'pepper'])
+export const NETWORK_COMMANDS: ReadonlySet<string> = new Set(['curl', 'wget', 'ping', 'dig', 'host', 'nslookup', 'whois', 'minecraft', 'pepper', 'git', 'changelog', 'releases'])
 /** A command line that names a file steering the agent: such a call always asks, and only then may it write one. */
 export const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
 
 /**
  * The grant for a call. Nothing is implied by anything else: the text of an approved line decides
  * the extras, because the user saw that text. A script the line runs gets what the line names, no more
- * (`msh x.sh` does not give x.sh the right to rm; `rm x` does).
+ * (`msh x.sh` does not give x.sh the right to rm; `rm x` does). Steering rights additionally
+ * require this call's fresh explicit approval, never a remembered command grant.
  */
-export function terminalGrant(permission: Permission, line: string, access: TerminalAccess): ClientGrant {
+export function terminalGrant(permission: Permission, line: string, access: TerminalAccess, explicitlyApproved = false): ClientGrant {
   const names = commandNames(line)
   const has = (set: ReadonlySet<string>) => names.some((n) => set.has(n))
   switch (access) {
@@ -596,6 +598,6 @@ export function terminalGrant(permission: Permission, line: string, access: Term
     case 'bypass':
       return { mode: permission, write: true, delete: true, network: true, steering: false }
     case 'approved':
-      return { mode: permission, write: true, delete: has(DELETE_COMMANDS), network: has(NETWORK_COMMANDS), steering: STEERING_IN_LINE.test(line) }
+      return { mode: permission, write: true, delete: has(DELETE_COMMANDS), network: has(NETWORK_COMMANDS), steering: explicitlyApproved && STEERING_IN_LINE.test(line) }
   }
 }

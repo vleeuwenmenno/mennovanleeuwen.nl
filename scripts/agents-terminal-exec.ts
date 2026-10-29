@@ -60,7 +60,7 @@ try {
   const FOLDER = '/tmp'
   const grantOf = (g: Partial<Grant> = {}): Grant => ({ mode: 'acceptEdits', root: FOLDER, write: true, delete: false, network: false, steering: false, ...g })
   const READONLY = grantOf({ mode: 'default', write: false })
-  const approved = (line: string) => ({ ...terminalGrant('default', line, 'approved'), root: FOLDER })
+  const approved = (line: string) => ({ ...terminalGrant('default', line, 'approved', true), root: FOLDER })
   const EDITS = grantOf()
   const run = (command: string, grant: Grant = EDITS, limits = AGENT_LIMITS, signal = new AbortController().signal) => execute(command, FOLDER, grant, limits, signal)
   const result = async (command: string, grant?: Grant, limits?: typeof AGENT_LIMITS) => (await run(command, grant, limits)).result!
@@ -262,7 +262,7 @@ try {
     ['eval', `eval 'cat ${HOME}/README.md'`],
   ] as const) {
     const r = await result(line, grantOf({ delete: true, network: true }))
-    check(r.exit_code !== 0 && !/Seafile|Welcome|# /.test(r.stdout) && r.stdout === '' && /outside|work folder/.test(r.stderr), `a call cannot read outside the work folder: ${what}`, JSON.stringify(r))
+    check(r.exit_code !== 0 && !/Seafile|Welcome|# /.test(r.stdout) && r.stdout === '' && /outside|work folder|not available|unavailable/.test(r.stderr), `a call cannot read outside the work folder: ${what}`, JSON.stringify(r))
   }
   const listed = await result('echo /etc/* ../*; echo /*', EDITS)
   eq(listed.stdout, '/etc/* ../*\n/*', 'a glob outside the work folder expands to nothing: it cannot be used to list what is there')
@@ -360,6 +360,7 @@ try {
       if (!c.usage || !(o.flag.startsWith('--') ? c.usage.includes(letters) : new RegExp(`-[A-Za-z0-9|\\[\\]-]*${letters}`).test(c.usage))) strays.push(`${c.name} ${o.flag}`)
     }
   eq(strays, [], 'every reported option appears in that command’s usage line (none invented)')
+  check((await result("printf '%1000s' a b c d e f", EDITS, { ...AGENT_LIMITS, maxBuffer: 5000 })).terminated === 'output', 'printf formatting itself stops before allocating the sixth field')
   eq(optionsOf('tar -t|-x [-vzkO] -f archive [-C dir] [member]...').options.map((o) => o.flag).sort(), ['-C', '-O', '-f', '-k', '-t', '-v', '-x', '-z'], 'a usage with clusters and alternatives gives each flag once')
   eq(optionsOf(undefined), { options: [], complete: false }, 'a command with no usage line lists no options and says so')
   // The human help comes from the same groups the machine view uses.
@@ -404,6 +405,116 @@ try {
   check(cwdCall.status !== 0 && /outside/.test(cwdCall.output), 'a cwd outside the work folder is refused')
   const cwdOk = await tool('terminal', { command: 'pwd', cwd: '/tmp' })
   check(cwdOk.result?.stdout === '/tmp' && cwdOk.result?.cwd === '/tmp', 'cwd names the folder the call starts in')
+
+  // Regression: patterns are data, not filenames. No accidental directory fetch for /outside.
+  eq((await result('echo /outside | grep /outside')).stdout, '/outside', 'grep does not authorize its pattern as a file')
+  for (const command of ['tar -xf review.tar -C /outside', 'unzip review.zip -d /outside', 'git show secret-data', 'changelog', 'releases']) {
+    let requests = 0
+    const previous = g.fetch
+    g.fetch = () => { requests++; return Promise.reject(new Error('unexpected request')) }
+    const r = await result(command, READONLY)
+    g.fetch = previous
+    check(r.exit_code !== 0 && requests === 0, `${command}: denied before any request`)
+  }
+  for (const command of ["echo aaaa | grep '(a+)+$'", "find /tmp -regex '(a+)+$'", "fd -F --regex '(a+)+$'", 'x=aaaa; echo ${x//a*a*a*/x}']) {
+    check((await result(command)).exit_code !== 0, `uninterruptible pattern workload refused: ${command}`)
+  }
+  const fields = await result('x=\"a a a a a a a a a a a a a a a a\"; for i in 1 2 3 4 5 6 7 8 9 10; do x=\"$x $x\"; done; echo $x')
+  check(fields.terminated === 'memory', 'field expansion stops incrementally before a giant argument vector is allocated')
+  const formatted = await result("printf '%1000s' $(seq 1 1000)", EDITS, { ...AGENT_LIMITS, maxBuffer: 5000 })
+  check(formatted.terminated === 'output', 'printf charges each field before padding/concatenation')
+  eq(optionsOf('tar -t|-x [-vzkO] -f archive [-C dir] [member]...').options.find((o) => o.flag === '-C')?.takesValue, true, 'tar -C requires a directory value')
+  eq(optionsOf('ls [-a] [-l]').complete, false, 'usage-derived option lists never claim completeness')
+  const query = JSON.parse((await tool('terminal_capabilities', {}, grantOf({ mode: 'bypass', write: false }))).capabilities!)
+  check(query.permissions.write === false && query.sessionRights.write === true && query.sessionRights.writeApproval.includes('not required'), 'capability query authority is distinct from Bypass session rights')
+
+  // Real delayed Seafile requests: release after timeout and verify no mutation is submitted.
+  const { loadAccount } = await load<typeof import('../src/os/account.ts')>('/src/os/account.ts')
+  const { loadLibraries } = await load<typeof import('../src/data/seafile.ts')>('/src/data/seafile.ts')
+  const { setFstab, getFstab } = await load<typeof import('../src/data/mounts.ts')>('/src/data/mounts.ts')
+  const { makePolicy } = await load<typeof import('../src/terminal/policy.ts')>('/src/terminal/policy.ts')
+  const { transfer, removePath, writeFile, actorOf } = await load<typeof import('../src/terminal/fs.ts')>('/src/terminal/fs.ts')
+  const originalFstab = getFstab()
+  const previousFetch = g.fetch
+  let release: (() => void) | undefined
+  let entered: (() => void) | undefined
+  let hold = false
+  let holdLink = false
+  const requests: { url: string; method: string }[] = []
+  g.fetch = async (input: string, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost')
+    requests.push({ url: url.href, method: init?.method ?? 'GET' })
+    if (url.pathname === '/api/me') return Response.json({ authEnabled: false, user: null, forges: [], seafile: { url: 'https://files.invalid', username: 'test' } })
+    if (url.pathname === '/api/seafile/libraries') return Response.json(['repo', 'foreign'].map((id) => ({ id, name: id, permission: 'rw', type: 'mine' })))
+    if (url.pathname === '/api/seafile/dir') {
+      if (hold) { hold = false; entered?.(); await new Promise<void>((r) => { release = r }) }
+      return Response.json({ perm: 'rw', entries: [{ name: 'src', dir: true, size: 0, mtime: 1 }, { name: 'AGENTS.md', dir: false, size: 4, mtime: 1 }, { name: 'existing.txt', dir: false, size: 4, mtime: 1 }] })
+    }
+    if (url.pathname === '/api/seafile/link') {
+      if (holdLink) { holdLink = false; entered?.(); await new Promise<void>((r) => { release = r }) }
+      return Response.json({ url: 'http://localhost/mock-file' })
+    }
+    if (url.pathname === '/mock-file') return new Response('data')
+    return Response.json({ path: '/late.txt' })
+  }
+  try {
+    await loadAccount()
+    await loadLibraries(true)
+    setFstab('UUID=repo /review seafile defaults 0 0')
+    const sfGrant: Grant = { ...EDITS, root: '/review', backing: { repo: 'repo', path: '/' } }
+    hold = true
+    const began = new Promise<void>((r) => { entered = r })
+    const delayed = execute('touch late.txt', '/review', sfGrant, { ...AGENT_LIMITS, timeoutMs: 100 }, new AbortController().signal)
+    await Promise.race([began, new Promise((_, reject) => setTimeout(() => reject(new Error('prepare not reached')), 3000))])
+    const stopped = await delayed
+    release!()
+    await new Promise((r) => setTimeout(r, 80))
+    check(stopped.result?.terminated === 'timeout' && !requests.some((r) => r.method === 'POST'), 'delayed preparation released after timeout cannot submit touch POST')
+    const actor = actorOf({ policy: makePolicy({ ...sfGrant, delete: true }), signal: new AbortController().signal })
+    for (const operation of [() => transfer('copy', '/review', 'src', 'dest', true, actor), () => removePath('/review', 'src', { recursive: true, force: true, dir: false, root: actor })]) {
+      let denied = false
+      try { await operation() } catch { denied = true }
+      check(denied && !requests.some((r) => r.method === 'POST'), 'bulk directory mutation is denied without relying on partial descendant cache')
+    }
+    const ctl = new AbortController()
+    holdLink = true
+    const linked = new Promise<void>((r) => { entered = r })
+    const write = writeFile('/review', 'existing.txt', 'new', false, actorOf({ policy: makePolicy(sfGrant), signal: ctl.signal })).catch(() => {})
+    await Promise.race([linked, new Promise((_, reject) => setTimeout(() => reject(new Error('update link not reached')), 3000))])
+    ctl.abort(); release!(); await write
+    check(!requests.some((r) => r.method === 'POST'), 'abort during update-link lookup prevents upload POST')
+    const frozen = makePolicy(sfGrant)
+    setFstab('UUID=repo /review seafile defaults 0 0\nUUID=foreign /review/foreign seafile defaults 0 0')
+    check(!!frozen.read('/review/foreign/private') && !!frozen.write('/review/foreign/new') && !!frozen.tree('/review'), 'nested foreign mount cannot inherit lexical workdir rights, including traversal')
+    setFstab('UUID=repo /review seafile defaults 0 0\n/review/outside /review/project/foreign none bind 0 0')
+    const bound = makePolicy({ ...sfGrant, root: '/review/project', backing: { repo: 'repo', path: '/project' } })
+    check(!!bound.read('/review/project/foreign/secret'), 'same-repo bind mount cannot escape authorized backing path')
+    setFstab('UUID=repo /review seafile defaults 0 0')
+    requests.length = 0
+    await execute('ls .', '/review/project', { ...sfGrant, root: '/review/project', backing: { repo: 'repo', path: '/project' } }, AGENT_LIMITS, new AbortController().signal)
+    check(requests.every((r) => new URL(r.url).searchParams.get('p') !== '/'), 'preparing the work folder never requests its unauthorized parent listing')
+  } finally { setFstab(originalFstab); g.fetch = previousFetch }
+
+  // Shared executor tests use actual claim promises and the real shell, not source-string checks.
+  const { ClientCalls } = await load<typeof import('../src/terminal/agents/lifecycle.ts')>('/src/terminal/agents/lifecycle.ts')
+  for (const action of ['stop', 'close', 'switch', 'clientDone'] as const) {
+    const calls = new ClientCalls()
+    calls.select('a')
+    let resolveClaim!: (mine: boolean) => void
+    let ran = 0, delivered = 0
+    const pending = calls.run('call', () => new Promise((r) => { resolveClaim = r }), async () => { ran++; return 1 }, async () => { delivered++ })
+    if (action === 'switch') calls.select('b')
+    else if (action === 'clientDone') calls.done('call')
+    else calls[action]()
+    resolveClaim(true); await pending
+    eq([ran, delivered], [0, 0], `${action} during pending claim prevents late execution`)
+  }
+  const calls = new ClientCalls()
+  let running!: () => void
+  const began = new Promise<void>((r) => { running = r })
+  const active = calls.run('active', async () => true, async (signal) => { running(); return run('sleep 30; touch lifecycle-late', EDITS, AGENT_LIMITS, signal) }, async () => { throw new Error('cancelled result delivered') })
+  await began; calls.done('active'); await active
+  check(!exists('lifecycle-late'), 'clientDone aborts real in-flight shell execution')
 } finally {
   await vite.close()
 }

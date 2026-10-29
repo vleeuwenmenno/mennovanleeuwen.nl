@@ -9,7 +9,8 @@ import { cvMode } from '../os/cvMode'
 import { keptRc, RC_NAME, RC_PATH, setKeptRc } from './rcfile'
 import { HOME, kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
 import { allows, carrySfModes, dropSfModes, setSfMode, sfModeOf, userOwns, type Access } from './modes'
-import type { Policy } from './policy'
+import { fileOperands, type Policy } from './policy'
+import type { Budget } from './limits'
 
 // The filesystem as the terminal sees it: the site's own files (vfs.ts), with whatever /etc/fstab
 // mounts on top (data/mounts.ts): Seafile libraries under /mnt/seafile, a library on ~, bind
@@ -211,33 +212,41 @@ async function fetchDir(sf: string, cmd: string, arg: string | null) {
   }
 }
 
-async function fetchText(sf: string, e: Entry) {
+async function fetchText(sf: string, e: Entry, actor: Actor = false) {
   const hit = texts.get(sf)
   if (hit && hit.mtime === e.mtime) return
-  texts.set(sf, { text: await readText(sf), mtime: e.mtime })
+  texts.set(sf, { text: await readText(sf, { check: () => checkActor(actor), signal: typeof actor === 'boolean' ? undefined : actor.signal }), mtime: e.mtime })
 }
 
 /** One path: its folder's listing, its own if it is a folder, and its text if `read`. */
-async function ensure(abs: string, cmd: string, arg: string | null, read: boolean): Promise<string | null> {
+async function ensure(abs: string, cmd: string, arg: string | null, read: boolean, actor: Actor = false): Promise<string | null> {
+  checkActor(actor)
+  if (typeof actor !== 'boolean') {
+    const why = actor.policy?.read(abs)
+    if (why) throw err(why)
+  }
   let w = whereIs(abs)
   if (w.kind === 'missing' && w.loading) {
     await loadLibraries()
+    checkActor(actor)
     w = whereIs(abs)
   }
   if (w.kind !== 'sf' || w.sf === SF) return null
-  const parent = sfParent(w.sf)
+  // The work folder's own listing is enough; do not fetch its unauthorized parent.
+  const parent = typeof actor !== 'boolean' && actor.policy?.grant.root === abs ? null : sfParent(w.sf)
   if (parent && !(await fetchDir(parent, cmd, arg))) return null
+  checkActor(actor)
   const e = sfEntry(w.sf)
   if (!parent || e?.dir) {
     await fetchDir(w.sf, cmd, arg)
     return w.sf
   }
-  if (e && read && e.size <= MAX_TEXT) await fetchText(w.sf, e).catch(() => {})
+  if (e && read && e.size <= MAX_TEXT) await fetchText(w.sf, e, actor).catch(() => {})
   return null
 }
 
 /** Everything under a Seafile folder, breadth first, as far as the limits go. */
-async function ensureTree(root: string, cmd: string, read: boolean) {
+async function ensureTree(root: string, cmd: string, read: boolean, actor: Actor = false) {
   const queue = [root]
   let dirs = 0
   let files = 0
@@ -246,13 +255,15 @@ async function ensureTree(root: string, cmd: string, read: boolean) {
     dirs += batch.length
     await Promise.all(
       batch.map(async (sf) => {
+        checkActor(actor)
         if (!(await fetchDir(sf, cmd, null))) return
+        checkActor(actor)
         for (const e of cachedDir(sf)?.listing?.entries ?? []) {
           const child = `${sf}/${e.name}`
           if (e.dir) queue.push(child)
           else if (read && files < MAX_FILES && e.size <= MAX_RECURSIVE_TEXT && ['text', 'markdown', 'link'].includes(kindOfName(e.name))) {
             files++
-            await fetchText(child, e).catch(() => {})
+            await fetchText(child, e, actor).catch(() => {})
           }
         }
       }),
@@ -265,19 +276,27 @@ async function ensureTree(root: string, cmd: string, read: boolean) {
  * working folder), their contents for commands that read files, and whole trees for find, fd,
  * tree and -r. Throws the command's own error for a locked library or a lost connection.
  */
-export async function prepare(cwd: string, cmd: string, args: string[]) {
+export async function prepare(cwd: string, cmd: string, args: string[], actor: Actor = false) {
+  checkActor(actor)
+  const paths = typeof actor === 'boolean' || !actor.policy ? args : fileOperands(cmd, args)
+  if (typeof actor !== 'boolean' && actor.policy) {
+    for (const path of [cwd, ...paths.map((p) => resolvePath(cwd, p))]) {
+      const why = actor.policy.tree(path)
+      if (why) throw err(why)
+    }
+  }
   // The browser's files load once, right after sign-in; the first command waits for that.
   if (browserMountPoint()) await browserFilesReady()
   if (!usesSeafile() || !getAccount().seafile || SELF_SERVED.has(cmd)) return
   if (!getLibraries()) await loadLibraries()
   const read = READERS.has(cmd)
   const recursive = ALWAYS_RECURSIVE.has(cmd) || (MAYBE_RECURSIVE.has(cmd) && args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === '--recursive'))
-  await ensure(cwd, cmd, null, false)
+  await ensure(cwd, cmd, null, false, actor)
   const roots: string[] = []
-  for (const a of args) {
+  for (const a of paths) {
     if (!a || (a.startsWith('-') && a !== '-')) continue
     const abs = resolvePath(cwd, a)
-    const dir = await ensure(abs, cmd, a, read)
+    const dir = await ensure(abs, cmd, a, read, actor)
     if (dir || lookup(abs)?.type === 'dir') roots.push(abs)
   }
   if (!recursive) return
@@ -294,8 +313,8 @@ export async function prepare(cwd: string, cmd: string, args: string[]) {
     }
   }
   for (const t of trees) {
-    if (t === SF) for (const l of getLibraries() ?? []) await ensureTree(sfPath(l.id), cmd, read && cmd === 'grep')
-    else await ensureTree(t, cmd, read && (cmd === 'grep' || cmd === 'egrep'))
+    if (t === SF) for (const l of getLibraries() ?? []) await ensureTree(sfPath(l.id), cmd, read && cmd === 'grep', actor)
+    else await ensureTree(t, cmd, read && (cmd === 'grep' || cmd === 'egrep'), actor)
   }
 }
 
@@ -306,7 +325,7 @@ export async function prepareFolder(abs: string) {
 }
 
 /** A Seafile file's text for an editor: fetched now, whatever its age. */
-export async function readFileText(abs: string, root = false): Promise<{ text: string; ro: boolean } | null> {
+export async function readFileText(abs: string, root = false, actor: Actor = false): Promise<{ text: string; ro: boolean } | null> {
   const node = lookup(abs)
   if (!node || node.type !== 'file') return null
   // A mode set with chmod can forbid the read; the callers that show it say so (DeniedError).
@@ -314,7 +333,8 @@ export async function readFileText(abs: string, root = false): Promise<{ text: s
   if (node.browser) return { text: await readBrowserText(node.browser), ro: false }
   // The site's own files under the browser mount: readable, and saving makes the browser's copy.
   if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && abs !== RC_PATH && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
-  const text = await readText(node.sf)
+  checkActor(actor)
+  const text = await readText(node.sf, { check: () => checkActor(actor), signal: typeof actor === 'boolean' ? undefined : actor.signal })
   texts.set(node.sf, { text, mtime: node.mtime ?? 0 })
   return { text, ro: !!node.ro }
 }
@@ -325,15 +345,30 @@ export async function readFileText(abs: string, root = false): Promise<{ text: s
  * Who is writing: root or not, and for an agent's terminal call the policy that confines it. A plain
  * boolean is the old way to say "root or not" and means no policy (the user's own writes: Zed, Files).
  */
-export type Actor = boolean | { root: boolean; policy?: Policy }
+export type Actor = boolean | { root: boolean; policy?: Policy; signal?: AbortSignal; budget?: Budget }
 const isRoot = (a: Actor) => (typeof a === 'boolean' ? a : a.root)
 /** An agent call's policy refusing a write: the command's own error. */
+export function checkActor(a: Actor) {
+  if (typeof a === 'boolean') return
+  a.signal?.throwIfAborted()
+  if (a.policy?.grant.root) {
+    const why = a.policy.tree(a.policy.grant.root)
+    if (why) throw err(why)
+  }
+  if (a.budget?.step()) throw err(`msh: ${a.budget.stopped} limit reached`)
+}
 function mayWrite(a: Actor, abs: string, op: 'write' | 'delete' = 'write') {
+  checkActor(a)
   const why = typeof a === 'boolean' ? null : a.policy?.write(abs, op)
   if (why) throw err(why)
 }
 /** The actor a command's context stands for. */
-export const actorOf = (ctx: { root?: boolean; policy?: Policy }): Actor => ({ root: !!ctx.root, policy: ctx.policy })
+export const actorOf = (ctx: { root?: boolean; policy?: Policy; signal?: AbortSignal; budget?: Budget }): Actor => ({ root: !!ctx.root, policy: ctx.policy, signal: ctx.signal, budget: ctx.budget })
+
+const guarded = <A extends unknown[], R>(actor: Actor, fn: (...args: A) => R) => (...args: A): R => {
+  checkActor(actor)
+  return fn(...args)
+}
 
 const err = (msg: string) => new CmdError(msg)
 
@@ -359,12 +394,12 @@ export async function setMode(abs: string, mode: number | null, who: Actor = fal
   const refuse = (why: string) => err(`chmod: changing permissions of '${abs}': ${why}`)
   if (w.kind === 'missing') throw refuse('Transport endpoint is not connected')
   if (node.browser) {
-    await setBrowserMode(node.browser, mode).catch(() => {
+    await guarded(who, setBrowserMode)(node.browser, mode).catch(() => {
       throw refuse('Operation not permitted')
     })
     return
   }
-  if (node.sf && !node.ro && node.sf !== SF) return setSfMode(node.sf, mode)
+  if (node.sf && !node.ro && node.sf !== SF) return guarded(who, setSfMode)(node.sf, mode)
   if (w.kind === 'local' && abs.startsWith('/tmp/')) {
     const kept = siteLookup(abs)
     if (kept) kept.mode = mode ?? undefined
@@ -388,7 +423,7 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   }
   if (abs === '/etc/fstab') {
     if (!root) throw err(`${who}: permission denied: ${target}`)
-    setFstab(append ? `${getFstab().replace(/\n?$/, '\n')}${content}` : content)
+    guarded(actor, setFstab)(append ? `${getFstab().replace(/\n?$/, '\n')}${content}` : content)
     return
   }
   const w = whereIs(abs)
@@ -398,26 +433,27 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   if (abs === RC_PATH && w.kind === 'local' && !cvMode()) {
     const prev = keptRc()
     const body = content && !content.endsWith('\n') ? `${content}\n` : content
-    setKeptRc(append && prev ? (prev.endsWith('\n') ? prev + body : `${prev}\n${body}`) : body)
+    guarded(actor, setKeptRc)(append && prev ? (prev.endsWith('\n') ? prev + body : `${prev}\n${body}`) : body)
     return
   }
-  if (w.kind === 'local') return writeTmp('/', w.path, content, append, actor, who)
+  if (w.kind === 'local') return guarded(actor, writeTmp)('/', w.path, content, append, actor, who)
   if (w.kind === 'browser') {
     await browserFilesReady()
     const node = lookup(abs)
     if (node?.type === 'dir') throw err(`${who}: is a directory: ${target}`)
-    await browserFolder(parentOf(abs), who, target)
+    await browserFolder(parentOf(abs), who, target, actor)
     const body = content && !content.endsWith('\n') ? `${content}\n` : content
     let text = body
     if (append && node) {
       const prev = node.browser ? await readBrowserText(node.browser) : node.content()
       text = prev && !prev.endsWith('\n') ? `${prev}\n${body}` : prev + body
     }
-    await writeBrowserFile(w.path, text).catch(asCmdError(who))
+    await guarded(actor, writeBrowserFile)(w.path, text).catch(asCmdError(who))
     return
   }
   if (w.ro || w.sf === SF) throw err(`${who}: read-only file system: ${target}`)
-  await ensure(abs, who, target, false)
+  await ensure(abs, who, target, false, actor)
+  checkActor(actor)
   const e = sfEntry(w.sf)
   if (e === undefined) throw err(`${who}: no such file or directory: ${target}`)
   if (e?.dir) throw err(`${who}: is a directory: ${target}`)
@@ -428,10 +464,10 @@ export async function writeFile(cwd: string, target: string, content: string, ap
     text = prev && !prev.endsWith('\n') ? `${prev}\n${body}` : prev + body
   }
   if (!e) {
-    dropSfModes(w.sf)
-    await createFile(w.sf)
+    guarded(actor, dropSfModes)(w.sf)
+    await guarded(actor, createFile)(w.sf)
   }
-  await writeText(w.sf, text)
+  await guarded(actor, writeText)(w.sf, text, { signal: typeof actor === 'boolean' ? undefined : actor.signal, check: () => mayWrite(actor, abs) })
   texts.set(w.sf, { text, mtime: Date.now() })
   await listDir(sfParent(w.sf)!, 0).catch(() => {})
 }
@@ -445,12 +481,12 @@ const asCmdError = (who: string) => (e: Error) => {
  * Makes sure a folder on the browser mount exists in the browser, so a file can go in it: one of
  * the site's own folders there (games/, Pictures/) is made in the browser on first write.
  */
-async function browserFolder(absDir: string, who: string, arg: string) {
+async function browserFolder(absDir: string, who: string, arg: string, actor: Actor = false) {
   const w = whereIs(absDir)
   if (w.kind !== 'browser') throw err(`${who}: cannot create '${arg}': Read-only file system`)
   if (statBrowser(w.path)?.dir) return
   if (lookup(absDir)?.type !== 'dir') throw err(`${who}: cannot create '${arg}': No such file or directory`)
-  await mkdirBrowser(w.path, true).catch(asCmdError(who))
+  await guarded(actor, mkdirBrowser)(w.path, true).catch(asCmdError(who))
 }
 
 /** For a write: a path's Seafile location, or the error to give (`what` is the command and verb). */
@@ -479,19 +515,19 @@ export async function makeDir(cwd: string, arg: string, parents: boolean, actor:
       if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
       await makeDir('/', parentOf(abs), true, actor)
     }
-    await browserFolder(parentOf(abs), 'mkdir', arg)
-    await mkdirBrowser(where.path, true).catch(asCmdError('mkdir'))
+    await browserFolder(parentOf(abs), 'mkdir', arg, actor)
+    await guarded(actor, mkdirBrowser)(where.path, true).catch(asCmdError('mkdir'))
     return
   }
   const sf = writable(abs, arg, 'mkdir: cannot create directory')
   const parent = parentOf(abs)
-  await ensure(parent, 'mkdir', null, false)
+  await ensure(parent, 'mkdir', null, false, actor)
   if (!lookup(parent)) {
     if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
     await makeDir('/', parent, true, actor)
   }
-  dropSfModes(sf)
-  await sfMkdir(sf)
+  guarded(actor, dropSfModes)(sf)
+  await guarded(actor, sfMkdir)(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
@@ -501,19 +537,19 @@ export async function touchFile(cwd: string, arg: string, actor: Actor = false) 
   mayWrite(actor, abs)
   if (lookup(abs)) return
   needParent(abs, `touch: cannot touch '${arg}'`, root)
-  if (abs === RC_PATH && whereIs(abs).kind === 'local' && !cvMode()) return setKeptRc('')
-  if (abs.startsWith('/tmp/')) return writeTmp('/', abs, '', true, actor)
+  if (abs === RC_PATH && whereIs(abs).kind === 'local' && !cvMode()) return guarded(actor, setKeptRc)('')
+  if (abs.startsWith('/tmp/')) return guarded(actor, writeTmp)('/', abs, '', true, actor)
   const where = whereIs(abs)
   if (where.kind === 'browser') {
     if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
-    await browserFolder(parentOf(abs), 'touch', arg)
-    await writeBrowserFile(where.path, '').catch(asCmdError('touch'))
+    await browserFolder(parentOf(abs), 'touch', arg, actor)
+    await guarded(actor, writeBrowserFile)(where.path, '').catch(asCmdError('touch'))
     return
   }
   const sf = writable(abs, arg, 'touch: cannot touch')
   if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
-  dropSfModes(sf)
-  await createFile(sf)
+  guarded(actor, dropSfModes)(sf)
+  await guarded(actor, createFile)(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
@@ -529,13 +565,14 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
     if (opts.force) return
     throw err(`rm: cannot remove '${arg}': No such file or directory`)
   }
+  if (node.type === 'dir' && typeof opts.root !== 'boolean' && opts.root?.policy) throw err('rm: directory removal is unavailable to agents; remove verified individual files')
   needParent(abs, `rm: cannot remove '${arg}'`, isRoot(opts.root ?? false))
   if (node.type === 'dir' && !opts.recursive && !(opts.dir && node.children.size === 0)) throw err(`rm: cannot remove '${arg}': ${opts.dir ? 'Directory not empty' : 'Is a directory'}`)
   if (abs.startsWith('/tmp/')) {
     ;(siteLookup(parentOf(abs)) as DirNode).children.delete(baseOf(abs))
     return
   }
-  if (abs === RC_PATH && node.type === 'file' && !node.sf && !node.browser) return setKeptRc(null)
+  if (abs === RC_PATH && node.type === 'file' && !node.sf && !node.browser) return guarded(opts.root ?? false, setKeptRc)(null)
   const w = whereIs(abs)
   if (w.kind === 'sf' && parseSf(w.sf)?.p === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
   if (w.kind === 'browser') {
@@ -543,7 +580,7 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
     if (w.path === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
     if (!node.browser) throw err(`rm: cannot remove '${arg}': Read-only file system`)
     if (opts.ask && !opts.force && node.type === 'dir' && !(await opts.ask(`rm: remove '${arg}' and everything in it for good? Files in this browser have no trash [y/N]`))) return
-    await removeBrowser(node.browser)
+    await guarded(opts.root ?? false, removeBrowser)(node.browser)
     return
   }
   const sf = writable(abs, arg, 'rm: cannot remove')
@@ -554,9 +591,9 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
       if (!(await opts.ask(`rm: ${name} keeps no history: remove '${arg}' for good? [y/N]`))) return
     }
   }
-  await deleteItems([sf])
+  await guarded(opts.root ?? false, deleteItems)([sf])
   texts.delete(sf)
-  dropSfModes(sf)
+  guarded(opts.root ?? false, dropSfModes)(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
@@ -571,9 +608,15 @@ export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string,
   if (op === 'move') mayWrite(actor, src)
   else if (typeof actor !== 'boolean' && actor.policy?.read(src)) throw err(actor.policy.read(src)!)
   const node = lookup(src)
+  if (node?.type === 'dir' && typeof actor !== 'boolean' && actor.policy) throw err(`${cmd}: directory transfers are unavailable to agents; copy verified individual files`)
   let dest = resolvePath(cwd, destArg)
   if (node && lookup(dest)?.type === 'dir') dest = join(dest, baseOf(src))
   mayWrite(actor, dest)
+  if (typeof actor !== 'boolean' && actor.policy && node?.sf && whereIs(dest).kind === 'sf' && !(op === 'move' && parentOf(src) === parentOf(dest))) {
+    const staged = join(parentOf(dest), baseOf(src))
+    mayWrite(actor, staged)
+    if (staged !== dest && lookup(staged)) throw err(`${cmd}: intermediate destination already exists; use an unused name`)
+  }
   const kept: [string, number][] = []
   if (node && dest !== src) {
     const kind = node.type === 'dir' ? 'directory' : 'regular file'
@@ -599,25 +642,25 @@ export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string,
     // What is replaced takes the new file's mode: the defaults, unless the source has its own.
     for (const to of overwritten) {
       const at = whereIs(to)
-      if (at.kind === 'sf') dropSfModes(at.sf)
-      else if (lookup(to)?.mode !== undefined) await setMode(to, null, true).catch(() => {})
+      if (at.kind === 'sf') guarded(actor, dropSfModes)(at.sf)
+      else if (lookup(to)?.mode !== undefined) await setMode(to, null, actor).catch(() => {})
     }
   }
-  await move(op, cwd, srcArg, destArg, recursive, root)
+  await move(op, cwd, srcArg, destArg, recursive, actor)
   if (!node || dest === src) return
   const fromSf = sfOf(src)
   const toSf = whereIs(dest)
-  if (fromSf && toSf.kind === 'sf') return carrySfModes(fromSf.sf, toSf.sf, op === 'copy')
+  if (fromSf && toSf.kind === 'sf') return guarded(actor, carrySfModes)(fromSf.sf, toSf.sf, op === 'copy')
   for (const [rel, mode] of kept) {
     const to = dest + rel
     if (lookup(to)?.mode === mode) continue
     const at = whereIs(to)
-    if (at.kind === 'sf') setSfMode(at.sf, mode)
-    else await setMode(to, mode, true).catch(() => {})
+    if (at.kind === 'sf') guarded(actor, setSfMode)(at.sf, mode)
+    else await setMode(to, mode, actor).catch(() => {})
   }
 }
 
-async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean, root: boolean) {
+async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean, actor: Actor) {
   const cmd = op === 'move' ? 'mv' : 'cp'
   const src = resolvePath(cwd, srcArg)
   const node = lookup(src)
@@ -638,12 +681,13 @@ async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: s
     if (toSf.ro) throw err(`${cmd}: cannot create ${node.type === 'dir' ? 'directory' : 'regular file'} '${destArg}': Read-only file system`)
     const existing = lookup(dest)
     if (existing?.type === 'dir') throw err(`${cmd}: cannot overwrite directory '${destArg}' with non-directory`)
-    if (existing?.sf) await deleteItems([existing.sf])
+    if (existing?.sf) await guarded(actor, deleteItems)([existing.sf])
     const sameFolder = parentOf(src) === into
-    if (op === 'move' && sameFolder) await renameItem(fromSf.sf, name, node.type === 'dir')
+    if (op === 'move' && sameFolder) await guarded(actor, renameItem)(fromSf.sf, name, node.type === 'dir')
     else {
-      await transferItems(op, [fromSf.sf], toSf.sf)
-      if (baseOf(src) !== name) await renameItem(`${toSf.sf}/${baseOf(src)}`, name, node.type === 'dir')
+      mayWrite(actor, join(into, baseOf(src)))
+      await guarded(actor, transferItems)(op, [fromSf.sf], toSf.sf)
+      if (baseOf(src) !== name) await guarded(actor, renameItem)(`${toSf.sf}/${baseOf(src)}`, name, node.type === 'dir')
     }
     for (const sf of [sfParent(fromSf.sf), toSf.sf]) if (sf) await listDir(sf, 0).catch(() => {})
     return
@@ -653,17 +697,17 @@ async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: s
   if (node.browser && toBrowser) {
     const existing = lookup(dest)
     if (existing?.type === 'dir') throw err(`${cmd}: cannot overwrite directory '${destArg}' with non-directory`)
-    await browserFolder(into, cmd, destArg)
-    if (existing?.browser) await removeBrowser(existing.browser)
-    await transferBrowser(op, node.browser, (whereIs(dest) as { path: string }).path).catch(asCmdError(cmd))
+    await browserFolder(into, cmd, destArg, actor)
+    if (existing?.browser) await guarded(actor, removeBrowser)(existing.browser)
+    await guarded(actor, transferBrowser)(op, node.browser, (whereIs(dest) as { path: string }).path).catch(asCmdError(cmd))
     return
   }
   // Across Seafile, the browser and /tmp: the bytes are carried over, folders and all.
   const movable = !!fromSf || !!node.browser || src.startsWith('/tmp/')
   if (op === 'move' && (!movable || fromSf?.ro)) throw err(`mv: cannot move '${srcArg}': Read-only file system`)
   if (node.type === 'dir' && fromSf) await ensureTree(fromSf.sf, cmd, false)
-  await copyAcross(src, dest, cmd, destArg, root)
-  if (op === 'move') await removePath('/', src, { recursive: true, force: true, dir: false, root: true })
+  await copyAcross(src, dest, cmd, destArg, actor)
+  if (op === 'move') await removePath('/', src, { recursive: true, force: true, dir: false, root: actor })
 }
 
 /** A file's bytes, wherever it is. */
@@ -674,26 +718,27 @@ async function bytesOf(node: FileNode): Promise<Blob> {
 }
 
 /** Copies a file or folder to a new place on another filesystem (the browser, Seafile, /tmp). */
-async function copyAcross(src: string, dest: string, cmd: string, destArg: string, root: boolean) {
+async function copyAcross(src: string, dest: string, cmd: string, destArg: string, actor: Actor) {
+  mayWrite(actor, dest)
   const node = lookup(src)
   if (!node) return
   const into = parentOf(dest)
   const w = whereIs(into)
   const cannot = (why: string) => err(`${cmd}: cannot create ${node.type === 'dir' ? 'directory' : 'regular file'} '${destArg}': ${why}`)
   if (node.type === 'dir') {
-    if (lookup(dest)?.type !== 'dir') await makeDir('/', dest, true, root)
-    for (const name of node.children.keys()) await copyAcross(join(src, name), join(dest, name), cmd, destArg, root)
+    if (lookup(dest)?.type !== 'dir') await makeDir('/', dest, true, actor)
+    for (const name of node.children.keys()) await copyAcross(join(src, name), join(dest, name), cmd, destArg, actor)
     return
   }
   if (lookup(dest)?.type === 'dir') throw err(`${cmd}: cannot overwrite directory '${destArg}' with non-directory`)
   if (w.kind === 'browser') {
-    await browserFolder(into, cmd, destArg)
-    await writeBrowserFile((whereIs(dest) as { path: string }).path, await bytesOf(node)).catch(asCmdError(cmd))
+    await browserFolder(into, cmd, destArg, actor)
+    await guarded(actor, writeBrowserFile)((whereIs(dest) as { path: string }).path, await bytesOf(node)).catch(asCmdError(cmd))
   } else if (w.kind === 'sf') {
     if (w.ro || w.sf === SF) throw cannot('Read-only file system')
-    await uploadBlob(w.sf, baseOf(dest), await bytesOf(node))
+    await guarded(actor, uploadBlob)(w.sf, baseOf(dest), await bytesOf(node), { signal: typeof actor === 'boolean' ? undefined : actor.signal, check: () => mayWrite(actor, dest) })
     await listDir(w.sf, 0).catch(() => {})
   } else if (w.kind === 'local' && dest.startsWith('/tmp/')) {
-    writeTmp('/', dest, await (await bytesOf(node)).text(), false, root, cmd)
+    guarded(actor, writeTmp)('/', dest, await (await bytesOf(node)).text(), false, actor, cmd)
   } else throw cannot(w.kind === 'missing' ? 'Transport endpoint is not connected' : 'Read-only file system')
 }

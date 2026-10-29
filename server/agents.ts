@@ -2429,6 +2429,7 @@ export function decideTerminal(thread: string, permission: Permission, line: str
   if (permission === 'bypass') return { decision: steering ? 'ask' : 'run', access: steering ? 'approved' : 'bypass' }
   const names = commandNames(line)
   if (permission === 'acceptEdits' && !steering && !names.some((n) => NEEDS_CARD.has(n))) return { decision: 'run', access: 'edits' }
+  if (steering) return { decision: 'ask', access: 'approved' }
   const ok = allowedCommands.get(thread)?.names
   if (writesFile(line) || names.some((n) => NEVER_ALWAYS.has(n))) return { decision: 'ask', access: 'approved' }
   return { decision: names.length && ok && names.every((n) => ok.has(n)) ? 'run' : 'ask', access: 'approved' }
@@ -4121,6 +4122,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             try { calendar = await prepareRenderTool(user, c.arguments ?? {}, ctl.signal) }
             catch (e) { if (ctl.signal.aborted) throw e; return JSON.stringify({ error: (e as Error).message }) }
           }
+          let explicitlyApproved = false
           if (decision === 'ask' || unknownPage) {
             const v = await waiting(index, askOwner(row.id, assistant, index, c, ctl.signal, send, calendar?.summary, checkSaid))
             if (c.name === 'exit_plan_mode') {
@@ -4133,6 +4135,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             }
             if (!v.allow)
               return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : v.feedback ? `The user declined this and said: ${v.feedback}` : MAIL_TOOLS.has(c.name) ? 'The user did not allow this mail call, so nothing was read or changed. Ask what they want instead.' : 'The user declined this change. Ask what they want instead, or try another way.' })
+            explicitlyApproved = true
             // Mail reads for a while (approve set it, from this read's card): every window shows the chip.
             if ((v.always === 'mail_reads' || v.always === 'mail_reads_always') && MAIL_READS.has(c.name)) send({ type: 'thread', thread: current() })
             if (v.always === 'edits' && FILE_WRITES.has(c.name)) {
@@ -4155,7 +4158,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           }
           if (c.name === 'terminal' || c.name === 'terminal_capabilities') {
             const line = argString(c.arguments ?? {}, 'command')
-            const grant = terminalGrant(current().permission, line, c.name === 'terminal' ? decideTerminal(row.id, current().permission, line).access : 'readonly')
+            const grant = terminalGrant(current().permission, line, c.name === 'terminal' ? decideTerminal(row.id, current().permission, line).access : 'readonly', explicitlyApproved)
             const r = await askClient(row.id, assistant, index, c, ctl.signal, send, grant)
             const none = 'No window ran this: the terminal tool works while the Agents app is open on this thread, or the agents command runs in the MvL OS terminal.'
             if (!r) return JSON.stringify({ error: none })

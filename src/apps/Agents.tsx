@@ -1,3 +1,4 @@
+import { useClientCalls } from '../terminal/agents/useClientCalls'
 import { toUi } from '../os/uiScale'
 import { Icon, NEW_TITLE, regenerateHint, RenameBox, Scramble, titlePending } from './agentsSidebar/bits'
 import { AgentsSidebar, Rail, reportBulk, runBulk, sideKeys, useThreadSelection, type Bulk, type SideCtx } from './agentsSidebar'
@@ -1196,30 +1197,28 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // This window runs the terminal tool for the threads it follows or sends to: no terminal window is needed.
   // The thread as the last event said it (the work folder is read from it) and the calls under way, to stop them.
   const execThread = useRef<Thread | null>(null)
-  const execCalls = useRef(new Map<string, AbortController>())
-  useEffect(() => () => execCalls.current.forEach((c) => c.abort()), [])
+  const execCalls = useClientCalls(id, streamed.current)
   const runClientCall = async (e: Extract<TurnEvent, { type: 'client' }>) => {
-    const id = execThread.current?.id
-    if (!id || execCalls.current.has(e.callId) || !(await claimClientCall(id, e.callId))) return
-    const ctl = new AbortController()
-    execCalls.current.set(e.callId, ctl)
-    try {
-      const { runAgentCall } = await import('../terminal/agents/exec')
-      const { HOME } = await import('../terminal/vfs')
-      const a = await runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir: execThread.current?.workdir ?? null, fallbackDir: HOME, grant: e.grant, signal: ctl.signal })
-      await sendClientResult(id, e.callId, a.output, a.status, { result: a.result, capabilities: a.capabilities })
-    } catch (err) {
-      await sendClientResult(id, e.callId, `msh: ${(err as Error).message}`, 1).catch(() => {})
-    } finally {
-      execCalls.current.delete(e.callId)
-    }
+    const snapshot = execThread.current
+    if (!snapshot) return
+    const { id, workdir } = snapshot
+    const calls = execCalls
+    calls.select(id)
+    await calls.run(e.callId, () => claimClientCall(id, e.callId), async (signal) => {
+      try {
+        const { runAgentCall } = await import('../terminal/agents/exec')
+        const { HOME } = await import('../terminal/vfs')
+        signal.throwIfAborted()
+        return await runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir, fallbackDir: HOME, grant: e.grant, signal })
+      } catch (err) { return { output: `msh: ${(err as Error).message}`, status: 1 } }
+    }, (a) => sendClientResult(id, e.callId, a.output, a.status, { result: 'result' in a ? a.result : undefined, capabilities: 'capabilities' in a ? a.capabilities : undefined })).catch(() => {})
   }
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
     if (e.type === 'snapshot' || e.type === 'thread') execThread.current = e.thread
     if (e.type === 'snapshot') for (const p of e.pending) if (p.kind === 'client' && p.call) void runClientCall({ type: 'client', callId: p.callId, messageId: p.messageId, index: p.index, call: p.call, grant: p.grant })
     if (e.type === 'client') void runClientCall(e)
-    if (e.type === 'clientDone') execCalls.current.get(e.callId)?.abort()
+    if (e.type === 'clientDone') execCalls.done(e.callId)
     if (e.type === 'snapshot') {
       setThread(e.thread)
       setMessages(e.messages)
@@ -1712,6 +1711,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }
 
   const stop = () => {
+    execCalls.stop()
     abort.current?.abort()
     if (thread) stopThread(thread.id).catch(() => {})
   }
