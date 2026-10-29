@@ -80,7 +80,7 @@ class Run {
     return value
   }
 }
-type Token = { kind: string; text: string }
+type Token = { kind: string; text: string; start: number }
 // Adapted from jq.ts's token vocabulary; interpolation and arbitrary builtins are excluded.
 async function tokenize(src: string, run: Run): Promise<Token[]> {
   if (src.length > SAFE_JQ_LIMITS.filter) run.fail('memory')
@@ -96,14 +96,14 @@ async function tokenize(src: string, run: Run): Promise<Token[]> {
       if (j >= src.length) throw new SafeJqError('jq-safe: unterminated string')
       const text = src.slice(i, j + 1)
       try { JSON.parse(text) } catch { throw new SafeJqError('jq-safe: invalid string literal') }
-      out.push({ kind: 'string', text }); i = j + 1
+      out.push({ kind: 'string', text, start: i }); i = j + 1
     } else {
       const m = /^(?:-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)/.exec(src.slice(i))
-      if (m) { out.push({ kind: m[0][0] === '$' ? 'var' : /^-?\d/.test(m[0]) ? 'number' : 'id', text: m[0] }); i += m[0].length }
+      if (m) { out.push({ kind: m[0][0] === '$' ? 'var' : /^-?\d/.test(m[0]) ? 'number' : 'id', text: m[0], start: i }); i += m[0].length }
       else {
         const op = ['==', '!=', '<=', '>='].includes(src.slice(i, i + 2)) ? src.slice(i, i + 2) : c
         if (!['.', '[', ']', '{', '}', '(', ')', ':', ',', '|', '?', '==', '!=', '<=', '>=', '<', '>'].includes(op)) throw new SafeJqError(`jq-safe: unsupported token ${c}`)
-        out.push({ kind: 'op', text: op }); i += op.length
+        out.push({ kind: 'op', text: op, start: i }); i += op.length
       }
     }
   }
@@ -143,7 +143,8 @@ class Parser {
     } else if (t.kind === 'var') n = ast('var', [], undefined, t.text.slice(1))
     else if (t.text === '.') {
       n = ast('identity')
-      if (this.tokens[this.p]?.kind === 'id' || this.tokens[this.p]?.kind === 'string') n = this.field(n)
+      const next = this.tokens[this.p]
+      if ((next?.kind === 'id' && (next.start === t.start + 1 || !['and', 'or'].includes(next.text))) || next?.kind === 'string') n = this.field(n)
     } else if (['true', 'false', 'null'].includes(t.text)) n = ast('literal', [], JSON.parse(t.text))
     else if (t.text === '(') { n = this.expr(); this.eat(')') }
     else if (t.text === '[') { n = ast('array', this.peek(']') ? [] : [this.expr()]); this.eat(']') }
@@ -245,9 +246,13 @@ async function evaluate(n: Ast, input: Json, vars: Record<string, Json>, run: Ru
     case 'length': if (input === null) await add(0); else if (typeof input === 'string' || Array.isArray(input)) await add(input.length); else if (typeof input === 'object') await add(Object.keys(input).length); else throw new TypeErrorJq('jq-safe: length requires string, array, object or null'); break
     case 'not': await add(!truth(input)); break
     default: {
-      const a = await one(n.children[0]), b = await one(n.children[1])
-      if (n.op === 'and' || n.op === 'or') await add(n.op === 'and' ? truth(a) && truth(b) : truth(a) || truth(b))
-      else {
+      const a = await one(n.children[0])
+      if (n.op === 'and' || n.op === 'or') {
+        if (n.op === 'and' && !truth(a)) await add(false)
+        else if (n.op === 'or' && truth(a)) await add(true)
+        else await add(truth(await one(n.children[1])))
+      } else {
+        const b = await one(n.children[1])
         // Scalar comparisons only: no recursive equality, coercion or user regex.
         if ((a !== null && typeof a === 'object') || (b !== null && typeof b === 'object')) throw new TypeErrorJq('jq-safe: comparisons require scalars')
         if (n.op === '==' || n.op === '!=') await add(n.op === '==' ? a === b : a !== b)
@@ -262,8 +267,74 @@ async function evaluate(n: Ast, input: Json, vars: Record<string, Json>, run: Ru
   return out
 }
 
+export type SafeJsonContext = { signal: AbortSignal; budget?: SafeJqBudget; policy?: unknown }
+
+/** Serialize ordinary, already-parsed JSON data without calling user getters or toJSON.
+ * Proxies/executable host objects are not a supported input boundary; callers pass parsed data.
+ * Snapshot before serialization: data may change while validation yields to the event loop.
+ */
+export async function boundedJson(value: unknown, context: SafeJsonContext): Promise<string> {
+  if (context.policy && !context.budget) throw new SafeJqError('jq-safe: agent budget required')
+  const run = new Run(context.signal, context.budget)
+  const active = new WeakSet<object>()
+  let nodes = 0, held = 0
+  const invalid = (): never => { throw new SafeJqError('jq-safe: expected JSON data (no cycles, accessors or non-JSON values)') }
+  const copy = async (v: unknown, depth: number): Promise<Json> => {
+    await run.tick()
+    if (++nodes > SAFE_JQ_LIMITS.nodes || depth > SAFE_JQ_LIMITS.depth) run.fail('memory')
+    const cost = (typeof v === 'string' ? 6 * v.length + 2 : 24) + 4 * depth + 4
+    run.charge(cost, held); held += cost
+    if (v === null || typeof v === 'string' || typeof v === 'boolean') return v
+    if (typeof v === 'number') { if (!Number.isFinite(v)) invalid(); return v }
+    if (typeof v !== 'object') return invalid()
+    if (active.has(v)) return invalid()
+    const array = Array.isArray(v)
+    const proto = Object.getPrototypeOf(v)
+    if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return invalid()
+    if (Object.getOwnPropertySymbols(v).length) return invalid()
+    active.add(v)
+    const result: Json[] | Record<string, Json> = array ? [] : Object.create(null)
+    if (array) {
+      const length = Object.getOwnPropertyDescriptor(v, 'length')!.value as number
+      if (length > SAFE_JQ_LIMITS.nodes) run.fail('memory')
+      // Shadow an inherited toJSON without introducing an enumerable output key.
+      Object.defineProperty(result, 'toJSON', { value: undefined })
+      for (let i = 0; i < length; i++) {
+        const desc = Object.getOwnPropertyDescriptor(v, String(i))
+        if (!desc || !('value' in desc) || !desc.enumerable) return invalid()
+        ;(result as Json[]).push(await copy(desc.value, depth + 1))
+      }
+    }
+    // Incremental enumeration avoids building a key array for a huge response object.
+    for (const key in v) {
+      await run.tick()
+      if (!Object.hasOwn(v, key)) continue
+      if (array) {
+        if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= (result as Json[]).length) return invalid()
+        continue
+      }
+      const desc = Object.getOwnPropertyDescriptor(v, key)
+      if (!desc || !('value' in desc) || !desc.enumerable) return invalid()
+      const keyCost = 6 * key.length + 3
+      run.charge(keyCost, held); held += keyCost
+      ;(result as Record<string, Json>)[key] = await copy(desc.value, depth + 1)
+    }
+    active.delete(v)
+    return result
+  }
+  const snapshot = await copy(value, 0)
+  // Reuse evaluator accounting and its depth/size walk BEFORE native serialization.
+  await run.retain(snapshot)
+  const output = JSON.stringify(snapshot).replace(/"(?:[^"\\]|\\.)*"/g,
+    (s) => s.replace(/\{/g, '\\u007b').replace(/\}/g, '\\u007d'))
+  if (output.length > SAFE_JQ_LIMITS.output) run.fail('output')
+  run.charge(output.length)
+  await run.tick()
+  return output
+}
+
 /** stdin-only adapter: structurally accepts Ctx.signal / Ctx.budget from f958cc5. */
-export async function safeJq(argv: string[], input: string, context: { signal: AbortSignal; budget?: SafeJqBudget; policy?: unknown }): Promise<string> {
+export async function safeJq(argv: string[], input: string, context: SafeJsonContext): Promise<string> {
   if (context.policy && !context.budget) throw new SafeJqError('jq-safe: agent budget required')
   const run = new Run(context.signal, context.budget)
   await run.tick()

@@ -510,7 +510,8 @@ indices included), iteration, final optional access `?`, pipes, array collection
 objects (literal, shorthand, variable and parenthesized string keys), variables,
 JSON literals, `map`, `select`, scalar comparisons, `and`/`or`/`not`, `length`,
 `fromjson`, and `tojson`. Constructor keys/values and comparison operands must each
-produce exactly one value. Ordering requires two strings or two numbers. No comma
+produce exactly one value. Boolean `and`/`or` short-circuit their right operand.
+Ordering requires two strings or two numbers. No comma
 streams, slices, variable binding with `as`, interpolation, arithmetic, recursion,
 ranges, user-defined functions, regex, or additional builtins are accepted. No
 unsupported syntax can reach rich jq. Prototype-named keys remain ordinary data.
@@ -527,6 +528,15 @@ elapsed time, and shared budget. Native parsing/serialization operates only on
 size/depth-checked data. Regex evaluation is absent. Failure returns no partial
 result. `pnpm check:jq-safe` tests malicious filters, amplification, malformed/deep
 JSON, inherited keys, budget exhaustion, and timer-driven cancellation during work.
+
+For already-parsed responses, `boundedJson(value, { signal, budget, policy })`
+exports the same accounting and cancellation boundary. It validates and snapshots
+ordinary JSON data before `JSON.stringify`, preserves literal markup with JSON
+escapes, and bounds the final output. It rejects cycles, non-finite numbers,
+undefined/functions/symbols/bigints, sparse arrays, custom object prototypes and
+enumerable accessors; getters and `toJSON` hooks are never called. Shared object
+references are allowed and counted per occurrence. Pass parsed data, not proxies
+or executable host objects. Policy contexts require the shared budget.
 
 **Integration with security commit `f958cc5`:** this independent change does not
 modify its policy or enable commands there. Keep `EFFECTS.jq = 'blocked'`. After

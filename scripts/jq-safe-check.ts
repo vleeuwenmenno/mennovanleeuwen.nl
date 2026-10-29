@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { safeJq, SAFE_JQ_LIMITS, type SafeJqBudget } from '../src/terminal/jq-safe.ts'
+import { safeJq, boundedJson, SAFE_JQ_LIMITS, type SafeJqBudget } from '../src/terminal/jq-safe.ts'
 import { stripMarkup } from '../src/terminal/markup.ts'
 const signal = new AbortController().signal
 const run = (args: string[], input = '') => safeJq(args, input, { signal })
@@ -78,3 +78,51 @@ assert.ok(abortScheduled && timerFired)
 assert.equal(stopped, 'cancelled')
 assert.ok(ticks - scheduledAt <= 64, 'cancellation stops evaluation by the next yield')
 console.log(`jq-safe: functional cases, ${passed} adversarial cases, shared budget and in-computation timer cancellation passed`)
+
+// Boolean operands are lazy; whitespace after identity must not become a field name.
+assert.equal(await value('false and fromjson', 3), false)
+assert.equal(await value('true or fromjson', 3), true)
+await rejects(['true and fromjson'], '3', /requires a string/)
+await rejects(['false or fromjson'], '3', /requires a string/)
+assert.equal(await value('. and true', false), false)
+assert.equal(await value('. or false', true), true)
+assert.equal(await value('select(. and true)', 3), 3)
+assert.equal(await value('.and', { and: 7 }), 7)
+assert.equal(await value('.or', { or: 8 }), 8)
+assert.equal(await value('.["and"]', { and: 9 }), 9)
+const jsonContext = { signal }
+const data = JSON.parse('{"__proto__":{"safe":true},"constructor":"{c:red}literal{/}","values":[null,false,3]}')
+assert.deepEqual(JSON.parse(stripMarkup(await boundedJson(data, jsonContext))), data)
+const shared = { v: 1 }
+assert.deepEqual(JSON.parse(await boundedJson([shared, shared], jsonContext)), [{ v: 1 }, { v: 1 }])
+const cycle: unknown[] = []; cycle.push(cycle)
+let getterRan = false, hookRan = false
+const accessor = Object.defineProperty({}, 'value', { enumerable: true, get() { getterRan = true; return 1 } })
+for (const bad of [undefined, NaN, Infinity, 1n, Symbol('x'), () => 1, new Date(), new Map(), cycle, accessor, { toJSON() { hookRan = true; return 1 } }, [undefined], new Array(3), { x: undefined }]) {
+  await assert.rejects(boundedJson(bad, jsonContext), /expected JSON data/)
+}
+assert.equal(getterRan, false); assert.equal(hookRan, false)
+await assert.rejects(boundedJson('x'.repeat(65537), jsonContext), /memory limit/)
+await assert.rejects(boundedJson(Array(5000).fill(0), jsonContext), /memory limit/)
+let deep: unknown = null
+for (let i = 0; i < 40; i++) deep = { deep }
+await assert.rejects(boundedJson(deep, jsonContext), /memory limit/)
+await assert.rejects(boundedJson({}, { signal, policy: {} }), /budget required/)
+await assert.rejects(boundedJson({}, { signal, budget: denied }), /shared budget output/)
+await assert.rejects(boundedJson({}, { signal: aborted.signal }), /cancelled/)
+const jsonAbort = new AbortController()
+let jsonTicks = 0
+const jsonBudget: SafeJqBudget = {
+  step() { if (++jsonTicks === 100) setTimeout(() => jsonAbort.abort(), 0); return null },
+  write() { return null }, stop() {},
+}
+await assert.rejects(boundedJson(Array(1000).fill(1), { signal: jsonAbort.signal, budget: jsonBudget }), /cancelled/)
+assert.ok(jsonTicks <= 128, 'boundedJson yields during validation')
+// Oversized values must never reach native stringify, even when no budget was supplied.
+const stringify = JSON.stringify
+let serialized = false
+JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => { serialized = true; return stringify(...args) }) as typeof JSON.stringify
+try { await assert.rejects(boundedJson('x'.repeat(65537), jsonContext), /memory limit/) }
+finally { JSON.stringify = stringify }
+assert.equal(serialized, false)
+console.log('jq-safe: lazy booleans, identity parsing, boundedJson validation/escaping/budget/cancellation passed')
