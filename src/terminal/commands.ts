@@ -1,3 +1,6 @@
+import { reserve, singleInput, textWork } from './bounds'
+import { downloadJson, checkDownload } from './download'
+import { safeJq, boundedJson } from './jq-safe'
 import { agentGrepRefusal, parseGrepArgs } from './grepArgs'
 import { contributions, headlines, profile, projects } from '../data/profile'
 import { countFor, levels, loadContributions } from '../data/contributions'
@@ -216,6 +219,8 @@ function flags(args: string[]) {
 
 /** Input text for filters: stdin from a pipe, or the named files. */
 function input(ctx: Ctx, files: string[], cmd: string): string {
+  singleInput(ctx, files.length)
+  if (!files.length && ctx.stdin !== null) textWork(ctx, ctx.stdin.length)
   if (files.length) return files.map((f) => readFile(ctx, f, cmd)).join('\n')
   if (ctx.stdin !== null) return ctx.stdin
   throw new CmdError(`${cmd}: missing file operand`)
@@ -331,8 +336,8 @@ const FORTUNES = [
 
 function cowsay(text: string) {
   const t = text || 'moo'
-  const width = Math.min(40, Math.max(...t.split('\n').map((l) => l.length)))
-  const wrapped = t.match(new RegExp(`.{1,${width}}(\\s|$)`, 'g'))?.map((s) => s.trim()) ?? [t]
+  const width = 40
+  const wrapped = t.match(new RegExp(`.{1,${width}}(?:\\s|$)|.{1,${width}}`, 'g'))?.map((s) => s.trim()) ?? [t]
   const w = Math.max(...wrapped.map((l) => l.length))
   const body = wrapped.length === 1 ? [`< ${wrapped[0]} >`] : wrapped.map((l, i) => `${i === 0 ? '/' : i === wrapped.length - 1 ? '\\' : '|'} ${l.padEnd(w)} ${i === 0 ? '\\' : i === wrapped.length - 1 ? '/' : '|'}`)
   return [` ${'_'.repeat(w + 2)}`, ...body, ` ${'-'.repeat(w + 2)}`, '        \\   ^__^', '         \\  (oo)\\_______', '            (__)\\       )\\/\\', '                ||----w |', '                ||     ||'].join('\n')
@@ -462,7 +467,7 @@ export const commands: Record<string, Command> = {
       const render = (rows: { node: Node; abs: string }[]) => {
         if (!f.has('l')) return ctx.tty ? lsColumns(rows.map((r) => r.node), ctx.size.cols) : rows.map((r) => r.node.name).join('\n')
         // Devices show `major, minor` where a file shows its size.
-        const sizes = rows.map(({ node: k }) => (k.type === 'file' && k.dev ? `${k.dev.major}, ${k.dev.minor}` : String(k.type === 'file' ? (k.size ?? k.content().length) : 4096)))
+        const sizes = rows.map(({ node: k }) => (k.type === 'file' && k.dev ? `${k.dev.major}, ${k.dev.minor}` : String(k.type === 'file' ? (k.size ?? (ctx.policy ? '?' : k.content().length)) : 4096)))
         const sizeWidth = rows.some(({ node: k }) => k.type === 'file' && k.dev) ? Math.max(6, ...sizes.map((x) => x.length)) : 6
         return rows
           .map(({ node: k, abs: kAbs }, i) => {
@@ -472,13 +477,18 @@ export const commands: Record<string, Command> = {
           })
           .join('\n')
       }
-      const inside = (node: DirNode, abs: string) =>
-        render(
-          [...node.children.values()]
+      const inside = (node: DirNode, abs: string) => {
+        const children = node.children
+        reserve(ctx, children.size * 128)
+        let held = 0
+        for (const n of children.values()) { const cost = (n.name.length + abs.length + 1) * 16; reserve(ctx, cost, held); held += cost }
+        return render(
+          [...children.values()]
             .filter((n) => f.has('a') || !n.name.startsWith('.'))
             .sort((a, b) => a.name.localeCompare(b.name, 'en'))
             .map((n) => ({ node: n, abs: `${abs === '/' ? '' : abs}/${n.name}` })),
         )
+      }
       const missing: string[] = []
       const targets = (f.rest.length ? f.rest : ['.']).flatMap((t) => {
         const abs = resolvePath(ctx.cwd, t)
@@ -523,6 +533,8 @@ export const commands: Record<string, Command> = {
     usage: 'cat [file | -]...',
     run: (ctx) => {
       // The files one after the other, byte for byte: no newline between them or after the last.
+      singleInput(ctx, ctx.args.length)
+      if (ctx.stdin !== null && ctx.args.includes('-')) textWork(ctx, ctx.stdin.length)
       const parts = ctx.args.length ? ctx.args.map((f) => (f === '-' && ctx.stdin !== null ? ctx.stdin : readFile(ctx, f, 'cat'))) : [input(ctx, [], 'cat')]
       const text = parts.join('')
       if (ctx.raw) return void ctx.raw(text)
@@ -781,7 +793,11 @@ export const commands: Record<string, Command> = {
       )
     },
   },
-  env: { desc: 'environment variables', run: ({ env }) => Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') },
+  env: { desc: 'environment variables', run: (ctx) => {
+    let held = 0
+    for (const k in ctx.env) { const n = k.length + ctx.env[k].length + 2; reserve(ctx, n * 4, held); held += n * 4 }
+    return Object.entries(ctx.env).map(([k, v]) => `${k}=${v}`).join('\n')
+  } },
   export: {
     desc: 'set an environment variable',
     usage: 'export NAME=value',
@@ -1121,7 +1137,7 @@ export const commands: Record<string, Command> = {
       const short = ctx.args.includes('+short')
       const { name, type, server } = dnsArgs(ctx.args.filter((a) => a !== '+short'), 'dig')
       const prefer = server ? resolverFor(server) : null
-      const r = await resolve(name, type, ctx.signal, prefer)
+      const r = await resolve(name, type, ctx.signal, prefer, ctx)
       if (short) return r.answers.filter((a) => a.type === type).map((a) => a.data).join('\n')
       return [
         c('muted', `; <<>> DiG over HTTPS <<>> ${server ? `@${server} ` : ''}${name} ${type}`),
@@ -1140,7 +1156,7 @@ export const commands: Record<string, Command> = {
       const { name, type: explicit, typeGiven, server } = dnsArgs(ctx.args, 'host')
       const types = typeGiven ? [explicit] : ['A', 'AAAA', 'MX']
       const prefer = server ? resolverFor(server) : null
-      const results = await Promise.all(types.map((t) => resolve(name, t, ctx.signal, prefer)))
+      const results = await Promise.all(types.map((t) => resolve(name, t, ctx.signal, prefer, ctx)))
       if (results[0].status === 'NXDOMAIN') throw new CmdError(`Host ${name} not found: 3(NXDOMAIN)`)
       const verb: Record<string, string> = { A: 'has address', AAAA: 'has IPv6 address', MX: 'mail is handled by', CNAME: 'is an alias for', NS: 'name server', TXT: 'descriptive text' }
       const out = results.flatMap((r, i) => r.answers.filter((a) => a.type === types[i] || a.type === 'CNAME').map((a) => `${a.name} ${verb[a.type] ?? `has ${a.type} record`} ${a.data}`))
@@ -1152,7 +1168,7 @@ export const commands: Record<string, Command> = {
     usage: 'nslookup <name>',
     run: async (ctx) => {
       const { name } = dnsArgs(ctx.args, 'nslookup')
-      const [a, aaaa] = await Promise.all([resolve(name, 'A', ctx.signal), resolve(name, 'AAAA', ctx.signal)])
+      const [a, aaaa] = await Promise.all([resolve(name, 'A', ctx.signal, null, ctx), resolve(name, 'AAAA', ctx.signal, null, ctx)])
       if (a.status === 'NXDOMAIN') throw new CmdError(`** server can't find ${name}: NXDOMAIN`)
       const addrs = [...a.answers, ...aaaa.answers].filter((x) => x.type === 'A' || x.type === 'AAAA')
       return [`Server:\t\t${a.resolver}`, '', 'Non-authoritative answer:', ...addrs.flatMap((x) => [`Name:\t${x.name}`, `Address: ${x.data}`])].join('\n')
@@ -1293,9 +1309,15 @@ export const commands: Record<string, Command> = {
       const { args, stdin } = ctx
       const text = (args.length ? args.join(' ') : (stdin ?? '')).trim()
       if (!text) throw new CmdError(`usage: ${commands.calc.usage}`)
-      let res = smartCalc(text)
+      let res = ctx.budget || ctx.policy ? smartCalc(text, null) : smartCalc(text)
       if (res?.kind === 'pending') res = smartCalc(text, await loadRates({
         signal: ctx.signal,
+        ...(ctx.budget || ctx.policy ? {
+          check: () => checkActor(actorOf(ctx)),
+          readJson: (response: Response) => downloadJson(response, ctx),
+          parseCache: async (raw: string) => { textWork(ctx, raw.length); return JSON.parse(await safeJq(['-c', '.'], raw, ctx)) },
+          checkCache: async (data: unknown) => { const raw = await boundedJson(data, ctx); textWork(ctx, raw.length) },
+        } : {}),
         authorize: () => {
           checkActor(actorOf(ctx))
           if (ctx.policy && !ctx.policy.grant.network) throw new CmdError('calc: fetching exchange rates needs network approval; run the currency calculation directly', false, 126)
@@ -1343,14 +1365,17 @@ export const commands: Record<string, Command> = {
   seq: {
     desc: 'print a sequence of numbers',
     usage: 'seq [first [step]] last',
-    run: ({ args }) => {
+    run: (ctx) => {
+      const { args } = ctx
       const nums = args.filter((a) => a !== '-w').map(Number)
-      if (!nums.length || nums.some((n) => Number.isNaN(n))) throw new CmdError('usage: seq [first [step]] last')
+      if (!nums.length || nums.some((n) => !Number.isFinite(n))) throw new CmdError('usage: seq [first [step]] last')
       const [first, step, last] = nums.length === 1 ? [1, 1, nums[0]] : nums.length === 2 ? [nums[0], 1, nums[1]] : nums
       if (step === 0) throw new CmdError('seq: step must not be zero')
       const out: number[] = []
       for (let n = first; step > 0 ? n <= last : n >= last; n += step) {
+        reserve(ctx, 64, out.length * 64)
         out.push(n)
+        if (n + step === n) throw new CmdError('seq: step does not advance')
         if (out.length > 100_000) throw new CmdError('seq: that is a lot of numbers (100,000 at most)')
       }
       const width = args.includes('-w') ? Math.max(...out.map((n) => String(n).length)) : 0
@@ -1458,17 +1483,19 @@ async function ping(ctx: Ctx): Promise<string> {
   let address: string | null = /^\d+\.\d+\.\d+\.\d+$/.test(hostname) ? hostname : null
   if (!address) {
     try {
-      const r = await lookupAddress(hostname, ctx.signal)
+      const r = await lookupAddress(hostname, ctx.signal, ctx)
       if (!r.address) throw new CmdError(`ping: ${hostname}: ${r.status === 'NXDOMAIN' ? 'Name or service not known' : `no address (${r.status})`}`)
       address = r.address
     } catch (err) {
+      checkDownload(ctx)
       if (err instanceof CmdError) throw err
       /* DNS-over-HTTPS unreachable: ping anyway and let the browser resolve */
     }
   }
 
   const lines: string[] = []
-  const out = (l: string) => (ctx.tty ? ctx.print(l) : lines.push(l))
+  let held = 0
+  const out = (l: string) => { reserve(ctx, l.length, held); held += l.length; return ctx.tty ? ctx.print(l) : lines.push(l) }
   const times: number[] = []
   let sent = 0
   let fastFails = 0
@@ -1482,7 +1509,10 @@ async function ping(ctx: Ctx): Promise<string> {
     ctx.signal.addEventListener('abort', stop)
     const t0 = performance.now()
     try {
-      await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', credentials: 'omit', signal: timeout.signal })
+      checkDownload(ctx)
+      const response = await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', credentials: 'omit', signal: timeout.signal })
+      void response.body?.cancel().catch(() => {})
+      checkDownload(ctx)
       const ms = performance.now() - t0
       times.push(ms)
       out(`reply from ${host}: seq=${seq} time=${ms.toFixed(1)} ms${seq === 1 ? c('muted', '  (includes DNS + TLS setup)') : ''}`)
@@ -1533,9 +1563,10 @@ export function writeTmp(cwd: string, target: string, content: string, append: b
   const existing = tmp().children.get(name)
   if (existing && !allows(abs, existing, 'w', root)) throw new CmdError(`${who ? `${who}: ` : ''}${target}: Permission denied`)
   const prev = existing?.type === 'file' ? existing.content() : ''
+  reserve(typeof actor === 'boolean' ? {} : actor, (append ? prev.length : 0) + content.length + 1)
   const next = append && prev ? (prev.endsWith('\n') ? prev + content : `${prev}\n${content}`) : content
   // Writing to a file keeps its mode (chmod +x, then edit: still runs).
-  tmp().children.set(name, { type: 'file', name, content: () => next, mode: existing?.mode })
+  tmp().children.set(name, { type: 'file', name, size: next.length, content: () => next, mode: existing?.mode })
 }
 
 // ---------------------------------------------------------------------------

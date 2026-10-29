@@ -1,4 +1,5 @@
-import { checkDownload, downloadText } from './download'
+import { reserve, singleInput, textWork } from './bounds'
+import { checkDownload, downloadText, downloadJson } from './download'
 import { HANDLE } from '../os/identity'
 import { contributions, profile, projects } from '../data/profile'
 import { ansiToMarkup, plain, rainbow } from './ansi'
@@ -155,6 +156,7 @@ async function curl(ctx: Ctx): Promise<string> {
   const signal = AbortSignal.any([ctx.signal, timeout])
   let res: Response
   try {
+    checkDownload(ctx)
     res = await fetch(url, { method: verb, headers, body: data ?? undefined, credentials: 'omit', redirect: 'follow', signal })
   } catch (err) {
     if (ctx.signal.aborted) return ''
@@ -171,7 +173,11 @@ async function curl(ctx: Ctx): Promise<string> {
   try {
     checkDownload(ctx, signal)
     const status = `${protocolOf(res.url)} ${res.status}${STATUS_TEXT[res.status] ? ` ${STATUS_TEXT[res.status]}` : ''}`
-    const headerBlock = [status, ...[...res.headers].map(([k, v]) => `${k}: ${v}`)].join('\n')
+    let headerBlock = status
+    for (const [k, v] of res.headers) {
+      reserve(ctx, (k.length + v.length + 3) * 4, headerBlock.length * 4)
+      headerBlock += `\n${k}: ${v}`
+    }
     if (verbose) ctx.print(c('muted', `< ${headerBlock.replace(/\n/g, '\n< ')}\n<\n* (a browser only shows the headers a site exposes to other sites)`))
     if (res.redirected && verbose) ctx.print(c('muted', `* Followed redirect to ${res.url}`))
     if ((fail && res.status >= 400) || head || verb === 'HEAD') {
@@ -191,6 +197,7 @@ async function curl(ctx: Ctx): Promise<string> {
       return `Warning: Binary output can mess up your terminal. Use "--output -" to tell curl to output it to your terminal anyway, or consider "--output <FILE>" to save to a file.`
     }
     const body = await downloadText(res, ctx, signal)
+    textWork(ctx, body.length)
     const rendered = ctx.tty ? (body.includes('\x1b[') ? ansiToMarkup(body) : plain(body)) : body.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
     return (include ? headerBlock + '\n\n' : '') + rendered
   } finally {
@@ -237,6 +244,7 @@ async function wget(ctx: Ctx): Promise<string> {
   if (!quiet && !toStdout) ctx.print(`--${when}--  ${url.href}\nResolving ${url.hostname}... done.\nConnecting to ${url.hostname}|${url.hostname}|:${url.port || 443}... connected.\nHTTP request sent, awaiting response... `)
   let res: Response
   try {
+    checkDownload(ctx)
     res = await fetch(url, { credentials: 'omit', signal: ctx.signal })
   } catch (err) {
     if (ctx.signal.aborted) return ''
@@ -269,14 +277,16 @@ async function whois(ctx: Ctx): Promise<string> {
   if (!isIp && !/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(q)) throw new CmdError(`whois: '${q}' is not a domain name or IP address`)
   let res: Response
   try {
+    checkDownload(ctx)
     res = await fetch(`https://rdap.org/${isIp ? 'ip' : 'domain'}/${encodeURIComponent(q)}`, { signal: ctx.signal, credentials: 'omit' })
   } catch (err) {
     if (ctx.signal.aborted) return ''
     throw new CmdError(`whois: the registry for ${q} did not answer a browser request (${(err as Error).message})`)
   }
+  if (!res.ok) void res.body?.cancel().catch(() => {})
   if (res.status === 404) return `No match for "${q.toUpperCase()}".`
   if (!res.ok) throw new CmdError(`whois: registry answered ${res.status}`)
-  const r = await res.json()
+  const r = await downloadJson(res, ctx)
   const date = (action: string) => r.events?.find((e: { eventAction: string }) => e.eventAction === action)?.eventDate
   const entity = (role: string) => {
     const e = r.entities?.find((x: { roles?: string[] }) => x.roles?.includes(role))
@@ -333,16 +343,23 @@ function repoFor(cwd: string): { repo: string | null; name: string; web?: string
 }
 
 /** GitHub's commit API, through the site's cached /api/git when it is there, else directly. */
-const ghApi = async (path: string, signal: AbortSignal) => {
+const ghApi = async (path: string, ctx: Ctx) => {
+  const { signal } = ctx
+  checkDownload(ctx)
   const viaSite = await fetch(`/api/git/${path.replace(/^\/repos\//, '')}`, { signal }).catch(() => null)
+  if (ctx.signal.aborted || ctx.budget?.stopped) { void viaSite?.body?.cancel().catch(() => {}); checkDownload(ctx) }
+  checkDownload(ctx)
+  const usable = viaSite && viaSite.headers.get('content-type')?.includes('json') && viaSite.status !== 502
+  if (viaSite && !usable) void viaSite.body?.cancel().catch(() => {})
   const res =
     viaSite && viaSite.headers.get('content-type')?.includes('json') && viaSite.status !== 502
       ? viaSite
       : await fetch(`https://api.github.com${path}`, { headers: { Accept: 'application/vnd.github+json' }, signal })
+  if (!res.ok) void res.body?.cancel().catch(() => {})
   if (res.status === 403 || res.status === 429) throw new CmdError('fatal: GitHub rate limit reached for this network; try again in a bit')
   if (res.status === 404 || res.status === 422) throw new CmdError(`fatal: bad revision '${path.split('/').pop()}'`)
   if (!res.ok) throw new CmdError(`fatal: GitHub answered ${res.status}`)
-  return res.json()
+  return downloadJson(res, ctx)
 }
 
 type GhCommit = { sha: string; commit: { message: string; author: { name: string; date: string } }; stats?: { additions: number; deletions: number }; files?: { filename: string; additions: number; deletions: number; patch?: string; status: string }[] }
@@ -366,7 +383,7 @@ async function git(ctx: Ctx): Promise<string | void> {
     const nArg = rest.find((a) => /^-\d+$/.test(a))
     const nIdx = rest.indexOf('-n')
     const n = Math.min(100, nArg ? -Number(nArg) : nIdx >= 0 ? Number(rest[nIdx + 1]) || 10 : oneline ? 20 : 10)
-    const commits: GhCommit[] = await ghApi(`/repos/${needRepo()}/commits?per_page=${n}`, ctx.signal)
+    const commits: GhCommit[] = await ghApi(`/repos/${needRepo()}/commits?per_page=${n}`, ctx)
     const deco = c('yellow', '(') + c('cyan', 'HEAD -> ') + c('green', 'main') + c('yellow', ', ') + c('red', 'origin/main') + c('yellow', ')')
     if (oneline) return commits.map((x, i) => `${link(`https://github.com/${repo}/commit/${x.sha}`, c('yellow', x.sha.slice(0, 7)))}${i === 0 ? ` ${deco}` : ''} ${plain(x.commit.message.split('\n')[0])}`).join('\n')
     // Author names only: commit e-mail addresses stay out of the page.
@@ -384,12 +401,13 @@ async function git(ctx: Ctx): Promise<string | void> {
   }
   if (sub === 'show') {
     const ref = rest.find((a) => !a.startsWith('-')) ?? 'HEAD'
-    const x: GhCommit = await ghApi(`/repos/${needRepo()}/commits/${encodeURIComponent(ref)}`, ctx.signal)
+    const x: GhCommit = await ghApi(`/repos/${needRepo()}/commits/${encodeURIComponent(ref)}`, ctx)
     const stat = rest.includes('--stat')
     const head = [`${c('yellow', `commit ${x.sha}`)}`, `Author: ${plain(x.commit.author.name)}`, `Date:   ${gitDate(x.commit.author.date)}`, '', ...plain(x.commit.message.trimEnd()).split('\n').map((l) => `    ${l}`), ''].join('\n')
     const files = x.files ?? []
     if (stat) {
       const w = Math.max(...files.map((f) => f.filename.length), 4)
+      reserve(ctx, files.length * (w + 100) * 4)
       return `${head}\n${files.map((f) => ` ${f.filename.padEnd(w)} | ${String(f.additions + f.deletions).padStart(4)} ${c('green', '+'.repeat(Math.min(30, f.additions)))}${c('red', '-'.repeat(Math.min(30, f.deletions)))}`).join('\n')}\n ${files.length} files changed, ${x.stats?.additions ?? 0} insertions(+), ${x.stats?.deletions ?? 0} deletions(-)`
     }
     const diff = files
@@ -874,6 +892,8 @@ const sums = (algo: 'SHA-1' | 'SHA-256' | 'SHA-384' | 'SHA-512' | 'MD5', cmd: st
   usage: `${cmd} [file]...`,
   run: async (ctx) => {
     const files = ctx.args.filter((a) => !a.startsWith('-'))
+    singleInput(ctx, files.length)
+    if (ctx.stdin !== null && !files.length) textWork(ctx, ctx.stdin.length)
     const inputs: [string, string][] = files.length ? files.map((f) => [f, readText(ctx, f, cmd)]) : ctx.stdin !== null ? [['-', ctx.stdin]] : []
     if (!inputs.length) throw new CmdError(`${cmd}: missing file operand (or pipe something in: echo hi | ${cmd})`)
     const out = await Promise.all(inputs.map(async ([name, text]) => `${algo === 'MD5' ? md5(text) : await sha(algo, text)}  ${name}`))
@@ -936,6 +956,8 @@ export const extraCommands: Record<string, Command> = {
     desc: 'rainbows, for pipes',
     usage: 'figlet hello | lolcat',
     run: (ctx) => {
+      singleInput(ctx, ctx.args.length)
+      if (ctx.stdin !== null && !ctx.args.length) textWork(ctx, ctx.stdin.length)
       const text = ctx.args.length ? ctx.args.map((f) => readText(ctx, f, 'lolcat')).join('\n') : ctx.stdin
       if (text === null) throw new CmdError('lolcat: pipe something in: figlet hi | lolcat')
       return ctx.tty ? rainbow(plain(text)) : text

@@ -1,3 +1,4 @@
+import { reserve, textWork } from './bounds'
 import { bytesToText, dumpChar, hexByte, textToBytes } from './bytes'
 import type { Completion } from './commands'
 import { emit, readInputs } from './read'
@@ -207,7 +208,7 @@ function xxdPlain(bytes: Uint8Array, o: XxdOptions): string {
 }
 
 /** xxd -r: the bytes a dump (or, with -p, plain hex) stands for. Dumps are placed at their offsets. */
-function xxdRevert(text: string, o: XxdOptions): Uint8Array {
+function xxdRevert(text: string, o: XxdOptions, ctx: Ctx): Uint8Array {
   const parse = (digits: string) => {
     const clean = digits.replace(/[^0-9a-fA-F]/g, '')
     return Uint8Array.from({ length: clean.length >> 1 }, (_, i) => parseInt(clean.slice(i * 2, i * 2 + 2), 16))
@@ -221,6 +222,10 @@ function xxdRevert(text: string, o: XxdOptions): Uint8Array {
     // The hex stops at the first double space: what follows is the text column.
     const bytes = parse(m[2].split('  ')[0])
     if (at < 0 || at > 1 << 28) continue
+    const length = Math.max(out.length, at + bytes.length)
+    // Account for sparse zero fill and the later typed-array copy before expanding anything.
+    textWork(ctx, length, 0)
+    reserve(ctx, (length - out.length) * 16, out.length * 16)
     while (out.length < at) out.push(0)
     bytes.forEach((b, i) => (out[at + i] = b))
   }
@@ -232,7 +237,7 @@ function xxd(ctx: Ctx) {
   if (o.files.length > 1) throw new CmdError('xxd: writing to a file is not supported here; use a redirect: xxd in > out')
   if (o.cols !== null && (o.cols < 1 || o.cols > 256)) throw new CmdError(`xxd: invalid number of columns (max. 256)`)
   const [{ bytes }] = readInputs(ctx, o.files, 'xxd')
-  if (o.reverse) return emit(ctx, xxdRevert(bytesToText(bytes), o))
+  if (o.reverse) return emit(ctx, xxdRevert(bytesToText(bytes), o, ctx))
   const start = o.seek < 0 ? Math.max(0, bytes.length + o.seek) : o.seek
   const part = bytes.subarray(start, o.len === null ? undefined : start + o.len)
   return o.plain ? xxdPlain(part, o) : xxdDump(part, o, start)
@@ -373,6 +378,8 @@ function od(ctx: Ctx) {
     const digits = { x: [2, 4, 0, 8], o: [3, 6, 0, 11], u: [3, 5, 0, 10], d: [4, 6, 0, 11] }[m[1] as 'x'][size - 1]
     return { kind: m[1], size, width: digits }
   })
+  // Each format retains another row for every input row, even when folding hides it later.
+  reserve(ctx, (bytes.length + 16) * formats.length * 32)
   const lineBytes = 16
   const value = (chunk: Uint8Array, at: number, f: (typeof formats)[number]) => {
     if (f.kind === 'c') {

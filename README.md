@@ -548,6 +548,25 @@ HTTP failures with `curl --fail`, and all unsuccessful wget responses, cancel th
 body without saving it. `curl -o -` writes to stdout. Interrupted or oversized
 responses never leave a partial downloaded file.
 
+All agent-admitted command families are bounded or fail closed before unsupported modes run.
+The implementation inventory is:
+
+| Command family | Boundary before expensive work |
+| --- | --- |
+| Text filters, byte dumpers and hashes (including cat aliases and lolcat) | One input; 65,536-character synchronous ceiling; conservative reservations before splitting, decoding, sorting, hashing and markup. `od` additionally reserves rows times formats; `xxd -r` reserves sparse zero-fill and conversion before expanding offsets. |
+| Shell, variables and formatting | Sources, expanded fields, patterns, heredocs and buffers share the call budget; parser inputs, variable listings, builtin operands and printf precision/padding are charged before processing. |
+| `ls` and globs | Nonrecursive listings; cached Seafile metadata, entry arrays, names and formatting are charged. Generated site file contents are not evaluated for agent `ls -l` sizes. |
+| `seq`, `cowsay`, calculators | Each sequence element is reserved before retaining it; ranges must be finite and advance. Cowsay wraps at 40 columns. Text input and transformation reservations bound synchronous work. |
+| Network and filesystem I/O | Curl/wget, WHOIS, Git, DNS, FX and every agent-reachable Seafile metadata/link/text/mutation response stream through shared byte/text accounting before decoding or parsing. Unused JSON fields and cached metadata/rates count too; structured data also passes jq-safe depth/node/size checks. Unused error bodies are cancelled. |
+| `mvl`, `jq-safe`, fixed information commands | Account responses and JSON work use the bounded evaluator and resource grants. Capability construction is reserved; session information uses the fresh headless context (empty history/windows). Unsupported engines and filesystem modes are denied by policy. |
+
+Allocation units deliberately overestimate intermediate strings, arrays and byte conversions;
+they are not measured JavaScript heap bytes. Consequently a small input can exhaust a small
+budget even if the final output would fit. Synchronous adapters have the additional 65,536-character
+ceiling; deadlines remain cooperative. A completed remote mutation cannot be rolled back if its
+response later exceeds the budget. Cached rates stay usable offline; blocked or malformed browser
+storage does not prevent a fresh approved rate lookup.
+
 Command preparation uses actual file operands. String operations such as
 `basename /outside/file.txt`, `dirname /outside/file.txt`, and `calc 10 / 2` do not
 read those strings as paths. Data-only commands skip filesystem preparation after
@@ -872,8 +891,8 @@ host shell is involved.
   [`fs.ts`](src/terminal/fs.ts), every file written, moved, removed or `chmod`ed.
   - Reads and writes stay inside both the work folder's terminal path and its authorized backing
     repository/path. Foreign nested mounts and bind mounts outside that backing path are refused;
-    a work folder containing one currently fails closed for filesystem operations. A thread with no folder reads anything the terminal
-    can and writes nothing; `/dev/null` and the byte devices are fine.
+    a work folder containing one currently fails closed for filesystem operations. A thread with no folder reads supported Seafile and `/tmp` text
+    and writes nothing; `/dev/null` and the byte devices are fine.
   - A call writes only if its mode lets it: a line that only looks (a fixed allowlist, plus `msh -n
     file`) runs in every mode, Plan too, with a read-only grant; **Edits allowed** runs any other
     line that does not name `rm`/`rmdir`, a network command or `sudo`, writing in the work folder;
@@ -886,8 +905,7 @@ host shell is involved.
     even in Bypass; a name built from a variable is refused. Steering permission requires a fresh
     explicit approval of this call; remembered command approvals never grant it. Both the visible
     path and the resolved backing path are checked, so bind aliases cannot hide steering files.
-    `git`, `changelog`
-    and `releases` are network commands too, including when reached from scripts. `calc`, `units`
+    `git` is a network command too, including when reached from scripts. `calc`, `units`
     and `bc` remain usable for offline arithmetic and unit conversions. Their rate-cache misses
     require network authority at every actual rate request; cached rates need no network. The
     server uses the same calculator parser to ask before literal currency expressions (also when
@@ -900,10 +918,14 @@ host shell is involved.
     script fails when a new command is neither listed nor on its list of ones an agent never runs.
     A command refusal is `msh: …` on stderr with status 126 and says which rule. Archive commands
     (`tar`, `unzip`), directory transfers/removal, and writes to browser storage are unavailable to
-    agents until their complete operation/descendant checks are supported. Individual Seafile
-    file operations remain available. To avoid uninterruptible regex/query workloads, agents use
-    literal `grep` (`-F` for metacharacters) and bounded `find` glob patterns;
-    recursive `grep`, `find -regex/-iregex`, `fd` (including its ignore-file regexes), and `jq` are unavailable. Patterns are not treated as
+    agents until their complete operation/descendant checks are supported. Seafile file reads,
+    writes, creation, mkdir and individual file removal remain available. `cp`, `mv` and `chmod`
+    currently work only on local `/tmp` files; `mv` also needs delete authority and refuses before
+    writing its destination without it. To avoid uninterruptible regex/query workloads, agents use
+    literal `grep` (`-F` for metacharacters). Recursive modes, `find`, `fd`, `tree`, `du`, `figlet`,
+    `pepper`, `changelog`, `releases`, `df`, `findmnt`, `lsblk` and rich `jq` are unavailable.
+    Browser-backed and generated site-file content reads are unavailable; use a Seafile work folder
+    or `/tmp`. Patterns are not treated as
     file operands during preparation or authorization. Grep execution, preparation and policy
     share one argument parser, including dash-prefixed patterns, letter clusters and `--`. Agent
     grep patterns are limited to 4096 characters.
@@ -917,7 +939,9 @@ host shell is involved.
   synchronous JavaScript inside a command.
 - *Writing and checking a script*: the agent writes `potato-flight-check.sh` with `write_file`, checks
   it with `msh -n potato-flight-check.sh` (parse only, so it never asks), runs `msh
-  potato-flight-check.sh`, reads the real stderr and exit code, fixes it and runs it again. With
+  potato-flight-check.sh`, reads the real stderr and exit code, fixes it and runs it again. Both
+  syntax-only file checks and execution report parser errors as canonical absolute
+  `filename:line:column: [expression]` diagnostics. With
   *Edits allowed* that needs no one at the keyboard.
 
 **`help --json` and `terminal_capabilities`.** What the terminal can do, as data, for programs and
@@ -932,7 +956,7 @@ from Linux), the mounts with their writability, the integrations (Seafile, the b
 network, apps) and the session. In an agent's call it describes that call: `session.kind: "agent"`,
 the `limits` it runs under, its `permissions` (this call's grant), separate `sessionRights` describing
 available rights and approval requirements (a read-only capability query does not make Bypass read-only), where it may read and write (`filesystem.agent`),
-and per command whether it may run (`available`, `restriction`); in the user's terminal `limits` and
+and per command whether it may run (`available`, `restriction`, `bounds`); in the user's terminal `limits` and
 `permissions` are `null`. Piped, or inside an agent call, the JSON is one compact line.
 `pnpm check:agents-terminal-exec` tests all of this (running, limits, isolation, script milestone,
 nested bypass attempts, capabilities, delayed-request cancellation and the shared executor);

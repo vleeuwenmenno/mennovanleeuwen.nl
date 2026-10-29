@@ -149,8 +149,8 @@ export async function execute(command: string, cwd: string, grant: Grant, limits
   outer.addEventListener('abort', stop)
   if (outer.aborted) ctl.abort()
   const t0 = performance.now()
+  const budget = new Budget(limits)
   try {
-    const budget = new Budget(limits)
     const ctx = headless(cwd, grant, budget, ctl.signal)
     let run: ReturnType<typeof startAgent> | undefined
     const task = async () => {
@@ -179,6 +179,12 @@ export async function execute(command: string, cwd: string, grant: Grant, limits
     const result: TerminalResult = { exit_code: terminated && !done.termination ? (timedOut ? 124 : 130) : done.status, stdout: done.stdout, stderr: done.stderr, duration_ms: Math.round(performance.now() - t0), truncated: done.truncated, terminated, cwd }
     return { output: text(result), status: result.exit_code, result }
   } catch (e) {
+    if (budget.stopped) {
+      const reason = budget.stopped
+      const status = reason === 'timeout' ? 124 : reason === 'cancelled' ? 130 : 125
+      const result: TerminalResult = { exit_code: status, stdout: '', stderr: '', duration_ms: Math.round(performance.now() - t0), truncated: { stdout: 0, stderr: 0 }, terminated: reason, cwd }
+      return { output: '', status, result }
+    }
     return failed(`msh: ${(e as Error).message}`, cwd, 2)
   } finally {
     clearTimeout(timer)

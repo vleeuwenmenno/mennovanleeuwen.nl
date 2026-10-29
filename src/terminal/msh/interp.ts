@@ -1,3 +1,4 @@
+import { reserve, textWork } from '../bounds'
 // msh, the MvL OS shell: runs the tree from parse.ts. POSIX-ish: pipelines, && ||, if/for/while/
 // until/case, functions, subshells, $(…), $((…)), ${…} forms, globbing, heredocs and redirects.
 //
@@ -10,7 +11,7 @@ import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
-import { lookup, prepare, prepareFolder, readFileText, writeFile, actorOf } from '../fs'
+import { lookup, prepare, prepareFolder, readFileText, writeFile, actorOf, cachedText } from '../fs'
 import { AGENT_LIMITS, Budget, type Stop } from '../limits'
 import { allows, canRun } from '../modes'
 import { arith } from './arith'
@@ -307,8 +308,11 @@ function printf(fmt: string, args: string[], budget?: Budget): string {
       }
       const width = Math.min(widthRaw === '*' ? parseInt(next(), 10) || 0 : widthRaw ? parseInt(widthRaw, 10) : 0, MAX_PAD)
       const prec = precRaw === '*' ? parseInt(next(), 10) : precRaw !== undefined ? parseInt(precRaw, 10) : undefined
+      if (prec !== undefined && !Number.isFinite(prec)) throw new ShellError('printf: invalid precision')
       if (budget && prec !== undefined && prec > budget.limits.maxBuffer) throw new LimitSignal(budget.stop('output'))
       if (prec !== undefined && prec > MAX_PAD) throw new ShellError('printf: precision too large')
+      // Precision can pad integers before the final output reservation.
+      reserve(Math.max(0, width, prec ?? 0))
       const arg = next()
       const num = () => {
         const t = arg.trim()
@@ -751,8 +755,11 @@ class Shell {
         this.checkAbort()
         const node = lookup(x.abs)
         if (node?.type !== 'dir') continue
-        const names = [...node.children.keys()].sort((a, b) => a.localeCompare(b, 'en'))
-        for (const name of names) if ((!name.startsWith('.') || seg.startsWith('.') || seg.startsWith('\\.')) && re.test(name)) next.push({ shown: join(x.shown, name), abs: resolvePath(x.abs, name) })
+        const children = node.children
+        reserve(this.base, children.size * 128)
+        for (const name of children.keys()) textWork(this.base, name.length, 8)
+        const names = [...children.keys()].sort((a, b) => a.localeCompare(b, 'en'))
+        for (const name of names) if ((!name.startsWith('.') || seg.startsWith('.') || seg.startsWith('\\.')) && re.test(name)) { reserve(this.base, (x.shown.length + name.length + x.abs.length + 2) * 4, next.length * 64); next.push({ shown: join(x.shown, name), abs: resolvePath(x.abs, name) }) }
       }
       found = next
       if (!found.length) return []
@@ -788,6 +795,7 @@ class Shell {
 
   /** Turns a thrown signal or error into a status (printing what needs saying). */
   caught(e: unknown, io: Io): number {
+    if (this.base.budget?.stopped) throw new LimitSignal(this.base.budget.stopped)
     if (e instanceof ExitSignal || e instanceof ReturnSignal) return e.status
     if (e instanceof AbortSignal_) return 130
     if (e instanceof LoopSignal) return 0
@@ -1092,8 +1100,10 @@ class Shell {
       let tree: Node
       const rest = node.words.slice(1)
       try {
+        textWork(this.base, value.length, 8)
         tree = parse(value)
       } catch (e) {
+        this.checkAbort()
         throw new ShellError(`alias ${word}: ${(e as Error).message}`)
       }
       if (tree.t === 'simple' && !tree.redirs.length) {
@@ -1102,8 +1112,10 @@ class Shell {
       }
       let full: Node
       try {
+        textWork(this.base, value.length + rest.reduce((n, a) => n + a.length + 1, 0), 8)
         full = parse(rest.length ? `${value} ${rest.join(' ')}` : value)
       } catch (e) {
+        this.checkAbort()
         throw new ShellError(`alias ${word}: ${(e as Error).message}`)
       }
       return { node: node.redirs.length ? { t: 'group', body: full, redirs: node.redirs } : full, block: seen }
@@ -1143,6 +1155,7 @@ class Shell {
         io.err.write(`${red(`msh: ${denied}`)}\n`)
         return 126
       }
+      textWork(this.base, args.reduce((n, a) => n + a.length + 1, 0), 8)
       const b = BUILTINS[name]
       if (b) {
         try {
@@ -1231,8 +1244,11 @@ class Shell {
     if (this.base.budget && src.length > 64_000) throw new LimitSignal(this.base.budget.stop('memory'))
     let tree: Node
     try {
+      textWork(this.base, src.length, 8)
       tree = parse(src, sourcePath)
     } catch (e) {
+      if (this.base.budget?.stopped) throw new LimitSignal(this.base.budget.stopped)
+      if (this.base.signal.aborted) return 130
       io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, sourcePath, e))}`)}\n`)
       return 2
     }
@@ -1274,6 +1290,7 @@ class Shell {
     }
     const stdin = io.stdin ? drain(io.stdin, true) : null
     try {
+      if (known && ['cowsay', 'calc', 'units', 'bc'].includes(known)) textWork(this.base, (stdin?.length ?? 0) + args.reduce((n, a) => n + a.length + 1, 0))
       const help = known !== null && hooks.asksHelp(known, args)
       if (known && !help) {
         // `open photos` starts the app: no need to look for a folder of that name in Seafile.
@@ -1344,6 +1361,7 @@ class Shell {
       return (await readFileText(abs, !!this.base.root, actorOf(this.base)))?.text ?? node.content()
     } catch (e) {
       if (e instanceof DeniedError) throw denied(e.message)
+      if (this.base.policy || this.base.budget) throw e
       return node.content()
     }
   }
@@ -1398,7 +1416,7 @@ async function test(sh: Shell, argv: string[], io: Io, bracket: boolean): Promis
       case '-d':
         return n?.type === 'dir'
       case '-s':
-        return n?.type === 'file' ? (n.size ?? n.content().length) > 0 : !!n
+        return n?.type === 'file' ? (n.size ?? cachedText(resolvePath(sh.base.cwd, a), n, actorOf(sh.base)).length) > 0 : !!n
       case '-r':
         return !!n
       case '-w':
@@ -1531,6 +1549,7 @@ const BUILTINS: Record<string, Builtin> = {
   export: (sh, args, io) => {
     const list = args.filter((a) => a !== '-n' && a !== '-p')
     if (!list.length) {
+      reserveVariables(sh)
       io.out.write(
         Object.entries(sh.st.vars)
           .filter(([k]) => NAME.test(k))
@@ -1561,6 +1580,7 @@ const BUILTINS: Record<string, Builtin> = {
   },
   set: (sh, args, io) => {
     if (!args.length) {
+      reserveVariables(sh)
       io.out.write(
         Object.entries(sh.st.vars)
           .filter(([k]) => NAME.test(k))
@@ -1657,6 +1677,7 @@ const BUILTINS: Record<string, Builtin> = {
     }
     if (!raw) line = line.replace(/\\(.)/g, '$1')
     const ifs = sh.st.vars.IFS ?? ' \t\n'
+    if (sh.base.budget && ifs.length > 256) throw new LimitSignal(sh.base.budget.stop('memory'))
     const white = [...ifs].filter((c) => /\s/.test(c)).join('')
     const trimmed = white ? line.replace(new RegExp(`^[${white}]+|[${white}]+$`, 'g'), '') : line
     const parts: string[] = []
@@ -1722,6 +1743,7 @@ const BUILTINS: Record<string, Builtin> = {
     const src = args.join(' ')
     if (!src.trim()) return 0
     try {
+      textWork(sh.base, src.length, 8)
       return await sh.exec(parse(src), io)
     } catch (e) {
       if (e instanceof Signal) throw e
@@ -1837,6 +1859,14 @@ const BUILTINS: Record<string, Builtin> = {
 }
 
 /** msh -c 'cmd' [arg0 args…], msh file [args…], msh < script. */
+function reserveVariables(sh: Shell) {
+  let held = 0
+  for (const k in sh.st.vars) {
+    const n = (k.length + sh.st.vars[k].length + 16) * 4
+    reserve(sh.base, n, held); held += n
+  }
+}
+
 async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   let i = 0
   let src: string | null = null
@@ -1891,10 +1921,12 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   }
   if (check) {
     try {
-      parse(src)
+      textWork(sh.base, src.length, 8)
+      parse(src, sourcePath ?? label)
       return 0
     } catch (e) {
-      return fail(io, `${label}: ${(e as Error).message}`, 2)
+      if (sh.base.budget?.stopped) throw new LimitSignal(sh.base.budget.stopped)
+      return fail(io, formatDiagnostic(diagnostic(src, sourcePath ?? label, e)), 2)
     }
   }
   const child = sh.child(arg0, positional)
@@ -2048,7 +2080,7 @@ export function startAgent(src: string, shell: Base & { budget: Budget }): { don
   const result = (status: number, termination: Stop | null): AgentRun => ({
     stdout: out.text.replace(/\n$/, ''),
     stderr: err.text.replace(/\n$/, ''),
-    status: termination && status === 0 ? STOP_STATUS[termination] : status,
+    status: termination ? STOP_STATUS[termination] : status,
     termination,
     truncated: { stdout: out.dropped, stderr: err.dropped },
     steps: budget.steps,
@@ -2059,7 +2091,8 @@ export function startAgent(src: string, shell: Base & { budget: Budget }): { don
     try {
       status = await sh.runSource(src, { out, err, stdin: null }, '-c')
     } catch (e) {
-      if (e instanceof LimitSignal) termination = e.why
+      if (budget.stopped) termination = budget.stopped
+      else if (e instanceof LimitSignal) termination = e.why
       else if (e instanceof AbortSignal_) termination = 'cancelled'
       else err.write(`${red(`msh: ${(e as Error)?.message ?? e}`)}\n`)
       status = termination ? STOP_STATUS[termination] : 1

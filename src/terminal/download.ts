@@ -1,3 +1,5 @@
+import { safeJq } from './jq-safe'
+import { textWork } from './bounds'
 import { CmdError, type Ctx } from './types'
 
 /** Check before retaining response data or handing it to a filesystem mutation. */
@@ -12,7 +14,7 @@ export function checkDownload(ctx: Pick<Ctx, 'signal' | 'budget' | 'policy'>, si
  * Content-Length is not trusted. A file download uses the same limits as stdout; no partial
  * file is persisted. TextDecoder matches Response.text's UTF-8 replacement semantics. */
 export async function downloadText(response: Response, ctx: Pick<Ctx, 'signal' | 'budget' | 'policy'>, signal = ctx.signal): Promise<string> {
-  checkDownload(ctx, signal)
+  try { checkDownload(ctx, signal) } catch (error) { void response.body?.cancel().catch(() => {}); throw error }
   if (!response.body) return ''
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -45,4 +47,15 @@ export async function downloadText(response: Response, ctx: Pick<Ctx, 'signal' |
     cancel()
     reader.releaseLock()
   }
+}
+
+/** Bounded raw body BEFORE native JSON parsing, then depth/node validation and a reservation
+ * for linear response projection/formatting. Unused JSON fields count too. */
+export async function downloadJson(response: Response, ctx: Pick<Ctx, 'signal' | 'budget' | 'policy'>): Promise<any> {
+  if (!ctx.budget && !ctx.policy) return response.json()
+  const text = await downloadText(response, ctx)
+  textWork(ctx, text.length)
+  const json = await safeJq(['-c', '.'], text, ctx)
+  checkDownload(ctx)
+  return JSON.parse(json)
 }

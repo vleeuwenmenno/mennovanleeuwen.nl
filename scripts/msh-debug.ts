@@ -105,6 +105,9 @@ try {
     await debugRun.done
     check(displayed.join('\n') === arg0 + '\ndone' && debugRun.session.current.state === 'completed', `script $0 remains invocation spelling: ${command}`, displayed.join('\n'))
   }
+  await runLine("printf 'echo good\\nthen\\n' > /tmp/review-syntax.sh", base())
+  const checkedFile = await run('msh -n review-syntax.sh')
+  check(checkedFile.status === 2 && checkedFile.stderr.includes('/tmp/review-syntax.sh:2:1:') && checkedFile.stderr.includes('[then]'), 'round4: syntax-only file check uses canonical parser diagnostic', checkedFile.stderr)
   const snapshotBudget = new Budget({ ...AGENT_LIMITS, maxTotal: 10 })
   const snapshotRun = launchDebug('echo never', { ...base(), budget: snapshotBudget })
   await snapshotRun.done

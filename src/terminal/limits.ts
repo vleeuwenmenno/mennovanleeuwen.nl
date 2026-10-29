@@ -12,7 +12,7 @@ export type Limits = {
   maxOutput: number
   /** One intermediate buffer: a pipe stage, a $(…), a file being redirected into */
   maxBuffer: number
-  /** Everything written to any sink during the call (the bound on what a loop can pile up) */
+  /** Sink writes plus conservative reservations for retained/transformed data during the call */
   maxTotal: number
   /** One variable's value */
   maxVariable: number
@@ -34,7 +34,7 @@ export type Stop = 'timeout' | 'cancelled' | 'steps' | 'output' | 'memory'
 
 export class Budget {
   steps = 0
-  /** Characters written to any sink so far */
+  /** Sink characters plus conservative allocation units reserved so far (not measured heap bytes) */
   total = 0
   /** Why the run was stopped; once set, nothing more runs and nothing more is written */
   stopped: Stop | null = null

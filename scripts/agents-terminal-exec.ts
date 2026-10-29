@@ -49,7 +49,7 @@ try {
   const { commands, runLine, strip } = await load<typeof import('../src/terminal/commands.ts')>('/src/terminal/commands.ts')
   const { HOME } = await load<typeof import('../src/terminal/vfs.ts')>('/src/terminal/vfs.ts')
   const { execute, runInFolder } = await load<typeof import('../src/terminal/agents/exec.ts')>('/src/terminal/agents/exec.ts')
-  const { AGENT_LIMITS } = await load<typeof import('../src/terminal/limits.ts')>('/src/terminal/limits.ts')
+  const { AGENT_LIMITS, Budget } = await load<typeof import('../src/terminal/limits.ts')>('/src/terminal/limits.ts')
   const { EFFECTS } = await load<typeof import('../src/terminal/policy.ts')>('/src/terminal/policy.ts')
   const { SHELL_BUILTINS, MSH_VERSION } = await load<typeof import('../src/terminal/msh/interp.ts')>('/src/terminal/msh/interp.ts')
   const { optionsOf, HELP_GROUPS } = await load<typeof import('../src/terminal/capabilities.ts')>('/src/terminal/capabilities.ts')
@@ -189,7 +189,6 @@ try {
   }
   // Cancellation still precedes the data-command preparation fast path.
   const { prepare, actorOf: preparationActor } = await load<typeof import('../src/terminal/fs.ts')>('/src/terminal/fs.ts')
-  const { Budget } = await load<typeof import('../src/terminal/limits.ts')>('/src/terminal/limits.ts')
   const stoppedSignal = AbortSignal.abort()
   const { makePolicy: preparationPolicy } = await load<typeof import('../src/terminal/policy.ts')>('/src/terminal/policy.ts')
   for (const command of ['basename', 'calc', 'curl', 'jq-safe', 'mvl']) {
@@ -197,6 +196,90 @@ try {
     check(await prepare('/tmp', command, ['/outside/data'], actor).then(() => false, () => true), `prepare checks cancellation before ${command} data early-return`)
   }
 
+  // Round 4: response bodies must be charged even when projected fields are tiny.
+  const round4Fetch = globalThis.fetch
+  try {
+    for (const command of ['whois example.com', 'git log --oneline']) {
+      globalThis.fetch = async () => new Response(JSON.stringify(command.startsWith('git') ? [{ sha: 'abcd1234', commit: { message: 'real message', author: { name: 'Ada', date: '2026-01-01' } }, unused: 'x'.repeat(20_000) }] : { ldhName: 'EXAMPLE.COM', unused: 'x'.repeat(20_000) }), { headers: { 'content-type': 'application/json' } })
+      const r = await result(command, { ...EDITS, network: true }, { ...AGENT_LIMITS, maxBuffer: 1000, maxTotal: 10_000 })
+      check(r.terminated === 'output', `round4: unused network data is bounded before JSON.parse: ${command}`, JSON.stringify(r))
+    }
+  } finally { globalThis.fetch = round4Fetch }
+  const smallBounds = { ...AGENT_LIMITS, maxBuffer: 4096, maxTotal: 10_000 }
+  for (const command of ["find . -maxdepth 0 -printf '%500000000p'", 'tree .', 'du -s .', 'figlet -w 500000000 hello', 'pepper --version', 'changelog', 'releases', 'df', 'findmnt', 'lsblk', 'ls -R', 'cp -r a b', 'rm -r a', 'chmod -R +x a']) {
+    const r = await result(command, { ...EDITS, network: true, delete: true }, smallBounds)
+    check(r.exit_code === 126 && r.terminated === null, `round4: unsupported engine/mode refused before preparation: ${command}`, JSON.stringify(r))
+  }
+  const filters = ['cat', 'wc', 'grep -F x', 'sort', 'uniq', 'head -c 1', 'tail -c 1', 'xxd', 'hexdump -C', 'od -t x1', 'md5sum', 'sha1sum', 'sha256sum', 'sha384sum', 'sha512sum', 'lolcat', 'cowsay']
+  const { writeTmp: seedTmp } = await load<typeof import('../src/terminal/commands.ts')>('/src/terminal/commands.ts')
+  seedTmp('/tmp', 'audit-input', 'x'.repeat(200), false)
+  for (const command of filters) {
+    const file = command === 'cowsay' ? '' : ' /tmp/audit-input'
+    const line = command === 'cowsay' ? `cowsay '${'x'.repeat(200)}'` : command + file
+    const r = await result(line, EDITS, smallBounds)
+    check(r.terminated === 'output', `round4: reserve synchronous text/byte/hash work before transformation: ${command}`, JSON.stringify(r))
+  }
+  for (const command of ['cat - -', 'wc /tmp/audit-input /tmp/audit-input', 'head -c 1 /tmp/audit-input /tmp/audit-input', 'sha256sum /tmp/audit-input /tmp/audit-input', 'lolcat /tmp/audit-input /tmp/audit-input']) {
+    const r = await result(`echo x | ${command}`)
+    check(r.exit_code === 126, `round4: repeated inputs cannot multiply arrays: ${command}`, JSON.stringify(r))
+  }
+  check((await result('seq 1 100000', EDITS, smallBounds)).terminated === 'output', 'round4: seq reserves each retained number')
+  check((await result("printf 'abcdefgh' | od -t x1 -t o1 -t c -t d1 -t u1 -t x2 -t o2 -t d2", EDITS, smallBounds)).terminated === 'output', 'round4: od row by format expansion is reserved before formatting')
+  const precisionBudget = { ...AGENT_LIMITS, maxBuffer: 100_000, maxTotal: 1500 }
+  check((await result("printf '%.*d' nope 1; seq 1 1000", EDITS, precisionBudget)).terminated === 'output', 'round4: invalid printf precision cannot poison cumulative budget with NaN')
+  check((await result("printf '%.90000d' 1", EDITS, precisionBudget)).terminated === 'output', 'round4: printf integer precision is charged before padStart')
+  for (const command of ['echo ok', 'msh -n /tmp/audit-input', "eval 'echo x'", "alias f='echo x'; f"]) {
+    const r = await result(command, EDITS, { ...AGENT_LIMITS, maxBuffer: 8, maxTotal: 1000 })
+    check(r.terminated === 'output', `round4: parser/builtin allocations share small budget: ${command}`, JSON.stringify(r))
+  }
+  seedTmp('/tmp', 'audit-copy', 'copy', false)
+  check((await result('cp /tmp/audit-copy /tmp/audit-copy2')).exit_code === 0 && text('audit-copy2') === 'copy', 'round4: bounded local copy remains useful')
+  check((await result('mv /tmp/audit-copy /tmp/audit-copy3')).exit_code !== 0 && text('audit-copy') === 'copy' && !exists('audit-copy3'), 'round4: move without delete authority refuses before writing destination')
+  check((await result('mv /tmp/audit-copy /tmp/audit-copy3', { ...EDITS, delete: true })).exit_code === 0 && !exists('audit-copy') && text('audit-copy3') === 'copy', 'round4: bounded local move with delete authority works')
+  seedTmp('/tmp', 'audit-append', 'y'.repeat(5000), false)
+  for (const command of ['echo x >> /tmp/audit-append', 'echo x | tee -a /tmp/audit-append', 'true < /tmp/audit-append', 'source /tmp/audit-append', 'msh /tmp/audit-append']) {
+    const r = await result(command, EDITS, smallBounds)
+    check(r.terminated === 'output' && text('audit-append')!.length === 5000, `round4: existing content is charged by redirects/scripts/append: ${command}`, JSON.stringify(r))
+  }
+  for (const [command, expected] of [["printf '00000000: 41\\n' | xxd -r", 'A'], ["echo 6869 | xxd -r -p", 'hi'], ["printf hi | xxd -p", '6869'], ["printf 'a\\nb\\n' | head -n 1", 'a'], ['seq -w 8 10', '08\n09\n10'], ["printf abc | md5sum", '900150983cd24fb0d6963f7d28e17f72  -'], ["printf abc | sha256sum", 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -']]) {
+    eq((await result(command)).stdout, expected, `round4: bounded mode keeps real output: ${command}`)
+  }
+  try {
+    for (const command of ['dig example.com', 'host example.com', 'nslookup example.com', 'ping -c 1 example.com']) {
+      let requests = 0
+      globalThis.fetch = async () => { requests++; return Response.json({ Status: 0, Answer: [], unused: 'x'.repeat(20_000) }) }
+      const r = await result(command, { ...EDITS, network: true }, smallBounds)
+      check(r.terminated === 'output' && requests <= 3, `round4: DNS helper counts unused JSON and stops fallback: ${command}`, JSON.stringify(r))
+    }
+    for (const [command, body, expected] of [
+      ['whois example.com', { ldhName: 'EXAMPLE.COM' }, 'EXAMPLE.COM'],
+      ['git log --oneline', [{ sha: 'abcd1234', commit: { message: 'real message', author: { name: 'Ada', date: '2026-01-01' } } }], 'real message'],
+      ['dig +short example.com', { Status: 0, Answer: [{ name: 'example.com.', type: 1, TTL: 60, data: '192.0.2.1' }] }, '192.0.2.1'],
+    ] as const) {
+      globalThis.fetch = async () => Response.json(body)
+      const r = await result(command, { ...EDITS, network: true })
+      check(r.exit_code === 0 && r.stdout.includes(expected), `round4: bounded network mode keeps real output: ${command}`, JSON.stringify(r))
+    }
+    for (const command of ['whois example.com', 'git log --oneline', 'dig example.com']) {
+      const ctl = new AbortController()
+      let cancelled = false
+      globalThis.fetch = async () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{')); setTimeout(() => ctl.abort(), 10) }, cancel() { cancelled = true } }), { headers: { 'content-type': 'application/json' } })
+      const r = (await run(command, { ...EDITS, network: true }, AGENT_LIMITS, ctl.signal)).result!
+      check(r.terminated === 'cancelled' && cancelled, `round4: cancellation interrupts JSON body read: ${command}`, JSON.stringify(r))
+    }
+    for (const status of [200, 500]) {
+      globalThis.fetch = async () => new Response('invalid JSON ' + 'é'.repeat(20000), { status, headers: { 'content-type': 'application/json' } })
+      const r = await result('dig example.com', { ...EDITS, network: true }, smallBounds)
+      check(r.terminated === 'output', `round4: multibyte/malformed DNS response bounded before parsing, HTTP ${status}`)
+    }
+  } finally { globalThis.fetch = round4Fetch }
+  let oversizedArray = false
+  const originalPush = Array.prototype.push
+  Array.prototype.push = function (...items) { if (this.length >= 1000) oversizedArray = true; return originalPush.apply(this, items) }
+  try {
+    const r = await result("printf '00100000: 41\\n' | xxd -r", EDITS, { ...AGENT_LIMITS, maxBuffer: 1000, maxTotal: 10_000 })
+    check(!oversizedArray && (r.terminated !== null || r.exit_code === 126), 'round4: reverse xxd refuses expansion before allocating sparse offset', JSON.stringify({ oversizedArray, r }))
+  } finally { Array.prototype.push = originalPush }
   // --- running ------------------------------------------------------------------------------------
 
   const out = await result('echo out; echo err >&2')
@@ -254,7 +337,7 @@ try {
   const redirBig = await result('seq 1 5000 > /tmp/redir-big.txt', EDITS, { ...AGENT_LIMITS, maxBuffer: 2000 })
   check(redirBig.terminated === 'output' && !exists('redir-big.txt'), 'a file being redirected into is bounded, and nothing is written once the run is stopped', JSON.stringify(redirBig.terminated))
   const printfWide = await result('printf "%99999999999s" x | wc -c')
-  check(printfWide.exit_code === 0 && Number(printfWide.stdout.trim()) <= 100_001, 'printf cannot ask for a gigabyte of padding', printfWide.stdout.slice(0, 40))
+  check(printfWide.terminated === 'memory' || (printfWide.exit_code === 0 && Number(printfWide.stdout.trim()) <= 100_001), 'printf cannot ask for a gigabyte of padding', printfWide.stdout.slice(0, 40))
   const fnLoop = await result('f() { ( f ); }; f', EDITS, { ...AGENT_LIMITS, maxSteps: 5000 })
   check(fnLoop.terminated !== null, 'recursion through subshells is bounded by the same budget', JSON.stringify(fnLoop.terminated))
 
@@ -266,7 +349,7 @@ try {
   const c = (await cancelled).result!
   check(c.terminated === 'cancelled' && c.exit_code === 130 && Date.now() - started < 4000 && !exists('cancel-after.txt'), 'a cancelled call stops (terminated: cancelled, 130) and runs nothing after', JSON.stringify(c))
   const ctl2 = new AbortController()
-  const c2 = run('while true; do :; done', EDITS, AGENT_LIMITS, ctl2.signal)
+  const c2 = run('while true; do :; done', EDITS, { ...AGENT_LIMITS, maxSteps: 10_000_000 }, ctl2.signal)
   setTimeout(() => ctl2.abort(), 100)
   const c2r = (await c2).result!
   check(c2r.terminated === 'cancelled', 'cancelling a busy loop stops it', JSON.stringify(c2r.terminated))
@@ -398,7 +481,7 @@ try {
   // resolved-command check) still cannot read or write outside the work folder or write without a grant.
   {
     const { makePolicy } = await load<typeof import('../src/terminal/policy.ts')>('/src/terminal/policy.ts')
-    const ctx = (policy: ReturnType<typeof makePolicy>, args: string[]) => ({ args, stdin: null, cwd: FOLDER, setCwd() {}, env: {}, history: [], windows: [], openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent: () => true, print() {}, tty: false, live() {}, size: { cols: 80, rows: 24 }, signal: new AbortController().signal, onKey() {}, policy }) as never
+    const ctx = (policy: ReturnType<typeof makePolicy>, args: string[]) => ({ args, stdin: null, cwd: FOLDER, setCwd() {}, env: {}, history: [], windows: [], openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent: () => true, print() {}, tty: false, live() {}, size: { cols: 80, rows: 24 }, signal: new AbortController().signal, onKey() {}, policy, budget: new Budget(AGENT_LIMITS) }) as never
     const cmds = commands as Record<string, { run: (c: never) => unknown }>
     const asRead = async (name: string, args: string[], policy = makePolicy(EDITS)) => {
       try {
@@ -679,9 +762,19 @@ try {
       await tick()
       check(signals.length === 3 && signals.every((s) => s?.aborted) && !cachedRates(), 'all rate sources receive cancellation; late fallback results cannot populate cache')
 
+      for (const target of ['/api/fx', 'fallback']) {
+        requests = 0
+        g.fetch = async (url: string) => { requests++; return url === '/api/fx' && target === 'fallback' ? new Response('{}', { status: 503 }) : Response.json({ base: 'EUR', date: '2026-01-01', source: 'fixture', rates: { EUR: 1, USD: 2 }, unused: 'x'.repeat(20_000) }) }
+        const r = await result('calc 10 EUR in USD', permitted, smallBounds)
+        check(r.terminated === 'output' && !cachedRates() && requests <= 3, `round4: exchange rates ${target} body bounded before parse/cache`, JSON.stringify(r))
+      }
       requests = 0
       g.fetch = async () => { requests++; return Response.json({ base: 'EUR', date: '2026-01-01', source: 'fixture', rates: { EUR: 1, USD: 2 } }) }
-      check((await result('calc 10 EUR in USD', permitted)).exit_code === 0 && requests === 1, 'approved rate lookup still calculates successfully')
+      const storageGet = fakeStorage.getItem
+      fakeStorage.getItem = () => { throw new Error('storage blocked') }
+      const calcResult = await result('calc 10 EUR in USD', permitted)
+      fakeStorage.getItem = storageGet
+      check(calcResult.exit_code === 0 && requests === 1, 'approved rate lookup still calculates successfully with blocked browser storage', JSON.stringify(calcResult))
       for (const name of ['calc', 'units', 'bc']) {
         check((await result(`${name} 10 EUR in USD`, READONLY)).exit_code === 0 && requests === 1, `${name} may use cached rates without network authority or new requests`)
       }
@@ -730,7 +823,8 @@ try {
     release!()
     await new Promise((r) => setTimeout(r, 80))
     check(stopped.result?.terminated === 'timeout' && !requests.some((r) => r.method === 'POST'), 'delayed preparation released after timeout cannot submit touch POST')
-    const actor = actorOf({ policy: makePolicy({ ...sfGrant, delete: true }), signal: new AbortController().signal })
+    const actor = actorOf({ budget: new Budget(AGENT_LIMITS), policy: makePolicy({ ...sfGrant, delete: true }), signal: new AbortController().signal })
+    await prepare('/review', 'ls', ['src'], actor)
     for (const operation of [() => transfer('copy', '/review', 'src', 'dest', true, actor), () => removePath('/review', 'src', { recursive: true, force: true, dir: false, root: actor })]) {
       let denied = false
       try { await operation() } catch { denied = true }
@@ -739,10 +833,50 @@ try {
     const ctl = new AbortController()
     holdLink = true
     const linked = new Promise<void>((r) => { entered = r })
-    const write = writeFile('/review', 'existing.txt', 'new', false, actorOf({ policy: makePolicy(sfGrant), signal: ctl.signal })).catch(() => {})
+    const write = writeFile('/review', 'existing.txt', 'new', false, actorOf({ budget: new Budget(AGENT_LIMITS), policy: makePolicy(sfGrant), signal: ctl.signal })).catch(() => {})
     await Promise.race([linked, new Promise((_, reject) => setTimeout(() => reject(new Error('update link not reached')), 3000))])
     ctl.abort(); release!(); await write
     check(!requests.some((r) => r.method === 'POST'), 'abort during update-link lookup prevents upload POST')
+    // Every Seafile helper reachable from an agent must use the same response boundary,
+    // including link metadata, error bodies, successful mutation acknowledgements and caches.
+    const sf = await load<typeof import('../src/data/seafile.ts')>('/src/data/seafile.ts')
+    const { downloadJson, downloadText } = await load<typeof import('../src/terminal/download.ts')>('/src/terminal/download.ts')
+    const { boundedJson } = await load<typeof import('../src/terminal/jq-safe.ts')>('/src/terminal/jq-safe.ts')
+    const sfFetch = g.fetch as typeof fetch
+    const guardedIo = (budget: InstanceType<typeof Budget>) => {
+      const context = { budget, signal: new AbortController().signal, policy: makePolicy(sfGrant) }
+      return { signal: context.signal, check: () => { context.signal.throwIfAborted(); if (budget.step()) throw new Error('stopped') }, json: (r: Response) => downloadJson(r, context), text: (r: Response) => downloadText(r, context), snapshot: async (v: unknown) => { await boundedJson(v, context) } }
+    }
+    const sfPath = 'seafile://repo/existing.txt'
+    const sfCases: [string, string, (guard: ReturnType<typeof guardedIo>) => Promise<unknown>][] = [
+      ['libraries', '/api/seafile/libraries', guard => sf.loadLibraries(true, guard)],
+      ['listing', '/api/seafile/dir', guard => sf.listDir('seafile://repo/audit-listing', 0, guard)],
+      ...(['download', 'upload', 'update'] as const).map(op => [`${op} link`, '/api/seafile/link', (guard: ReturnType<typeof guardedIo>) => sf.fileLink(sfPath, op, guard)] as [string, string, (guard: ReturnType<typeof guardedIo>) => Promise<unknown>]),
+      ['file text', '/mock-file', guard => sf.readText(sfPath, guard)],
+      ['write acknowledgement', '/mock-file', guard => sf.writeText(sfPath, 'ok', guard)],
+      ['upload acknowledgement', '/mock-file', guard => sf.uploadBlob('seafile://repo/', 'audit.txt', new Blob(['ok']), guard)],
+      ['create acknowledgement', '/api/seafile/file', guard => sf.createFile(sfPath, guard)],
+      ['mkdir acknowledgement', '/api/seafile/dir', guard => sf.mkdir('seafile://repo/audit-dir', guard)],
+      ['delete acknowledgement', '/api/seafile/delete', guard => sf.deleteItems([sfPath], guard)],
+      ['history metadata', '/api/seafile/history', guard => sf.historyDays('repo', guard)],
+    ]
+    for (const [name, target, operation] of sfCases) {
+      for (const status of [200, 500]) {
+        g.fetch = (input: Parameters<typeof fetch>[0], init?: RequestInit) => new URL(String(input), 'http://localhost').pathname === target ? Promise.resolve(new Response(JSON.stringify({ unused: 'x'.repeat(20_000) }), { status })) : sfFetch(input, init)
+        const budget = new Budget(smallBounds)
+        let failed = false
+        try { await operation(guardedIo(budget)) } catch { failed = true }
+        check(failed && budget.stopped === 'output', `round4: Seafile ${name} streams before parse/retention (HTTP ${status})`, JSON.stringify({ failed, stopped: budget.stopped }))
+      }
+    }
+    g.fetch = sfFetch
+    const cacheBudget = new Budget({ ...AGENT_LIMITS, maxBuffer: 100, maxTotal: 1000 })
+    await sf.loadLibraries(false, guardedIo(cacheBudget)).catch(() => {})
+    check(cacheBudget.stopped !== null, 'round4: existing Seafile library cache is charged before use')
+    const prepared = await execute('pwd', '/review', sfGrant, { ...AGENT_LIMITS, maxBuffer: 100, maxTotal: 1000 }, new AbortController().signal, '.')
+    check(prepared.result?.terminated !== null && prepared.status === 125, 'round4: cwd preparation budget failures keep structured termination', JSON.stringify(prepared))
+    const read = await execute('cat existing.txt', '/review', sfGrant, AGENT_LIMITS, new AbortController().signal)
+    check(read.status === 0 && read.result?.stdout === 'data', 'round4: guarded Seafile file read still works', JSON.stringify(read))
     setFstab('UUID=repo /review seafile defaults 0 0\n/review/.agents /review/innocent none bind 0 0')
     const steeringAlias = makePolicy(sfGrant)
     check(!!steeringAlias.write('/review/innocent/rules.md'), 'R2 steering protection follows backing identity through a bind alias')

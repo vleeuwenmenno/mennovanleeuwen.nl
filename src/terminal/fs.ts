@@ -1,6 +1,9 @@
+import { reserve, textWork } from './bounds'
+import { downloadJson, downloadText } from './download'
+import { boundedJson } from './jq-safe'
 import { browserFilesReady, browserText, listBrowser, mkdirBrowser, readBrowserBlob, readBrowserText, removeBrowser, setBrowserMode, statBrowser, transferBrowser, writeBrowserFile } from '../data/browserfs'
 import { browserMountPoint, getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
-import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readBlob, readText, renameItem, SF, sfPath, transferItems, uploadBlob, writeText, type Entry } from '../data/seafile'
+import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readBlob, readText, renameItem, SF, sfPath, transferItems, uploadBlob, writeText, type Entry, type IoGuard } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
 import { CmdError, DeniedError } from './types'
@@ -189,7 +192,7 @@ export function sfOf(abs: string): { sf: string; ro: boolean } | null {
 // --- fetching ahead -------------------------------------------------------------------------------
 
 /** Commands that read the contents of the files they are given. */
-const READERS = new Set(['cat', 'less', 'more', 'head', 'tail', 'wc', 'grep', 'egrep', 'sort', 'uniq', 'jq', 'sha1sum', 'sha256sum', 'sha512sum', 'md5sum', 'nano', 'cp', 'diff', 'base64'])
+const READERS = new Set(['cat', 'less', 'more', 'bat', 'lolcat', 'xxd', 'hexdump', 'od', 'sha384sum', 'head', 'tail', 'wc', 'grep', 'egrep', 'sort', 'uniq', 'jq', 'sha1sum', 'sha256sum', 'sha512sum', 'md5sum', 'nano', 'cp', 'diff', 'base64'])
 /** Commands that look after themselves (sudo runs its command, which is prepared then). */
 const SELF_SERVED = new Set(['fscrypt', 'mount', 'umount', 'findmnt', 'lsblk', 'sudo', 'echo', 'man', 'help', 'clear', 'history', 'visited'])
 const ALWAYS_RECURSIVE = new Set(['find', 'fd', 'tree', 'du'])
@@ -200,11 +203,13 @@ const usesSeafile = () => mounts().some((m) => isSeafileType(m) || m.options.inc
 class FsError extends CmdError {}
 
 /** Fetches one Seafile folder; a locked library or a dead connection is an error for `cmd`. */
-async function fetchDir(sf: string, cmd: string, arg: string | null) {
+async function fetchDir(sf: string, cmd: string, arg: string | null, actor: Actor = false) {
   try {
-    await listDir(sf)
+    await listDir(sf, 30_000, ioGuard(actor))
     return true
   } catch (e) {
+    checkActor(actor)
+    if (typeof actor !== 'boolean' && actor.policy && errorStatus(e) === null) throw e
     const status = errorStatus(e)
     if (!arg || status === 404) return false
     if (status === 423) throw new FsError(`${cmd}: cannot access '${arg}': Required key not available`)
@@ -214,8 +219,8 @@ async function fetchDir(sf: string, cmd: string, arg: string | null) {
 
 async function fetchText(sf: string, e: Entry, actor: Actor = false) {
   const hit = texts.get(sf)
-  if (hit && hit.mtime === e.mtime) return
-  texts.set(sf, { text: await readText(sf, { check: () => checkActor(actor), signal: typeof actor === 'boolean' ? undefined : actor.signal }), mtime: e.mtime })
+  if (hit && hit.mtime === e.mtime) { textWork(boundActor(actor), hit.text.length); return }
+  texts.set(sf, { text: await readText(sf, ioGuard(actor)), mtime: e.mtime })
 }
 
 /** One path: its folder's listing, its own if it is a folder, and its text if `read`. */
@@ -227,21 +232,22 @@ async function ensure(abs: string, cmd: string, arg: string | null, read: boolea
   }
   let w = whereIs(abs)
   if (w.kind === 'missing' && w.loading) {
-    await loadLibraries()
+    await loadLibraries(false, ioGuard(actor))
     checkActor(actor)
     w = whereIs(abs)
   }
   if (w.kind !== 'sf' || w.sf === SF) return null
   // The work folder's own listing is enough; do not fetch its unauthorized parent.
   const parent = typeof actor !== 'boolean' && actor.policy?.grant.root === abs ? null : sfParent(w.sf)
-  if (parent && !(await fetchDir(parent, cmd, arg))) return null
+  if (parent && !(await fetchDir(parent, cmd, arg, actor))) return null
   checkActor(actor)
   const e = sfEntry(w.sf)
   if (!parent || e?.dir) {
-    await fetchDir(w.sf, cmd, arg)
+    await fetchDir(w.sf, cmd, arg, actor)
     return w.sf
   }
-  if (e && read && e.size <= MAX_TEXT) await fetchText(w.sf, e, actor).catch(() => {})
+  if (e && read && typeof actor !== 'boolean' && actor.budget && e.size > MAX_TEXT) { actor.budget.stop('memory'); throw err('msh: file metadata exceeds text limit') }
+  if (e && read && e.size <= MAX_TEXT) await fetchText(w.sf, e, actor).catch(error => { if (typeof actor !== 'boolean' && actor.policy) throw error })
   return null
 }
 
@@ -256,7 +262,7 @@ async function ensureTree(root: string, cmd: string, read: boolean, actor: Actor
     await Promise.all(
       batch.map(async (sf) => {
         checkActor(actor)
-        if (!(await fetchDir(sf, cmd, null))) return
+        if (!(await fetchDir(sf, cmd, null, actor))) return
         checkActor(actor)
         for (const e of cachedDir(sf)?.listing?.entries ?? []) {
           const child = `${sf}/${e.name}`
@@ -280,6 +286,10 @@ export async function prepare(cwd: string, cmd: string, args: string[], actor: A
   checkActor(actor)
   // Data operands are never filesystem paths; cancellation still precedes this return.
   if (hasNoFileOperands(cmd)) return
+  if (typeof actor !== 'boolean' && actor.policy) {
+    const why = actor.policy.command(cmd, args, cwd)
+    if (why) throw err(why)
+  }
   const paths = typeof actor === 'boolean' || !actor.policy ? args : fileOperands(cmd, args)
   if (typeof actor !== 'boolean' && actor.policy) {
     for (const path of [cwd, ...paths.map((p) => resolvePath(cwd, p))]) {
@@ -289,9 +299,9 @@ export async function prepare(cwd: string, cmd: string, args: string[], actor: A
   }
 
   // The browser's files load once, right after sign-in; the first command waits for that.
-  if (browserMountPoint()) await browserFilesReady()
+  if (browserMountPoint() && (typeof actor === 'boolean' || !actor.policy)) await browserFilesReady()
   if (!usesSeafile() || !getAccount().seafile || SELF_SERVED.has(cmd)) return
-  if (!getLibraries()) await loadLibraries()
+  if (!getLibraries() || (typeof actor !== 'boolean' && actor.policy)) await loadLibraries(false, ioGuard(actor))
   const read = READERS.has(cmd)
   const recursive = ALWAYS_RECURSIVE.has(cmd) || (MAYBE_RECURSIVE.has(cmd) && args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === '--recursive'))
   await ensure(cwd, cmd, null, false, actor)
@@ -329,15 +339,25 @@ export async function prepareFolder(abs: string) {
 
 /** A Seafile file's text for an editor: fetched now, whatever its age. */
 export async function readFileText(abs: string, root = false, actor: Actor = false): Promise<{ text: string; ro: boolean } | null> {
+  checkActor(actor)
+  const outside = typeof actor === 'boolean' ? null : actor.policy?.read(abs)
+  if (outside) throw err(outside)
   const node = lookup(abs)
   if (!node || node.type !== 'file') return null
   // A mode set with chmod can forbid the read; the callers that show it say so (DeniedError).
   if (!allows(abs, node, 'r', root)) throw new DeniedError('Permission denied')
-  if (node.browser) return { text: await readBrowserText(node.browser), ro: false }
+  if (node.browser) {
+    if (typeof actor !== 'boolean' && actor.policy) throw err('msh: browser-backed file reads are unavailable to agents; use a Seafile work folder')
+    return { text: await readBrowserText(node.browser), ro: false }
+  }
   // The site's own files under the browser mount: readable, and saving makes the browser's copy.
-  if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && abs !== RC_PATH && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
+  if (!node.sf) {
+    const text = cachedText(abs, node, actor)
+    return { text, ro: abs !== '/etc/fstab' && abs !== RC_PATH && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
+  }
   checkActor(actor)
-  const text = await readText(node.sf, { check: () => checkActor(actor), signal: typeof actor === 'boolean' ? undefined : actor.signal })
+  const text = await readText(node.sf, ioGuard(actor))
+  textWork(boundActor(actor), text.length, 1)
   texts.set(node.sf, { text, mtime: node.mtime ?? 0 })
   return { text, ro: !!node.ro }
 }
@@ -349,6 +369,31 @@ export async function readFileText(abs: string, root = false, actor: Actor = fal
  * boolean is the old way to say "root or not" and means no policy (the user's own writes: Zed, Files).
  */
 export type Actor = boolean | { root: boolean; policy?: Policy; signal?: AbortSignal; budget?: Budget }
+const boundActor = (actor: Actor) => typeof actor === 'boolean' ? {} : actor
+/** A shared cached-content boundary used by command readers, scripts and redirects. */
+export function cachedText(abs: string, node: FileNode, actor: Actor): string {
+  checkActor(actor)
+  if (typeof actor !== 'boolean' && actor.policy) {
+    const outside = actor.policy.read(abs)
+    if (outside) throw err(outside)
+    if (node.browser) throw err('msh: browser-backed file reads are unavailable to agents; use a Seafile work folder')
+    if (!node.sf && !node.dev && !abs.startsWith('/tmp/')) throw err('msh: dynamic site files are unavailable to agents; use a work-folder file')
+  }
+  // Device content generators allocate up to 64 KiB when called.
+  if (node.dev) textWork(boundActor(actor), node.dev.major === 1 && node.dev.minor === 3 ? 0 : 65536)
+  const text = node.content()
+  textWork(boundActor(actor), text.length)
+  return text
+}
+function ioGuard(actor: Actor, check = () => checkActor(actor)): IoGuard | undefined {
+  if (typeof actor === 'boolean') return undefined
+  const ctx = { ...actor, signal: actor.signal ?? new AbortController().signal }
+  return { check, signal: actor.signal,
+    json: actor.budget || actor.policy ? response => downloadJson(response, ctx) : undefined,
+    text: actor.budget || actor.policy ? response => downloadText(response, ctx) : undefined,
+    snapshot: actor.budget || actor.policy ? async value => { const text = await boundedJson(value, ctx); textWork(ctx, text.length) } : undefined,
+  }
+}
 const isRoot = (a: Actor) => (typeof a === 'boolean' ? a : a.root)
 /** An agent call's policy refusing a write: the command's own error. */
 export function checkActor(a: Actor) {
@@ -358,6 +403,7 @@ export function checkActor(a: Actor) {
     const why = a.policy.tree(a.policy.grant.root)
     if (why) throw err(why)
   }
+  if (a.policy && !a.budget) throw err('msh: agent budget required')
   if (a.budget?.step()) throw err(`msh: ${a.budget.stopped} limit reached`)
 }
 function mayWrite(a: Actor, abs: string, op: 'write' | 'delete' = 'write') {
@@ -391,6 +437,7 @@ const needParent = (abs: string, what: string, root?: boolean) => need(parentOf(
 export async function setMode(abs: string, mode: number | null, who: Actor = false): Promise<void> {
   const root = isRoot(who)
   mayWrite(who, abs)
+  if (typeof who !== 'boolean' && who.policy && whereIs(abs).kind !== 'local') throw err('chmod: agent mode changes currently require local /tmp files')
   const node = lookup(abs)
   if (!node) throw err(`chmod: cannot access '${abs}': No such file or directory`)
   const w = whereIs(abs)
@@ -435,6 +482,7 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   else needParent(abs, `${who}: ${target}`, root)
   if (abs === RC_PATH && w.kind === 'local' && !cvMode()) {
     const prev = keptRc()
+    reserve(boundActor(actor), content.length * 4 + 1)
     const body = content && !content.endsWith('\n') ? `${content}\n` : content
     guarded(actor, setKeptRc)(append && prev ? (prev.endsWith('\n') ? prev + body : `${prev}\n${body}`) : body)
     return
@@ -445,6 +493,7 @@ export async function writeFile(cwd: string, target: string, content: string, ap
     const node = lookup(abs)
     if (node?.type === 'dir') throw err(`${who}: is a directory: ${target}`)
     await browserFolder(parentOf(abs), who, target, actor)
+    reserve(boundActor(actor), content.length * 4 + 1)
     const body = content && !content.endsWith('\n') ? `${content}\n` : content
     let text = body
     if (append && node) {
@@ -460,19 +509,22 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   const e = sfEntry(w.sf)
   if (e === undefined) throw err(`${who}: no such file or directory: ${target}`)
   if (e?.dir) throw err(`${who}: is a directory: ${target}`)
+  reserve(boundActor(actor), content.length * 4 + 1)
   const body = content && !content.endsWith('\n') ? `${content}\n` : content
   let text = body
   if (append && e) {
-    const prev = await readText(w.sf)
+    const prev = await readText(w.sf, ioGuard(actor))
+    reserve(boundActor(actor), prev.length + body.length + 1)
     text = prev && !prev.endsWith('\n') ? `${prev}\n${body}` : prev + body
   }
   if (!e) {
     guarded(actor, dropSfModes)(w.sf)
-    await guarded(actor, createFile)(w.sf)
+    await guarded(actor, createFile)(w.sf, ioGuard(actor, () => mayWrite(actor, abs)))
   }
-  await guarded(actor, writeText)(w.sf, text, { signal: typeof actor === 'boolean' ? undefined : actor.signal, check: () => mayWrite(actor, abs) })
+  reserve(boundActor(actor), text.length * 4)
+  await guarded(actor, writeText)(w.sf, text, ioGuard(actor, () => mayWrite(actor, abs)))
   texts.set(w.sf, { text, mtime: Date.now() })
-  await listDir(sfParent(w.sf)!, 0).catch(() => {})
+  await listDir(sfParent(w.sf)!, 0, ioGuard(actor)).catch(() => {})
 }
 
 /** A browser store refusal (a full disk, say) as the command's own error. */
@@ -530,8 +582,8 @@ export async function makeDir(cwd: string, arg: string, parents: boolean, actor:
     await makeDir('/', parent, true, actor)
   }
   guarded(actor, dropSfModes)(sf)
-  await guarded(actor, sfMkdir)(sf)
-  await listDir(sfParent(sf)!, 0).catch(() => {})
+  await guarded(actor, sfMkdir)(sf, ioGuard(actor, () => mayWrite(actor, abs)))
+  await listDir(sfParent(sf)!, 0, ioGuard(actor)).catch(() => {})
 }
 
 export async function touchFile(cwd: string, arg: string, actor: Actor = false) {
@@ -552,8 +604,8 @@ export async function touchFile(cwd: string, arg: string, actor: Actor = false) 
   const sf = writable(abs, arg, 'touch: cannot touch')
   if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
   guarded(actor, dropSfModes)(sf)
-  await guarded(actor, createFile)(sf)
-  await listDir(sfParent(sf)!, 0).catch(() => {})
+  await guarded(actor, createFile)(sf, ioGuard(actor, () => mayWrite(actor, abs)))
+  await listDir(sfParent(sf)!, 0, ioGuard(actor)).catch(() => {})
 }
 
 /**
@@ -589,15 +641,15 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
   const sf = writable(abs, arg, 'rm: cannot remove')
   if (opts.ask && !opts.force) {
     const repo = parseSf(sf)!.repo
-    if ((await historyDays(repo).catch(() => null)) === 0) {
+    if ((await historyDays(repo, ioGuard(opts.root ?? false)).catch(error => { checkActor(opts.root ?? false); if (typeof opts.root !== 'boolean' && opts.root?.policy) throw error; return null })) === 0) {
       const name = getLibraries()?.find((l) => l.id === repo)?.name ?? 'this library'
       if (!(await opts.ask(`rm: ${name} keeps no history: remove '${arg}' for good? [y/N]`))) return
     }
   }
-  await guarded(opts.root ?? false, deleteItems)([sf])
+  await guarded(opts.root ?? false, deleteItems)([sf], ioGuard(opts.root ?? false, () => mayWrite(opts.root ?? false, abs, 'delete')))
   texts.delete(sf)
   guarded(opts.root ?? false, dropSfModes)(sf)
-  await listDir(sfParent(sf)!, 0).catch(() => {})
+  await listDir(sfParent(sf)!, 0, ioGuard(opts.root ?? false)).catch(() => {})
 }
 
 /**
@@ -608,7 +660,8 @@ export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string,
   const root = isRoot(actor)
   const cmd = op === 'move' ? 'mv' : 'cp'
   const src = resolvePath(cwd, srcArg)
-  if (op === 'move') mayWrite(actor, src)
+  if (typeof actor !== 'boolean' && actor.policy && [src, resolvePath(cwd, destArg)].some(p => whereIs(p).kind !== 'local')) throw err(`${cmd}: agent transfers currently require local /tmp files`)
+  if (op === 'move') mayWrite(actor, src, typeof actor !== 'boolean' && actor.policy ? 'delete' : 'write')
   else if (typeof actor !== 'boolean' && actor.policy?.read(src)) throw err(actor.policy.read(src)!)
   const node = lookup(src)
   if (node?.type === 'dir' && typeof actor !== 'boolean' && actor.policy) throw err(`${cmd}: directory transfers are unavailable to agents; copy verified individual files`)
@@ -703,6 +756,12 @@ async function move(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: s
     await browserFolder(into, cmd, destArg, actor)
     if (existing?.browser) await guarded(actor, removeBrowser)(existing.browser)
     await guarded(actor, transferBrowser)(op, node.browser, (whereIs(dest) as { path: string }).path).catch(asCmdError(cmd))
+    return
+  }
+  if (typeof actor !== 'boolean' && actor.policy) {
+    if (node.type !== 'file' || fromSf || node.browser || whereIs(dest).kind !== 'local') throw err(`${cmd}: unsupported agent transfer`)
+    await writeFile('/', dest, cachedText(src, node, actor), false, actor, cmd)
+    if (op === 'move') await removePath('/', src, { recursive: false, force: true, dir: false, root: actor })
     return
   }
   // Across Seafile, the browser and /tmp: the bytes are carried over, folders and all.

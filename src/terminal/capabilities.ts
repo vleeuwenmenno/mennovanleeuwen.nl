@@ -4,7 +4,8 @@ import { getLibraries } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { browserMountPoint, isSeafileType, mounts, whereIs } from '../data/mounts'
 import { MSH_VERSION, SHELL_BUILTINS } from './msh/interp'
-import { EFFECTS } from './policy'
+import { EFFECTS, commandBounds } from './policy'
+import { reserve } from './bounds'
 import type { Ctx } from './types'
 
 // What this session can do, as data: `help --json` in the terminal and the agents' terminal_capabilities
@@ -79,6 +80,8 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
   const builtins = new Set(SHELL_BUILTINS)
   const names = [...new Set([...Object.keys(registry), ...builtins])].sort()
   const picked = only ? names.filter((n) => n === only) : names
+  // Registry entries are static, but constructing the full overview is still retained work.
+  reserve(ctx, picked.length * 1024)
   const full = picked.map((name) => {
     const info = registry[name]
     const { options, complete } = optionsOf(info?.usage)
@@ -99,13 +102,16 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
       options,
       optionsComplete: info?.usage ? complete : false,
       manual: info ? (info.man ? `man ${name}` : `${name} --help`) : 'man msh',
+      ...(policy && commandBounds(name) ? { bounds: commandBounds(name) } : {}),
       ...(policy ? { effect: effect ?? 'blocked', available: !blocked, ...(restriction ? { restriction } : {}) } : {}),
     }
   })
 
-  const commands = compact && !only ? full.filter((c) => !('alias' in c)).map(({ name, group, summary, kind, options, optionsComplete, ...rest }) => ({ name, group, summary: summary.slice(0, 60), kind, options: options.map((o) => (o.takesValue ? `${o.flag} <v>` : o.flag)), ...(optionsComplete ? {} : { optionsComplete }), ...('conditionalNetwork' in rest ? { conditionalNetwork: rest.conditionalNetwork } : {}), ...('available' in rest ? { available: rest.available, ...(rest.available && rest.restriction ? { restriction: rest.restriction } : {}) } : {}) })) : full
+  const commands = compact && !only ? full.filter((c) => !('alias' in c)).map(({ name, group, summary, kind, options, optionsComplete, ...rest }) => ({ name, group, summary: summary.slice(0, 60), kind, options: options.map((o) => (o.takesValue ? `${o.flag} <v>` : o.flag)), ...(optionsComplete ? {} : { optionsComplete }), ...('bounds' in rest ? { bounds: rest.bounds } : {}), ...('conditionalNetwork' in rest ? { conditionalNetwork: rest.conditionalNetwork } : {}), ...('available' in rest ? { available: rest.available, ...(rest.available && rest.restriction ? { restriction: rest.restriction } : {}) } : {}) })) : full
 
   const all = mounts()
+  reserve(ctx, all.length * 512)
+  for (const m of all) reserve(ctx, (m.target.length + m.source.length + m.type.length + m.options.reduce((n, o) => n + o.length, 0)) * 8)
   const root = grant?.root ?? null
   // The mount that holds the work folder: the longest target that is a prefix of it.
   const holder = root ? all.filter((m) => root === m.target || root.startsWith(m.target === '/' ? '/' : `${m.target}/`)).sort((a, b) => b.target.length - a.target.length)[0] : undefined
@@ -150,7 +156,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
         ? {
             workFolder: root ? { path: root, mount: holder?.target ?? null, writable: folderWritable && !!grant?.write } : null,
             agent: {
-              read: root ? `inside the work folder (${root}) only` : 'anywhere the terminal can read (this thread has no work folder)',
+              read: root ? `inside the work folder (${root}); Seafile and /tmp text, bounded devices only` : 'Seafile and /tmp text, bounded devices only (no work folder)',
               write: !root ? 'nowhere (no work folder)' : grant?.write ? (folderWritable ? 'inside the work folder only' : 'nowhere: the work folder is on a read-only mount') : `nowhere (${grant?.mode} mode does not let this call change files)`,
               delete: grant?.delete ? 'inside the work folder' : 'not for this call (the approved command line must name rm or rmdir)',
               steeringFiles: grant?.steering ? 'writable for this call (the user approved a command naming them)' : 'AGENTS.md, CLAUDE.md, .agents/, .claude/ cannot be written by this call',
@@ -161,7 +167,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
     },
     integrations,
     limits: ctx.budget
-      ? { maxSourceChars: 64_000, maxExpandedFields: 10_000, maxPatternChars: 256, maxPatternStars: 1, maxPatternInputChars: 4096, maxGrepPatternChars: 4096, maxIfsChars: 256, deadline: 'cooperative; synchronous JavaScript is not preempted', timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
+      ? { syncTextChars: 65536, maxCommandArgs: 128, textInputsPerCommand: 1, accounting: 'conservative intermediate allocation reservations plus bytes and UTF-16 text; not heap measurement', maxSourceChars: 64_000, maxExpandedFields: 10_000, maxPatternChars: 256, maxPatternStars: 1, maxPatternInputChars: 4096, maxGrepPatternChars: 4096, maxIfsChars: 256, deadline: 'cooperative; synchronous JavaScript is not preempted', timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
       : null,
     sessionRights: grant ? { mode: grant.mode, write: !!root && grant.mode !== 'plan', writeApproval: ['bypass', 'acceptEdits'].includes(grant.mode) ? 'not required inside work folder' : 'required', deleteApproval: grant.mode === 'bypass' ? 'not required' : 'required', networkApproval: grant.mode === 'bypass' ? 'not required' : 'required', steeringApproval: 'fresh explicit approval always required', queryAuthority: 'permissions below apply only to this call' } : null,
     permissions: grant ? { mode: grant.mode, write: grant.write, delete: grant.delete, network: grant.network, steering: grant.steering, appDataRead: grant.appDataRead ?? [] } : null,

@@ -62,16 +62,16 @@ export const EFFECTS: Record<string, Effect> = {
   test: 'read', '[': 'read',
   // Information about the session and plain computation.
   help: 'pure', man: 'pure', pwd: 'pure', whoami: 'pure', id: 'pure', hostname: 'pure', uname: 'pure', date: 'pure', uptime: 'pure', history: 'pure', env: 'pure', which: 'pure', clear: 'pure', tty: 'pure', stty: 'pure',
-  fastfetch: 'pure', neofetch: 'pure', fortune: 'pure', cowsay: 'pure', figlet: 'pure', lolcat: 'pure', cal: 'pure', calc: 'pure', units: 'pure', bc: 'pure', seq: 'pure', basename: 'pure', dirname: 'pure',
-  df: 'pure', free: 'pure', nproc: 'pure', lscpu: 'pure', ip: 'pure', ifconfig: 'pure', xrandr: 'pure', findmnt: 'pure', lsblk: 'pure', ps: 'pure', git: 'network', changelog: 'network', releases: 'network',
+  fastfetch: 'pure', neofetch: 'pure', fortune: 'pure', cowsay: 'pure', figlet: 'blocked', lolcat: 'read', cal: 'pure', calc: 'pure', units: 'pure', bc: 'pure', seq: 'pure', basename: 'pure', dirname: 'pure',
+  df: 'blocked', free: 'pure', nproc: 'pure', lscpu: 'pure', ip: 'pure', ifconfig: 'pure', xrandr: 'pure', findmnt: 'blocked', lsblk: 'blocked', ps: 'pure', git: 'network', changelog: 'blocked', releases: 'blocked',
   // Commands that read the files they are given (and the shell's own `cd`).
-  cd: 'read', ls: 'read', ll: 'read', cat: 'read', less: 'read', more: 'read', bat: 'read', head: 'read', tail: 'read', wc: 'read', grep: 'read', sort: 'read', uniq: 'read', tree: 'read', du: 'read', find: 'read', fd: 'blocked',
+  cd: 'read', ls: 'read', ll: 'read', cat: 'read', less: 'read', more: 'read', bat: 'read', head: 'read', tail: 'read', wc: 'read', grep: 'read', sort: 'read', uniq: 'read', tree: 'blocked', du: 'blocked', find: 'blocked', fd: 'blocked',
   'jq-safe': 'pure', mvl: 'resource', jq: 'blocked', sha1sum: 'read', sha256sum: 'read', sha384sum: 'read', sha512sum: 'read', md5sum: 'read', xxd: 'read', hexdump: 'read', od: 'read', tar: 'blocked', unzip: 'blocked',
   // Commands that write what they are given.
   touch: 'write', mkdir: 'write', tee: 'write', cp: 'write', mv: 'write', chmod: 'write',
   rm: 'delete', rmdir: 'delete',
   // The network.
-  curl: 'network', wget: 'network', ping: 'network', dig: 'network', host: 'network', nslookup: 'network', whois: 'network', pepper: 'network',
+  curl: 'network', wget: 'network', ping: 'network', dig: 'network', host: 'network', nslookup: 'network', whois: 'network', pepper: 'blocked',
 }
 
 /** find and fd options that run commands or write files: never for an agent. */
@@ -100,6 +100,7 @@ export function makePolicy(grant: Grant): Policy {
   }
   const where = root ? `the work folder (${root})` : 'a work folder'
   const read = (abs: string): string | null => {
+    if (whereIs(abs).kind === 'browser') return `${abs}: browser-backed agent reads are unavailable; use a Seafile work folder`
     if (identity(abs)) return identity(abs)
     if (!root || inside(root, abs) || HARMLESS_DEVICES.has(abs)) return null
     return `${abs}: outside ${where}`
@@ -139,13 +140,16 @@ export function makePolicy(grant: Grant): Policy {
         if (name.startsWith('/bin/') && !name.slice(5).includes('/')) name = name.slice(5)
         else return /\.game$/.test(name) ? `${name}: games do not run from the agent` : read(abs(cwd, name))
       }
+      if (args.length > 128 || args.some(a => a.length > 65536)) return `${name}: agent argument limit (128 words, 65536 characters each)`
+      if (['ls', 'll', 'cp', 'rm', 'chmod'].includes(name) && args.some(a => /^-[a-zA-Z]*[rR]/.test(a) || a === '--recursive')) return `${name}: recursive agent modes are unavailable`
+      if (['cp', 'mv', 'chmod'].includes(name) && fileOperands(name, args).some(p => whereIs(abs(cwd, p)).kind !== 'local')) return `${name}: agent transfers and mode changes currently require local /tmp files`
       if (name === 'grep') {
         const why = agentGrepRefusal(parseGrepArgs(args))
         if (why) return why
       }
       if (name === 'find' && (args.some((a) => ['-regex', '-iregex'].includes(a)) || args.some((a) => a.length > 256 || (a.match(/\*/g)?.length ?? 0) > 1))) return 'find: agent searches allow bounded glob patterns only, not regular expressions'
       const effect = EFFECTS[name]
-      if (effect === undefined || effect === 'blocked') return `${name}: not available to an agent (requires unsupported effects or unbounded synchronous execution); \`help --json\` lists what runs`
+      if (effect === undefined || effect === 'blocked') return `${name}: not available to an agent; \`help --json\` lists what runs`
       switch (effect) {
         case 'resource':
           return appDataDenial(args, grant)
@@ -188,7 +192,7 @@ export function fileOperands(name: string, args: string[]): string[] {
   if (hasNoFileOperands(name)) return []
   if (name === 'grep' || name === 'egrep') return parseGrepArgs(args).files.filter((p) => p !== '-')
   // cat aliases take literal names (no option parser). '-' alone denotes stdin.
-  if (['cat', 'less', 'more', 'bat'].includes(name)) return args.filter(a => a !== '-')
+  if (['cat', 'less', 'more', 'bat', 'lolcat'].includes(name)) return args.filter(a => a !== '-')
   if (name === 'rmdir') return args
   if (name === 'tree') return args.slice(0, 1)
   if (name === 'cd') return args.slice(0, 1).filter(a => a !== '-')
@@ -244,4 +248,15 @@ export function fileOperands(name: string, args: string[]): string[] {
   }
   // touch and checksums discard all dash-prefixed words; test's caller supplies file paths.
   return words
+}
+
+/** Runtime restrictions are also reported by the machine capability registry. */
+export function commandBounds(name: string): string | undefined {
+  if (['cp', 'mv', 'chmod'].includes(name)) return 'Local /tmp files only; no recursive modes or directory mutations. mv also requires delete authority.'
+  if (['cat', 'less', 'more', 'bat', 'head', 'tail', 'wc', 'grep', 'sort', 'uniq', 'xxd', 'hexdump', 'od', 'lolcat', 'sha1sum', 'sha256sum', 'sha384sum', 'sha512sum', 'md5sum'].includes(name)) return 'One input; at most 65536 characters; conservative shared allocation accounting before processing. Seafile, /tmp and bounded devices only.'
+  if (['ls', 'll'].includes(name)) return 'Nonrecursive; metadata and formatting count against shared limits.'
+  if (['curl', 'wget', 'whois', 'git', 'dig', 'host', 'nslookup', 'ping', 'calc', 'units', 'bc'].includes(name)) return 'Network bodies stream through shared byte/text accounting before decode/parse; structured responses also have depth/node/size limits. Synchronous formatting capped at 65536 characters.'
+  if (name === 'seq') return 'Each retained number is reserved before allocation; finite advancing ranges only.'
+  if (name === 'cowsay') return '65536-character input ceiling; 40-column wrapping and shared allocation reservation.'
+  return undefined
 }
