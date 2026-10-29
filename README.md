@@ -76,7 +76,7 @@ class separately from scaled dimensions, so a desktop at 200% still restores des
 Like a desktop, the chrome can't be selected: dragging across title bars, the dock, menus,
 sidebars, toolbars, list rows, icons or a game, or double-clicking a label, highlights nothing, a
 long press on it gets no text callout and a tap no grey flash. Text that is there to be read and
-copied can: fields, the terminal, Zed and every Markdown preview, Agents' messages and tool output,
+copied can: fields, the terminal, Xed and every Markdown preview, Agents' messages and tool output,
 the mail being read (subject, people, the message), notes and stickies, a contact's card, a
 read-only event's place and notes, PDF text, the Viewer, Preview's and Photos' info, Spotlight's
 previews, answers and sums, the CV page, inline code and error messages. Ctrl+A selects the text
@@ -193,7 +193,7 @@ Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)
 (several at once, as a pile with a count), rows in Files, apps and launchers in All apps, rows
 in Archive, and photos in Photos (see Photos below). They land on desktop folders and the desktop itself, Files windows (a folder, the
 folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
-files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
+files: Preview, Player, Omamp, PDF, the Viewer, Archive and Xed show what is dropped on them, and
 a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
 on it (from the computer, Files or the desktop) and takes a launcher as its link in the text, and
 the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick) and
@@ -237,7 +237,7 @@ Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): 
 sticky note, projects, contributions, skills and experience. The terminal's filesystem
 (`~/cv.md`, `~/projects/*/README.md`, ...) is generated from the same file.
 
-Markdown renders the same everywhere it shows (Zed's preview, Notebook, Spotlight and the Agents
+Markdown renders the same everywhere it shows (Xed's preview, Notebook, Spotlight and the Agents
 app's answers), through one parser of our own in [`src/data/markdown/`](src/data/markdown):
 CommonMark's blocks and inlines (emphasis nests in any combination, setext and ATX headings,
 nested and loose lists, quotes, fenced and indented code, reference links, escapes and hard
@@ -265,7 +265,7 @@ main bundle only carries the small matching code. `pnpm check:emoji` runs its te
 ### Visual blocks
 
 A fenced block with the language `visual` holds a small JSON spec that draws as a picture in every
-Markdown preview (Notebook, Zed, Spotlight, the Agents app's answers, READMEs and comments), so a
+Markdown preview (Notebook, Xed, Spotlight, the Agents app's answers, READMEs and comments), so a
 model or a note can show a diagram instead of describing one ([`src/data/visual/`](src/data/visual)):
 
 ````md
@@ -539,7 +539,7 @@ deleting inside), and `sudo` ignores all of it, down through `find -delete` and 
 makes. A file that replaces another (`mv`/`cp` over it) takes the new file's mode, never the old one's.
 Setuid, setgid and the sticky bit are kept and shown (`rws`, `r-S`, `t`, `T`; `a=rw` clears them, as in
 `chmod`), but setuid and setgid are display only: nothing here runs as someone else, so they grant
-nothing. The apps are the exception on the way out: Zed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Zed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
+nothing. The apps are the exception on the way out: Xed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Xed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
 
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
@@ -656,6 +656,52 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
 - **Tab bar**: from the second tab on (the default, like Ghostty), or always.
 - **Startup file**: run `~/.mvshrc` when a terminal opens (on by default; see below).
 
+### Xed: msh editing and debugging
+
+The editor is named **Xed**. Its existing `zed` app ID, launch links, file associations,
+component/module names and saved-window keys remain compatible.
+
+Files ending in `.msh` or `.sh`, and files with an msh shebang, use the shell's actual lexer
+and parser for highlighting and syntax diagnostics. Diagnostics show filename, line, column
+and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
+Nothing is executed to lint a file.
+
+**Debug saved file** launches `msh 'path'` through the normal command table, file reads and
+permission checks, using the project directory. Save changes first: this executes the saved
+file and can perform the same actions as running it in Terminal. The debugger starts paused
+at the launch command; **Step** enters the script. **Continue** runs until a breakpoint,
+**Step** stops before the next command/compound command, **Pause** requests a stop at the next
+checkpoint, and **Stop** aborts the session, including an awaited pause. Pauses show source
+location, status and variables. Click the location to open it. **Breakpoint line N** toggles
+a breakpoint at the editor caret; the breakpoint list shows its filename and line.
+
+**Attach debug session** lists only explicitly opted-in sessions in this page. It does not
+inspect ordinary terminals, agents, other browser tabs or server processes. Xed cancels its
+own sessions when its window closes; attaching does not transfer lifetime ownership.
+The registry holds at most 16 sessions (evicting completed ones), each with at most 256
+breakpoints and 256 displayed variables, capped at 4096 characters each. Output retains the
+last 32 KB. Controls wrap on phones and use the active theme.
+
+There is one interpreter. `parse.ts` adds token offsets and command `span` metadata;
+`interp.ts` awaits optional `Base.debug.checkpoint` hooks before execution. `debug.ts` owns
+session state and subscriptions. `launchDebug(line, base, label?)` returns `{ session, done }`
+and follows normal `runLine` execution; callers must supply their existing permission context.
+`runCapturedStreams(source, base, filename?)` returns distinct `{ stdout, stderr, status }`;
+`runCaptured` retains its existing combined-output API. `set -x` trace goes to stderr.
+
+Stepping is command-granular, not expression-level or step-over/step-out. Command substitution
+and alias expansions currently use their own `-c` coordinates. Breakpoints are filename/line
+based, can stop more than once on a loop line, and do not move when text is edited. Long-running
+commands pause only when they return to a checkpoint; Stop uses their normal abort signal.
+The debug panel does not supply interactive stdin or a full terminal for fullscreen commands;
+use Xed's terminal panel for those. The initial launch location is `-c`, followed by the file's
+own source coordinates. Variable snapshots can contain script secrets, just as Terminal output
+can; they stay in this page and are not persisted.
+
+Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams;
+`pnpm check:xed-debug-ui` drives the actual editor through the repository's muted Chromium
+harness against a caller-started scratch dev server (`XED_TEST_PORT`, default 5276).
+
 ### The shell, agents and skills
 
 The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
@@ -687,7 +733,7 @@ account or files do not answer within 4 s, and the first command typed waits for
 sources itself (`source`, `.` or `msh ~/.mvshrc`) is refused with "already running, skipped".
 There is no file until you make one (`nano ~/.mvshrc`, `echo "alias ll='ls -l'" >> ~/.mvshrc`);
 `help` and the Terminal settings mention it. Where it lives follows home: in the browser's files
-or Seafile once signed in (a normal file there, so Zed, Files and the terminal all edit it); signed
+or Seafile once signed in (a normal file there, so Xed, Files and the terminal all edit it); signed
 out, where home is read-only, `~/.mvshrc` is still a file the terminal can create, read and remove
 (`nano`, `>`, `>>`, `rm`), but its text is kept in this browser
 ([`src/terminal/rcfile.ts`](src/terminal/rcfile.ts), a `synced()` value, so local without an
@@ -1164,7 +1210,7 @@ keeps the dock and Spotlight's favourites pointing at it when the file moves. On
 MvL OS app instead has `Type=Application`, `X-MvL-App=calendar` and, optionally,
 `X-MvL-Props=path=~/Work;`. The desktop and Files show a launcher as itself (its name and icon,
 opened with a double-click), never as `GitHub.desktop`; *Show hidden files* in Files shows the
-file's own name, and its menu has *Edit the file in Zed*. Renaming one changes its `Name=` (and
+file's own name, and its menu has *Edit the file in Xed*. Renaming one changes its `Name=` (and
 drops its translations, `Name[nl]=`, so the new name shows in every language); the file keeps its
 name. The terminal shows them as the files they are: `ls ~/Desktop` lists `GitHub.desktop`, `cat`
 prints it and `open GitHub.desktop` opens what it points at. The format is read without a library
@@ -1682,10 +1728,10 @@ token Seafile hands out, encrypted, which shows up in Seafile's Devices as the s
 ([`server/seafile.ts`](server/seafile.ts)). Every library is under Seafile in Files' sidebar. The
 primary library (My Library unless you pick another) is home unless you switch that off: Places'
 Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
-Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
+Text, code and config open in Xed and save back with Ctrl+S; pictures, video, audio and PDFs open in
 the Viewer; `.ics` (also `.ical`, `.ifb`) and `.vcf` (`.vcard`) files open in Calendar and Contacts and
 bring up their import dialog (see Calendar and Contacts), from Files, the desktop, Spotlight, the
-terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Zed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
+terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Xed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
 again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
 headers, so it goes through the server; files themselves go straight between the browser and
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
@@ -1709,10 +1755,10 @@ across the mounts; before a command runs, the Seafile folders and files it names
 **Without Seafile**, signed in, `~` is kept in this browser ([`src/data/browserfs.ts`](src/data/browserfs.ts):
 one IndexedDB database per account, so another account on the same browser never sees it), laid
 over the site's own home so README.md, games/ and the wallpapers stay readable. The terminal,
-Files, Zed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
+Files, Xed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
 and write it, and copying or moving between it and Seafile carries the bytes over
 ([`src/data/fileOps.ts`](src/data/fileOps.ts)). Clearing the site's data deletes it, which is said
-wherever it shows: a strip in Files, *Browser only* in Zed's status bar, the terminal's welcome and
+wherever it shows: a strip in Files, *Browser only* in Xed's status bar, the terminal's welcome and
 `df`, Settings → Account (with a Delete). Once Seafile is home it is mounted on `/mnt/browser`
 instead, and MvL OS offers to copy it into Seafile folder for folder. Unpacking archives and
 OnlyOffice need the file in Seafile.
@@ -1761,7 +1807,7 @@ Files' toolbar has the sidebar button at its left end and the **preview pane** b
 end ([`src/apps/FilesPreview.tsx`](src/apps/FilesPreview.tsx)). The pane, on the right of the list,
 shows the selected file (the one last clicked, with several selected) with the same code the apps
 use: pictures as in Preview, video and audio through Player's addresses (with controls, muted and
-not playing by themselves), Markdown as Zed's preview renders it, code and text with the same
+not playing by themselves), Markdown as Xed's preview renders it, code and text with the same
 highlighter (the first 200 KB or 2,000 lines), a PDF's first page with pdf.js, and the top level of
 a ZIP (or of a tar in Seafile) as the Archive app reads it. Office documents are never opened there,
 since that would mean loading OnlyOffice in the pane: they, and files of any other kind, show their

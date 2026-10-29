@@ -103,7 +103,7 @@ export function shortcuts(ctrlSpace: CtrlSpace = spotlightPrefs().ctrlSpace): Sh
     ],
   },
   {
-    area: 'Zed',
+    area: 'Xed',
     keys: [
       ['Ctrl P', 'go to file'],
       ['Ctrl F', 'find in the file (↵ next, Shift ↵ previous)'],

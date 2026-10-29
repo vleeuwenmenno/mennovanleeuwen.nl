@@ -4,6 +4,8 @@
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
+import { DebugSession } from './debug'
+import { diagnostic, formatDiagnostic } from './analysis'
 import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
@@ -12,9 +14,9 @@ import { lookup, prepare, prepareFolder, readFileText, writeFile } from '../fs'
 import { allows, canRun } from '../modes'
 import { arith } from './arith'
 import { globMatch, globSource, hasGlob, unescapeGlob } from './glob'
-import { Incomplete, nestedEnd, parse, type Node, type Redirect } from './parse'
+import { Incomplete, nestedEnd, parse, type Node, type Redirect, type SourceSpan } from './parse'
 
-export type Base = Omit<Ctx, 'args' | 'stdin' | 'tty'>
+export type Base = Omit<Ctx, 'args' | 'stdin' | 'tty'> & { debug?: DebugSession }
 export type RunResult = { output: string; ok: boolean }
 type Cmd = { run: (ctx: Ctx) => string | void | Promise<string | void> }
 
@@ -322,6 +324,7 @@ class Shell {
   /** The status of the last $(…) in the current command, for a line of assignments only */
   private substStatus: number | null = null
   private depth = 0
+  private location?: SourceSpan
   /** Alias names that do not expand while an expanded alias runs (the loop guard) */
   private aliasBlock: Set<string> | null = null
 
@@ -721,6 +724,17 @@ class Shell {
 
   async exec(n: Node, io: Io, cond = false): Promise<number> {
     this.checkAbort()
+    if (n.span) this.location = n.span
+    if (n.span && this.base.debug && n.t !== 'func') {
+      await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal)
+      this.checkAbort()
+      if (this.base.debug.abort.signal.aborted) throw new AbortSignal_()
+    }
+    if ((n.t === 'simple' || n.t === 'arith') && n.span && n.span.filename !== '-c') {
+      const location = n.span
+      const err = io.err
+      io = { ...io, err: { ...err, write: text => err.write(text.startsWith('{c:red}') ? `${location.filename}:${location.line}:${location.column}: [${location.expression.slice(0, 200)}] ${text}` : text) } }
+    }
     switch (n.t) {
       case 'list': {
         let s = 0
@@ -1090,14 +1104,19 @@ class Shell {
   async runSource(src: string, io: Io, label: string): Promise<number> {
     let tree: Node
     try {
-      tree = parse(src)
+      tree = parse(src, label)
     } catch (e) {
-      io.err.write(`${red(`msh: ${label}: ${(e as Error).message}`)}\n`)
+      io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, label, e))}`)}\n`)
       return 2
     }
     try {
       return await this.exec(tree, io)
     } catch (e) {
+      if (e instanceof Error && this.location) {
+        const at = this.location
+        const err = io.err
+        return this.caught(e, { ...io, err: { ...err, write: text => err.write(`${at.filename}:${at.line}:${at.column}: [${at.expression.slice(0, 200)}] ${text}`) } })
+      }
       return this.caught(e, io)
     }
   }
@@ -1823,6 +1842,27 @@ export async function runCaptured(src: string, shell: Base): Promise<{ output: s
   const out = bufferSink()
   const status = await sh.runSource(src, { out, err: out, stdin: null }, '-c')
   return { output: hooks.strip(out.text).replace(/\n$/, ''), status }
+}
+
+/** Separate byte streams for regression tools and editor output; legacy runCaptured stays unchanged. */
+export async function runCapturedStreams(src: string, shell: Base, filename = '-c'): Promise<{ stdout: string; stderr: string; status: number }> {
+  const sh = topShell({ ...shell, env: { ...shell.env }, print: () => {} }, false)
+  const out = bufferSink(), err = bufferSink()
+  const status = await sh.runSource(src, { out, err, stdin: null }, filename)
+  return { stdout: hooks.strip(out.text), stderr: hooks.strip(err.text), status }
+}
+
+/** Launch through normal command lookup, msh file reads, mode checks, and command execution. */
+export function launchDebug(line: string, shell: Base, label = line) {
+  const session = new DebugSession(label)
+  const abort = () => session.cancel()
+  shell.signal.addEventListener('abort', abort, { once: true })
+  const done = runLine(line, { ...shell, debug: session, signal: session.abort.signal })
+    .then(results => { session.finish(session.abort.signal.aborted ? 130 : Number(shell.env['?'] ?? (results.every(r => r.ok) ? 0 : 1))); return results })
+    .catch(error => { session.finish(1); throw error })
+    .finally(() => shell.signal.removeEventListener('abort', abort))
+  if (shell.signal.aborted) session.cancel()
+  return { session, done }
 }
 
 /** The aliases of a terminal session (its environment object), for completion, which and the rc. */

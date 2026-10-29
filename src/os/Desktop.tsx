@@ -529,7 +529,7 @@ export function Desktop() {
       return [
         { label: l.app ? 'Open' : 'Open ↗', shortcut: '↵', onSelect: () => open(icon) },
         ...(l.url ? [{ label: 'Copy link', onSelect: () => navigator.clipboard?.writeText(l.url).catch(() => {}) }] : []),
-        ...(l.file ? [{ label: 'Show in Files', onSelect: () => wm.openNew('files', { path: l.file!.split('/').slice(0, -1).join('/'), select: l.file }) }, { label: 'Edit the file in Zed', onSelect: () => void openSeafile(wm, l.file!, { how: 'zed' }) }] : []),
+        ...(l.file ? [{ label: 'Show in Files', onSelect: () => wm.openNew('files', { path: l.file!.split('/').slice(0, -1).join('/'), select: l.file }) }, { label: 'Edit the file in Xed', onSelect: () => void openSeafile(wm, l.file!, { how: 'zed' }) }] : []),
         { separator: true },
         { label: 'Rename', shortcut: 'F2', onSelect: () => setRenaming(icon.id) },
         { label: 'Edit launchers…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
@@ -549,7 +549,7 @@ export function Desktop() {
                 submenu: [
                   ...(isIcsName(icon.path) ? [{ label: 'Calendar', onSelect: () => void openSeafile(wm, icon.path, { how: 'calendar' }) }] : []),
                   ...(isVcfName(icon.path) ? [{ label: 'Contacts', onSelect: () => void openSeafile(wm, icon.path, { how: 'contacts' }) }] : []),
-                  { label: 'Zed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) },
+                  { label: 'Xed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) },
                   { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) },
                   { label: 'Preview', onSelect: () => void openSeafile(wm, icon.path, { how: 'preview' }) },
                   { label: 'Player', onSelect: () => void openSeafile(wm, icon.path, { how: 'player' }) },
