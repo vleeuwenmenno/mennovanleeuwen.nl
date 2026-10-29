@@ -9,6 +9,7 @@ import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
 import { lookup, prepare, prepareFolder, readFileText, writeFile } from '../fs'
+import { Budget, type Stop } from '../limits'
 import { allows, canRun } from '../modes'
 import { arith } from './arith'
 import { globMatch, globSource, hasGlob, unescapeGlob } from './glob'
@@ -40,12 +41,25 @@ export const aliasLine = (name: string, value: string) => `alias ${name}='${valu
 const red = (s: string) => `{c:red}${s}{/}`
 /** Deepest chain of files that source or run each other */
 const MAX_SOURCE_DEPTH = 16
+/** What `msh --version` and the capability report say */
+export const MSH_VERSION = '2.0'
+/** The widest field printf pads to: a format cannot ask for a gigabyte */
+const MAX_PAD = 100_000
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** A word that can be an alias: no quotes, escapes or expansions in it */
 const ALIAS_WORD = /^[^\s'"\\$`=/|&;()<>{}!*?[\]~#]+$/
 const nullSink: Sink = { tty: false, write: () => {} }
-const bufferSink = () => {
-  const sink = { tty: false, text: '', write: (t: string) => void (sink.text += t) }
+/** A buffer for a pipe, $(…) or a redirect; within an agent's call it counts against the call's budget. */
+const bufferSink = (budget?: Budget) => {
+  const sink = {
+    tty: false,
+    text: '',
+    write: (t: string) => {
+      const why = budget?.write(t.length, sink.text.length)
+      if (why) throw new LimitSignal(why)
+      sink.text += t
+    },
+  }
   return sink
 }
 
@@ -70,6 +84,12 @@ class ExitSignal extends Signal {
   }
 }
 class AbortSignal_ extends Signal {}
+/** A call ran out of its budget (steps, time, output, memory): it stops, and nothing catches this. */
+class LimitSignal extends Signal {
+  constructor(readonly why: Stop) {
+    super()
+  }
+}
 /** An error the shell itself reports (bad substitution, unbound variable): the command fails. */
 class ShellError extends Error {}
 
@@ -249,8 +269,9 @@ function printf(fmt: string, args: string[]): string {
         if (ai < args.length) used = true
         return args[ai++] ?? ''
       }
-      const width = widthRaw === '*' ? parseInt(next(), 10) || 0 : widthRaw ? parseInt(widthRaw, 10) : 0
+      const width = Math.min(widthRaw === '*' ? parseInt(next(), 10) || 0 : widthRaw ? parseInt(widthRaw, 10) : 0, MAX_PAD)
       const prec = precRaw === '*' ? parseInt(next(), 10) : precRaw !== undefined ? parseInt(precRaw, 10) : undefined
+      if (prec !== undefined && prec > MAX_PAD) throw new ShellError('printf: precision too large')
       const arg = next()
       const num = () => {
         const t = arg.trim()
@@ -370,6 +391,8 @@ class Shell {
 
   setVar(name: string, value: string) {
     if (!NAME.test(name)) throw new ShellError(`${name}: not a valid identifier`)
+    const why = this.base.budget?.variable(value.length)
+    if (why) throw new LimitSignal(why)
     this.st.vars[name] = value
   }
 
@@ -482,7 +505,7 @@ class Shell {
   /** $(…) and `…`: runs in a subshell and gives what it printed, trailing newlines removed. */
   private async substitute(src: string, io: Io): Promise<string> {
     const sub = this.subshell()
-    const out = bufferSink()
+    const out = bufferSink(this.base.budget)
     let status: number
     try {
       status = await sub.exec(parse(src), { out, err: io.err, stdin: null })
@@ -662,6 +685,8 @@ class Shell {
       const re = new RegExp(`^${globSource(seg)}$`)
       const next: typeof found = []
       for (const x of found) {
+        // A call confined to a folder cannot list what is outside it by globbing either (echo /etc/*).
+        if (this.base.policy?.read(x.abs)) continue
         await prepareFolder(x.abs)
         const node = lookup(x.abs)
         if (node?.type !== 'dir') continue
@@ -682,6 +707,7 @@ class Shell {
     const base: Base = { ...this.base }
     const st: State = { ...this.st, vars: { ...this.st.vars }, funcs: new Map(this.st.funcs), opts: { ...this.st.opts }, positional: [...this.st.positional], locals: [], aliases: new Map(this.st.aliases) }
     base.setCwd = (p) => {
+      this.guardCwd(p)
       base.cwd = p
       st.vars.PWD = p
     }
@@ -711,7 +737,16 @@ class Shell {
     throw e
   }
 
+  /** cd somewhere the call's policy keeps it out of: the command fails. */
+  guardCwd(to: string) {
+    const why = this.base.policy?.cwd(to)
+    if (why) throw new CmdError(`cd: ${why}`)
+  }
+
+  /** One step of the run: charged to the budget, and the end of it when it is spent or the call is cancelled. */
   private checkAbort() {
+    const why = this.base.budget?.step()
+    if (why) throw new LimitSignal(why)
     if (this.base.signal.aborted) throw new AbortSignal_()
   }
 
@@ -750,7 +785,7 @@ class Shell {
         let failed = 0
         for (let k = 0; k < n.cmds.length; k++) {
           const last = k === n.cmds.length - 1
-          const out = last ? io.out : bufferSink()
+          const out = last ? io.out : bufferSink(this.base.budget)
           status = await this.exec(n.cmds[k], { out, err: io.err, stdin }, true)
           if (status !== 0) failed = status
           if (!last) stdin = { data: hooks.strip((out as { text: string }).text), pos: 0 }
@@ -871,6 +906,17 @@ class Shell {
     return status
   }
 
+  /** A redirect or script read the call's policy refuses fails like any other bad redirect. */
+  private mayRead(abs: string) {
+    const why = this.base.policy?.read(abs)
+    if (why) throw new ShellError(why)
+  }
+
+  private mayWrite(target: string) {
+    const why = this.base.policy?.write(resolvePath(this.base.cwd, target))
+    if (why) throw new ShellError(why)
+  }
+
   /** Runs `fn` with redirections in place; files are written once it is done. */
   private async redirected(redirs: Redirect[], io: Io, fn: (io: Io) => Promise<number>): Promise<number> {
     if (!redirs.length) return fn(io)
@@ -894,7 +940,8 @@ class Shell {
             else if (r.fd === 1) next.out = to
           } else if (r.op === '>&' && r.fd === 1) {
             // `>& file` is &> file.
-            const sink = bufferSink()
+            this.mayWrite(target)
+            const sink = bufferSink(this.base.budget)
             files.push({ target, append: false, sink })
             next.out = next.err = sink
           }
@@ -902,6 +949,7 @@ class Shell {
         }
         if (r.op === '<') {
           const abs = resolvePath(this.base.cwd, target)
+          this.mayRead(abs)
           await prepare(this.base.cwd, 'cat', [target])
           const node = lookup(abs)
           if (!node) throw new ShellError(`${target}: No such file or directory`)
@@ -914,11 +962,12 @@ class Shell {
           continue
         }
         // > >> >| &>
+        this.mayWrite(target)
         const written = target === '/dev/null' ? null : lookup(resolvePath(this.base.cwd, target))
         const refused = written?.type === 'file' ? writeError('msh', target, written.dev, !!this.base.root) : null
         if (refused) throw new ShellError(refused.message.replace(/^msh: /, ''))
         // The character devices swallow what is written to them.
-        const sink = target === '/dev/null' || (written?.type === 'file' && written.dev) ? null : bufferSink()
+        const sink = target === '/dev/null' || (written?.type === 'file' && written.dev) ? null : bufferSink(this.base.budget)
         if (sink) files.push({ target, append: r.op === '>>', sink })
         const to = sink ?? nullSink
         if (r.op === '&>') next.out = next.err = to
@@ -936,9 +985,10 @@ class Shell {
     try {
       status = await fn(next)
     } finally {
-      for (const f of files) {
+      // A call that ran out of budget or was cancelled writes nothing more.
+      for (const f of this.base.budget?.stopped ? [] : files) {
         try {
-          await writeFile(this.base.cwd, f.target, hooks.strip(f.sink.text).replace(/\n$/, ''), f.append, !!this.base.root)
+          await writeFile(this.base.cwd, f.target, hooks.strip(f.sink.text).replace(/\n$/, ''), f.append, { root: !!this.base.root, policy: this.base.policy })
         } catch (e) {
           io.err.write(`${red(e instanceof CmdError ? e.message : `msh: ${(e as Error).message}`)}\n`)
           status = 1
@@ -1009,6 +1059,13 @@ class Shell {
     try {
       const fn = skipFunctions ? undefined : this.st.funcs.get(name)
       if (fn) return await this.call(name, fn, args, io)
+      // What the call may do is judged here, on the command as it resolved: the same for a typed line, eval, source, a script or a function body.
+      // A name that is no command at all falls through to "command not found".
+      const denied = BUILTINS[name] || name.includes('/') || name.endsWith('.game') || hooks.commands[name] ? this.base.policy?.command(name, args, this.base.cwd) : null
+      if (denied) {
+        io.err.write(`${red(`msh: ${denied}`)}\n`)
+        return 126
+      }
       const b = BUILTINS[name]
       if (b) {
         try {
@@ -1061,6 +1118,11 @@ class Shell {
    */
   private async scriptAt(path: string, io: Io): Promise<string | null | 'refused'> {
     const abs = resolvePath(this.base.cwd, path)
+    const outside = this.base.policy?.read(abs)
+    if (outside) {
+      io.err.write(`${red(`msh: ${outside}`)}\n`)
+      return 'refused'
+    }
     await prepare(this.base.cwd, 'cat', [path])
     const node = lookup(abs)
     if (node?.type !== 'file' || node.exec || node.name.endsWith('.game')) return null
@@ -1140,6 +1202,8 @@ class Shell {
 
   /** `read` from the keyboard: a line typed at the terminal. */
   readKeyboard(prompt: string): Promise<string | null> {
+    // Nobody types at an agent's call: `read` with no input sees the end of it.
+    if (this.base.policy) return Promise.resolve(null)
     return new Promise((resolve) => {
       let buf = ''
       const draw = () => this.base.live(`${prompt}${buf}{c:inverse} {/}`)
@@ -1165,6 +1229,8 @@ class Shell {
   /** A script file's text for msh/source, or null when there is none. */
   async readScript(path: string, who = 'msh'): Promise<string | null> {
     const abs = resolvePath(this.base.cwd, path)
+    const outside = this.base.policy?.read(abs)
+    if (outside) throw new ShellError(`${who}: ${outside}`)
     await prepare(this.base.cwd, 'cat', [path])
     const node = lookup(abs)
     if (node?.type !== 'file') return null
@@ -1694,7 +1760,7 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
       break
     }
     if (a === '--version') {
-      io.out.write('msh 2.0 (MvL OS shell)\n')
+      io.out.write(`msh ${MSH_VERSION} (MvL OS shell)\n`)
       return 0
     }
     if (a === '--help' || a === '-h') {
@@ -1719,7 +1785,7 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
   }
   if (src === null) {
     if (!io.stdin) {
-      io.out.write("msh 2.0 is the shell you are typing in. Run a line with msh -c 'echo hi', a script with msh file.sh, or read man msh.\n")
+      io.out.write(`msh ${MSH_VERSION} is the shell you are typing in. Run a line with msh -c 'echo hi', a script with msh file.sh, or read man msh.\n`)
       return 0
     }
     src = drain(io.stdin)
@@ -1752,6 +1818,8 @@ async function mshCommand(sh: Shell, args: string[], io: Io): Promise<number> {
 function topShell(shell: Base, interactive: boolean): Shell {
   const base: Base = { ...shell }
   base.setCwd = (p) => {
+    const why = shell.policy?.cwd(p)
+    if (why) throw new CmdError(`cd: ${why}`)
     base.cwd = p
     shell.env.PWD = p
     shell.setCwd(p)
@@ -1816,7 +1884,7 @@ export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
 
 /**
  * Runs a script the way `msh -c` does, with everything it prints collected as plain text (no
- * terminal: ls lists one name per line). For the agents' terminal tool.
+ * terminal: ls lists one name per line), stdout and stderr together.
  */
 export async function runCaptured(src: string, shell: Base): Promise<{ output: string; status: number }> {
   const sh = topShell({ ...shell, env: { ...shell.env }, print: () => {} }, false)
@@ -1824,6 +1892,81 @@ export async function runCaptured(src: string, shell: Base): Promise<{ output: s
   const status = await sh.runSource(src, { out, err: out, stdin: null }, '-c')
   return { output: hooks.strip(out.text).replace(/\n$/, ''), status }
 }
+
+export type AgentRun = {
+  stdout: string
+  stderr: string
+  status: number
+  /** Why the run was cut short: out of time, cancelled, out of steps, too much output or memory */
+  termination: Stop | null
+  /** Characters of each stream that were dropped because they were over the limit */
+  truncated: { stdout: number; stderr: number }
+  steps: number
+}
+
+/** A sink for one of a run's two streams: keeps the first `cap` characters, counts the rest. */
+function capSink(budget: Budget, cap: number) {
+  const sink = {
+    tty: false,
+    text: '',
+    dropped: 0,
+    write(t: string) {
+      const plain = hooks.strip(t)
+      const why = budget.write(plain.length, 0)
+      if (why) throw new LimitSignal(why)
+      const room = Math.max(0, cap - sink.text.length)
+      sink.text += plain.slice(0, room)
+      sink.dropped += Math.max(0, plain.length - room)
+    },
+  }
+  return sink
+}
+
+/**
+ * An agent's terminal call: a fresh shell (its own environment, so no aliases, functions or
+ * variables from any other call or from a terminal), the same interpreter as the terminal's, the
+ * output kept as stdout and stderr apart, and the run bounded by `shell.budget` and checked against
+ * `shell.policy`. `done` never rejects: a run that is stopped comes back with its termination.
+ * `snapshot` is what has been printed so far, for a caller that has to give up on a run that does
+ * not come back (a command waiting on something that ignores the signal).
+ */
+export function startAgent(src: string, shell: Base & { budget: Budget }): { done: Promise<AgentRun>; snapshot: (termination: Stop) => AgentRun } {
+  const budget = shell.budget
+  const sh = topShell({ ...shell, env: { ...shell.env }, print: () => {} }, false)
+  const out = capSink(budget, budget.limits.maxOutput)
+  const err = capSink(budget, budget.limits.maxOutput)
+  const result = (status: number, termination: Stop | null): AgentRun => ({
+    stdout: out.text.replace(/\n$/, ''),
+    stderr: err.text.replace(/\n$/, ''),
+    status: termination && status === 0 ? STOP_STATUS[termination] : status,
+    termination,
+    truncated: { stdout: out.dropped, stderr: err.dropped },
+    steps: budget.steps,
+  })
+  const done = (async () => {
+    let status: number
+    let termination: Stop | null = null
+    try {
+      status = await sh.runSource(src, { out, err, stdin: null }, '-c')
+    } catch (e) {
+      if (e instanceof LimitSignal) termination = e.why
+      else if (e instanceof AbortSignal_) termination = 'cancelled'
+      else err.write(`${red(`msh: ${(e as Error)?.message ?? e}`)}\n`)
+      status = termination ? STOP_STATUS[termination] : 1
+    }
+    return result(status, termination ?? budget.stopped)
+  })()
+  return {
+    done,
+    snapshot: (termination) => {
+      budget.stop(termination)
+      return result(STOP_STATUS[termination], termination)
+    },
+  }
+}
+
+/** The exit status of a run that was stopped: 124 for time (as timeout(1)), 130 for Ctrl+C, 125 for the other limits. */
+const STOP_STATUS: Record<Stop, number> = { timeout: 124, cancelled: 130, steps: 125, output: 125, memory: 125 }
 
 /** The aliases of a terminal session (its environment object), for completion, which and the rc. */
 export const aliasesOf = (env: Record<string, string>): ReadonlyMap<string, string> => kept.get(env)?.aliases ?? new Map()

@@ -6,8 +6,11 @@ import { CmdError, type Ctx } from './types'
 import { resolvePath } from './vfs'
 
 /** A file's text for a command (cat, grep, wc…): the errors a real read would give, a device's included. */
-export function readFile(ctx: Pick<Ctx, 'cwd' | 'root'>, path: string, cmd: string): string {
+export function readFile(ctx: Pick<Ctx, 'cwd' | 'root' | 'policy'>, path: string, cmd: string): string {
   const abs = resolvePath(ctx.cwd, path)
+  // An agent's call reads inside its work folder only, whichever command is asking.
+  const outside = ctx.policy?.read(abs)
+  if (outside) throw new CmdError(`${cmd}: ${outside}`)
   const node = lookup(abs)
   if (!node) throw new CmdError(`${cmd}: ${path}: No such file or directory`)
   if (node.type === 'dir') throw new CmdError(`${cmd}: ${path}: Is a directory`)

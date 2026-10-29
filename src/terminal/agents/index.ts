@@ -1,11 +1,11 @@
 import { generatedImage } from '../../data/agentImages'
-import { agentSettings, answerApproval, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
+import { agentSettings, answerApproval, claimClientCall, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
 import { seafileAt, syncAgentPlaces } from '../../data/agentPlaces'
 import { getAccount } from '../../os/account'
 import { CmdError, type Ctx } from '../types'
 import { prettyPath } from '../vfs'
 import { Session } from './app'
-import { runCommand, workdirPath } from './client'
+import { runAgentCall } from './exec'
 import { markdown } from './markdown'
 import { toolTitle } from './render'
 import { ago, lines as toMarkup, seg } from './text'
@@ -177,7 +177,6 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
   const imageSettingsLinks = new Map<string, string>()
   let answer = ''
   let failure: string | null = null
-  const dir = o.workdir ? workdirPath(o.workdir) : ctx.cwd
   await sendMessage(
     thread.id,
     prompt,
@@ -193,8 +192,11 @@ async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null;
       } else if (e.type === 'approval') void answerApproval(thread.id, e.callId, false, { feedback: 'This runs non-interactively (agents -p), with nobody to allow changes: say what you would change instead.' })
       else if (e.type === 'question') void answerForm(thread.id, e.callId, null)
       else if (e.type === 'client') {
-        const command = typeof e.call.arguments?.command === 'string' ? e.call.arguments.command : ''
-        void (dir ? runCommand(ctx, dir, command, ctx.signal) : Promise.resolve({ output: 'The work folder is not mounted here', status: 1 })).then((r) => sendClientResult(thread.id, e.callId, r.output, r.status).catch(() => {}))
+        void claimClientCall(thread.id, e.callId).then((mine) =>
+          mine
+            ? runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir: o.workdir, fallbackDir: ctx.cwd, grant: e.grant, signal: ctx.signal }).then((r) => sendClientResult(thread.id, e.callId, r.output, r.status, { result: r.result, capabilities: r.capabilities }).catch(() => {}))
+            : undefined,
+        )
       } else if (e.type === 'error') failure = e.error
     },
     ctx.signal,

@@ -44,6 +44,8 @@ import {
   removeQueued,
   saveQueued,
   sendClientResult,
+  claimClientCall,
+  type ClientGrant,
   sendMessage,
   sendQueuedNow,
   setSkillEnabled,
@@ -90,6 +92,7 @@ import { lookup, prepareFolder, readFileText, writeFile } from '../fs'
 import type { Ctx } from '../types'
 import { HOME, prettyPath, resolvePath } from '../vfs'
 import { runCommand, workdirPath } from './client'
+import { runAgentCall } from './exec'
 import { Editor } from './editor'
 import { markdown } from './markdown'
 import { assistantLines, compactLines, editPreview, filePreview, runningLines, thinkingLines, todoLines, toolLines, userLines } from './render'
@@ -1614,7 +1617,7 @@ export class Session {
           const call = this.messages.find((m) => m.id === p.messageId)?.toolCalls?.[p.index] ?? p.call ?? null
           if (p.kind === 'approval' && !this.approvals.some((a) => a.callId === p.callId)) this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check, ...(p.child ? { child: p.child } : {}) })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
-          else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
+          else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call, p.grant)
           this.setCallState(p.messageId, p.index, p.kind === 'image' ? 'running' : p.kind === 'question' ? 'question' : p.kind)
           if (p.kind === 'image') this.imageProgress(p.callId, p.messageId, p.index, p.progress)
         }
@@ -1675,7 +1678,7 @@ export class Session {
         break
       case 'client':
         this.setCallState(e.messageId, e.index, 'client')
-        void this.runClient(e.callId, e.messageId, e.index, e.call)
+        void this.runClient(e.callId, e.messageId, e.index, e.call, e.grant)
         break
       case 'imageGeneration':
         this.imageProgress(e.callId, e.messageId, e.index)
@@ -1816,15 +1819,18 @@ export class Session {
     this.out([...toolLines(call, m.content, w, this.verbose), []], call.name === 'generate_image' ? this.imageArt(m.content) : undefined)
   }
 
-  /** Runs a terminal tool call here and sends back what it printed. */
-  private async runClient(callId: string, messageId: number, index: number, call: ToolCall) {
-    const command = typeof call.arguments?.command === 'string' ? call.arguments.command : ''
-    const dir = this.workdir ? workdirPath(this.workdir) : this.ctx.cwd
-    let result: { output: string; status: number }
-    if (!dir) result = { output: `The work folder ${this.workdir?.label} is not mounted in this terminal (check /etc/fstab).`, status: 1 }
-    else result = await runCommand(this.ctx, dir, command, this.turn?.ctl.signal ?? this.ctx.signal)
+  /** Runs a terminal tool call here and sends back what it printed: the same runner the Agents app uses. */
+  private async runClient(callId: string, messageId: number, index: number, call: ToolCall, grant?: ClientGrant) {
+    const id = this.thread?.id
+    if (!id || !(await claimClientCall(id, callId))) return
+    let answer: Awaited<ReturnType<typeof runAgentCall>>
     try {
-      await sendClientResult(this.thread!.id, callId, result.output, result.status)
+      answer = await runAgentCall({ name: call.name, arguments: call.arguments ?? {}, workdir: this.workdir, fallbackDir: this.ctx.cwd, grant, signal: this.turn?.ctl.signal ?? this.ctx.signal })
+    } catch (e) {
+      answer = { output: `msh: ${(e as Error).message}`, status: 1 }
+    }
+    try {
+      await sendClientResult(id, callId, answer.output, answer.status, { result: answer.result, capabilities: answer.capabilities })
     } catch {
       /* the turn ended meanwhile */
     }

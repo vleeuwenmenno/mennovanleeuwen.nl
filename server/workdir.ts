@@ -4,6 +4,7 @@ import { guardedFetch } from './egress.ts'
 import { HttpError } from './http.ts'
 import { fileLink, listDir, mkdir, removeItems, rename, seafile, transfer } from './seafile.ts'
 import { commandWords, parse } from '../src/terminal/msh/parse.ts'
+import { STEERING } from '../src/data/steering.ts'
 
 // A thread's work folder: a Seafile folder the agent works in, like a coding agent's checkout.
 // The file tools here are Claude Code's (read, write, edit, list, glob, grep), with every path
@@ -84,9 +85,23 @@ export function workdirTools(): ToolDef[] {
 export function terminalTool(): ToolDef {
   return tool(
     'terminal',
-    "Run a command line in the user's MvL OS terminal, in msh (a POSIX-like shell), with the work folder as the working directory. It answers the output and the exit status. The commands are MvL OS's own (ls, cat, grep, find, head, sed-less text tools, curl, jq, …), not a Linux box: there is no git, python, node or package manager. Read-only commands run straight away; anything that changes something waits for the user.",
-    { command: str('The command line'), description: str('What it does, in a few words, for the user') },
+    "Run a command line in msh, the MvL OS shell (a POSIX-like shell: pipes, redirects, if/for/while/case, functions, $(…), heredocs), the same interpreter as the user's terminal. Every call starts a fresh shell in the work folder (or `cwd`, a folder inside it): files you write stay, variables, functions, aliases and `cd` do not carry over to the next call. It answers JSON: exit_code, stdout and stderr apart, duration_ms, truncated (characters dropped from each stream) and terminated (null, or timeout, cancelled, steps, output or memory when the run was cut short). The commands are MvL OS's own (ls, cat, grep, find, head, jq, curl, …), not a Linux box: there is no git, python, node or package manager, and only the options a command's usage names exist; call terminal_capabilities for the exact list. Files can be read and written only inside the work folder; deleting, the network and the files that steer you (AGENTS.md, CLAUDE.md, .agents/, .claude/) need the user's approval of a command that names them. Read-only commands run straight away; a script you wrote runs with `msh script.sh` (check it first with `msh -n script.sh`); anything that changes something may wait for the user.",
+    {
+      command: str('The command line'),
+      description: str('What it does, in a few words, for the user'),
+      cwd: str('A folder inside the work folder to run in (default: the work folder itself)'),
+      timeout_seconds: { type: 'number', description: 'Stop the run after this many seconds (default 60, at most 180)' },
+    },
     ['command'],
+  )
+}
+
+/** What the terminal can do in this session, as data: asked before guessing at commands or flags. */
+export function terminalCapabilitiesTool(): ToolDef {
+  return tool(
+    'terminal_capabilities',
+    "What the terminal tool can actually do in this session, as JSON: the shell and its version and syntax, every command with the options its usage names (no others exist), which commands this call may run, the mounts and where you may read and write (the work folder only), the available integrations, and the execution limits (time, steps, output). Call it before writing a script that depends on a command or an option, instead of assuming Linux flags. With `command`, one command's entry in full (usage and manual).",
+    { command: str('One command or builtin, for its usage and manual (default: the overview of everything)') },
   )
 }
 
@@ -488,7 +503,7 @@ function matchLines(pattern: string, flags: string, texts: string[], max: number
 }
 
 /** Files that steer the agent itself: writing them always asks, even with edits allowed. */
-export const STEERING = /(^|\/)(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)(\/|$)/i
+export { STEERING }
 
 /** AGENTS.md (or CLAUDE.md) at the top of the work folder: the project's own instructions. */
 export async function projectInstructions(user: User, w: Workdir, signal: AbortSignal): Promise<{ name: string; text: string } | null> {
@@ -511,6 +526,13 @@ const READ_ONLY = new Set([
 // Not here on purpose: find and fd (-delete, -exec, fd -x in ways a word check misses), and dig,
 // host, nslookup and whois (a lookup can carry data out, past web_fetch's guard).
 
+/** `msh -n file` (also sh, bash): parses and runs nothing, so it only reads. */
+function checksSyntax(c: { name: string; args: string[] }): boolean {
+  if (!['msh', 'sh', 'bash'].includes(c.name)) return false
+  const flags = c.args.filter((a) => a.startsWith('-'))
+  return flags.length > 0 && flags.every((a) => /^-[nxe]+$/.test(a)) && flags.some((a) => a.includes('n')) && !c.args.includes('-c')
+}
+
 /** Whether a command line only reads (so it can run without the user allowing it). */
 export function readOnlyCommand(line: string): boolean {
   if (/[`]|\$\(/.test(line)) return false
@@ -523,7 +545,7 @@ export function readOnlyCommand(line: string): boolean {
   const cmds = commandWords(tree)
   return cmds.every((c) => {
     if (c.name === 'function') return false
-    if (c.name && (!READ_ONLY.has(c.name) || /[$*?[]/.test(c.name))) return false
+    if (c.name && !checksSyntax(c) && (!READ_ONLY.has(c.name) || /[$*?[]/.test(c.name))) return false
     // Words that expand or are quoted could say anything once the shell is done with them.
     if (c.args.some((a) => /[$`'"\\]/.test(a))) return false
     return c.redirs.every((r) => r.op === '<' || r.op === '<<' || r.op === '<<-' || ((r.op === '>&' || r.op === '<&') && /^[0-9-]$/.test(r.target)) || r.target === '/dev/null')
@@ -536,5 +558,44 @@ export function commandNames(line: string): string[] {
     return [...new Set(commandWords(parse(line)).map((c) => c.name).filter((n) => n && n !== 'function' && !/[$*?[]/.test(n)))]
   } catch {
     return []
+  }
+}
+
+// --- what a terminal call may do -----------------------------------------------------------------
+
+/**
+ * What the terminal runs a call under (src/terminal/policy.ts enforces it where the shell resolves
+ * each command, redirect and file write): writes stay inside the work folder, and the rest is only
+ * granted by what the user approved.
+ */
+export type ClientGrant = { mode: string; write: boolean; delete: boolean; network: boolean; steering: boolean }
+/**
+ * How the call got to run: `readonly` (a line that only looks, in any mode), `edits` (edits accepted:
+ * files in the work folder), `bypass`, or `approved` (the user allowed this line, or its commands).
+ */
+export type TerminalAccess = 'readonly' | 'edits' | 'bypass' | 'approved'
+
+export const DELETE_COMMANDS: ReadonlySet<string> = new Set(['rm', 'rmdir'])
+export const NETWORK_COMMANDS: ReadonlySet<string> = new Set(['curl', 'wget', 'ping', 'dig', 'host', 'nslookup', 'whois', 'minecraft', 'pepper'])
+/** A command line that names a file steering the agent: such a call always asks, and only then may it write one. */
+export const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
+
+/**
+ * The grant for a call. Nothing is implied by anything else: the text of an approved line decides
+ * the extras, because the user saw that text. A script the line runs gets what the line names, no more
+ * (`msh x.sh` does not give x.sh the right to rm; `rm x` does).
+ */
+export function terminalGrant(permission: Permission, line: string, access: TerminalAccess): ClientGrant {
+  const names = commandNames(line)
+  const has = (set: ReadonlySet<string>) => names.some((n) => set.has(n))
+  switch (access) {
+    case 'readonly':
+      return { mode: permission, write: false, delete: false, network: false, steering: false }
+    case 'edits':
+      return { mode: permission, write: true, delete: false, network: false, steering: false }
+    case 'bypass':
+      return { mode: permission, write: true, delete: true, network: true, steering: false }
+    case 'approved':
+      return { mode: permission, write: true, delete: has(DELETE_COMMANDS), network: has(NETWORK_COMMANDS), steering: STEERING_IN_LINE.test(line) }
   }
 }

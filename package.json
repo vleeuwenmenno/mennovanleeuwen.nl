@@ -68,6 +68,7 @@
     "check:agents-roles": "node scripts/agents-roles.ts",
     "check:agents-tasks": "node scripts/agents-tasks-check.ts",
     "check:agents-subagents": "node scripts/agents-subagents.ts",
+    "check:agents-terminal-exec": "node scripts/agents-terminal-exec.ts",
     "check:video-studio": "node scripts/video-studio-check.ts",
     "check:agents-find-image": "node scripts/agents-find-image.ts",
     "check:agents-skill-hooks": "node scripts/agents-skill-hooks.ts",

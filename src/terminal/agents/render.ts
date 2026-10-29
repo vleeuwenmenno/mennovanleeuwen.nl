@@ -84,6 +84,8 @@ export function toolTitle(call: ToolCall): [string, string] {
       return ['Delete', s(call, 'path')]
     case 'terminal':
       return ['Terminal', oneLine(s(call, 'command'), 120)]
+    case 'terminal_capabilities':
+      return ['Capabilities', s(call, 'command') || 'terminal']
     case 'web_search':
       return ['Web Search', `"${s(call, 'query')}"`]
     case 'web_fetch':
@@ -262,11 +264,14 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
       return ok([under(`Found ${n} ${call.arguments?.files_only === true ? 'file' : 'line'}${n === 1 ? '' : 's'}`), ...(verbose ? result.split('\n').slice(0, 50).map((l) => clipLine([seg('     '), seg(l, 'muted')], w)) : [])])
     }
     case 'terminal': {
-      const out = typeof obj?.output === 'string' ? obj.output : result
+      const out = typeof obj?.stdout === 'string' ? obj.stdout : typeof obj?.output === 'string' ? obj.output : result
+      const err = typeof obj?.stderr === 'string' ? obj.stderr : ''
       const code = typeof obj?.exit_code === 'number' ? obj.exit_code : 0
+      const stopped = typeof obj?.terminated === 'string' ? obj.terminated : null
       const ls = out.replace(/\n$/, '').split('\n')
-      const shown = out.trim() ? ls.slice(0, max).map((l, i) => clipLine([seg(i === 0 ? '  ⎿  ' : '     ', 'muted'), seg(l)], w)) : [under('(no output)')]
-      return [header(call, code === 0 ? 'green' : 'red', w), ...shown, ...more(out.trim() ? ls.length - max : 0, verbose), ...(code !== 0 ? [[seg(`     exit code ${code}`, 'red')]] : [])]
+      const errs = err ? err.replace(/\n$/, '').split('\n') : []
+      const shown = out.trim() ? ls.slice(0, max).map((l, i) => clipLine([seg(i === 0 ? '  ⎿  ' : '     ', 'muted'), seg(l)], w)) : errs.length ? [] : [under('(no output)')]
+      return [header(call, code === 0 ? 'green' : 'red', w), ...shown, ...more(out.trim() ? ls.length - max : 0, verbose), ...errs.slice(0, max).map((l) => clipLine([seg('     '), seg(l, 'red')], w)), ...(stopped ? [[seg(`     stopped: ${stopped}`, 'red')]] : []), ...(code !== 0 ? [[seg(`     exit code ${code}`, 'red')]] : [])]
     }
     case 'web_search': {
       const list = Array.isArray(json) ? (json as { title?: string; url?: string }[]) : []

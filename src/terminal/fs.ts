@@ -9,6 +9,7 @@ import { cvMode } from '../os/cvMode'
 import { keptRc, RC_NAME, RC_PATH, setKeptRc } from './rcfile'
 import { HOME, kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
 import { allows, carrySfModes, dropSfModes, setSfMode, sfModeOf, userOwns, type Access } from './modes'
+import type { Policy } from './policy'
 
 // The filesystem as the terminal sees it: the site's own files (vfs.ts), with whatever /etc/fstab
 // mounts on top (data/mounts.ts): Seafile libraries under /mnt/seafile, a library on ~, bind
@@ -320,6 +321,20 @@ export async function readFileText(abs: string, root = false): Promise<{ text: s
 
 // --- writing --------------------------------------------------------------------------------------
 
+/**
+ * Who is writing: root or not, and for an agent's terminal call the policy that confines it. A plain
+ * boolean is the old way to say "root or not" and means no policy (the user's own writes: Zed, Files).
+ */
+export type Actor = boolean | { root: boolean; policy?: Policy }
+const isRoot = (a: Actor) => (typeof a === 'boolean' ? a : a.root)
+/** An agent call's policy refusing a write: the command's own error. */
+function mayWrite(a: Actor, abs: string, op: 'write' | 'delete' = 'write') {
+  const why = typeof a === 'boolean' ? null : a.policy?.write(abs, op)
+  if (why) throw err(why)
+}
+/** The actor a command's context stands for. */
+export const actorOf = (ctx: { root?: boolean; policy?: Policy }): Actor => ({ root: !!ctx.root, policy: ctx.policy })
+
 const err = (msg: string) => new CmdError(msg)
 
 /**
@@ -335,7 +350,9 @@ function need(abs: string, access: Access, what: string, root?: boolean) {
 const needParent = (abs: string, what: string, root?: boolean) => need(parentOf(abs), 'w', what, root)
 
 /** Whether a file's mode can be set where it lives, and the error to give where it cannot. */
-export async function setMode(abs: string, mode: number | null, root = false): Promise<void> {
+export async function setMode(abs: string, mode: number | null, who: Actor = false): Promise<void> {
+  const root = isRoot(who)
+  mayWrite(who, abs)
   const node = lookup(abs)
   if (!node) throw err(`chmod: cannot access '${abs}': No such file or directory`)
   const w = whereIs(abs)
@@ -358,8 +375,10 @@ export async function setMode(abs: string, mode: number | null, root = false): P
 }
 
 /** Writes a file: /tmp, Seafile, or /etc/fstab (root only). `append` adds to the end, like >>. */
-export async function writeFile(cwd: string, target: string, content: string, append: boolean, root = false, who = 'msh') {
+export async function writeFile(cwd: string, target: string, content: string, append: boolean, actor: Actor = false, who = 'msh') {
+  const root = isRoot(actor)
   const abs = resolvePath(cwd, target)
+  mayWrite(actor, abs)
   // A device swallows what is written to it (the disks refuse it).
   const written = abs.startsWith('/dev/') ? lookup(abs) : null
   if (written?.type === 'file' && written.dev) {
@@ -382,7 +401,7 @@ export async function writeFile(cwd: string, target: string, content: string, ap
     setKeptRc(append && prev ? (prev.endsWith('\n') ? prev + body : `${prev}\n${body}`) : body)
     return
   }
-  if (w.kind === 'local') return writeTmp('/', w.path, content, append, root, who)
+  if (w.kind === 'local') return writeTmp('/', w.path, content, append, actor, who)
   if (w.kind === 'browser') {
     await browserFilesReady()
     const node = lookup(abs)
@@ -442,8 +461,10 @@ function writable(abs: string, arg: string, what: string): string {
   return w.sf
 }
 
-export async function makeDir(cwd: string, arg: string, parents: boolean, root = false) {
+export async function makeDir(cwd: string, arg: string, parents: boolean, actor: Actor = false) {
+  const root = isRoot(actor)
   const abs = resolvePath(cwd, arg)
+  mayWrite(actor, abs)
   const existing = lookup(abs)
   if (existing) {
     if (parents && existing.type === 'dir') return
@@ -456,7 +477,7 @@ export async function makeDir(cwd: string, arg: string, parents: boolean, root =
     await browserFilesReady()
     if (!lookup(parentOf(abs))) {
       if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
-      await makeDir('/', parentOf(abs), true, root)
+      await makeDir('/', parentOf(abs), true, actor)
     }
     await browserFolder(parentOf(abs), 'mkdir', arg)
     await mkdirBrowser(where.path, true).catch(asCmdError('mkdir'))
@@ -467,19 +488,21 @@ export async function makeDir(cwd: string, arg: string, parents: boolean, root =
   await ensure(parent, 'mkdir', null, false)
   if (!lookup(parent)) {
     if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
-    await makeDir('/', parent, true, root)
+    await makeDir('/', parent, true, actor)
   }
   dropSfModes(sf)
   await sfMkdir(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
-export async function touchFile(cwd: string, arg: string, root = false) {
+export async function touchFile(cwd: string, arg: string, actor: Actor = false) {
+  const root = isRoot(actor)
   const abs = resolvePath(cwd, arg)
+  mayWrite(actor, abs)
   if (lookup(abs)) return
   needParent(abs, `touch: cannot touch '${arg}'`, root)
   if (abs === RC_PATH && whereIs(abs).kind === 'local' && !cvMode()) return setKeptRc('')
-  if (abs.startsWith('/tmp/')) return writeTmp('/', abs, '', true)
+  if (abs.startsWith('/tmp/')) return writeTmp('/', abs, '', true, actor)
   const where = whereIs(abs)
   if (where.kind === 'browser') {
     if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
@@ -498,14 +521,15 @@ export async function touchFile(cwd: string, arg: string, root = false) {
  * rm: Seafile puts what it deletes in the library's trash, so this one is forgiving. Except in a
  * library that keeps no history: there it is gone for good, so `ask` (rm without -f) gets a say.
  */
-export async function removePath(cwd: string, arg: string, opts: { recursive: boolean; force: boolean; dir: boolean; ask?: (question: string) => Promise<boolean>; root?: boolean }) {
+export async function removePath(cwd: string, arg: string, opts: { recursive: boolean; force: boolean; dir: boolean; ask?: (question: string) => Promise<boolean>; root?: Actor }) {
   const abs = resolvePath(cwd, arg)
+  mayWrite(opts.root ?? false, abs, 'delete')
   const node = lookup(abs)
   if (!node) {
     if (opts.force) return
     throw err(`rm: cannot remove '${arg}': No such file or directory`)
   }
-  needParent(abs, `rm: cannot remove '${arg}'`, opts.root)
+  needParent(abs, `rm: cannot remove '${arg}'`, isRoot(opts.root ?? false))
   if (node.type === 'dir' && !opts.recursive && !(opts.dir && node.children.size === 0)) throw err(`rm: cannot remove '${arg}': ${opts.dir ? 'Directory not empty' : 'Is a directory'}`)
   if (abs.startsWith('/tmp/')) {
     ;(siteLookup(parentOf(abs)) as DirNode).children.delete(baseOf(abs))
@@ -540,12 +564,16 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
  * mv and cp: into a folder, or onto a new name (replacing a file of that name). The modes chmod
  * set go along with what is moved or copied.
  */
-export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean, root = false) {
+export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string, destArg: string, recursive: boolean, actor: Actor = false) {
+  const root = isRoot(actor)
   const cmd = op === 'move' ? 'mv' : 'cp'
   const src = resolvePath(cwd, srcArg)
+  if (op === 'move') mayWrite(actor, src)
+  else if (typeof actor !== 'boolean' && actor.policy?.read(src)) throw err(actor.policy.read(src)!)
   const node = lookup(src)
   let dest = resolvePath(cwd, destArg)
   if (node && lookup(dest)?.type === 'dir') dest = join(dest, baseOf(src))
+  mayWrite(actor, dest)
   const kept: [string, number][] = []
   if (node && dest !== src) {
     const kind = node.type === 'dir' ? 'directory' : 'regular file'
