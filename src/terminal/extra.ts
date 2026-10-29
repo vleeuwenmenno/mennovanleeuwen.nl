@@ -3,6 +3,7 @@ import { contributions, profile, projects } from '../data/profile'
 import { ansiToMarkup, plain, rainbow } from './ansi'
 import { md5, sha } from './hash'
 import { jq, JqError, parseJqArgs } from './jq'
+import { safeJq, type SafeJqBudget } from './jq-safe'
 import { CmdError, type Ctx } from './types'
 import { cmatrix, USAGE as CMATRIX_USAGE } from './cmatrix'
 import { lookup } from './fs'
@@ -881,11 +882,21 @@ export const extraCommands: Record<string, Command> = {
   xrandr: { desc: 'screen resolution and measured refresh rate', run: xrandr },
   ip: { desc: 'network interfaces (what the browser shares)', usage: 'ip [a|link|route]', run: (ctx) => ip(ctx, 'ip') },
   ifconfig: { desc: 'network interfaces, old style', run: (ctx) => ip(ctx, 'ifconfig') },
+  'jq-safe': {
+    desc: 'bounded, cancellable JSON subset (stdin only; no regex)',
+    usage: 'jq-safe [-ncr] [--arg name value] [--argjson name JSON] <filter>',
+    run: async (ctx) => {
+      try { return await safeJq(ctx.args, ctx.stdin ?? '', ctx as Ctx & { budget?: SafeJqBudget; policy?: unknown }) }
+      catch (error) { throw new CmdError((error as Error).message) }
+    },
+  },
   jq: {
     desc: 'slice and filter JSON',
     usage: "jq [-rcnsM] [--arg name value] [--argjson name JSON] <filter> [file]   e.g. curl -s api.github.com/users/vleeuwenmenno | jq .name",
     run: (ctx) => {
       try {
+        const guarded = ctx as Ctx & { policy?: unknown; budget?: unknown }
+        if (guarded.policy || guarded.budget) throw new CmdError('rich jq is interactive-only; use jq-safe')
         const { filter, file, opts } = parseJqArgs(ctx.args)
         const text = file && file !== '-' ? readText(ctx, file, 'jq') : ctx.stdin ?? (opts.nullInput ? '' : null)
         if (text === null) throw new CmdError("Usage: jq [OPTIONS] FILTER [FILE]\n  pipe JSON in or use -n to construct JSON")

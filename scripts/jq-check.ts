@@ -112,7 +112,7 @@ Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'node', lan
 
 const vite = await createServer({ configFile: false, root: new URL('..', import.meta.url).pathname, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', define: { __APP_VERSION__: '"0.0.0"', __APP_COMMIT__: '"test"', __BUILD_TIME__: '"2026-01-01T00:00:00.000Z"' }, optimizeDeps: { noDiscovery: true, include: [] } })
 try {
-  const { runLine, strip } = (await vite.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
+  const { runLine, strip, commands } = (await vite.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
   const { HOME } = (await vite.ssrLoadModule('/src/terminal/vfs.ts')) as typeof import('../src/terminal/vfs.ts')
   let cwd = HOME
   const opened: string[] = []
@@ -159,6 +159,12 @@ try {
   assert.equal((await run("jq -nc --arg value '" + value + "' '{value: $value}' > /tmp/jq-roundtrip.json")).ok, true)
   assert.deepEqual(JSON.parse(await out('jq -c . /tmp/jq-roundtrip.json')), { value })
   assert.equal(await out("jq -nc --argjson rows '[{\"ok\":true,\"name\":\"Ada\"},{\"ok\":false}]' '$rows | map(select(.ok) | {name})'"), '[{"name":"Ada"}]')
+  const safe = await out("jq-safe -nc --arg value '" + value + "' '{value: $value}' | jq-safe -c .")
+  assert.deepEqual(JSON.parse(safe), { value })
+  const agentContext = { args: ['-n', '.'], stdin: '', signal: new AbortController().signal, policy: {}, budget: { step: () => null, write: () => null, stop() {} } }
+  assert.throws(() => commands.jq.run(agentContext as never), /interactive-only/)
+  assert.equal(await commands['jq-safe'].run(agentContext as never), 'null')
+  await assert.rejects(Promise.resolve().then(() => commands['jq-safe'].run({ ...agentContext, budget: undefined } as never)), /budget required/)
   console.log('jq: registered command, pipes, redirects, file reads, and CLI errors passed')
 } catch (error) {
   console.error(error)

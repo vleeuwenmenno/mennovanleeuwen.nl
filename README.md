@@ -492,6 +492,64 @@ and arithmetic helpers. It does not implement assignments/update operators,
 `pnpm check:jq` covers the documented workflows, option parsing, invalid inputs,
 prototype-key handling, and literal-markup round trips.
 
+### jq-safe: bounded JSON for agent workflows
+
+`jq-safe` is a separate, asynchronous JSON evaluator, not a mode or fallback to rich
+`jq`. It reads exactly one JSON document from stdin (or null with `-n`); filenames,
+multiple documents and slurping are not supported. Its flags are `-n`, `-c`, `-r`
+(combinable), `--arg NAME VALUE`, and `--argjson NAME JSON`.
+
+```sh
+cat people.json | jq-safe -c '[.[] | select(.active and .score >= 2) | {name}]'
+jq-safe -nc --arg name 'Ada "Lovelace"' --argjson tags '["math"]' '{name: $name, tags: $tags}'
+cat encoded.json | jq-safe 'fromjson | .name'
+```
+
+The explicit subset is identity, field/string-key/integer-index access (negative
+indices included), iteration, final optional access `?`, pipes, array collection,
+objects (literal, shorthand, variable and parenthesized string keys), variables,
+JSON literals, `map`, `select`, scalar comparisons, `and`/`or`/`not`, `length`,
+`fromjson`, and `tojson`. Constructor keys/values and comparison operands must each
+produce exactly one value. Ordering requires two strings or two numbers. No comma
+streams, slices, variable binding with `as`, interpolation, arithmetic, recursion,
+ranges, user-defined functions, regex, or additional builtins are accepted. No
+unsupported syntax can reach rich jq. Prototype-named keys remain ordinary data.
+Serialized JSON preserves literal terminal markup; raw `-r` text follows existing
+terminal behavior.
+
+Hard ceilings are 65,536 UTF-16 code units for input, combined arguments, each
+retained value/stream and output; 4,096 filter characters; 512 tokens; 32 nesting
+levels; 4,096 value nodes; 50,000 work steps; 4 MiB cumulative conservative
+allocation charges; and two seconds elapsed per invocation. Value accounting
+includes worst-case escaping and indentation, so some smaller values also hit
+limits. The evaluator yields to the event loop every 64 steps and checks abort,
+elapsed time, and shared budget. Native parsing/serialization operates only on
+size/depth-checked data. Regex evaluation is absent. Failure returns no partial
+result. `pnpm check:jq-safe` tests malicious filters, amplification, malformed/deep
+JSON, inherited keys, budget exhaustion, and timer-driven cancellation during work.
+
+**Integration with security commit `f958cc5`:** this independent change does not
+modify its policy or enable commands there. Keep `EFFECTS.jq = 'blocked'`. After
+integrating and testing, add only `'jq-safe': 'pure'` to `EFFECTS`, and return `[]`
+for `fileOperands('jq-safe', args)` (every argument is data, never a filename).
+Also add `if (cmd === 'jq-safe') return` immediately after `checkActor(actor)`
+in `fs.ts`'s `prepare`, before operand discovery, policy path checks or filesystem
+loading. Merely adding `SELF_SERVED` is insufficient: path checks run before it.
+The normal shell command-policy check still applies. These changes are required
+BEFORE enabling the command: otherwise arguments can trigger filesystem access
+or rejection before evaluator limits apply. Add an agent shell regression with
+`jq-safe -n --arg p /outside '$p'` under `/work` confinement and a Seafile fetch
+spy: it must return the string without path checks/fetches for the argument.
+The registered adapter already forwards `Ctx.signal`, `Ctx.policy`, and the shared
+`Ctx.budget`; its structural budget interface matches `Budget.step/write/stop` in
+that commit. It refuses policy contexts missing a budget. Rich jq additionally
+refuses any policy/budget context. Add jq-safe to the capabilities Text group;
+availability then derives from policy and its usage/manual from the registry.
+The parent integration should test `agents/exec.ts` with nested pipelines,
+cancellation and small shared limits; do not remap the `jq` command to the rich
+evaluator or omit the shared budget. File reads and redirects remain the shell's
+policy-checked operations (`cat file | jq-safe ...`), not evaluator operations.
+
 `cmatrix` ([`src/terminal/cmatrix.ts`](src/terminal/cmatrix.ts)) is the film's rain: mirrored
 half-width katakana with digits and a few symbols, a glowing head, a trail that fades through a
 dozen shades into the background, characters that flicker while they fade, drops at their own
