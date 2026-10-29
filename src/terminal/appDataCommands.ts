@@ -1,3 +1,5 @@
+import { appDataResponse } from './appDataResponse'
+import type { SafeJqBudget } from './jq-safe'
 import { api } from '../os/account'
 import { appDataDenial, readAppData, type AppDataGrant } from './appData'
 import { CmdError, type Ctx } from './types'
@@ -10,10 +12,12 @@ export const appDataCommands = {
     run: (ctx: Ctx) => {
       // Structural bridge keeps this branch independent of the pending agent-policy branch.
       // Its command gate still denies mvl until the server supplies resource authorization.
-      const policy = (ctx as Ctx & { policy?: { grant: AppDataGrant } }).policy
+      const guarded = ctx as Ctx & { policy?: { grant: AppDataGrant }; budget?: SafeJqBudget }
+      const policy = guarded.policy
       const denied = policy && appDataDenial(ctx.args, policy.grant)
       if (denied) throw new CmdError(denied)
-      return readAppData(ctx.args, ctx.signal, (path, signal) => api(path, { method: 'GET', signal }))
+      if (policy && !guarded.budget) throw new CmdError('mvl: agent budget required')
+      return readAppData(ctx.args, ctx.signal, (path, signal) => api(path, { method: 'GET', signal, decode: response => appDataResponse(response, guarded) }), guarded.budget)
     },
   },
 }

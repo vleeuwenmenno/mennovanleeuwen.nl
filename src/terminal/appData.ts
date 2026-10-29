@@ -1,3 +1,4 @@
+import { boundedJson, type SafeJqBudget } from './jq-safe'
 import { CmdError } from './types'
 
 /** Explicit integration metadata: these commands access private account data, never pure data. */
@@ -16,10 +17,7 @@ const record = (v: unknown): Record<string, unknown> => v && typeof v === 'objec
 const list = (v: unknown): unknown[] => Array.isArray(v) ? v : []
 const pick = (v: unknown, keys: string[]) => Object.fromEntries(keys.filter(k => Object.hasOwn(record(v), k)).map(k => [k, record(v)[k]]))
 
-/** Keep terminal markup inside JSON strings literal, including when msh strips markup for pipes. */
-export const appDataJson = (value: unknown) => JSON.stringify(value, null, 2).replace(/"(?:\\.|[^"\\])*"/g, s => s.replaceAll('{', '\\u007b').replaceAll('}', '\\u007d'))
-
-export async function readAppData(args: string[], signal: AbortSignal, get: AppDataGet): Promise<string> {
+export async function readAppData(args: string[], signal: AbortSignal, get: AppDataGet, budget?: SafeJqBudget): Promise<string> {
   const check = () => { if (signal.aborted) throw new CmdError('mvl: cancelled', false, 130) }
   check()
   let path: string
@@ -38,7 +36,10 @@ export async function readAppData(args: string[], signal: AbortSignal, get: AppD
     throw new CmdError(`mvl: ${error instanceof Error ? error.message : 'request failed'}`)
   }
   check()
-  if (kind === 'notes') return appDataJson({ notes: list(record(result.notes).value).filter(n => !record(n).deleted && !record(n).purged).map(n => pick(n, ['id', 'text', 'created', 'updated', 'events'])) })
-  if (kind === 'calendar') return appDataJson({ events: list(result.events), errors: list(result.errors) })
-  return appDataJson({ enabled: result.enabled === true, tasks: list(result.tasks).map(t => pick(t, ['id', 'title', 'status', 'createdAt', 'updatedAt', 'nextRunAt', 'lastRunAt', 'active', 'failures', 'stateNote'])) })
+  await boundedJson(result, { signal, budget })
+  check()
+  const serialize = (value: unknown) => boundedJson(value, { signal, budget })
+  if (kind === 'notes') return serialize({ notes: list(record(result.notes).value).filter(n => !record(n).deleted && !record(n).purged).map(n => pick(n, ['id', 'text', 'created', 'updated', 'events'])) })
+  if (kind === 'calendar') return serialize({ events: list(result.events), errors: list(result.errors) })
+  return serialize({ enabled: result.enabled === true, tasks: list(result.tasks).map(t => pick(t, ['id', 'title', 'status', 'createdAt', 'updatedAt', 'nextRunAt', 'lastRunAt', 'active', 'failures', 'stateNote'])) })
 }

@@ -6164,3 +6164,11 @@ arguments are filenames. When combining with the security branch, keep its actor
 cancellation check before this early return and return no file operands for both.
 `mvl` still performs its own explicit resource check and authenticated GET; this
 preparation exception does not authorize either command in the agent policy.
+
+App-data reads are bounded before parsing: the authenticated API decoder streams
+at most 65,536 response bytes (including error bodies), cancels excess bodies,
+and checks cancellation during reads. Responses must fit the same depth, node,
+work, allocation, and serialized-value ceilings as `jq-safe`; projection and
+serialization are preflighted and share the agent budget. Processing yields for
+cancellation. Large account-state responses fail instead of returning partial
+notes; there is no pagination promise. Agent contexts without a budget fail.

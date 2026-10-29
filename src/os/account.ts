@@ -80,8 +80,8 @@ export function useAccount() {
 }
 
 /** JSON request to the site's own API; throws with the server's message on failure. */
-export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
-  const { json, ...rest } = init
+export async function api<T>(path: string, init: RequestInit & { json?: unknown; decode?: (response: Response) => Promise<unknown> } = {}): Promise<T> {
+  const { json, decode, ...rest } = init
   // A tab of another account than the browser's now sends nothing (src/os/accountSpace.ts).
   if (!accountGuard()) throw new Error('Signed in as another account')
   const res = await fetch(path, {
@@ -90,7 +90,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
     headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...rest.headers, 'X-MvL-Account': TAB_ACCOUNT },
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   })
-  const body = await res.json().catch(() => null)
+  const body = (decode ? await decode(res) : await res.json().catch(() => null)) as { error?: string } | null
   if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`)
   return body as T
 }
