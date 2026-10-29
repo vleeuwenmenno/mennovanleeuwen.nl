@@ -692,7 +692,7 @@ export function Shell() {
   // moment the desk behind it shows. Nothing of the desk may peek out from behind it then.
   const covered = wm.windows.some((w) => w.maximized && !w.minimized && !NOTE_APPS.has(w.app) && wm.shown(w))
 
-  // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
+  // Phones: app windows are full-screen sheets; built-in notes go one under
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
   const mobile = useIsMobile()
@@ -842,7 +842,7 @@ export function Shell() {
       <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
-          {wm.windows.map((w) => (
+          {wm.windows.filter((w) => !mobile || w.app !== 'widget').map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
           {/* Phones: where a note being moved up or down the column will land. */}

@@ -118,6 +118,8 @@
     "check:revocation-boundaries": "node scripts/revocation-boundaries-check.ts",
     "check:revocation": "node scripts/revocation-check.ts",
     "check:session-streams": "node scripts/session-streams-check.ts",
+    "check:widget-layout": "node scripts/widget-layout-e2e.ts",
+    "check:widget-geometry": "node scripts/widget-geometry-check.ts",
     "check:widgets-sync": "node scripts/widgets-sync-check.ts",
     "check:ui-scale": "node scripts/ui-scale-e2e.ts",
     "check:widget-stacking": "node scripts/widget-stacking-e2e.ts",

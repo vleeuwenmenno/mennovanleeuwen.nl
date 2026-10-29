@@ -13024,3 +13024,9 @@ html {
 .xed-debug pre { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .xed-diagnostic { display: block; text-align: left; }
 @media (pointer: coarse) { .xed-debug-controls button, .xed-debug select { min-height: 36px; } }
+/* Widget content can grow without moving its grip or any neighbouring widget. */
+.window.chrome-note.widget .window-body {
+  max-height: var(--widget-body-max);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
