@@ -443,11 +443,12 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         g.y = top
         g.h = d.y + d.h - top
       }
-      // Keep a widget's origin fixed during width resizing; the right handle stays reachable.
+      // Keep the origin unless a wider rotated grip needs more clearance below the bar.
       if (win.app === 'widget' && g.w !== undefined) {
         const fitted = fitWidget({ x: g.x ?? d.x, y: d.y, w: g.w, h: d.h }, viewW(), viewH())
         g.w = d.edge.includes('w') ? fitted.w : Math.max(1, Math.min(g.w, viewW() - d.x - 24))
         if (d.edge.includes('w')) g.x = fitted.x
+        g.y = fitWidget({ x: g.x ?? d.x, y: g.y ?? d.y, w: g.w, h: d.h }, viewW(), viewH()).y
       }
       // Resizing a snapped window makes it a normal one again.
       wm.setGeometry(win.pid, { ...g, snap: undefined, restore: undefined })

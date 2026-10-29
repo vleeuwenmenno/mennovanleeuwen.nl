@@ -4066,7 +4066,8 @@ cross-device display, phone layout and delayed sticky contents in muted Chromium
 accounts and data; it starts and stops its own server.
 Desktop widgets overlap freely. Dragging, resizing or growing one never pushes another aside;
 clicking a widget brings it forward using the normal window stacking order. Multiple instances
-of the same kind are intentional. Width resizing keeps the grip fixed, and long content scrolls
+of the same kind are intentional. Width resizing keeps the grip fixed unless a wide tilted card
+needs extra top-bar clearance; fitting reserves that clearance for either tilt direction. Long content scrolls
 inside the card so controls stay reachable. Offscreen saved positions are fitted independently;
 shrinking the viewport never overwrites preferred geometry, which returns when it grows again.
 All widgets (including sticky widgets) are hidden below the existing 720 px mobile breakpoint.

@@ -113,71 +113,124 @@ async function drag(p: P, pid: number, dx: number, dy: number, edge = false) {
   await sleep(1600)
 }
 try {
-  const seeded = { places: {
-    a: { id: 'a', kind: 'sticky', x: 120, y: 120, w: 280, h: 180, vw: 1200, vh: 800, phone: false, at: now },
-    b: { id: 'b', kind: 'sticky', x: 600, y: 120, w: 280, h: 180, vw: 1200, vh: 800, phone: false, at: now },
-  }, removed: '' }
-  const notes = ['a', 'b'].map(id => ({ id, text: 'Synthetic widget ' + id + '\n' + 'Content line\n'.repeat(5), color: 'yellow', tilt: 0, created: now, updated: now }))
-  await api('windows:desktop', []); await api('notes', notes); await api('widgets:placed', seeded)
-  const phonePage = await browser(sid, 390, 844)
-  await load(phonePage)
-  check('cold mobile load mounts no widgets', (await widgets(phonePage)).length === 0)
-  await resize(phonePage, 1200, 800)
-  check('mobile-first session restores desktop widgets', (await widgets(phonePage)).length === 2)
-  check('mobile-first session preserves placements', isDeepStrictEqual(await api('widgets:placed'), seeded))
-  const A = await browser(sid, 1200, 800)
-  await load(A)
-  const rects = () => A.eval(`[...document.querySelectorAll('[data-app="widget"]')].map(e => ({x: parseFloat(e.style.left), y: parseFloat(e.style.top), w: parseFloat(e.style.width), z: +e.style.zIndex, pid: +e.dataset.pid}))`)
-  const before = await rects()
-  check('intentional duplicate kind retains both instances', before.length === 2)
-  await drag(A, before[1].pid, -450, 30)
-  const moved = await rects()
-  check('drag permits overlap without moving neighbour', moved[0].x === before[0].x && moved[0].y === before[0].y && moved[1].x === 150 && moved[1].y === 150 && moved[1].z > moved[0].z, moved)
-  await drag(A, moved[1].pid, 100, 0, true)
-  const resized = await rects()
-  check('resize keeps origin and neighbour fixed', resized[1].x === moved[1].x && resized[1].y === moved[1].y && resized[1].w === 380 && resized[0].x === before[0].x && resized[0].y === before[0].y, resized)
-  await drag(A, resized[1].pid, -180, 0, true)
-  check('widget can resize below app-window minimum without jumping', (await rects())[1].w === 200 && (await rects())[1].x === resized[1].x)
-  await drag(A, resized[1].pid, 180, 0, true)
-  const saved = await api('widgets:placed')
-  await instrument(A)
-  await resize(A, 740, 500); await scale(A, 1.5)
-  await quiet(A, 'shrink and zoom')
-  await scale(A, 1); await resize(A, 1200, 800)
-  check('grow restores preferred geometry', isDeepStrictEqual(await rects(), resized))
-  await resize(A, 390, 844)
-  check('mobile hides every widget including stickies', (await widgets(A)).length === 0)
-  await quiet(A, 'mobile')
-  await resize(A, 1200, 800)
-  check('desktop restores same instances and geometry', isDeepStrictEqual(await rects(), resized), await rects())
-  check('mobile never changes saved desktop geometry', isDeepStrictEqual(saved, await api('widgets:placed')))
-  // Content growth should scroll in place, including content taller than the whole viewport.
-  await api('notes', notes.map(n => ({...n, text: n.text + 'More content\n'.repeat(100), updated: now + 1000, edited: now + 1000})))
-  await A.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
-  await sleep(800)
-  check('content growth leaves every origin fixed', isDeepStrictEqual(await rects(), resized))
-  check('long content remains scrollable', await A.eval(`[...document.querySelectorAll('.widget .window-body')].every(e => e.scrollHeight > e.clientHeight && e.getBoundingClientRect().bottom < innerHeight)`))
-  await quiet(A, 'content growth')
-  // Native touch cancellation releases capture and dragging state on nonmobile touch devices.
-  await A.send('Emulation.setTouchEmulationEnabled', {enabled: true, maxTouchPoints: 1})
-  const pt = await A.eval(`(() => {const r=document.querySelectorAll('.widget .note-grip')[1].getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+10}})()`)
-  await A.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[pt]})
-  await A.send('Input.dispatchTouchEvent', {type:'touchMove', touchPoints:[{x:pt.x+20,y:pt.y+20}]})
-  await A.send('Input.dispatchTouchEvent', {type:'touchCancel', touchPoints:[]})
-  await sleep(500)
-  check('touch cancellation clears dragging state', await A.eval(`!document.body.classList.contains('is-dragging') && !document.body.classList.contains('is-resizing')`))
-  const afterTouch = await rects()
-  check('touch moves only active widget', afterTouch[0].x === resized[0].x && afterTouch[0].y === resized[0].y && afterTouch[1].x > resized[1].x)
-  await A.eval(`document.querySelectorAll('.ws[data-ws]')[1].click()`)
-  await sleep(300)
-  check('widgets retain geometry across workspaces', isDeepStrictEqual(await rects(), afterTouch))
-  const off = structuredClone(saved); off.places.a.x = 9000; off.places.a.y = -9000; off.places.a.at += 10000
-  await api('widgets:placed', off)
-  await A.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
-  await sleep(600)
-  const recovered = await rects()
-  check('offscreen saved grip recovered independently', recovered[0].x + recovered[0].w <= 1200 && recovered[0].y >= 48 && recovered[1].x === afterTouch[1].x, recovered)
-  check('recovery leaves saved preference intact', (await api('widgets:placed')).places.a.x === 9000)
+  if (!process.env.WIDGET_WIDE_ONLY) {
+    const seeded = { places: {
+      a: { id: 'a', kind: 'sticky', x: 120, y: 120, w: 280, h: 180, vw: 1200, vh: 800, phone: false, at: now },
+      b: { id: 'b', kind: 'sticky', x: 600, y: 120, w: 280, h: 180, vw: 1200, vh: 800, phone: false, at: now },
+    }, removed: '' }
+    const notes = ['a', 'b'].map(id => ({ id, text: 'Synthetic widget ' + id + '\n' + 'Content line\n'.repeat(5), color: 'yellow', tilt: 0, created: now, updated: now }))
+    await api('windows:desktop', []); await api('notes', notes); await api('widgets:placed', seeded)
+    const phonePage = await browser(sid, 390, 844)
+    await load(phonePage)
+    check('cold mobile load mounts no widgets', (await widgets(phonePage)).length === 0)
+    await resize(phonePage, 1200, 800)
+    check('mobile-first session restores desktop widgets', (await widgets(phonePage)).length === 2)
+    check('mobile-first session preserves placements', isDeepStrictEqual(await api('widgets:placed'), seeded))
+    const A = await browser(sid, 1200, 800)
+    await load(A)
+    const rects = () => A.eval(`[...document.querySelectorAll('[data-app="widget"]')].map(e => ({x: parseFloat(e.style.left), y: parseFloat(e.style.top), w: parseFloat(e.style.width), z: +e.style.zIndex, pid: +e.dataset.pid}))`)
+    const before = await rects()
+    check('intentional duplicate kind retains both instances', before.length === 2)
+    await drag(A, before[1].pid, -450, 30)
+    const moved = await rects()
+    check('drag permits overlap without moving neighbour', moved[0].x === before[0].x && moved[0].y === before[0].y && moved[1].x === 150 && moved[1].y === 150 && moved[1].z > moved[0].z, moved)
+    await drag(A, moved[1].pid, 100, 0, true)
+    const resized = await rects()
+    check('resize keeps origin and neighbour fixed', resized[1].x === moved[1].x && resized[1].y === moved[1].y && resized[1].w === 380 && resized[0].x === before[0].x && resized[0].y === before[0].y, resized)
+    await drag(A, resized[1].pid, -180, 0, true)
+    check('widget can resize below app-window minimum without jumping', (await rects())[1].w === 200 && (await rects())[1].x === resized[1].x)
+    await drag(A, resized[1].pid, 180, 0, true)
+    const saved = await api('widgets:placed')
+    await instrument(A)
+    await resize(A, 740, 500); await scale(A, 1.5)
+    await quiet(A, 'shrink and zoom')
+    await scale(A, 1); await resize(A, 1200, 800)
+    check('grow restores preferred geometry', isDeepStrictEqual(await rects(), resized))
+    await resize(A, 390, 844)
+    check('mobile hides every widget including stickies', (await widgets(A)).length === 0)
+    await quiet(A, 'mobile')
+    await resize(A, 1200, 800)
+    check('desktop restores same instances and geometry', isDeepStrictEqual(await rects(), resized), await rects())
+    check('mobile never changes saved desktop geometry', isDeepStrictEqual(saved, await api('widgets:placed')))
+    // Content growth should scroll in place, including content taller than the whole viewport.
+    await api('notes', notes.map(n => ({...n, text: n.text + 'More content\n'.repeat(100), updated: now + 1000, edited: now + 1000})))
+    await A.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
+    await sleep(800)
+    check('content growth leaves every origin fixed', isDeepStrictEqual(await rects(), resized))
+    check('long content remains scrollable', await A.eval(`[...document.querySelectorAll('.widget .window-body')].every(e => e.scrollHeight > e.clientHeight && e.getBoundingClientRect().bottom < innerHeight)`))
+    await quiet(A, 'content growth')
+    // Native touch cancellation releases capture and dragging state on nonmobile touch devices.
+    await A.send('Emulation.setTouchEmulationEnabled', {enabled: true, maxTouchPoints: 1})
+    const pt = await A.eval(`(() => {const r=document.querySelectorAll('.widget .note-grip')[1].getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+10}})()`)
+    await A.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[pt]})
+    await A.send('Input.dispatchTouchEvent', {type:'touchMove', touchPoints:[{x:pt.x+20,y:pt.y+20}]})
+    await A.send('Input.dispatchTouchEvent', {type:'touchCancel', touchPoints:[]})
+    await sleep(500)
+    check('touch cancellation clears dragging state', await A.eval(`!document.body.classList.contains('is-dragging') && !document.body.classList.contains('is-resizing')`))
+    const afterTouch = await rects()
+    check('touch moves only active widget', afterTouch[0].x === resized[0].x && afterTouch[0].y === resized[0].y && afterTouch[1].x > resized[1].x)
+    await A.eval(`document.querySelectorAll('.ws[data-ws]')[1].click()`)
+    await sleep(300)
+    check('widgets retain geometry across workspaces', isDeepStrictEqual(await rects(), afterTouch))
+    const off = structuredClone(saved); off.places.a.x = 9000; off.places.a.y = -9000; off.places.a.at += 10000
+    await api('widgets:placed', off)
+    await A.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
+    await sleep(600)
+    const recovered = await rects()
+    check('offscreen saved grip recovered independently', recovered[0].x + recovered[0].w <= 1200 && recovered[0].y >= 48 && recovered[1].x === afterTouch[1].x, recovered)
+    check('recovery leaves saved preference intact', (await api('widgets:placed')).places.a.x === 9000)
+  }
+  // A very wide rotated grip used to cross the top bar even though its unrotated y was 48.
+  for (const b of browsers.splice(0)) await b.close()
+  const W = await browser(sid, 1600, 900)
+  await api('windows:desktop', [])
+  await load(W)
+  await W.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+  await scale(W, 1); await resize(W, 1600, 900)
+  const wide = { places: { wide: { id: 'wide', kind: 'sticky', x: 24, y: 48, w: 1552, h: 180, vw: 1600, vh: 900, phone: false, at: now + 20000 } }, removed: '' }
+  const wideNote = { id: 'wide', text: 'Synthetic wide card', color: 'yellow', tilt: -4.5, created: now, updated: now + 20000, edited: now + 20000 }
+  const earlier = await api('widgets:placed')
+  wide.removed = [earlier?.removed, ...Object.keys(earlier?.places ?? {})].filter(Boolean).join(' ')
+  await api('widgets:placed', wide)
+  for (const tilt of [-4.5, 4.5]) {
+    await api('notes', [{ ...wideNote, tilt, updated: now + 30000 + tilt }])
+    await load(W)
+    const reachable = async (label: string) => {
+      // Bring the tested widget forward and dismiss unrelated startup notices before hit testing.
+      await W.eval(`(() => {
+        document.querySelector('.widget-sticky').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+        document.querySelectorAll('.notice-close').forEach(e => e.click())
+      })()`)
+      await sleep(400)
+      const result = await W.eval(`(() => {
+        const widget = document.querySelector('.widget-sticky'), button = widget.querySelector('.note-close')
+        const r = button.getBoundingClientRect(), top = document.querySelector('.topbar').getBoundingClientRect().bottom
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+        const grip = widget.querySelector('.note-grip').getBoundingClientRect()
+        return { tilt: widget.style.getPropertyValue('--widget-tilt'), hitClass: hit?.className, top, y: r.y, bottom: r.bottom, right: r.right, x: r.x, hit: hit === button || button.contains(hit), gripTop: grip.top,
+          ok: r.y >= top && r.bottom <= innerHeight && r.x >= 0 && r.right <= innerWidth && (hit === button || button.contains(hit)) }
+      })()`)
+      check('wide tilt ' + tilt + ': ' + label + ' close reachable', result.ok && result.gripTop >= result.top, result)
+    }
+    await reachable('load')
+    const baseline = await api('widgets:placed')
+    await resize(W, 1000, 650); await reachable('viewport shrink')
+    await scale(W, 1.5); await reachable('150% scale')
+    await load(W); await reachable('scaled reload')
+    await scale(W, 1); await resize(W, 1600, 900); await reachable('grow')
+    check('wide tilt ' + tilt + ': fitting preserves preferred geometry', isDeepStrictEqual(await api('widgets:placed'), baseline))
+    // Start smaller near the top, then grow the east edge: it needs fresh rotation clearance.
+    const narrow = structuredClone(wide); narrow.places.wide.w = 300; narrow.places.wide.at = Math.max(Date.now(), (await api('widgets:placed')).places.wide.at) + 1000
+    await api('widgets:placed', narrow); await load(W)
+    await reachable('narrow before resize')
+    check('wide test starts resize at 300 px', await W.eval(`parseFloat(document.querySelector('.widget-sticky').style.width)`) === 300)
+    const pid = (await widgets(W))[0].pid
+    await drag(W, pid, 900, 0, true)
+    await reachable('east resize')
+    await load(W); await reachable('resized reload')
+    wide.places.wide.at = Math.max(Date.now(), (await api('widgets:placed')).places.wide.at) + 1000
+    await api('widgets:placed', wide)
+  }
 } catch (error) {
   failed++; console.error(error)
 } finally {
