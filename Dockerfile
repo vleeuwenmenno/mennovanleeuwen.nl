@@ -35,7 +35,7 @@ COPY src/apps/games/catalog.ts ./src/apps/games/
 # The agents: the shell's parser (to tell read-only command lines apart) and its reference (the msh skill).
 COPY src/data/mshReference.ts ./src/data/
 COPY src/terminal/msh/parse.ts ./src/terminal/msh/
-COPY src/data/steering.ts ./src/data/
+COPY src/data/steering.ts src/data/terminalResources.ts ./src/data/
 # Shared calculator parser classifies rate-fetching terminal expressions without network I/O.
 COPY src/os/smartcalc.ts ./src/os/
 # Tasks: its settings, which the server's reminders read.

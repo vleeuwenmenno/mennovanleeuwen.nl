@@ -2139,7 +2139,7 @@ function FuriganaGroup() {
         する
       </p>
       <p className="muted set-help">
-        {shown[2]} Applies to all Markdown text: Agents replies, the previews in Zed and Files, Notebook, Spotlight answers and the terminal's <code>agents</code> view. It is written <code>{'{漢字|かんじ}'}</code>, and an agent can write it too.{' '}
+        {shown[2]} Applies to all Markdown text: Agents replies, the previews in Xed and Files, Notebook, Spotlight answers and the terminal's <code>agents</code> view. It is written <code>{'{漢字|かんじ}'}</code>, and an agent can write it too.{' '}
         {account.status === 'user' ? 'Your choice syncs to your other devices.' : 'Saved in this browser.'}
       </p>
     </SetGroup>

@@ -11,6 +11,7 @@ import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve, resolverFor } from './dns'
 import { pepper } from './pepper'
 import { extraCommands } from './extra'
+import { appDataCommands } from './appDataCommands'
 import { findCommands } from './find'
 import { revealEmail } from '../data/email'
 import { shortcuts } from '../data/shortcuts'
@@ -1379,7 +1380,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, byteCommands, findCommands, chmodCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
+Object.assign(commands, appDataCommands, extraCommands, byteCommands, findCommands, chmodCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
 // Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
 if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).

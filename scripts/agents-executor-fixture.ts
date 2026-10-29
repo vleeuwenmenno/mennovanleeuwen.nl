@@ -1,9 +1,11 @@
+import { Session } from '../src/terminal/agents/app'
+import { claimClientCall, sendClientResult } from '../src/data/agents'
 // Browser fixture for check:agents-executor-lifecycle; not imported by the app.
 import { createElement as h, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { useClientCalls } from '../src/terminal/agents/useClientCalls'
-import { execute } from '../src/terminal/agents/exec'
+import { execute, runAgentCall } from '../src/terminal/agents/exec'
 import { AGENT_LIMITS } from '../src/terminal/limits'
 import type { ClientCalls } from '../src/terminal/agents/lifecycle'
 import { lookup } from '../src/terminal/fs'
@@ -60,5 +62,59 @@ export async function run() {
   await original.run('new-thread', async () => true, async () => { ran = true }, async () => {})
   checks.push({ name: 'new conversation adopts its assigned ID without losing the send stream executor', ok: original === owner && ran })
   flushSync(() => root.unmount()); host.remove()
+  // Real UI hook + CLI Session.runClient route, transport mocked at fetch only.
+  // Both claim, run actual mvl/jq-safe, deliver structured results, and cancel in-flight reads.
+  const savedFetch = window.fetch
+  const replies: { status: number; result?: { stdout: string } }[] = []
+  let reads = 0, hold = false, entered!: () => void
+  window.fetch = async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/claim')) return Response.json({ ok: true })
+    if (url.endsWith('/result')) { replies.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }) }
+    if (url === '/api/state') {
+      reads++; entered?.()
+      if (hold) await new Promise<void>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
+      })
+      return Response.json({ notes: { value: [{ id: 'fixture', text: 'same msh' }] } })
+    }
+    return savedFetch(input, init)
+  }
+  try {
+    for (const surface of ['ui', 'cli'] as const) {
+      const host = document.createElement('div'); document.body.append(host)
+      const root = createRoot(host)
+      let owner!: ClientCalls
+      function View() { owner = useClientCalls('integration'); return null }
+      flushSync(() => root.render(h(View)))
+      const ctx = { cwd: '/tmp', env: {}, signal: new AbortController().signal, size: { cols: 100, rows: 30 } }
+      const session = new Session(ctx as never, { thread: { id: 'integration' }, messages: [], workdir: null, mode: 'quick', model: '', projectId: null, permission: 'plan', tools: [], first: '' } as never)
+      const cli = session as unknown as { runClient: (id: string, message: number, index: number, call: { name: string; arguments: Record<string, unknown> }, grant: object) => Promise<void>; clientCalls: ClientCalls; draw: () => void }
+      cli.draw = () => {} // Screen painting is irrelevant to the executor transport.
+      const serverGrant = { mode: 'plan', write: false, delete: false, network: false, steering: false, appDataRead: ['notes'] as const }
+      const call = { name: 'terminal', arguments: { command: "mvl notes | jq-safe -c '.notes | map({text})'" } }
+      const dispatch = (id: string, grant = serverGrant) => surface === 'cli'
+        ? cli.runClient(id, 1, 0, call, grant)
+        : owner.run(id, () => claimClientCall('integration', id), signal => runAgentCall({ ...call, workdir: null, fallbackDir: '/tmp', grant, signal }), a => sendClientResult('integration', id, a.output, a.status, { result: a.result }))
+      const before = replies.length
+      await dispatch(surface + '-success')
+      checks.push({ name: surface + ' claimed mvl + jq-safe returns structured real interpreter result', ok: replies.length === before + 1 && replies.at(-1)?.status === 0 && replies.at(-1)?.result?.stdout === '[{"text":"same msh"}]' })
+      const count = reads
+      await dispatch(surface + '-denied', { ...serverGrant, appDataRead: [] } as unknown as typeof serverGrant)
+      checks.push({ name: surface + ' resource refusal occurs before HTTP', ok: reads === count && replies.at(-1)?.status !== 0 })
+      hold = true
+      const began = new Promise<void>(r => entered = r)
+      const pending = dispatch(surface + '-cancel')
+      await began
+      const delivered = replies.length
+      if (surface === 'cli') cli.clientCalls.done(surface + '-cancel')
+      else owner.stop()
+      await pending
+      checks.push({ name: surface + ' lifecycle cancellation aborts actual mvl read without late result', ok: replies.length === delivered })
+      hold = false
+      cli.clientCalls.close()
+      flushSync(() => root.unmount()); host.remove()
+    }
+  } finally { window.fetch = savedFetch }
   return checks
 }

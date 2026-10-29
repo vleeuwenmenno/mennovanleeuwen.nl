@@ -2,7 +2,8 @@ import { HANDLE } from '../os/identity'
 import { contributions, profile, projects } from '../data/profile'
 import { ansiToMarkup, plain, rainbow } from './ansi'
 import { md5, sha } from './hash'
-import { jq, JqError } from './jq'
+import { jq, JqError, parseJqArgs } from './jq'
+import { safeJq, type SafeJqBudget } from './jq-safe'
 import { CmdError, type Ctx } from './types'
 import { cmatrix, USAGE as CMATRIX_USAGE } from './cmatrix'
 import { actorOf, lookup } from './fs'
@@ -881,28 +882,25 @@ export const extraCommands: Record<string, Command> = {
   xrandr: { desc: 'screen resolution and measured refresh rate', run: xrandr },
   ip: { desc: 'network interfaces (what the browser shares)', usage: 'ip [a|link|route]', run: (ctx) => ip(ctx, 'ip') },
   ifconfig: { desc: 'network interfaces, old style', run: (ctx) => ip(ctx, 'ifconfig') },
+  'jq-safe': {
+    desc: 'bounded, cancellable JSON subset (stdin only; no regex)',
+    usage: 'jq-safe [-ncr] [--arg name value] [--argjson name JSON] <filter>',
+    run: async (ctx) => {
+      try { return await safeJq(ctx.args, ctx.stdin ?? '', ctx as Ctx & { budget?: SafeJqBudget; policy?: unknown }) }
+      catch (error) { throw new CmdError((error as Error).message) }
+    },
+  },
   jq: {
     desc: 'slice and filter JSON',
-    usage: "jq [-r] [-c] [-n] [-s] <filter> [file]   e.g. curl -s api.github.com/users/vleeuwenmenno | jq .name",
+    usage: "jq [-rcnsM] [--arg name value] [--argjson name JSON] <filter> [file]   e.g. curl -s api.github.com/users/vleeuwenmenno | jq .name",
     run: (ctx) => {
-      const opts = { raw: false, compact: false, nullInput: false, slurp: false }
-      const rest: string[] = []
-      for (const a of ctx.args) {
-        if (/^-[rcnsM]+$/.test(a)) for (const ch of a.slice(1)) {
-          if (ch === 'r') opts.raw = true
-          if (ch === 'c') opts.compact = true
-          if (ch === 'n') opts.nullInput = true
-          if (ch === 's') opts.slurp = true
-        }
-        else if (a === '--raw-output') opts.raw = true
-        else if (a === '--compact-output') opts.compact = true
-        else rest.push(a)
-      }
-      const [filter = '.', file] = rest
-      const text = file ? readText(ctx, file, 'jq') : ctx.stdin ?? (opts.nullInput ? '' : null)
-      if (text === null) throw new CmdError("Usage: jq [OPTIONS] FILTER [FILE]\n  pipe JSON in: curl -s api.github.com/users/vleeuwenmenno | jq '.name, .public_repos'")
       try {
-        return jq(filter, text, { ...opts, color: ctx.tty })
+        const guarded = ctx as Ctx & { policy?: unknown; budget?: unknown }
+        if (guarded.policy || guarded.budget) throw new CmdError('rich jq is interactive-only; use jq-safe')
+        const { filter, file, opts } = parseJqArgs(ctx.args)
+        const text = file && file !== '-' ? readText(ctx, file, 'jq') : ctx.stdin ?? (opts.nullInput ? '' : null)
+        if (text === null) throw new CmdError("Usage: jq [OPTIONS] FILTER [FILE]\n  pipe JSON in or use -n to construct JSON")
+        return jq(filter, text, { ...opts, color: opts.color ?? ctx.tty })
       } catch (err) {
         if (err instanceof JqError) throw new CmdError(`jq: error: ${err.message}`)
         throw new CmdError(`jq: error: ${(err as Error).message}`)

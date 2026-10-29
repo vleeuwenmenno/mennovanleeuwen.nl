@@ -79,7 +79,7 @@ const gamesMenu = (w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => {
 export const APP_META: Record<AppId, AppMeta> = {
   terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], titleOf: terminalTitle, render: (w) => <Terminal win={w} />, menu: terminalMenu },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} />, menu: settingsMenu('Files', 'files') },
-  zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
+  zed: { title: 'Xed', dock: 'Xed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} />, menu: settingsMenu('Preview', 'preview') },
   player: { title: 'Player', dock: 'Player', blurb: 'Video', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
   amp: { title: 'Omamp', dock: 'Omamp', blurb: 'Music: MP3, FLAC and more, with an equalizer and a playlist', size: [500, 660], titleOf: ampTitle, render: (w) => <Amp win={w} />, menu: settingsMenu('Omamp', 'amp') },

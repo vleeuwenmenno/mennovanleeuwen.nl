@@ -72,6 +72,35 @@ try {
   const tool = (name: string, args: Record<string, unknown>, grant: Grant = EDITS) => runInFolder({ name, arguments: args, folder: { path: FOLDER, label: FOLDER }, fallbackDir: FOLDER, grant, signal: new AbortController().signal })
   const denied = (r: { stderr: string; exit_code: number }) => r.exit_code !== 0 && /^msh: |: /.test(r.stderr)
 
+  // Combined branch regressions: actual agent entry point, shared limits, no operand I/O.
+  const fetchBefore = globalThis.fetch
+  const fetched: string[] = []
+  globalThis.fetch = async (url) => {
+    fetched.push(String(url))
+    return new Response(JSON.stringify({ notes: { value: [{ id: 'n', text: 'saved' }] }, events: [], tasks: [] }))
+  }
+  try {
+    eq((await result("jq-safe -nc --arg p /outside '$p'", READONLY)).stdout, '"/outside"', 'jq-safe data operands bypass file preparation under confinement')
+    eq(fetched.length, 0, 'jq-safe data arguments cause no Seafile or app requests')
+    const dataGrant = { ...READONLY, appDataRead: ['notes'] as const }
+    eq((await result("mvl notes | jq-safe -c '.notes | map({text})'", dataGrant)).stdout, '[{"text":"saved"}]', 'agent mvl reads pipe through bounded jq-safe with a resource grant')
+    eq(fetched, ['/api/state'], 'mvl fetches only its authenticated resource endpoint')
+    const deniedResource = await result('mvl calendar 2026-01-01 2026-01-02', dataGrant)
+    check(deniedResource.exit_code === 126 && fetched.length === 1, 'grant cannot read another resource')
+    check((await result('mvl notes', { ...READONLY, network: true })).exit_code === 126 && fetched.length === 1, 'broad network permission does not authorize account data')
+    check((await tool('terminal', { command: 'mvl notes', appDataRead: ['notes'] }, READONLY)).status === 126, 'tool arguments cannot forge resource grants')
+    const info = JSON.parse((await tool('terminal_capabilities', {}, dataGrant)).capabilities!)
+    check(info.permissions.appDataRead.includes('notes') && info.commands.find((c: { name: string }) => c.name === 'mvl').available, 'capabilities reflect granted resources')
+    const steps = await result("echo '[1,2,3]' | jq-safe 'map(.)'; touch /tmp/jq-after", EDITS, { ...AGENT_LIMITS, maxSteps: 40 })
+    check(steps.terminated === 'steps' && !exists('jq-after'), 'jq-safe charges the shared agent step budget and prevents later mutations')
+    const output = await result("jq-safe -n --arg x abc '{value:$x}'", READONLY, { ...AGENT_LIMITS, maxTotal: 150 })
+    check(output.terminated === 'output', 'jq-safe internal allocations charge shared output budget')
+    const ctl = new AbortController()
+    setTimeout(() => ctl.abort(), 10)
+    const cancelled = await run("jq-safe -n --argjson x '[" + Array(500).fill('1').join(',') + "]' '$x | map(.)'; touch /tmp/jq-cancel-after", EDITS, AGENT_LIMITS, ctl.signal)
+    check(cancelled.result?.terminated === 'cancelled' && !exists('jq-cancel-after'), 'timer-driven cancellation interrupts actual agent jq-safe work')
+  } finally { globalThis.fetch = fetchBefore }
+
   // --- running ------------------------------------------------------------------------------------
 
   const out = await result('echo out; echo err >&2')
@@ -283,7 +312,7 @@ try {
       }
     }
     check(/^ERR .*outside/.test(await asRead('cat', [`${HOME}/README.md`])), 'cat called directly still cannot read outside the work folder (the read funnel checks the policy)')
-    check(/^ERR .*outside/.test(await asRead('grep', ['x', '/etc/fstab'])) && /^ERR .*outside/.test(await asRead('wc', ['/etc/fstab'])) && /^ERR .*outside/.test(await asRead('jq', ['.', '/etc/fstab'])), 'grep, wc and jq called directly cannot either')
+    check(/^ERR .*outside/.test(await asRead('grep', ['x', '/etc/fstab'])) && /^ERR .*outside/.test(await asRead('wc', ['/etc/fstab'])) && /^ERR .*interactive-only/.test(await asRead('jq', ['.', '/etc/fstab'])), 'grep, wc and jq called directly cannot either')
     for (const [name, args] of [['touch', [`${HOME}/direct.txt`]], ['mkdir', [`${HOME}/direct-dir`]], ['cp', ['/tmp/iso-file.txt', `${HOME}/direct.txt`]], ['mv', ['/tmp/iso-file.txt', `${HOME}/direct.txt`]], ['tee', [`${HOME}/direct.txt`]], ['rm', [`${HOME}/README.md`]], ['chmod', ['+x', `${HOME}/README.md`]]] as [string, string[]][]) {
       const r = await asRead(name, args, makePolicy(grantOf({ delete: true, network: true, steering: true })))
       check(/^ERR .*(outside|work folder)/.test(r) && exists('iso-file.txt'), `${name} called directly cannot write outside the work folder (fs.ts checks the policy)`, r)

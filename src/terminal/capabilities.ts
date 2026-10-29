@@ -1,3 +1,5 @@
+import { TERMINAL_RESOURCES } from '../data/terminalResources'
+import { SAFE_JQ_LIMITS } from './jq-safe'
 import { getLibraries } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { browserMountPoint, isSeafileType, mounts, whereIs } from '../data/mounts'
@@ -19,11 +21,11 @@ export const HELP_GROUPS: [string, string[]][] = [
   ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'weather', 'games']],
   ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'changelog', 'git', 'heatmap', 'stars', 'contact']],
   ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'chmod', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
-  ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
+  ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq-safe', 'jq', 'sha256sum', 'md5sum']],
   ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
   ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
   ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'alias', 'unalias', 'type', 'sleep', 'seq', 'basename', 'dirname']],
-  ['Agents', ['agents', 'skills']],
+  ['Agents', ['agents', 'skills', 'mvl']],
   ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
   ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
 ]
@@ -82,7 +84,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
     const { options, complete } = optionsOf(info?.usage)
     const effect = EFFECTS[name]
     // What this session may do with it: for an agent the policy answers (with no arguments, so what it says is only the kind of command), the terminal runs everything.
-    const blocked = policy ? policy.command(name, [], ctx.cwd) : null
+    const blocked = policy ? name === 'mvl' && grant?.appDataRead?.length ? null : policy.command(name, [], ctx.cwd) : null
     const restriction = policy ? (effect === 'network' && !grant?.network ? 'runs only when the approved command line names it' : effect === 'delete' && !grant?.delete ? 'needs the approved command line to name it' : blocked ?? undefined) : undefined
     return {
       name,
@@ -91,6 +93,8 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
       kind: builtins.has(name) ? ('builtin' as const) : ('command' as const),
       ...(info?.hidden ? { alias: true } : {}),
       ...(['calc', 'units', 'bc'].includes(name) ? { conditionalNetwork: 'Exchange-rate cache misses require network authority; arithmetic, units and cached rates stay offline.' } : {}),
+      ...(name === 'mvl' ? { resources: TERMINAL_RESOURCES.map(r => ({ ...r, available: policy ? !!grant?.appDataRead?.includes(r.id) : !!getAccount().user })) } : {}),
+      ...(name === 'jq-safe' ? { limits: SAFE_JQ_LIMITS } : {}),
       usage: info?.usage ?? null,
       options,
       optionsComplete: info?.usage ? complete : false,
@@ -124,6 +128,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
     { id: 'seafile', available: !!account.seafile, detail: account.seafile ? `${libs ? libs.length : 'some'} libraries${all.some(isSeafileType) ? ', mounted' : ', none mounted'}` : 'not linked to an account' },
     { id: 'browser-files', available: !!browserMountPoint(), detail: browserMountPoint() ? `files kept in this browser, mounted at ${browserMountPoint()}` : 'only when signed in' },
     { id: 'network', available: true, detail: 'curl, wget, ping, dig, host, nslookup, whois (the browser fetches: only sites that allow it)', ...(policy ? { agent: grant?.network ? 'allowed for this call' : 'only when the approved command line names the command' } : {}) },
+    ...TERMINAL_RESOURCES.map(r => ({ id: r.id, available: policy ? !!grant?.appDataRead?.includes(r.id) : !!account.user, detail: 'Authenticated read-only account data through mvl; server authorization applies to every request' })),
     { id: 'apps', available: !ctx.tty ? false : true, detail: 'open, photos, mail… start apps in the desktop', ...(policy ? { agent: 'not available to an agent' } : {}) },
   ]
 
@@ -159,7 +164,7 @@ export function capabilities(registry: Record<string, CommandInfo>, ctx: Pick<Ct
       ? { maxSourceChars: 64_000, maxExpandedFields: 10_000, maxPatternChars: 256, maxPatternStars: 1, maxPatternInputChars: 4096, maxGrepPatternChars: 4096, maxIfsChars: 256, deadline: 'cooperative; synchronous JavaScript is not preempted', timeoutSeconds: ctx.budget.limits.timeoutMs / 1000, maxSteps: ctx.budget.limits.maxSteps, outputCharsPerStream: ctx.budget.limits.maxOutput, bufferCharsPerPipeOrSubstitution: ctx.budget.limits.maxBuffer, totalCharsWritten: ctx.budget.limits.maxTotal, variableChars: ctx.budget.limits.maxVariable, onLimit: 'the run stops; the result says why (termination) and what was cut (truncated)' }
       : null,
     sessionRights: grant ? { mode: grant.mode, write: !!root && grant.mode !== 'plan', writeApproval: ['bypass', 'acceptEdits'].includes(grant.mode) ? 'not required inside work folder' : 'required', deleteApproval: grant.mode === 'bypass' ? 'not required' : 'required', networkApproval: grant.mode === 'bypass' ? 'not required' : 'required', steeringApproval: 'fresh explicit approval always required', queryAuthority: 'permissions below apply only to this call' } : null,
-    permissions: grant ? { mode: grant.mode, write: grant.write, delete: grant.delete, network: grant.network, steering: grant.steering } : null,
+    permissions: grant ? { mode: grant.mode, write: grant.write, delete: grant.delete, network: grant.network, steering: grant.steering, appDataRead: grant.appDataRead ?? [] } : null,
     notes: [
       'Commands are MvL OS’s own, not a Linux system’s: option lists are partial usage hints, not a complete parser schema.',
       ...(policy ? ['A command the policy refuses answers `msh: …` on stderr with status 126; the reason says which rule.'] : []),

@@ -1,3 +1,5 @@
+import { TERMINAL_RESOURCES } from '../src/data/terminalResources.ts'
+import type { TerminalResource } from '../src/data/terminalResources.ts'
 import { posix } from 'node:path'
 import { calculatorUsesRates } from '../src/os/smartcalc.ts'
 import { Worker } from 'node:worker_threads'
@@ -521,7 +523,7 @@ export async function projectInstructions(user: User, w: Workdir, signal: AbortS
 /** Commands that only look: a line made of these alone runs without asking. */
 const READ_ONLY = new Set([
   'ls', 'll', 'cat', 'less', 'more', 'bat', 'head', 'tail', 'wc', 'grep', 'egrep', 'sort', 'uniq', 'tree', 'pwd', 'echo', 'printf', 'stat', 'du', 'df', 'file',
-  'which', 'type', 'whoami', 'id', 'date', 'cal', 'uname', 'uptime', 'hostname', 'env', 'man', 'help', 'jq', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'base64',
+  'which', 'type', 'whoami', 'id', 'date', 'cal', 'uname', 'uptime', 'hostname', 'env', 'man', 'help', 'jq', 'jq-safe', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'base64',
   'seq', 'basename', 'dirname', 'test', '[', 'true', 'false', ':', 'cd', 'calc', 'units', 'bc', 'nproc', 'free', 'ps', 'diff', 'read', 'set', 'export', 'local',
   'sleep', 'findmnt', 'lsblk', 'tty', 'history', 'fastfetch', 'fortune', 'cowsay', 'figlet',
 ])
@@ -548,7 +550,7 @@ export function readOnlyCommand(line: string): boolean {
   const cmds = commandWords(tree)
   return cmds.every((c) => {
     if (c.name === 'function') return false
-    if (c.name && !checksSyntax(c) && (!READ_ONLY.has(c.name) || /[$*?[]/.test(c.name))) return false
+    if (c.name && !(c.name === 'mvl' && TERMINAL_RESOURCES.some(r => r.subcommand === c.args[0])) && !checksSyntax(c) && (!READ_ONLY.has(c.name) || /[$*?[]/.test(c.name))) return false
     // Words that expand or are quoted could say anything once the shell is done with them.
     if (c.args.some((a) => /[$`'"\\]/.test(a))) return false
     return c.redirs.every((r) => r.op === '<' || r.op === '<<' || r.op === '<<-' || ((r.op === '>&' || r.op === '<&') && /^[0-9-]$/.test(r.target)) || r.target === '/dev/null')
@@ -589,7 +591,7 @@ export function commandNames(line: string): string[] {
  * each command, redirect and file write): writes stay inside the work folder, and the rest is only
  * granted by what the user approved.
  */
-export type ClientGrant = { mode: string; write: boolean; delete: boolean; network: boolean; steering: boolean }
+export type ClientGrant = { appDataRead?: readonly TerminalResource[]; mode: string; write: boolean; delete: boolean; network: boolean; steering: boolean }
 /**
  * How the call got to run: `readonly` (a line that only looks, in any mode), `edits` (edits accepted:
  * files in the work folder), `bypass`, or `approved` (the user allowed this line, or its commands).
@@ -607,17 +609,24 @@ export const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
  * (`msh x.sh` does not give x.sh the right to rm; `rm x` does). Steering rights additionally
  * require this call's fresh explicit approval, never a remembered command grant.
  */
-export function terminalGrant(permission: Permission, line: string, access: TerminalAccess, explicitlyApproved = false): ClientGrant {
+export function terminalGrant(permission: Permission, line: string, access: TerminalAccess, explicitlyApproved = false, appDataRead: readonly TerminalResource[] = []): ClientGrant {
   const names = commandNames(line)
   const has = (set: ReadonlySet<string>) => names.some((n) => set.has(n))
   switch (access) {
     case 'readonly':
-      return { mode: permission, write: false, delete: false, network: false, steering: false }
+      return { appDataRead: [...appDataRead], mode: permission, write: false, delete: false, network: false, steering: false }
     case 'edits':
-      return { mode: permission, write: true, delete: false, network: false, steering: false }
+      return { appDataRead: [...appDataRead], mode: permission, write: true, delete: false, network: false, steering: false }
     case 'bypass':
-      return { mode: permission, write: true, delete: true, network: true, steering: false }
+      return { appDataRead: [...appDataRead], mode: permission, write: true, delete: true, network: true, steering: false }
     case 'approved':
-      return { mode: permission, write: true, delete: has(DELETE_COMMANDS), network: terminalNeedsNetwork(line), steering: explicitlyApproved && STEERING_IN_LINE.test(line) }
+      return { appDataRead: [...appDataRead], mode: permission, write: true, delete: has(DELETE_COMMANDS), network: terminalNeedsNetwork(line), steering: explicitlyApproved && STEERING_IN_LINE.test(line) }
   }
+}
+
+/** Called only with the authenticated thread's server-built tool catalog. A model cannot
+ * enable a disabled Notes/Calendar group through terminal arguments or permission mode.
+ * Task status, like GET /api/agents/tasks, is a read of the signed-in account only. */
+export function terminalResourceGrants(offered: ReadonlySet<string>): TerminalResource[] {
+  return TERMINAL_RESOURCES.filter(r => r.tool === null || offered.has(r.tool)).map(r => r.id)
 }

@@ -1,3 +1,5 @@
+import { appDataDenial } from './appData'
+import type { TerminalResource } from '../data/terminalResources'
 import { agentGrepRefusal, parseGrepArgs } from './grepArgs'
 import { parseSf, sfPath } from '../data/seafile'
 import { whereIs, mounts } from '../data/mounts'
@@ -18,6 +20,7 @@ import { resolvePath } from './vfs'
 
 export type Grant = {
   /** The thread's permission mode, for the capability report */
+  appDataRead?: readonly TerminalResource[]
   mode: string
   /** The work folder as a terminal path; null when the thread has none */
   root: string | null
@@ -45,7 +48,7 @@ export interface Policy {
   cwd(abs: string): string | null
 }
 
-export type Effect = 'pure' | 'read' | 'write' | 'delete' | 'network' | 'blocked'
+export type Effect = 'pure' | 'read' | 'write' | 'delete' | 'network' | 'resource' | 'blocked'
 
 /**
  * What each command of the registry does to the world, for the agents' terminal. A command that is
@@ -63,7 +66,7 @@ export const EFFECTS: Record<string, Effect> = {
   df: 'pure', free: 'pure', nproc: 'pure', lscpu: 'pure', ip: 'pure', ifconfig: 'pure', xrandr: 'pure', findmnt: 'pure', lsblk: 'pure', ps: 'pure', git: 'network', changelog: 'network', releases: 'network',
   // Commands that read the files they are given (and the shell's own `cd`).
   cd: 'read', ls: 'read', ll: 'read', cat: 'read', less: 'read', more: 'read', bat: 'read', head: 'read', tail: 'read', wc: 'read', grep: 'read', sort: 'read', uniq: 'read', tree: 'read', du: 'read', find: 'read', fd: 'blocked',
-  jq: 'blocked', sha1sum: 'read', sha256sum: 'read', sha384sum: 'read', sha512sum: 'read', md5sum: 'read', xxd: 'read', hexdump: 'read', od: 'read', tar: 'blocked', unzip: 'blocked',
+  'jq-safe': 'pure', mvl: 'resource', jq: 'blocked', sha1sum: 'read', sha256sum: 'read', sha384sum: 'read', sha512sum: 'read', md5sum: 'read', xxd: 'read', hexdump: 'read', od: 'read', tar: 'blocked', unzip: 'blocked',
   // Commands that write what they are given.
   touch: 'write', mkdir: 'write', tee: 'write', cp: 'write', mv: 'write', chmod: 'write',
   rm: 'delete', rmdir: 'delete',
@@ -144,6 +147,8 @@ export function makePolicy(grant: Grant): Policy {
       const effect = EFFECTS[name]
       if (effect === undefined || effect === 'blocked') return `${name}: not available to an agent (requires unsupported effects or unbounded synchronous execution); \`help --json\` lists what runs`
       switch (effect) {
+        case 'resource':
+          return appDataDenial(args, grant)
         case 'pure':
           return null
         case 'network':
@@ -174,6 +179,7 @@ export function makePolicy(grant: Grant): Policy {
 
 /** Files a command prepares. Patterns/filters are data, never paths. */
 export function fileOperands(name: string, args: string[]): string[] {
+  if (name === 'jq-safe' || name === 'mvl') return []
   const words = operands(args)
   if (name === 'grep' || name === 'egrep') return parseGrepArgs(args).files.filter((p) => p !== '-')
   if (['jq', 'fd'].includes(name)) return words.slice(1)

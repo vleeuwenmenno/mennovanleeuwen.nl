@@ -4,18 +4,20 @@
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
+import { DebugSession } from './debug'
+import { diagnostic, formatDiagnostic } from './analysis'
 import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
 import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
 import { lookup, prepare, prepareFolder, readFileText, writeFile, actorOf } from '../fs'
-import { Budget, type Stop } from '../limits'
+import { AGENT_LIMITS, Budget, type Stop } from '../limits'
 import { allows, canRun } from '../modes'
 import { arith } from './arith'
 import { globMatch, globSource, hasGlob, unescapeGlob } from './glob'
-import { Incomplete, nestedEnd, parse, type Node, type Redirect } from './parse'
+import { Incomplete, nestedEnd, parse, type Node, type Redirect, type SourceSpan } from './parse'
 
-export type Base = Omit<Ctx, 'args' | 'stdin' | 'tty'>
+export type Base = Omit<Ctx, 'args' | 'stdin' | 'tty'> & { debug?: DebugSession }
 export type RunResult = { output: string; ok: boolean }
 type Cmd = { run: (ctx: Ctx) => string | void | Promise<string | void> }
 
@@ -117,7 +119,7 @@ let ticks = 0
 const breathe = () => (++ticks % 128 === 0 ? new Promise<void>((r) => setTimeout(r, 0)) : null)
 
 /** The terminal's screen as a sink: whole lines go out as they complete. */
-function screen(print: (text: string) => void) {
+function screen(print: (text: string) => void, limit?: number) {
   let pending = ''
   const flush = () => {
     if (pending) print(pending)
@@ -127,6 +129,23 @@ function screen(print: (text: string) => void) {
     tty: true,
     flush,
     write(t) {
+      if (limit !== undefined) {
+        const text = printable(t)
+        // Debug output must make progress even when a command never writes a newline.
+        // Append in bounded pieces so neither pending nor a print callback grows indefinitely.
+        for (let at = 0; at < text.length; ) {
+          const size = Math.min(limit - pending.length, text.length - at)
+          pending += text.slice(at, at + size)
+          at += size
+          const nl = pending.lastIndexOf('\n')
+          if (nl >= 0) {
+            print(pending.slice(0, nl) || ' ')
+            pending = pending.slice(nl + 1)
+          }
+          if (pending.length === limit) flush()
+        }
+        return
+      }
       pending += printable(t)
       const i = pending.lastIndexOf('\n')
       if (i < 0) return
@@ -362,6 +381,7 @@ class Shell {
   /** The status of the last $(…) in the current command, for a line of assignments only */
   private substStatus: number | null = null
   private depth = 0
+  private location?: SourceSpan
   /** Alias names that do not expand while an expanded alias runs (the loop guard) */
   private aliasBlock: Set<string> | null = null
 
@@ -797,6 +817,17 @@ class Shell {
 
   async exec(n: Node, io: Io, cond = false): Promise<number> {
     this.checkAbort()
+    if (n.span) this.location = n.span
+    if (n.span && this.base.debug && n.t !== 'func') {
+      await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal, this.base.budget)
+      this.checkAbort()
+      if (this.base.debug.abort.signal.aborted) throw new AbortSignal_()
+    }
+    if ((n.t === 'simple' || n.t === 'arith') && n.span && n.span.filename !== '-c') {
+      const location = n.span
+      const err = io.err
+      io = { ...io, err: { ...err, write: text => err.write(text.startsWith('{c:red}') ? `${location.filename}:${location.line}:${location.column}: [${location.expression.slice(0, 200)}] ${text}` : text) } }
+    }
     switch (n.t) {
       case 'list': {
         let s = 0
@@ -1199,14 +1230,19 @@ class Shell {
     if (this.base.budget && src.length > 64_000) throw new LimitSignal(this.base.budget.stop('memory'))
     let tree: Node
     try {
-      tree = parse(src)
+      tree = parse(src, label)
     } catch (e) {
-      io.err.write(`${red(`msh: ${label}: ${(e as Error).message}`)}\n`)
+      io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, label, e))}`)}\n`)
       return 2
     }
     try {
       return await this.exec(tree, io)
     } catch (e) {
+      if (e instanceof Error && this.location) {
+        const at = this.location
+        const err = io.err
+        return this.caught(e, { ...io, err: { ...err, write: text => err.write(`${at.filename}:${at.line}:${at.column}: [${at.expression.slice(0, 200)}] ${text}`) } })
+      }
       return this.caught(e, io)
     }
   }
@@ -1896,27 +1932,38 @@ function topShell(shell: Base, interactive: boolean): Shell {
  * Runs a command line typed at the prompt (or handed over by sudo, find -exec, watch). Each
  * top-level command's output is printed as it comes, and returned with whether it succeeded.
  */
-export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
+export type RunLineOptions = {
+  /** Opt-in tail capture and screen chunk bound, in UTF-16 code units; default remains unlimited. */
+  captureLimit?: number
+}
+export const DEBUG_OUTPUT_LIMIT = 32768
+
+export async function runLine(line: string, shell: Base, options: RunLineOptions = {}): Promise<RunResult[]> {
+  const limit = options.captureLimit
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw new RangeError('captureLimit must be a positive safe integer')
   const sh = topShell(shell, true)
   let tree: Node
   try {
     tree = parse(line)
   } catch (e) {
-    const msg = red(`msh: ${(e as Error).message}`)
+    const message = red(`msh: ${(e as Error).message}`)
+    const msg = limit === undefined ? message : message.slice(-limit)
     shell.print(msg)
     sh.setStatus(2)
     return [{ output: msg, ok: false }]
   }
   const items = tree.t === 'list' ? tree.items : [{ node: tree, bg: false }]
   const results: RunResult[] = []
-  const tty = screen(shell.print)
+  const tty = screen(shell.print, limit)
   for (const item of items) {
     let rec = ''
     const out: Sink = {
       tty: true,
       flush: tty.flush,
       write: (t) => {
-        rec += t
+        const why = shell.budget?.write(t.length, 0)
+        if (why) throw new LimitSignal(why)
+        rec = limit === undefined ? rec + t : (rec + t.slice(-limit)).slice(-limit)
         tty.write(t)
       },
     }
@@ -1926,9 +1973,9 @@ export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
     try {
       status = await sh.exec(item.node, io)
     } catch (e) {
-      stop = e instanceof ExitSignal || e instanceof AbortSignal_
+      stop = e instanceof ExitSignal || e instanceof AbortSignal_ || e instanceof LimitSignal
       try {
-        status = sh.caught(e, io)
+        status = e instanceof LimitSignal ? STOP_STATUS[e.why] : sh.caught(e, io)
       } catch {
         out.write(`${red(`msh: ${(e as Error)?.message ?? e}`)}\n`)
         status = 1
@@ -2027,6 +2074,28 @@ export function startAgent(src: string, shell: Base & { budget: Budget }): { don
 
 /** The exit status of a run that was stopped: 124 for time (as timeout(1)), 130 for Ctrl+C, 125 for the other limits. */
 const STOP_STATUS: Record<Stop, number> = { timeout: 124, cancelled: 130, steps: 125, output: 125, memory: 125 }
+/** Separate byte streams for regression tools and editor output; legacy runCaptured stays unchanged. */
+export async function runCapturedStreams(src: string, shell: Base, filename = '-c'): Promise<{ stdout: string; stderr: string; status: number }> {
+  const sh = topShell({ ...shell, env: { ...shell.env }, print: () => {} }, false)
+  const out = bufferSink(shell.budget), err = bufferSink(shell.budget)
+  const status = await sh.runSource(src, { out, err, stdin: null }, filename)
+  return { stdout: hooks.strip(out.text), stderr: hooks.strip(err.text), status }
+}
+
+/** Launch through normal command lookup, msh file reads, mode checks, and command execution. */
+export function launchDebug(line: string, shell: Base, label = line) {
+  const session = new DebugSession(label)
+  const budget = shell.budget ?? new Budget(AGENT_LIMITS)
+  const abort = () => { budget.stop('cancelled'); session.cancel() }
+  const timer = setTimeout(() => { budget.stop('timeout'); session.cancel() }, Math.max(0, budget.deadline - Date.now()))
+  shell.signal.addEventListener('abort', abort, { once: true })
+  const done = runLine(line, { ...shell, budget, debug: session, signal: session.abort.signal }, { captureLimit: DEBUG_OUTPUT_LIMIT })
+    .then(results => { session.finish(session.abort.signal.aborted ? 130 : Number(shell.env['?'] ?? (results.every(r => r.ok) ? 0 : 1))); return results })
+    .catch(error => { session.finish(1); throw error })
+    .finally(() => { clearTimeout(timer); shell.signal.removeEventListener('abort', abort) })
+  if (shell.signal.aborted) session.cancel()
+  return { session, done }
+}
 
 /** The aliases of a terminal session (its environment object), for completion, which and the rc. */
 export const aliasesOf = (env: Record<string, string>): ReadonlyMap<string, string> => kept.get(env)?.aliases ?? new Map()

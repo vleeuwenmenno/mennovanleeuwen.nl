@@ -1,3 +1,4 @@
+import type { TerminalResource } from './terminalResources'
 import { DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from './agentTaskMail'
 import { api } from '../os/account'
 import { synced } from '../os/synced'
@@ -243,7 +244,7 @@ export const mailReadsLeft = (t: Pick<Thread, 'mailReadsUntil'> | null | undefin
  * terminal's policy enforces it (src/terminal/policy.ts): where writes, deletes, the network and the
  * files that steer the agent are concerned. Writes always stay inside the work folder.
  */
-export type ClientGrant = { mode: string; write: boolean; delete: boolean; network: boolean; steering: boolean }
+export type ClientGrant = { appDataRead?: readonly TerminalResource[]; mode: string; write: boolean; delete: boolean; network: boolean; steering: boolean }
 
 /** What the terminal printed for a terminal tool call (`result`: the structured answer of `terminal`; `capabilities`: the JSON of `terminal_capabilities`). */
 export const sendClientResult = (id: string, callId: string, output: string, status: number, extra: { result?: unknown; capabilities?: string } = {}) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status, ...extra } })

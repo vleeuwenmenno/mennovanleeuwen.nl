@@ -278,6 +278,8 @@ async function ensureTree(root: string, cmd: string, read: boolean, actor: Actor
  */
 export async function prepare(cwd: string, cmd: string, args: string[], actor: Actor = false) {
   checkActor(actor)
+  // Data operands are never filesystem paths; cancellation still precedes this return.
+  if (cmd === 'jq-safe' || cmd === 'mvl') return
   const paths = typeof actor === 'boolean' || !actor.policy ? args : fileOperands(cmd, args)
   if (typeof actor !== 'boolean' && actor.policy) {
     for (const path of [cwd, ...paths.map((p) => resolvePath(cwd, p))]) {
@@ -285,6 +287,7 @@ export async function prepare(cwd: string, cmd: string, args: string[], actor: A
       if (why) throw err(why)
     }
   }
+
   // The browser's files load once, right after sign-in; the first command waits for that.
   if (browserMountPoint()) await browserFilesReady()
   if (!usesSeafile() || !getAccount().seafile || SELF_SERVED.has(cmd)) return

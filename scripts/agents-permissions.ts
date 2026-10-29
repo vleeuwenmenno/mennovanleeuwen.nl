@@ -134,7 +134,7 @@ database().prepare('INSERT INTO users (id, github_id, login, github_token, creat
 database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 1, ?, ?)').run(sha256(sid), now, now + 86400_000)
 // The decisions themselves, for what the stand-in cannot reach (a calendar).
 const { decide, decideTerminal, clearedByRules } = await import('../server/agents.ts')
-const { terminalGrant, terminalTool, terminalCapabilitiesTool } = await import('../server/workdir.ts')
+const { terminalGrant, terminalResourceGrants, terminalTool, terminalCapabilitiesTool } = await import('../server/workdir.ts')
 await server.start()
 
 const api = async (method: string, path: string, body?: unknown) => {
@@ -304,7 +304,15 @@ try {
   check('Terminal round trip: the Agents app (exec) runs it too, without being a terminal', tmOut !== null)
   check('Terminal round trip: terminal_capabilities hands back the window’s JSON as it is', tmRun.tools.find((m) => m.toolName === 'terminal_capabilities')?.content === '{"session":{"kind":"agent"}}')
   check('Terminal round trip: only the first window to claim a call may run it', claimed.length >= 2 && claimed.every((c) => c[0] === true && c[1] === false))
-  check(`Terminal round trip: Bypass sends a grant to write, delete and use the network (got ${JSON.stringify(clients[clients.length - 2]?.grant)})`, JSON.stringify(clients[clients.length - 2]?.grant) === '{"mode":"bypass","write":true,"delete":true,"network":true,"steering":false}')
+  check(`Terminal round trip: Bypass sends a grant to write, delete and use the network (got ${JSON.stringify(clients[clients.length - 2]?.grant)})`, JSON.stringify({ ...(clients[clients.length - 2]?.grant as object), appDataRead: undefined }) === '{"mode":"bypass","write":true,"delete":true,"network":true,"steering":false}')
+  check('Authenticated terminal client events carry explicit resource grants', Array.isArray((clients.at(-1)?.grant as { appDataRead?: unknown })?.appDataRead))
+  check('Disabled tool groups cannot gain Notes/Calendar through terminal', JSON.stringify(terminalResourceGrants(new Set())) === '["background-tasks"]')
+  check('Enabled read tools grant only their resources', JSON.stringify(terminalResourceGrants(new Set(['search_notes']))) === '["notes","background-tasks"]')
+  for (const mode of ['plan', 'default', 'auto', 'acceptEdits', 'bypass'] as const) {
+    check(`${mode}: mvl read pipeline follows read permission semantics`, decideTerminal(tm.id, mode, "mvl notes | jq-safe -c .notes").decision === 'run')
+    const r = terminalGrant(mode, 'mvl notes', 'readonly', false, terminalResourceGrants(new Set(['search_notes'])))
+    check(`${mode}: resource grants do not authorize arbitrary network or file writes`, r.appDataRead?.includes('notes') === true && !r.network && !r.write)
+  }
   const remembered = await newThread({ permission: 'default', workdir })
   await turn(remembered.id, 'SCENARIO remember-tee', () => ({ allow: true, always: 'command' }), 'exec')
   const beforeSteering = clients.length
@@ -321,7 +329,7 @@ try {
   const tp = await newThread({ permission: 'plan', workdir })
   const tpRun = await turn(tp.id, 'SCENARIO term-plan', () => ({ allow: false }), true)
   const tpGrant = clients[clients.length - 1]?.grant
-  check(`Terminal in Plan: ls runs with a read-only grant (got ${JSON.stringify(tpGrant)})`, JSON.stringify(tpGrant) === '{"mode":"plan","write":false,"delete":false,"network":false,"steering":false}')
+  check(`Terminal in Plan: ls runs with a read-only grant (got ${JSON.stringify(tpGrant)})`, JSON.stringify({ ...(tpGrant as object), appDataRead: undefined }) === '{"mode":"plan","write":false,"delete":false,"network":false,"steering":false}')
   check('Terminal in Plan: touch is refused', tpRun.tools.filter((m) => m.toolName === 'terminal').some((m) => /Plan mode|did not run|refus|read/i.test(m.content) && !/"exit_code"/.test(m.content)))
   const ed = await newThread({ permission: 'default', workdir })
   const edRun = await turn(ed.id, 'SCENARIO edits', () => ({ allow: false }))

@@ -46,7 +46,7 @@ import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSk
 import { prepareTaskCall, stopTasksOf, TASK_CHAT_TOOLS, taskChatTools } from './agentTasks.ts'
 import { CALL_VERDICTS, defaultPolicy, MAX_TRUSTED_SITES, normalizePolicy, TASK_TOOLS, TOOL_NAMES, type CallScope, type Decision, type RunVerdict, type ThreadTools, type Verdict as TaskVerdict } from '../src/data/agentTaskPolicy.ts'
 import { CONTINUATIONS_PER_MESSAGE, findSubagent, overviewLine, SPAWNS_PER_MESSAGE, SUBAGENT_CAPS, SUBAGENTS_KEPT, SUBAGENTS_PER_THREAD, SUBAGENTS_PER_USER, SUBAGENTS_TOTAL, type SubagentInfo, type SubagentOverview, type SubagentStatus } from '../src/data/agentSubagents.ts'
-import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, DELETE_COMMANDS, NETWORK_COMMANDS, STEERING_IN_LINE, terminalCapabilitiesTool, terminalGrant, terminalNeedsNetwork, terminalTool, workdirOf, workdirTools, type ClientGrant, type Permission, type TerminalAccess, type Workdir } from './workdir.ts'
+import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, DELETE_COMMANDS, NETWORK_COMMANDS, STEERING_IN_LINE, terminalCapabilitiesTool, terminalGrant, terminalResourceGrants, terminalNeedsNetwork, terminalTool, workdirOf, workdirTools, type ClientGrant, type Permission, type TerminalAccess, type Workdir } from './workdir.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in user. Threads and their
 // messages live in SQLite; each turn runs here, on the server, calling Ollama's chat API with a
@@ -4158,7 +4158,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           }
           if (c.name === 'terminal' || c.name === 'terminal_capabilities') {
             const line = argString(c.arguments ?? {}, 'command')
-            const grant = terminalGrant(current().permission, line, c.name === 'terminal' ? decideTerminal(row.id, current().permission, line).access : 'readonly', explicitlyApproved)
+            const grant = terminalGrant(current().permission, line, c.name === 'terminal' ? decideTerminal(row.id, current().permission, line).access : 'readonly', explicitlyApproved, terminalResourceGrants(offeredNow))
             const r = await askClient(row.id, assistant, index, c, ctl.signal, send, grant)
             const none = 'No window ran this: the terminal tool works while the Agents app is open on this thread, or the agents command runs in the MvL OS terminal.'
             if (!r) return JSON.stringify({ error: none })
