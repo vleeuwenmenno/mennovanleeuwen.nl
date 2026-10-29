@@ -30,12 +30,12 @@ export function addWidget(wm: WM, kind: string) {
 /** "Add widget ›" entries, for menus. */
 export const addWidgetItems = (wm: WM): MenuItem[] => widgetDefs().map((d) => ({ label: `${d.glyph}  ${d.name}`, onSelect: () => addWidget(wm, d.kind) }))
 
-/** A widget window's contents. An unknown kind (removed in a later release) closes itself. */
+/** Missing runtime kinds stay placed: unavailable is not a user removal. */
 export function WidgetHost({ win }: { win: WinState }) {
   const wm = useWM()
   const def = widgetDef(win.props.kind)
   useEffect(() => {
-    if (!def || !win.props.id) wm.close(win.pid)
+    if (!win.props.id) wm.close(win.pid)
   }, [def, win.pid, win.props.id, wm])
   if (!def || !win.props.id) return null
   return <def.Component win={win} id={win.props.id} />

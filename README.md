@@ -4298,6 +4298,64 @@ CalDAV, see above), **Code inbox**, **Status** (updown.io) and **Minecraft serve
 address to copy, who is on with their heads, and the in-game day and time when RCON is set up; a
 click opens the Minecraft server window).
 
+### Source packages: Weather and Sticky foundation
+
+Weather and Sticky now load executable source folders through the same verifier and bounded
+QuickJS WASM worker used for user forks. The other four widgets still use the earlier registry.
+Files, msh and Xed can read the immutable defaults at `/usr/share/mvlos/widgets/weather` and
+`/usr/share/mvlos/widgets/sticky`: real `manifest.json`, `src/main.js`, `styles/tokens.json`,
+`assets`, `tests` and `README.md`. `/usr/share/mvlos/widgets/SDK.md` describes the scoped SDK.
+These sources produce the layout and checklist transformations; they are not aliases for
+privileged React widget components. Widgets use the Omarchy theme by default; a Sticky's menu
+can opt into **Paper appearance** without changing its saved colour or tilt.
+
+Open **Source** on either widget, or **Widget Workshop** from All apps/Spotlight. Signed in,
+**Clone & edit in Xed** copies the default to `~/.local/share/mvlos/widgets/<kind>` on the backing
+browser store or writable Seafile home. Edit and save `src/main.js`, return to Workshop, choose
+**Build & mock preview**, review the sample output, opt into this instance's data, then
+**Activate built revision**. Source saves never activate. Activation checks that the source still
+matches the built digest. **Rebuild default & preview** uses the same compiler/verifier/loader;
+**Recover previous revision** restores the prior immutable snapshot, including the default on a
+first install. Recovery does not roll back note contents, settings or placement. Installation
+generations reject a stale activation; imported build.json/dist output is ignored and rebuilt.
+Clone retries keep matching bytes, resume missing files and refuse to overwrite edits.
+Guests keep default widgets and their notes, but do not get writable source folders.
+
+The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
+column, row, text, button and a native editor. Styles accept spacing tokens only. No npm packages,
+build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC
+are exposed to packages. Snapshots hash every accepted file, manifest permissions, assets, styles
+and the pinned SDK/QuickJS build identity. Each invocation has 8 MiB heap, 256 KiB stack, a 40 ms
+interrupt deadline, 16 promise jobs and a 3 s worker watchdog; output/render/source limits and
+tab-wide concurrency/rate caps also apply. All VM handles and workers are disposed. The production
+CSP adds `wasm-unsafe-eval` and self-origin workers; JavaScript `unsafe-eval` stays forbidden.
+
+The host owns immediate native note edits, selection, IME, undo, launcher-link drops and list
+continuation. The package owns checklist transformations; stale responses cannot replace newer
+text. Fork data grants bind account, backing identity, instance and source digest. They are local
+to the live session, never imported from build files or synced approval flags. **Pause access**
+revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
+is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
+search queries come from the trusted user-operated city picker, not package code. Preview uses
+sample data, with no real writes. There is no model-forwarding, navigation, export or clipboard API.
+The desktop does no widget VM work while hidden, minimized or below the existing mobile breakpoint.
+
+**Migration boundary and staged gaps.** This slice adds versioned `widgets:packages:v1`
+installation records; existing `widgets`, `widgets:placed` and note stores remain authoritative.
+It deliberately does not cut config/placement over to a second canonical store or ingest later
+legacy writes into a new one. Existing hydration-aware legacy-layout migration, counters,
+geometry, note IDs and tombstones remain intact; unavailable runtime/source is not a removal.
+Calendar link/unlink and backlinks remain in the trusted menu/Notebook, but inline calendar chips
+and a narrow package calendar operation are staged. The other four packages, TypeScript/TSX,
+source-defined test execution, broader catalog, executable iframe comparison, conflict UI and
+ClientCalls-based agent source authoring are follow-up work. Agent browser writes have not been
+broadened. This is a reviewable first slice, not completion of the six-widget platform.
+
+`pnpm check:widget-packages` checks verifier/digest/VM attacks and native transaction rules.
+`pnpm check:widget-packages-ui` uses scratch data, synthetic accounts and muted Chromium to prove
+clone/Xed edit/build/mock/activate/recover, native input/IME/undo, stale writes, revocation, weather
+place selection and mobile preservation. Existing widget sync/layout tests cover legacy fixtures.
+
 ### Weather
 
 The **Weather** app ([`src/apps/Weather.tsx`](src/apps/Weather.tsx), with its parts in
