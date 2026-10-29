@@ -4,6 +4,7 @@ import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu
 import { ask } from '../../os/Dialogs'
 import { setDragGhost } from '../../os/dnd'
 import { useWM, type WinState } from '../../os/wm'
+import { toUi } from '../../os/uiScale'
 import {
   act,
   bootstrap,
@@ -27,6 +28,7 @@ import {
   type Op,
   type ThreadRow,
 } from '../../data/mail'
+import { mailLayout } from '../../data/appPrefs'
 import { findMail } from '../../data/pim'
 import { Composer, type ComposeInit } from './Composer'
 import { Icon, mailboxIcon, type IconName } from './icons'
@@ -38,12 +40,17 @@ import './mail.css'
 // read and written through the site's server (server/jmap.ts), which keeps the tokens. Mailboxes
 // on the left, conversations in the middle (a list drawn only where it shows, loading more as it
 // scrolls), the conversation on the right, a message being written in its place. On a phone, or
-// in a narrow window, one at a time: mailboxes, list, conversation, with a way back.
+// in a narrow window, one at a time: mailboxes, list, conversation, with a way back. The two
+// dividers (mailboxes | list, list | conversation) drag, and the sizes are kept in this browser.
+// The app measures its own width, not the screen's: when the conversation would get less than
+// READER_MIN beside the mailboxes and the list, opening a conversation shows it alone, with a
+// Back to the conversations (and the mailboxes stay beside the list).
 //
 // Selecting several conversations, as in Files and Photos: Ctrl or Cmd+click (or the circle on a
 // row's picture) takes one in or out, Shift+click (or Shift+↑/↓) a range, Ctrl+A all of those
 // loaded, Esc none. On a touch screen a long press starts selecting, and taps then add and take
-// away. With two or more the right side says how many, with what can be done to them all; the
+// away. Once anything is selected, a plain click on a row takes it in or out (nothing opens until
+// the selection is empty again). With two or more the right side says how many, with what can be done to them all; the
 // toolbar keys, the row menu and dragging onto a mailbox act on all of them too (one request, one
 // Email/set on the server). The selection outlives new mail arriving, not a change of mailbox.
 //
@@ -60,6 +67,12 @@ type View = 'boxes' | 'list' | 'thread' | 'compose'
 
 const DRAG_TYPE = 'application/x-mvlos-mail'
 const LONG_PRESS_MS = 500
+/** Narrowest the conversation may get beside the other two panes before it takes the whole window. */
+const READER_MIN = 380
+const SIDE_MIN = 140
+const SIDE_MAX = 320
+const LIST_MIN = 260
+const LIST_MAX = 640
 const NONE: ReadonlySet<string> = new Set()
 const plural = (n: number) => (n === 1 ? '1 message' : `${n} messages`)
 
@@ -70,6 +83,18 @@ export function Mail({ win }: { win: WinState }) {
   const prefs = useMailPrefs()
   const root = useRef<HTMLDivElement>(null)
   const [narrow, setNarrow] = useState(false)
+  const [width, setWidth] = useState(0)
+  const layout = mailLayout.use()
+  /** A divider's width while it is dragged (saved when let go). */
+  const [drag, setDrag] = useState<{ side?: number; list?: number } | null>(null)
+  // The saved widths give way (down to their minimums) before the conversation loses its room.
+  const room = width || Infinity
+  const sideW = drag?.side ?? Math.min(layout.side, SIDE_MAX, Math.max(SIDE_MIN, room - LIST_MIN - READER_MIN))
+  const listW = drag?.list ?? Math.min(layout.list, LIST_MAX, Math.max(LIST_MIN, room - sideW - READER_MIN))
+  /** Not narrow, but too narrow to keep the conversation beside the list: it opens alone. */
+  const stacked = !narrow && width > 0 && sideW + listW + READER_MIN > width
+  /** One thing at a time in the main area: narrow (mailboxes, list or conversation) or stacked (mailboxes with the list, or the conversation). */
+  const single = narrow || stacked
   const [view, setView] = useState<View>('list')
   const [accountId, setAccountId] = useState<number | null>(() => (win.props.account ? Number(win.props.account) : null))
   const account = accounts?.find((a) => a.id === accountId) ?? accounts?.find((a) => a.id === prefs.defaultAccount) ?? accounts?.[0] ?? null
@@ -119,7 +144,12 @@ export function Mail({ win }: { win: WinState }) {
   useEffect(() => {
     const el = root.current
     if (!el) return
-    const ro = new ResizeObserver(() => setNarrow(el.clientWidth < 720))
+    const measure = () => {
+      setNarrow(el.clientWidth < 720)
+      setWidth(el.clientWidth)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
   }, [showing])
@@ -166,7 +196,7 @@ export function Mail({ win }: { win: WinState }) {
         if (!live) return
         setRows(r.rows)
         setTotal(r.total)
-        if (fresh && !narrow) setSelected((s) => (s && r.rows.some((x) => x.threadId === s) ? s : null))
+        if (fresh && !single) setSelected((s) => (s && r.rows.some((x) => x.threadId === s) ? s : null))
       })
       .catch((e: Error) => live && setError(e.message))
       .finally(() => live && setLoading(false))
@@ -271,8 +301,8 @@ export function Mail({ win }: { win: WinState }) {
       setRows(rest)
       if (selected && threadIds.includes(selected)) {
         const next = rest[Math.min(i, rest.length - 1)] ?? null
-        setSelected(narrow ? null : (next?.threadId ?? null))
-        if (narrow) setView('list')
+        setSelected(single ? null : (next?.threadId ?? null))
+        if (single) setView('list')
       }
     } else if (op === 'seen' || op === 'unseen') setRows((list) => list.map((r) => (threadIds.includes(r.threadId) ? { ...r, seen: op === 'seen' } : r)))
     try {
@@ -319,15 +349,15 @@ export function Mail({ win }: { win: WinState }) {
     setPicked(NONE)
     const only = [...next][0] ?? null
     setSelected(only)
-    if (only && !narrow) setView('thread')
+    if (only && !single) setView('thread')
   }
-  const togglePick = (id: string) => {
+  const togglePick = (id: string, mode: PickMode = pickMode()) => {
     const next = pickedNow()
     if (next.has(id)) next.delete(id)
     else next.add(id)
     anchor.current = id
     lead.current = id
-    applyPick(next)
+    applyPick(next, mode)
   }
   /** From the anchor to `id`, added to what is selected (`add`) or instead of it. */
   const pickRange = (id: string, add: boolean, mode: PickMode = pickMode()) => {
@@ -346,9 +376,13 @@ export function Mail({ win }: { win: WinState }) {
     lead.current = rows[rows.length - 1].threadId
     applyPick(new Set(rows.map((r) => r.threadId)))
   }
-  /** A click on a row: open it, or (Ctrl, Cmd, Shift, or while selecting with a finger) select. */
+  /**
+   * A click on a row: open it, or select (Ctrl, Cmd, Shift, while selecting with a finger, or
+   * whenever something is selected: the selection then stays, down to the last one).
+   */
   const clickRow = (r: ThreadRow, e: MouseEvent) => {
     if (e.shiftKey) return pickRange(r.threadId, e.ctrlKey || e.metaKey)
+    if (picking) return togglePick(r.threadId, pickMode() ?? 'box')
     if (e.ctrlKey || e.metaKey || fingerPick) return togglePick(r.threadId)
     unpick()
     anchor.current = r.threadId
@@ -504,7 +538,7 @@ export function Mail({ win }: { win: WinState }) {
     const next = rows[Math.max(0, Math.min(rows.length - 1, i < 0 ? 0 : i + d))]
     anchor.current = next.threadId
     setSelected(next.threadId)
-    if (!narrow) setView('thread')
+    if (!single) setView('thread')
     reveal(next)
   }
   /** Shift+↑/↓: the selection grows (or shrinks) from the anchor to the next row. */
@@ -548,7 +582,7 @@ export function Mail({ win }: { win: WinState }) {
         break
       case 'Escape':
         if (picking) unpick()
-        else if (view === 'thread' && narrow) setView('list')
+        else if (view === 'thread' && single) setView('list')
         else if (search) (setSearch(''), setTyped(''))
         else return
         break
@@ -714,12 +748,59 @@ export function Mail({ win }: { win: WinState }) {
       </div>
     )
 
-  const showSide = narrow ? view === 'boxes' : true
-  const showList = narrow ? view === 'list' : true
-  const showRight = narrow ? view === 'thread' || view === 'compose' : true
+  const reading = view === 'thread' || view === 'compose'
+  const showSide = narrow ? view === 'boxes' : stacked ? !reading : true
+  const showList = narrow ? view === 'list' : stacked ? !reading : true
+  const showRight = single ? reading : true
+
+  /** A divider dragged (or moved with the arrow keys): `side` or `list`, kept within what leaves the conversation its room. */
+  const clampSide = (w: number) => Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, Math.min(w, width - LIST_MIN - (stacked ? 0 : READER_MIN)))))
+  const clampList = (w: number, side = sideW) => Math.round(Math.min(LIST_MAX, Math.max(LIST_MIN, Math.min(w, width - side - READER_MIN))))
+  const splitDown = (which: 'side' | 'list') => (e: RPointerEvent) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return
+    e.preventDefault()
+    const startX = toUi(e.clientX)
+    const startW = which === 'side' ? sideW : listW
+    const fit = which === 'side' ? clampSide : (w: number) => clampList(w)
+    let w = startW
+    const move = (ev: PointerEvent) => setDrag({ [which]: (w = fit(startW + toUi(ev.clientX) - startX)) })
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      setDrag(null)
+      if (w !== startW) mailLayout.patch({ [which]: w })
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+  const splitKeys = (which: 'side' | 'list') => (e: KeyboardEvent) => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      e.stopPropagation()
+      const d = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 50 : 10)
+      mailLayout.patch(which === 'side' ? { side: clampSide(sideW + d) } : { list: clampList(listW + d) })
+    }
+  }
+  const splitter = (which: 'side' | 'list', label: string, value: number, min: number, max: number) => (
+    <div
+      className={`ml-split ${drag && which in drag ? 'is-dragging' : ''}`}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      tabIndex={0}
+      onPointerDown={splitDown(which)}
+      onDoubleClick={() => mailLayout.patch({ [which]: which === 'side' ? 200 : 360 })}
+      onKeyDown={splitKeys(which)}
+    />
+  )
 
   return (
-    <div ref={root} className={`ml ${narrow ? 'is-narrow' : ''}`} tabIndex={-1} onKeyDown={onKey}>
+    <div ref={root} className={`ml ${narrow ? 'is-narrow' : ''} ${stacked ? 'is-stacked' : ''}`} tabIndex={-1} onKeyDown={onKey}>
       <header className="ml-toolbar">
         {narrow && (
           <button className={`ml-icon ${view === 'boxes' ? 'is-on' : ''}`} onClick={() => setView(view === 'boxes' ? 'list' : 'boxes')} aria-label="Mailboxes" title="Mailboxes">
@@ -789,7 +870,7 @@ export function Mail({ win }: { win: WinState }) {
       )}
       <div className="ml-main">
         {showSide && (
-          <aside className="ml-side">
+          <aside className="ml-side" style={narrow ? undefined : { width: sideW }}>
             {accounts && accounts.length > 1 && (
               <div className="ml-accounts">
                 {accounts.map((a) => (
@@ -817,8 +898,9 @@ export function Mail({ win }: { win: WinState }) {
             </div>
           </aside>
         )}
+        {showSide && showList && !narrow && splitter('side', 'Resize the mailboxes', sideW, SIDE_MIN, SIDE_MAX)}
         {showList && (
-          <section className="ml-listpane" aria-label="Conversations">
+          <section className="ml-listpane" aria-label="Conversations" style={single ? undefined : { width: listW }}>
             {picking ? (
               <Selection compact count={picked.size} rows={rowsOf(targets())} ids={targets()} canArchive={canArchive} inTrash={inTrash} inJunk={inJunk} moveItems={moveItems} change={change} flagRows={flagRows} onClear={unpick} all={rows.length > 0 && rows.every((r) => picked.has(r.threadId)) ? 'all' : 'some'} onAll={checkAll} />
             ) : (
@@ -857,6 +939,7 @@ export function Mail({ win }: { win: WinState }) {
             />
           </section>
         )}
+        {showRight && !single && splitter('list', 'Resize the conversation list', listW, LIST_MIN, LIST_MAX)}
         {showRight && (
           <div className="ml-right">
             {view === 'compose' && compose && boot && acc !== null ? (
@@ -870,6 +953,7 @@ export function Mail({ win }: { win: WinState }) {
                 boot={boot}
                 mailbox={search ? null : mailbox}
                 narrow={narrow}
+                canBack={single}
                 onBack={() => setView('list')}
                 onAction={(op, opts) => void change(op, [selected], opts)}
                 onReply={reply}

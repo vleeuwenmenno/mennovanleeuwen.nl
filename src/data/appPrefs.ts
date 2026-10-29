@@ -73,3 +73,9 @@ export const ampPresetOf = (bands: number[]) => Object.keys(AMP_PRESETS).find((k
 
 export const pdfPrefs = jsonPref('mvlos.pdf', { sidebar: true, night: false })
 export const previewPrefs = jsonPref('mvlos.preview', { sidebar: false })
+
+/** Mail's pane widths (the mailboxes, the conversation list), in px: this browser's layout. */
+export const mailLayout = jsonPref('mvlos.mail.layout.v1', { side: 200, list: 360 }, (v) => ({
+  side: Number.isFinite(v.side) ? Math.min(320, Math.max(140, Math.round(v.side))) : 200,
+  list: Number.isFinite(v.list) ? Math.min(640, Math.max(260, Math.round(v.list))) : 360,
+}), { account: true })
