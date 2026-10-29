@@ -48,6 +48,9 @@ function lookup(ref: string, snap: WatchSnapshot | null): Piece | { error: strin
   return { error: ref === '?' ? '$? is not captured' : `${ref} is not set at this pause` }
 }
 
+/** The reference to positional parameter `n` (1-based): `$1`…`$9`, then `${10}`, since `$10` is `$1` followed by "0". */
+export const argRef = (n: number) => (n < 10 ? `$${n}` : `\${${n}}`)
+
 /** Checks an expression without a snapshot: null when it is allowed, or why not. */
 export function watchError(expr: string): string | null {
   const r = evaluateWatch(expr, null)
@@ -146,7 +149,13 @@ export function variableAt(text: string, offset: number): string | null {
   }
   const name = text.slice(start, end)
   if (!name) return null
-  if (/^\d+$/.test(name)) return text[start - 1] === '$' || text.slice(start - 2, start) === '${' ? `$${name}` : null
+  // Positional parameters, as the shell reads them: unbraced only one digit ($10 is $1 then the text
+  // "0", so only the $ and the 1 are the reference); braced any number (${10} is the tenth).
+  if (/^\d/.test(name)) {
+    if (text.slice(start - 2, start) === '${') return /^\d+$/.test(name) && text[end] === '}' ? argRef(Number(name)) : null
+    if (text[start - 1] === '$') return offset <= start ? `$${name[0]}` : null
+    return null
+  }
   if (!NAME.test(name)) return null
   const before = text.slice(Math.max(0, start - 3), start)
   if (before.endsWith('$') || before.endsWith('${') || before.endsWith('${#')) return name

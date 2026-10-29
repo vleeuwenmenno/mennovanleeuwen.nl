@@ -4,7 +4,7 @@ import { launchDebug } from '../terminal/msh/interp'
 import '../terminal/commands' // install the normal executable/command/security hooks
 import { formatDiagnostic, type Diagnostic } from '../terminal/msh/analysis'
 import type { Token } from '../terminal/msh/parse'
-import { evaluateWatch, MAX_WATCHES, variableAt, WATCH_DISPLAY, watchError, type WatchResult } from '../terminal/msh/watch'
+import { argRef, evaluateWatch, MAX_WATCHES, variableAt, WATCH_DISPLAY, watchError, type WatchResult } from '../terminal/msh/watch'
 import { useWM } from '../os/wm'
 import { HOME } from '../terminal/vfs'
 import { setAccent } from '../os/theme'
@@ -388,7 +388,7 @@ export function XedDebugPanel({ ctl, path, caretLine, diagnostics, commands, jum
       const names = Object.keys(snap.variables).sort((a, b) => Number(locals.has(b)) - Number(locals.has(a)) || a.localeCompare(b))
       body = <><table className="xed-vars selectable" aria-label="Variables at this pause">
         <tbody>
-          {snap.args.map((v, i) => <VarRow key={`$${i + 1}`} name={`$${i + 1}`} tag="argument" value={v} length={snap.cut.args[i]} onWatch={() => ctl.addWatch(`$${i + 1}`)} />)}
+          {snap.args.map((v, i) => <VarRow key={argRef(i + 1)} name={argRef(i + 1)} tag="argument" value={v} length={snap.cut.args[i]} onWatch={() => ctl.addWatch(argRef(i + 1))} />)}
           {names.map(k => <VarRow key={k} name={k} tag={locals.has(k) ? 'local' : undefined} value={snap.variables[k]} length={snap.cut.variables[k]} onWatch={() => ctl.addWatch(k)} />)}
         </tbody>
       </table>

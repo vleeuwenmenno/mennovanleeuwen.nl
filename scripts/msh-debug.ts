@@ -321,6 +321,21 @@ try {
   bounds.session.cancel(); await bounds.done
   const small = { variables: { y: 'ab' }, args: ['p'], cut: { variables: {}, args: {} }, argCount: 1, variableCount: 1 }
   eq([watch.evaluateWatch('nosuch', small), watch.evaluateWatch('$2', small)], [{ ok: false, error: 'nosuch is not set at this pause' }, { ok: false, error: '$2 is not set' }], 'with nothing left out, missing names and arguments are "not set"')
+  // Positional parameters past $9 need braces: $10 is $1 then "0" (shell rules), ${10} the tenth.
+  const tagged = Array.from({ length: 65 }, (_, i) => `arg-${i + 1}-x`).join(' ')
+  await runLine(`printf '%s\n' 'g() {' '  : "$10 \${10} \${64} \${65}"' '}' 'g ${tagged}' > /tmp/watch-positional.sh`, base())
+  const pos = launchDebug('msh /tmp/watch-positional.sh', base(), 'positional', { start: 'run' })
+  pos.session.breakpoint('/tmp/watch-positional.sh', 2)
+  await wait(() => pos.session.current.state === 'paused' || pos.session.done)
+  const psnap = pos.session.current
+  const pv = (e: string) => { const r = watch.evaluateWatch(e, psnap); return r.ok ? r.value : `ERR ${r.error}` }
+  eq([pv('$1'), pv('$9'), pv('$10'), pv('${10}'), pv('${64}'), pv('$#')], ['arg-1-x', 'arg-9-x', 'arg-1-x0', 'arg-10-x', 'arg-64-x', '65'], 'real pause: $10 is $1 then 0, ${10} the tenth, ${64} the last kept')
+  check(pv('${65}').includes('not captured') && pv('${66}').includes('not set'), '${65} past the bound is not captured, ${66} is not set', `${pv('${65}')} | ${pv('${66}')}`)
+  pos.session.cancel(); await pos.done
+  eq([watch.argRef(1), watch.argRef(9), watch.argRef(10), watch.argRef(64)], ['$1', '$9', '${10}', '${64}'], 'generated positional references use braces from 10 on')
+  const ptext = ': "$10 ${10} $1x ${2} $"'
+  const hoverAt = (needle: string, d = 0) => watch.variableAt(ptext, ptext.indexOf(needle) + d)
+  eq([hoverAt('$10'), hoverAt('$10', 1), hoverAt('$10', 2), hoverAt('${10}'), hoverAt('${10}', 2), hoverAt('${10}', 3), hoverAt('$1x', 1), hoverAt('$1x', 2), hoverAt('${2}', 2), hoverAt(' $"', 1)], ['$1', '$1', null, '${10}', '${10}', '${10}', '$1', null, '$2', null], 'hover/caret: unbraced $10 is $1 (its 0 is text), braced ${10} is the tenth')
   for (let i = 0; i < 30; i++) { const s = new DebugSession('bounded'); s.finish(0) }
   eq(debugSessions().length, 16, 'registry remains bounded')
 } finally { await vite.close() }
