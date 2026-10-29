@@ -680,7 +680,9 @@ inspect ordinary terminals, agents, other browser tabs or server processes. Xed 
 own sessions when its window closes; attaching does not transfer lifetime ownership.
 The registry holds at most 16 sessions (evicting completed ones), each with at most 256
 breakpoints and 256 displayed variables, capped at 4096 characters each. Output retains the
-last 32 KB. Controls wrap on phones and use the active theme.
+last 32 KB. Debug launches also bound interpreter capture and screen chunks to 32768 UTF-16
+code units, streaming partial lines when needed; ordinary `runLine` output remains unlimited
+unless its optional `captureLimit` is supplied. Controls wrap on phones and use the active theme.
 
 There is one interpreter. `parse.ts` adds token offsets and command `span` metadata;
 `interp.ts` awaits optional `Base.debug.checkpoint` hooks before execution. `debug.ts` owns

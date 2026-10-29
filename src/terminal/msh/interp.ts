@@ -99,7 +99,7 @@ let ticks = 0
 const breathe = () => (++ticks % 128 === 0 ? new Promise<void>((r) => setTimeout(r, 0)) : null)
 
 /** The terminal's screen as a sink: whole lines go out as they complete. */
-function screen(print: (text: string) => void) {
+function screen(print: (text: string) => void, limit?: number) {
   let pending = ''
   const flush = () => {
     if (pending) print(pending)
@@ -109,6 +109,23 @@ function screen(print: (text: string) => void) {
     tty: true,
     flush,
     write(t) {
+      if (limit !== undefined) {
+        const text = printable(t)
+        // Debug output must make progress even when a command never writes a newline.
+        // Append in bounded pieces so neither pending nor a print callback grows indefinitely.
+        for (let at = 0; at < text.length; ) {
+          const size = Math.min(limit - pending.length, text.length - at)
+          pending += text.slice(at, at + size)
+          at += size
+          const nl = pending.lastIndexOf('\n')
+          if (nl >= 0) {
+            print(pending.slice(0, nl) || ' ')
+            pending = pending.slice(nl + 1)
+          }
+          if (pending.length === limit) flush()
+        }
+        return
+      }
       pending += printable(t)
       const i = pending.lastIndexOf('\n')
       if (i < 0) return
@@ -1787,27 +1804,36 @@ function topShell(shell: Base, interactive: boolean): Shell {
  * Runs a command line typed at the prompt (or handed over by sudo, find -exec, watch). Each
  * top-level command's output is printed as it comes, and returned with whether it succeeded.
  */
-export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
+export type RunLineOptions = {
+  /** Opt-in tail capture and screen chunk bound, in UTF-16 code units; default remains unlimited. */
+  captureLimit?: number
+}
+export const DEBUG_OUTPUT_LIMIT = 32768
+
+export async function runLine(line: string, shell: Base, options: RunLineOptions = {}): Promise<RunResult[]> {
+  const limit = options.captureLimit
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw new RangeError('captureLimit must be a positive safe integer')
   const sh = topShell(shell, true)
   let tree: Node
   try {
     tree = parse(line)
   } catch (e) {
-    const msg = red(`msh: ${(e as Error).message}`)
+    const message = red(`msh: ${(e as Error).message}`)
+    const msg = limit === undefined ? message : message.slice(-limit)
     shell.print(msg)
     sh.setStatus(2)
     return [{ output: msg, ok: false }]
   }
   const items = tree.t === 'list' ? tree.items : [{ node: tree, bg: false }]
   const results: RunResult[] = []
-  const tty = screen(shell.print)
+  const tty = screen(shell.print, limit)
   for (const item of items) {
     let rec = ''
     const out: Sink = {
       tty: true,
       flush: tty.flush,
       write: (t) => {
-        rec += t
+        rec = limit === undefined ? rec + t : (rec + t.slice(-limit)).slice(-limit)
         tty.write(t)
       },
     }
@@ -1857,7 +1883,7 @@ export function launchDebug(line: string, shell: Base, label = line) {
   const session = new DebugSession(label)
   const abort = () => session.cancel()
   shell.signal.addEventListener('abort', abort, { once: true })
-  const done = runLine(line, { ...shell, debug: session, signal: session.abort.signal })
+  const done = runLine(line, { ...shell, debug: session, signal: session.abort.signal }, { captureLimit: DEBUG_OUTPUT_LIMIT })
     .then(results => { session.finish(session.abort.signal.aborted ? 130 : Number(shell.env['?'] ?? (results.every(r => r.ok) ? 0 : 1))); return results })
     .catch(error => { session.finish(1); throw error })
     .finally(() => shell.signal.removeEventListener('abort', abort))

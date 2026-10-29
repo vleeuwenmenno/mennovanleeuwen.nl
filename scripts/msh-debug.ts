@@ -26,7 +26,7 @@ g.fetch = () => Promise.reject(new Error('offline'))
 const vite = await createServer({ configFile: false, root: new URL('..', import.meta.url).pathname, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom', define: { __APP_VERSION__: '"0.0.0"', __APP_COMMIT__: '"test"', __BUILD_TIME__: '"2026-01-01T00:00:00.000Z"' }, optimizeDeps: { noDiscovery: true, include: [] } })
 try {
   const { runLine } = await vite.ssrLoadModule('/src/terminal/commands.ts')
-  const { runCapturedStreams, runCaptured, launchDebug } = await vite.ssrLoadModule('/src/terminal/msh/interp.ts')
+  const { runCapturedStreams, runCaptured, launchDebug, DEBUG_OUTPUT_LIMIT } = await vite.ssrLoadModule('/src/terminal/msh/interp.ts')
   const { DebugSession, debugSessions } = await vite.ssrLoadModule('/src/terminal/msh/debug.ts')
   const { analyzeMsh } = await vite.ssrLoadModule('/src/terminal/msh/analysis.ts')
   const { parse, lex } = await vite.ssrLoadModule('/src/terminal/msh/parse.ts')
@@ -100,6 +100,26 @@ try {
   await wait(() => pause.current.state === 'paused')
   eq(pause.current.location.expression, 'echo after', 'pause request stops at next checkpoint after running command')
   pause.cancel(); eq((await pausing).status, 130, 'cancel after pause request')
+  // One top-level msh invocation streams far more than the UI cap, without newlines.
+  // Both retained RunResult output and screen callback chunks must remain bounded.
+  const chunk = 'x'.repeat(2048)
+  const largeScript = `for i in ${Array.from({ length: 256 }, (_, i) => i).join(' ')}; do printf %s '${chunk}'; done; printf END`
+  await runLine(`printf %s '${largeScript.replace(/'/g, "'\\''")}' > /tmp/xed-output.msh`, base())
+  const fullOutput = chunk.repeat(256) + 'END'
+  const ordinaryPrints: string[] = []
+  const ordinary = await runLine('msh /tmp/xed-output.msh', { ...base(), print: (s: string) => ordinaryPrints.push(s) })
+  check(ordinary[0].output === fullOutput, 'ordinary runLine still returns complete large output')
+  check(ordinaryPrints.length === 1 && ordinaryPrints[0] === fullOutput, 'ordinary screen still flushes complete unterminated line')
+  let maxPrinted = 0, printedLength = 0, printCalls = 0
+  const bounded = launchDebug('msh /tmp/xed-output.msh', { ...base(), print: (s: string) => { maxPrinted = Math.max(maxPrinted, s.length); printedLength += s.length; printCalls++ } })
+  await wait(() => bounded.session.current.state === 'paused'); bounded.session.continue()
+  const boundedResults = await bounded.done
+  eq(boundedResults[0].output.length, DEBUG_OUTPUT_LIMIT, 'debug capture stays at configured bound for large output')
+  check(boundedResults[0].output === fullOutput.slice(-DEBUG_OUTPUT_LIMIT), 'debug capture retains correct output tail')
+  check(maxPrinted <= DEBUG_OUTPUT_LIMIT && printedLength === fullOutput.length && printCalls > 1, 'debug screen streams bounded chunks without waiting for newline')
+  const newlineScript = largeScript.replace('printf %s', "printf '%s\\n'")
+  const newlineResults = await runLine(newlineScript, base(), { captureLimit: 1024 })
+  check(newlineResults[0].output.length <= 1024, 'optional bound also applies to newline output')
   for (let i = 0; i < 30; i++) { const s = new DebugSession('bounded'); s.finish(0) }
   eq(debugSessions().length, 16, 'registry remains bounded')
 } finally { await vite.close() }
