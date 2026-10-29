@@ -205,6 +205,103 @@ try {
   const newlineScript = largeScript.replace('printf %s', "printf '%s\\n'")
   const newlineResults = await runLine(newlineScript, base(), { captureLimit: 1024 })
   check(newlineResults[0].output.length <= 1024, 'optional bound also applies to newline output')
+  // --- step into / over / out across functions and sourced files, with frame depth ---------------
+  const dbg = await vite.ssrLoadModule('/src/terminal/msh/debug.ts')
+  const watch = await vite.ssrLoadModule('/src/terminal/msh/watch.ts')
+  const lib = 'helper() {\n  echo "in helper $1"\n  inner=done\n}\nsub() {\n  echo from-sub\n}'
+  const main = 'source /tmp/step-lib.sh\nouter() {\n  local depth=one\n  helper "$depth"\n  echo after-helper\n}\nouter\nx=$(sub)\ny=$(echo plain)\necho end'
+  await runLine(`printf %s '${lib}' > /tmp/step-lib.sh; printf %s '${main}' > /tmp/step-main.sh`, base())
+  const stops: string[] = []
+  const stepped: string[] = []
+  const stepRun = launchDebug('msh /tmp/step-main.sh', { ...base(), print: (t: string) => stepped.push(t) }, 'steps', { start: { entry: '/tmp/step-main.sh' } })
+  const at = async (action: () => void) => {
+    action()
+    await wait(() => stepRun.session.current.state === 'paused' || stepRun.session.done)
+    const c = stepRun.session.current
+    const where = c.state === 'paused' ? `${c.location.filename.split('/').pop()}:${c.location.line}@${c.frames.length}` : c.state
+    stops.push(where)
+    return c
+  }
+  let snap = await at(() => {})
+  eq([snap.reason, snap.location.filename, snap.location.line, snap.frames.map((f: { kind: string }) => f.kind)], ['entry', '/tmp/step-main.sh', 1, ['script', 'script']], 'entry stop: first command of the file, not the -c launch line')
+  check(stepRun.session.sourceOf('/tmp/step-main.sh') === dbg.sourceHash(main), 'session records the parsed source identity (hash) of the file')
+  snap = await at(() => stepRun.session.stepOver())
+  eq([snap.location.line, snap.location.expression], [7, 'outer'], 'step over a source command skips the sourced file and function definitions')
+  snap = await at(() => stepRun.session.stepInto())
+  eq([snap.location.line, snap.frames[0].kind, snap.frames[0].name, snap.frames.length], [3, 'function', 'outer', 3], 'step into enters the function body, one frame deeper')
+  snap = await at(() => stepRun.session.stepOver())
+  eq([snap.location.line, snap.locals], [4, ['depth']], 'step over stays in the frame; locals of the frame are listed')
+  snap = await at(() => stepRun.session.stepInto())
+  eq([snap.location.filename, snap.location.line, snap.frames.map((f: { name: string }) => f.name).slice(0, 2), snap.args], ['/tmp/step-lib.sh', 2, ['helper', 'outer'], ['one']], 'step into a function from a sourced file: its own file, frame and $1')
+  eq([snap.frames[1].filename, snap.frames[1].line], ['/tmp/step-main.sh', 4], 'call stack shows where the caller is')
+  eq(stepped.join(''), '', 'nothing printed yet while stepping')
+  snap = await at(() => stepRun.session.stepOut())
+  eq([snap.location.filename, snap.location.line, snap.variables.inner, snap.frames.length], ['/tmp/step-main.sh', 5, 'done', 3], 'step out returns to the caller after the rest of the function ran')
+  snap = await at(() => stepRun.session.stepOut())
+  eq([snap.location.line, snap.frames.length], [8, 2], 'step out of outer() lands on the next command of the script')
+  snap = await at(() => stepRun.session.stepInto())
+  eq([snap.location.filename, snap.location.line, snap.frames[0].name, snap.frames[1].kind], ['/tmp/step-lib.sh', 6, 'sub', 'substitution'], 'step into $(sub) skips the sourceless -c text and enters the function')
+  snap = await at(() => stepRun.session.stepOut())
+  eq([snap.location.line, snap.variables.x], [9, 'from-sub'], 'step out of a substitution finishes the assignment')
+  snap = await at(() => stepRun.session.stepInto())
+  eq([snap.location.line, snap.location.filename], [10, '/tmp/step-main.sh'], 'step into $(echo …) has no source to show: it lands on the next line, never on -c')
+  snap = await at(() => stepRun.session.stepOver())
+  eq(snap.state, 'completed', 'step over the last command completes the session')
+  eq([stepped.join('\n'), stepRun.session.current.frames, stepRun.session.current.state], ['in helper one\nafter-helper\nend', [], 'completed'], 'stepped program output and no live frames once done')
+  // Line events: a breakpoint on a line of several commands stops once; a loop line stops again.
+  await runLine(`printf %s 'a=1; b=2\nfor i in 1 2 3; do c=$i; done\necho tail' > /tmp/line-events.sh`, base())
+  dbg.removeBreakpoints()
+  check(dbg.toggleBreakpoint('/tmp//line-events.sh', 1) && dbg.toggleBreakpoint('/tmp/./line-events.sh', 2), 'editor breakpoints accept and canonicalise absolute paths')
+  eq(dbg.editorBreakpoints().map((b: { path: string; line: number }) => `${b.path}:${b.line}`), ['/tmp/line-events.sh:1', '/tmp/line-events.sh:2'], 'canonical breakpoint list')
+  check(!dbg.toggleBreakpoint('relative.sh', 1), 'relative breakpoint paths are refused')
+  const plain = launchDebug('msh /tmp/line-events.sh', base(), 'no editor', { start: 'run' })
+  await plain.done
+  eq(plain.session.current.state, 'completed', 'editor breakpoints do not stop sessions that did not opt in')
+  const lineRun = launchDebug('msh /tmp/line-events.sh', base(), 'editor', { start: 'run', editorBreakpoints: true })
+  const lineStops: string[] = []
+  for (let i = 0; i < 8; i++) {
+    await wait(() => lineRun.session.current.state === 'paused' || lineRun.session.done)
+    if (lineRun.session.done) break
+    const c = lineRun.session.current
+    lineStops.push(`${c.location.line}:${c.location.expression}:${c.variables.i ?? ''}:${c.reason}`)
+    lineRun.session.continue()
+  }
+  await lineRun.done
+  eq(lineStops, ['1:a=1:undefined:breakpoint'.replace('undefined', ''), '2:for i in 1 2 3; do c=$i; done::breakpoint', '2:c=$i:2:breakpoint', '2:c=$i:3:breakpoint'], 'line events: one stop per line entry, and again each time a loop jumps back')
+  dbg.setBreakpointEnabled('/tmp/line-events.sh', 2, false)
+  const disabledRun = launchDebug('msh /tmp/line-events.sh', base(), 'disabled', { start: 'run', editorBreakpoints: true })
+  await wait(() => disabledRun.session.current.state === 'paused'); const firstStop = disabledRun.session.current.location.line; disabledRun.session.continue(); await disabledRun.done
+  eq([firstStop, disabledRun.session.current.state], [1, 'completed'], 'a disabled breakpoint does not stop; enabled ones still do')
+  dbg.removeBreakpoints(); dbg.toggleBreakpoint('/tmp/x.sh', 5); dbg.toggleBreakpoint('/tmp/x.sh', 2); dbg.toggleBreakpoint('/tmp/x.sh', 9)
+  dbg.shiftBreakpoints('/tmp/x.sh', 3, 0, 2)
+  eq(dbg.editorBreakpoints().map((b: { line: number }) => b.line), [2, 7, 11], 'inserted lines move later breakpoints with their text')
+  dbg.shiftBreakpoints('/tmp/x.sh', 6, 3, 1)
+  eq(dbg.editorBreakpoints().map((b: { line: number }) => b.line), [2, 9], 'a breakpoint on deleted lines goes; later ones move up')
+  dbg.moveBreakpoints('/tmp', '/srv/tmp2')
+  eq(dbg.editorBreakpoints().map((b: { path: string }) => b.path), ['/srv/tmp2/x.sh', '/srv/tmp2/x.sh'], 'breakpoints follow a renamed folder')
+  dbg.removeBreakpoints()
+  // A pause request lands inside a function; step out from there and over a whole loop.
+  const pauseIn = launchDebug("f() { while true; do n=1; done; }; f", base(), 'pause in function', { start: 'run' })
+  await new Promise(r => setTimeout(r, 30)); pauseIn.session.pause()
+  await wait(() => pauseIn.session.current.state === 'paused')
+  eq([pauseIn.session.current.reason, pauseIn.session.current.frames[0].kind], ['pause', 'function'], 'pause request stops inside the running function frame')
+  pauseIn.session.cancel(); await pauseIn.done
+  // Watches: read-only references against the snapshot, never shell evaluation.
+  const ws = { variables: { x: 'hello', big: 'z'.repeat(5000), '?': '3' }, args: ['first', 'second'] }
+  const ev = (e: string) => watch.evaluateWatch(e, ws)
+  eq([ev('x'), ev('$x-${#x}'), ev('$1/$#'), ev('${2}'), ev('$?'), ev('"$x"')], [
+    { ok: true, value: 'hello', truncated: false }, { ok: true, value: 'hello-5', truncated: false }, { ok: true, value: 'first/2', truncated: false },
+    { ok: true, value: 'second', truncated: false }, { ok: true, value: '3', truncated: false }, { ok: true, value: '"hello"', truncated: false },
+  ], 'watch references and plain text')
+  for (const bad of ['$(rm -rf /tmp)', '`id`', '$((1+1))', '${x:-y}', '${x:=y}', '${!x}', '$(touch /tmp/watch-ran)']) check(!ev(bad).ok, `watch refuses ${bad}`, JSON.stringify(ev(bad)))
+  check(!lookup('/tmp/watch-ran'), 'refused watch expressions never execute anything')
+  eq([ev('nope').ok, ev('$9').ok, ev('x'.repeat(201)).ok], [false, false, false], 'unset variables, missing args and over-long expressions are errors')
+  const truncated = ev('$big$big')
+  check(truncated.ok && truncated.value.length === 4096 && truncated.truncated, 'watch values are bounded while built')
+  eq([watch.watchError('$(id)') !== null, watch.watchError('$anything'), watch.evaluateWatch('$x', null)], [true, null, { ok: true, value: '', truncated: false }], 'syntax check without a snapshot')
+  const src = 'name=1\necho "$name ${other} ${#len} $1"\nlocal kept\nfor item in a; do :; done\nplain word'
+  const off = (needle: string, d = 0) => src.indexOf(needle) + d
+  eq([watch.variableAt(src, 1), watch.variableAt(src, off('$name', 2)), watch.variableAt(src, off('$name')), watch.variableAt(src, off('${other}', 3)), watch.variableAt(src, off('${#len}', 4)), watch.variableAt(src, off('$1', 1)), watch.variableAt(src, off('kept', 1)), watch.variableAt(src, off('item', 1)), watch.variableAt(src, off('word', 1))], ['name', 'name', 'name', 'other', 'len', '$1', 'kept', 'item', null], 'hover finds variable references and assignments only')
   for (let i = 0; i < 30; i++) { const s = new DebugSession('bounded'); s.finish(0) }
   eq(debugSessions().length, 16, 'registry remains bounded')
 } finally { await vite.close() }

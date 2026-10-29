@@ -5,7 +5,7 @@ import { reserve, textWork } from '../bounds'
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
-import { DebugSession } from './debug'
+import { DebugSession, type DebugStart } from './debug'
 import { diagnostic, formatDiagnostic } from './analysis'
 import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
@@ -381,6 +381,9 @@ function printf(fmt: string, args: string[], budget?: Budget): string {
 
 type Builtin = (sh: Shell, args: string[], io: Io) => number | Promise<number>
 
+/** The nodes a debugger stops before (see exec). */
+const STOPS = new Set<Node['t']>(['simple', 'arith', 'for', 'case'])
+
 class Shell {
   /** The status of the last $(…) in the current command, for a line of assignments only */
   private substStatus: number | null = null
@@ -554,10 +557,13 @@ class Shell {
     const sub = this.subshell()
     const out = bufferSink(this.base.budget)
     let status: number
+    const leave = this.base.debug?.enter('substitution', '$(…)', '-c')
     try {
       status = await sub.exec(parse(src), { out, err: io.err, stdin: null })
     } catch (e) {
       status = this.caught(e, io)
+    } finally {
+      leave?.()
     }
     this.substStatus = status
     return hooks.strip(out.text).replace(/\n+$/, '')
@@ -826,8 +832,10 @@ class Shell {
   async exec(n: Node, io: Io, cond = false): Promise<number> {
     this.checkAbort()
     if (n.span) this.location = n.span
-    if (n.span && this.base.debug && n.t !== 'func') {
-      await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal, this.base.budget)
+    // Stops are at commands: simple commands, (( )), and for/case heads. Lists, pipelines, groups and
+    // if/while are made of commands that stop on their own, so one place is never stopped at twice.
+    if (n.span && this.base.debug && STOPS.has(n.t)) {
+      await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal, this.base.budget, { args: this.st.positional, locals: this.st.locals[this.st.locals.length - 1]?.keys() })
       this.checkAbort()
       if (this.base.debug.abort.signal.aborted) throw new AbortSignal_()
     }
@@ -1184,6 +1192,7 @@ class Shell {
     this.st.positional = args
     this.st.locals.push(frame)
     this.depth++
+    const leave = this.base.debug?.enter('function', name, body.span?.filename ?? '-c')
     await breathe()
     try {
       return await this.exec(body, io)
@@ -1191,6 +1200,7 @@ class Shell {
       if (e instanceof ReturnSignal) return e.status
       throw e
     } finally {
+      leave?.()
       this.depth--
       this.st.locals.pop()
       this.st.positional = savedArgs
@@ -1252,6 +1262,7 @@ class Shell {
       io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, sourcePath, e))}`)}\n`)
       return 2
     }
+    const leave = this.base.debug?.enter('script', label, sourcePath, src)
     try {
       return await this.exec(tree, io)
     } catch (e) {
@@ -1261,6 +1272,8 @@ class Shell {
         return this.caught(e, { ...io, err: { ...err, write: text => err.write(`${at.filename}:${at.line}:${at.column}: [${at.expression.slice(0, 200)}] ${text}`) } })
       }
       return this.caught(e, io)
+    } finally {
+      leave?.()
     }
   }
 
@@ -2122,8 +2135,9 @@ export async function runCapturedStreams(src: string, shell: Base, filename = '-
 }
 
 /** Launch through normal command lookup, msh file reads, mode checks, and command execution. */
-export function launchDebug(line: string, shell: Base, label = line) {
-  const session = new DebugSession(label)
+export function launchDebug(line: string, shell: Base, label = line, options: { start?: DebugStart; editorBreakpoints?: boolean } = {}) {
+  const session = new DebugSession(label, options.start)
+  if (options.editorBreakpoints) session.useEditorBreakpoints()
   const budget = shell.budget ?? new Budget(AGENT_LIMITS)
   const abort = () => { budget.stop('cancelled'); session.cancel() }
   const timer = setTimeout(() => { budget.stop('timeout'); session.cancel() }, Math.max(0, budget.deadline - Date.now()))
