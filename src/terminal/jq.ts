@@ -40,7 +40,7 @@ function index(v: J, k: J, optional: boolean): J[] {
       if (optional) return []
       throw new JqError(`Cannot index ${typeOf(v)} with "${k}"`)
     }
-    return [(v as Record<string, J>)[k] ?? null]
+    return [Object.hasOwn(v as object, k) ? (v as Record<string, J>)[k] ?? null : null]
   }
   if (typeof k === 'number') {
     if (!Array.isArray(v)) {
@@ -114,10 +114,17 @@ function tokenize(src: string): Tok[] {
           parts.push({ src: src.slice(j + 2, k - 1) })
           j = k
         } else if (src[j] === '\\') {
-          const e = src[j + 1]
-          s += e === 'n' ? '\n' : e === 't' ? '\t' : e === 'u' ? String.fromCharCode(parseInt(src.slice(j + 2, j + 6), 16)) : e
-          j += e === 'u' ? 6 : 2
-        } else s += src[j++]
+          const size = src[j + 1] === 'u' ? 6 : 2
+          try {
+            s += JSON.parse('"' + src.slice(j, j + size) + '"')
+          } catch {
+            throw new JqError('syntax error: invalid string escape')
+          }
+          j += size
+        } else {
+          if (src.charCodeAt(j) < 32) throw new JqError('syntax error: unescaped control character in string')
+          s += src[j++]
+        }
       }
       if (j >= src.length) throw new JqError('unterminated string')
       if (parts.length) {
@@ -164,9 +171,11 @@ class Parser {
   private p = 0
   private toks: Tok[]
   private env: Env
-  constructor(toks: Tok[], env: Env = {}) {
+  private vars: Env
+  constructor(toks: Tok[], env: Env = {}, vars: Env = Object.create(null)) {
     this.toks = toks
     this.env = env
+    this.vars = vars
   }
 
   private peek(v?: string) {
@@ -200,7 +209,7 @@ class Parser {
         this.env = saved
         return b
       })()
-      return (x) => src(x).flatMap((v) => withVar(name.v, v, () => body(x)))
+      return (x) => src(x).flatMap((v) => withVar(this.vars, name.v, v, () => body(x)))
     }
     while (this.peek('|')) {
       this.p++
@@ -229,13 +238,7 @@ class Parser {
       this.p++
       const right = this.alt()
       return (x) => {
-        const vals = (() => {
-          try {
-            return left(x).filter(truthy)
-          } catch {
-            return []
-          }
-        })()
+        const vals = left(x).filter(truthy)
         return vals.length ? vals : right(x)
       }
     }
@@ -380,7 +383,7 @@ class Parser {
     }
     if (t.t === 'tpl') {
       this.p++
-      const parts = t.parts!.map((part) => (typeof part === 'string' ? part : new Parser(tokenize(part.src), this.env).parse()))
+      const parts = t.parts!.map((part) => (typeof part === 'string' ? part : new Parser(tokenize(part.src), this.env, this.vars).parse()))
       return (x) => {
         let results = ['']
         for (const part of parts) {
@@ -396,8 +399,8 @@ class Parser {
     if (t.t === 'var') {
       this.p++
       if (t.v === 'ENV') return () => [{}]
-      if (!(t.v in this.env)) throw new JqError(`$${t.v} is not defined`)
-      return () => [vars[t.v]]
+      if (!Object.hasOwn(this.env, t.v)) throw new JqError(`$${t.v} is not defined`)
+      return () => [this.vars[t.v]]
     }
     if (t.t === 'field') {
       this.p++
@@ -488,6 +491,7 @@ class Parser {
     const entries: [Node, Node][] = []
     while (!this.peek('}')) {
       const t = this.toks[this.p]
+      if (!t) throw new JqError('syntax error: expected object key at end')
       let key: Node
       let value: Node | null = null
       if (t.t === 'id' || t.t === 'str') {
@@ -497,7 +501,9 @@ class Parser {
       } else if (t.t === 'var') {
         this.p++
         key = () => [t.v]
-        value = () => [vars[t.v]]
+        if (!Object.hasOwn(this.env, t.v)) throw new JqError(`$${t.v} is not defined`)
+        if (this.peek(':')) key = () => [this.vars[t.v]]
+        else value = () => [this.vars[t.v]]
       } else if (t.t === 'op' && t.v === '(') {
         this.p++
         key = this.pipe()
@@ -516,7 +522,10 @@ class Parser {
       let results: Record<string, J>[] = [{}]
       for (const [k, v] of entries) {
         const next: Record<string, J>[] = []
-        for (const r of results) for (const kk of k(x)) for (const vv of v(x)) next.push({ ...r, [String(kk)]: vv })
+        for (const r of results) for (const kk of k(x)) {
+          if (typeof kk !== 'string') throw new JqError('Object keys must be strings')
+          for (const vv of v(x)) next.push({ ...r, [kk]: vv })
+        }
         results = next
       }
       return results
@@ -524,9 +533,8 @@ class Parser {
   }
 }
 
-const vars: Env = {}
-function withVar(name: string, value: J, fn: () => J[]): J[] {
-  const had = name in vars
+function withVar(vars: Env, name: string, value: J, fn: () => J[]): J[] {
+  const had = Object.hasOwn(vars, name)
   const prev = vars[name]
   vars[name] = value
   try {
@@ -544,6 +552,12 @@ function recurse(v: J): J[] {
 const one = (n: Node, x: J) => n(x)[0]
 
 function builtin(name: string, args: Node[]): Node {
+  const oneArg = ['has', 'in', 'map', 'map_values', 'select', 'ltrimstr', 'rtrimstr', 'startswith', 'endswith', 'split', 'join', 'contains', 'inside', 'sort_by', 'group_by', 'unique_by', 'min_by', 'max_by', 'with_entries', 'getpath', 'splits']
+  const optionalArg = ['error', 'any', 'all', 'first', 'last', 'flatten']
+  const min = oneArg.includes(name) || name === 'range' || name === 'test' ? 1 : name === 'sub' || name === 'gsub' || name === 'limit' ? 2 : 0
+  const max = ['range', 'test', 'sub', 'gsub', 'limit'].includes(name) ? 2 : oneArg.includes(name) || optionalArg.includes(name) ? 1 : 0
+  if (args.length < min || args.length > max) throw new JqError(`${name}/${args.length} is not defined (expected ${min === max ? min : min + '–' + max} arguments)`)
+
   const str = (x: J, what: string) => {
     if (typeof x !== 'string') throw new JqError(`${typeOf(x)} cannot be ${what}`)
     return x
@@ -617,7 +631,7 @@ function builtin(name: string, args: Node[]): Node {
     case 'tojson':
       return (x) => [JSON.stringify(x)]
     case 'fromjson':
-      return (x) => [JSON.parse(str(x, 'parsed'))]
+      return (x) => [parseJson(str(x, 'parsed by fromjson'), 'fromjson')]
     case 'ascii_downcase':
       return (x) => [str(x, 'lowercased').toLowerCase()]
     case 'ascii_upcase':
@@ -694,7 +708,7 @@ function builtin(name: string, args: Node[]): Node {
     case 'paths':
       return (x) => paths(x, []).slice(1)
     case 'getpath':
-      return (x) => f(x).map((p) => (p as J[]).reduce((v: J, k) => (v == null ? null : (v as Record<string, J>)[k as string] ?? null), x))
+      return (x) => f(x).map((p) => arr(p, 'use as a path').reduce((v: J, k) => index(v, k, false)[0], x))
     case 'splits':
       return (x) => f(x).flatMap((p) => str(x, 'split').split(new RegExp(String(p))))
     case 'ascii':
@@ -735,19 +749,67 @@ function paths(v: J, prefix: J[]): J[] {
 function contains(a: J, b: J): boolean {
   if (typeof a === 'string' && typeof b === 'string') return a.includes(b)
   if (Array.isArray(a) && Array.isArray(b)) return b.every((y) => a.some((x) => contains(x, y)))
-  if (typeOf(a) === 'object' && typeOf(b) === 'object') return Object.entries(b as object).every(([k, v]) => k in (a as object) && contains((a as Record<string, J>)[k], v))
+  if (typeOf(a) === 'object' && typeOf(b) === 'object') return Object.entries(b as object).every(([k, v]) => Object.hasOwn(a as object, k) && contains((a as Record<string, J>)[k], v))
   return equal(a, b)
 }
 
 // ---------------------------------------------------------------------------
 
-export type JqOptions = { raw?: boolean; compact?: boolean; color?: boolean; nullInput?: boolean; slurp?: boolean }
+export type JqOptions = { raw?: boolean; compact?: boolean; color?: boolean; nullInput?: boolean; slurp?: boolean; args?: Record<string, unknown> }
+
+function parseJson(text: string, context: string): J {
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new JqError(`${context}: invalid JSON`)
+  }
+}
+
+/** The deliberately small command-line subset; values are data, never filter source. */
+export function parseJqArgs(argv: string[]): { filter: string; file?: string; opts: JqOptions } {
+  const opts: JqOptions = { args: Object.create(null) }
+  const rest: string[] = []
+  let options = true
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (options && a === '--') { options = false; continue }
+    if (options && (a === '--arg' || a === '--argjson')) {
+      const name = argv[++i]
+      const value = argv[++i]
+      if (!name || value === undefined) throw new JqError(`${a} requires NAME and VALUE`)
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || name === 'ENV') throw new JqError(`${a}: invalid variable name '${name}'`)
+      opts.args![name] = a === '--arg' ? value : parseJson(value, `--argjson ${name}`)
+    } else if (options && /^-[rcnsM]+$/.test(a)) {
+      for (const ch of a.slice(1)) {
+        if (ch === 'r') opts.raw = true
+        if (ch === 'c') opts.compact = true
+        if (ch === 'n') opts.nullInput = true
+        if (ch === 's') opts.slurp = true
+        if (ch === 'M') opts.color = false
+      }
+    } else if (options && a === '--raw-output') opts.raw = true
+    else if (options && a === '--compact-output') opts.compact = true
+    else if (options && a === '--null-input') opts.nullInput = true
+    else if (options && a === '--slurp') opts.slurp = true
+    else if (options && a === '--monochrome-output') opts.color = false
+    else if (options && a.startsWith('-') && a !== '-') throw new JqError(`Unknown option: ${a} (use -- before a filter starting with -)`)
+    else rest.push(a)
+  }
+  if (rest.length > 2) throw new JqError('Expected one filter and at most one input file')
+  return { filter: rest[0] ?? '.', file: rest[1], opts }
+}
+
+/** Escape braces only inside JSON strings so terminal markup stripping is lossless. */
+function jsonOutput(value: J, space?: number): string {
+  return JSON.stringify(value, null, space).replace(/"(?:[^"\\]|\\.)*"/g,
+    (str) => str.replace(/\{/g, '\\u007b').replace(/\}/g, '\\u007d'))
+}
 
 /** Colours JSON like jq on a terminal: keys blue, strings green, null grey. Uses the terminal's markup. */
 function colorJson(v: J, indent: string, compact: boolean): string {
   const nl = compact ? '' : '\n'
   const pad = compact ? '' : indent + '  '
-  const esc = (s: string) => JSON.stringify(s).replace(/\{(?=(?:c|link|anim|fg|bg):|\/\})/g, '{​')
+  const esc = (s: string) => jsonOutput(s)
   if (v === null) return '{c:muted}null{/}'
   if (typeof v === 'string') return `{c:green}${esc(v)}{/}`
   if (typeof v === 'number' || typeof v === 'boolean') return String(v)
@@ -805,13 +867,14 @@ export function jq(filter: string, input: string, opts: JqOptions = {}): string 
     }
     if (opts.slurp) data = [data]
   }
-  const prog = new Parser(tokenize(filter || '.')).parse()
+  const bindings = Object.assign(Object.create(null) as Env, opts.args)
+  const prog = new Parser(tokenize(filter || '.'), bindings, bindings).parse()
   const out: string[] = []
   for (const d of data) {
     for (const v of prog(d)) {
       if (opts.raw && typeof v === 'string') out.push(opts.color ? v.replace(/\{(?=(?:c|link|anim|fg|bg):|\/\})/g, '{​') : v)
       else if (opts.color) out.push(colorJson(v, '', !!opts.compact))
-      else out.push(opts.compact ? JSON.stringify(v) : JSON.stringify(v, null, 2))
+      else out.push(jsonOutput(v, opts.compact ? undefined : 2))
     }
   }
   return out.join('\n')

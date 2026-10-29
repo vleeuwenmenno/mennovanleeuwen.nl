@@ -12,7 +12,9 @@ export type Redirect = {
   heredoc?: { body: string; quoted: boolean }
 }
 
-export type Node =
+export type SourceSpan = { start: number; end: number; line: number; column: number; filename: string; expression: string }
+
+export type Node = { span?: SourceSpan } & (
   | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[] }
   | { t: 'pipeline'; cmds: Node[]; bang: boolean }
   | { t: 'andor'; first: Node; rest: ['&&' | '||', Node][] }
@@ -26,21 +28,26 @@ export type Node =
   | { t: 'func'; name: string; body: Node }
   /** (( expression )): true when the arithmetic is not 0 (bash) */
   | { t: 'arith'; expr: string; redirs: Redirect[] }
+)
 
 /** The input stops halfway (an open quote, `if` without `fi`, a trailing `|`): more lines would finish it. */
 export class Incomplete extends Error {
-  constructor(what = 'unexpected end of file') {
+  readonly offset: number
+  constructor(what = 'unexpected end of file', offset = 0) {
     super(`syntax error: ${what}`)
+    this.offset = offset
   }
 }
 
 export class SyntaxError extends Error {
-  constructor(message: string) {
+  readonly offset: number
+  constructor(message: string, offset = 0) {
     super(`syntax error ${message}`)
+    this.offset = offset
   }
 }
 
-type Token = { k: 'word'; v: string; heredoc?: { body: string; quoted: boolean } } | { k: 'op'; v: string } | { k: 'io'; v: string } | { k: 'arith'; v: string } | { k: 'nl' } | { k: 'eof' }
+export type Token = { start: number; end: number } & ({ k: 'word'; v: string; heredoc?: { body: string; quoted: boolean } } | { k: 'op'; v: string } | { k: 'io'; v: string } | { k: 'arith'; v: string } | { k: 'nl' } | { k: 'eof' })
 
 const OPS = ['&&', '||', ';;', '<<-', '<<', '>>', '>&', '<&', '>|', '&>', '|', '&', ';', '(', ')', '<', '>']
 const META = /[|&;()<>\s]/
@@ -60,7 +67,7 @@ function skipNested(src: string, i: number): number {
       if (src[j] === '(') depth++
       else if (src[j] === ')' && --depth === 0) return j + 1
     }
-    throw new Incomplete('unterminated $((')
+    throw new Incomplete('unterminated $((', i)
   }
   if (src.startsWith('$(', i)) return skipParens(src, i + 2)
   if (src.startsWith('${', i)) {
@@ -74,14 +81,14 @@ function skipNested(src: string, i: number): number {
       else if (ch === '{') depth++
       else if (ch === '}' && --depth === 0) return j + 1
     }
-    throw new Incomplete('unterminated ${')
+    throw new Incomplete('unterminated ${', i)
   }
   if (src[i] === '`') {
     for (let j = i + 1; j < src.length; j++) {
       if (src[j] === '\\') j++
       else if (src[j] === '`') return j + 1
     }
-    throw new Incomplete('unterminated `')
+    throw new Incomplete('unterminated `', i)
   }
   return i + 1
 }
@@ -99,7 +106,7 @@ function skipParens(src: string, i: number): number {
     else if (ch === '(') depth++
     else if (ch === ')' && --depth === 0) return j + 1
   }
-  throw new Incomplete('unterminated $(')
+  throw new Incomplete('unterminated $(', Math.max(0, i - 2))
 }
 
 /** The end of `(( … ))` starting at `i` (after the `))`), or -1 when it is really nested subshells. */
@@ -119,7 +126,7 @@ function arithEnd(src: string, i: number): number {
 /** The index of the closing `'` for the one at `i`. */
 function skipSingle(src: string, i: number): number {
   const j = src.indexOf("'", i + 1)
-  if (j < 0) throw new Incomplete("unterminated '")
+  if (j < 0) throw new Incomplete("unterminated '", i)
   return j
 }
 
@@ -131,7 +138,7 @@ function skipDouble(src: string, i: number): number {
     else if (ch === '"') return j + 1
     else if (ch === '`' || (ch === '$' && (src[j + 1] === '(' || src[j + 1] === '{'))) j = skipNested(src, j) - 1
   }
-  throw new Incomplete('unterminated "')
+  throw new Incomplete('unterminated "', i)
 }
 
 /** Removes quotes from a heredoc delimiter: 'EOF', "EOF" and \EOF all mean EOF, quoted. */
@@ -174,7 +181,7 @@ export function lex(src: string): Token[] {
         }
         lines.push(line)
       }
-      if (!found) throw new Incomplete(`here-document delimited by end of file (wanted '${word}')`)
+      if (!found) throw new Incomplete(`here-document delimited by end of file (wanted '${word}')`, src.length)
       h.tok.heredoc = { body: lines.length ? `${lines.join('\n')}\n` : '', quoted }
     }
   }
@@ -185,7 +192,7 @@ export function lex(src: string): Token[] {
       continue
     }
     if (ch === '\n') {
-      out.push({ k: 'nl' })
+      out.push({ k: 'nl', start: i, end: i + 1 })
       i++
       if (heredocs.length) readHeredocs()
       continue
@@ -202,14 +209,14 @@ export function lex(src: string): Token[] {
     if (src.startsWith('((', i)) {
       const end = arithEnd(src, i)
       if (end > 0) {
-        out.push({ k: 'arith', v: src.slice(i + 2, end - 2) })
+        out.push({ k: 'arith', v: src.slice(i + 2, end - 2), start: i, end })
         i = end
         continue
       }
     }
     const op = OPS.find((o) => src.startsWith(o, i))
     if (op) {
-      out.push({ k: 'op', v: op })
+      out.push({ k: 'op', v: op, start: i, end: i + op.length })
       i += op.length
       continue
     }
@@ -218,7 +225,7 @@ export function lex(src: string): Token[] {
     while (i < src.length && !META.test(src[i])) {
       const c = src[i]
       if (c === '\\') {
-        if (i + 1 >= src.length) break
+        if (i + 1 >= src.length) throw new Incomplete('trailing backslash', i)
         i += 2
       } else if (c === "'") i = skipSingle(src, i) + 1
       else if (c === '"') i = skipDouble(src, i)
@@ -227,19 +234,19 @@ export function lex(src: string): Token[] {
     }
     const v = src.slice(start, i).replace(/\\\n/g, '')
     // `2>file`: digits right before a redirect are its file descriptor.
-    if (/^\d$/.test(v) && (src[i] === '<' || src[i] === '>')) out.push({ k: 'io', v })
+    if (/^\d$/.test(v) && (src[i] === '<' || src[i] === '>')) out.push({ k: 'io', v, start, end: i })
     else {
-      const tok: Token & { k: 'word' } = { k: 'word', v }
+      const tok: Token & { k: 'word' } = { k: 'word', v, start, end: i }
       const prev = out[out.length - 1]
       if (prev?.k === 'op' && (prev.v === '<<' || prev.v === '<<-')) heredocs.push({ tok, strip: prev.v === '<<-' })
       out.push(tok)
     }
   }
   if (heredocs.length) {
-    out.push({ k: 'nl' })
+    out.push({ k: 'nl', start: i, end: i + 1 })
     readHeredocs()
   }
-  out.push({ k: 'eof' })
+  out.push({ k: 'eof', start: src.length, end: src.length })
   return out
 }
 
@@ -252,7 +259,13 @@ const ENDERS = new Set(['then', 'else', 'elif', 'fi', 'do', 'done', 'esac', '}']
 class Parser {
   private i = 0
   private toks: Token[]
-  constructor(toks: Token[]) {
+  private src: string
+  private filename: string
+  private lineStarts: number[] = [0]
+  constructor(toks: Token[], src: string, filename: string) {
+    this.src = src
+    for (let i = 0; i < src.length; i++) if (src[i] === '\n') this.lineStarts.push(i + 1)
+    this.filename = filename
     this.toks = toks
   }
 
@@ -275,8 +288,8 @@ class Parser {
     return t.k === 'eof' ? 'end of file' : t.k === 'nl' ? 'newline' : `\`${t.v}'`
   }
   private fail(t = this.peek()): never {
-    if (t.k === 'eof') throw new Incomplete()
-    throw new SyntaxError(`near unexpected token ${this.describe(t)}`)
+    if (t.k === 'eof') throw new Incomplete(undefined, t.start)
+    throw new SyntaxError(`near unexpected token ${this.describe(t)}`, t.start)
   }
   private expectWord(v: string) {
     this.skipNl()
@@ -335,6 +348,20 @@ class Parser {
   }
 
   private command(): Node {
+    const start = this.peek().start
+    const node = this.commandBody()
+    const end = this.toks[this.i - 1]?.end ?? start
+    let low = 0, high = this.lineStarts.length
+    while (low + 1 < high) {
+      const mid = (low + high) >>> 1
+      if (this.lineStarts[mid] <= start) low = mid
+      else high = mid
+    }
+    node.span = { start, end, line: low + 1, column: start - this.lineStarts[low] + 1, filename: this.filename, expression: this.src.slice(start, end) }
+    return node
+  }
+
+  private commandBody(): Node {
     const t = this.peek()
     if (t.k === 'arith') {
       this.i++
@@ -505,8 +532,8 @@ class Parser {
 }
 
 /** Parses a script or a command line. Throws Incomplete when more input would finish it. */
-export function parse(src: string): Node {
-  return new Parser(lex(src)).program()
+export function parse(src: string, filename = '-c'): Node {
+  return new Parser(lex(src), src, filename).program()
 }
 
 /** The command names a line runs (first words of each simple command), for permission checks. */

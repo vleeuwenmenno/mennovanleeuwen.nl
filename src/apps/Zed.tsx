@@ -15,6 +15,8 @@ import { Terminal } from './Terminal'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
 import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
+import { XedDebug, MshHighlight, isMsh } from './XedDebug'
+import { analyzeMsh } from '../terminal/msh/analysis'
 import { toUi } from '../os/uiScale'
 
 // The Markdown preview moved to its own module; other apps still import it from here.
@@ -335,6 +337,7 @@ export function Zed({ win }: { win: WinState }) {
   const buf = active && active !== SEARCH ? buffers[active] : null
   const view: View = (active && views[active]) || 'edit'
   const markdown = !!active && isMarkdown(active)
+  const mshAnalysis = useMemo(() => active && buf && isMsh(active, buf.text) ? analyzeMsh(buf.text, active) : null, [active, buf?.text])
 
   const findMatches = useMemo(() => (buf && find ? matchesIn(buf.text, find.query) : []), [buf, find?.query])
   const current = findMatches.length ? ((find!.index % findMatches.length) + findMatches.length) % findMatches.length : -1
@@ -962,7 +965,7 @@ export function Zed({ win }: { win: WinState }) {
                         </pre>
                       )}
                       <pre className="zed-hl" aria-hidden>
-                        {kind === 'markdown' ? <Markdown text={buf.text} /> : buf.text}
+                        {mshAnalysis ? <MshHighlight text={buf.text} tokens={mshAnalysis.tokens} /> : kind === 'markdown' ? <Markdown text={buf.text} /> : buf.text}
                         {'\n'}
                       </pre>
                       <textarea
@@ -1037,6 +1040,7 @@ export function Zed({ win }: { win: WinState }) {
         </section>
       </div>
 
+      <XedDebug path={active === SEARCH ? null : active} text={buf?.text ?? ''} saved={!!buf && !buf.loading && !buf.error && buf.text === buf.saved} root={root} line={cursor.line} jump={(path, line, col) => openFile(path, { line, col, len: 0 })} />
       <footer className="zed-status">
         <button className={`zed-status-btn zed-status-icon ${showPanel ? 'is-on' : ''}`} onClick={togglePanel} title={`${showPanel ? 'Hide' : 'Show'} the project panel (Ctrl+B${narrow ? ', or swipe in from the left' : ''})`} aria-label="Toggle project panel" aria-pressed={showPanel}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -1454,7 +1458,7 @@ function Welcome({ root, onOpen, onProject }: { root: string; onOpen: (p: string
         <path d="M13 13h22L13 35h22" />
         <path d="M19 24h10" />
       </svg>
-      <p className="zed-welcome-title">Zed</p>
+      <p className="zed-welcome-title">Xed</p>
       <p className="muted">Pick a file in the project panel, or:</p>
       <div className="zed-welcome-list">
         {picks.map((p) => (

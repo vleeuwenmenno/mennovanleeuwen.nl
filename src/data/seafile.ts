@@ -15,6 +15,16 @@ export { useSeafileHome } from './mounts'
 // /etc/fstab's to say (data/mounts.ts): "Use as home", the primary library and mapped places are
 // lines in it, so Files, the desktop and the terminal all agree.
 
+/** Optional per-operation boundary used by the agent shell. UI callers keep their normal caches.
+ * Guarded calls never borrow unguarded in-flight requests or decode responses outside the guard. */
+export type IoGuard = {
+  signal?: AbortSignal
+  check: () => void
+  json?: (response: Response) => Promise<any>
+  text?: (response: Response) => Promise<string>
+  snapshot?: (value: unknown) => Promise<void>
+}
+
 export const SF = 'seafile://'
 
 export type Library = { id: string; name: string; type: 'mine' | 'shared' | 'group' | 'public'; owner: string | null; encrypted: boolean; permission: 'r' | 'rw'; size: number; mtime: number }
@@ -110,7 +120,18 @@ export const subscribeLibraries = (l: () => void) => {
   return () => libListeners.delete(l)
 }
 
-export function loadLibraries(fresh = false): Promise<void> {
+export function loadLibraries(fresh = false, guard?: IoGuard): Promise<void> {
+  if (guard) return (async () => {
+    guard.check()
+    if (!getAccount().seafile) return
+    if (libraries && !fresh) { await guard.snapshot?.(libraries); guard.check(); return }
+    const next = await call<Library[]>('/api/seafile/libraries', {}, guard)
+    guard.check()
+    libraries = next
+    librariesError = null
+    emitLibs()
+  })()
+
   if (!getAccount().seafile) return Promise.resolve()
   if (librariesLoading && !fresh) return librariesLoading
   librariesLoading = api<Library[]>('/api/seafile/libraries')
@@ -196,10 +217,12 @@ class ApiError extends Error {
 }
 
 /** Like api(), but keeps the status (423 is a locked library). */
-async function call<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
+async function call<T>(path: string, init: RequestInit & { json?: unknown } = {}, guard?: IoGuard): Promise<T> {
+  guard?.check()
   const { json, ...rest } = init
-  const res = await fetch(path, { ...rest, credentials: 'same-origin', headers: json !== undefined ? { 'Content-Type': 'application/json' } : undefined, body: json !== undefined ? JSON.stringify(json) : rest.body })
-  const body = await res.json().catch(() => null)
+  const res = await fetch(path, { ...rest, signal: guard?.signal ?? rest.signal, credentials: 'same-origin', headers: json !== undefined ? { 'Content-Type': 'application/json' } : undefined, body: json !== undefined ? JSON.stringify(json) : rest.body })
+  const body = guard?.json ? await guard.json(res) : await res.json().catch(() => null)
+  guard?.check()
   if (res.status === 423) throw new ApiError(423, 'That library is locked: open it in Files and give its password first')
   if (!res.ok) throw new ApiError(res.status, body?.error ?? `Request failed (${res.status})`)
   return body as T
@@ -261,12 +284,17 @@ export function useDir(path: string | null, maxAge = 30_000): DirState & { reloa
  * A folder's listing for code that can wait (the terminal): from the cache while fresh, else
  * asked for. Rejects with the status kept (423: an encrypted library that is locked).
  */
-export async function listDir(path: string, maxAge = 30_000): Promise<Listing> {
+export async function listDir(path: string, maxAge = 30_000, guard?: IoGuard): Promise<Listing> {
   const hit = dirCache.get(path)
-  if (hit?.listing && !hit.loading && Date.now() - hit.at < maxAge) return hit.listing
+  guard?.check()
+  if (hit?.listing && !hit.loading && Date.now() - hit.at < maxAge) {
+    await guard?.snapshot?.(hit.listing)
+    guard?.check()
+    return hit.listing
+  }
   const at = parseSf(path)!
   try {
-    const listing = await call<Listing>(`/api/seafile/dir?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}`)
+    const listing = await call<Listing>(`/api/seafile/dir?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}`, {}, guard)
     dirCache.set(path, { listing, error: null, status: null, loading: false, at: Date.now() })
     return listing
   } catch (e) {
@@ -287,9 +315,9 @@ export function cachedDir(path: string): { listing: Listing | null; status: numb
 /** The status a Seafile call failed with (423: locked), if it kept one. */
 export const errorStatus = (e: unknown): number | null => (e instanceof ApiError ? e.status : null)
 
-export async function mkdir(path: string): Promise<string> {
+export async function mkdir(path: string, guard?: IoGuard): Promise<string> {
   const at = parseSf(path)!
-  const { path: made } = await call<{ path: string }>('/api/seafile/dir', { method: 'POST', json: { repo: at.repo, path: at.p } })
+  const { path: made } = await call<{ path: string }>('/api/seafile/dir', { method: 'POST', json: { repo: at.repo, path: at.p } }, guard)
   refreshDirs(sfPath(at.repo, at.p.split('/').slice(0, -1).join('/') || '/'))
   return sfPath(at.repo, made)
 }
@@ -301,7 +329,8 @@ export async function mkdir(path: string): Promise<string> {
 const downloads = new Map<string, { at: number; url: Promise<string> }>()
 
 /** A link on Seafile's file server: download (reusable for an hour), upload into a folder, update a file. */
-export async function fileLink(path: string, op: 'download' | 'upload' | 'update'): Promise<string> {
+export async function fileLink(path: string, op: 'download' | 'upload' | 'update', guard?: IoGuard): Promise<string> {
+  if (guard) { guard.check(); return linkFor(path, op, guard) }
   if (op === 'download') {
     const hit = downloads.get(path)
     if (hit && Date.now() - hit.at < 5 * 60_000) return hit.url
@@ -313,17 +342,23 @@ export async function fileLink(path: string, op: 'download' | 'upload' | 'update
   return linkFor(path, op)
 }
 
-async function linkFor(path: string, op: 'download' | 'upload' | 'update'): Promise<string> {
+async function linkFor(path: string, op: 'download' | 'upload' | 'update', guard?: IoGuard): Promise<string> {
   const at = parseSf(path)!
-  const { url } = await call<{ url: string }>(`/api/seafile/link?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}&op=${op}`)
+  const { url } = await call<{ url: string }>(`/api/seafile/link?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}&op=${op}`, {}, guard)
   return url
 }
 
 /** A file's text, straight from Seafile's file server. */
-export async function readText(path: string): Promise<string> {
-  const res = await fetch(await fileLink(path, 'download'))
+export async function readText(path: string, guard?: IoGuard): Promise<string> {
+  guard?.check()
+  const link = await fileLink(path, 'download', guard)
+  guard?.check()
+  const res = await fetch(link, { signal: guard?.signal })
+  if (!res.ok && !guard?.text) throw new Error(`Seafile answered ${res.status}`)
+  const text = guard?.text ? await guard.text(res) : await res.text()
+  guard?.check()
   if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
-  return res.text()
+  return text
 }
 
 /** A file's bytes, straight from Seafile's file server (copying out of Seafile). */
@@ -334,28 +369,34 @@ export async function readBlob(path: string): Promise<Blob> {
 }
 
 /** Puts bytes in a Seafile folder under `name`, replacing a file of that name (copying into Seafile). */
-export async function uploadBlob(folder: string, name: string, blob: Blob) {
+export async function uploadBlob(folder: string, name: string, blob: Blob, guard?: IoGuard) {
   const at = parseSf(folder)!
-  const link = await fileLink(folder, 'upload')
+  const link = await fileLink(folder, 'upload', guard)
   const form = new FormData()
   form.append('parent_dir', at.p)
   form.append('replace', '1')
   form.append('file', blob, name)
-  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form })
-  if (!res.ok) throw new Error((await res.text().catch(() => '')) || `Seafile answered ${res.status}`)
+  guard?.check()
+  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form, signal: guard?.signal })
+  const response = guard?.text ? await guard.text(res) : !res.ok ? await res.text().catch(() => '') : ''
+  guard?.check()
+  if (!res.ok) throw new Error(response || `Seafile answered ${res.status}`)
   refreshDirs(folder)
 }
 
 /** Overwrites a file with new text (the editor's save). */
-export async function writeText(path: string, text: string) {
+export async function writeText(path: string, text: string, guard?: IoGuard) {
   const at = parseSf(path)!
   const dir = at.p.split('/').slice(0, -1).join('/') || '/'
-  const link = await fileLink(sfPath(at.repo, dir), 'update')
+  const link = await fileLink(sfPath(at.repo, dir), 'update', guard)
   const form = new FormData()
   form.append('file', new Blob([text], { type: 'text/plain' }), at.p.split('/').pop()!)
   form.append('target_file', at.p)
-  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form })
-  if (!res.ok) throw new Error((await res.text().catch(() => '')) || `Seafile answered ${res.status}`)
+  guard?.check()
+  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form, signal: guard?.signal })
+  const response = guard?.text ? await guard.text(res) : !res.ok ? await res.text().catch(() => '') : ''
+  guard?.check()
+  if (!res.ok) throw new Error(response || `Seafile answered ${res.status}`)
   refreshDirs(sfPath(at.repo, dir))
 }
 
@@ -473,9 +514,9 @@ export async function renameItem(path: string, name: string, dir: boolean): Prom
 }
 
 /** A new empty file (Office files get Seafile's blank template); answers its path. */
-export async function createFile(path: string): Promise<string> {
+export async function createFile(path: string, guard?: IoGuard): Promise<string> {
   const at = parseSf(path)!
-  const { path: made } = await call<{ path: string }>('/api/seafile/file', { method: 'POST', json: { repo: at.repo, path: at.p } })
+  const { path: made } = await call<{ path: string }>('/api/seafile/file', { method: 'POST', json: { repo: at.repo, path: at.p } }, guard)
   refreshDirs(parentPath(path))
   return sfPath(at.repo, made)
 }
@@ -495,9 +536,9 @@ function byFolder(paths: string[]) {
 }
 
 /** Deletes files and folders (into the library's trash on Seafile, where they can be restored). */
-export async function deleteItems(paths: string[]) {
+export async function deleteItems(paths: string[], guard?: IoGuard) {
   for (const g of byFolder(paths)) {
-    await call('/api/seafile/delete', { method: 'POST', json: g })
+    await call('/api/seafile/delete', { method: 'POST', json: g }, guard)
     refreshDirs(sfPath(g.repo, g.parent))
   }
   for (const p of paths) refreshDirs(p)
@@ -577,7 +618,8 @@ export const cleanTrash = (repo: string, days: number) => call('/api/seafile/tra
 
 const histories = new Map<string, { days: Promise<number>; at: number }>()
 
-export function historyDays(repo: string): Promise<number> {
+export function historyDays(repo: string, guard?: IoGuard): Promise<number> {
+  if (guard) return call<{ days: number }>(`/api/seafile/history?repo=${encodeURIComponent(repo)}`, {}, guard).then(r => r.days)
   const known = histories.get(repo)
   if (known && Date.now() - known.at < 60_000) return known.days
   const days = call<{ days: number }>(`/api/seafile/history?repo=${encodeURIComponent(repo)}`).then((r) => r.days)

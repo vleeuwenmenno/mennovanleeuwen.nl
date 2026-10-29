@@ -13015,3 +13015,12 @@ html {
     font-size: max(16px, 1em) !important;
   }
 }
+
+/* Xed's opt-in msh debugger stays usable in narrow windows and with touch. */
+.xed-debug { flex: none; max-height: 36%; overflow: auto; padding: 6px 8px; border-top: 1px solid var(--line); background: var(--bg-dark); }
+.xed-debug-controls { display: flex; flex-wrap: wrap; gap: 4px; }
+.xed-debug button, .xed-debug select { color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); padding: 5px; font: inherit; max-width: 100%; overflow-wrap: anywhere; }
+.xed-debug button:disabled { opacity: .5; }
+.xed-debug pre { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.xed-diagnostic { display: block; text-align: left; }
+@media (pointer: coarse) { .xed-debug-controls button, .xed-debug select { min-height: 36px; } }

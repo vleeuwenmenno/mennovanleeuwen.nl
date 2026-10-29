@@ -76,7 +76,7 @@ class separately from scaled dimensions, so a desktop at 200% still restores des
 Like a desktop, the chrome can't be selected: dragging across title bars, the dock, menus,
 sidebars, toolbars, list rows, icons or a game, or double-clicking a label, highlights nothing, a
 long press on it gets no text callout and a tap no grey flash. Text that is there to be read and
-copied can: fields, the terminal, Zed and every Markdown preview, Agents' messages and tool output,
+copied can: fields, the terminal, Xed and every Markdown preview, Agents' messages and tool output,
 the mail being read (subject, people, the message), notes and stickies, a contact's card, a
 read-only event's place and notes, PDF text, the Viewer, Preview's and Photos' info, Spotlight's
 previews, answers and sums, the CV page, inline code and error messages. Ctrl+A selects the text
@@ -193,7 +193,7 @@ Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)
 (several at once, as a pile with a count), rows in Files, apps and launchers in All apps, rows
 in Archive, and photos in Photos (see Photos below). They land on desktop folders and the desktop itself, Files windows (a folder, the
 folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
-files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
+files: Preview, Player, Omamp, PDF, the Viewer, Archive and Xed show what is dropped on them, and
 a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
 on it (from the computer, Files or the desktop) and takes a launcher as its link in the text, and
 the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick) and
@@ -237,7 +237,7 @@ Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): 
 sticky note, projects, contributions, skills and experience. The terminal's filesystem
 (`~/cv.md`, `~/projects/*/README.md`, ...) is generated from the same file.
 
-Markdown renders the same everywhere it shows (Zed's preview, Notebook, Spotlight and the Agents
+Markdown renders the same everywhere it shows (Xed's preview, Notebook, Spotlight and the Agents
 app's answers), through one parser of our own in [`src/data/markdown/`](src/data/markdown):
 CommonMark's blocks and inlines (emphasis nests in any combination, setext and ATX headings,
 nested and loose lists, quotes, fenced and indented code, reference links, escapes and hard
@@ -265,7 +265,7 @@ main bundle only carries the small matching code. `pnpm check:emoji` runs its te
 ### Visual blocks
 
 A fenced block with the language `visual` holds a small JSON spec that draws as a picture in every
-Markdown preview (Notebook, Zed, Spotlight, the Agents app's answers, READMEs and comments), so a
+Markdown preview (Notebook, Xed, Spotlight, the Agents app's answers, READMEs and comments), so a
 model or a note can show a diagram instead of describing one ([`src/data/visual/`](src/data/visual)):
 
 ````md
@@ -443,6 +443,148 @@ mounts: the account's quota and usage (`/api/seafile/quota`), and each library's
 what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
 mounts, Seafile's included.
 
+### jq: a practical JSON subset
+
+The browser's `jq` extends the small parser in [src/terminal/jq.ts](src/terminal/jq.ts);
+it is **not full jq**. It supports field/index paths (`.user.name`, `.["odd.key"]`,
+`.[0]`, `.[-1]`), slices, optional access (`.name?`), iteration (`.[]`), pipes,
+arrays, object construction, `map`, `select`, comparisons, boolean filters, and
+`//` for missing/null/false values. Missing fields yield `null`; wrong input types
+raise errors unless the access uses `?`. Object reads use only own JSON properties;
+`__proto__`, `constructor`, and `prototype` remain ordinary data keys.
+
+Examples in msh (single quotes keep the shell from expanding filter variables):
+
+```sh
+cat people.json | jq '[.[] | select(.active and .score >= 2) | {name, score}]'
+cat response.json | jq '.user.name'
+jq -nc --arg name 'Ada "Lovelace"' --argjson tags '["math","code"]' '{name: $name, tags: $tags}'
+jq -nc --arg key 'odd.key' --arg value 'safe text' '{($key): $value}'
+cat encoded.json | jq 'fromjson | .name'
+cat response.json | jq -r 'tojson'
+```
+
+`--arg NAME VALUE` binds a literal string; `--argjson NAME JSON` parses one JSON
+value, including objects, arrays, booleans, and null. Use these with constructors
+instead of concatenating JSON text. Values never become filter source. Variable
+names use letters, digits, and underscores, cannot start with a digit, and cannot
+be `ENV` (reserved). Bindings are local to each command; `expr as $name | body`
+can temporarily shadow them. Constructors accept literal keys, shorthand
+`{name}` / `{$name}`, variable keys (`{$key: value}`), or parenthesized string keys;
+non-string keys are errors.
+`fromjson` parses a JSON string; `tojson` serializes a value, escaping its contents.
+
+Options: `-r` / `--raw-output` prints strings without JSON quotes; `-c` /
+`--compact-output` removes JSON indentation; `-n` / `--null-input` constructs
+from null; `-s` / `--slurp` collects input documents into one array; `-M` /
+`--monochrome-output` disables terminal colors. Short flags combine (`-ncr`).
+Supply one optional input file, or `-` for stdin; otherwise input comes from a
+pipe. Multiple JSON documents are accepted; empty stdin produces no values.
+Use `--` before a filter beginning with `-`. Unknown options, malformed JSON,
+undefined variables, invalid constructor keys, and malformed filters report errors.
+Serialized JSON escapes braces inside strings so literal terminal markup such as
+`{c:red}` survives pipes and redirects; JSON parsing restores the original data.
+Raw `-r` text retains the terminal's existing markup behavior.
+
+This subset also retains common sorting, aggregation, string, entry-conversion,
+and arithmetic helpers. It does not implement assignments/update operators,
+`def`, `reduce`, modules, streaming mode, or all upstream jq flags and overloads.
+`pnpm check:jq` covers the documented workflows, option parsing, invalid inputs,
+prototype-key handling, and literal-markup round trips.
+
+### jq-safe: bounded JSON for agent workflows
+
+`jq-safe` is a separate, asynchronous JSON evaluator, not a mode or fallback to rich
+`jq`. It reads exactly one JSON document from stdin (or null with `-n`); filenames,
+multiple documents and slurping are not supported. Its flags are `-n`, `-c`, `-r`
+(combinable), `--arg NAME VALUE`, and `--argjson NAME JSON`.
+
+```sh
+cat people.json | jq-safe -c '[.[] | select(.active and .score >= 2) | {name}]'
+jq-safe -nc --arg name 'Ada "Lovelace"' --argjson tags '["math"]' '{name: $name, tags: $tags}'
+cat encoded.json | jq-safe 'fromjson | .name'
+```
+
+The explicit subset is identity, field/string-key/integer-index access (negative
+indices included), iteration, final optional access `?`, pipes, array collection,
+objects (literal, shorthand, variable and parenthesized string keys), variables,
+JSON literals, `map`, `select`, scalar comparisons, `and`/`or`/`not`, `length`,
+`fromjson`, and `tojson`. Constructor keys/values and comparison operands must each
+produce exactly one value. Boolean `and`/`or` short-circuit their right operand.
+Ordering requires two strings or two numbers. No comma
+streams, slices, variable binding with `as`, interpolation, arithmetic, recursion,
+ranges, user-defined functions, regex, or additional builtins are accepted. No
+unsupported syntax can reach rich jq. Prototype-named keys remain ordinary data.
+Serialized JSON preserves literal terminal markup; raw `-r` text follows existing
+terminal behavior.
+
+Hard ceilings are 65,536 UTF-16 code units for input, combined arguments, each
+retained value/stream and output; 4,096 filter characters; 512 tokens; 32 nesting
+levels; 4,096 value nodes; 50,000 work steps; 4 MiB cumulative conservative
+allocation charges; and two seconds elapsed per invocation. Value accounting
+includes worst-case escaping and indentation, so some smaller values also hit
+limits. The evaluator yields to the event loop every 64 steps and checks abort,
+elapsed time, and shared budget. Native parsing/serialization operates only on
+size/depth-checked data. Regex evaluation is absent. Failure returns no partial
+result. `pnpm check:jq-safe` tests malicious filters, amplification, malformed/deep
+JSON, inherited keys, budget exhaustion, and timer-driven cancellation during work.
+
+For already-parsed responses, `boundedJson(value, { signal, budget, policy })`
+exports the same accounting and cancellation boundary. It validates and snapshots
+ordinary JSON data before `JSON.stringify`, preserves literal markup with JSON
+escapes, and bounds the final output. It rejects cycles, non-finite numbers,
+undefined/functions/symbols/bigints, sparse arrays, custom object prototypes and
+enumerable accessors; getters and `toJSON` hooks are never called. Shared object
+references are allowed and counted per occurrence. Pass parsed data, not proxies
+or executable host objects. Policy contexts require the shared budget.
+
+Downloads from `curl` and `wget` in budgeted runs are read incrementally. Both
+incoming bytes and decoded UTF-16 text charge the shared budget before retention;
+each response must fit the intermediate-buffer limit. File output has the same
+accounting as stdout and is persisted only after the complete response passes
+budget and cancellation checks. UTF-8 characters split across chunks are decoded
+correctly; malformed UTF-8 uses replacement characters, matching `Response.text`.
+HTTP failures with `curl --fail`, and all unsuccessful wget responses, cancel the
+body without saving it. `curl -o -` writes to stdout. Interrupted or oversized
+responses never leave a partial downloaded file.
+
+All agent-admitted command families are bounded or fail closed before unsupported modes run.
+The implementation inventory is:
+
+| Command family | Boundary before expensive work |
+| --- | --- |
+| Text filters, byte dumpers and hashes (including cat aliases and lolcat) | One input; 65,536-character synchronous ceiling; conservative reservations before splitting, decoding, sorting, hashing and markup. `od` additionally reserves rows times formats; `xxd -r` reserves sparse zero-fill and conversion before expanding offsets. |
+| Shell, variables and formatting | Sources, expanded fields, patterns, heredocs and buffers share the call budget; parser inputs, variable listings, builtin operands and printf precision/padding are charged before processing. |
+| `ls` and globs | Nonrecursive listings; cached Seafile metadata, entry arrays, names and formatting are charged. Generated site file contents are not evaluated for agent `ls -l` sizes. |
+| `seq`, `cowsay`, calculators | Each sequence element is reserved before retaining it; ranges must be finite and advance. Cowsay wraps at 40 columns. Text input and transformation reservations bound synchronous work. |
+| Network and filesystem I/O | Curl/wget, WHOIS, Git, DNS, FX and every agent-reachable Seafile metadata/link/text/mutation response stream through shared byte/text accounting before decoding or parsing. Unused JSON fields and cached metadata/rates count too; structured data also passes jq-safe depth/node/size checks. Unused error bodies are cancelled. |
+| `mvl`, `jq-safe`, fixed information commands | Account responses and JSON work use the bounded evaluator and resource grants. Capability construction is reserved; session information uses the fresh headless context (empty history/windows). Unsupported engines and filesystem modes are denied by policy. |
+
+Allocation units deliberately overestimate intermediate strings, arrays and byte conversions;
+they are not measured JavaScript heap bytes. Consequently a small input can exhaust a small
+budget even if the final output would fit. Synchronous adapters have the additional 65,536-character
+ceiling; deadlines remain cooperative. A completed remote mutation cannot be rolled back if its
+response later exceeds the budget. Cached rates stay usable offline; blocked or malformed browser
+storage does not prevent a fresh approved rate lookup.
+
+Command preparation uses actual file operands. String operations such as
+`basename /outside/file.txt`, `dirname /outside/file.txt`, and `calc 10 / 2` do not
+read those strings as paths. Data-only commands skip filesystem preparation after
+the cancellation check; file readers separate option values from real operands,
+and real reads/writes still pass their operation-level policy checks.
+
+Agent terminal calls in both the Agents app and the `agents` command enable
+`jq-safe` and keep rich `jq` blocked. Its evaluator and response decoder charge
+the same step/output budget as pipelines, nested scripts and substitutions.
+Cancellation interrupts work at cooperative checkpoints. Data arguments are never
+filesystem operands: `jq-safe -n --arg p /outside '$p'` performs no file lookup.
+`prepare` still checks cancellation before its data-command early return. File
+reads and redirects remain policy-checked shell operations (`cat file | jq-safe`).
+Capabilities derive availability from policy and report the evaluator's limits.
+`check:agents-terminal-exec` covers this integration, resource permissions, budget
+exhaustion, and cancellation; `check:agents-executor-lifecycle` executes the UI
+hook and CLI Session call lifecycle with real msh and mocked HTTP transport.
+
 `cmatrix` ([`src/terminal/cmatrix.ts`](src/terminal/cmatrix.ts)) is the film's rain: mirrored
 half-width katakana with digits and a few symbols, a glowing head, a trail that fades through a
 dozen shades into the background, characters that flicker while they fade, drops at their own
@@ -490,7 +632,7 @@ deleting inside), and `sudo` ignores all of it, down through `find -delete` and 
 makes. A file that replaces another (`mv`/`cp` over it) takes the new file's mode, never the old one's.
 Setuid, setgid and the sticky bit are kept and shown (`rws`, `r-S`, `t`, `T`; `a=rw` clears them, as in
 `chmod`), but setuid and setgid are display only: nothing here runs as someone else, so they grant
-nothing. The apps are the exception on the way out: Zed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Zed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
+nothing. The apps are the exception on the way out: Xed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Xed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
 
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
@@ -607,6 +749,68 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
 - **Tab bar**: from the second tab on (the default, like Ghostty), or always.
 - **Startup file**: run `~/.mvshrc` when a terminal opens (on by default; see below).
 
+### Xed: msh editing and debugging
+
+The editor is named **Xed**. Its existing `zed` app ID, launch links, file associations,
+component/module names and saved-window keys remain compatible.
+
+Files ending in `.msh` or `.sh`, and files with an msh shebang, use the shell's actual lexer
+and parser for highlighting and syntax diagnostics. Diagnostics show filename, line, column
+and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
+Nothing is executed to lint a file.
+
+**Debug saved file** launches `msh 'path'` through the normal command table, file reads and
+permission checks, using the project directory. Save changes first: this executes the saved
+file and can perform the same actions as running it in Terminal. The debugger starts paused
+at the launch command; **Step** enters the script. **Continue** runs until a breakpoint,
+**Step** stops before the next command/compound command, **Pause** requests a stop at the next
+checkpoint, and **Stop** aborts the session, including an awaited pause. Pauses show source
+location, status and variables. Click the location to open it. **Breakpoint line N** toggles
+a breakpoint at the editor caret; the breakpoint list shows its filename and line.
+
+**Attach debug session** lists only explicitly opted-in sessions in this page. It does not
+inspect ordinary terminals, agents, other browser tabs or server processes. Xed cancels its
+own sessions when its window closes; attaching does not transfer lifetime ownership.
+The registry holds at most 16 sessions (evicting completed ones), each with at most 256
+breakpoints and 256 displayed variables, capped at 4096 characters each. Output retains the
+last 32 KB. Debug launches also bound interpreter capture and screen chunks to 32768 UTF-16
+code units, streaming partial lines when needed; ordinary `runLine` output remains unlimited
+unless its optional `captureLimit` is supplied. Controls wrap on phones and use the active theme.
+
+Xed debug launches use the shared execution budget (60 seconds including pauses,
+100,000 steps and the normal intermediate/total-output limits by default). Stop
+or deadline expiry releases a paused checkpoint; continuing cannot bypass file
+policy or resume mutations after exhaustion. The bounded debug screen keeps its
+existing 32,768-character tail. Rich jq remains interactive-only outside bounded
+debug runs; use `jq-safe` while debugging. `check:msh-debug` covers cancellation,
+paused deadlines, policy and shared JSON accounting.
+
+There is one interpreter. `parse.ts` adds token offsets and command `span` metadata;
+`interp.ts` awaits optional `Base.debug.checkpoint` hooks before execution. `debug.ts` owns
+session state and subscriptions. `launchDebug(line, base, label?)` returns `{ session, done }`
+and follows normal `runLine` execution; callers must supply their existing permission context.
+`runCapturedStreams(source, base, filename?)` returns distinct `{ stdout, stderr, status }`;
+`runCaptured` retains its existing combined-output API. `set -x` trace goes to stderr.
+
+File-backed debugger locations use absolute, normalized source paths for navigation
+and breakpoints. This applies to `source`, nested `msh file`, and executable scripts,
+including relative paths after `cd`. Session display labels and script `$0` retain
+their existing spelling; normalizing source identity does not rewrite invocation
+arguments. Inline commands and substitutions keep their `-c` coordinates.
+
+Stepping is command-granular, not expression-level or step-over/step-out. Command substitution
+and alias expansions currently use their own `-c` coordinates. Breakpoints are filename/line
+based, can stop more than once on a loop line, and do not move when text is edited. Long-running
+commands pause only when they return to a checkpoint; Stop uses their normal abort signal.
+The debug panel does not supply interactive stdin or a full terminal for fullscreen commands;
+use Xed's terminal panel for those. The initial launch location is `-c`, followed by the file's
+own source coordinates. Variable snapshots can contain script secrets, just as Terminal output
+can; they stay in this page and are not persisted.
+
+Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams;
+`pnpm check:xed-debug-ui` drives the actual editor through the repository's muted Chromium
+harness against a caller-started scratch dev server (`XED_TEST_PORT`, default 5276).
+
 ### The shell, agents and skills
 
 The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
@@ -638,19 +842,141 @@ account or files do not answer within 4 s, and the first command typed waits for
 sources itself (`source`, `.` or `msh ~/.mvshrc`) is refused with "already running, skipped".
 There is no file until you make one (`nano ~/.mvshrc`, `echo "alias ll='ls -l'" >> ~/.mvshrc`);
 `help` and the Terminal settings mention it. Where it lives follows home: in the browser's files
-or Seafile once signed in (a normal file there, so Zed, Files and the terminal all edit it); signed
+or Seafile once signed in (a normal file there, so Xed, Files and the terminal all edit it); signed
 out, where home is read-only, `~/.mvshrc` is still a file the terminal can create, read and remove
 (`nano`, `>`, `>>`, `rm`), but its text is kept in this browser
 ([`src/terminal/rcfile.ts`](src/terminal/rcfile.ts), a `synced()` value, so local without an
 account). On the CV page home stays read-only and has none. The agents' `terminal` tool does not
-run it. `pnpm check:msh-rc` tests all of this.
+run it (it starts a fresh shell, see below). `pnpm check:msh-rc` tests all of this.
+
+**The agents' terminal tool.** The Agents app and the `agents` command both run an agent's `terminal`
+calls, with no terminal window needed: the window that follows the thread claims the call
+(`POST /api/agents/threads/<id>/claim`, so two windows never run it twice), runs it
+([`src/terminal/agents/exec.ts`](src/terminal/agents/exec.ts), the same function in both) and posts
+the answer back. Turning the *Terminal* tool group on in the app is enough. It runs in the browser
+because the Seafile mounts, the browser's files and their modes only exist there; the interpreter is
+the same one the terminal uses (`startAgent` in [`msh/interp.ts`](src/terminal/msh/interp.ts)), no
+host shell is involved.
+- *Fresh shell per call.* Every call starts a new msh in the work folder (or `cwd`, a folder inside
+  it): files it writes stay, variables, functions, aliases, `cd` and `export` do not carry over to
+  the next call, and `~/.mvshrc` is not run. `read` with no input sees the end of it.
+- *Arguments and answer.* `command`, `description`, `cwd` and `timeout_seconds` (default 60, at
+  most 180). The answer is JSON: `exit_code`, `stdout` and `stderr` apart, `duration_ms`, `truncated`
+  (characters dropped from each stream) and `terminated` (`null`, or `timeout`, `cancelled`, `steps`,
+  `output` or `memory`), plus the folder it ran in. A stopped run exits 124 (time), 130 (cancelled)
+  or 125 (another limit). Curl verbose output, warnings and file progress, and wget progress,
+  go to stderr; response bodies stay on stdout (or their requested file). Command output respects
+  `2>`, `2>&1`, pipes, per-stream truncation and the shared budget. Streaming status output from
+  ordinary commands remains stdout. The interactive terminal still displays both streams.
+- *Limits* ([`src/terminal/limits.ts`](src/terminal/limits.ts)), one budget shared by everything a
+  call starts (pipeline stages, `$(…)`, subshells, sourced files, nested `msh`): 100,000 interpreter
+  steps, the time, 60,000 characters kept per stream (more is dropped and counted), 4 MiB per
+  intermediate buffer (a pipe stage, a `$(…)`, a file being redirected into), 32 MiB written in all,
+  1 MiB per variable, and `printf` padding capped. Formatting and expansion charge allocations
+  incrementally, before padding or concatenation. Heredoc literals, escapes, substitutions and
+  positional-argument arrays use the same budget; arrays are appended without an uncharged join.
+  Command/script source is capped at 64,000
+  characters; field splitting is incremental and capped at 10,000 fields (IFS at 256 characters);
+  agent shell patterns allow at most 256 characters and one `*`, and pattern
+  substitutions operate on values of at most 4096 characters. Stop, a timeout or a spent limit ends the run at
+  the next step (a sleep is cut at once) and nothing is written after it, redirect files included.
+  Cancellation returns the partial result promptly; suspended preparation cannot resume a write.
+  These are cooperative limits, with the constraints described below.
+- *Permissions, where they happen.* The server decides whether a call runs, waits or is refused
+  (`decideTerminal` in [`server/agents.ts`](server/agents.ts)) and sends a grant with it
+  (`terminalGrant` in [`server/workdir.ts`](server/workdir.ts)); the terminal then enforces it on what
+  the shell *resolves*, never on the text of the line
+  ([`src/terminal/policy.ts`](src/terminal/policy.ts)): every command after expansion (so variables,
+  globs, `eval`, `source`, nested `msh`, functions and scripts are all seen as the commands they
+  become). Before preparation, dispatch or help, executable paths and aliases resolve to their
+  registered command identity and are authorized again; unknown executable handlers fail closed.
+  Checks also cover every redirect target, every script read, every directory a glob lists, `cd`, and, in
+  [`fs.ts`](src/terminal/fs.ts), every file written, moved, removed or `chmod`ed.
+  - Reads and writes stay inside both the work folder's terminal path and its authorized backing
+    repository/path. Foreign nested mounts and bind mounts outside that backing path are refused;
+    a work folder containing one currently fails closed for filesystem operations. A thread with no folder reads supported Seafile and `/tmp` text
+    and writes nothing; `/dev/null` and the byte devices are fine.
+  - A call writes only if its mode lets it: a line that only looks (a fixed allowlist, plus `msh -n
+    file`) runs in every mode, Plan too, with a read-only grant; **Edits allowed** runs any other
+    line that does not name `rm`/`rmdir`, a network command or `sudo`, writing in the work folder;
+    **Bypass** runs everything but a line naming a steering file; **Ask first/Auto** ask, and an
+    approved line may write in the folder.
+  - Deleting needs an approved (or Bypass) call whose text names `rm` or `rmdir`, and the network
+    needs one that names the network command: `msh x.sh` does not give `x.sh` the right to `rm` or
+    `curl`, running them directly does. `AGENTS.md`, `CLAUDE.md`, `.agents/` and `.claude/` can be
+    written only when the approved line names them ([`src/data/steering.ts`](src/data/steering.ts)),
+    even in Bypass; a name built from a variable is refused. Steering permission requires a fresh
+    explicit approval of this call; remembered command approvals never grant it. Both the visible
+    path and the resolved backing path are checked, so bind aliases cannot hide steering files.
+    `git` is a network command too, including when reached from scripts. `calc`, `units`
+    and `bc` remain usable for offline arithmetic and unit conversions. Their rate-cache misses
+    require network authority at every actual rate request; cached rates need no network. The
+    server uses the same calculator parser to ask before literal currency expressions (also when
+    rates might already be cached), and such approvals are not remembered by command name.
+    Dynamic expressions or stdin cannot obtain network authority from merely naming `calc`: run
+    the currency expression directly or use Bypass. Rate requests carry cancellation, never borrow
+    an unguarded in-flight request, and do not start fallbacks or cache late results after abort.
+  - A command with no entry in the policy table's `EFFECTS` does not run (apps, `sudo`, editors,
+    `watch`, `mount`, `kill`, `theme`, …; `find -exec/-delete/-fprint` and `fd -x`), and the check
+    script fails when a new command is neither listed nor on its list of ones an agent never runs.
+    A command refusal is `msh: …` on stderr with status 126 and says which rule. Archive commands
+    (`tar`, `unzip`), directory transfers/removal, and writes to browser storage are unavailable to
+    agents until their complete operation/descendant checks are supported. Seafile file reads,
+    writes, creation, mkdir and individual file removal remain available. `cp`, `mv` and `chmod`
+    currently work only on local `/tmp` files; `mv` also needs delete authority and refuses before
+    writing its destination without it. To avoid uninterruptible regex/query workloads, agents use
+    literal `grep` (`-F` for metacharacters). Recursive modes, `find`, `fd`, `tree`, `du`, `figlet`,
+    `pepper`, `changelog`, `releases`, `df`, `findmnt`, `lsblk` and rich `jq` are unavailable.
+    Browser-backed and generated site-file content reads are unavailable; use a Seafile work folder
+    or `/tmp`. Patterns are not treated as
+    file operands during preparation or authorization. Grep execution, preparation and policy
+    share one argument parser, including dash-prefixed patterns, letter clusters and `--`. Agent
+    grep patterns are limited to 4096 characters.
+- *Cancellation.* Each executor registers the call before claiming it, snapshots its thread/work
+  folder, and aborts on Stop, unmount, thread changes or `clientDone`. A late claim cannot start
+  execution. Preparation and mutation boundaries recheck cancellation and the budget; uploads
+  recheck after link lookup and receive the abort signal. Pending read requests can still settle,
+  but cannot start a later mutation. Every completed call aborts its call-owned signal, including
+  success, ordinary failure and early budget exhaustion, so concurrent sibling requests cannot
+  outlive it. Deadline timers and abort listeners are removed; cleanup preserves the captured
+  result and termination reason. Already submitted remote mutations cannot be rolled back.
+  Execution is cooperative on the browser thread, not a worker/process hard deadline: checks
+  bound known expensive formatting, expansion and pattern workloads, but cannot preempt arbitrary
+  synchronous JavaScript inside a command.
+- *Writing and checking a script*: the agent writes `potato-flight-check.sh` with `write_file`, checks
+  it with `msh -n potato-flight-check.sh` (parse only, so it never asks), runs `msh
+  potato-flight-check.sh`, reads the real stderr and exit code, fixes it and runs it again. Both
+  syntax-only file checks and execution report parser errors as canonical absolute
+  `filename:line:column: [expression]` diagnostics. With
+  *Edits allowed* that needs no one at the keyboard.
+
+**`help --json` and `terminal_capabilities`.** What the terminal can do, as data, for programs and
+agents: `help --json` in any terminal, or the `terminal_capabilities` tool (the overview in compact
+form; with `command` one command's usage, options and manual). It is built from the same registry
+`help`, `man` and Tab read ([`src/terminal/capabilities.ts`](src/terminal/capabilities.ts)): the
+human `help` listing uses the same groups (anything no group names goes under *More*). It reports
+the shell (`msh` and its version, builtins, syntax, redirects, expansions, options, what is not
+supported), every command and builtin with its group, usage and **only the options its usage line
+names** (`optionsComplete: false` for every usage-derived list, which can omit supported flags; nothing is borrowed
+from Linux), the mounts with their writability, the integrations (Seafile, the browser's files, the
+network, apps) and the session. In an agent's call it describes that call: `session.kind: "agent"`,
+the `limits` it runs under, its `permissions` (this call's grant), separate `sessionRights` describing
+available rights and approval requirements (a read-only capability query does not make Bypass read-only), where it may read and write (`filesystem.agent`),
+and per command whether it may run (`available`, `restriction`, `bounds`); in the user's terminal `limits` and
+`permissions` are `null`. Piped, or inside an agent call, the JSON is one compact line.
+`pnpm check:agents-terminal-exec` tests all of this (running, limits, isolation, script milestone,
+nested bypass attempts, capabilities, delayed-request cancellation and the shared executor);
+`check:agents-executor-lifecycle` mounts the Agents executor hook in React StrictMode and exercises
+Stop, unmount, thread changes and `clientDone` during pending claims and actual shell execution.
+`check:agents-permissions` covers the server's decisions and grants, including remembered steering
+command approval.
 
 `agents` ([`src/terminal/agents/`](src/terminal/agents)) is the Agents app as a coding-agent CLI.
 In a folder on Seafile, that folder becomes the thread's work folder:
 - File tools ([`server/workdir.ts`](server/workdir.ts)) let the agent read, write, edit, list,
   glob, grep, move and delete inside the folder, and it follows the folder's `AGENTS.md` or
   `CLAUDE.md`.
-- A `terminal` tool runs msh command lines in the user's own terminal.
+- A `terminal` tool runs msh command lines in a fresh msh in the work folder (see *The agents' terminal tool* above), and `terminal_capabilities` says what that terminal can do.
 - Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
   asking first, accepting edits, and plan mode (read only until a plan is approved).
 - `/threads <words>` searches earlier conversations across projects, including marked archives.
@@ -774,13 +1100,15 @@ descriptions and system prompt are untuned. Known limits:
   - Edits do not check whether the file changed since the agent read it.
   - Files over 2 MB, and binary files, cannot be read.
 - **Terminal tool.**
-  - It needs an attached `agents` session, so turns started in the app do not get it.
-  - Each command gets 60 s and returns at most 60k characters of output.
+  - It runs in a browser window that follows the thread (the Agents app or `agents`); with none
+    open, its calls fail with a message, and background tasks never get it.
+  - Each call gets 60 s by default (180 s at most) and returns at most 60k characters per stream.
   - Interactive programs are refused, and prompts (rm's y/N) are answered no.
+  - Reads are confined to the work folder too, so it cannot look at the rest of the OS.
   - "Don't ask again" for a command lasts until the server restarts.
   - Read-only detection is a fixed allowlist; any `$(…)` asks.
 - **A turn keeps running after `agents` closes.** Its terminal tool calls then fail until
-  `agents -c` reattaches.
+  a window follows the thread again (`agents -c`, or the Agents app).
 - **Skills.**
   - Install only from public GitHub repositories, and the app has no zip upload yet.
   - `allowed-tools` in the front matter is ignored.
@@ -1115,7 +1443,7 @@ keeps the dock and Spotlight's favourites pointing at it when the file moves. On
 MvL OS app instead has `Type=Application`, `X-MvL-App=calendar` and, optionally,
 `X-MvL-Props=path=~/Work;`. The desktop and Files show a launcher as itself (its name and icon,
 opened with a double-click), never as `GitHub.desktop`; *Show hidden files* in Files shows the
-file's own name, and its menu has *Edit the file in Zed*. Renaming one changes its `Name=` (and
+file's own name, and its menu has *Edit the file in Xed*. Renaming one changes its `Name=` (and
 drops its translations, `Name[nl]=`, so the new name shows in every language); the file keeps its
 name. The terminal shows them as the files they are: `ls ~/Desktop` lists `GitHub.desktop`, `cat`
 prints it and `open GitHub.desktop` opens what it points at. The format is read without a library
@@ -1640,10 +1968,10 @@ token Seafile hands out, encrypted, which shows up in Seafile's Devices as the s
 ([`server/seafile.ts`](server/seafile.ts)). Every library is under Seafile in Files' sidebar. The
 primary library (My Library unless you pick another) is home unless you switch that off: Places'
 Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
-Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
+Text, code and config open in Xed and save back with Ctrl+S; pictures, video, audio and PDFs open in
 the Viewer; `.ics` (also `.ical`, `.ifb`) and `.vcf` (`.vcard`) files open in Calendar and Contacts and
 bring up their import dialog (see Calendar and Contacts), from Files, the desktop, Spotlight, the
-terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Zed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
+terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Xed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
 again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
 headers, so it goes through the server; files themselves go straight between the browser and
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
@@ -1667,10 +1995,10 @@ across the mounts; before a command runs, the Seafile folders and files it names
 **Without Seafile**, signed in, `~` is kept in this browser ([`src/data/browserfs.ts`](src/data/browserfs.ts):
 one IndexedDB database per account, so another account on the same browser never sees it), laid
 over the site's own home so README.md, games/ and the wallpapers stay readable. The terminal,
-Files, Zed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
+Files, Xed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
 and write it, and copying or moving between it and Seafile carries the bytes over
 ([`src/data/fileOps.ts`](src/data/fileOps.ts)). Clearing the site's data deletes it, which is said
-wherever it shows: a strip in Files, *Browser only* in Zed's status bar, the terminal's welcome and
+wherever it shows: a strip in Files, *Browser only* in Xed's status bar, the terminal's welcome and
 `df`, Settings → Account (with a Delete). Once Seafile is home it is mounted on `/mnt/browser`
 instead, and MvL OS offers to copy it into Seafile folder for folder. Unpacking archives and
 OnlyOffice need the file in Seafile.
@@ -1719,7 +2047,7 @@ Files' toolbar has the sidebar button at its left end and the **preview pane** b
 end ([`src/apps/FilesPreview.tsx`](src/apps/FilesPreview.tsx)). The pane, on the right of the list,
 shows the selected file (the one last clicked, with several selected) with the same code the apps
 use: pictures as in Preview, video and audio through Player's addresses (with controls, muted and
-not playing by themselves), Markdown as Zed's preview renders it, code and text with the same
+not playing by themselves), Markdown as Xed's preview renders it, code and text with the same
 highlighter (the first 200 KB or 2,000 lines), a PDF's first page with pdf.js, and the top level of
 a ZIP (or of a tar in Seafile) as the Archive app reads it. Office documents are never opened there,
 since that would mean loading OnlyOffice in the pane: they, and files of any other kind, show their
@@ -2007,7 +2335,7 @@ which words were tried rather than invent a conversation.
 pnpm check:agents-threads   # History search, ownership, attachment reads, bounds, ranking and 20,000-message timing
 ```
 
-The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`, `check:agents-subagents`,
+The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-terminal-exec`, `check:agents-compact`, `check:agents-tasks`, `check:agents-subagents`,
 `check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
 
 **Tasks.** A task is an agent that runs in the background, once (now or at a time), on a
@@ -2227,6 +2555,7 @@ keeps the budget that message used); a restart marks working
 
 ```sh
 pnpm check:agents-subagents   # the /subagents command, then against a stand-in model: spawning, tools a subset, the stricter mode, agent messages, inherited addresses, cards in the parent, message_agent, results at a round boundary, continuations (merged, retried on 429), the caps, Stop, delete, rewind, a restart, closed chat routes, isolation
+pnpm check:agents-terminal-exec   # the agents' terminal tool: fresh shell per call, stdout/stderr/exit/duration, loops, huge output, cancel, the write-check-run-fix script, nested bypass attempts (redirects, eval, source, msh -c, variables, globs), confinement, delete/network/steering grants, help --json and terminal_capabilities against the registry, both windows
 ```
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
@@ -5976,3 +6305,57 @@ nobody else sees the panel), takes one command per request (no newlines, at most
 player names checked), allows 30 commands a minute per admin and logs each one with the admin's
 login to the server's console. Commands that are hard to undo (`stop`, `ban`, `op`,
 `whitelist off`, `kill @a` and the like) ask first.
+
+### Structured account data in msh
+
+`mvl notes`, `mvl calendar 2026-10-01 2026-11-01`, and `mvl tasks` print JSON
+objects with `notes`, `events` (and partial-provider `errors`), or `tasks` arrays.
+Pipe these to `jq-safe`, for example `mvl notes | jq-safe '.notes[] | .text'`. Calendar
+ranges are explicit UTC dates or ISO timestamps, end exclusive, at most 366 days.
+Notes come from authenticated server state, excluding trash and purged notes;
+unsynced browser-only edits are not included. Tasks are background agent task
+status (including active-run counts), not the Tasks app's to-do items. No command
+creates, edits, runs, or deletes anything. Invalid arguments fail before requests;
+network and authorization failures produce a nonzero status. Cancellation aborts
+the GET and suppresses responses arriving after cancellation.
+
+These commands use the existing account-bound API client and server authorization:
+`GET /api/state`, `GET /api/calendar/events`, and `GET /api/agents/tasks`. Only the
+notes portion of state and a limited task-status projection are printed. They are
+private network reads, **not pure commands**. `APP_DATA_POLICY` in
+`src/terminal/appData.ts` declares the deny-by-default agent integration contract.
+The authenticated server issues an explicit `appDataRead` resource list on each
+terminal and capability call. Notes and Calendar are granted only when the
+corresponding read tool is offered to that thread; switching a tool group off
+also removes its terminal access. Background-task status follows the existing
+account-bound task-list read permission. These reads work in Plan mode too.
+Resource grants authorize only the fixed read-only endpoints: they do not imply
+ordinary file-read permission or general network permission. A broad `network`
+grant alone cannot authorize `mvl`, and tool arguments cannot supply grants.
+Both resolved-command dispatch and the command adapter enforce resource access;
+existing server authentication and account checks apply to every request.
+
+Responses are limited to 65,536 bytes before JSON parsing, with bounded nodes,
+depth, allocation and elapsed work. Large account state may exceed this limit;
+no partial result is returned. Notes currently fetch `/api/state` before projecting
+notes, so unrelated state can also make that request exceed the limit. Calendar
+provider errors are returned alongside events. No account mutation is exposed.
+
+`pnpm check:app-data` covers projection, dates, literal markup, errors and
+cancellation. Combined agent tests cover resource grants, disabled groups,
+forged tool arguments, shared limits and actual UI/CLI execution lifecycles.
+
+
+Both `mvl` and `jq-safe` bypass filesystem preparation because none of their
+arguments are filenames. When combining with the security branch, keep its actor
+cancellation check before this early return and return no file operands for both.
+`mvl` still performs its own explicit resource check and authenticated GET; this
+preparation exception does not authorize either command in the agent policy.
+
+App-data reads are bounded before parsing: the authenticated API decoder streams
+at most 65,536 response bytes (including error bodies), cancels excess bodies,
+and checks cancellation during reads. Responses must fit the same depth, node,
+work, allocation, and serialized-value ceilings as `jq-safe`; projection and
+serialization are preflighted and share the agent budget. Processing yields for
+cancellation. Large account-state responses fail instead of returning partial
+notes; there is no pagination promise. Agent contexts without a budget fail.
