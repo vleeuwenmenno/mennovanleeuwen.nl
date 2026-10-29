@@ -1299,7 +1299,10 @@ class Shell {
       }
       this.checkAbort()
       io.out.flush?.()
-      const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty, raw: (t) => io.out.write(t) })) ?? '')
+      const line = (sink: Sink, text: string) => sink.write(text.endsWith('\n') ? text : `${text}\n`)
+      const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty,
+        print: text => line(io.out, text), stderr: text => line(io.err, text), raw: text => io.out.write(text),
+      })) ?? '')
       if (out) io.out.write(out.endsWith('\n') ? out : `${out}\n`)
       return 0
     } catch (err) {

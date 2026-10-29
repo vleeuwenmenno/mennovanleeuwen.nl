@@ -150,6 +150,7 @@ export async function execute(command: string, cwd: string, grant: Grant, limits
   if (outer.aborted) ctl.abort()
   const t0 = performance.now()
   const budget = new Budget(limits)
+  let giveUp: (() => void) | undefined
   try {
     const ctx = headless(cwd, grant, budget, ctl.signal)
     let run: ReturnType<typeof startAgent> | undefined
@@ -166,8 +167,9 @@ export async function execute(command: string, cwd: string, grant: Grant, limits
       return await run.done
     }
     const gaveUp = new Promise<null>((resolve) => {
-      if (ctl.signal.aborted) resolve(null)
-      else ctl.signal.addEventListener('abort', () => resolve(null), { once: true })
+      giveUp = () => resolve(null)
+      if (ctl.signal.aborted) giveUp()
+      else ctl.signal.addEventListener('abort', giveUp, { once: true })
     })
     const r = await Promise.race([task().catch((e) => {
       if (ctl.signal.aborted) return null
@@ -189,5 +191,9 @@ export async function execute(command: string, cwd: string, grant: Grant, limits
   } finally {
     clearTimeout(timer)
     outer.removeEventListener('abort', stop)
+    if (giveUp) ctl.signal.removeEventListener('abort', giveUp)
+    // The result above has already captured its reason. Release sibling requests on every
+    // exit, including successful completion and early Promise.all rejection/budget stops.
+    ctl.abort()
   }
 }

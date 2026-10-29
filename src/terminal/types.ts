@@ -41,8 +41,11 @@ export type Ctx = {
   /** Opens this terminal's settings sheet (not on the text console). */
   openSettings?: () => void
   setAccent: (name: string) => boolean
-  /** Writes a line to the screen right away (for commands that stream, like ping). */
+  /** Streams a stdout line through the shell (including pipes, redirects and budgets). */
   print: (text: string) => void
+  /** Streams a stderr line: warnings, progress and verbose diagnostics. The shell supplies
+   * this; direct command callers may omit it, in which case commands fall back to print. */
+  stderr?: (text: string) => void
   /** True when output goes to the screen rather than into a pipe or redirect. */
   tty: boolean
   /**

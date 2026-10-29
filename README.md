@@ -864,7 +864,10 @@ host shell is involved.
   most 180). The answer is JSON: `exit_code`, `stdout` and `stderr` apart, `duration_ms`, `truncated`
   (characters dropped from each stream) and `terminated` (`null`, or `timeout`, `cancelled`, `steps`,
   `output` or `memory`), plus the folder it ran in. A stopped run exits 124 (time), 130 (cancelled)
-  or 125 (another limit).
+  or 125 (another limit). Curl verbose output, warnings and file progress, and wget progress,
+  go to stderr; response bodies stay on stdout (or their requested file). Command output respects
+  `2>`, `2>&1`, pipes, per-stream truncation and the shared budget. Streaming status output from
+  ordinary commands remains stdout. The interactive terminal still displays both streams.
 - *Limits* ([`src/terminal/limits.ts`](src/terminal/limits.ts)), one budget shared by everything a
   call starts (pipeline stages, `$(…)`, subshells, sourced files, nested `msh`): 100,000 interpreter
   steps, the time, 60,000 characters kept per stream (more is dropped and counted), 4 MiB per
@@ -933,7 +936,10 @@ host shell is involved.
   folder, and aborts on Stop, unmount, thread changes or `clientDone`. A late claim cannot start
   execution. Preparation and mutation boundaries recheck cancellation and the budget; uploads
   recheck after link lookup and receive the abort signal. Pending read requests can still settle,
-  but cannot start a later mutation. Already submitted remote mutations cannot be rolled back.
+  but cannot start a later mutation. Every completed call aborts its call-owned signal, including
+  success, ordinary failure and early budget exhaustion, so concurrent sibling requests cannot
+  outlive it. Deadline timers and abort listeners are removed; cleanup preserves the captured
+  result and termination reason. Already submitted remote mutations cannot be rolled back.
   Execution is cooperative on the browser thread, not a worker/process hard deadline: checks
   bound known expensive formatting, expansion and pattern workloads, but cannot preempt arbitrary
   synchronous JavaScript inside a command.

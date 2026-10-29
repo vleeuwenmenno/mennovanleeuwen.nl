@@ -18,6 +18,7 @@
 //
 // Exits 1 on any failure.
 
+import { getEventListeners } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { createServer } from 'vite'
 
@@ -280,6 +281,95 @@ try {
     const r = await result("printf '00100000: 41\\n' | xxd -r", EDITS, { ...AGENT_LIMITS, maxBuffer: 1000, maxTotal: 10_000 })
     check(!oversizedArray && (r.terminated !== null || r.exit_code === 126), 'round4: reverse xxd refuses expansion before allocating sparse offset', JSON.stringify({ oversizedArray, r }))
   } finally { Array.prototype.push = originalPush }
+  // Round 5: a settled call owns and must release every concurrent request it started.
+  const round5Fetch = globalThis.fetch
+  try {
+    for (const mode of ['success', 'failure', 'budget', 'body-budget', 'stop', 'timeout'] as const) {
+      const outer = new AbortController()
+      const signals: AbortSignal[] = []
+      const pending: (() => void)[] = []
+      let disposed = false
+      let bodiesCancelled = 0
+      globalThis.fetch = async (input, init) => {
+        const signal = init!.signal as AbortSignal
+        signals.push(signal)
+        const type = new URL(String(input)).searchParams.get('type')
+        if (disposed) throw new Error('fixture disposed')
+        if (mode === 'success') return Response.json({ Status: 0, Answer: [] })
+        if (type === 'A' && (mode === 'budget' || mode === 'body-budget')) return Response.json({ Status: 0, Answer: [], unused: 'x'.repeat(20_000) })
+        if (type === 'A' && mode === 'failure') throw new Error('resolver unavailable')
+        if (mode === 'body-budget') return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{')) }, cancel() { bodiesCancelled++ } }))
+        return new Promise<Response>((_, reject) => {
+          const stop = () => { signal.removeEventListener('abort', stop); reject(new Error('request aborted')) }
+          pending.push(stop)
+          signal.addEventListener('abort', stop, { once: true })
+          if (signal.aborted) stop()
+        })
+      }
+      const stopTimer = mode === 'stop' ? setTimeout(() => outer.abort(), 10) : undefined
+      try {
+        const r = (await run('host example.com', { ...EDITS, network: true }, { ...(['budget', 'body-budget'].includes(mode) ? smallBounds : AGENT_LIMITS), timeoutMs: 100 }, outer.signal)).result!
+        const expected = ['budget', 'body-budget'].includes(mode) ? 'output' : mode === 'stop' ? 'cancelled' : mode === 'timeout' ? 'timeout' : null
+        check(r.terminated === expected && (mode !== 'failure' || r.exit_code !== 0), `round5: concurrent ${mode} preserves result reason`, JSON.stringify(r))
+        check(signals.length >= 3 && signals.every(s => s.aborted), `round5: concurrent ${mode} releases all call-owned request signals`)
+        check(getEventListeners(outer.signal, 'abort').length === 0 && signals.every(s => getEventListeners(s, 'abort').length === 0), `round5: concurrent ${mode} removes outer, race and request abort listeners`)
+        if (mode === 'body-budget') check(bodiesCancelled === 2, 'round5: early budget termination cancels pending sibling response readers', String(bodiesCancelled))
+        if (mode === 'budget') {
+          const snapshot = JSON.stringify(r)
+          await new Promise(resolve => setTimeout(resolve, 150))
+          check(signals.every(s => s.aborted) && JSON.stringify(r) === snapshot, 'round5: budget completion stays output after original deadline; no live sibling requests')
+        }
+      } finally {
+        clearTimeout(stopTimer)
+        disposed = true
+        for (const release of pending) release()
+        await new Promise(resolve => setTimeout(resolve, 0))
+      }
+    }
+    globalThis.fetch = async () => new Response('body', { headers: { 'content-type': 'text/plain', 'x-review': 'headers-present' } })
+    const network = { ...EDITS, network: true }
+    const verbose = await result('curl -v https://example.com/diagnostics', network)
+    check(verbose.exit_code === 0 && verbose.stdout === 'body' && verbose.stderr.includes('Trying example.com') && verbose.stderr.includes('x-review: headers-present'), 'round5: curl verbose diagnostics use stderr; body stays stdout', JSON.stringify(verbose))
+    const redirected = await result('curl -v https://example.com/diagnostics 2>/tmp/curl-diagnostics', network)
+    check(redirected.stdout === 'body' && redirected.stderr === '' && text('curl-diagnostics')?.includes('x-review: headers-present'), 'round5: command diagnostics honor 2> file', JSON.stringify(redirected))
+    const merged = await result('curl -v https://example.com/diagnostics 2>&1 | cat', network)
+    check(merged.stderr === '' && merged.stdout.includes('Trying example.com') && merged.stdout.includes('headers-present') && merged.stdout.endsWith('body'), 'round5: command diagnostics honor 2>&1 and pipeline', JSON.stringify(merged))
+    for (const flag of ['--user-agent', '-A']) {
+      const warning = await result(`curl ${flag} fixture https://example.com/diagnostics`, network)
+      check(warning.stdout === 'body' && warning.stderr.includes('User-Agent'), `round5: browser curl warning survives on stderr (${flag})`, JSON.stringify(warning))
+    }
+    const progress = await result('wget https://example.com/round5-download', network)
+    check(progress.stdout === '' && progress.stderr.includes('Resolving example.com') && progress.stderr.includes('saved [4/4]') && text('round5-download') === 'body', 'round5: wget initial and completion progress use stderr', JSON.stringify(progress))
+    const download = await result('curl -o /tmp/round5-curl-download https://example.com/diagnostics', network)
+    check(download.stdout === '' && download.stderr.includes('saved to /tmp/round5-curl-download') && text('round5-curl-download') === 'body', 'round5: curl file progress uses stderr', JSON.stringify(download))
+    const clipped = await result('curl -v https://example.com/diagnostics', network, { ...AGENT_LIMITS, maxOutput: 32 })
+    check(clipped.stdout === 'body' && clipped.stderr.length === 32 && clipped.truncated.stderr > 0 && clipped.terminated === null, 'round5: diagnostics respect per-stream capture/truncation', JSON.stringify(clipped))
+    let diagnosticFetches = 0
+    globalThis.fetch = async () => { diagnosticFetches++; return new Response(null, { headers: { 'x-review': 'h'.repeat(500) } }) }
+    const bounded = await result('curl -v https://e.co; touch /tmp/round5-after', network, { ...AGENT_LIMITS, maxBuffer: 10_000, maxTotal: 3000 })
+    check(diagnosticFetches === 1 && bounded.stderr.includes('Trying e.co') && bounded.terminated === 'output' && !exists('round5-after'), 'round5: diagnostic writes share total budget and stop later commands', JSON.stringify({ diagnosticFetches, bounded }))
+    globalThis.fetch = async () => new Response('body', { headers: { 'x-review': 'headers-present' } })
+    const shown: string[] = []
+    const terminal = { cwd: '/tmp', setCwd() {}, env: { HOME, USER: 'fixture' }, history: [], windows: [], openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent: () => true, print: (t: string) => { shown.push(strip(t)) }, live() {}, size: { cols: 80, rows: 24 }, signal: new AbortController().signal, onKey() {} }
+    await runLine('curl -v https://example.com/diagnostics', terminal)
+    check(shown.join('\n').includes('Trying example.com') && shown.join('\n').includes('headers-present') && shown.at(-1) === 'body', 'round5: interactive terminal still shows verbose diagnostics and body', JSON.stringify(shown))
+    shown.length = 0
+    await runLine('curl -v https://example.com/diagnostics 2>/tmp/interactive-diagnostics', terminal)
+    check(shown.join('\n') === 'body' && text('interactive-diagnostics')?.includes('Trying example.com'), 'round5: interactive stderr redirect preserves body on screen', JSON.stringify(shown))
+    globalThis.fetch = async () => new Response('binary', { headers: { 'content-type': 'application/octet-stream' } })
+    const binary = await result('curl https://example.com/binary', network)
+    check(binary.stdout === '' && binary.stderr.includes('Warning: Binary output'), 'round5: binary-output warning uses stderr', JSON.stringify(binary))
+    globalThis.fetch = async () => new Response('no', { status: 500 })
+    for (const command of ['curl -v -f https://example.com/error', 'wget https://example.com/error']) {
+      const r = await result(command, network)
+      check(r.exit_code !== 0 && r.stdout === '' && r.stderr.includes('500'), `round5: ${command} error and diagnostics survive`, JSON.stringify(r))
+    }
+    globalThis.fetch = async () => { throw new Error('fixture offline') }
+    const offline = await result('curl -v https://example.com/offline 2>&1', network)
+    check(offline.exit_code !== 0 && offline.stderr === '' && offline.stdout.includes('Trying example.com') && offline.stdout.includes('fixture offline'), 'round5: redirected failure keeps earlier diagnostics and error', JSON.stringify(offline))
+    const ordinary = await result('touch /tmp/round5-mode; chmod -v +x /tmp/round5-mode /tmp/round5-missing')
+    check(ordinary.stdout.includes('mode of') && !ordinary.stdout.includes('cannot access') && ordinary.stderr.includes('cannot access'), 'round5: ordinary streaming print remains stdout when command also fails', JSON.stringify(ordinary))
+  } finally { globalThis.fetch = round5Fetch }
   // --- running ------------------------------------------------------------------------------------
 
   const out = await result('echo out; echo err >&2')

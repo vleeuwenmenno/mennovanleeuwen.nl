@@ -78,6 +78,7 @@ function protocolOf(url: string) {
 const isBinary = (type: string) => /^(image|audio|video|font)\/|application\/(octet-stream|pdf|zip|gzip|x-tar|wasm)/.test(type) && !/svg/.test(type)
 
 async function curl(ctx: Ctx): Promise<string> {
+  const diagnostic = ctx.stderr ?? ctx.print
   const args = ctx.args
   let method: string | null = null
   const headers: [string, string][] = []
@@ -118,7 +119,7 @@ async function curl(ctx: Ctx): Promise<string> {
     else if (a === '--max-time') maxTime = Number(next()) || 30
     else if (a === '--user-agent') {
       next()
-      if (!silent) ctx.print(c('muted', '* Browsers do not let pages set the User-Agent; sending the default one.'))
+      if (!silent) diagnostic(c('muted', '* Browsers do not let pages set the User-Agent; sending the default one.'))
     } else if (a === '--help' || a === '-h') return curlHelp()
     else if (/^-[a-zA-Z]+$/.test(a)) {
       for (const ch of a.slice(1)) {
@@ -137,6 +138,7 @@ async function curl(ctx: Ctx): Promise<string> {
           else if (ch === 'd') data = v
           else if (ch === 'o') output = v
           else if (ch === 'm') maxTime = Number(v) || 30
+          else if (ch === 'A' && !silent) diagnostic(c('muted', '* Browsers do not let pages set the User-Agent; sending the default one.'))
         } else throw new CmdError(`curl: option -${ch}: is unknown\ncurl: try 'curl --help' for more information`)
       }
     } else if (a.startsWith('-')) throw new CmdError(`curl: option ${a}: is unknown\ncurl: try 'curl --help' for more information`)
@@ -149,7 +151,7 @@ async function curl(ctx: Ctx): Promise<string> {
   const verb = method ?? (head ? 'HEAD' : data !== null ? 'POST' : 'GET')
   if (data !== null && !headers.some(([k]) => k.toLowerCase() === 'content-type')) headers.push(['Content-Type', 'application/x-www-form-urlencoded'])
   if (verbose) {
-    ctx.print(c('muted', [`*   Trying ${url.hostname}:${url.port || (url.protocol === 'https:' ? 443 : 80)}...`, `> ${verb} ${url.pathname}${url.search} HTTP/2`, `> Host: ${url.host}`, ...headers.map(([k, v]) => `> ${k}: ${v}`), '>'].join('\n')))
+    diagnostic(c('muted', [`*   Trying ${url.hostname}:${url.port || (url.protocol === 'https:' ? 443 : 80)}...`, `> ${verb} ${url.pathname}${url.search} HTTP/2`, `> Host: ${url.host}`, ...headers.map(([k, v]) => `> ${k}: ${v}`), '>'].join('\n')))
   }
 
   const timeout = AbortSignal.timeout(maxTime * 1000)
@@ -178,8 +180,8 @@ async function curl(ctx: Ctx): Promise<string> {
       reserve(ctx, (k.length + v.length + 3) * 4, headerBlock.length * 4)
       headerBlock += `\n${k}: ${v}`
     }
-    if (verbose) ctx.print(c('muted', `< ${headerBlock.replace(/\n/g, '\n< ')}\n<\n* (a browser only shows the headers a site exposes to other sites)`))
-    if (res.redirected && verbose) ctx.print(c('muted', `* Followed redirect to ${res.url}`))
+    if (verbose) diagnostic(c('muted', `< ${headerBlock.replace(/\n/g, '\n< ')}\n<\n* (a browser only shows the headers a site exposes to other sites)`))
+    if (res.redirected && verbose) diagnostic(c('muted', `* Followed redirect to ${res.url}`))
     if ((fail && res.status >= 400) || head || verb === 'HEAD') {
       if (fail && res.status >= 400) throw new CmdError(silent && !showErrors ? '' : `curl: (22) The requested URL returned error: ${res.status}`, true)
       return headerBlock + '\n'
@@ -191,10 +193,12 @@ async function curl(ctx: Ctx): Promise<string> {
       const body = await downloadText(res, ctx, signal)
       checkDownload(ctx, signal)
       writeTmp(ctx.cwd, file.includes('/') ? file : `/tmp/${file}`, body, false, actorOf(ctx), 'curl')
-      return silent ? '' : c('muted', `  % Total    % Received  Xferd\n100 ${human(body.length).padStart(6)}  100 ${human(body.length).padStart(6)}   saved to ${file.includes('/') ? file : `/tmp/${file}`}`)
+      if (!silent) diagnostic(c('muted', `  % Total    % Received  Xferd\n100 ${human(body.length).padStart(6)}  100 ${human(body.length).padStart(6)}   saved to ${file.includes('/') ? file : `/tmp/${file}`}`))
+      return ''
     }
     if (isBinary(type) && file !== '-') {
-      return `Warning: Binary output can mess up your terminal. Use "--output -" to tell curl to output it to your terminal anyway, or consider "--output <FILE>" to save to a file.`
+      diagnostic(`Warning: Binary output can mess up your terminal. Use "--output -" to tell curl to output it to your terminal anyway, or consider "--output <FILE>" to save to a file.`)
+      return ''
     }
     const body = await downloadText(res, ctx, signal)
     textWork(ctx, body.length)
@@ -235,13 +239,14 @@ function curlHelp() {
 }
 
 async function wget(ctx: Ctx): Promise<string> {
+  const diagnostic = ctx.stderr ?? ctx.print
   const quiet = ctx.args.includes('-q')
   const toStdout = ctx.args.includes('-O-') || ctx.args.join(' ').includes('-O -')
   const raw = ctx.args.filter((a) => !a.startsWith('-') && a !== '-').pop()
   if (!raw) throw new CmdError("wget: missing URL\nUsage: wget [OPTION]... [URL]...")
   const url = targetUrl(raw, 'wget')
   const when = new Date().toISOString().replace('T', ' ').slice(0, 19)
-  if (!quiet && !toStdout) ctx.print(`--${when}--  ${url.href}\nResolving ${url.hostname}... done.\nConnecting to ${url.hostname}|${url.hostname}|:${url.port || 443}... connected.\nHTTP request sent, awaiting response... `)
+  if (!quiet && !toStdout) diagnostic(`--${when}--  ${url.href}\nResolving ${url.hostname}... done.\nConnecting to ${url.hostname}|${url.hostname}|:${url.port || 443}... connected.\nHTTP request sent, awaiting response... `)
   let res: Response
   try {
     checkDownload(ctx)
@@ -261,7 +266,8 @@ async function wget(ctx: Ctx): Promise<string> {
     checkDownload(ctx)
     writeTmp(ctx.cwd, `/tmp/${name}`, body, false, actorOf(ctx), 'wget')
     if (quiet) return ''
-    return `${res.status} ${STATUS_TEXT[res.status] ?? ''}\nLength: ${body.length} (${human(body.length)}) [${res.headers.get('content-type') ?? 'text/plain'}]\nSaving to: ‘/tmp/${name}’\n\n/tmp/${name}       100%[===================>]  ${human(body.length).padStart(6)}  --.-KB/s    in 0s\n\n${when} - ‘/tmp/${name}’ saved [${body.length}/${body.length}]`
+    diagnostic(`${res.status} ${STATUS_TEXT[res.status] ?? ''}\nLength: ${body.length} (${human(body.length)}) [${res.headers.get('content-type') ?? 'text/plain'}]\nSaving to: ‘/tmp/${name}’\n\n/tmp/${name}       100%[===================>]  ${human(body.length).padStart(6)}  --.-KB/s    in 0s\n\n${when} - ‘/tmp/${name}’ saved [${body.length}/${body.length}]`)
+    return ''
   } finally {
     void res.body?.cancel().catch(() => {})
   }
