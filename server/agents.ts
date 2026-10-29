@@ -4776,8 +4776,13 @@ export async function taskModel(user: User, model: string | null): Promise<strin
   const v = (readState(user).agents?.value ?? {}) as { taskModel?: unknown }
   return typeof v.taskModel === 'string' && /^[\w.:/-]{1,80}$/.test(v.taskModel) ? v.taskModel : defaultModel('quick', user)
 }
-/** Throws (409) when the account has no way to run that model. */
-export const requireTaskKey = (user: User, model: string) => void requireKey(user, model)
+/** Throws (409) when the account has no way to run that model: its provider is not set up. */
+export function requireTaskKey(user: User, model: string) {
+  const provider = providerOf(model)
+  if (provider === 'ollama') return void requireKey(user, model)
+  if (chatProviderReady(user, provider)) return
+  throw new HttpError(409, provider === 'chatgpt' ? 'Sign in with ChatGPT in Settings → Agents → Images first, or pick an Ollama model' : 'Add an OpenAI API key in Settings → Agents → Images first, or pick an Ollama model')
+}
 
 /**
  * A task's report in a chat thread: appended to one of the user's threads while it is at rest
@@ -4988,7 +4993,7 @@ function checkChildRoom(user: User, parent: string) {
 
 /** A model the account can run (its provider's key is there) and, when the list answers, one of its models. */
 async function checkModel(user: User, model: string) {
-  requireKey(user, model)
+  requireTaskKey(user, model)
   const list = await allModels(user).catch(() => [] as ModelInfo[])
   if (list.length && !list.some((m) => m.name === model)) throw new HttpError(400, `${model} is not one of your models. Some that are: ${list.slice(0, 8).map((m) => m.name).join(', ')}`)
 }

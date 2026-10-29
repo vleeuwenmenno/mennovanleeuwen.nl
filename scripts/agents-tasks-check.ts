@@ -27,12 +27,13 @@ import { join } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Server, check, finish, sleep } from './empires-harness.ts'
 import { cleanSchedule, fromWall, nextCron, parseCron, shortestGap, upcoming, MIN_INTERVAL_MS } from '../src/data/agentTaskSchedule.ts'
-import { askArgLines, CALL_VERDICTS, defaultPolicy, normalizePolicy, policySummary, scopeResult, TASK_TOOLS, taskDecide, toolVerdict, widens, type TaskPolicy } from '../src/data/agentTaskPolicy.ts'
+import { askArgLines, CALL_VERDICTS, defaultPolicy, normalizePolicy, policySummary, samePolicy, scopeResult, TASK_TOOLS, taskDecide, toolVerdict, widens, type TaskPolicy } from '../src/data/agentTaskPolicy.ts'
 import { cleanMailTrigger, describeMailTrigger, fromMatches, mailMatches, neverTrigger, promptText, type ArrivedMail, type MailTrigger } from '../src/data/agentTaskMail.ts'
 import { ME, startMockJmap } from './mail-mock.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 const MODEL = 'tasks-test'
+const OTHER_MODEL = 'tasks-other'
 // One key for this process's database and the server's, so a token sealed here opens there.
 process.env.SESSION_SECRET ||= randomBytes(32).toString('hex')
 // A scratch database for this process, set before anything opens one (server/db.ts reads DATA_DIR once).
@@ -96,6 +97,13 @@ const iso = (t: number | null) => (t === null ? 'null' : new Date(t).toISOString
   check('calendar changes outside the listed calendars are blocked', taskDecide({ ...open, calendars: ['Family'] }, { name: 'calendar_create_event' }, { ...ctx, scope: { calendars: [{ id: 'g:1', name: 'Work' }] } }).verdict === 'block')
   check('a dry run asks before every change', taskDecide(open, { name: 'seafile_write', arguments: { library: 'Docs', path: '/a.md' } }, { ...ctx, dryRun: true }).verdict === 'ask' && taskDecide(open, { name: 'seafile_read', arguments: { library: 'Docs', path: '/a.md' } }, { ...ctx, dryRun: true }).verdict === 'allow')
   check('widening is noticed', widens(defaultPolicy(), { ...defaultPolicy(), sites: ['a.example'] }) && widens(defaultPolicy(), { ...defaultPolicy(), tools: { remember: 'ask' } }) && !widens(open, defaultPolicy()))
+  const trusted: TaskPolicy = { ...defaultPolicy(), sites: ['*'], trustedSites: ['docs.example.org'] }
+  check('trusted sites: an address the agent built is read there even while it holds private data; elsewhere it asks', taskDecide(trusted, { name: 'web_fetch', arguments: { url: 'https://docs.example.org/x?q=1' } }, { ...ctx, holdsPrivate: true }).verdict === 'allow' && taskDecide(trusted, { name: 'web_fetch', arguments: { url: 'https://other.example.org/x?q=1' } }, { ...ctx, holdsPrivate: true }).verdict === 'ask')
+  check('a new trusted site widens a policy', widens(defaultPolicy(), { ...defaultPolicy(), trustedSites: ['a.example'] }))
+  check('trusted sites are kept up to the allowed-sites maximum, not 100', normalizePolicy({ trustedSites: Array.from({ length: 300 }, (_, i) => `s${i}.example`) }).trustedSites.length === 300)
+  const files: TaskPolicy = { ...defaultPolicy(), groups: { files: 'allow' } }
+  check('work folder: writes to the files that steer the agent never go beyond Ask', taskDecide(files, { name: 'write_file', arguments: { path: 'AGENTS.md', content: 'x' } }, ctx).verdict === 'ask' && taskDecide(files, { name: 'move_path', arguments: { from: 'a.md', to: '.claude/x.md' } }, ctx).verdict === 'ask' && taskDecide(files, { name: 'write_file', arguments: { path: 'notes.md', content: 'x' } }, ctx).verdict === 'allow')
+  check('the work folder tools are there for tasks now (with a work folder), not marked unavailable', ['read_file', 'write_file', 'grep'].every((n) => !TASK_TOOLS[n].unavailable) && toolVerdict(defaultPolicy(), 'read_file') === 'block')
   check('an edited policy is cleaned: unknown tools dropped, caps still hold', (() => { const p = normalizePolicy({ tools: { mail_send: 'allow', nonsense: 'allow' }, groups: { web: 'allow' } }); return !('nonsense' in p.tools) && toolVerdict(p, 'mail_send') === 'ask' })())
   const s = policySummary({ ...defaultPolicy(), groups: { web: 'allow', seafile_write: 'allow' } })
   check('the summary warns about untrusted input with writes', s.warnings.some((w) => w.includes('talk it into')))
@@ -186,7 +194,7 @@ const json = (res: ServerResponse, body: unknown) => res.writeHead(200, { 'Conte
 const ollama = createServer(async (req, res) => {
   let raw = ''
   for await (const chunk of req) raw += chunk
-  if (req.url === '/api/tags') return void json(res, { models: [{ name: MODEL }] })
+  if (req.url === '/api/tags') return void json(res, { models: [{ name: MODEL }, { name: OTHER_MODEL }] })
   if (req.url === '/api/show') return void json(res, { capabilities: ['completion', 'tools'], model_info: { 'x.context_length': 131072 } })
   if (req.url === '/api/web_fetch') return void (webFetches++, json(res, { title: 'A page', content: 'Page text', links: [] }))
   if (req.url !== '/api/chat') return void res.writeHead(404).end()
@@ -194,7 +202,8 @@ const ollama = createServer(async (req, res) => {
   if (body.stream === false) return void json(res, { message: { role: 'assistant', content: '{"title":"Tasks check"}' }, done: true })
   chats.push(body)
   const msgs = body.messages as J[]
-  const first = msgs.find((m) => m.role === 'user')?.content ?? ''
+  // A run that continues a thread starts with that thread's context: the instruction comes after it.
+  const first = msgs.find((m) => m.role === 'user' && /^SCENARIO /.test(String(m.content)))?.content ?? msgs.find((m) => m.role === 'user')?.content ?? ''
   let step: Step
   if (first.trim() === 'SCENARIO read-trigger') {
     // Reads the first mail that started the run (its id from the prompt), then its whole conversation (not a triggering message id).
@@ -206,6 +215,8 @@ const ollama = createServer(async (req, res) => {
     const steps = SCENARIOS[first.slice(9).trim()] ?? [{ content: 'Unknown scenario' }]
     const round = msgs.filter((m) => m.role === 'assistant').length
     step = steps[Math.min(round, steps.length - 1)]
+  } else if (msgs.some((m) => m.role === 'user' && String(m.content).startsWith('SLOWCHAT'))) {
+    step = { delay: 2500, content: 'slow chat done' }
   } else {
     // A chat turn: "CHAT <call json>" runs that call, then answers.
     const at = msgs.findLastIndex((m) => m.role === 'user' && String(m.content).startsWith('CHAT '))
@@ -449,6 +460,117 @@ try {
     await until('the report is posted', () => !!db.prepare('SELECT 1 FROM agent_messages WHERE thread_id = ?').get(thread))
     const roles = (db.prepare('SELECT role FROM agent_messages WHERE thread_id = ?').all(thread) as J[]).map((m) => m.role)
     check('a report goes into a thread as a task report, never as an assistant message', roles.length === 1 && roles[0] === 'report')
+  }
+  {
+    // A: a task made in a thread starts from the thread's tools: a snapshot, decided as Ask first would.
+    const agents = await import('../server/agents.ts')
+    const mk = async (body: J) => (await agents.createThread(alice, { model: MODEL, ...body })).id
+    db.prepare('INSERT OR IGNORE INTO agent_domains (user_id, host, created_at) VALUES (1, ?, ?)').run('granted.example.org', fake)
+    const bypass = await mk({ permission: 'bypass', tools: ['notes', 'calendar', 'gpt_images'] })
+    const t = agents.threadTaskTools(alice, bypass)
+    const v = (n: string) => toolVerdict(t.policy, n)
+    check('A: what the thread runs without asking is Allow, what it asks about is Ask, what it has off is blocked', v('search_notes') === 'allow' && v('update_note') === 'ask' && v('calendar_list_events') === 'allow' && v('calendar_create_event') === 'ask' && v('mail_search') === 'block' && v('seafile_read') === 'block' && v('search_code') === 'block')
+    check('A: derived verdicts never Bypass (a Bypass thread\'s changes still ask)', v('update_note') === 'ask' && v('delete_note') === 'ask' && v('create_note') === 'allow')
+    const modes = await Promise.all(['default', 'auto', 'acceptEdits', 'plan'].map((p) => mk({ permission: p, tools: ['notes', 'calendar', 'gpt_images'] })))
+    check('A: Auto, Edits allowed and Plan threads derive what Ask first would', modes.every((id) => samePolicy(agents.threadTaskTools(alice, id).policy, t.policy)))
+    check('A: pictures that cost ask (gpt-image), the icon list runs', v('gpt_image') === 'ask' && v('list_icons') === 'allow')
+    check('A: web and skills come along; any site, and the sites allowed for good are trusted', v('web_search') === 'allow' && v('use_skill') === 'allow' && t.policy.sites.includes('*') && t.policy.trustedSites.includes('granted.example.org'))
+    db.prepare('INSERT OR REPLACE INTO agent_mail_reads (user_id, always, updated_at) VALUES (1, 1, ?)').run(fake)
+    const mailing = await mk({ tools: ['mail'] })
+    const always = agents.threadTaskTools(alice, mailing)
+    db.prepare('DELETE FROM agent_mail_reads WHERE user_id = 1').run()
+    const asking = agents.threadTaskTools(alice, mailing)
+    check('A: mail reads allowed always come along; otherwise they ask; sends ask either way', toolVerdict(always.policy, 'mail_read') === 'allow' && toolVerdict(asking.policy, 'mail_read') === 'ask' && toolVerdict(always.policy, 'mail_send') === 'ask' && toolVerdict(always.policy, 'mail_draft') === 'ask')
+    const folder = await mk({ tools: ['files', 'images'], workdir: { repo: randomUUID(), path: '/proj', label: 'Docs/proj' } })
+    const ft = agents.threadTaskTools(alice, folder)
+    check('A: the work folder comes along: reads Allow, writes and deletes Ask', ft.workdir?.label === 'Docs/proj' && toolVerdict(ft.policy, 'read_file') === 'allow' && toolVerdict(ft.policy, 'grep') === 'allow' && toolVerdict(ft.policy, 'write_file') === 'ask' && toolVerdict(ft.policy, 'delete_path') === 'ask')
+    check('A: what never runs in the background is named (terminal, image generation)', ft.notCarried.includes('the terminal') && ft.notCarried.includes('image generation') && toolVerdict(ft.policy, 'terminal') === 'block' && toolVerdict(ft.policy, 'generate_image') === 'block')
+    const snap = tasks.createTask(alice, spec('report-false', { title: 'snapshot', schedule: { kind: 'daily', time: '09:00' }, policy: t.policy }), bypass)
+    await agents.updateThread(alice, bypass, { tools: [] })
+    check('A: a snapshot, not live: switching the thread\'s tools off later leaves the task as it was', samePolicy(tasks.getTask(alice, snap.id).policy, t.policy) && !samePolicy(agents.threadTaskTools(alice, bypass).policy, t.policy))
+    tasks.updateTask(alice, snap.id, { status: 'paused' })
+
+    // The agent's create_task in a thread: the thread's tools, its model, continuing the thread.
+    const origin = await mk({ tools: ['notes'] })
+    db.prepare("INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, 'user', 'We talked about the Utrecht flat', ?)").run(origin, fake)
+    db.prepare("INSERT INTO agent_messages (thread_id, role, content, created_at) VALUES (?, 'assistant', 'Noted the flat details', ?)").run(origin, fake)
+    const made = await tasks.prepareTaskCall(alice, origin, 'create_task', { title: 'From the agent', instruction: 'SCENARIO report-true', schedule: { kind: 'daily', time: '09:00' } }, 'Europe/Amsterdam')
+    const mspec = made.summary.spec as J
+    check('A/C: create_task in a thread takes its tools, its model, and continues it by default', samePolicy(mspec.policy, agents.threadTaskTools(alice, origin).policy) && mspec.model === MODEL && mspec.report.thread === 'origin' && mspec.report.threadId === origin)
+    check('A: the card says the tools are the same as this thread\'s', made.summary.rows.some(([k, x]) => k === 'Tools' && /^Same as this thread/.test(x)))
+    const wider = await tasks.prepareTaskCall(alice, origin, 'create_task', { title: 'Wider', instruction: 'x', schedule: { kind: 'daily', time: '09:00' }, allow: ['mail'] }, 'Europe/Amsterdam')
+    check('A: asked for more than the thread has, the card says it is not the same', wider.summary.rows.some(([k, x]) => k === 'Tools' && /Not the same/.test(x)))
+
+    // C: a model of its own, checked; a one-off on another model.
+    let noKey = ''
+    try { tasks.createTask(alice, spec('report-false', { title: 'no key', model: 'chatgpt/gpt-9' })) } catch (e) { noKey = (e as Error).message }
+    check('C: a model whose provider is not set up is refused', /ChatGPT/.test(noKey))
+    let notListed = ''
+    try { await tasks.checkSpecModel(alice, { model: 'no-such-model' }) } catch (e) { notListed = (e as Error).message }
+    check('C: a model that is not one of the account\'s is refused (when the list answers)', /not one of your models/.test(notListed))
+    let listed = true
+    try { await tasks.checkSpecModel(alice, { model: OTHER_MODEL }) } catch { listed = false }
+    check('C: another of the account\'s models is taken', listed)
+    const mt = tasks.createTask(alice, spec('report-false', { title: 'Model task', schedule: { kind: 'daily', time: '09:00' } }), origin)
+    const upd = await tasks.prepareTaskCall(alice, origin, 'update_task', { task: mt.id, model: OTHER_MODEL }, 'Europe/Amsterdam')
+    check('C: update_task takes a model, and the card shows "A → B"', (upd.summary.spec as J).model === OTHER_MODEL && upd.summary.rows.some(([k, x]) => k === 'Model' && x === `${MODEL} → ${OTHER_MODEL}`))
+    await upd.run()
+    check('C: saved', tasks.getTask(alice, mt.id).model === OTHER_MODEL)
+    const once = await tasks.prepareTaskCall(alice, origin, 'run_task_now', { task: mt.id, model: MODEL }, 'Europe/Amsterdam')
+    check('C: run_task_now asks with the model for this once', once.summary.rows.some(([k, x]) => k === 'Model' && x.startsWith(`${MODEL}, this once`)))
+    const before = chats.length
+    const started = JSON.parse(await once.run())
+    await tasks.tick()
+    await until('the one-off run ends', () => OVER.includes(runOf(started.started.run).status))
+    check('C: the one-off run uses that model; the task keeps its own', runOf(started.started.run).model === MODEL && chats.slice(before).some((c) => c.model === MODEL && String(c.messages?.[0]?.content ?? '').includes('called "Model task"')) && tasks.getTask(alice, mt.id).model === OTHER_MODEL)
+    const r2 = tasks.runNow(alice, mt.id)
+    await tasks.tick()
+    await until('the next run ends', () => OVER.includes(runOf(r2.id).status))
+    check('C: a run without an override runs on the task\'s model', runOf(r2.id).model === null && chats.some((c) => c.model === OTHER_MODEL && String(c.messages?.[0]?.content ?? '').includes('called "Model task"')))
+    const resync = tasks.createTask(alice, spec('report-false', { title: 'Resync', schedule: { kind: 'daily', time: '09:00' } }), origin)
+    const rs = await tasks.prepareTaskCall(alice, origin, 'update_task', { task: resync.id, use_thread_tools: true }, 'Europe/Amsterdam')
+    check("A: update_task can take the thread's tools again, and says when that widens", samePolicy((rs.summary.spec as J).policy, agents.threadTaskTools(alice, origin).policy) && rs.summary.rows.some(([k]) => k === 'Widens'))
+    for (const id of [mt.id, resync.id]) tasks.updateTask(alice, id, { status: 'paused' })
+
+    // B': runs that continue their thread: seeded with it, landing there as one block; quiet runs on one line.
+    const cont = (scenario: string, extra: J = {}) => spec(scenario, { report: { thread: 'origin', threadId: origin, notify: false, email: 'off', when: 'condition' }, ...extra })
+    const { task: ct, run: cr } = await oneRun(alice, cont('report-true', { title: 'Continues' }))
+    const seed = db.prepare('SELECT role, compact FROM agent_messages WHERE thread_id = ? ORDER BY id LIMIT 1').get(cr.thread_id) as J
+    check("B': a run that continues its thread starts from it (seeded, as data)", seed.role === 'compact' && JSON.parse(seed.compact).seed === origin && chats.some((c) => String(c.messages?.[0]?.content ?? '').includes('called "Continues"') && c.messages.some((m: J) => /<thread_so_far>[\s\S]*Utrecht flat/.test(m.content))))
+    check("B': it runs in its own hidden thread, never as the chat thread", cr.origin_thread === origin && cr.thread_id !== origin && cr.number === 1)
+    await until('it lands in the thread', () => !!runOf(cr.id).origin_message)
+    const block = db.prepare('SELECT * FROM agent_messages WHERE id = ?').get(runOf(cr.id).origin_message) as J
+    const meta = JSON.parse(block.meta ?? '{}')
+    check("B': at rest, the finished run lands there as one block (a task report with its header)", block.thread_id === origin && block.role === 'report' && meta.kind === 'taskRun' && meta.run === cr.id && meta.number === 1 && /Task “Continues”, run #1/.test(block.content) && /There is news\./.test(block.content))
+    check("B': the run history says where it went", JSON.parse(runOf(cr.id).delivered).includes('the thread it continues'))
+    check("B': the chat thread is never set running by a task", !agents.getThread(alice, origin).thread.running)
+    void ct
+    const quiet = tasks.createTask(alice, cont('report-false', { title: 'Quiet one', schedule: { kind: 'daily', time: '09:00' } }), origin)
+    for (let i = 0; i < 2; i++) {
+      db.prepare('UPDATE agent_tasks SET next_run_at = ? WHERE id = ?').run(fake, quiet.id)
+      await tasks.tick()
+      await until('a quiet run ends', () => runsOf(quiet.id).length === i + 1 && OVER.includes(runsOf(quiet.id)[i].status) && !!runsOf(quiet.id)[i].origin_message)
+    }
+    const lines = (db.prepare('SELECT * FROM agent_messages WHERE thread_id = ? AND meta LIKE ?').all(origin, '%taskQuiet%') as J[]).filter((l) => JSON.parse(l.meta).task === quiet.id)
+    const last = db.prepare('SELECT * FROM agent_messages WHERE thread_id = ? ORDER BY id DESC LIMIT 1').get(origin) as J
+    check("B': quiet runs keep one muted line, updated in place", lines.length === 1 && last.id === lines[0].id && JSON.parse(lines[0].meta).count === 2 && /checked 2×/.test(lines[0].content))
+    check("B': quiet runs send nothing else", runsOf(quiet.id).every((r) => r.quiet === 1 && r.reported === 0) && !notices(1, 'agenttasks.report').some((n) => n.title === 'Quiet one'))
+    tasks.updateTask(alice, quiet.id, { status: 'paused' })
+    // Waiting for the user: the thread shows the run going, with what it asks.
+    const waits = tasks.createTask(alice, cont('ask-site', { title: 'Asks in the thread' }), origin)
+    db.prepare('UPDATE agent_tasks SET next_run_at = ? WHERE id = ?').run(fake, waits.id)
+    await tasks.tick()
+    await until('it waits', () => runsOf(waits.id)[0]?.status === 'waiting')
+    const strip = agents.getThread(alice, origin).thread.taskRuns
+    check("B': while it runs, the thread lists it (live view, cancel and its questions)", strip.length === 1 && strip[0].run === runsOf(waits.id)[0].id && strip[0].status === 'waiting' && strip[0].asks === 1 && strip[0].title === 'Asks in the thread')
+    tasks.cancelRun(alice, runsOf(waits.id)[0].id)
+    check("B': cancelled, it leaves the thread's list", agents.getThread(alice, origin).thread.taskRuns.length === 0)
+    // The thread gone (archived): a new thread for the report, said in the run history.
+    db.prepare('UPDATE agent_threads SET archived = 1 WHERE id = ?').run(origin)
+    const { run: gone } = await oneRun(alice, cont('report-true', { title: 'Origin archived' }))
+    const goneRun = runOf(gone.id)
+    check("B': with its thread archived, a run falls back to a new thread, and the history says so", goneRun.origin_thread === null && /gone or archived/.test(goneRun.delivered) && /a new thread/.test(goneRun.delivered) && !!db.prepare("SELECT 1 FROM agent_threads t JOIN agent_messages m ON m.thread_id = t.id WHERE t.user_id = 1 AND t.title = 'Origin archived' AND m.role = 'report'").get())
+    db.prepare('UPDATE agent_threads SET archived = 0 WHERE id = ?').run(origin)
   }
   {
     // --- New mail, against a stand-in JMAP server -------------------------------------------------
@@ -720,7 +842,7 @@ try {
 
 // --- 3. The real server over HTTP ------------------------------------------------------------------------
 
-const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1,2', NOTIFY_WATCH: 'off', OLLAMA_URL, OLLAMA_API_KEY: 'fake-key', AGENT_TASKS: 'on', AGENT_TASKS_TICK_MS: '200' })
+const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', ADMIN_GITHUB_IDS: '1,2', NOTIFY_WATCH: 'off', OLLAMA_URL, OLLAMA_API_KEY: 'fake-key', AGENT_TASKS: 'on', AGENT_TASKS_TICK_MS: '200', AGENT_TASKS_RETRY_MS: '300' })
 try {
   // The sessions live in the server's own database: written there once it has made it.
   const { DatabaseSync } = await import('node:sqlite')
@@ -800,6 +922,42 @@ try {
   const sent = (chats.at(-2)?.messages ?? []) as J[]
   check('the model reads a task report as quoted data, not as its own answer', sent.some((m) => m.role === 'user' && /<task_report>[\s\S]*There is news\./.test(m.content)) && !sent.some((m) => m.role === 'assistant' && /There is news\./.test(m.content)))
   void reporting
+
+  // B': a run that ends while its thread answers lands there once it is at rest, after that answer.
+  const busy = (await api('POST', '/api/agents/threads', { permission: 'auto', model: MODEL })).body
+  const slowChat = fetch(`${server.origin}/api/agents/threads/${busy.id}/messages`, { method: 'POST', headers: await headers(sid), body: JSON.stringify({ text: 'SLOWCHAT please', client: { timeZone: 'Europe/Amsterdam' } }) }).then((r) => r.text())
+  await sleep(300)
+  const landing = (await api('POST', '/api/agents/tasks', { spec: spec('report-true', { title: 'Lands later', report: { thread: 'origin', threadId: busy.id, notify: false, email: 'off', when: 'always' } }), from: busy.id })).body
+  let landed: J = {}
+  const endL = Date.now() + 10_000
+  while (Date.now() < endL) {
+    landed = ((await api('GET', `/api/agents/tasks/${landing.id}/runs`)).body.runs as J[])[0] ?? {}
+    if (OVER.includes(landed.status)) break
+    await sleep(100)
+  }
+  check("B': a run that ends while its thread answers waits to land", landed.status === 'succeeded' && landed.delivered.some((d: string) => /when it is at rest/.test(d)) && !landed.originMessage)
+  await slowChat
+  const endL2 = Date.now() + 10_000
+  while (Date.now() < endL2 && !landed.originMessage) {
+    landed = (await api('GET', `/api/agents/task-runs/${landed.id}`)).body.run
+    await sleep(100)
+  }
+  const busyMsgs = (await api('GET', `/api/agents/threads/${busy.id}`)).body.messages as J[]
+  const at = busyMsgs.findIndex((m) => m.id === landed.originMessage)
+  check("B': once the thread is at rest it lands there, after the answer it was giving", at > 0 && busyMsgs[at].meta?.kind === 'taskRun' && busyMsgs.slice(0, at).some((m) => m.role === 'assistant' && m.content === 'slow chat done') && landed.delivered.includes('the thread it continues'))
+  // The quiet line stays out of what the model reads.
+  const quietTask = (await api('POST', '/api/agents/tasks', { spec: spec('report-false', { title: 'Quiet in chat', report: { thread: 'origin', threadId: busy.id, notify: false, email: 'off', when: 'condition' } }), from: busy.id })).body
+  const endQ = Date.now() + 10_000
+  while (Date.now() < endQ && !((await api('GET', `/api/agents/threads/${busy.id}`)).body.messages as J[]).some((m) => m.meta?.kind === 'taskQuiet')) await sleep(100)
+  await chatTurn(busy.id, { name: 'update_todos', arguments: { items: [] } })
+  const readQ = (chats.findLast((c) => String(c.messages?.[0]?.content ?? '').includes(`current thread ID: ${busy.id}`))?.messages ?? []) as J[]
+  check("B': the quiet line is shown in the thread but never sent to the model", ((await api('GET', `/api/agents/threads/${busy.id}`)).body.messages as J[]).some((m) => m.meta?.kind === 'taskQuiet') && !readQ.some((m) => /nothing new/.test(String(m.content))) && readQ.some((m) => /<task_report>[\s\S]*Lands later/.test(String(m.content))))
+  void quietTask
+  // C over HTTP: a model that is not the account's is refused, before anything is saved.
+  const refusedModel = await api('POST', '/api/agents/tasks', { spec: spec('report-false', { title: 'Bad model', model: 'no-such-model' }) })
+  check('C: the API refuses a model that is not one of the account\'s', refusedModel.status === 400 && /not one of your models/.test(refusedModel.body.error ?? refusedModel.body.text ?? JSON.stringify(refusedModel.body)))
+  const runModel = await api('POST', `/api/agents/tasks/${quietTask.id}/run`, { model: 'no-such-model' })
+  check('C: Run now on another model checks it too', runModel.status === 400)
 
   // A waiting run survives a restart, and goes on when approved.
   const waiting = (await api('POST', '/api/agents/tasks', { spec: spec('ask-site', { title: 'Across a restart' }) })).body

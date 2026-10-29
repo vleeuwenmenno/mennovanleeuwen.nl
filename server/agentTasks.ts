@@ -150,6 +150,8 @@ const TICK_MS = Math.max(200, Number(process.env.AGENT_TASKS_TICK_MS) || 30_000)
 /** Due while the server restarted (a deploy): not missed, it runs as usual. */
 const GRACE_MS = 10 * 60_000
 const ASK_WAIT_MS = () => Math.max(1000, Number(process.env.AGENT_TASKS_ASK_MS) || 12 * 3600_000)
+/** How soon a run that continues a busy thread tries to land there again (AGENT_TASKS_RETRY_MS for the checks). */
+const BUSY_RETRY_MS = () => Math.max(200, Number(process.env.AGENT_TASKS_RETRY_MS) || 60_000)
 const UNSEEN_MS = () => Math.max(1000, Number(process.env.AGENT_TASKS_UNSEEN_MS) || 15 * 60_000)
 const FAILURE_GUARD = 3
 /** Scheduled runs start up to this much after their time, the same for each task, so tasks set to the same minute do not all start at once. */
@@ -815,7 +817,9 @@ async function report(user: User, task: TaskRow, runId: string, kind: 'report' |
     addJob(user.id, runId, 'email_if_unseen', clock() + UNSEEN_MS(), { entry: entry.id, account: spec.report.emailAccount, title, body, task: task.id })
     delivered.push('email if not seen in time')
   }
-  db.prepare('UPDATE agent_task_runs SET delivered = ? WHERE id = ?').run(JSON.stringify(delivered), runId)
+  // After what is there already (where a run that continues its thread landed, or that its thread was gone).
+  const had = db.prepare('SELECT delivered FROM agent_task_runs WHERE id = ?').get(runId) as { delivered: string | null } | undefined
+  db.prepare('UPDATE agent_task_runs SET delivered = ? WHERE id = ?').run(JSON.stringify([...parse<string[]>(had?.delivered ?? null, []), ...delivered]), runId)
   db.prepare('UPDATE agent_tasks SET last_report_at = ? WHERE id = ?').run(clock(), task.id)
   changed(user.id, { task: task.id, run: runId })
 }
@@ -879,7 +883,7 @@ ${text}` })) delivered('a new thread')
   try {
     const id = postTaskRun(user, run.origin_thread, data)
     if (id !== null) delivered(quiet ? 'the thread it continues (quiet line)' : 'the thread it continues', id)
-    else (addJob(user.id, run.id, 'origin', clock() + 60_000, { ...data, tries: 0 }), delivered(quiet ? 'the thread it continues, when it is at rest (quiet line)' : 'the thread it continues, when it is at rest'))
+    else (addJob(user.id, run.id, 'origin', clock() + BUSY_RETRY_MS(), { ...data, tries: 0 }), delivered(quiet ? 'the thread it continues, when it is at rest (quiet line)' : 'the thread it continues, when it is at rest'))
   } catch (e) {
     if ((e as { status?: number }).status === 404) {
       if (!quiet) {
@@ -949,7 +953,7 @@ export async function runJobs(now: number) {
           done()
           delivered(data.quiet ? 'the thread it continues (quiet line)' : 'the thread it continues')
           db.prepare('UPDATE agent_task_runs SET origin_message = ? WHERE id = ?').run(id, job.run_id)
-        } else if (tries < 1440) later(60_000)
+        } else if (tries < 1440) later(BUSY_RETRY_MS())
         else (done(), delivered('thread failed: it stayed busy for a day'))
       } else if (job.kind === 'thread') {
         const posted = postTaskReport(user, typeof data.target === 'string' ? data.target : null, { title: String(data.title), model: String(data.model), text: String(data.text) })
@@ -1386,7 +1390,11 @@ function specFromArgs(user: User, args: Record<string, unknown>, zone: string, t
     const put = (names: unknown, v: 'allow' | 'ask') => {
       for (const n of Array.isArray(names) ? names : []) {
         const name = String(n)
-        if (TASK_GROUPS.some((g) => g.id === name)) policy.groups[name as keyof TaskPolicy['groups']] = v
+        if (TASK_GROUPS.some((g) => g.id === name)) {
+          // A whole group, as the editor sets one: its tools' own verdicts go.
+          policy.groups[name as keyof TaskPolicy['groups']] = v
+          for (const [n, t] of Object.entries(TASK_TOOLS)) if (t.group === name) delete policy.tools[n]
+        }
         else if (TASK_TOOLS[name]) policy.tools[name] = v
         else throw new Error(`Unknown tool or group "${name.slice(0, 40)}"`)
       }
