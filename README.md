@@ -5969,3 +5969,28 @@ nobody else sees the panel), takes one command per request (no newlines, at most
 player names checked), allows 30 commands a minute per admin and logs each one with the admin's
 login to the server's console. Commands that are hard to undo (`stop`, `ban`, `op`,
 `whitelist off`, `kill @a` and the like) ask first.
+
+### Structured account data in msh
+
+`mvl notes`, `mvl calendar 2026-10-01 2026-11-01`, and `mvl tasks` print JSON
+objects with `notes`, `events` (and partial-provider `errors`), or `tasks` arrays.
+Pipe these to `jq`, for example `mvl notes | jq '.notes[] | .text'`. Calendar
+ranges are explicit UTC dates or ISO timestamps, end exclusive, at most 366 days.
+Notes come from authenticated server state, excluding trash and purged notes;
+unsynced browser-only edits are not included. Tasks are background agent task
+status (including active-run counts), not the Tasks app's to-do items. No command
+creates, edits, runs, or deletes anything. Invalid arguments fail before requests;
+network and authorization failures produce a nonzero status. Cancellation aborts
+the GET and suppresses responses arriving after cancellation.
+
+These commands use the existing account-bound API client and server authorization:
+`GET /api/state`, `GET /api/calendar/events`, and `GET /api/agents/tasks`. Only the
+notes portion of state and a limited task-status projection are printed. They are
+private network reads, **not pure commands**. `APP_DATA_POLICY` in
+`src/terminal/appData.ts` declares the deny-by-default agent integration contract.
+When integrating the separate agent execution policy, keep `mvl` denied until
+explicit resource authorization is wired; do not infer permission from read-only
+behavior or add it to a pure-command allowlist.
+
+`pnpm check:app-data` exercises JSON output, range validation, safe literal markup,
+server-error propagation, and cancellation before and after asynchronous reads.
