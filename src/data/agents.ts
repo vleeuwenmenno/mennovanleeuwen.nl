@@ -1,3 +1,4 @@
+import type { TerminalResource } from './terminalResources'
 import { DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from './agentTaskMail'
 import { api } from '../os/account'
 import { synced } from '../os/synced'
@@ -104,7 +105,7 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'memory', name: 'Memory', detail: 'Remember what you tell it' },
   { id: 'projects', name: 'Projects', detail: 'Make and rename projects, move this thread; asks you first' },
   { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
-  { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
+  { id: 'terminal', name: 'Terminal', detail: 'Run msh commands and scripts in the work folder, from this app or the agents command' },
 ]
 /** The groups a thread can switch: every one but the always-on ones. */
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
@@ -117,7 +118,7 @@ const TOOL_BLOCKED: Partial<Record<ToolGroup, { on: string; off: string }>> = {
   seafile: { on: 'nothing to use: link Seafile first (Settings → Integrations → Seafile)', off: 'Seafile linked (Settings → Integrations → Seafile)' },
   seafile_write: { on: 'nothing to use: link Seafile first (Settings → Integrations → Seafile)', off: 'Seafile linked (Settings → Integrations → Seafile)' },
   files: { on: 'no work folder chosen (the folder button above)', off: 'a work folder (the folder button above)' },
-  terminal: { on: 'only from the agents command in the terminal, not in this app', off: 'the agents command in the terminal; it does not work in this app' },
+  terminal: { on: 'from this app and the agents command, confined to the work folder', off: 'no terminal tool, here or in the agents command' },
 }
 /**
  * What a group's row says. Three states: on and usable (its own detail), on but unable to do anything
@@ -174,7 +175,7 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { image?: { name: string; url: string; size: number }; title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string; /** create_task, update_task: the task as the server checked it, for the card's editor */ spec?: unknown }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; /** A subagent's card, shown (and answered) in its parent's thread */ child?: { id: string; name: string }; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client' | 'image'; /** A subagent's card, shown (and answered) in its parent's thread */ child?: { id: string; name: string }; width?: number; height?: number; /** An image job's latest progress */ progress?: ImageProgress; /** A gpt_image picture being drawn */ gpt?: GptDrawing; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string; grant?: ClientGrant }
 /**
  * A gpt_image picture being drawn: a typical time for it (ms), when it started (the server's clock;
  * the window turns it into its own with `elapsed`, how long it had been drawing when the window
@@ -191,7 +192,7 @@ export type TurnEvent =
   | { type: 'imageGenerationDone'; callId: string }
   | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
   /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
-  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
+  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall; grant?: ClientGrant }
   | { type: 'clientDone'; callId: string }
   | { type: 'approved'; callId: string; allow: boolean }
   | { type: 'question'; callId: string; messageId: number; index: number; form: Form }
@@ -238,8 +239,18 @@ export const setMailReads = (mode: MailReadsMode) =>
 export const revokeMailReads = (id: string) => api<Thread>(`/api/agents/threads/${id}/mail-reads`, { method: 'DELETE' })
 /** Whole minutes left of mail reads allowed in a thread (rounded up), or 0 when there are none. */
 export const mailReadsLeft = (t: Pick<Thread, 'mailReadsUntil'> | null | undefined, now = Date.now()) => (t?.mailReadsUntil && t.mailReadsUntil > now ? Math.ceil((t.mailReadsUntil - now) / 60_000) : 0)
-/** What the terminal printed for a terminal tool call. */
-export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
+/**
+ * What a terminal call may do, as the server decided it (server/agents.ts terminalGrant) and the
+ * terminal's policy enforces it (src/terminal/policy.ts): where writes, deletes, the network and the
+ * files that steer the agent are concerned. Writes always stay inside the work folder.
+ */
+export type ClientGrant = { appDataRead?: readonly TerminalResource[]; mode: string; write: boolean; delete: boolean; network: boolean; steering: boolean }
+
+/** What the terminal printed for a terminal tool call (`result`: the structured answer of `terminal`; `capabilities`: the JSON of `terminal_capabilities`). */
+export const sendClientResult = (id: string, callId: string, output: string, status: number, extra: { result?: unknown; capabilities?: string } = {}) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status, ...extra } })
+
+/** Whether this window may run a waiting call: false when another window already took it (so a call never runs twice). */
+export const claimClientCall = (id: string, callId: string) => api<{ ok: boolean }>(`/api/agents/threads/${id}/claim`, { method: 'POST', json: { callId } }).then((r) => r.ok, () => false)
 /** `todos: null` dismisses the thread's plan (for the agent too). */
 export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission' | 'skillsOff' | 'effort'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
@@ -526,14 +537,14 @@ export function agentModels(): Promise<ModelInfo[]> {
  * Sends the user's message and reads the answer as it streams: each JSON line is one event.
  * Aborting `signal` stops the turn on the server too.
  */
-export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
+export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean; exec?: boolean } = {}) {
   const res = await fetch(`/api/agents/threads/${id}/messages`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     // From the terminal's agents command, which can run the terminal tool. The time zone gives the
     // agent today's date and the calendar tools' times where the user is.
-    body: JSON.stringify({ text, attachments, client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(opts.terminal ? { terminal: true } : {}) } }),
+    body: JSON.stringify({ text, attachments, client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(opts.terminal ? { terminal: true } : opts.exec ? { exec: true } : {}) } }),
     signal,
   })
   await readEvents(res, onEvent)
@@ -543,12 +554,12 @@ export async function sendMessage(id: string, text: string, attachments: Attachm
  * Retry: the thread's last turn again (its partial, failed or finished reply goes), streamed like
  * sendMessage. Queued messages run after it.
  */
-export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
+export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean; exec?: boolean } = {}) {
   const res = await fetch(`/api/agents/threads/${id}/retry`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(opts.terminal ? { terminal: true } : {}) } }),
+    body: JSON.stringify({ client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(opts.terminal ? { terminal: true } : opts.exec ? { exec: true } : {}) } }),
     signal,
   })
   await readEvents(res, onEvent)
@@ -613,8 +624,8 @@ export const isDropped = (e: unknown) => e instanceof TypeError || (e as Error)?
  * Joins a turn this window did not start (opened again while it runs, or another tab): a snapshot
  * with the reply written so far, then its events live. Resolves when the turn ends.
  */
-export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
-  await readEvents(await fetch(`/api/agents/threads/${id}/follow${opts.terminal ? '?client=terminal' : ''}`, { credentials: 'same-origin', signal }), onEvent)
+export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean; exec?: boolean } = {}) {
+  await readEvents(await fetch(`/api/agents/threads/${id}/follow${opts.terminal ? '?client=terminal' : opts.exec ? '?client=exec' : ''}`, { credentials: 'same-origin', signal }), onEvent)
 }
 
 export async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
@@ -829,6 +840,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return `Delete ${s('path')}`
     case 'terminal':
       return s('description') || `Ran ${s('command').split('\n')[0].slice(0, 80)}`
+    case 'terminal_capabilities':
+      return s('command') ? `Checked what ${s('command')} can do` : 'Checked what the terminal can do'
     case 'exit_plan_mode':
       return 'Presented a plan'
     case 'use_skill':

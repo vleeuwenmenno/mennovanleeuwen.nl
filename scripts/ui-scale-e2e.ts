@@ -44,12 +44,6 @@ if (!log.includes('ready') || vite.exitCode !== null) throw new Error(`vite did 
 const COUNT_PUTS = `(() => {
   const real = window.fetch.bind(window)
   window.__puts = {}
-  window.__priorityWrites = 0
-  const setItem = Storage.prototype.setItem
-  Storage.prototype.setItem = function(key, value) {
-    if (key.endsWith('.widgets.layoutPriority')) window.__priorityWrites++
-    return setItem.call(this, key, value)
-  }
   window.fetch = (input, init) => {
     const url = typeof input === 'string' ? input : input.url
     if ((init?.method ?? 'GET').toUpperCase() === 'PUT' && url.includes('/api/state/')) {
@@ -136,14 +130,14 @@ try {
   check('large screen has separated widgets', nonoverlap(big), big)
   await resize(A, 900, 700)
   const small = await widgets(A)
-  check('small screen avoids widget collisions using rendered bounds', nonoverlap(small), small)
+  check('small screen retains all instances', small.length === 3, small)
   await quiet(A, 'viewport resize')
   await resize(A, 1280, 800)
   await scale(A, 2)
   check('200% remains a desktop', await A.eval(`!matchMedia('(max-width: 719px)').matches && document.querySelector('.workspaces') !== null`))
   const high = await widgets(A)
   check('high scale keeps widget grips and boxes on screen', high.every(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= 1281 && r.y + r.h <= 801), high)
-  check('high scale separates widgets when room is available', nonoverlap(high), high)
+  check('high scale retains all instances', high.length === 3, high)
   await quiet(A, 'scale change')
   check('other device display unchanged', JSON.stringify(await widgets(B)) === JSON.stringify(big))
   await quiet(B, 'other device')
@@ -158,30 +152,21 @@ try {
   await api('widgets:placed', remote)
   await A.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
   await sleep(1000)
-  check('remote update locally separated', nonoverlap(await widgets(A)), await widgets(A))
+  check('remote overlap preserved', !nonoverlap(await widgets(A)))
   await quiet(A, 'remote update')
-  await A.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.avoidWidgetOverlap.set(false))`)
-  await sleep(500)
-  check('per-device toggle permits intentional overlap', !nonoverlap(await widgets(A)))
-  await quiet(A, 'local preference toggle')
-  await A.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.avoidWidgetOverlap.set(true))`)
-  await sleep(500)
-  check('turning avoidance back on separates widgets', nonoverlap(await widgets(A)))
-
   await resize(A, 1280, 800); await scale(A, 2)
   const beforeDrag = await api('widgets:placed')
-  const target = (await widgets(A))[0]
+  const target = (await widgets(A))[2]
   await drag(A, target.pid, 24, 36)
   const afterDrag = await api('widgets:placed')
   const changed = Object.keys(afterDrag.places).filter(k => !isDeepStrictEqual(afterDrag.places[k], beforeDrag.places[k]))
-  check('manual drag saves only the moved widget', changed.length === 1 && changed[0] === 'scale0', changed)
-  check('high-scale desktop persists explicit screen class', afterDrag.places.scale0.phone === false && afterDrag.places.scale0.vw === 640, afterDrag.places.scale0)
-  // Disable collision projection to isolate restoration of the canonical high-scale geometry.
-  await A.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.avoidWidgetOverlap.set(false))`)
+  check('manual drag saves only the moved widget', changed.length === 1 && changed[0] === 'scale2', changed)
+  check('high-scale desktop persists explicit screen class', afterDrag.places.scale2.phone === false && afterDrag.places.scale2.vw === 640, afterDrag.places.scale2)
+  // Restoration of canonical high-scale geometry must not write fitted coordinates.
   await sleep(500)
   const moved = await widgets(A)
   await load(A)
-  check('high-scale saved position survives reload', JSON.stringify({ ...(await widgets(A))[0], pid: 0 }) === JSON.stringify({ ...moved[0], pid: 0 }), { before: moved, after: await widgets(A) })
+  check('high-scale saved position survives reload', JSON.stringify({ ...(await widgets(A))[2], pid: 0 }) === JSON.stringify({ ...moved[2], pid: 0 }), { before: moved, after: await widgets(A) })
   await instrument(A); await quiet(A, 'high-scale reload')
   const fit = await A.eval(`import('/src/os/wm.tsx').then(m => ({ desktop: m.fitNote({ x: 100, y: 450, w: 240, h: 180 }, 640, 400, false), phone: m.fitNote({ x: 100, y: 450, w: 240, h: 180 }, 640, 400, true) }))`)
   check('note fitting uses actual phone state', fit.desktop.y + fit.desktop.h <= 400 && fit.phone.y === 450, fit)
@@ -196,13 +181,12 @@ try {
   const note = { id: 'scale-note', text: '# Tall note\n' + 'Line of test content.\n'.repeat(14), color: 'yellow', tilt: 4.5, created: now, updated: now }
   await api('notes', [note])
   const withNote = await api('widgets:placed')
-  withNote.places['scale-note'] = { id: 'scale-note', kind: 'sticky', x: 100, y: 140, w: 260, h: 100, vw: 1920, vh: 1080, phone: false, at: now + 200 }
+  withNote.places['scale-note'] = { id: 'scale-note', kind: 'sticky', x: 1100, y: 140, w: 260, h: 100, vw: 1920, vh: 1080, phone: false, at: now + 200 }
   await api('widgets:placed', withNote)
-  await A.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.avoidWidgetOverlap.set(true))`)
   await A.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
   await A.waitFor(`!!document.querySelector('.window.widget-sticky')`)
   await sleep(1000)
-  check('tall slanted note uses rendered size for collision bounds', nonoverlap(await widgets(A)) && await A.eval(`document.querySelector('.window.widget-sticky').offsetHeight > 200`), await widgets(A))
+  check('tall slanted note displays its content', await A.eval(`document.querySelector('.window.widget-sticky').offsetHeight > 200`), await widgets(A))
   await quiet(A, 'remote note content and widget addition')
   const stickyPid = await A.eval<number>(`Number(document.querySelector('.window.widget-sticky').dataset.pid)`)
   const beforeResize = await api('widgets:placed')
@@ -216,12 +200,11 @@ try {
   await quiet(A, 'remote content growth and refitting')
   await scale(A, 2)
 
-  // The phone column owns placement; local avoidance must have no effect there.
+  // Mobile hides widgets without modifying their stored desktop placements.
   await resize(A, 390, 844)
   const phone = await widgets(A)
-  await A.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.avoidWidgetOverlap.set(true))`)
   await sleep(500)
-  check('phone column ignores collision setting', JSON.stringify(await widgets(A)) === JSON.stringify(phone))
+  check('phone hides every widget', phone.length === 0 && (await widgets(A)).length === 0)
   await quiet(A, 'phone resize and preference')
 
   // Actual React overlays, populated enough to reach their CSS viewport limits.
@@ -279,87 +262,6 @@ try {
   await load(C)
   const unsupported = await C.eval(`import('/src/os/uiScale.ts').then(m => { const e = new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true, cancelable: true }); window.dispatchEvent(e); return { supported: m.uiScaleSupported(), prevented: e.defaultPrevented } })`)
   check('unsupported engine keeps native zoom shortcuts', !unsupported.supported && !unsupported.prevented, unsupported)
-
-  // Bounded solver: oversized/dense input settles deterministically without mutating input.
-  const crowded = await A.eval(`import('/src/os/widgetLayout.ts').then(m => { const items = Array.from({ length: 200 }, (_, pid) => ({ pid, x: 100, y: 100, w: 300, h: 900 })); const before = JSON.stringify(items); const a = [...m.arrangeDesktop(items, 640, 400)]; const b = [...m.arrangeDesktop(items, 640, 400)]; return a.length <= 128 && JSON.stringify(a) === JSON.stringify(b) && before === JSON.stringify(items) })`)
-  check('dense/oversized fallback bounded, deterministic and immutable', crowded)
-
-  // Regression: a non-first widget manually placed over an earlier widget keeps priority after
-  // reload, with collision avoidance ON. Fresh profiles isolate this from earlier test layouts.
-  const prioritySet = { places: {
-    priorityA: { id: 'priorityA', kind: 'status', x: 100, y: 100, w: 240, h: 180, vw: 1200, vh: 800, phone: false, at: Date.now() },
-    priorityB: { id: 'priorityB', kind: 'status', x: 600, y: 100, w: 240, h: 180, vw: 1200, vh: 800, phone: false, at: Date.now() },
-  }, removed: '' }
-  await api('windows:desktop', [])
-  await api('widgets:placed', prioritySet)
-  const D = await browser(sid, 1200, 800)
-  const E = await browser(sid, 1200, 800)
-  await load(D); await load(E)
-  await D.waitFor(`document.querySelectorAll('[data-app="widget"]').length === 2`)
-  await E.waitFor(`document.querySelectorAll('[data-app="widget"]').length === 2`)
-  const geometry = async (p: P) => (await widgets(p)).map(({ x, y, w, h }) => ({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }))
-  check('automatic startup note sizing does not claim priority', await D.eval(`window.__priorityWrites`) === 0)
-  const beforePriorityDrag = await widgets(D)
-  await drag(D, beforePriorityDrag[1].pid, 130 - beforePriorityDrag[1].x, 0)
-  const preferred = await geometry(D)
-  check('non-first dragged widget keeps requested position and nudges earlier widget', preferred[1].x === 130 && preferred[1].y === 100 && preferred[0].y > 100 && nonoverlap(await widgets(D)), preferred)
-  const priorityWrites = await D.eval(`({ count: window.__priorityWrites, key: localStorage.getItem('mvlos.u.1.widgets.layoutPriority') })`)
-  check('eight drag moves write local priority only once', priorityWrites.count === 1, priorityWrites)
-  const savedPriority = await api('widgets:placed')
-  check('only manually moved widget changed in synced placement', isDeepStrictEqual(savedPriority.places.priorityA, prioritySet.places.priorityA) && savedPriority.places.priorityB.x === 130 && savedPriority.places.priorityB.y === 100)
-  await instrument(E)
-  await E.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
-  await sleep(600)
-  const otherLayout = await geometry(E)
-  const otherPriority = await E.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => ({ priority: m.desktopLayoutPriority.get() }))`)
-  check('second device receives canonical move without inheriting local priority', otherLayout[0].x === 100 && otherLayout[0].y === 100 && otherLayout[1].y > 100 && otherPriority.priority === null, { otherLayout, otherPriority })
-  await quiet(E, 'second device receiving manual move')
-  await load(D)
-  const reloadPuts = await D.eval<Record<string, number>>(`window.__puts`)
-  check('enabled-avoidance reload sends no automatic sync writes', !reloadPuts['widgets:placed'] && !reloadPuts['windows:desktop'], reloadPuts)
-  check('enabled-avoidance reload preserves full visible layout', isDeepStrictEqual(await geometry(D), preferred), { before: preferred, after: await geometry(D) })
-  check('priority survives reload under account-local key', await D.eval(`localStorage.getItem('mvlos.u.1.widgets.layoutPriority')`) === 'widget:priorityB')
-  await instrument(D)
-  await quiet(D, 'enabled-avoidance reload settling')
-  check('reload leaves canonical server placement and other device unchanged', isDeepStrictEqual(await api('widgets:placed'), savedPriority) && isDeepStrictEqual(await geometry(E), otherLayout))
-
-  // Removing/re-adding the same widget creates a new placement key. The old priority is inert,
-  // even after reload reuses that widget's pid; no pruning writes or startup race are needed.
-  const replaced = { places: { priorityA: savedPriority.places.priorityA, 'priorityB~new': { ...savedPriority.places.priorityB, at: Date.now() + 1 } }, removed: 'priorityB' }
-  await api('widgets:placed', replaced)
-  await D.eval(`import('/src/os/synced.ts').then(m => m.pullAll())`)
-  await sleep(600)
-  check('new placement of removed widget does not inherit stale priority', isDeepStrictEqual(await geometry(D), otherLayout), await geometry(D))
-  await quiet(D, 'removed and re-added widget')
-  await load(D)
-  check('stale priority remains inert after pid reuse on reload', isDeepStrictEqual(await geometry(D), otherLayout), await geometry(D))
-
-  // Switch account space in the same profile, then return. Priority must never leak between
-  // visitor and signed-in layouts, and returning restores this account's local preference.
-  for (const name of ['mvlos_sid', 'mvlos_login', 'mvlos_uid']) await D.send('Network.deleteCookies', { name, url: origin })
-  await load(D)
-  const visitorPriority = await D.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => ({ priority: m.desktopLayoutPriority.get(), uid: document.cookie.match(/mvlos_uid=[^;]*/)?.[0] ?? null }))`)
-  check('same-browser account switch isolates placement priority', visitorPriority.priority === null, visitorPriority)
-  for (const [name, value] of [['mvlos_sid', sid], ['mvlos_login', login], ['mvlos_uid', '1']]) await D.send('Network.setCookie', { name, value, url: origin })
-  await load(D)
-  check('returning account retains its own local priority', await D.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.desktopLayoutPriority.get())`) === 'widget:priorityB')
-
-  // A fresh preference module with blocked storage must still keep in-memory priority and
-  // deduplicate pointer updates. Isolated visitor page; restore its storage methods afterwards.
-  const blockedPriority = await C.eval(`(async () => {
-    const get = Storage.prototype.getItem, set = Storage.prototype.setItem
-    let attempts = 0
-    try {
-      Storage.prototype.getItem = () => { throw new DOMException('Blocked', 'SecurityError') }
-      Storage.prototype.setItem = () => { attempts++; throw new DOMException('Blocked', 'SecurityError') }
-      const { desktopLayoutPriority: pref } = await import('/src/os/widgetLayoutPrefs.ts?blocked-storage')
-      const initial = pref.get()
-      pref.set('widget:memory-only')
-      pref.set('widget:memory-only')
-      return { initial, value: pref.get(), attempts }
-    } finally { Storage.prototype.getItem = get; Storage.prototype.setItem = set }
-  })()`)
-  check('blocked storage falls back to memory without repeated write attempts', blockedPriority.initial === null && blockedPriority.value === 'widget:memory-only' && blockedPriority.attempts === 1, blockedPriority)
 
 } catch (error) {
   failed++

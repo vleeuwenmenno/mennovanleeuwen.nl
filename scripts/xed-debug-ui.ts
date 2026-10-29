@@ -1,0 +1,123 @@
+// Uses the repository's muted Chromium harness and a caller-owned scratch Vite server.
+import { launch, newPage } from './perf/cdp.ts'
+const port = Number(process.env.XED_TEST_PORT ?? 5276)
+if (port < 5170 || port > 5299) throw new Error('Use a scratch dev server on port 5170–5299')
+const browser = await launch(1280, 800)
+try {
+  const page = await newPage(browser, 1280, 800, '')
+  await page.send('Page.navigate', { url: `http://127.0.0.1:${port}/` })
+  await page.waitFor(`document.readyState === 'complete'`)
+  for (let i = 0; i < 40 && !(await page.eval(`!!document.querySelector('.window')`)); i++) {
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await new Promise(r => setTimeout(r, 250))
+  }
+  await page.eval(`(async () => {
+    const fs = await import('/src/terminal/fs.ts')
+    await fs.writeFile('/tmp', '/tmp/xed-ui.msh', 'x=one\\necho "$x"\\nx=two\\necho "$x"', false)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-ui.msh', root: '/tmp' } } }))
+  })()`)
+  await page.waitFor(`!!document.querySelector('[aria-label="msh debugger"]')`)
+  const click = (text: string) => page.eval(`(() => { const e = [...document.querySelectorAll('.xed-debug button')].find(e => e.textContent === ${JSON.stringify(text)}); if (!e || e.disabled) throw new Error('Control unavailable: '+${JSON.stringify(text)}); e.click() })()`)
+  const paused = () => page.waitFor(`document.querySelector('.xed-debug [role="status"]')?.textContent.startsWith('paused')`)
+  // React must receive real textarea input/selection events; do not inject analysis results.
+  const edit = (value: string) => page.eval(`(() => {
+    const e = document.querySelector('textarea.zed-input')
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(e, ${JSON.stringify(value)})
+    e.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+  const malformed = 'if true; then\n  echo "$value" | cat\nfi\nthen'
+  await edit(malformed)
+  await page.waitFor(`document.querySelector('.xed-diagnostic')?.textContent.includes('/tmp/xed-ui.msh:4:1:')`)
+  const lint = await page.eval(`document.querySelector('.xed-diagnostic').textContent`)
+  if (!lint.includes('syntax error') || !lint.includes('[then]')) throw new Error('Wrong editor diagnostic: '+lint)
+  const highlighting = await page.eval(`(() => {
+    const pre = document.querySelector('.zed-hl:not(.zed-marks)')
+    return { text: pre.textContent, keyword: [...pre.querySelectorAll('.md-bullet')].some(e => e.textContent === 'if'), quoted: [...pre.querySelectorAll('.md-code')].some(e => e.textContent === '"$value"'), pipe: [...pre.querySelectorAll('.md-punct')].some(e => e.textContent === '|') }
+  })()`)
+  if (highlighting.text !== malformed + '\n' || !highlighting.keyword || !highlighting.quoted || !highlighting.pipe) throw new Error('Wrong msh highlighting: '+JSON.stringify(highlighting))
+  console.log('PASS textarea input updates lint filename/line/column/expression and real msh highlighting')
+  await edit('x=one\necho "$x"\nx=two\necho "$x"')
+  await page.waitFor(`!document.querySelector('.xed-diagnostic') && ![...document.querySelectorAll('.xed-debug button')].find(e => e.textContent === 'Debug saved file').disabled`)
+  await click('Debug saved file'); await paused()
+  console.log('PASS editor launches saved file and pauses')
+  await click('Step'); await paused() // step through the msh launch command into the file
+  await page.waitFor(`document.querySelector('.xed-debug [role="status"]').textContent.includes('/tmp/xed-ui.msh:1:1')`)
+  await click('Step'); await paused()
+  await page.waitFor(`document.querySelector('.xed-debug details pre').textContent.includes('x=one')`)
+  console.log('PASS editor step shows source and variables')
+  await page.eval(`(() => {
+    const e = document.querySelector('textarea.zed-input')
+    const offset = e.value.lastIndexOf('echo'); e.focus(); e.setSelectionRange(offset, offset)
+    e.dispatchEvent(new Event('select', { bubbles: true }))
+    e.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }))
+  })()`)
+  await page.waitFor(`[...document.querySelectorAll('.xed-debug button')].some(e => e.textContent === 'Breakpoint line 4')`)
+  await click('Breakpoint line 4')
+  await page.waitFor(`document.querySelector('.xed-debug').textContent.includes('Breakpoints: /tmp/xed-ui.msh:4')`)
+  await click('Continue'); await paused()
+  await page.waitFor(`document.querySelector('.xed-debug [role="status"]').textContent.includes('/tmp/xed-ui.msh:4:1')`)
+  const breakpointStop = await page.eval(`({ variables: document.querySelector('.xed-debug details pre').textContent, output: document.querySelector('[aria-label="Debug output"]').textContent })`)
+  if (!breakpointStop.variables.includes('x=two') || breakpointStop.output !== 'one\n') throw new Error('Breakpoint did not suspend before final echo: '+JSON.stringify(breakpointStop))
+  console.log('PASS UI breakpoint stops real execution at selected file/line before output')
+  await click('Continue')
+  await page.waitFor(`document.querySelector('.xed-debug [role="status"]').textContent.includes('completed')`)
+  const output = await page.eval(`document.querySelector('[aria-label="Debug output"]').textContent`)
+  if (output !== 'one\ntwo\n') throw new Error('Wrong output: '+output)
+  console.log('PASS editor continue reaches completed state and prints output')
+  await click('Debug saved file'); await paused(); await click('Stop')
+  await page.waitFor(`document.querySelector('.xed-debug [role="status"]').textContent.includes('cancelled')`)
+  console.log('PASS editor stop cancels awaited execution')
+  // Launch outside Xed through the real execution API and retain its promise/output.
+  const externalLaunch = () => page.eval(`(async () => {
+    const fs = await import('/src/terminal/fs.ts')
+    const { launchDebug } = await import('/src/terminal/msh/interp.ts')
+    await fs.writeFile('/tmp', '/tmp/xed-external.msh', 'value=external\\necho "$value"\\nvalue=finished\\necho "$value"', false)
+    window.xedExternalOutput = []; window.xedExternalFinished = false
+    window.xedExternal = launchDebug('msh /tmp/xed-external.msh', {
+      cwd: '/tmp', setCwd() {}, env: { HOME: '/home/menno', PWD: '/tmp' }, history: [], windows: [],
+      openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent() { return true },
+      print(s) { window.xedExternalOutput.push(s) }, live() {}, size: { cols: 80, rows: 24 }, onKey() {}, signal: new AbortController().signal,
+    }, 'external executing script')
+    window.xedExternal.done.then(results => { window.xedExternalFinished = true; window.xedExternalResults = results })
+  })()`)
+  await externalLaunch()
+  await page.waitFor(`window.xedExternal.session.current.state === 'paused'`)
+  await page.eval(`(() => { const e = document.querySelector('[aria-label="Attach debug session"]'); e.value = window.xedExternal.session.id; e.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+  await paused()
+  await click('Step'); await paused()
+  await page.waitFor(`document.querySelector('.xed-debug [role="status"]').textContent.includes('/tmp/xed-external.msh:1:1')`)
+  await click('Step'); await paused()
+  await page.waitFor(`document.querySelector('.xed-debug [role="status"]').textContent.includes('/tmp/xed-external.msh:2:1') && document.querySelector('.xed-debug details pre').textContent.includes('value=external')`)
+  if (await page.eval(`window.xedExternalFinished || window.xedExternalOutput.length !== 0`)) throw new Error('External execution escaped stepped pause')
+  await click('Continue')
+  await page.waitFor(`window.xedExternalFinished && document.querySelector('.xed-debug [role="status"]').textContent.includes('completed')`)
+  const external = await page.eval(`({ output: window.xedExternalOutput.join('\\n'), results: window.xedExternalResults, state: window.xedExternal.session.current.state })`)
+  if (external.output !== 'external\nfinished' || external.state !== 'completed' || external.results.length !== 1 || !external.results[0].ok || external.results[0].output !== 'external\nfinished') throw new Error('External script did not execute: '+JSON.stringify(external))
+  console.log('PASS editor attaches real external launch, steps assignment, continues and verifies execution output/result')
+  // A second real launch remains paused while its attached editor closes below.
+  await externalLaunch()
+  await page.waitFor(`window.xedExternal.session.current.state === 'paused'`)
+  await page.eval(`(() => { const e = document.querySelector('[aria-label="Attach debug session"]'); e.value = window.xedExternal.session.id; e.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+  await paused()
+  await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+  await page.waitFor(`matchMedia('(max-width: 719px)').matches && document.querySelector('.xed-debug').getBoundingClientRect().right <= innerWidth + 1`)
+  const fits = await page.eval(`(() => { const e = document.querySelector('.xed-debug'); return e.scrollWidth <= e.clientWidth + 1 })()`)
+  if (!fits) throw new Error('Debug controls overflow phone width')
+  console.log('PASS debugger controls fit phone width')
+  // Close an owner window while its own script is paused; attached external session survives.
+  await page.eval(`(() => { const e = document.querySelector('[aria-label="Attach debug session"]'); e.value = ''; e.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+  await click('Debug saved file'); await paused()
+  const ownId = await page.eval(`document.querySelector('[aria-label="Attach debug session"]').value`)
+  await page.eval(`document.querySelector('.zed').closest('.window').querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+  const lifetime = await page.eval(`(async () => { const d = await import('/src/terminal/msh/debug.ts'); return [d.debugSessions().find(s => s.id === ${JSON.stringify(ownId)}).current.state, window.xedExternal.session.current.state] })()`)
+  if (JSON.stringify(lifetime) !== JSON.stringify(['cancelled', 'paused'])) throw new Error('Wrong session lifetimes: '+JSON.stringify(lifetime))
+  console.log('PASS closing editor cancels owned pause and preserves attached session')
+  await page.eval('window.xedExternal.session.continue()')
+  await page.waitFor('window.xedExternalFinished')
+  if (!(await page.eval(`window.xedExternal.session.current.state === 'completed' && window.xedExternalOutput.join('\\n') === 'external\\nfinished'`))) throw new Error('External script could not complete after editor closed')
+  console.log('PASS preserved external execution completes after editor closes')
+  if (page.errors.length) throw new Error(page.errors.join('\n'))
+  console.log('PASS no browser exceptions')
+} finally { await browser.close() }

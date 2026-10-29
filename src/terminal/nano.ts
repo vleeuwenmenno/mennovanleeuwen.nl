@@ -1,4 +1,4 @@
-import { lookup, MAX_TEXT, readFileText, writeFile } from './fs'
+import { actorOf, lookup, MAX_TEXT, readFileText, writeFile } from './fs'
 import { CmdError, type Ctx } from './types'
 import { prettyPath, resolvePath } from './vfs'
 
@@ -339,7 +339,7 @@ async function nano(ctx: Ctx): Promise<string | void> {
     }
     const text = `${lines.join('\n')}\n`
     try {
-      await writeFile(ctx.cwd, target, text, false, !!ctx.root, 'nano')
+      await writeFile(ctx.cwd, target, text, false, actorOf(ctx), 'nano')
       name = target
       modified = false
       writable = true
