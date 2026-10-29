@@ -673,6 +673,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
     case 'save_image_profile': return 'Save suggested style profile'
     case 'make_image_mask': return `${result ? 'Made a mask' : 'Making a mask'}: “${s('target').slice(0, 80)}”${s('exclude') ? `, keeping “${s('exclude').slice(0, 80)}”` : ''}`
     case 'list_image_masks': return 'Listed image masks'
+    case 'plan_video': return `${result ? 'Planned a video' : 'Planning a video'}${s('title') ? `: “${s('title').slice(0, 80)}”` : ''}`
+    case 'render_video': return result && !result.startsWith('{"error"') ? 'Started a video render' : 'Render a video'
     case 'generate_image':
       return generateImageLabel(a, result)
     case 'view_generated_image':

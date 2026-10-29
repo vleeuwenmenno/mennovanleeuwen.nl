@@ -133,6 +133,8 @@ const APPS: Record<string, AppId> = {
   agents: 'agents',
   imagestudio: 'imagestudio',
   'image-studio': 'imagestudio',
+  videostudio: 'videostudio',
+  'video-studio': 'videostudio',
   settings: 'settings',
   mcserver: 'mcserver',
 }
@@ -178,6 +180,7 @@ const APP_NAMES: Record<AppId, string> = {
   git: 'git',
   about: 'about',
   imagestudio: 'image-studio',
+  videostudio: 'video-studio',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

@@ -52,6 +52,8 @@ export function toolTitle(call: ToolCall): [string, string] {
     case 'save_image_profile': return ['Save style profile', s(call, 'name')]
     case 'make_image_mask': return ['Make mask', `${s(call, 'target')}${s(call, 'exclude') ? `, keeping ${s(call, 'exclude')}` : ''}`]
     case 'list_image_masks': return ['Image masks', 'This thread']
+    case 'plan_video': return ['Plan video', s(call, 'title') || 'Video Studio']
+    case 'render_video': return ['Render video', s(call, 'project_id')]
     case 'generate_image':
       return call.arguments?.operation === 'remove' ? ['Remove masked area', 'LaMa'] : call.arguments?.operation === 'inpaint' ? ['Inpaint image', s(call, 'prompt')] : call.arguments?.operation === 'refine' ? ['Refine image', s(call, 'prompt') || 'Inherited prompt'] : call.arguments?.operation === 'upscale' ? ['Upscale image', s(call, 'upscale_model')] : [call.arguments?.source_image_id ? 'Edit image' : 'Generate image', s(call, 'prompt')]
     case 'view_generated_image':

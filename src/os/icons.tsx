@@ -267,6 +267,17 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  videostudio: {
+    bg: 'linear-gradient(160deg,#ff9e64,#e0537a 55%,#7a4fd0)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="8" y="13" width="24" height="22" rx="3" />
+        <path d="M32 21l8-5v16l-8-5z" />
+        <path d="M8 29h24M14 35v-6M20 35v-6M26 35v-6" />
+      </>
+    ),
+  },
   mail: {
     bg: 'linear-gradient(160deg,#7dcfff,#2f6fd6)',
     fg: '#fff',
@@ -418,6 +429,7 @@ const HUES: Record<AppId, string> = {
   tasks: 'var(--orange)',
   agents: 'var(--magenta)',
   imagestudio: 'var(--magenta)',
+  videostudio: 'var(--orange)',
   photos: 'var(--orange)',
   weather: 'var(--cyan)',
   changelog: 'var(--green)',

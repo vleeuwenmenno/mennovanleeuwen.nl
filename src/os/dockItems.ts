@@ -17,7 +17,7 @@ export type DockId = AppId | `launcher:${string}`
 export const DEFAULT_DOCK: AppId[] = (['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'notebook', 'contact'] as AppId[]).filter(appHere)
 
 /** Apps that can sit on the dock: not Trash (always last), not windows that need a file or note. */
-const DOCKABLE = new Set<AppId>(([...DEFAULT_DOCK, 'keys', 'settings', 'calendar', 'mail', 'tasks', 'contacts', 'agents', 'imagestudio', 'preview', 'player', 'amp', 'photos', 'weather', 'git', 'changelog', 'newdoc', 'newsheet', 'newslides'] as AppId[]).filter(appHere))
+const DOCKABLE = new Set<AppId>(([...DEFAULT_DOCK, 'keys', 'settings', 'calendar', 'mail', 'tasks', 'contacts', 'agents', 'imagestudio', 'videostudio', 'preview', 'player', 'amp', 'photos', 'weather', 'git', 'changelog', 'newdoc', 'newsheet', 'newslides'] as AppId[]).filter(appHere))
 
 type DockState = { order: DockId[]; removed: AppId[] } | null
 

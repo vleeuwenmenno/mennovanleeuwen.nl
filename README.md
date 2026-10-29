@@ -1917,7 +1917,8 @@ stored encrypted, see [`server/websearch.ts`](server/websearch.ts)), Ollama's we
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
-Stop) and `remember`/`update_memory`. A group with nothing behind it yet is greyed in that menu and
+Stop), `remember`/`update_memory`, and with Images on, `plan_video` and `render_video` (a clip for
+the [Video Studio](#video-studio); every render asks first, Plan mode refuses it). A group with nothing behind it yet is greyed in that menu and
 says why (Mail before an account is linked, Calendar before one is connected, Work folder before one
 is chosen, Terminal outside the `agents` command); it can be switched off but not on. Memory is yours (every thread) or a project's (that
 project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
@@ -3368,7 +3369,8 @@ It is laid out like Diffu's Generate page. In a wide window it has three columns
   shape lock and swap, and a batch of 1–8.
 - **Middle**: the picture as it is made, using the same block grid as a thread. Under it are its
   actions: **Use these settings**, **Send to chat…** (into a new or recent thread's message box),
-  **Refine…**, **Edit area…** (inpaint or remove), **Upscale…**, **Download** and **Delete**.
+  **Refine…**, **Edit area…** (inpaint or remove), **Upscale…**, **Make video…** (a
+  [Video Studio](#video-studio) project starting from it), **Download** and **Delete**.
   Below them is the Studio's history.
 - **Right**: **Generate**, which turns into **Queue** while a picture runs, and **Cancel**. With the
   reason it cannot run yet, if any (with **Copy all**). Then the queue, the seed (−1 random, Roll,
@@ -3407,6 +3409,122 @@ only the Studio's own queued prompt. The other routes are:
 
 ```sh
 pnpm check:agents-image-studio   # Family rules, the form's request and validation, and the endpoint against a stand-in ComfyUI: owner only, graphs per family, batch, uploads, history
+```
+
+## Video Studio
+
+**Video Studio** (its own app: the dock's app list, the Launchpad, Spotlight, `open videostudio`
+in the terminal, `/?open=videostudio&project=<id>`) turns a picture into a video clip on the
+account's own ComfyUI, the same connection as the Image Studio (Settings → Apps → Image & Video
+Studio). It also opens from **Make video…** under an Image Studio picture, and from **Open in
+Video Studio** under an agent's video plan. Without ComfyUI connected it says so and links to the
+settings.
+
+**Models.** Two, with their hard rules (shared by browser and server, `src/data/videoModels.ts`,
+ported from Diffu):
+
+| | MiniMax H3 (default) | LTX 2.5 Distilled |
+|---|---|---|
+| Length | 5–15 s; frames round up to 17k + 5 at 24 fps (5 s plays 5.17 s; the ruler shows the real end) | whole seconds 1–15; seconds × 24 + 1 frames |
+| Size | multiples of 32 (768p 16:9 is 1344 × 768) | multiples of 64, 128–2048 (its first stage runs at half size) |
+| Keyframes | first and last frame | first frame |
+| Sound | made with the picture: speech, sound, soundscape, music | made with the picture |
+
+Size is picked as an aspect ratio (21:9 to 9:16) and a tier (360p to 1080p). Which model files each
+runs with (video model, text encoder, video and audio VAE, H3's optional Turbo LoRA, LTX's latent
+upscaler) is set in Settings → Apps → Image & Video Studio → **Video**; Automatic takes an installed
+file whose name says the model.
+
+**Keyframes.** A slot for the first frame (and the last, for H3). **+ add** or **Change…** opens a
+picker: **Studio & agents** (every generated picture, newest first, with an Image Studio only
+filter, then pictures sent in threads), **Files** (Seafile or this browser's files) or **This
+device** (a file input; a picture can also be dropped on a slot or pasted). Then the clip's frame
+is laid over the picture: drag it (or the arrow keys) to keep the right part. The browser crops it
+to the clip's exact size and sends a PNG; the server keeps keyframes as the account's own pictures,
+so a project still renders after the thread it came from is gone. The same picture copied again
+reuses its keyframe, and keyframes no project or waiting render uses are deleted (after an hour,
+when a project is saved or deleted, and every few hours) so they stop counting against the quota. A keyframe made at another size
+(after a size change, or from an agent's plan) is centre-cropped by ComfyUI and the slot says so.
+
+**The timeline.** Lanes under a ruler: **Shots** (each one a cut, with its framing and transition),
+**Action**, **Camera** (MiniMax's 20 moves, small/large, slow/fast, a target), **Speech** (a
+speaker, the exact line, language, delivery, voice-over), **Sound**, **Text** (visible in the
+frame), and **Bed** (soundscape and music for the whole clip). **Style** and **Speakers** (up to
+four, who and what the voice sounds like) are on the left. With a mouse: drag an item to move it,
+its right edge to give it an end, a shot's left edge to move its cut; double-click a lane (or its
++) to add; right-click for Edit, Duplicate, Cut a shot here, Delete. Everything snaps to 0.25 s and
+to the cuts. Keyboard on the timeline: ←/→ nudge 0.1 s (Shift: 1 s), Delete removes, **S** cuts a
+shot at the playhead, Space plays, Enter edits, Esc deselects. Ctrl+wheel and − + zoom. The
+selected item's fields are in the **Inspector** on the right.
+
+Every item carries a badge that says how much control it really gives:
+- **Real**: a model input (the first frame; H3's last frame). **Off**: not used by this model (LTX's last frame).
+- **Timed**: written with its timestamp, so the model cuts close to it (H3's shots: `[Shot 2] At 00:04.000`).
+- **Ordered**: inside a shot only the order reaches the model, not the exact time (action, camera, speech, sound; LTX's shots). The selected item draws a dotted line back to its shot's start.
+- **Hint**: prompt words the model may follow (visible text, the beds).
+
+**The prompt.** The lanes compile to a plan (`compileProject` in `src/data/videoPlan.ts`): items
+fall in the shot that holds their start; each action starts a moment and the camera, speech, sound
+and text before the next action join it; at most six moments a shot (more merge, with a warning).
+The plan is then checked like an agent's (shots tile the clip, at least a second each, at most six,
+speakers exist, keyframes anchored) and written in MiniMax's base-mode format (H3: the keyframe
+instruction line, `integrated_multimodal_description`, `overall_soundscape`, `non_diegetic_music`)
+or as one chronological paragraph (LTX). **Prompt** shows it; **Edit as text** writes it by hand
+instead (the lanes are then unused, until **Back to the timeline**). Warnings point at what will not
+come out as drawn: an item crossing a cut, merged moments, and "no X" phrasing (naming a thing makes
+the model show it). The server compiles and checks again before every render.
+
+**Renders.** **Render** saves the project and queues a job on the server, which runs it when the
+account's ComfyUI slot is free: one job at a time per account, shared with the Image Studio and
+generate_image. A picture asked for during a render waits for it (it does not fail; it gives up
+after the render deadline), and pictures go first: no render starts while one waits, nor between the
+pictures of an Image Studio batch. The job goes on
+with the window or the tab closed. A bar shows where it is (waiting in ComfyUI's queue, loading,
+sampling n of N, upscaling and refining for LTX, decoding, saving) with **Cancel**, and a
+notification (also a push on devices that allow it) says when it is done or failed. At most four
+renders wait per account. Cancel deletes only the job's own queued prompt (never `/interrupt`): a
+render ComfyUI already started may finish there, but its video is not kept. A server restart marks
+renders it was running **interrupted** (they are not resubmitted); queued ones start when it is back.
+A render stops after `VIDEO_DEADLINE_MIN` (default 30) minutes.
+
+**Videos.** Kept as files, `DATA_DIR/videos/<user>/<id>.mp4` (folders 0700, files 0600), checked to
+be MP4 and at most 512 MB, and counted in the account's storage quota with its projects and
+keyframes: a render is refused before it is queued when the estimate does not fit, and its video is
+not kept when the real file does not (refused before reading when ComfyUI gives the size, and
+stopped while streaming when it does not). A download that fails or is cancelled leaves no file, and
+a server start removes half-written ones. The history under the timeline lists the project's videos;
+the preview plays the selected one (muted by default; the playhead follows it). **Open in Player**,
+**Download** and **Delete** act on it. Deleting a project keeps its videos; deleting the account
+removes the folder.
+
+**On a phone** (or a window under 1000 px) the preview comes first, then the render bar and one lane
+at a time (picked above the timeline; pinch zooms, a long-press opens an item's menu), its items as a
+list (tap one to edit it in a sheet, or + Add at the playhead), the sound beds, and the history.
+**Keyframes**, **Style** and **Prompt** open as sheets from the bottom bar, above **Render**.
+
+**Agents.** With Images on in a thread and ComfyUI connected, an agent can **plan_video**: a clip
+(MiniMax H3 or LTX, a length, an optional first or last frame from the thread's pictures) as a
+shot plan. The server checks it and returns any error for the agent to fix; a valid plan is saved
+as a Video Studio project and the thread shows **Open in Video Studio**. Nothing renders then. With
+`project_id` it replaces a plan it made earlier in the same thread (any other project gets a new
+one instead, so a Studio project is never overwritten); Plan mode may draft a new plan but not
+replace one.
+**render_video** queues a render of such a project: it always asks first (in every mode, Bypass
+included, with the card showing model, length, size, keyframes, seed and the prompt), and Plan mode
+refuses it. The card shows the whole prompt. Background tasks never get either tool.
+
+Routes (`server/agentVideo.ts`, all the signed-in account's own; another account's id answers 404):
+- `GET /api/video`, `GET /api/video/catalog` (what ComfyUI has, and the files each model resolves to), `GET|PUT /api/video/models`.
+- `GET|POST /api/video/projects`, `GET|PUT|DELETE /api/video/projects/<id>` (PUT names the revision it is based on; an older one answers 409 with the current project), `POST /api/video/projects/<id>/render`.
+- `POST /api/video/sources` (`{ name, data }` with a base64 PNG, or `{ image_id }` for a copy of one of the account's pictures), `GET /api/video/sources/<id>`, `GET /api/video/pictures` (pictures sent in threads).
+- `GET /api/video/jobs?active=1`, `GET|DELETE /api/video/jobs/<id>` (DELETE cancels).
+- `GET /api/video/videos?project=`, `DELETE /api/video/videos/<id>`, `GET|HEAD /api/video/media/<id>` (byte ranges: 206, suffix and open-ended ranges, 416).
+
+Not in this version: clips longer than one generation (chained segments), stitching (no ffmpeg in
+the image), LTX last frames and mid keyframes, camera LoRAs, and your own audio.
+
+```sh
+pnpm check:video-studio   # frame and size rules, the lane compiler and its badges, the H3 and LTX graphs and schema checks, and the server against a stand-in ComfyUI: render, cancel, restart (interrupted), the shared slot, queue and quota limits, byte ranges, owner-only routes, and the agent tools' permissions
 ```
 
 ## Photos
