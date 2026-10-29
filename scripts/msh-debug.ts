@@ -100,6 +100,28 @@ try {
   await wait(() => pause.current.state === 'paused')
   eq(pause.current.location.expression, 'echo after', 'pause request stops at next checkpoint after running command')
   pause.cancel(); eq((await pausing).status, 130, 'cancel after pause request')
+  // Abort only after real output has arrived while the interpreter is running.
+  const runningAbort = new AbortController()
+  let runningPrints = 0, cancelledWhileRunning = false
+  const running = launchDebug('while true; do echo running; done', {
+    ...base(runningAbort.signal), print: () => {
+      runningPrints++
+      if (runningPrints === 8) {
+        cancelledWhileRunning = running.session.current.state === 'running'
+        runningAbort.abort()
+      }
+    },
+  })
+  await wait(() => running.session.current.state === 'paused'); running.session.continue()
+  const runningResult = await Promise.race([running.done, new Promise<never>((_, reject) => {
+    const timeout = setTimeout(() => { running.session.cancel(); reject(new Error('running output cancellation timed out')) }, 2000)
+    void running.done.finally(() => clearTimeout(timeout))
+  })])
+  check(cancelledWhileRunning && runningPrints === 8, 'abort occurs during running loop after eight real output callbacks')
+  eq([running.session.current.state, running.session.current.status, runningResult[0].ok], ['cancelled', 130, false], 'running output cancellation terminates execution with status 130')
+  const printsAtEnd = runningPrints
+  await new Promise(r => setTimeout(r, 20))
+  eq(runningPrints, printsAtEnd, 'running loop emits no output after cancellation settles')
   // One top-level msh invocation streams far more than the UI cap, without newlines.
   // Both retained RunResult output and screen callback chunks must remain bounded.
   const chunk = 'x'.repeat(2048)
