@@ -318,10 +318,14 @@ function Editor({ id, configured, jobs, refreshJobs, onClose, onGone, onSettings
     setSeg({ duration: d, lanes: fitLanes(lanes, d) })
     setPlayhead((t) => Math.min(t, d))
   }
-  const aspect = videoAspectLabel(project.width, project.height) ?? 'custom'
+  // "Match first frame" takes the picture's own shape, so ComfyUI has nothing to cut off.
+  const frameRatio = seg.firstFrame && seg.firstFrame.width > 0 && seg.firstFrame.height > 0 ? seg.firstFrame.width / seg.firstFrame.height : null
+  const matchesFrame = frameRatio !== null && Math.abs(project.width / project.height / frameRatio - 1) < 0.03
+  const aspect = videoAspectLabel(project.width, project.height) ?? (matchesFrame ? 'frame' : 'custom')
   const tier = videoSizeTier(project.width, project.height, project.family) ?? 'custom'
+  const ratioOf = (label: string) => (label === 'frame' && frameRatio) || VIDEO_ASPECT_RATIOS.find((a) => a.label === label)?.value || project.width / project.height
   const setSize = (ratioLabel: string, tierLabel: string) => {
-    const ratio = VIDEO_ASPECT_RATIOS.find((a) => a.label === ratioLabel)?.value ?? project.width / project.height
+    const ratio = ratioOf(ratioLabel)
     const short = VIDEO_SIZE_TIERS.find((t) => t.label === tierLabel)?.shortSide ?? Math.min(project.width, project.height)
     change((p) => ({ ...p, ...videoSizeFor(ratio, short, p.family) }))
   }
@@ -404,7 +408,7 @@ function Editor({ id, configured, jobs, refreshJobs, onClose, onGone, onSettings
 
   const preview = (
     <section className="vs-preview" aria-label="Preview">
-      <div className="vs-stage" style={{ aspectRatio: `${project.width} / ${project.height}` }}>
+      <div className="vs-stage" style={{ '--vs-ar': project.width / project.height } as React.CSSProperties}>
         {shown ? (
           <video
             ref={video}
@@ -457,8 +461,8 @@ function Editor({ id, configured, jobs, refreshJobs, onClose, onGone, onSettings
       {columns && (
         <>
           <Select aria-label="Model" value={project.family} onChange={setFamily} options={(['minimax_h3', 'ltx25'] as VideoFamily[]).map((f) => ({ value: f, label: FAMILY_LABEL[f] }))} />
-          <Select aria-label="Aspect ratio" value={aspect} onChange={(a) => setSize(a, tier)} options={[...VIDEO_ASPECT_RATIOS.map((a) => ({ value: a.label, label: a.label })), ...(aspect === 'custom' ? [{ value: 'custom', label: 'Custom' }] : [])]} />
-          <Select aria-label="Size" value={tier} onChange={(t) => setSize(aspect, t)} options={[...VIDEO_SIZE_TIERS.map((t) => ({ value: t.label, label: `${t.label} · ${videoSizeFor(VIDEO_ASPECT_RATIOS.find((a) => a.label === aspect)?.value ?? project.width / project.height, t.shortSide, project.family).width} × ${videoSizeFor(VIDEO_ASPECT_RATIOS.find((a) => a.label === aspect)?.value ?? project.width / project.height, t.shortSide, project.family).height}` })), ...(tier === 'custom' ? [{ value: 'custom', label: `${project.width} × ${project.height}` }] : [])]} />
+          <Select aria-label="Aspect ratio" value={aspect} onChange={(a) => setSize(a, tier)} options={[...(frameRatio ? [{ value: 'frame', label: `Match first frame (${seg.firstFrame!.width} × ${seg.firstFrame!.height})` }] : []), ...VIDEO_ASPECT_RATIOS.map((a) => ({ value: a.label, label: a.label })), ...(aspect === 'custom' ? [{ value: 'custom', label: 'Custom' }] : [])]} />
+          <Select aria-label="Size" value={tier} onChange={(t) => setSize(aspect, t)} options={[...VIDEO_SIZE_TIERS.map((t) => ({ value: t.label, label: `${t.label} · ${videoSizeFor(ratioOf(aspect), t.shortSide, project.family).width} × ${videoSizeFor(ratioOf(aspect), t.shortSide, project.family).height}` })), ...(tier === 'custom' ? [{ value: 'custom', label: `${project.width} × ${project.height}` }] : [])]} />
           <DurationField family={project.family} duration={duration} onChange={setDuration} effective={effective} />
           <button type="button" className={`btn btn-small ${promptOpen ? 'btn-primary' : ''}`} aria-expanded={promptOpen} onClick={() => setPromptOpen((o) => !o)}>Prompt</button>
         </>
@@ -471,7 +475,7 @@ function Editor({ id, configured, jobs, refreshJobs, onClose, onGone, onSettings
         aria-label="More"
         onClick={(e) => {
           const items: MenuItem[] = [
-            ...(!columns ? [{ label: 'Model', submenu: (['minimax_h3', 'ltx25'] as VideoFamily[]).map((f) => ({ label: FAMILY_LABEL[f], checked: project.family === f, onSelect: () => setFamily(f) })) }, { label: 'Aspect ratio', submenu: VIDEO_ASPECT_RATIOS.map((a) => ({ label: a.label, checked: aspect === a.label, onSelect: () => setSize(a.label, tier) })) }, { label: 'Size', submenu: VIDEO_SIZE_TIERS.map((t) => ({ label: t.label, checked: tier === t.label, onSelect: () => setSize(aspect, t.label) })) }] : []),
+            ...(!columns ? [{ label: 'Model', submenu: (['minimax_h3', 'ltx25'] as VideoFamily[]).map((f) => ({ label: FAMILY_LABEL[f], checked: project.family === f, onSelect: () => setFamily(f) })) }, { label: 'Aspect ratio', submenu: [...(frameRatio ? [{ label: 'Match first frame', checked: aspect === 'frame', onSelect: () => setSize('frame', tier) }] : []), ...VIDEO_ASPECT_RATIOS.map((a) => ({ label: a.label, checked: aspect === a.label, onSelect: () => setSize(a.label, tier) }))] }, { label: 'Size', submenu: VIDEO_SIZE_TIERS.map((t) => ({ label: t.label, checked: tier === t.label, onSelect: () => setSize(aspect, t.label) })) }] : []),
             { label: 'Video settings…', onSelect: onSettings },
             { separator: true },
             { label: 'Delete this project…', danger: true, onSelect: () => void removeProject() },
