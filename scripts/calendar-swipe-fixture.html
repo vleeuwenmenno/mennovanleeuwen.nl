@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- The Calendar app alone on a page, for scripts/calendar-swipe-check.ts (served by a scratch Vite server). -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Calendar fixture</title>
+  </head>
+  <body>
+    <div id="root" style="position: fixed; inset: 0; display: flex"></div>
+    <script type="module">
+      import { createRoot } from 'react-dom/client'
+      import { loadAccount } from '/src/os/account.ts'
+      import { initTheme } from '/src/os/theme.ts'
+      import { initUiScale } from '/src/os/uiScale.ts'
+      import { WindowManagerProvider } from '/src/os/wm.tsx'
+      import { CalendarApp } from '/src/apps/calendar/Calendar.tsx'
+      import React from 'react'
+      import '/src/styles.css'
+      import '/src/home.css'
+      import '/src/mobile.css'
+      initTheme()
+      initUiScale()
+      void loadAccount()
+      const q = new URLSearchParams(location.search)
+      const win = { pid: 1, app: 'calendar', x: 0, y: 0, w: innerWidth, h: innerHeight, z: 1, minimized: false, maximized: true, openedAt: 0, props: { view: q.get('view') ?? '3day', date: q.get('date') ?? '2026-10-14' } }
+      createRoot(document.getElementById('root')).render(
+        React.createElement(WindowManagerProvider, { initial: () => [], placement: () => ({ x: 0, y: 0, w: 400, h: 400 }), isApp: () => true }, React.createElement('div', { style: { display: 'flex', flex: 1, minWidth: 0 } }, React.createElement(CalendarApp, { win }))),
+      )
+    </script>
+  </body>
+</html>
