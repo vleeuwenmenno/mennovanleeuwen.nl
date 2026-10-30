@@ -9,6 +9,7 @@
 // Exits 1 on any failure.
 
 import { existsSync } from 'node:fs'
+import { widgetStorageFixture } from './widget-storage-fixture.ts'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { check, finish, sleep } from './empires-harness.ts'
@@ -95,6 +96,7 @@ g.localStorage = {
 const main = new Tab()
 tabs.push(main)
 g.window = main
+g.indexedDB = widgetStorageFixture(() => { const owner = g.window as Tab; return callback => as(owner, callback) })
 g.document = { cookie: 'mvlos_login=check; mvlos_uid=1', visibilityState: 'visible', addEventListener() {}, removeEventListener() {}, title: '' }
 /** How often a page asked to start again. */
 let reloads = 0

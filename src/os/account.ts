@@ -45,7 +45,7 @@ const listeners = new Set<() => void>()
 async function forgetBrowserAccount() {
   freezeAccount(false)
   window.dispatchEvent(new Event('mvlos:forget'))
-  clearAccountSpace()
+  await clearAccountSpace().catch(() => { /* blocked storage remains account-scoped; auth revocation still completes */ })
   try {
     const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription()
     await sub?.unsubscribe()
@@ -53,7 +53,7 @@ async function forgetBrowserAccount() {
     /* no push here */
   }
   // Anything else that wrote meanwhile goes too.
-  clearAccountSpace()
+  await clearAccountSpace().catch(() => { /* blocked storage remains account-scoped; auth revocation still completes */ })
 }
 
 function set(next: Account) {

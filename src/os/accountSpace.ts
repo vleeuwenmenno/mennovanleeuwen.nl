@@ -1,3 +1,4 @@
+import { storageTransaction, WIDGET_STORAGE_KEY, WIDGET_JOURNAL_PREFIX } from './storageTransaction'
 // Whose browser storage this tab uses, and the guard that keeps one account's state out of
 // another's.
 //
@@ -116,12 +117,17 @@ export const accountStorage = {
 export const isAccountKey = (storageKey: string | null, key: string) => storageKey === accountKey(key)
 
 /** Removes this tab's whole account space (signing out: the account's state leaves this browser). */
-export function clearAccountSpace() {
+export function clearAccountSpace(): Promise<void> {
+  const canonical = accountKey(WIDGET_STORAGE_KEY), journals = accountKey(WIDGET_JOURNAL_PREFIX)
+  const widgetKey = (key: string) => key === canonical || key === journals || key.startsWith(journals + ':')
   try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE)) localStorage.removeItem(k)
-  } catch {
-    /* nothing kept */
-  }
+    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && !widgetKey(k)) localStorage.removeItem(k)
+  } catch { return Promise.reject(new Error('Account storage cleanup unavailable')) }
+  // Logout is authorized cleanup after revocation, so it intentionally does not call accountGuard.
+  // It follows any already-running writer, including a tab paused inside its native storage call.
+  return storageTransaction(() => {
+    for (const k of Object.keys(localStorage)) if (widgetKey(k)) localStorage.removeItem(k)
+  })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -152,40 +158,52 @@ const OLD_MARKER = 'mvlos.account'
 const OLDER_MARKER = 'mvlos.owner'
 
 function moveIn() {
-  if (typeof localStorage === 'undefined') return
   try {
-    const flag = `${SPACE}moved`
-    if (localStorage.getItem(flag)) return
-    const keys = Object.keys(localStorage)
-    const marker = localStorage.getItem(OLD_MARKER)
-    // The plain keys were this account's (or a visitor's, for a visitor), by the old marker; the
-    // older "owner" flag belonged to whoever signed in first.
-    const theirs = TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)
-    if (theirs) {
-      for (const k of keys)
-        if (LEGACY.some((r) => r.test(k))) {
-          const to = accountKey(k)
-          const v = localStorage.getItem(k)
+    if (typeof localStorage === 'undefined') return
+    const flag = `${SPACE}moved`, plainPlan = `${SPACE}widget-move:plain:v2`, guestPlan = `${SPACE}widget-move:guest:v2`
+    if (!localStorage.getItem(flag)) {
+      const keys = Object.keys(localStorage)
+      const marker = localStorage.getItem(OLD_MARKER)
+      const theirs = TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)
+      // Separate monotonic intent flags cannot overwrite another starter's positive claim.
+      // Failed IDB must not reopen other stores' import or discard the original envelope.
+      if (theirs) localStorage.setItem(plainPlan, '1')
+      if (TAB_UID) localStorage.setItem(guestPlan, '1')
+      if (theirs) {
+        for (const k of keys) if (LEGACY.some(r => r.test(k)) && k !== WIDGET_STORAGE_KEY) {
+          const to = accountKey(k), v = localStorage.getItem(k)
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
           localStorage.removeItem(k)
         }
-      localStorage.removeItem(OLD_MARKER)
-      localStorage.removeItem(OLDER_MARKER)
+        localStorage.removeItem(OLD_MARKER)
+        localStorage.removeItem(OLDER_MARKER)
+      }
+      if (TAB_UID) for (const k of keys) if (k.startsWith('mvlos.visitor.sync.') && k !== 'mvlos.visitor.sync.widgets:state:v2') {
+        const to = SPACE + k.slice('mvlos.visitor.'.length)
+        if (localStorage.getItem(to) !== null) continue
+        const v = localStorage.getItem(k)
+        if (v !== null) { const m = JSON.parse(v); localStorage.setItem(to, JSON.stringify({ value: m.value, base: 0, dirty: true })) }
+      }
+      localStorage.setItem(flag, '1')
     }
-    // A visitor signing in: what they did as a visitor (their synced state) joins the account,
-    // once, as the account's space starts.
-    if (TAB_UID)
-      for (const k of keys)
-        if (k.startsWith('mvlos.visitor.sync.')) {
-          const to = SPACE + k.slice('mvlos.visitor.'.length)
-          const v = localStorage.getItem(k)
+    if (localStorage.getItem(plainPlan) || localStorage.getItem(guestPlan)) {
+      void storageTransaction(() => {
+        if (!accountGuard()) return
+        const to = accountKey(WIDGET_STORAGE_KEY)
+        if (localStorage.getItem(plainPlan)) {
+          const v = localStorage.getItem(WIDGET_STORAGE_KEY)
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
-          localStorage.removeItem(k)
+          if (v !== null) localStorage.removeItem(WIDGET_STORAGE_KEY)
         }
-    localStorage.setItem(flag, '1')
-  } catch {
-    /* storage can't be used: nothing to move */
-  }
+        if (localStorage.getItem(guestPlan) && localStorage.getItem(to) === null) {
+          const v = localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')
+          if (v !== null) { const m = JSON.parse(v); localStorage.setItem(to, JSON.stringify({ value: m.value, base: 0, dirty: true })) }
+        }
+        localStorage.removeItem(plainPlan)
+        localStorage.removeItem(guestPlan)
+      }).catch(() => { /* fail closed; original envelope + scoped plan remain for retry */ })
+    }
+  } catch { /* storage unavailable: ordinary stores remain usable in memory */ }
 }
 moveIn()
 

@@ -6,7 +6,7 @@ import { accountGuard } from '../../os/accountSpace'
 import { isMobile, useIsMobile } from '../../os/useIsMobile'
 import { useWM, type WinState } from '../../os/wm'
 import { defaultBuild } from './defaults'
-import { hasGrant, allowRevision, revokeRevision, installations, installationVersion, useInstallationPresence, type Revision } from './installations'
+import { hasGrant, useRevisionGrant, allowRevision, revokeRevision, installations, installationVersion, useInstallationPresence, type Revision } from './installations'
 import { isWidgetKind, supportsCapabilities, descriptor, verifySnapshot, sourceIdentityOf, type Capability, type Descriptor, type Snapshot, type WidgetInput } from './package'
 import { allowNativeText, applyPackageEdit, projectNote, sameNote } from './noteTransactions'
 import { Renderer } from './Renderer'
@@ -57,8 +57,8 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const [broker,setBroker]=useState<{identity:string;value:BrokerPresentation}|null>(null)
   const [pages, setPages] = useState<number[]>([0])
   const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : !unavailable && builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
-  const permitted = revision && hasGrant(id, revision)
-  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent])
+  const permitted = useRevisionGrant(id, revision)
+  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
   const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && !isMobile() && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id

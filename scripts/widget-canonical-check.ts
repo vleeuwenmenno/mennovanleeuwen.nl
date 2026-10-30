@@ -1,6 +1,7 @@
 // Pure merge/migration fixtures plus the real canonical facade and synced hydration/CAS paths.
 // No real accounts, browser, source packages, or network. Run with pnpm exec node <this file>.
 import assert from 'node:assert/strict'
+import { widgetStorageFixture } from './widget-storage-fixture.ts'
 import { existsSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -60,6 +61,35 @@ const firstPass = model.applyPending(emptyWidgetState(), overOnePass, false)
 assert.equal(firstPass.consumed!.burst, model.JOURNAL_LIMITS.operations)
 assert.equal(Object.keys(model.unconsumed(overOnePass, firstPass).operations).length, 1)
 assert.equal(model.applyPending(firstPass, overOnePass, true).consumed!.burst, model.JOURNAL_LIMITS.operations + 1, 'bounded replay retains and drains the remainder')
+// A remotely tombstoned original key is remapped once per writer. Every following gesture
+// addresses that same identity, including later replay passes and a JSON/reload round trip.
+const remapBase = { ...emptyWidgetState(), placements: { places: {}, removed: 'remap-note' } }
+const remapAdd = { ...model.emptyDelta(), placements: { places: { 'remap-note': entry('remap-note') }, removed: '' }, added: ['remap-note'] }
+const remapMove = { ...model.emptyDelta(), placements: { places: { 'remap-note': entry('remap-note', { x: 123, y: 456, at: 72 }) }, removed: '' } }
+const remapRemove = { ...model.emptyDelta(), placements: { places: {}, removed: 'remap-note' } }
+let remapLog = model.appendPending(model.emptyPending(), 'remap-writer', 1, remapAdd)
+const addedRemap = model.applyPending(remapBase, remapLog, true)
+const remappedKey = addedRemap.remaps!['remap-writer']['remap-note']
+assert.ok(remappedKey.startsWith('remap-note~pending-'))
+remapLog = model.appendPending(remapLog, 'remap-writer', 2, remapMove)
+const movedRemap = model.applyPending(normalizeWidgetState(JSON.parse(JSON.stringify(addedRemap)))!, remapLog, true)
+assert.equal(Object.keys(movedRemap.placements.places).length, 1)
+assert.equal(movedRemap.placements.places[remappedKey].x, 123)
+remapLog = model.appendPending(remapLog, 'remap-writer', 3, remapRemove)
+const removedRemap = model.applyPending(normalizeWidgetState(JSON.parse(JSON.stringify(movedRemap)))!, remapLog, true)
+assert.equal(Object.keys(removedRemap.placements.places).length, 0)
+assert.ok(sets.removedKeys(removedRemap.placements).has(remappedKey))
+assert.deepEqual(model.applyPending(remapBase, remapLog, true), removedRemap, 'one pass and reloaded multi-pass replay agree')
+assert.equal(Object.keys(merge(removedRemap, movedRemap).placements.places).length, 0, 'late geometry cannot resurrect remapped tombstone')
+const splitRemap: model.PendingWidgets = { operations: { ...remapLog.operations } }
+delete splitRemap.operations['remap-writer:3']
+for (let n = 3; n <= model.JOURNAL_LIMITS.operations; n++) splitRemap.operations['remap-writer:' + n] = { writer: 'remap-writer', sequence: n, at: n, delta: model.emptyDelta() }
+splitRemap.operations['remap-writer:1025'] = { writer: 'remap-writer', sequence: 1025, at: 1025, delta: remapRemove }
+const boundary = model.applyPending(remapBase, splitRemap, true)
+assert.equal(boundary.placements.places[remappedKey].x, 123)
+assert.equal(Object.keys(model.applyPending(normalizeWidgetState(JSON.parse(JSON.stringify(boundary)))!, splitRemap, true).placements.places).length, 0)
+assert.throws(() => merge(addedRemap, { ...addedRemap, remaps: { 'remap-writer': { 'remap-note': 'other-target' } } }), /Conflicting widget placement identity/)
+assert.equal(normalizeWidgetState({ ...remapBase, remaps: { 'remap-writer': Object.fromEntries(Array.from({ length: model.JOURNAL_LIMITS.remaps + 1 }, (_, n) => ['key' + n, 'target' + n])) } }), null)
 console.log('pure canonical migration/config/placement/installation merge fixtures passed')
 
 // Each page imports its own real modules; storage and the fake account server are shared.
@@ -67,6 +97,7 @@ type Remote = { value: unknown; updatedAt: number }
 type Listener = (event: any) => void
 const g = globalThis as any
 const nativeTimeout = globalThis.setTimeout
+const nativeClearTimeout = globalThis.clearTimeout
 const storage = new Map<string, string>()
 const servers = new Map<string, Map<string, Remote>>()
 const pages: Page[] = []
@@ -79,7 +110,7 @@ let timerId = 0
 const timers = new Map<number, { page: Page; callback: () => void }>()
 const writes: string[] = []
 const puts: { account: string; key: string; value: unknown }[] = []
-const savedGlobals = Object.fromEntries(['window', 'document', 'location', 'localStorage', 'fetch', 'setTimeout', 'clearTimeout'].map(key => [key, g[key]]))
+const savedGlobals = Object.fromEntries(['window', 'document', 'location', 'localStorage', 'indexedDB', 'fetch', 'setTimeout', 'clearTimeout'].map(key => [key, g[key]]))
 class Page {
   id = pages.length + 1
   innerWidth = 1400
@@ -133,6 +164,7 @@ class Page {
   async pull() { this.activate(); await this.sync.pullAll() }
   async flush() {
     this.activate()
+    await this.canonical.canonicalConfigs.flush?.()
     for (const [id, timer] of [...timers]) if (timer.page === this) { timers.delete(id); timer.callback() }
     await new Promise(resolve => nativeTimeout(resolve, 2))
   }
@@ -157,8 +189,12 @@ g.localStorage = {
   },
   removeItem(key: string) { if (active.blocked) throw new Error('blocked'); storage.delete(`${active.device}/${key}`) },
 }
-g.setTimeout = (callback: () => void) => { const id = ++timerId; timers.set(id, { page: active, callback }); return id }
-g.clearTimeout = (id: number) => timers.delete(id)
+g.indexedDB = widgetStorageFixture(() => { const owner = active; return callback => owner.run(callback) })
+g.setTimeout = (callback: () => void, delay: number) => {
+  if (delay === 5000) return nativeTimeout(callback, delay)
+  const id = ++timerId; timers.set(id, { page: active, callback }); return id
+}
+g.clearTimeout = (id: any) => typeof id === 'number' ? timers.delete(id) : nativeClearTimeout(id)
 g.fetch = async (path: string, init: RequestInit = {}) => {
   const page = active
   const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
@@ -336,6 +372,7 @@ try {
   guest.config.setWidgetConfig('guest', { tilt: -2 })
   assert.equal(guest.meta(KEY), null)
   await guest.login()
+  await guest.canonical.canonicalConfigs.flush?.()
   assert.ok(guest.meta(KEY).value.placements.places.guest)
   assert.equal(guest.meta(KEY).value.configs.guest.value.tilt, -2)
   const authDisabled = new Page('visitor', 'auth-disabled')
@@ -345,6 +382,7 @@ try {
   assert.equal(authDisabled.meta(KEY), null)
   await authDisabled.login()
   assert.equal(authDisabled.account.getAccount().status, 'off')
+  await authDisabled.canonical.canonicalConfigs.flush?.()
   assert.equal(authDisabled.meta(KEY).value.configs.local.value.tilt, 3, 'confirmed auth-disabled guest cuts over locally')
   const denied = new Page('visitor', 'denied')
   denied.blocked = true

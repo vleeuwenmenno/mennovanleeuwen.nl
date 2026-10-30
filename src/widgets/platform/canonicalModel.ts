@@ -11,6 +11,8 @@ export type WidgetState = {
   installations: InstallationRecords
   /** Durable high-water marks for pre-hydration writers. Never evicted. */
   consumed?: Record<string, number>
+  /** Writer-local original placement key -> permanent remapped key. */
+  remaps?: Record<string, Record<string, string>>
 }
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const own = (v: object, key: string) => Object.hasOwn(v, key)
@@ -49,9 +51,9 @@ export function normalizeWidgetState(raw: unknown): WidgetState | null {
     if (v.removed === true) return [[id, { at: v.at, removed: true }]]
     return record(v.value) ? [[id, { at: v.at, value: v.value }]] : []
   })) as WidgetState['configs']
-  const consumed = normalizeConsumed(raw.consumed)
-  if (!consumed) return null
-  return { schema: 2, configs, placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations), ...(Object.keys(consumed).length ? { consumed } : {}) }
+  const consumed = normalizeConsumed(raw.consumed), remaps = normalizeRemaps(raw.remaps)
+  if (!consumed || !remaps) return null
+  return { schema: 2, configs, placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations), ...(Object.keys(consumed).length ? { consumed } : {}), ...(Object.keys(remaps).length ? { remaps } : {}) }
 }
 export function mergeWidgetStates(local: WidgetState | null, remote: WidgetState | null): WidgetState | null {
   if (!local) return remote
@@ -62,8 +64,8 @@ export function mergeWidgetStates(local: WidgetState | null, remote: WidgetState
     // At the same counter deletion beats a live copy, then a stable data tie-break.
     if (!other || value.at > other.at || value.at === other.at && (Number(!!value.removed) > Number(!!other.removed) || !!value.removed === !!other.removed && stableJSON(value) > stableJSON(other))) Object.defineProperty(configs, id, { value, enumerable: true, writable: true, configurable: true })
   }
-  const consumed = mergeConsumed(local.consumed, remote.consumed)
-  return { schema: 2, configs, placements: mergeSets(local.placements, remote.placements), installations: mergeInstallationRecords(local.installations, remote.installations), ...(Object.keys(consumed).length ? { consumed } : {}) }
+  const consumed = mergeConsumed(local.consumed, remote.consumed), remaps = mergeRemaps(local.remaps, remote.remaps)
+  return { schema: 2, configs, placements: mergeSets(local.placements, remote.placements), installations: mergeInstallationRecords(local.installations, remote.installations), ...(Object.keys(consumed).length ? { consumed } : {}), ...(Object.keys(remaps).length ? { remaps } : {}) }
 }
 export const configsOf = (state: WidgetState): Configs => Object.fromEntries(Object.entries(state.configs).flatMap(([id, v]) => v.removed ? [] : [[id, v.value!]]))
 export function withConfigs(state: WidgetState, next: Configs, now = Date.now()): WidgetState {
@@ -82,7 +84,7 @@ export function importLegacy(configs: unknown, placements: unknown, installation
   return { schema: 2, configs: Object.fromEntries(Object.entries(normalizeConfigs(configs)).map(([id, value]) => [id, { at: 0, value }])), placements: normalizeSet(placements), installations: normalizeInstallations(installations) }
 }
 
-export const JOURNAL_LIMITS = Object.freeze({ writers: 256, operations: 1024 })
+export const JOURNAL_LIMITS = Object.freeze({ writers: 256, operations: 1024, remaps: 1024 })
 const WRITER = /^[a-zA-Z0-9-]{1,80}$/
 const frontier = (value: Record<string, number> | undefined, id: string) => value && own(value, id) ? value[id] : 0
 const sequence = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0
@@ -95,6 +97,29 @@ function mergeConsumed(a: Record<string, number> = {}, b: Record<string, number>
   const out = Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].sort().map(id => [id, Math.max(frontier(a, id), frontier(b, id))]))
   // Never forget a writer to make room: an old tab could then replay its consumed gestures.
   if (Object.keys(out).length > JOURNAL_LIMITS.writers) throw new Error('Widget migration writer limit reached; pending changes retained')
+  return out
+}
+function normalizeRemaps(raw: unknown): NonNullable<WidgetState['remaps']> | null {
+  if (raw === undefined) return {}
+  if (!record(raw) || Object.keys(raw).length > JOURNAL_LIMITS.writers) return null
+  let count = 0
+  for (const [writer, keys] of Object.entries(raw)) {
+    if (!WRITER.test(writer) || !record(keys)) return null
+    for (const [from, to] of Object.entries(keys)) if (++count > JOURNAL_LIMITS.remaps || !/^[^\s]{1,80}$/.test(from) || typeof to !== 'string' || !/^[^\s]{1,80}$/.test(to)) return null
+  }
+  return Object.fromEntries(Object.entries(raw).map(([writer, keys]) => [writer, { ...keys as Record<string, string> }]))
+}
+function mergeRemaps(a: WidgetState['remaps'] = {}, b: WidgetState['remaps'] = {}) {
+  const out = Object.fromEntries(Object.entries(b).map(([writer, keys]) => [writer, { ...keys }]))
+  for (const [writer, keys] of Object.entries(a)) {
+    const merged = { ...(own(out, writer) ? out[writer] : {}) }
+    for (const [from, to] of Object.entries(keys)) {
+      if (own(merged, from) && merged[from] !== to) throw new Error('Conflicting widget placement identity; pending changes retained')
+      Object.defineProperty(merged, from, { value: to, enumerable: true, configurable: true, writable: true })
+    }
+    Object.defineProperty(out, writer, { value: merged, enumerable: true, configurable: true, writable: true })
+  }
+  if (!normalizeRemaps(out)) throw new Error('Widget placement identity limit reached; pending changes retained')
   return out
 }
 export type ConfigEdit = { at: number; patch: Record<string, unknown>; unset: string[]; removed?: true }
@@ -155,7 +180,7 @@ export function configDelta(before: Configs, after: Configs): WidgetDelta {
   }
   return { ...emptyDelta(), configs }
 }
-function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: boolean, at: number): WidgetState {
+function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: boolean, at: number, writer: string): WidgetState {
   const configs = configsOf(state)
   for (const [id, edit] of Object.entries(pending.configs)) {
     if (edit.removed) delete configs[id]
@@ -166,19 +191,23 @@ function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: b
     }
   }
   const removed = removedKeys(state.placements), added = new Set(pending.added)
+  let remaps = state.remaps ?? {}
+  const mapped = (key: string) => own(remaps, writer) && own(remaps[writer], key) ? remaps[writer][key] : key
   const puts = Object.fromEntries(Object.entries(pending.placements.places).filter(([, p]) => !canonicalExists || p.at > 0).map(([original, p]) => {
-    let key = original
-    if (removed.has(key) && added.has(key)) {
+    let key = mapped(original)
+    if (key === original && removed.has(original) && added.has(original)) {
       let hash = 2166136261
-      for (const ch of stableJSON([key, p])) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619) >>> 0
+      for (const ch of stableJSON([original, p])) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619) >>> 0
       key = `${p.id.slice(0, 60)}~pending-${hash.toString(36)}`
+      remaps = mergeRemaps(remaps, { [writer]: { [original]: key } })
     }
     return [key, p.at > 0 ? { ...p, at: Math.max(p.at, (state.placements.places[key]?.at ?? 0) + 1) } : p]
   }))
+  const removals = [...new Set((pending.placements.removed ? pending.placements.removed.split(' ') : []).flatMap(key => [key, mapped(key)]))].sort().join(' ')
   // Use the original gesture stamp, never the time a stale tab happens to hydrate.
   const next = withConfigs(state, configs, at)
   for (const [id, edit] of Object.entries(pending.configs)) if (edit.removed && !next.configs[id]?.removed) Object.defineProperty(next.configs, id, { value: { at: Math.max(at, (state.configs[id]?.at ?? 0) + 1), removed: true }, enumerable: true, configurable: true, writable: true })
-  return { ...next, placements: mergeSets({ places: puts, removed: pending.placements.removed }, state.placements), installations: mergeInstallationRecords(pending.installations, state.installations) }
+  return { ...next, placements: mergeSets({ places: puts, removed: removals }, state.placements), installations: mergeInstallationRecords(pending.installations, state.installations), ...(Object.keys(remaps).length ? { remaps } : {}) }
 }
 export function applyPending(state: WidgetState, pending: PendingWidgets, canonicalExists: boolean): WidgetState {
   let next = state
@@ -191,7 +220,7 @@ export function applyPending(state: WidgetState, pending: PendingWidgets, canoni
     const op = [...writers.values()].map(ops => ops[0]).sort((a, b) => a.at - b.at || a.writer.localeCompare(b.writer))[0]
     if (op.sequence !== frontier(next.consumed, op.writer) + 1) throw new Error('Incomplete widget journal; pending changes retained')
     const consumed = mergeConsumed(next.consumed, { [op.writer]: op.sequence })
-    next = { ...applyDelta(next, op.delta, canonicalExists, op.at), consumed }
+    next = { ...applyDelta(next, op.delta, canonicalExists, op.at, op.writer), consumed }
     const ops = writers.get(op.writer)!
     ops.shift()
     if (!ops.length) writers.delete(op.writer)

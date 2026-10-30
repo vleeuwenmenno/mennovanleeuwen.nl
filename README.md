@@ -4402,15 +4402,37 @@ revisions/generations. Its presence is the atomic cutover marker. First import w
 account discovery and complete account-state hydration; failed/offline discovery does not mean
 an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
 Edits made while hydration is pending use account-scoped, per-writer browser journals. Every
-operation has a writer UUID and monotonic sequence. Consumption watermarks commit atomically
-with config/placement/install data and merge by maximum sequence, so a late tab or reload cannot
-reapply an already consumed edit or resurrect an already consumed addition. Writers store patches
-rather than stale whole views, re-read durable receipts before replay and never erase another
-writer's log. Original gesture stamps prevent delayed replay from gaining a new wall-clock time.
-Ordinary per-config counter and deterministic tie-break rules remain unchanged.
+operation has a writer UUID and monotonic sequence. Consumption watermarks commit in the same
+JSON envelope as config/placement/install data and merge by maximum sequence. Every durable canonical
+read/merge/write sequence and receipt cleanup runs inside one origin-wide IndexedDB `readwrite` request
+scope, including server replies, storage-event adoption, startup account transfers and logout
+cleanup. [IndexedDB transaction scheduling](https://w3c.github.io/IndexedDB/#transaction-scheduling)
+excludes overlapping writers even when another tab pauses immediately before native
+`localStorage.setItem`; another pre-write read alone would not provide that guarantee. IndexedDB
+holds no account data here. Its scope supplies mutual exclusion; it does not roll back a
+localStorage write if the transaction later aborts. Receipts precede cleanup, making retry safe.
+All tabs use this same protocol, with or without Web Locks.
+
+Local UI updates remain optimistic. Explicit installation activation waits for durable
+persistence before succeeding. Absent/blocked IndexedDB refuses shared canonical writes rather
+than falling back to unsafe localStorage locking; the UI remains usable in memory and durable
+pending journals remain available for recovery. A failed flush gets one retry per caller;
+background sync retries use existing bounded backoff. Fully blocked localStorage cannot retain
+edits across reloads and reports persistence failure. Account guards cancel queued transactions
+on revocation/switch; authorized logout cleanup follows earlier active writers. If storage
+refuses cleanup, authentication is still revoked and the inaccessible copy remains in that
+account's namespace. Ordinary synced stores keep their synchronous persistence behavior.
+
+Writers store patches rather than stale whole views and never erase another writer's log.
+A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.
+A pending addition remapped around a remote tombstone stores a writer-local original-to-target
+identity in the envelope. Later moves/removals use that same target across replay passes and
+reloads; remapped removals beat stale geometry. Original gesture stamps prevent delayed replay
+from gaining a new wall-clock time. Ordinary per-config ordering remains unchanged.
 The log admits at most 1,024 pending operations and replay processes at most 1,024 per pass;
-canonical receipts retain up to 256 pre-hydration writers. Receipts are never evicted to admit a
-new writer: capacity/merge failure preserves durable data and pending operations for recovery.
+canonical receipts retain up to 256 pre-hydration writers and 1,024 placement identity mappings.
+Receipts/mappings are never evicted to admit another operation: capacity or conflicting identity
+errors preserve durable data and pending operations for recovery.
 The one-time import preserves IDs, note identities, counters, geometry, overlap, stacking and
 removals from legacy config/placements/installations and desktop/mobile layouts. Legacy records
 remain intact for older clients; later legacy writes cannot overwrite canonical state or resurrect
@@ -4448,12 +4470,17 @@ regressions with synthetic accounts and muted Chromium. Existing widget sync/lay
 build/mock/activate/recover, action grants, private projections, paging, hidden read cancellation,
 unavailable sources, mobile preservation and explicit removals. `pnpm check:widget-review1-ui` adds real two-tab consumed-journal/reload checks,
 missing-generation repair and shared task-owner hide/close/revocation/logout regressions.
+`pnpm check:widget-review2-ui` pauses native writes in three real tabs, then checks journal
+consumption, later edits, server acknowledgements, remote adoption/storage events, overlapping
+push ownership, remap move/removal/reload, missing Web Locks, denied IndexedDB/localStorage,
+retry/deferred account transfer, cookie account switch and queued logout cleanup.
 `pnpm check:widget-canonical` checks old/new clients, complete/missing/failed hydration, offline edits, CAS conflicts, deterministic
 merges, config counters, placement tombstones, guests and storage denial. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
 check hydration, same-identity renders, runtime changes, grant revocation/re-grant and account
 authority loss/recovery, including stale cancellation. Lifecycle VM tests also exercise checklist
-prefixes at byte boundaries, oversized single lines and exact original edit offsets. Live Seafile, a full storage-denied environment and non-Chromium browsers remain
-unverified; none of the staged migration/platform gaps above are marked complete.
+prefixes at byte boundaries, oversized single lines and exact original edit offsets. Live Seafile and non-Chromium browsers remain
+unverified. Storage denial above is synthetic, including browser API denial before app boot.
+None of the staged migration/platform gaps above are marked complete.
 
 ### Weather
 

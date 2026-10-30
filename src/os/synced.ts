@@ -49,6 +49,8 @@ export type Synced<T> = {
   onRemote: (l: (v: T) => void) => () => void
   /** Whether this browser's copy was ever saved to or loaded from the account. */
   everSynced: () => boolean
+  /** Wait for serialized durable persistence, when configured. */
+  flush?: () => Promise<void>
   /** Called after account metadata is established, after any remote value callbacks. */
   onSynced: (l: () => void) => () => void
 }
@@ -107,6 +109,9 @@ export function synced<T>(
     mergeTabs?: boolean
     /** A failed canonical merge must preserve the durable copy and pending operation journal. */
     preserveOnMergeError?: boolean
+    /** Canonical stores serialize every durable write, including remote metadata updates. */
+    serialize?: <R>(run: () => R) => Promise<R>
+    afterPersist?: (value: T) => void
     /** Sees every newer value from the server or another tab before any merge can drop it. */
     onIncoming?: (remote: unknown) => void
   } = {},
@@ -127,7 +132,16 @@ export function synced<T>(
   }
   const emit = () => listeners.forEach((l) => l())
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
-  const save = () => {
+  let persistence: Promise<void> = Promise.resolve()
+  const serialized = (run: () => void) => {
+    const task = persistence.catch(() => {}).then(() => opts.serialize!(() => {
+      if (frozen() || !accountGuard()) throw new Error('Widget persistence cancelled: account authority changed')
+      run()
+    }))
+    persistence = task
+    void task.catch(reportSyncFailure)
+  }
+  const saveNow = () => {
     if (frozen() || !accountGuard()) return
     let others = false
     // Another tab's save this tab hasn't heard of yet: merged in first.
@@ -148,7 +162,10 @@ export function synced<T>(
         if (opts.preserveOnMergeError) throw error
         /* not readable: written over */
       }
-    accountStorage.set(storageKey(key), JSON.stringify(meta))
+    const durable = meta
+    const saved = accountStorage.set(storageKey(key), JSON.stringify(durable))
+    if (opts.serialize && !saved) throw new Error('Widget storage write refused; pending changes retained')
+    if (saved) opts.afterPersist?.(durable.value)
     // Another tab's changes came along: show them, as when they arrive by themselves.
     if (others) {
       emit()
@@ -156,8 +173,28 @@ export function synced<T>(
     }
   }
 
+  let saveQueued: object | undefined
+  let retrySave = false
+  const save = () => {
+    if (!opts.serialize) return saveNow()
+    if (saveQueued) return
+    const ticket = {}
+    saveQueued = ticket
+    serialized(() => { saveQueued = undefined; saveNow(); retrySave = false })
+    void persistence.catch(() => { retrySave = true }).finally(() => {
+      if (saveQueued === ticket) saveQueued = undefined
+    })
+  }
+  const flush = async () => {
+    // One bounded retry per caller. Permanent storage denial surfaces as an error, while a
+    // transient denial can recover without requiring another user edit.
+    if (retrySave && !saveQueued) save()
+    for (;;) { const prior = persistence; await prior; if (prior === persistence) return }
+  }
+
   const store: Synced<T> = {
     key,
+    ...(opts.serialize ? { flush } : {}),
     get: () => meta.value,
     set(next) {
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next
@@ -217,7 +254,8 @@ export function synced<T>(
     reset() {
       known = null
       meta = { value: fallback, base: 0, dirty: false }
-      accountStorage.remove(storageKey(key))
+      if (opts.serialize) serialized(() => accountStorage.remove(storageKey(key)))
+      else accountStorage.remove(storageKey(key))
       emit()
     },
     merge: opts.merge as Internal['merge'],
@@ -232,13 +270,22 @@ export function synced<T>(
   if (typeof window !== 'undefined')
     window.addEventListener('storage', (e) => {
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
-      const before = meta.value
-      meta = readMeta(key, fallback, undefined, opts.normalize)
-      learn()
-      if (e.newValue !== null) opts.onIncoming?.(meta.value)
-      emit()
-      if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
-      emitSynced()
+      const receive = () => {
+        const before = meta.value
+        const incoming = readMeta(key, fallback, undefined, opts.normalize)
+        // A storage notification must not discard this tab's unpersisted optimistic edits.
+        if (opts.serialize && meta.dirty && opts.merge) {
+          const value = opts.merge(meta.value, incoming.value)
+          meta = { value, base: Math.max(meta.base, incoming.base), dirty: JSON.stringify(value) !== JSON.stringify(incoming.value) || incoming.dirty }
+        } else meta = incoming
+        learn()
+        if (e.newValue !== null) opts.onIncoming?.(meta.value)
+        emit()
+        if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach(l => l(meta.value))
+        emitSynced()
+      }
+      if (opts.serialize) serialized(receive)
+      else receive()
     })
 
   return store
@@ -343,6 +390,16 @@ async function push(key: string) {
   }
   const wait = backoff(key)
   if (wait > 0) return schedulePush(key, wait)
+  if (s.flush) {
+    try { await s.flush() } catch (error) {
+      paceOf(key).errors = Math.min(paceOf(key).errors + 1, 16)
+      reportSyncFailure(error)
+      return schedulePush(key, 1000)
+    }
+  }
+  // Another timer may have reached this await while persistence was blocked in another tab.
+  // Recheck ownership after the await so only one request can claim this store.
+  if (frozen() || !accountGuard() || inFlight.has(key)) return
   const { value, base } = s.meta()
   const pace = paceOf(key)
   counted(key)
@@ -355,6 +412,7 @@ async function push(key: string) {
     pace.errors = 0
     if (r.conflict) reconcile(s, r)
     else s.pushed(r.updatedAt, value)
+    if (s.flush) await s.flush()
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
     pace.errors = Math.min(pace.errors + 1, 16)
@@ -397,11 +455,15 @@ export function pullAll(): Promise<void> {
   lastPull = Date.now()
   setStatus({ state: 'syncing', at: status.at })
   pulling = api<Record<string, Remote>>('/api/state')
-    .then((remote) => {
+    .then(async (remote) => {
       if (frozen() || !accountGuard()) return
       for (const s of stores.values()) reconcile(s, remote[s.key])
+      await Promise.all([...stores.values()].flatMap(s => s.flush ? [s.flush()] : []))
+      if (frozen() || !accountGuard()) return
       hydration = remote
       hydrationListeners.forEach((l) => l(remote))
+      await Promise.all([...stores.values()].flatMap(s => s.flush ? [s.flush()] : []))
+      if (frozen() || !accountGuard()) return
       if (status.state !== 'error') setStatus({ state: 'synced', at: Date.now() })
     })
     .catch((e: Error) => setStatus({ state: 'error', at: status.at, error: e.message }))
@@ -445,8 +507,13 @@ export function startSync() {
       // The server's copy, as far as this tab knows, unless a save is still out: then the server
       // may be about to hold that save's value instead (a change undone meanwhile), so send it.
       if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
-      const { value, base } = s.meta()
-      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      const send = () => {
+        if (frozen() || !accountGuard()) return
+        const { value, base } = s.meta()
+        fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      }
+      if (s.flush) void s.flush().then(send, reportSyncFailure)
+      else send()
     }
   })
   // Back from the back/forward cache: the page runs on, so what it hadn't saved is saved now

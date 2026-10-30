@@ -139,7 +139,8 @@
     "check:widget-canonical": "node scripts/widget-canonical-check.ts",
     "check:widget-builtins-ui": "node scripts/widget-builtins-e2e.ts",
     "check:widgets-sync-ui": "node scripts/widgets-sync-e2e.ts",
-    "check:widget-review1-ui": "node scripts/widget-review1-e2e.ts"
+    "check:widget-review1-ui": "node scripts/widget-review1-e2e.ts",
+    "check:widget-review2-ui": "node scripts/widget-review2-e2e.ts"
   },
   "dependencies": {
     "figlet": "^1.12.0",

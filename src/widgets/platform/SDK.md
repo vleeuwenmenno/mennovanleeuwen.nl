@@ -130,11 +130,18 @@ All six built-in folders use the same compiler/verifier/worker/renderer as forks
 Installation overrides, per-config counters and placement geometry/tombstones live in the
 versioned widgets:state:v2 envelope. One-time legacy import waits for complete account/state
 hydration; older clients cannot change canonical records after cutover. Account-scoped
-writer/sequence journals and atomic consumption watermarks make replay idempotent across
-late tabs and reloads. Ordinary per-config counter ordering remains unchanged.
+writer/sequence journals and consumption watermarks in the same envelope make replay idempotent
+across late tabs and reloads. All canonical persistence paths and receipt cleanup use one
+origin-wide IndexedDB readwrite request scope for cross-tab exclusion. There is no Web Locks or
+localStorage-only fallback: blocked transactional storage fails closed, retaining optimistic
+memory and any durable journal; activation awaits a durable flush. Account changes cancel queued
+writes and logout cleanup follows already active writers. Ordinary synced stores stay synchronous.
+Pending placement remaps retain writer-local identity across moves, removals, replay passes and
+reloads. Ordinary per-config counter ordering remains unchanged.
 Writers never delete another writer's log; their own log is
 removed only after a durable receipt. Receipts never evict old writers (256 maximum);
-pending admission/replay is bounded to 1,024 operations. Capacity errors retain the journal. Unknown kinds,
+pending admission/replay is bounded to 1,024 operations, with at most 1,024 permanent placement
+identity mappings. Capacity/conflicting-identity errors retain the journal. Unknown kinds,
 unavailable sources and hidden widgets are recoverable, not removals. Revision recovery
 changes no config, placement or note data. Cross-device conflicting generation/identity
 changes reject stale recovery; same-revision activation retries are idempotent.

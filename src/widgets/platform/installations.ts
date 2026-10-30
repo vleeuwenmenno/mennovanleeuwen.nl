@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import { defaultBuild, isBuiltin } from './defaults'
 import type { Synced } from '../../os/synced'
 import { canonicalInstallations, canonicalInstallationBytes } from './canonicalState'
@@ -61,6 +61,10 @@ export async function activate(instance: string, kind: Installation['kind'], rev
     return next
   })
   if (conflict) throw new Error(conflict)
+  await installations.flush?.()
+  if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
+  const installed = installation(instance)
+  if (installed?.active.snapshot.digest !== snapshot.digest || JSON.stringify(installed.active.source) !== JSON.stringify(revision.source)) throw new Error('Installation changed; reload before activating')
 }
 export async function recover(instance: string, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   const current = installation(instance)
@@ -69,16 +73,26 @@ export async function recover(instance: string, expectedGeneration: number, expe
 }
 /** Identity grants are local to this live account session, never accepted from imported/synced files. */
 const grants = new Set<string>()
+const grantListeners = new Set<() => void>()
+const notifyGrants = () => grantListeners.forEach(listener => listener())
+const subscribeGrants = (listener: () => void) => { grantListeners.add(listener); return () => { grantListeners.delete(listener) } }
+/** Activation can finish after host verification. Consent changes must be observable independently. */
+export const useRevisionGrant = (instance: string, revision: Revision | null) => useSyncExternalStore(subscribeGrants, () => !!revision && hasGrant(instance, revision))
 const grantKey = (instance: string, revision: Revision) => JSON.stringify([getAccount().user?.id ?? 'guest', instance, revision.source, revision.snapshot.digest])
 export function allowRevision(instance: string, revision: Revision) {
   assertSource(revision.source)
   if (!accountGuard()) throw new Error('Account revoked')
-  grants.add(grantKey(instance, revision))
+  const key = grantKey(instance, revision)
+  if (!grants.has(key)) { grants.add(key); notifyGrants() }
 }
 export function hasGrant(instance: string, revision: Revision) {
   try { assertSource(revision.source) } catch { return false }
   return accountGuard() && (revision.source.kind === 'system' && isBuiltin(revision.source.path, revision.snapshot.digest) || grants.has(grantKey(instance, revision)))
 }
-export const revokeRevision = (instance: string, revision: Revision) => grants.delete(grantKey(instance, revision))
+export const revokeRevision = (instance: string, revision: Revision) => {
+  const removed = grants.delete(grantKey(instance, revision))
+  if (removed) notifyGrants()
+  return removed
+}
 
-if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', () => grants.clear())
+if (typeof window !== 'undefined') for (const event of ['mvlos:forget', 'mvlos:account-changed']) window.addEventListener(event, () => { grants.clear(); notifyGrants() })

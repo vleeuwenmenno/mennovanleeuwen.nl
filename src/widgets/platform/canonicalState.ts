@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { storageTransaction } from '../../os/storageTransaction'
 import { getAccount, subscribeAccount } from '../../os/account'
 import { accountGuard, accountKey, accountStorage, TAB_UID } from '../../os/accountSpace'
 import { getSyncedHydration, onSyncedHydration, reportSyncFailure, synced, type Synced, type SyncedHydration } from '../../os/synced'
@@ -28,7 +29,7 @@ function readJournals() {
 }
 let pending = readJournals()
 let journalTimer: ReturnType<typeof setTimeout> | undefined
-const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, { normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true })
+const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, { normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true, serialize: storageTransaction, afterPersist: value => { if (value) finishJournal(value) } })
 
 /** Old layout coordinates have no viewport metadata. Keep every number unchanged and record the
  * screen class from the layout key, so desktop migration still wins a tie with mobile. */
@@ -96,11 +97,11 @@ function queue(delta: WidgetDelta) {
   const own = { operations: Object.fromEntries(Object.entries(pending.operations).filter(([, op]) => op.writer === writer)) }
   accountStorage.set(ownJournalKey, JSON.stringify(own))
 }
-function finishJournal() {
-  pending = unconsumed(mergePending(pending, readJournals()), latestState())
+function finishJournal(committed: WidgetState) {
+  pending = unconsumed(mergePending(pending, readJournals()), committed)
   // A successful in-memory set is not a durable receipt when storage is full/denied.
   // Only this writer can append here, and ready writers never append again.
-  const durable = normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value)
+  const durable = committed
   const own = normalizePending(readJSON(ownJournalKey))
   if (durable && !Object.keys(unconsumed(own, durable).operations).length && accountStorage.get(ownJournalKey) !== null) accountStorage.remove(ownJournalKey)
 }
@@ -125,10 +126,10 @@ function hydrate(snapshot: SyncedHydration = {}) {
   const current = latestState()
   pending = unconsumed(mergePending(pending, readJournals()), current)
   const next = applyPending(current ?? legacyState(snapshot), pending, !!current)
-  // save() merges other tabs' envelopes before writing, so simultaneous first cutovers converge.
+  // The serialized save merges other tabs' envelopes under the same IDB request scope before
+  // writing data + receipts and cleaning this writer's journal.
   state.set(next)
   ready = true
-  finishJournal()
   refresh(state.get()!, true)
   syncedListeners.forEach(l => l())
   if (!emptyJournal()) scheduleDrain()
@@ -139,7 +140,7 @@ function scheduleDrain() {
   journalTimer = setTimeout(() => { journalTimer = undefined; hydrateSafely(getSyncedHydration() ?? {}) }, 0)
 }
 
-/** True only once a complete canonical envelope was loaded or committed. Legacy layout imports
+/** True once a complete canonical envelope was loaded or staged for serialized persistence. Legacy layout imports
  * must never be admitted after this marker, including later writes from an old client. */
 export const hasWidgetCutover = () => ready || !!state.get()
 export const widgetsHydrated = () => ready
@@ -174,6 +175,7 @@ function facade<T>(get: () => T, update: (next: T) => void): Synced<T> {
       remoteListeners.add(forward)
       return () => { remoteListeners.delete(forward) }
     },
+    flush: state.flush,
     everSynced: state.everSynced,
     onSynced(l) {
       syncedListeners.add(l)
@@ -231,7 +233,7 @@ subscribeAccount(() => {
 })
 // Modules may load after /api/me and /api/state, or after a guest was established.
 if (ready && !emptyJournal()) {
-  try { commit(applyPending(latestState()!, pending, true)); finishJournal(); if (!emptyJournal()) scheduleDrain() } catch (error) { reportSyncFailure(error) }
+  try { commit(applyPending(latestState()!, pending, true)); if (!emptyJournal()) scheduleDrain() } catch (error) { reportSyncFailure(error) }
 }
 if (!ready) hydrateSafely(getSyncedHydration() ?? {})
 
