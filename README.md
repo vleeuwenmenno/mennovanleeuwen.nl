@@ -1679,6 +1679,19 @@ a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeTe
 quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
 When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
 
+**The sidebar** (a month to get around, the calendars, birthdays and task lists to show) follows the window's own width, as
+Mail does, not the screen's. From 720px up it sits beside the calendar and the ☰ button (like the toolbar's other icon buttons, 28px with a mouse and 40px with a finger, as in Mail) grows and shrinks it (the
+choice is kept while the window is narrow, and its content keeps its width so nothing reflows as it moves). Under 720px the
+window shows one thing at a time: the calendar, or the sidebar as a pane of its own that slides over it from the left
+(☰, or `‹ Calendar` at the top of the pane, goes back; so do `Esc`, picking a day or month, Today, the arrows and the view
+tabs). The calendar behind a pane is never unmounted, so its scroll and swipe paging stay as they were, and ticking a
+calendar or task list in the pane doesn't close it. A hidden pane is inert (no focus, no taps, hidden from screen
+readers), the ☰ button says `aria-expanded` and `aria-controls`, and focus goes into the pane when it opens and back to ☰
+when it closes (also when the window crosses 720px with focus in a pane that goes away). Narrowing the window starts on
+the calendar, and widening it again brings back the desktop sidebar as you left it. The slide is off with *reduce
+motion*, and while the window switches between the two layouts or before its first measure, so a phone never shows a
+wide flash. `node scripts/calendar-swipe-check.ts <scratch server>` covers all of this in headless Chromium.
+
 **Swiping between pages.** On a touch screen, swipe sideways to turn the page, in every view: it goes where
 the ‹ › arrows go (`step(shownView, …)`: a day, 3 days, a week, a month or a year; swiping left in 3 days shows
 the next 3 days). The page follows the finger with the real previous and next pages beside it (their events,
