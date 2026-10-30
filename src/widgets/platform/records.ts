@@ -36,7 +36,7 @@ export const customInstallations = (live: Installations) => Object.values(live).
 export function admission(raw: Record<string, unknown>, instance: string): string {
   if (Object.hasOwn(raw, instance)) return ''
   const keys = Object.keys(raw)
-  if (keys.filter(id => !isTombstone(raw[id])).length >= INSTALLATION_LIMIT) return `Installation limit reached (${INSTALLATION_LIMIT} widgets); remove one first or edit an existing widget`
+  if (keys.filter(id => !isTombstone(raw[id])).length >= INSTALLATION_LIMIT) return `Installation limit reached (${INSTALLATION_LIMIT} records); existing revisions remain editable, or remove a custom widget`
   if (keys.length >= RECORD_LIMIT) return 'Too many removed widget records; contact the owner'
   return ''
 }

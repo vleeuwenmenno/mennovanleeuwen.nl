@@ -88,7 +88,7 @@ export function Workshop({ win }: { win: WinState }) {
           openWidget(wm, CUSTOM_KIND, id)
           setMessage(`New widget "${revision.snapshot.manifest.name}" activated and placed on the desktop.`); setOptIn(false)
         })}>Activate as new widget</button>}
-        {instance && <button disabled={busy || !revision || !optIn || account.status !== 'user' || !current} onClick={() => void run(async () => {
+        {instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
           if (!revision) return
           await verified(revision)
           await activate(instance, kind, revision, generation.current, expectedIdentity.current)
