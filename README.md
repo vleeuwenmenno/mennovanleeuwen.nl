@@ -4376,7 +4376,11 @@ The live installation identity is rechecked synchronously, including equal-gener
 The renderer checks current grants and resource type at every interaction. Provider refs,
 credentials and navigation URLs stay outside the VM. Clipboard writes copy only the fixed
 Minecraft address following a user gesture. Shared reads are scoped to account/connection
-identity; visibility/revocation cancels pending reads. Agenda refreshes every five minutes,
+identity; visibility/revocation cancels pending reads. Agenda task reads use subscriber-owned
+leases shared with Tasks, Calendar and other live consumers. Hiding/revoking the last owner aborts
+the request and prevents late cache adoption even if a transport ignores abort. Another live app
+keeps its shared request; logout/provider changes cancel old authority and clear its cache.
+Agenda refreshes every five minutes,
 Inbox every two, Status every minute and Minecraft every thirty seconds while eligible.
 Shell visibility owns widget work: putting notes away, covering them with a maximized window,
 minimizing, hiding the document or entering the mobile breakpoint aborts active/queued work and
@@ -4397,14 +4401,25 @@ per-config counters/tombstones, placement geometry/tombstones and immutable inst
 revisions/generations. Its presence is the atomic cutover marker. First import waits for successful
 account discovery and complete account-state hydration; failed/offline discovery does not mean
 an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
-Edits made while hydration is pending use a browser-local journal and replay after hydration.
+Edits made while hydration is pending use account-scoped, per-writer browser journals. Every
+operation has a writer UUID and monotonic sequence. Consumption watermarks commit atomically
+with config/placement/install data and merge by maximum sequence, so a late tab or reload cannot
+reapply an already consumed edit or resurrect an already consumed addition. Writers store patches
+rather than stale whole views, re-read durable receipts before replay and never erase another
+writer's log. Original gesture stamps prevent delayed replay from gaining a new wall-clock time.
+Ordinary per-config counter and deterministic tie-break rules remain unchanged.
+The log admits at most 1,024 pending operations and replay processes at most 1,024 per pass;
+canonical receipts retain up to 256 pre-hydration writers. Receipts are never evicted to admit a
+new writer: capacity/merge failure preserves durable data and pending operations for recovery.
 The one-time import preserves IDs, note identities, counters, geometry, overlap, stacking and
 removals from legacy config/placements/installations and desktop/mobile layouts. Legacy records
 remain intact for older clients; later legacy writes cannot overwrite canonical state or resurrect
 removed widgets. Browser source authority still requires this device's store UUID.
 
 Malformed installation metadata stays unavailable until an explicit verified activation repairs it;
-it never selects a default. Unknown records remain in the envelope and its byte budget.
+it never selects a default, including records with missing, zero, negative or nonnumeric
+generations. Invalid generations rank below a verified repair; ties merge deterministically.
+Unknown records remain in the envelope and its byte budget.
 Hidden/mobile/minimized, unavailable source/runtime and unknown newer widget kinds never imply
 removal. Only an explicit close records a placement tombstone. Width/content-height sizing,
 regular-window two-axis sizing and the under-720-pixel hide rule stay unchanged. Previous revision
@@ -4431,8 +4446,9 @@ regressions with synthetic accounts and muted Chromium. Existing widget sync/lay
 `pnpm check:widget-builtins` executes all six sources and resource-descriptor attack fixtures.
 `pnpm check:widget-builtins-ui` exercises synthetic six-package behavior, source editing in Xed,
 build/mock/activate/recover, action grants, private projections, paging, hidden read cancellation,
-unavailable sources, mobile preservation and explicit removals. `pnpm check:widget-canonical`
-checks old/new clients, complete/missing/failed hydration, offline edits, CAS conflicts, deterministic
+unavailable sources, mobile preservation and explicit removals. `pnpm check:widget-review1-ui` adds real two-tab consumed-journal/reload checks,
+missing-generation repair and shared task-owner hide/close/revocation/logout regressions.
+`pnpm check:widget-canonical` checks old/new clients, complete/missing/failed hydration, offline edits, CAS conflicts, deterministic
 merges, config counters, placement tombstones, guests and storage denial. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
 check hydration, same-identity renders, runtime changes, grant revocation/re-grant and account
 authority loss/recovery, including stale cancellation. Lifecycle VM tests also exercise checklist

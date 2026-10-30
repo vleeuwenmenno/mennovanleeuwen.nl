@@ -58,11 +58,12 @@ function usePublish(props:BrokerProps,value:BrokerPresentation) {
 function AgendaBroker(props:BrokerProps) {
   const config=useWidgetConfig(props.id,{calendars:null as string[]|null,days:3})
   const calendars=useCalendarList().calendars,shown=useShownCalendarIds(),hidden=useHiddenCalendars(),version=useCalendarVersion(),markOf=useEventMarks()
-  const tasks=useTasks(),prefs=useTaskPrefs(),scope=useScope(props)
+  const scope=useScope(props)
+  const ready=scope.account.status==='user'&&hasCalendar(scope.account)
+  const tasks=useTasks({identity:JSON.stringify([props.lifecycle,scope.key]),eligible:()=>ready&&scope.valid()}),prefs=useTaskPrefs()
   const days=[1,3,7].includes(config.days)?config.days:3
   const allowed=new Set((calendars??[]).map(c=>c.id))
   const ids=Array.isArray(config.calendars)?calendars?config.calendars.filter(id=>typeof id==='string'&&allowed.has(id)&&!hidden.includes(id)):null:shown
-  const ready=scope.account.status==='user'&&hasCalendar(scope.account)
   const key=JSON.stringify([props.lifecycle,scope.key,ids,days,version,props.tick])
   const result=useLoad((signal,first)=>fetchEvents(startOfDay(new Date()),startOfDay(new Date(),days),ids,props.tick>0&&first,signal).then(value=>{signal.throwIfAborted();return value}),key,ready&&!!ids,5*60_000,scope.valid)
   const [minute,setMinute]=useState(0)

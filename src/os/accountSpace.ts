@@ -81,6 +81,17 @@ export const accountStorage = {
       return null
     }
   },
+  /** Read only enumeration inside this tab's account space. */
+  keys(prefix: string): string[] {
+    try {
+      const full = accountKey(prefix), keys: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        if (key?.startsWith(full)) keys.push(`mvlos.${key.slice(SPACE.length)}`)
+      }
+      return keys.sort()
+    } catch { return [] }
+  },
   /** False when it wasn't written (the guard failed, or storage refused it). */
   set(key: string, value: string): boolean {
     if (!accountGuard()) return false

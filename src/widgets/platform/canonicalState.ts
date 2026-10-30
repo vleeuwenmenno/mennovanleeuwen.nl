@@ -1,12 +1,12 @@
 import { useSyncExternalStore } from 'react'
 import { getAccount, subscribeAccount } from '../../os/account'
-import { accountGuard, accountStorage, TAB_UID } from '../../os/accountSpace'
-import { getSyncedHydration, onSyncedHydration, synced, type Synced, type SyncedHydration } from '../../os/synced'
+import { accountGuard, accountKey, accountStorage, TAB_UID } from '../../os/accountSpace'
+import { getSyncedHydration, onSyncedHydration, reportSyncFailure, synced, type Synced, type SyncedHydration } from '../../os/synced'
 import { changeSet, importPlaces, mergeSets, type WidgetPlace, type WidgetSet } from './placementSet'
 import {
-  applyPending, configsOf, emptyPending, importLegacy, mergeInstallationRecords, mergePending,
-  mergeWidgetStates, normalizeConfigs, normalizePending, normalizeWidgetState, queueConfigs,
-  stableJSON, withConfigs, type Configs, type InstallationRecords, type WidgetState,
+  applyPending, appendPending, configDelta, configsOf, emptyDelta, emptyPending, importLegacy, mergeInstallationRecords, mergePending,
+  mergeWidgetStates, normalizeConfigs, normalizePending, normalizeWidgetState, unconsumed,
+  stableJSON, withConfigs, type Configs, type InstallationRecords, type WidgetDelta, type WidgetState,
 } from './canonicalModel'
 
 export const WIDGET_STATE_KEY = 'widgets:state:v2'
@@ -17,8 +17,18 @@ function readJSON(key: string): unknown {
   try { return JSON.parse(accountStorage.get(key) ?? 'null') } catch { return null }
 }
 const localLegacy = Object.fromEntries(LEGACY_KEYS.map(key => [key, readJSON(`mvlos.sync.${key}`) as LegacyMeta | null]))
-let pending = normalizePending(readJSON(PENDING_KEY))
-const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, { normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true })
+// Each writer owns a separate key. A consumer cannot erase a concurrently appended journal.
+const writer = crypto.randomUUID()
+const ownJournalKey = `${PENDING_KEY}:${writer}`
+let serial = 0
+function readJournals() {
+  let found = normalizePending(readJSON(PENDING_KEY))
+  for (const key of accountStorage.keys(`${PENDING_KEY}:`)) found = mergePending(found, normalizePending(readJSON(key)))
+  return found
+}
+let pending = readJournals()
+let journalTimer: ReturnType<typeof setTimeout> | undefined
+const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, { normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true })
 
 /** Old layout coordinates have no viewport metadata. Keep every number unchanged and record the
  * screen class from the layout key, so desktop migration still wins a tie with mobile. */
@@ -56,7 +66,13 @@ function legacyState(snapshot: SyncedHydration = {}): WidgetState {
 }
 
 let ready = !!state.get()
-let view = state.get() ?? applyPending(legacyState(), pending, false)
+function initialView() {
+  const current = state.get()
+  if (current) return current
+  try { return applyPending(legacyState(), pending, false) }
+  catch (error) { reportSyncFailure(error); return legacyState() }
+}
+let view = initialView()
 const listeners = new Set<() => void>()
 const remoteListeners = new Set<(remote: boolean) => void>()
 const syncedListeners = new Set<() => void>()
@@ -72,9 +88,26 @@ function refresh(next: WidgetState, remote = false) {
   listeners.forEach(l => l())
   remoteListeners.forEach(l => l(remote))
 }
-const persistPending = () => {
-  pending = mergePending(pending, normalizePending(readJSON(PENDING_KEY)))
-  accountStorage.set(PENDING_KEY, JSON.stringify(pending))
+const latestState = () => mergeWidgetStates(state.get(), normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value))
+function queue(delta: WidgetDelta) {
+  pending = unconsumed(mergePending(pending, readJournals()), latestState())
+  pending = appendPending(pending, writer, serial + 1, delta)
+  serial++
+  const own = { operations: Object.fromEntries(Object.entries(pending.operations).filter(([, op]) => op.writer === writer)) }
+  accountStorage.set(ownJournalKey, JSON.stringify(own))
+}
+function finishJournal() {
+  pending = unconsumed(mergePending(pending, readJournals()), latestState())
+  // A successful in-memory set is not a durable receipt when storage is full/denied.
+  // Only this writer can append here, and ready writers never append again.
+  const durable = normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value)
+  const own = normalizePending(readJSON(ownJournalKey))
+  if (durable && !Object.keys(unconsumed(own, durable).operations).length && accountStorage.get(ownJournalKey) !== null) accountStorage.remove(ownJournalKey)
+}
+function pendingView() {
+  const current = latestState()
+  pending = unconsumed(mergePending(pending, readJournals()), current)
+  return applyPending(current ?? legacyState(), pending, !!current)
 }
 const emptyJournal = () => stableJSON(pending) === stableJSON(emptyPending())
 
@@ -89,16 +122,21 @@ function hydrate(snapshot: SyncedHydration = {}) {
   // Unsupported/corrupt envelopes are not evidence that instances were removed. Keep the local
   // projection and queued edits rather than overwriting that account key with a migration.
   if (snapshot[WIDGET_STATE_KEY] && !normalizeWidgetState(snapshot[WIDGET_STATE_KEY].value)) return
-  pending = mergePending(pending, normalizePending(readJSON(PENDING_KEY)))
-  const current = state.get()
+  const current = latestState()
+  pending = unconsumed(mergePending(pending, readJournals()), current)
   const next = applyPending(current ?? legacyState(snapshot), pending, !!current)
-  ready = true
   // save() merges other tabs' envelopes before writing, so simultaneous first cutovers converge.
   state.set(next)
-  pending = emptyPending()
-  accountStorage.remove(PENDING_KEY)
+  ready = true
+  finishJournal()
   refresh(state.get()!, true)
   syncedListeners.forEach(l => l())
+  if (!emptyJournal()) scheduleDrain()
+}
+
+function scheduleDrain() {
+  if (!ready || journalTimer !== undefined || !accountGuard()) return
+  journalTimer = setTimeout(() => { journalTimer = undefined; hydrateSafely(getSyncedHydration() ?? {}) }, 0)
 }
 
 /** True only once a complete canonical envelope was loaded or committed. Legacy layout imports
@@ -115,6 +153,9 @@ function facade<T>(get: () => T, update: (next: T) => void): Synced<T> {
     get,
     set(next) {
       if (!accountGuard()) return
+      const current = latestState()
+      if (!ready) refresh(pendingView())
+      else if (current && stableJSON(current) !== stableJSON(view)) refresh(current)
       const before = get()
       const after = typeof next === 'function' ? (next as (v: T) => T)(before) : next
       if (stableJSON(before) === stableJSON(after)) return
@@ -150,9 +191,8 @@ function commit(next: WidgetState) {
 export const canonicalConfigs = facade<Configs>(() => configs, next => {
   if (ready) commit(withConfigs(view, normalizeConfigs(next)))
   else {
-    pending = queueConfigs(pending, configs, normalizeConfigs(next))
-    persistPending()
-    refresh(applyPending(legacyState(), pending, false))
+    queue(configDelta(configs, normalizeConfigs(next)))
+    refresh(pendingView())
   }
 })
 export const canonicalPlacements = facade<WidgetSet>(() => placements, next => {
@@ -162,9 +202,8 @@ export const canonicalPlacements = facade<WidgetSet>(() => placements, next => {
     const beforeRemoved = new Set(placements.removed.split(' '))
     const remove = next.removed.split(' ').filter(key => key && !beforeRemoved.has(key))
     const added = Object.entries(put).filter(([key, p]) => p.at > 0 && !Object.hasOwn(placements.places, key)).map(([key]) => key)
-    pending = { ...pending, placements: changeSet(pending.placements, put, remove), added: [...new Set([...pending.added, ...added])].sort() }
-    persistPending()
-    refresh(applyPending(legacyState(), pending, false))
+    queue({ ...emptyDelta(), placements: changeSet({ places: {}, removed: '' }, put, remove), added })
+    refresh(pendingView())
   }
 })
 /** Parent installation layer supplies its package normalization/typing over this generic facade.
@@ -173,9 +212,8 @@ export const canonicalInstallations = facade<InstallationRecords>(() => installa
   if (ready) commit({ ...view, installations: mergeInstallationRecords(next, view.installations) })
   else {
     const edits = Object.fromEntries(Object.entries(next).filter(([id, value]) => stableJSON(value) !== stableJSON(installations[id])))
-    pending = { ...pending, installations: mergeInstallationRecords(edits, pending.installations) }
-    persistPending()
-    refresh(applyPending(legacyState(), pending, false))
+    queue({ ...emptyDelta(), installations: edits })
+    refresh(pendingView())
   }
 })
 
@@ -183,15 +221,23 @@ state.onRemote(next => {
   if (next && ready) refresh(next, true)
 })
 state.onSynced(() => { if (ready) syncedListeners.forEach(l => l()) })
-onSyncedHydration(hydrate)
+function hydrateSafely(snapshot: SyncedHydration = {}) {
+  try { hydrate(snapshot) } catch (error) { reportSyncFailure(error) }
+}
+onSyncedHydration(hydrateSafely)
 subscribeAccount(() => {
   const account = getAccount()
-  if (account.status === 'anon' || account.status==='off'&&account.resolved) hydrate()
+  if (account.status === 'anon' || account.status==='off'&&account.resolved) hydrateSafely()
 })
 // Modules may load after /api/me and /api/state, or after a guest was established.
 if (ready && !emptyJournal()) {
-  commit(applyPending(state.get()!, pending, true))
-  pending = emptyPending()
-  accountStorage.remove(PENDING_KEY)
+  try { commit(applyPending(latestState()!, pending, true)); finishJournal(); if (!emptyJournal()) scheduleDrain() } catch (error) { reportSyncFailure(error) }
 }
-if (!ready) hydrate(getSyncedHydration() ?? {})
+if (!ready) hydrateSafely(getSyncedHydration() ?? {})
+
+// A ready tab can consume a still-loading tab's unique operations, without owning its journal.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', event => {
+    if (event.key?.startsWith(accountKey(`${PENDING_KEY}:`))) scheduleDrain()
+  })
+}

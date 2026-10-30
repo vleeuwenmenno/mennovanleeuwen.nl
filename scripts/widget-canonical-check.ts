@@ -51,6 +51,15 @@ const revA = { note: revision(3, 'a') }, revB = { note: revision(3, 'b') }
 assert.deepEqual(mergeInstallationRecords(revA, revB), mergeInstallationRecords(revB, revA))
 assert.deepEqual(mergeInstallationRecords({ note: revision(4) }, revB).note, revision(4))
 assert.deepEqual(sets.mergeSets({ places: { gone: entry('gone', { at: 1e15 }) }, removed: '' }, legacy.placements).removed, 'gone')
+const replayLog = model.appendPending(model.emptyPending(), 'same-operation', 1, model.configDelta({}, { agenda: { days: 1 } }))
+const consumedOnce = model.applyPending(emptyWidgetState(), replayLog, false)
+const laterEdit = withConfigs(consumedOnce, { agenda: { days: 7 } })
+assert.deepEqual(model.applyPending(laterEdit, replayLog, true), laterEdit, 'replaying a consumed operation is a strict no-op even after a later edit')
+const overOnePass: model.PendingWidgets = { operations: Object.fromEntries(Array.from({ length: model.JOURNAL_LIMITS.operations + 1 }, (_, i) => ['burst:' + (i + 1), { writer: 'burst', sequence: i + 1, at: i + 1, delta: { ...model.emptyDelta(), configs: { burst: { at: i + 1, patch: { value: i + 1 }, unset: [] } } } }])) }
+const firstPass = model.applyPending(emptyWidgetState(), overOnePass, false)
+assert.equal(firstPass.consumed!.burst, model.JOURNAL_LIMITS.operations)
+assert.equal(Object.keys(model.unconsumed(overOnePass, firstPass).operations).length, 1)
+assert.equal(model.applyPending(firstPass, overOnePass, true).consumed!.burst, model.JOURNAL_LIMITS.operations + 1, 'bounded replay retains and drains the remainder')
 console.log('pure canonical migration/config/placement/installation merge fixtures passed')
 
 // Each page imports its own real modules; storage and the fake account server are shared.
@@ -62,6 +71,9 @@ const storage = new Map<string, string>()
 const servers = new Map<string, Map<string, Remote>>()
 const pages: Page[] = []
 let active: Page
+let holdStorage = false
+const storageEvents: (() => void)[] = []
+let afterWrite: ((key: string) => void) | undefined
 let tick = 2000
 let timerId = 0
 const timers = new Map<number, { page: Page; callback: () => void }>()
@@ -78,6 +90,8 @@ class Page {
   failAccount = false
   authEnabled = true
   blocked = false
+  rejectCanonicalWrite = false
+  closed = false
   canonical!: typeof import('../src/widgets/platform/canonicalState.ts')
   wp!: typeof import('../src/os/widgetPlaces.ts')
   config!: typeof import('../src/widgets/config.ts')
@@ -126,13 +140,20 @@ class Page {
   meta(key: string) { return JSON.parse(storage.get(this.storageKey(`mvlos.sync.${key}`)) ?? 'null') }
 }
 g.localStorage = {
+  get length() { return [...storage.keys()].filter(key => key.startsWith(active.device + '/')).length },
+  key(index: number) { return [...storage.keys()].filter(key => key.startsWith(active.device + '/'))[index]?.slice(active.device.length + 1) ?? null },
   getItem(key: string) { if (active.blocked) throw new Error('blocked'); return storage.get(`${active.device}/${key}`) ?? null },
   setItem(key: string, value: string) {
-    if (active.blocked) throw new Error('blocked')
+    if (active.blocked || active.rejectCanonicalWrite && key.endsWith('sync.widgets:state:v2')) throw new Error('blocked')
     const from = active
     storage.set(`${from.device}/${key}`, value)
     writes.push(`${from.device}/${key}`)
-    for (const page of pages) if (page !== from && page.device === from.device) page.run(() => page.listeners.get('storage')?.forEach(l => l({ key, newValue: value })))
+    for (const page of pages) if (page !== from && page.device === from.device && !page.closed) {
+      const deliver = () => page.run(() => page.listeners.get('storage')?.forEach(l => l({ key, newValue: value })))
+      if (holdStorage) storageEvents.push(deliver)
+      else deliver()
+    }
+    afterWrite?.(key)
   },
   removeItem(key: string) { if (active.blocked) throw new Error('blocked'); storage.delete(`${active.device}/${key}`) },
 }
@@ -334,6 +355,97 @@ try {
   denied.wp.widgetPlaces.set(cur => denied.wp.changeSet(cur, { temp: entry('temp') }))
   assert.ok(denied.wp.widgetPlaces.get().places.temp)
 
+  // A late tab retains a consumed journal; receipts must survive new edits, removals and reloads.
+  const lagA = new Page('27', 'lag-shared'); await lagA.init()
+  lagA.run(() => lagA.config.setWidgetConfig('agenda', { days: 1 }))
+  const lagB = new Page('27', 'lag-shared'); await lagB.init()
+  await lagA.login(); await lagA.pull()
+  lagA.run(() => lagA.config.setWidgetConfig('agenda', { days: 7 }))
+  await lagA.flush()
+  await lagB.login(); await lagB.pull()
+  assert.equal(lagB.canonical.canonicalConfigs.get().agenda.days, 7, 'retained consumed config never gets a fresh counter')
+  const lagReload = new Page('27', 'lag-shared'); await lagReload.init(); await lagReload.login(); await lagReload.pull()
+  assert.equal(lagReload.canonical.canonicalConfigs.get().agenda.days, 7)
+  const tombA = new Page('28', 'tomb-shared'); await tombA.init()
+  tombA.run(() => tombA.wp.widgetPlaces.set(cur => tombA.wp.changeSet(cur, { fresh: entry('fresh') })))
+  const tombB = new Page('28', 'tomb-shared'); await tombB.init()
+  await tombA.login(); await tombA.pull()
+  tombA.run(() => tombA.wp.widgetPlaces.set(cur => tombA.wp.changeSet(cur, {}, ['fresh'])))
+  await tombA.flush(); await tombB.login(); await tombB.pull()
+  assert.equal(tombB.wp.entriesOf(tombB.wp.widgetPlaces.get(), 'fresh').length, 0, 'consumed add cannot become a new pending variant after removal')
+  const tombReload = new Page('28', 'tomb-shared'); await tombReload.init(); await tombReload.login(); await tombReload.pull()
+  assert.equal(tombReload.wp.entriesOf(tombReload.wp.widgetPlaces.get(), 'fresh').length, 0)
+
+  // Storage events can lag. Every admission re-reads durable receipts, not just event state.
+  holdStorage = true
+  const heldA = new Page('29', 'held'); await heldA.init()
+  heldA.run(() => heldA.config.setWidgetConfig('agenda', { days: 1 }))
+  const heldB = new Page('29', 'held'); await heldB.init()
+  await heldA.login(); await heldA.pull()
+  heldA.run(() => heldA.config.setWidgetConfig('agenda', { days: 7 }))
+  heldB.run(() => heldB.config.setWidgetConfig('agenda', { units: 'f' }))
+  await heldA.flush(); await heldB.login(); await heldB.pull()
+  assert.deepEqual(heldB.canonical.canonicalConfigs.get().agenda, { days: 7, units: 'f' }, 'new unique patch does not replay its retained old view')
+  holdStorage = false
+  while (storageEvents.length) storageEvents.shift()!()
+
+  // A unique writer appends during another tab's canonical write, then crashes. No consumer
+  // owns/deletes that other writer's log; reload must recover the operation exactly once.
+  const raceA = new Page('30', 'race'); await raceA.init()
+  raceA.run(() => raceA.config.setWidgetConfig('agenda', { days: 1 }))
+  const raceB = new Page('30', 'race'); await raceB.init()
+  afterWrite = key => {
+    if (!key.endsWith('sync.widgets:state:v2')) return
+    afterWrite = undefined
+    raceB.run(() => raceB.config.setWidgetConfig('agenda', { units: 'f' }))
+    raceB.closed = true
+  }
+  await raceA.login(); await raceA.pull(); await raceA.flush()
+  const raceReload = new Page('30', 'race'); await raceReload.init(); await raceReload.login(); await raceReload.pull()
+  assert.deepEqual(raceReload.canonical.canonicalConfigs.get().agenda, { days: 1, units: 'f' })
+  raceReload.run(() => raceReload.config.setWidgetConfig('agenda', { days: 7 }))
+  await raceReload.flush()
+  const raceAgain = new Page('30', 'race'); await raceAgain.init(); await raceAgain.login(); await raceAgain.pull()
+  assert.deepEqual(raceAgain.canonical.canonicalConfigs.get().agenda, { days: 7, units: 'f' }, 'unclosed old journal remains harmless after subsequent reloads')
+  assert.ok(Object.keys(raceAgain.meta(KEY).value.consumed).length <= model.JOURNAL_LIMITS.writers)
+
+  // JSON values with invalid generations are unavailable records, not absence. Repairs rank
+  // above every invalid generation and same-generation ties converge despite key order.
+  for (const value of [null, 7, {}, { generation: 0 }, { generation: -1 }, { generation: '99' }, { generation: Number.MAX_SAFE_INTEGER + 1 }]) {
+    const normalized = normalizeWidgetState({ ...emptyWidgetState(), installations: { broken: value } })!
+    assert.ok(Object.hasOwn(normalized.installations, 'broken'))
+    assert.deepEqual(mergeInstallationRecords(normalized.installations, { broken: revision(1) }).broken, revision(1))
+    assert.deepEqual(mergeInstallationRecords({ broken: revision(1) }, normalized.installations).broken, revision(1))
+  }
+  assert.deepEqual(mergeInstallationRecords({ broken: { a: 1, b: 2 } }, { broken: { b: 2, a: 1 } }), mergeInstallationRecords({ broken: { b: 2, a: 1 } }, { broken: { a: 1, b: 2 } }))
+  const full = { ...emptyWidgetState(), consumed: Object.fromEntries(Array.from({ length: model.JOURNAL_LIMITS.writers }, (_, i) => ['writer-' + i, 1])) }
+  const extra = model.appendPending(model.emptyPending(), 'extra-writer', 1, model.configDelta({}, { extra: { days: 7 } }))
+  assert.throws(() => model.applyPending(full, extra, true), /writer limit/)
+  assert.equal(Object.keys(full.consumed).length, model.JOURNAL_LIMITS.writers, 'capacity never evicts durable receipts')
+  assert.equal(Object.keys(extra.operations).length, 1, 'capacity retains the unapplied operation')
+  assert.equal(normalizeWidgetState({ ...full, consumed: { ...full.consumed, 'over-limit': 1 } }), null)
+  const quota = new Page('32', 'quota'); await quota.init()
+  quota.run(() => quota.config.setWidgetConfig('quota-note', { days: 1 }))
+  quota.rejectCanonicalWrite = true
+  await quota.login(); await quota.pull()
+  assert.equal(quota.meta(KEY), null)
+  assert.ok([...storage.keys()].some(key => key.startsWith('quota/mvlos.u.32.widgets.pending:v2:')), 'failed canonical save cannot delete a durably queued journal')
+  const quotaReload = new Page('32', 'quota'); await quotaReload.init(); await quotaReload.login(); await quotaReload.pull()
+  assert.equal(quotaReload.canonical.canonicalConfigs.get()['quota-note'].days, 1)
+  quotaReload.run(() => quotaReload.config.setWidgetConfig('quota-note', { days: 7 })); await quotaReload.flush()
+  await quota.pull()
+  assert.equal(quota.canonical.canonicalConfigs.get()['quota-note'].days, 7, 'recovered durable journal cannot replay over a newer edit')
+  const guarded = new Page('31', 'guarded'); await guarded.init(); guarded.activate()
+  const sharedClocks = Object.fromEntries(Array.from({ length: model.JOURNAL_LIMITS.writers - 1 }, (_, i) => ['writer-' + i, 1]))
+  const left = { ...emptyWidgetState(), consumed: { ...sharedClocks, 'left-writer': 1 } }
+  const right = { ...emptyWidgetState(), consumed: { ...sharedClocks, 'right-writer': 1 } }
+  const mergeGuard = guarded.sync.synced('journal-merge-guard', left, { normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true })
+  guarded.seed('journal-merge-guard', right, 10)
+  const beforeGuard = guarded.meta('journal-merge-guard')
+  assert.throws(() => mergeGuard.set(withConfigs(left, { new: { days: 7 } })), /writer limit/)
+  assert.deepEqual(guarded.meta('journal-merge-guard'), beforeGuard, 'failed receipt merge never overwrites the durable copy')
+  assert.deepEqual(mergeGuard.get(), left, 'failed merge restores in-memory state for retry')
+  console.log('review: consumed journals, delayed events, append-during-consume/crash/reloads, unique patches, bounds and malformed generations passed')
   console.log('real facade/hydration/offline/old-client/CAS/guest/storage-denied fixtures passed')
 } finally {
   Object.assign(g, savedGlobals)

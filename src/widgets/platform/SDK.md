@@ -106,7 +106,9 @@ are at most eight scrubbed 160-unit strings. Inbox/status payload schemas are ch
 projection; malformed or over-10,000-row sections fail explicitly. The existing 64 KiB input,
 64 KiB output and 256-node limits still apply. Preview has synthetic data and no resource
 handles. Reads refresh only while eligible, cancel on hide/revocation, and share caches only
-inside the same account/connection authority.
+inside the same account/connection authority. Agenda tasks use shared live-reader leases:
+Tasks/Calendar can retain a read after a widget hides; losing the last eligible reader
+aborts it and prevents late adoption. Logout/provider changes cancel the old read authority.
 
 No arbitrary exports, logging, RPC or model forwarding APIs.
 Package grants never authorize forwarding private data to a model.
@@ -127,7 +129,12 @@ and placement are not rolled back. Missing sources/runtime are not removals.
 All six built-in folders use the same compiler/verifier/worker/renderer as forks.
 Installation overrides, per-config counters and placement geometry/tombstones live in the
 versioned widgets:state:v2 envelope. One-time legacy import waits for complete account/state
-hydration; older clients cannot change canonical records after cutover. Unknown kinds,
+hydration; older clients cannot change canonical records after cutover. Account-scoped
+writer/sequence journals and atomic consumption watermarks make replay idempotent across
+late tabs and reloads. Ordinary per-config counter ordering remains unchanged.
+Writers never delete another writer's log; their own log is
+removed only after a durable receipt. Receipts never evict old writers (256 maximum);
+pending admission/replay is bounded to 1,024 operations. Capacity errors retain the journal. Unknown kinds,
 unavailable sources and hidden widgets are recoverable, not removals. Revision recovery
 changes no config, placement or note data. Cross-device conflicting generation/identity
 changes reject stale recovery; same-revision activation retries are idempotent.

@@ -9,6 +9,8 @@ export type WidgetState = {
   configs: Record<string, ConfigRecord>
   placements: WidgetSet
   installations: InstallationRecords
+  /** Durable high-water marks for pre-hydration writers. Never evicted. */
+  consumed?: Record<string, number>
 }
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const own = (v: object, key: string) => Object.hasOwn(v, key)
@@ -29,14 +31,14 @@ export function normalizeConfigs(raw: unknown): Configs {
 /** Validation of package contents remains the installation layer's responsibility. Persistence
  * keeps immutable revisions whole and uses exactly its generation/serialized-identity ordering. */
 export function normalizeInstallations(raw: unknown): InstallationRecords {
-  return record(raw) ? Object.fromEntries(Object.entries(raw).filter(([, v]) => record(v) && Number.isSafeInteger(v.generation) && Number(v.generation) > 0)) : {}
+  return record(raw) ? Object.fromEntries(Object.entries(raw)) : {}
 }
 export function mergeInstallationRecords(local: InstallationRecords, remote: InstallationRecords): InstallationRecords {
   const out = { ...remote }
   for (const [id, value] of Object.entries(local)) {
     const other = out[id]
-    const generation = (v: unknown) => record(v) ? Number(v.generation) : 0
-    if (!own(out, id) || generation(value) > generation(other) || generation(value) === generation(other) && JSON.stringify(value) > JSON.stringify(other)) Object.defineProperty(out, id, { value, enumerable: true, writable: true, configurable: true })
+    const generation = (v: unknown) => record(v) && Number.isSafeInteger(v.generation) && Number(v.generation) > 0 ? Number(v.generation) : 0
+    if (!own(out, id) || generation(value) > generation(other) || generation(value) === generation(other) && stableJSON(value) > stableJSON(other)) Object.defineProperty(out, id, { value, enumerable: true, writable: true, configurable: true })
   }
   return out
 }
@@ -47,7 +49,9 @@ export function normalizeWidgetState(raw: unknown): WidgetState | null {
     if (v.removed === true) return [[id, { at: v.at, removed: true }]]
     return record(v.value) ? [[id, { at: v.at, value: v.value }]] : []
   })) as WidgetState['configs']
-  return { schema: 2, configs, placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations) }
+  const consumed = normalizeConsumed(raw.consumed)
+  if (!consumed) return null
+  return { schema: 2, configs, placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations), ...(Object.keys(consumed).length ? { consumed } : {}) }
 }
 export function mergeWidgetStates(local: WidgetState | null, remote: WidgetState | null): WidgetState | null {
   if (!local) return remote
@@ -58,7 +62,8 @@ export function mergeWidgetStates(local: WidgetState | null, remote: WidgetState
     // At the same counter deletion beats a live copy, then a stable data tie-break.
     if (!other || value.at > other.at || value.at === other.at && (Number(!!value.removed) > Number(!!other.removed) || !!value.removed === !!other.removed && stableJSON(value) > stableJSON(other))) Object.defineProperty(configs, id, { value, enumerable: true, writable: true, configurable: true })
   }
-  return { schema: 2, configs, placements: mergeSets(local.placements, remote.placements), installations: mergeInstallationRecords(local.installations, remote.installations) }
+  const consumed = mergeConsumed(local.consumed, remote.consumed)
+  return { schema: 2, configs, placements: mergeSets(local.placements, remote.placements), installations: mergeInstallationRecords(local.installations, remote.installations), ...(Object.keys(consumed).length ? { consumed } : {}) }
 }
 export const configsOf = (state: WidgetState): Configs => Object.fromEntries(Object.entries(state.configs).flatMap(([id, v]) => v.removed ? [] : [[id, v.value!]]))
 export function withConfigs(state: WidgetState, next: Configs, now = Date.now()): WidgetState {
@@ -77,47 +82,80 @@ export function importLegacy(configs: unknown, placements: unknown, installation
   return { schema: 2, configs: Object.fromEntries(Object.entries(normalizeConfigs(configs)).map(([id, value]) => [id, { at: 0, value }])), placements: normalizeSet(placements), installations: normalizeInstallations(installations) }
 }
 
+export const JOURNAL_LIMITS = Object.freeze({ writers: 256, operations: 1024 })
+const WRITER = /^[a-zA-Z0-9-]{1,80}$/
+const frontier = (value: Record<string, number> | undefined, id: string) => value && own(value, id) ? value[id] : 0
+const sequence = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0
+function normalizeConsumed(value: unknown): Record<string, number> | null {
+  if (value === undefined) return {}
+  if (!record(value) || Object.keys(value).length > JOURNAL_LIMITS.writers || Object.entries(value).some(([id, n]) => !WRITER.test(id) || !sequence(n))) return null
+  return Object.fromEntries(Object.entries(value)) as Record<string, number>
+}
+function mergeConsumed(a: Record<string, number> = {}, b: Record<string, number> = {}) {
+  const out = Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].sort().map(id => [id, Math.max(frontier(a, id), frontier(b, id))]))
+  // Never forget a writer to make room: an old tab could then replay its consumed gestures.
+  if (Object.keys(out).length > JOURNAL_LIMITS.writers) throw new Error('Widget migration writer limit reached; pending changes retained')
+  return out
+}
 export type ConfigEdit = { at: number; patch: Record<string, unknown>; unset: string[]; removed?: true }
-/** Browser-local journal while account identity/hydration is unknown. It is not a cutover marker. */
-export type PendingWidgets = { configs: Record<string, ConfigEdit>; placements: WidgetSet; added: string[]; installations: InstallationRecords }
-export const emptyPending = (): PendingWidgets => ({ configs: {}, placements: EMPTY, added: [], installations: {} })
-export function normalizePending(raw: unknown): PendingWidgets {
-  if (!record(raw)) return emptyPending()
+export type WidgetDelta = { configs: Record<string, ConfigEdit>; placements: WidgetSet; added: string[]; installations: InstallationRecords }
+export const emptyDelta = (): WidgetDelta => ({ configs: {}, placements: EMPTY, added: [], installations: {} })
+export type PendingOperation = { writer: string; sequence: number; at: number; delta: WidgetDelta }
+/** Account-scoped durable operation log. A writer retains its complete unconsumed prefix. */
+export type PendingWidgets = { operations: Record<string, PendingOperation> }
+export const emptyPending = (): PendingWidgets => ({ operations: {} })
+function normalizeDelta(raw: unknown): WidgetDelta {
+  if (!record(raw)) return emptyDelta()
   return {
-    configs: Object.fromEntries(Object.entries(record(raw.configs) ? raw.configs : {}).filter(([, e]) => record(e) && counter(e.at) && record(e.patch) && Array.isArray(e.unset) && e.unset.every(k => typeof k === 'string'))) as PendingWidgets['configs'],
+    configs: Object.fromEntries(Object.entries(record(raw.configs) ? raw.configs : {}).filter(([, e]) => record(e) && counter(e.at) && record(e.patch) && Array.isArray(e.unset) && e.unset.every(k => typeof k === 'string'))) as WidgetDelta['configs'],
     placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations),
     added: Array.isArray(raw.added) ? raw.added.filter((k): k is string => typeof k === 'string') : [],
   }
 }
-/** Merge the browser-local journals before saving or migrating, so tabs that start before the
- * account is known do not discard each other's queued instance edits on reload. */
-export function mergePending(local: PendingWidgets, remote: PendingWidgets): PendingWidgets {
-  const configs = Object.fromEntries([...new Set([...Object.keys(local.configs), ...Object.keys(remote.configs)])].map(id => {
-    const a = Object.hasOwn(local.configs, id) ? local.configs[id] : undefined
-    const b = Object.hasOwn(remote.configs, id) ? remote.configs[id] : undefined
-    return [id, !b || a && (a.at > b.at || a.at === b.at && stableJSON(a) > stableJSON(b)) ? a : b]
-  })) as PendingWidgets['configs']
-  return { configs, placements: mergeSets(local.placements, remote.placements), added: [...new Set([...local.added, ...remote.added])].sort(), installations: mergeInstallationRecords(local.installations, remote.installations) }
+const deltaEmpty = (d: WidgetDelta) => !Object.keys(d.configs).length && !Object.keys(d.placements.places).length && !d.placements.removed && !Object.keys(d.installations).length
+export function normalizePending(raw: unknown): PendingWidgets {
+  if (!record(raw)) return emptyPending()
+  if (record(raw.operations)) {
+    return { operations: Object.fromEntries(Object.entries(raw.operations).flatMap(([id, op]) => record(op) && typeof op.writer === 'string' && WRITER.test(op.writer) && sequence(op.sequence) && counter(op.at) && id === `${op.writer}:${op.sequence}` ? [[id, { writer: op.writer, sequence: op.sequence, at: op.at, delta: normalizeDelta(op.delta) }]] : [])) }
+  }
+  // Compatibility with the unreleased aggregate journal: identical retained copies have one ID.
+  const delta = normalizeDelta(raw)
+  if (deltaEmpty(delta)) return emptyPending()
+  let a = 2166136261, b = 5381
+  for (const ch of stableJSON(delta)) { a = Math.imul(a ^ ch.charCodeAt(0), 16777619) >>> 0; b = (Math.imul(b, 33) ^ ch.charCodeAt(0)) >>> 0 }
+  const writer = `legacy-${a.toString(16)}-${b.toString(16)}`
+  return { operations: { [`${writer}:1`]: { writer, sequence: 1, at: Math.max(0, ...Object.values(delta.configs).map(v => v.at), ...Object.values(delta.placements.places).map(v => v.at)), delta } } }
 }
-export function queueConfigs(pending: PendingWidgets, before: Configs, after: Configs): PendingWidgets {
-  const edits = { ...pending.configs }
+export function mergePending(local: PendingWidgets, remote: PendingWidgets): PendingWidgets {
+  const operations = { ...remote.operations }
+  for (const [id, value] of Object.entries(local.operations)) if (!own(operations, id) || stableJSON(value) > stableJSON(operations[id])) Object.defineProperty(operations, id, { value, enumerable: true, configurable: true, writable: true })
+  return { operations }
+}
+export function unconsumed(pending: PendingWidgets, state: WidgetState | null): PendingWidgets {
+  return { operations: Object.fromEntries(Object.entries(pending.operations).filter(([, op]) => op.sequence > frontier(state?.consumed, op.writer))) }
+}
+export function appendPending(pending: PendingWidgets, writer: string, n: number, delta: WidgetDelta): PendingWidgets {
+  if (!WRITER.test(writer) || !sequence(n)) throw new Error('Invalid widget journal identity')
+  if (Object.keys(pending.operations).length >= JOURNAL_LIMITS.operations) throw new Error('Too many pending widget changes; wait for account hydration')
+  const at = Math.max(0, ...Object.values(delta.configs).map(v => v.at), ...Object.values(delta.placements.places).map(v => v.at))
+  return mergePending(pending, { operations: { [`${writer}:${n}`]: { writer, sequence: n, at, delta } } })
+}
+/** Each gesture is a patch, not the entire retained view from another tab. */
+export function configDelta(before: Configs, after: Configs): WidgetDelta {
+  const configs: WidgetDelta['configs'] = {}
   for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (own(before, id) === own(after, id) && same(before[id], after[id])) continue
-    const old = own(edits, id) ? edits[id] : undefined
-    const at = Math.max(Date.now(), (old?.at ?? 0) + 1)
-    if (!own(after, id)) { Object.defineProperty(edits, id, { value: { at, patch: {}, unset: [], removed: true }, enumerable: true, configurable: true, writable: true }); continue }
-    const patch = { ...old?.patch }
-    const unset = new Set(old?.unset ?? [])
-    for (const key of new Set([...Object.keys(before[id] ?? {}), ...Object.keys(after[id])])) {
+    const patch: Record<string, unknown> = {}, unset: string[] = []
+    if (own(after, id)) for (const key of new Set([...Object.keys(before[id] ?? {}), ...Object.keys(after[id])])) {
       if (same(before[id]?.[key], after[id][key]) && own(before[id] ?? {}, key) === own(after[id], key)) continue
-      if (own(after[id], key)) { Object.defineProperty(patch, key, { value: after[id][key], enumerable: true, configurable: true, writable: true }); unset.delete(key) }
-      else { delete patch[key]; unset.add(key) }
+      if (own(after[id], key)) Object.defineProperty(patch, key, { value: after[id][key], enumerable: true, configurable: true, writable: true })
+      else unset.push(key)
     }
-    Object.defineProperty(edits, id, { value: { at, patch, unset: [...unset] }, enumerable: true, configurable: true, writable: true })
+    Object.defineProperty(configs, id, { value: { at: Date.now(), patch, unset, ...(!own(after, id) ? { removed: true } : {}) }, enumerable: true, configurable: true, writable: true })
   }
-  return { ...pending, configs: edits }
+  return { ...emptyDelta(), configs }
 }
-export function applyPending(state: WidgetState, pending: PendingWidgets, canonicalExists: boolean, now = Date.now()): WidgetState {
+function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: boolean, at: number): WidgetState {
   const configs = configsOf(state)
   for (const [id, edit] of Object.entries(pending.configs)) {
     if (edit.removed) delete configs[id]
@@ -127,24 +165,36 @@ export function applyPending(state: WidgetState, pending: PendingWidgets, canoni
       Object.defineProperty(configs, id, { value, enumerable: true, configurable: true, writable: true })
     }
   }
-  // A queued real gesture is later than the data just learned. Layout imports (at: 0) are not
-  // gestures; once another device has cut over they are ignored, even for previously unseen ids.
-  const removed = removedKeys(state.placements)
-  const added = new Set(pending.added)
+  const removed = removedKeys(state.placements), added = new Set(pending.added)
   const puts = Object.fromEntries(Object.entries(pending.placements.places).filter(([, p]) => !canonicalExists || p.at > 0).map(([original, p]) => {
     let key = original
     if (removed.has(key) && added.has(key)) {
-      // A real add made before learning of an old removal gets a new entry key, just as newKey
-      // would have given it with that knowledge. Replay uses the same key; identity stays p.id.
       let hash = 2166136261
       for (const ch of stableJSON([key, p])) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619) >>> 0
       key = `${p.id.slice(0, 60)}~pending-${hash.toString(36)}`
     }
     return [key, p.at > 0 ? { ...p, at: Math.max(p.at, (state.placements.places[key]?.at ?? 0) + 1) } : p]
   }))
-  const next = withConfigs(state, configs, now)
-  for (const [id, edit] of Object.entries(pending.configs)) {
-    if (edit.removed && !next.configs[id]?.removed) Object.defineProperty(next.configs, id, { value: { at: Math.max(now, (state.configs[id]?.at ?? 0) + 1), removed: true }, enumerable: true, configurable: true, writable: true })
-  }
+  // Use the original gesture stamp, never the time a stale tab happens to hydrate.
+  const next = withConfigs(state, configs, at)
+  for (const [id, edit] of Object.entries(pending.configs)) if (edit.removed && !next.configs[id]?.removed) Object.defineProperty(next.configs, id, { value: { at: Math.max(at, (state.configs[id]?.at ?? 0) + 1), removed: true }, enumerable: true, configurable: true, writable: true })
   return { ...next, placements: mergeSets({ places: puts, removed: pending.placements.removed }, state.placements), installations: mergeInstallationRecords(pending.installations, state.installations) }
+}
+export function applyPending(state: WidgetState, pending: PendingWidgets, canonicalExists: boolean): WidgetState {
+  let next = state
+  const remaining = Object.values(unconsumed(pending, state).operations)
+  const writers = new Map<string, PendingOperation[]>()
+  for (const op of remaining) writers.set(op.writer, [...writers.get(op.writer) ?? [], op])
+  for (const ops of writers.values()) ops.sort((a, b) => a.sequence - b.sequence)
+  // Merge writer prefixes by original gesture time. Clock rollback cannot reorder one writer.
+  for (let count = 0; writers.size && count < JOURNAL_LIMITS.operations; count++) {
+    const op = [...writers.values()].map(ops => ops[0]).sort((a, b) => a.at - b.at || a.writer.localeCompare(b.writer))[0]
+    if (op.sequence !== frontier(next.consumed, op.writer) + 1) throw new Error('Incomplete widget journal; pending changes retained')
+    const consumed = mergeConsumed(next.consumed, { [op.writer]: op.sequence })
+    next = { ...applyDelta(next, op.delta, canonicalExists, op.at), consumed }
+    const ops = writers.get(op.writer)!
+    ops.shift()
+    if (!ops.length) writers.delete(op.writer)
+  }
+  return next
 }

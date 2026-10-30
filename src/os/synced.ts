@@ -105,6 +105,8 @@ export function synced<T>(
     yieldWhenNew?: boolean
     /** Merge what another tab saved into this tab's value (with `merge`) right before saving. */
     mergeTabs?: boolean
+    /** A failed canonical merge must preserve the durable copy and pending operation journal. */
+    preserveOnMergeError?: boolean
     /** Sees every newer value from the server or another tab before any merge can drop it. */
     onIncoming?: (remote: unknown) => void
   } = {},
@@ -142,7 +144,8 @@ export function synced<T>(
         // (or another tab's copy of it), and taking it in again after every save kept both tabs
         // saving the same value to the server forever.
         meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || (!!stored.dirty && others) || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
-      } catch {
+      } catch (error) {
+        if (opts.preserveOnMergeError) throw error
         /* not readable: written over */
       }
     accountStorage.set(storageKey(key), JSON.stringify(meta))
@@ -160,8 +163,9 @@ export function synced<T>(
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next
       // Nothing changed (the same value made again): nothing to save or send.
       if (value === meta.value || JSON.stringify(value) === JSON.stringify(meta.value)) return
+      const before = meta
       meta = { ...meta, value, dirty: true }
-      save()
+      try { save() } catch (error) { meta = before; throw error }
       emit()
       emitSynced()
       schedulePush(key)
@@ -255,6 +259,8 @@ const setStatus = (s: SyncStatus) => {
   status = s
   statusListeners.forEach((l) => l())
 }
+/** A local canonical-state failure is still a sync failure; keep the durable copy for retry. */
+export const reportSyncFailure = (error: unknown) => setStatus({ state: 'error', at: status.at, error: error instanceof Error ? error.message : 'State synchronization failed' })
 export const getSyncStatus = () => status
 export const subscribeSyncStatus = (l: () => void) => {
   statusListeners.add(l)
@@ -396,7 +402,7 @@ export function pullAll(): Promise<void> {
       for (const s of stores.values()) reconcile(s, remote[s.key])
       hydration = remote
       hydrationListeners.forEach((l) => l(remote))
-      setStatus({ state: 'synced', at: Date.now() })
+      if (status.state !== 'error') setStatus({ state: 'synced', at: Date.now() })
     })
     .catch((e: Error) => setStatus({ state: 'error', at: status.at, error: e.message }))
     .finally(() => (pulling = null))
