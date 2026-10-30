@@ -900,7 +900,7 @@ function DockSettings() {
       <ul className="set-list">
         <li className="set-row">
           <span className="set-row-text">
-            <strong>Reserve dock space for snapped windows</strong>
+            <strong className="set-row-wrap">Reserve dock space for snapped windows</strong>
             <span className="muted set-row-wrap">Off: windows snapped left, right or to a corner use the height under the dock. Saved on this device only</span>
           </span>
           <Toggle on={reserve} onChange={(v) => snapReservePref.set(v)} label="Reserve dock space for snapped windows" />
