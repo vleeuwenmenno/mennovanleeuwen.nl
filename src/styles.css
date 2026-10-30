@@ -13285,6 +13285,7 @@ html {
   font: inherit;
 }
 .xed-dbg-caret,
+.xed-dbg-frame,
 .xed-dbg-warn {
   flex: none;
   padding: 3px 10px;
@@ -13491,3 +13492,8 @@ html {
   overflow: auto;
   overscroll-behavior: contain;
 }
+
+.xed-vars .is-changed .xed-var-value { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.xed-var-previous { color: var(--muted); }
+.xed-dbg-frame { font-size: 11px; color: var(--muted); }
+.xed-vars caption { text-align: left; overflow-wrap: anywhere; color: var(--muted); }

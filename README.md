@@ -833,14 +833,25 @@ debugger moves to another file and back (stepping into a function in another fil
 again leaves the caller's selection where it was), and the editor keeps the keyboard focus if it
 had it. The panel under the editor (resizable
 from its top edge, shown and hidden with the bug button in the status bar) has **Output**,
-**Variables** (arguments, the function's `local` names and the other variables of the pause),
-**Watch**, **Breakpoints**, **Call stack** (click a frame to see its line) and **Problems**
+**Variables** (positional arguments, named **Parameters**, ordinary **Locals**, inherited **Caller scope** and **Globals**),
+**Watch**, **Breakpoints**, **Call stack** (click a frame to inspect its bindings and see its line) and **Problems**
 (syntax diagnostics, also marked in the gutter). Hovering a variable in the editor shows its
 value at the pause (the value is read from the current pause when drawn; a step or choosing
 another session hides it until the pointer moves); with a keyboard or on a touch screen, putting the caret on a variable shows
 it in the panel. Values are only shown while paused, from the pause's snapshot: when the
 session resumes or ends they are cleared rather than shown as if current, and a hover on a
 file that is not in the paused call stack says so.
+
+Every invocation has a stable, distinct frame identity, including recursive calls of the same
+function. Selecting a caller reconstructs its shadowed bindings and positional arguments;
+Watches and runtime hover use that selected frame. A hover in a different file asks you to
+select its frame rather than displaying the executing function's value under another name.
+Dynamic caller locals are labelled as inherited scope. Parameters are visible before the
+first body command. `(unset)` and `(empty)` are distinct, and omitted/cut values are labelled.
+The Variables view highlights changes as previous → current only for the same session,
+invocation and binding. Comparisons use complete captured values only; previous display text
+is limited to 120 characters. Switching sessions resets comparisons. Ending a session or
+changing account clears its captured current and previous values.
 
 **Watches** are read from the snapshot and never evaluated as shell: a name, `$name`,
 `${name}`, `${#name}`, `$1`…`$9`, `${10}` and higher, `$#`, `$@` and `$?`, with plain text around them.
@@ -865,8 +876,10 @@ its lifetime. Xed cancels its own sessions when its window closes. With several 
 each has its own session and panel; the keys go to the focused one.
 
 The registry holds at most 16 sessions (evicting completed ones), each with at most 256
-breakpoints and 256 displayed variables and 64 arguments, capped at 4096 characters each; the
-editor keeps at most 256 breakpoints. Output retains the last 32 KB. Debug launches also bound
+breakpoints. One pause shares 256 variables, 64 arguments and 65,536 characters across the
+executing frame and its callers (at most 128 frames), with each value capped at 4096 characters; the
+editor keeps at most 256 breakpoints. The previous pause uses the same bound; snapshot work
+and retained change text also charge the shared execution budget. Output retains the last 32 KB. Debug launches also bound
 interpreter capture and screen chunks to 32768 UTF-16 code units, streaming partial lines when
 needed; ordinary `runLine` output remains unlimited unless its optional `captureLimit` is
 supplied. The toolbar and panel use the active theme, wrap to phone widths and have 36 px touch

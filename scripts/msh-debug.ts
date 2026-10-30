@@ -139,13 +139,32 @@ deliver "Space Potato" 3`
   await wait(() => namedCancel.session.current.state === 'paused')
   namedCancel.session.stepInto()
   await wait(() => namedCancel.session.current.state === 'paused')
-  eq([namedCancel.session.current.variables.a, namedCancel.session.current.args, namedCancel.session.current.locals], ['inner', ['inner'], ['a']], 'parameter visible before first function command with positionals intact')
+  eq([namedCancel.session.current.variables.a, namedCancel.session.current.args, namedCancel.session.current.params, namedCancel.session.current.locals], ['inner', ['inner'], ['a'], []], 'parameter visible before first function command with positionals intact')
   namedCancel.session.cancel(); await namedCancel.done
   eq(namedCancelBase.env['a'], 'outer', 'cancelled named invocation restores caller value')
   const bindingBudget = new Budget({ ...AGENT_LIMITS, maxVariable: 4 })
   const limitedBase = { ...base(), budget: bindingBudget }
   await runLine('a=old; f(a,b) { touch /tmp/named-budget-body; }; f new oversized', limitedBase)
   check(bindingBudget.stopped === 'memory' && limitedBase.env['a'] === 'old' && !Object.hasOwn(limitedBase.env, 'b') && !lookup('/tmp/named-budget-body'), 'partial parameter binding obeys variable budget and restores on exhaustion')
+  const framesSource = 'value=global\nf(value) {\n  local attempt=1\n  if [ "$value" = outer ]; then f inner; fi\n  value=changed\n  unset attempt\n  echo "$value"\n}\nf outer\necho "$value"'
+  const frameSession = new DebugSession('frame inspection', 'run')
+  frameSession.breakpoint('/tmp/frames.msh', 5)
+  const frameRun = runCapturedStreams(framesSource, { ...base(), debug: frameSession }, '/tmp/frames.msh')
+  await wait(() => frameSession.current.state === 'paused')
+  let frames = frameSession.current.frames
+  const innerId = frames[0].id, outerId = frames[1].id
+  check(innerId !== outerId && frames[0].name === 'f' && frames[1].name === 'f', 'recursive debugger frames have distinct stable identity')
+  eq([frames[0].values.variables.value, frames[1].values.variables.value, frames[2].values.variables.value], ['inner', 'outer', 'global'], 'caller snapshots reconstruct each shadowed binding, not executing values')
+  eq([frames[0].values.params, frames[0].values.locals, frames[1].values.args], [['value'], ['attempt'], ['outer']], 'parameters separated from locals and caller positional arguments retained')
+  frameSession.stepOver(); await wait(() => frameSession.current.state === 'paused')
+  eq([frameSession.current.frames[0].id, frameSession.current.changes.value, frameSession.current.variables.value], [innerId, 'inner', 'changed'], 'changed values compare same invocation and binding only')
+  frameSession.stepOver(); await wait(() => frameSession.current.state === 'paused')
+  eq([frameSession.current.unset, frameSession.current.changes.attempt], [['attempt'], '1'], 'unset local captured explicitly with prior value')
+  frameSession.stepOut(); await wait(() => frameSession.current.state === 'paused')
+  eq([frameSession.current.frames[0].id, frameSession.current.variables.value, frameSession.current.changes.value], [outerId, 'outer', undefined], 'return selects caller identity without comparing unrelated recursion')
+  frameSession.breakpoint('/tmp/frames.msh', 5); frameSession.continue()
+  await frameRun; frameSession.finish(0)
+  eq([frameSession.current.frames, frameSession.current.variables, frameSession.current.changes], [[], {}, {}], 'completed debugger clears all current and prior inspection values')
   await runLine("echo 'echo child' > /tmp/review-child.sh", base())
   const relative = launchDebug('source review-child.sh', base())
   await wait(() => relative.session.current.state === 'paused')
