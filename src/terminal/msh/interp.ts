@@ -98,7 +98,7 @@ class ShellError extends Error {}
 
 type State = {
   vars: Record<string, string>
-  funcs: Map<string, Node>
+  funcs: Map<string, Node & { t: 'func' }>
   opts: { e: boolean; x: boolean; u: boolean; pipefail: boolean }
   positional: string[]
   arg0: string
@@ -436,7 +436,16 @@ class Shell {
     if (!NAME.test(name)) throw new ShellError(`${name}: not a valid identifier`)
     const why = this.base.budget?.variable(value.length)
     if (why) throw new LimitSignal(why)
-    this.st.vars[name] = value
+    // Shell identifiers such as __proto__ are data, not object setters.
+    Object.defineProperty(this.st.vars, name, { value, writable: true, enumerable: true, configurable: true })
+  }
+
+  /** Both explicit locals and named parameters use the same scope and variable limits. */
+  localVar(name: string, value: string) {
+    const frame = this.st.locals[this.st.locals.length - 1]
+    if (!frame) throw new ShellError('local: can only be used in a function')
+    if (!frame.has(name)) frame.set(name, Object.hasOwn(this.st.vars, name) ? this.st.vars[name] : undefined)
+    this.setVar(name, value)
   }
 
   private arithVars() {
@@ -902,7 +911,7 @@ class Shell {
         return s
       }
       case 'func':
-        this.st.funcs.set(n.name, n.body)
+        this.st.funcs.set(n.name, n)
         return 0
       case 'arith':
         return this.redirected(n.redirs, io, async (io2) => {
@@ -1177,7 +1186,11 @@ class Shell {
     }
   }
 
-  private async call(name: string, body: Node, args: string[], io: Io): Promise<number> {
+  private async call(name: string, fn: Node & { t: 'func' }, args: string[], io: Io): Promise<number> {
+    const { body, params } = fn
+    if (params.length && args.length !== params.length) {
+      return fail(io, `${name} expects ${params.length} arguments (${params.map(p => p.name).join(', ')}); received ${args.length}`)
+    }
     if (this.depth >= 100) {
       io.err.write(`${red(`msh: ${name}: maximum function nesting level exceeded (100)`)}\n`)
       return 1
@@ -1188,8 +1201,12 @@ class Shell {
     this.st.locals.push(frame)
     this.depth++
     const leave = this.base.debug?.enter('function', name, body.span?.filename ?? '-c')
-    await breathe()
     try {
+      for (let i = 0; i < params.length; i++) {
+        this.checkAbort()
+        this.localVar(params[i].name, args[i])
+      }
+      await breathe()
       return await this.exec(body, io)
     } catch (e) {
       if (e instanceof ReturnSignal) return e.status
@@ -1201,7 +1218,7 @@ class Shell {
       this.st.positional = savedArgs
       for (const [k, v] of frame) {
         if (v === undefined) delete this.st.vars[k]
-        else this.st.vars[k] = v
+        else Object.defineProperty(this.st.vars, k, { value: v, writable: true, enumerable: true, configurable: true })
       }
     }
   }
@@ -1635,8 +1652,7 @@ const BUILTINS: Record<string, Builtin> = {
       const eq = a.indexOf('=')
       const name = eq < 0 ? a : a.slice(0, eq)
       if (!NAME.test(name)) return fail(io, `local: '${a}': not a valid identifier`)
-      if (!frame.has(name)) frame.set(name, name in sh.st.vars ? sh.st.vars[name] : undefined)
-      sh.st.vars[name] = eq < 0 ? (sh.st.vars[name] ?? '') : a.slice(eq + 1)
+      sh.localVar(name, eq < 0 ? (Object.hasOwn(sh.st.vars, name) ? sh.st.vars[name] : '') : a.slice(eq + 1))
     }
     return 0
   },

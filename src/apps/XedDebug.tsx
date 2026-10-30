@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEv
 import { debugRevision, debugSessions, editorBreakpoints, removeBreakpoints, setBreakpointEnabled, sourceHash, subscribeDebug, toggleBreakpoint, type DebugSession, type DebugStart } from '../terminal/msh/debug'
 import { launchDebug } from '../terminal/msh/interp'
 import '../terminal/commands' // install the normal executable/command/security hooks
-import { formatDiagnostic, type Diagnostic } from '../terminal/msh/analysis'
-import type { Token } from '../terminal/msh/parse'
+import { formatDiagnostic, type AnalysisToken, type Diagnostic } from '../terminal/msh/analysis'
 import { argRef, evaluateWatch, MAX_WATCHES, variableAt, WATCH_DISPLAY, watchError, type WatchResult } from '../terminal/msh/watch'
 import { useWM } from '../os/wm'
 import { HOME } from '../terminal/vfs'
@@ -20,12 +19,12 @@ const OUTPUT_LIMIT = 32768
 const fileName = (p: string) => p.split('/').pop() || p
 const dirName = (p: string) => p.replace(/\/[^/]*$/, '') || '/'
 
-export function MshHighlight({ text, tokens }: { text: string; tokens: Token[] }) {
+export function MshHighlight({ text, tokens }: { text: string; tokens: AnalysisToken[] }) {
   let end = 0
   return <>{tokens.map((t, i) => {
     const gap = text.slice(end, t.start)
     end = t.end
-    const cls = t.k === 'op' || t.k === 'io' ? 'md-punct' : t.k === 'arith' ? 'md-code' : t.k === 'word' && /^(if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function)$/.test(t.v) ? 'md-bullet' : t.k === 'word' && /['"$`]/.test(t.v) ? 'md-code' : undefined
+    const cls = t.role === 'parameter' ? 'md-code' : t.k === 'op' || t.k === 'io' ? 'md-punct' : t.k === 'arith' ? 'md-code' : t.k === 'word' && /^(if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function)$/.test(t.v) ? 'md-bullet' : t.k === 'word' && /['"$`]/.test(t.v) ? 'md-code' : undefined
     return <span key={i}>{gap}<span className={cls}>{text.slice(t.start, t.end)}</span></span>
   })}{text.slice(end)}</>
 }

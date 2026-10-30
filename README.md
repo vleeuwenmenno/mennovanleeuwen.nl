@@ -929,6 +929,44 @@ and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts (`./scrip
 reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
 built-in `msh` skill.
 
+**Named function parameters.** Optional comma-separated names replace manual
+`local parcel="$1"; local cost="$2"` bindings:
+
+```sh
+deliver(parcel, cost) {
+    printf 'Delivering %s for %s fuel\n' "$parcel" "$cost"
+}
+deliver "Space Potato" 3
+```
+
+`function deliver(parcel, cost) { …; }` works too. Whitespace, newlines and comments
+between parameters are allowed. Names must be unique plain shell identifiers
+(`[A-Za-z_][A-Za-z0-9_]*`); `RANDOM` is computed by msh and cannot be a parameter.
+There are no defaults, rest parameters, destructuring, type annotations or expression-style
+calls such as `deliver("Space Potato", 3)`. Commas in ordinary command words stay literal.
+Existing `name()`, `function name()` and `function name` declarations keep their argument handling.
+
+A **nonempty** parameter list requires exactly that many arguments. Empty strings count as
+arguments. A wrong count fails with status 1 and a diagnostic naming the function, parameter
+names, received count and call site, before the body (including its redirects) runs. Normal
+argument expansion and call-site redirection still follow shell evaluation order. `set -e`
+handles this failure like any other command failure. `msh -n` checks declarations without
+running them; it cannot predict a call's expanded argument count.
+
+Bindings receive the already expanded strings, never reparse/evaluate them, and are local to
+each invocation, including recursion. `$1`, `$2`, `$#` and `"$@"` remain available; `shift` and
+`set --` change only those positional arguments, not the named snapshots. Named assignments
+can be changed or unset like other locals. Local shadowing and restoration use the same path
+as `local`, on return, error, exit, cancellation and budget exhaustion. Nested calls follow
+msh's dynamic scope: they can read a caller's locals until they shadow them. Arrays and
+read-only variables are not implemented by msh; declarations pretending to use them are
+syntax errors. Ordinary names such as `IFS` retain their existing local-variable effects.
+Missing arguments are rejected with or without `set -u`; for legacy functions, msh still
+expands a missing positional argument to the empty string even under `set -u`.
+
+`help --json` / `terminal_capabilities` advertise named-parameter syntax in `shell.syntax`.
+The shell version remains 2.0; this is a language feature, not an OS release.
+
 **Aliases and `~/.mvshrc`.** `alias ll='ls -l'` gives a command another name; `alias` lists them,
 `alias ll` shows one, `unalias ll` (or `unalias -a`) removes them. An alias replaces the first word
 of a simple command, also after `;`, `&&`, `||` and `|`, in `if` conditions, functions and

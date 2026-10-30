@@ -73,6 +73,15 @@ try {
   const tool = (name: string, args: Record<string, unknown>, grant: Grant = EDITS) => runInFolder({ name, arguments: args, folder: { path: FOLDER, label: FOLDER }, fallbackDir: FOLDER, grant, signal: new AbortController().signal })
   const denied = (r: { stderr: string; exit_code: number }) => r.exit_code !== 0 && /^msh: |: /.test(r.stderr)
 
+  const namedDelivery = await result('deliver(parcel, cost) { printf "%s:%s" "$parcel" "$cost"; }; deliver "Space Potato" 3', READONLY)
+  eq([namedDelivery.exit_code, namedDelivery.stdout], [0, 'Space Potato:3'], 'agent execution supports named function parameters')
+  const namedDenied = await result('write(path) { echo denied > "$path"; }; write /tmp/named-policy-denied', READONLY)
+  check(denied(namedDenied) && !exists('named-policy-denied'), 'named bindings do not bypass operation permissions')
+  const namedArity = await result('write(path) { touch /tmp/named-arity-body; }; write', EDITS)
+  check(namedArity.exit_code === 1 && !exists('named-arity-body') && namedArity.stderr.includes('write expects 1 arguments (path); received 0'), 'agent arity error prevents body mutations')
+  const namedLimits = await result('f(a) { touch /tmp/named-limits-body; }; f abcdef', EDITS, { ...AGENT_LIMITS, maxVariable: 3 })
+  check(namedLimits.terminated === 'memory' && !exists('named-limits-body'), 'agent named bindings honor variable budget')
+
   // Combined branch regressions: actual agent entry point, shared limits, no operand I/O.
   const fetchBefore = globalThis.fetch
   const fetched: string[] = []
@@ -631,6 +640,7 @@ try {
 
   const caps = async (line: string, grant?: Grant) => JSON.parse(strip((await result(line, grant)).stdout))
   const agentCaps = await caps('help --json', READONLY)
+  check(agentCaps.shell.syntax.some((s: string) => s.includes('named function parameters')), 'machine capabilities advertise named syntax and exact arity')
   check(agentCaps.shell.version === MSH_VERSION && (await result('msh --version')).stdout.includes(MSH_VERSION), 'the shell version in help --json is the one msh --version prints')
   eq(agentCaps.session.kind, 'agent', 'help --json inside an agent call says it is an agent session')
   eq(agentCaps.limits.timeoutSeconds, AGENT_LIMITS.timeoutMs / 1000, 'it reports the limits the call actually has')

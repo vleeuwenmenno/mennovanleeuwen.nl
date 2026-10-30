@@ -64,6 +64,88 @@ try {
     for (let i = 0; i < 200; i++) { if (test()) return; await new Promise(r => setTimeout(r, 5)) }
     throw new Error('debug checkpoint timeout')
   }
+  // Named parameters: parser, runtime, source diagnostics and frame cleanup share the real path.
+  const potato = `deliver(parcel, cost) {
+    printf 'Delivering %s for %s fuel\\n' "$parcel" "$cost"
+}
+deliver "Space Potato" 3`
+  eq(await run(potato), { stdout: 'Delivering Space Potato for 3 fuel\n', stderr: '', status: 0 }, 'exact named-parameter potato example')
+  for (const header of ['f()', 'function f()', 'function f']) {
+    eq((await run(`${header} { printf '<%s:%s>\\n' "$#" "$1"; }; f; f a b`)).stdout, '<0:>\n<2:a>\n', `legacy argument handling: ${header}`)
+  }
+  for (const header of ['f(a,b)', 'function f(a, b)', 'f (\n a, # comment\n b\n)', 'f(a ,\n b)', 'f(a,\\\n b)']) {
+    eq((await run(`${header}\n{ printf '<%s:%s>\\n' "$a" "$b"; }; f '' 'two words'`)).stdout, '<:two words>\n', `named header whitespace: ${header}`)
+  }
+  eq((await run(`f(a) { printf '%s\\n' "$a"; }; f '$(touch /tmp/parameter-eval) \`echo no\` $HOME " * ;'`)).stdout,
+    '$(touch /tmp/parameter-eval) `echo no` $HOME " * ;\n', 'argument strings are never reparsed or expanded twice')
+  check(!lookup('/tmp/parameter-eval'), 'substitution-looking literal parameter causes no mutation')
+  eq((await run(`f(a,b) { printf '%s\\n' "$#" "$1" "$2" "$@"; shift; printf '%s\\n' "$a" "$b" "$#" "$1"; }; f 'one two' ''`)).stdout,
+    '2\none two\n\none two\n\none two\n\n1\n\n', 'positionals preserved; shift does not change named snapshots')
+  for (const options of ['', 'set -u;']) for (const args of ['', 'one', 'one two three']) {
+    const r = await run(`${options} f(a,b) { touch /tmp/arity-body; };\nf ${args}`, '/tmp/arity.msh')
+    check(r.status === 1 && r.stderr.includes('/tmp/arity.msh:2:1:') && r.stderr.includes(`f expects 2 arguments (a, b); received ${args ? args.split(' ').length : 0}`), `exact arity diagnostic: ${options} ${args}`, r.stderr)
+  }
+  check(!lookup('/tmp/arity-body'), 'arity failure never enters body')
+  eq((await run('set -u; f(a) { printf "<%s>" "$a"; }; f ""')).stdout, '<>', 'empty supplied argument is set under nounset')
+  eq((await run('set -u; f() { printf "<%s>" "$1"; }; f')).stdout, '<>', 'legacy missing positional remains empty under nounset')
+  eq((await run('a=global; f(a) { local a=changed; g(a) { echo "$a"; }; g nested; echo "$a"; unset a; }; f first; echo "$a"')).stdout,
+    'nested\nchanged\nglobal\n', 'parameter/local redeclaration preserves original value, nesting and unset restore')
+  eq((await run('a=global; f(a) { g() { echo "$a"; }; g; }; f caller; echo "$a"')).stdout, 'caller\nglobal\n', 'parameter follows existing dynamic local scope')
+  eq((await run('f(n) { echo "$n"; if [ "$n" -gt 0 ]; then f "$((n - 1))"; fi; echo "$n"; }; f 2')).stdout,
+    '2\n1\n0\n0\n1\n2\n', 'recursive named bindings isolate frames')
+  eq((await run('f(a) { echo "$a"; }; x=$(f "two words"); echo "$x"; (f sub)')).stdout, 'two words\nsub\n', 'substitution and subshell preserve function parameter definitions')
+  eq((await run('f(a) { echo never; }; x=$(f); echo "status=$? value=$x"')).stdout, 'status=1 value=\n', 'wrong arity in substitution keeps status and skips body')
+  const badParameters: [string, number, string][] = [
+    ['f(a,a) { :; }', 5, 'duplicate'], ['f(a, a) { :; }', 6, 'duplicate'],
+    ['f(1x) { :; }', 3, 'plain variable'], ['f(a-b) { :; }', 3, 'plain variable'],
+    ['f(a=1) { :; }', 3, 'plain variable'], ['f(a: str) { :; }', 3, 'plain variable'],
+    ['f([a]) { :; }', 3, 'plain variable'], ['f(a[]) { :; }', 3, 'plain variable'],
+    ['f(...a) { :; }', 3, 'plain variable'], ['f("a") { :; }', 3, 'plain variable'],
+    ['f($a) { :; }', 3, 'plain variable'], ['f(a b) { :; }', 5, 'comma'],
+    ['f(,a) { :; }', 3, 'before comma'], ['f(a,) { :; }', 5, 'after comma'],
+    ['f(a,,b) { :; }', 5, 'before comma'], ['f(RANDOM) { :; }', 3, 'computed'],
+    ['f(readonly a) { :; }', 12, 'comma'], ['f("Space Potato", 3)', 3, 'plain variable'],
+  ]
+  for (const [code, column, message] of badParameters) {
+    const a = analyzeMsh('# file\n' + code, '/tmp/params-invalid.msh')
+    check(a.diagnostics.length === 1 && a.diagnostics[0].line === 2 && a.diagnostics[0].column === column && a.diagnostics[0].message.includes(message),
+      `precise declaration diagnostic: ${code}`, JSON.stringify(a.diagnostics))
+  }
+  const analysis = analyzeMsh(potato, 'potato.msh')
+  eq(analysis.tokens.filter((t: { role?: string }) => t.role === 'parameter').map((t: { v: string }) => t.v), ['parcel', 'cost'], 'shared Xed analysis identifies named parameters')
+  eq([...analysis.commands], [2, 4], 'parameter declaration does not add debugger command stops')
+  eq((await run('echo a,b readonly parcel cost')).stdout, 'a,b readonly parcel cost\n', 'ordinary command words and commas remain literal')
+  const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+  await runLine(`printf %s ${q(potato)} > /tmp/named-source.msh`, base())
+  eq((await run('source /tmp/named-source.msh')).stdout, 'Delivering Space Potato for 3 fuel\n', 'source uses shared named parser/runtime')
+  eq((await run('msh -n /tmp/named-source.msh')).status, 0, 'syntax-only accepts named parameters without running')
+  await runLine(`printf %s ${q('f(a,a) { :; }')} > /tmp/named-invalid.msh`, base())
+  for (const cmd of ['source', 'msh -n']) {
+    const r = await run(`${cmd} named-invalid.msh`)
+    check(r.status === 2 && r.stderr.includes('/tmp/named-invalid.msh:1:5:') && r.stderr.includes('duplicate function parameter'), `${cmd} keeps canonical declaration diagnostics`, r.stderr)
+  }
+  for (const tail of ['return 7', 'set -e; false', 'set -u; echo "$missing"']) {
+    const b = base()
+    await runLine(`a=outer; f(a) { local own=inner; ${tail}; }; f inner`, b)
+    eq([b.env['a'], Object.hasOwn(b.env, 'own')], ['outer', false], `cleanup after ${tail}`)
+  }
+  const proto = base()
+  const originalPrototype = Object.getPrototypeOf(proto.env)
+  await runLine('f(__proto__, constructor) { echo "$__proto__:$constructor"; local __proto__=local; }; f data ctor', proto)
+  check(Object.getPrototypeOf(proto.env) === originalPrototype && !Object.hasOwn(proto.env, '__proto__') && !Object.hasOwn(proto.env, 'constructor'), 'prototype-like identifiers bind as data and restore absence')
+  const namedCancelBase = base()
+  await runLine('a=outer; f(a) { echo "$a"; }', namedCancelBase)
+  const namedCancel = launchDebug('f inner', namedCancelBase)
+  await wait(() => namedCancel.session.current.state === 'paused')
+  namedCancel.session.stepInto()
+  await wait(() => namedCancel.session.current.state === 'paused')
+  eq([namedCancel.session.current.variables.a, namedCancel.session.current.args, namedCancel.session.current.locals], ['inner', ['inner'], ['a']], 'parameter visible before first function command with positionals intact')
+  namedCancel.session.cancel(); await namedCancel.done
+  eq(namedCancelBase.env['a'], 'outer', 'cancelled named invocation restores caller value')
+  const bindingBudget = new Budget({ ...AGENT_LIMITS, maxVariable: 4 })
+  const limitedBase = { ...base(), budget: bindingBudget }
+  await runLine('a=old; f(a,b) { touch /tmp/named-budget-body; }; f new oversized', limitedBase)
+  check(bindingBudget.stopped === 'memory' && limitedBase.env['a'] === 'old' && !Object.hasOwn(limitedBase.env, 'b') && !lookup('/tmp/named-budget-body'), 'partial parameter binding obeys variable budget and restores on exhaustion')
   await runLine("echo 'echo child' > /tmp/review-child.sh", base())
   const relative = launchDebug('source review-child.sh', base())
   await wait(() => relative.session.current.state === 'paused')
