@@ -79,11 +79,13 @@ try {
   check('Signing in preserves visitor staged sticky-note content',transferred.notes.some(n=>n.id==='note1'&&n.text==='OLD'));
   check('Signing in retains the staged sticky placement',Object.values(transferred.places.places).some((p:any)=>p.id==='note1'));
   await signed.close();
-  await control.eval(`localStorage.setItem('mvlos.u.1.sync.notes',JSON.stringify({value:[{id:'note1',text:'',color:'yellow',tilt:0,created:1,updated:Date.now(),purged:true}],base:100,dirty:false}))`);
+  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.setItem('mvlos.u.1.sync.notes',JSON.stringify({value:[{id:'note1',text:'',color:'yellow',tilt:0,created:1,updated:Date.now(),purged:true}],base:100,dirty:false}))`);
   const tombstone=await open();await hydrate(tombstone);await flush(tombstone);
-  check('Existing account note tombstone takes precedence over visitor stage',await tombstone.eval(`import('/src/data/notes.ts').then(m=>!m.getNote('note1')&&m.allNotes().some(n=>n.id==='note1'&&n.purged))`));
+  check('Pre-cutover account note tombstone takes precedence over visitor stage',await tombstone.eval(`import('/src/data/notes.ts').then(m=>!m.getNote('note1')&&m.allNotes().some(n=>n.id==='note1'&&n.purged))`));
   await tombstone.close();
   // A prior startup wrote moved and the canonical transfer intent, but not its note dependency.
+  // This fixture represents the earlier v2 cache, before the visitor's new note checkpoint.
+  await control.eval(`for(const k of Object.keys(localStorage))if(k==='mvlos.visitor.notes:state:v1'||k.startsWith('mvlos.visitor.notes:pending:v1:'))localStorage.removeItem(k)`);
   const guestEnvelope=await control.eval(`localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')`);
   await control.eval(`for(const k of Object.keys(localStorage))if(k.startsWith('mvlos.u.1.'))localStorage.removeItem(k);localStorage.setItem('mvlos.u.1.moved','1');localStorage.setItem('mvlos.u.1.widget-move:guest:v2',JSON.stringify({source:${JSON.stringify(guestEnvelope)},target:null}));localStorage.setItem('mvlos.visitor.widget-cache:v2:notes',JSON.stringify({value:[{id:'note1',text:'VISITOR-CACHE',color:'yellow',tilt:0,created:1,updated:2}],base:0,dirty:true}))`);
   const partialGuest=await open(false,{},`const dependencySet=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('mvlos.u.1.widget-stage:v1:mvlos.sync.notes:')&&!sessionStorage.getItem('dependency-failed')){sessionStorage.setItem('dependency-failed','1');throw new DOMException('Synthetic dependency denial','QuotaExceededError')}return dependencySet.call(this,k,v)}`);
@@ -96,9 +98,9 @@ try {
   await control.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.notes',${JSON.stringify(oldNote)});localStorage.setItem('mvlos.sync.windows:desktop',${JSON.stringify(layout)})`);
   const remote={notes:{value:[{id:'note1',text:'NEW-REMOTE',color:'yellow',tilt:0,created:1,updated:99}],updatedAt:99}};
   const online=await open(false,remote);await hydrate(online);await flush(online);await sleep(200);
-  check('Remote reconciliation writes separate cache, not ordinary target',await online.eval(`localStorage.getItem('mvlos.u.1.sync.notes')===null&&Object.keys(localStorage).some(k=>k.startsWith('mvlos.u.1.widget-cache:v2:notes'))`));
+  check('Remote reconciliation writes separate cache, not ordinary target',await online.eval(`localStorage.getItem('mvlos.u.1.sync.notes')===null&&Object.keys(localStorage).some(k=>k.startsWith('mvlos.u.1.notes:state:v1'))`));
   await reload(online);
-  check('Reload retains one bounded note cache checkpoint',await online.eval(`Object.keys(localStorage).filter(k=>k.startsWith('mvlos.u.1.widget-cache:')).length===1`));
+  check('Reload retains one bounded note cache checkpoint',await online.eval(`Object.keys(localStorage).filter(k=>k==='mvlos.u.1.notes:state:v1').length===1`));
   await online.close();
   const offline=await open(false,{},`window.__holdState=true`);await offline.eval('window.__releaseMe()');await sleep(200);
   const cached=await offline.eval(`(async()=>({notes:(await import('/src/data/notes.ts')).allNotes(),target:localStorage.getItem('mvlos.u.1.sync.notes')}))()`);
@@ -111,7 +113,7 @@ try {
   const authoritative=JSON.stringify({value:[{id:'note1',text:'ACCOUNT-TARGET',color:'yellow',tilt:0,created:1,updated:199}],base:199,dirty:false});
   await control.eval(`localStorage.setItem('mvlos.u.1.sync.notes',${JSON.stringify(authoritative)})`);
   const target=await open(false,{},`window.__holdState=true`);await target.eval('window.__releaseMe()');await sleep(200);
-  check('New ordinary account target wins over cached and staged notes',await target.eval(`import('/src/data/notes.ts').then(m=>m.getNote('note1')?.text==='ACCOUNT-TARGET')`));
+  check('Post-cutover ordinary writes cannot shadow committed note edits',await target.eval(`import('/src/data/notes.ts').then(m=>m.getNote('note1')?.text==='OFFLINE-EDIT'&&localStorage.getItem('mvlos.u.1.sync.notes')===${JSON.stringify(authoritative)})`));
   await target.close();
   for(const [name,value]of [['mvlos_sid',sid2],['mvlos_login','widget-review6-b'],['mvlos_uid','2']])await control.send('Network.setCookie',{name,value,url:origin});
   const other=await open(false,{},`window.__holdState=true`);await other.eval('window.__releaseMe()');await sleep(200);
@@ -119,17 +121,17 @@ try {
   await other.close();
   for(const [name,value]of [['mvlos_sid',sid],['mvlos_login',login],['mvlos_uid','1']])await control.send('Network.setCookie',{name,value,url:origin});
   await control.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.notes',${JSON.stringify(oldNote)})`);
-  const failedCache=await open(false,remote,`const base=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('mvlos.u.1.widget-cache:v2:notes')&&!sessionStorage.getItem('cache-failed')){sessionStorage.setItem('cache-failed','1');throw new DOMException('Synthetic cache denial','QuotaExceededError')}return base.call(this,k,v)}`);
+  const failedCache=await open(false,remote,`const base=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('mvlos.u.1.notes:state:v1')&&!sessionStorage.getItem('cache-failed')){sessionStorage.setItem('cache-failed','1');throw new DOMException('Synthetic cache denial','QuotaExceededError')}return base.call(this,k,v)}`);
   await failedCache.eval('window.__releaseMe()');await failedCache.waitFor(`import('/src/os/synced.ts').then(m=>m.getSyncStatus().state==='error')`);
   check('Failed cache write does not claim hydration',await failedCache.eval(`import('/src/os/synced.ts').then(m=>m.getSyncedHydration()===null)`));
   await failedCache.eval(`import('/src/os/synced.ts').then(m=>m.pullAll())`);await failedCache.waitFor(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.widgetsHydrated())`);
-  check('Retry persists remote note after transient cache failure',await failedCache.eval(`Object.keys(localStorage).some(k=>k.startsWith('mvlos.u.1.widget-cache:v2:notes'))&&import('/src/data/notes.ts').then(m=>m.getNote('note1')?.text==='NEW-REMOTE')`));
+  check('Retry persists remote note after transient cache failure',await failedCache.eval(`Object.keys(localStorage).some(k=>k.startsWith('mvlos.u.1.notes:state:v1'))&&import('/src/data/notes.ts').then(m=>m.getNote('note1')?.text==='NEW-REMOTE')`));
   await failedCache.close();
-  await control.eval(`localStorage.setItem('mvlos.u.1.widget-cache:v2:notes',JSON.stringify({value:{},base:0,dirty:false}))`);
+  await control.eval(`localStorage.setItem('mvlos.u.1.notes:state:v1',JSON.stringify({value:{},base:0,dirty:false}))`);
   const corrupt=await open();await corrupt.eval('window.__releaseMe()');await corrupt.waitFor(`import('/src/os/synced.ts').then(m=>m.getSyncStatus().state==='error')`);
-  check('Unreadable note cache blocks hydration and retains source',await corrupt.eval(`import('/src/os/synced.ts').then(m=>m.getSyncedHydration()===null&&localStorage.getItem('mvlos.u.1.widget-cache:v2:notes')!==null)`));
+  check('Unreadable note cache blocks hydration and retains source',await corrupt.eval(`import('/src/os/synced.ts').then(m=>m.getSyncedHydration()===null&&localStorage.getItem('mvlos.u.1.notes:state:v1')!==null)`));
   await corrupt.close();
-  await control.eval(`localStorage.removeItem('mvlos.u.1.widget-cache:v2:notes');localStorage.setItem('mvlos.u.1.sync.notes','')`);
+  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.removeItem('mvlos.u.1.widget-cache:v2:notes');localStorage.setItem('mvlos.u.1.sync.notes','')`);
   const emptyTarget=await open();await emptyTarget.eval('window.__releaseMe()');await emptyTarget.waitFor(`import('/src/os/synced.ts').then(m=>m.getSyncStatus().state==='error')`);
   check('Empty unreadable ordinary note envelope is not an absent store',await emptyTarget.eval(`import('/src/os/synced.ts').then(m=>m.getSyncedHydration()===null&&localStorage.getItem('mvlos.u.1.sync.notes')==='')`));
   await emptyTarget.close();
@@ -142,7 +144,7 @@ try {
   await deniedRead.close();
   await control.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.notes',${JSON.stringify(oldNote)})`);
   const noteA={id:'note-a',text:'TAB-A',color:'yellow',tilt:0,created:2,updated:100},noteB={id:'note-b',text:'TAB-B',color:'yellow',tilt:0,created:3,updated:100};
-  const tabA=await open(false,{notes:{value:[noteA],updatedAt:100}},`const base=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('mvlos.u.1.widget-cache:v2:notes')&&!sessionStorage.getItem('cache-paused')){sessionStorage.setItem('cache-paused','1');debugger}return base.call(this,k,v)}`);
+  const tabA=await open(false,{notes:{value:[noteA],updatedAt:100}},`const base=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('mvlos.u.1.notes:state:v1')&&!sessionStorage.getItem('cache-paused')){sessionStorage.setItem('cache-paused','1');debugger}return base.call(this,k,v)}`);
   const tabB=await open(false,{notes:{value:[noteB],updatedAt:100}});
   try {
     await tabA.send('Debugger.enable');const paused=new Promise<void>(resolve=>onPause=resolve);
@@ -155,7 +157,7 @@ try {
   const mergedNotes=await merged.eval(`import('/src/data/notes.ts').then(m=>m.allNotes())`);
   check('Concurrent note cache writes survive together offline',mergedNotes.some(n=>n.id==='note-a')&&mergedNotes.some(n=>n.id==='note-b'),mergedNotes);
   await merged.close();
-  await control.eval(`localStorage.setItem('mvlos.u.1.widget-cache:v2:notes',JSON.stringify({value:[${JSON.stringify(noteA)}],base:100,dirty:false}))`);
+  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.setItem('mvlos.u.1.widget-cache:v2:notes',JSON.stringify({value:[${JSON.stringify(noteA)}],base:100,dirty:false}))`);
   const removed=await open(false,{notes:{value:[],updatedAt:200}});await hydrate(removed);await flush(removed);
   check('Clean obsolete cache cannot resurrect server-pruned notes',await removed.eval(`import('/src/data/notes.ts').then(m=>m.allNotes().length===0)`));
   await removed.close();

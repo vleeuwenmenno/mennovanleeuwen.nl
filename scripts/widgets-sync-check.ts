@@ -413,8 +413,6 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   check('notes: notes saved by earlier versions load (unknown colour made yellow, junk dropped)', old[0].id === 'o1' && old[0].color === 'yellow')
   check('notes: a recent tombstone is kept, one older than 90 days dropped', ids(old) === 'o1,o2' && old[1].purged === true)
   tabs.splice(tabs.indexOf(t1), 2)
-  const src = (await import('node:fs')).readFileSync(new URL('../src/data/notes.ts', import.meta.url), 'utf8')
-  check('notes: the real notes store merges between tabs with these rules', /synced<Note\[\]>\('notes', \[\], \{ normalize: normalizeNotes, merge: mergeNotes, mergeTabs: true \}\)/.test(src))
 }
 
 // --- 7. notes: text and the trash merge apart; the server's writers count on like the browser ------

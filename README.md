@@ -4448,17 +4448,37 @@ automatic ownership claims. Its explicit original account can read it when the r
 source still matches; a pending transfer also records a bound snapshot without changing the original.
 Visitor widget and sticky-note dependencies transfer before account cutover, subject to
 account-target precedence.
-Remote note reconciliation uses one account-scoped live cache checkpoint, leaving the immutable
-input and ordinary account key untouched. Its read/merge/write runs under the same IndexedDB gate;
-reloads do not accumulate cache slots. Dirty concurrent snapshots merge by note identity, while a
-newer server version replaces a clean older cache, including notes whose tombstones expired.
-A present ordinary account key takes precedence. An unreadable note source blocks hydration and
-writes until reload; a failed cache write can retry without losing its candidate. Explicit note
-edits retain the ordinary Notes store's persistence behavior and include the latest readable
-cache before the first ordinary write.
-Visitor transfer includes staged note dependencies (or their newer live cache), including retries
-while a canonical visitor transfer intent remains. Ownership checks inspect stage evidence even
-when an older global claim already exists; a claim cannot override a later explicit owner.
+Notes use one account-scoped `notes:state:v1` checkpoint for hydration, edits, server
+acknowledgements, storage events and offline reloads. It separates the last server baseline from
+actual unsaved note revisions; an unrelated edit never turns unchanged rows in a stale snapshot
+into dirty notes. Functional edits first read the latest checkpoint and pending records, then
+advance the existing note counters. Every accepted edit writes a unique immutable journal record
+before becoming visible. Only changed notes enter that record. Checkpoint read/merge/write and
+receipt cleanup run under the same IndexedDB gate as widgets; there is no first-edit handoff to
+an ordinary key. A newer server baseline replaces clean old rows, while real dirty edits retain
+the existing per-field merge and final-purge rules. Server acknowledgements consume only revisions
+they actually contain, so an edit made while a request was in flight remains dirty.
+
+Before the first note checkpoint, ordinary account notes take precedence over the earlier
+`widget-cache:v2:notes` cache and immutable staged inputs. That first commit waits for migration
+inputs to be resolved; a pending startup transfer resumes when account discovery settles, even
+when an existing account target means no reload was needed. After cutover, those old keys remain
+untouched as recovery inputs, but later old-client writes cannot shadow committed note state.
+An unreadable checkpoint, source or journal fails closed. A rejected journal write rejects the
+edit; a failed checkpoint leaves the admitted journal recoverable across reloads. Admission
+stops at 256 visible pending records (1 MiB per edit). Concurrent admissions can exceed that soft
+count limit and are still replayed and drained. The checkpoint has a 2 MiB limit; receipts cover
+only extant records, not every tab ever opened. Receipt
+cleanup follows the successful checkpoint write, and failed cleanup can retry without replay.
+
+Note checkpoints and journals carry the account-space revocation generation. Logout advances it
+under the gate and clears the checkpoint and journals. A non-gated admission paused before its
+native write may leave an old-generation physical record after cleanup, but it cannot replay in
+the new generation or another account. If cleanup itself fails, the retained data stays in that
+account's namespace. Visitor transfer reads the current checkpoint plus admitted journals, so an
+edit survives sign-in even if its visitor tab closed before checkpointing. Ownership checks inspect
+stage evidence even when an older global claim exists; a claim cannot override a later explicit
+owner.
 At canonical cutover the ordinary account value takes precedence over its staged input;
 the canonical write re-reads these inputs inside the storage gate. Conflicting snapshots or
 ambiguous prepared copies stay unresolved. Startup does not save a default window layout while

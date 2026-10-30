@@ -294,8 +294,11 @@ try {
   const deliverNote = async (extra: Record<string, unknown> = {}) => {
     const note = { id: 'delayed-note', text: 'Arrived after widget', color: 'yellow', tilt: 0, created: Date.now(), updated: Date.now(), edited: Date.now(), ...extra }
     await D.eval(`(() => {
-      const key = 'mvlos.visitor.sync.notes'
-      const value = JSON.stringify({ value: [${JSON.stringify(note)}], base: 0, dirty: true })
+      // Deliver an independently admitted edit using the current note protocol. Retained
+      // ordinary keys belong to older clients and cannot shadow a checkpoint after cutover.
+      const generation = localStorage.getItem('mvlos.visitor.revocation:v1')
+      const key = 'mvlos.visitor.notes:pending:v1:' + encodeURIComponent(generation ?? 'initial') + ':' + crypto.randomUUID()
+      const value = JSON.stringify({ generation, changes: [${JSON.stringify(note)}] })
       localStorage.setItem(key, value)
       window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }))
     })()`)

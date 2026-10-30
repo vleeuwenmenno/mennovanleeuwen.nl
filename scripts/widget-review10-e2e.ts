@@ -35,7 +35,7 @@ const inject = (reset=false, remote:unknown={}, extra='')=>`(()=>{
   const native=fetch.bind(window);window.fetch=(input,options)=>{
     const path=String(input);
     if(path==='/api/me')return new Promise((resolve,reject)=>{window.__releaseMe=()=>native(input,options).then(resolve,reject)});
-    if(path==='/api/state')return window.__holdState?new Promise(()=>{}):Promise.resolve(Response.json(window.__remote));
+    if(path==='/api/state'){window.__stateRequested=true;return window.__holdState?new Promise(()=>{}):Promise.resolve(Response.json(window.__remote))};
     if(path.startsWith('/api/state/'))return new Promise(resolve=>window.__puts.push({path,body:JSON.parse(options.body),release:reply=>resolve(Response.json(reply))}));
     if(path.startsWith('/api/')&&sessionStorage.getItem('review2-switch'))return Promise.resolve(Response.json({}));
     return native(input,options);
@@ -140,9 +140,12 @@ try {
     const holding=locker.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{debugger}))`);void holding.catch(()=>{})
     await Promise.race([paused,sleep(10000).then(()=>{throw Error('gate did not pause')})])
     await pending.send('Page.navigate',{url:origin});await pending.waitFor(`!!window.__releaseMe&&document.querySelector('.desktop')&&!document.querySelector('.boot')`,90000)
-    await pending.eval('window.__releaseMe()');await pending.waitFor(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.widgetsHydrated())`)
+    // Whole-account hydration now awaits the note checkpoint under this same gate. Observe
+    // the request, change the target while blocked, then let both checkpoints complete.
+    await pending.eval('window.__releaseMe()');await pending.waitFor('window.__stateRequested===true')
     await control.eval(`localStorage.setItem('mvlos.u.1.sync.widgets',${JSON.stringify(latest)})`)
-    onPause=undefined;await locker.send('Debugger.resume');await holding;await flush(pending)
+    onPause=undefined;await locker.send('Debugger.resume');await holding
+    await pending.waitFor(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.widgetsHydrated())`);await flush(pending)
     check('Canonical cutover re-reads account target after waiting for gate',(await configs(pending))['private-note']?.text==='DURING-GATE'&&await pending.eval(`localStorage.getItem('mvlos.u.1.sync.widgets')===${JSON.stringify(latest)}`))
   } finally {onPause=undefined;await locker.send('Debugger.resume').catch(()=>{});await locker.close();await pending.close()}
   // Receipt written, native target write fails. Normal OS startup may persist an empty layout.
