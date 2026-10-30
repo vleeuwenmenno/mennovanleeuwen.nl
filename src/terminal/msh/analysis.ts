@@ -1,4 +1,5 @@
 import { lex, parse, type Token } from './parse'
+import { commandLines } from './debug'
 
 export type Diagnostic = { filename: string; line: number; column: number; expression: string; message: string }
 export function diagnostic(src: string, filename: string, error: unknown): Diagnostic {
@@ -8,9 +9,10 @@ export function diagnostic(src: string, filename: string, error: unknown): Diagn
 }
 export const formatDiagnostic = (d: Diagnostic) => `${d.filename}:${d.line}:${d.column}: ${d.message} [${d.expression}]`
 /** The editor and execution share the real msh lexer and parser, including heredocs. */
-export function analyzeMsh(src: string, filename: string): { tokens: Token[]; diagnostics: Diagnostic[] } {
-  if (src.length > 512_000) return { tokens: [], diagnostics: [{ filename, line: 1, column: 1, expression: '', message: 'Analysis limited to 512 KB' }] }
+/** `commands`: the lines with a command the debugger can stop at (null when the file does not parse). */
+export function analyzeMsh(src: string, filename: string): { tokens: Token[]; diagnostics: Diagnostic[]; commands: ReadonlySet<number> | null } {
+  if (src.length > 512_000) return { tokens: [], diagnostics: [{ filename, line: 1, column: 1, expression: '', message: 'Analysis limited to 512 KB' }], commands: null }
   let tokens: Token[] = []
-  try { tokens = lex(src); parse(src, filename); return { tokens, diagnostics: [] } }
-  catch (error) { return { tokens, diagnostics: [diagnostic(src, filename, error)] } }
+  try { tokens = lex(src); return { tokens, diagnostics: [], commands: commandLines(parse(src, filename)) } }
+  catch (error) { return { tokens, diagnostics: [diagnostic(src, filename, error)], commands: null } }
 }
