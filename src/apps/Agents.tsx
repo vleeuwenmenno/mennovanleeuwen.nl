@@ -1,3 +1,4 @@
+import { useClientCalls } from '../terminal/agents/useClientCalls'
 import { toUi } from '../os/uiScale'
 import { Icon, NEW_TITLE, regenerateHint, RenameBox, Scramble, titlePending } from './agentsSidebar/bits'
 import { AgentsSidebar, Rail, reportBulk, runBulk, sideKeys, useThreadSelection, type Bulk, type SideCtx } from './agentsSidebar'
@@ -55,6 +56,8 @@ import {
   listMemories,
   listThreads,
   followThread,
+  claimClientCall,
+  sendClientResult,
   sendMessage,
   agentSettings,
   setAgentSettings,
@@ -1191,8 +1194,31 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     if (c.type === 'approval') setApprovals((a) => (a.some((x) => x.callId === c.callId) ? a : [...a, { callId: c.callId, messageId: c.messageId, index: c.index, kind: 'approval', call: c.call, summary: c.summary, check: c.check, child: e.child }]))
     else if (c.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== c.callId))
   }
+  // This window runs the terminal tool for the threads it follows or sends to: no terminal window is needed.
+  // The thread as the last event said it (the work folder is read from it) and the calls under way, to stop them.
+  const execThread = useRef<Thread | null>(null)
+  const execCalls = useClientCalls(id, streamed.current)
+  const runClientCall = async (e: Extract<TurnEvent, { type: 'client' }>) => {
+    const snapshot = execThread.current
+    if (!snapshot) return
+    const { id, workdir } = snapshot
+    const calls = execCalls
+    calls.select(id)
+    await calls.run(e.callId, () => claimClientCall(id, e.callId), async (signal) => {
+      try {
+        const { runAgentCall } = await import('../terminal/agents/exec')
+        const { HOME } = await import('../terminal/vfs')
+        signal.throwIfAborted()
+        return await runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir, fallbackDir: HOME, grant: e.grant, signal })
+      } catch (err) { return { output: `msh: ${(err as Error).message}`, status: 1 } }
+    }, (a) => sendClientResult(id, e.callId, a.output, a.status, { result: 'result' in a ? a.result : undefined, capabilities: 'capabilities' in a ? a.capabilities : undefined })).catch(() => {})
+  }
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
+    if (e.type === 'snapshot' || e.type === 'thread') execThread.current = e.thread
+    if (e.type === 'snapshot') for (const p of e.pending) if (p.kind === 'client' && p.call) void runClientCall({ type: 'client', callId: p.callId, messageId: p.messageId, index: p.index, call: p.call, grant: p.grant })
+    if (e.type === 'client') void runClientCall(e)
+    if (e.type === 'clientDone') execCalls.done(e.callId)
     if (e.type === 'snapshot') {
       setThread(e.thread)
       setMessages(e.messages)
@@ -1261,7 +1287,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   useEffect(() => {
     if (!id || busy || !(thread?.running || lostAt.current !== null)) return
     const ctl = new AbortController()
-    followThread(id, onEvent, ctl.signal)
+    followThread(id, onEvent, ctl.signal, { exec: true })
       .catch(() => {})
       .finally(() => {
         if (ctl.signal.aborted) return
@@ -1476,7 +1502,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       abort.current = ctl
       let accepted = false
       try {
-        await sendMessage(target.id, message, attached, (e) => ((accepted ||= (e.type === 'message' && e.message.role === 'user') || e.type === 'compact'), onEvent(e)), ctl.signal)
+        await sendMessage(target.id, message, attached, (e) => ((accepted ||= (e.type === 'message' && e.message.role === 'user') || e.type === 'compact'), onEvent(e)), ctl.signal, { exec: true })
       } catch (e) {
         // Dropped on the way, not refused: the turn may well go on (or the server is restarting).
         if (!isDropped(e) || ctl.signal.aborted) throw e
@@ -1561,7 +1587,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     const ctl = new AbortController()
     abort.current = ctl
     try {
-      await retryTurn(thread.id, onEvent, ctl.signal)
+      await retryTurn(thread.id, onEvent, ctl.signal, { exec: true })
     } catch (e) {
       if (isDropped(e) && !ctl.signal.aborted) lose()
       else if ((e as Error).name !== 'AbortError') {
@@ -1685,6 +1711,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }
 
   const stop = () => {
+    execCalls.stop()
     abort.current?.abort()
     if (thread) stopThread(thread.id).catch(() => {})
   }
@@ -1986,7 +2013,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     openMenuAt(e.currentTarget, [
       ...TOOL_GROUPS.map((g) => {
         const on = tools.includes(g.id)
-        const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal'
+        const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir)
         const { hint, muted } = toolState(g, on, !!blocked)
         // Greyed but clickable while it is on, so it can be switched off; off and blocked it cannot be switched on.
         return { label: g.name, checked: on, muted: muted && on, disabled: muted && !on, hint, onSelect: () => toggleTool(g.id) }
@@ -2757,7 +2784,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           {pending ? '◌' : failed ? '✕' : '✓'}
         </span>
         <span className="agt-tool-label">{toolLabel(call, result)}</span>
-        {inTerminal && <span className="muted"> · running in your terminal…</span>}
+        {inTerminal && <span className="muted"> · running…</span>}
         {checked && (
           <span className="muted agt-tool-checked" title={checked}>
             {' '}
@@ -2837,10 +2864,32 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           ))}
           {!!events.more && <li className="muted">and {events.more} more</li>}
         </ul>
+      ) : call.name === 'terminal' && parsed && typeof parsed === 'object' && typeof (parsed as { stdout?: unknown }).stdout === 'string' ? (
+        <TerminalResult call={call} r={parsed as TerminalAnswer} />
       ) : (
         <pre className="agt-tool-body">{[`${call.name}(${JSON.stringify(call.arguments)})`, result ? (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)).slice(0, 6000) : pending ? 'Running…' : 'No result (the turn stopped).'].join('\n\n')}</pre>
       )}
     </details>
+  )
+}
+
+type TerminalAnswer = { exit_code: number; stdout: string; stderr: string; duration_ms?: number; truncated?: { stdout: number; stderr: number }; terminated?: string | null }
+const STOPPED: Record<string, string> = { timeout: 'stopped: out of time', cancelled: 'stopped: cancelled', steps: 'stopped: too many steps', output: 'stopped: too much output', memory: 'stopped: too much memory' }
+
+/** What a terminal call answered: the command, stdout and stderr apart, how it ended. */
+function TerminalResult({ call, r }: { call: ToolCall; r: TerminalAnswer }) {
+  const cut = (r.truncated?.stdout ?? 0) + (r.truncated?.stderr ?? 0)
+  return (
+    <>
+      <pre className="agt-tool-body">{`$ ${String(call.arguments?.command ?? '').slice(0, 2000)}${r.stdout ? `\n${r.stdout.slice(0, 6000)}` : ''}`}</pre>
+      {r.stderr && <pre className="agt-tool-body t-red">{r.stderr.slice(0, 4000)}</pre>}
+      <p className="muted agt-ask-why">
+        exit {r.exit_code}
+        {r.duration_ms !== undefined && ` · ${r.duration_ms < 1000 ? `${r.duration_ms} ms` : `${(r.duration_ms / 1000).toFixed(1)} s`}`}
+        {r.terminated && ` · ${STOPPED[r.terminated] ?? r.terminated}`}
+        {cut > 0 && ` · ${cut} characters cut`}
+      </p>
+    </>
   )
 }
 
@@ -2864,7 +2913,7 @@ const PERMISSION_LABEL: Record<Permission, string> = { default: 'Ask first', aut
 const PERMISSION_HELP: Record<Permission, string> = {
   default: 'Each change, and each web address it made up, waits for you to allow it',
   auto: 'Web addresses it made up are checked for you (rules, then the safety check model); changes still ask',
-  acceptEdits: 'File edits in the work folder go through and web reads are checked like Auto; deleting and commands still ask',
+  acceptEdits: 'File edits in the work folder go through, and so do terminal commands that only write there; deleting, the network and web reads (checked like Auto) still ask',
   plan: 'Read only: it looks around, then shows you a plan to approve',
   bypass: 'Nothing asks: edits, deletes, commands and web reads all run. Calendar changes, mail, and AGENTS.md, CLAUDE.md, .agents/ and .claude/ still ask',
 }

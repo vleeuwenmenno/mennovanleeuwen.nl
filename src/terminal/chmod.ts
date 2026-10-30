@@ -1,4 +1,4 @@
-import { lookup, setMode, walk } from './fs'
+import { actorOf, lookup, setMode, walk } from './fs'
 import { applyMode, modeOf, rwx } from './modes'
 import { CmdError, type Ctx } from './types'
 import { resolvePath } from './vfs'
@@ -106,7 +106,7 @@ async function chmod(ctx: Ctx): Promise<string | void> {
       const to = applyMode(spec, was, node.type === 'dir')!
       const name = abs === root ? arg : `${arg.replace(/\/+$/, '')}${abs.slice(root.length)}`
       try {
-        if (to !== was || node.mode === undefined) await setMode(abs, to, !!ctx.root)
+        if (to !== was || node.mode === undefined) await setMode(abs, to, actorOf(ctx))
         if (flag.has('v') || (flag.has('c') && to !== was)) lines.push(to === was ? `mode of '${name}' retained as ${shown(to)}` : `mode of '${name}' changed from ${shown(was)} to ${shown(to)}`)
       } catch (e) {
         fail((e as Error).message.replace(`'${abs}'`, `'${name}'`))
