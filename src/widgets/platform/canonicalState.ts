@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { storageTransaction } from '../../os/storageTransaction'
 import { getAccount, subscribeAccount } from '../../os/account'
-import { accountGuard, accountKey, accountStorage, TAB_UID, widgetMigrationUnresolved } from '../../os/accountSpace'
+import { accountGuard, accountKey, accountStorage, TAB_UID, widgetLegacyStage, widgetMigrationUnresolved } from '../../os/accountSpace'
 import { getSyncedHydration, onSyncedHydration, reportSyncFailure, synced, type Synced, type SyncedHydration } from '../../os/synced'
 import { bindPlacementAliases, changeSet, importPlaces, mergeSets, type WidgetPlace, type WidgetSet } from './placementSet'
 import {
@@ -15,7 +15,7 @@ const PENDING_KEY = 'mvlos.widgets.pending:v2'
 const LEGACY_KEYS = ['widgets', 'widgets:placed', 'widgets:packages:v1', 'windows:desktop', 'windows:mobile'] as const
 type LegacyMeta = { value: unknown; base: number; dirty: boolean }
 function readJSON(key: string): unknown {
-  const raw = accountStorage.getStrict(key)
+  const raw = accountStorage.getStrict(key) ?? widgetLegacyStage(key)
   if (raw === null) return null
   try { return JSON.parse(raw) } catch { throw new Error('Widget storage is unreadable; original data retained') }
 }
@@ -35,6 +35,7 @@ function readJournals() {
 let pending = emptyPending()
 try { pending = readJournals() } catch (error) { reportSyncFailure(error) }
 let journalTimer: ReturnType<typeof setTimeout> | undefined
+let migrationSnapshot: SyncedHydration | null = null
 const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, {
   normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true, serialize: storageTransaction,
   beforeRead: () => {
@@ -44,8 +45,13 @@ const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, {
     try { if (normalizeWidgetState(JSON.parse(raw)?.value)) return } catch { /* invalid envelope */ }
     throw new Error('Widget state is unreadable; original data and journals retained')
   },
-  prepare: value => value ? applyPending(value, mergePending(pending, readJournals()), true) : value,
-  afterPersist: value => { if (value) finishJournal(value) },
+  prepare: value => {
+    // Re-read ordinary account keys inside the canonical gate. A real account value always
+    // overrides its staged legacy input; pending operations are then replayed on that baseline.
+    const base = migrationSnapshot && !durableState() ? legacyState(migrationSnapshot) : value
+    return base ? applyPending(base, mergePending(pending, readJournals()), !!value) : base
+  },
+  afterPersist: value => { if (value) { migrationSnapshot = null; finishJournal(value) } },
 })
 
 /** Old layout coordinates have no viewport metadata. Keep every number unchanged and record the
@@ -64,22 +70,31 @@ function layoutPlaces(raw: unknown, phone: boolean): WidgetSet {
   return { places, removed: '' }
 }
 function legacyState(snapshot: SyncedHydration = {}): WidgetState {
-  const localLegacy = Object.fromEntries(LEGACY_KEYS.map(key => [key, readJSON(`mvlos.sync.${key}`) as LegacyMeta | null]))
+  const staged = new Set<string>()
+  const localLegacy = Object.fromEntries(LEGACY_KEYS.map(key => {
+    const full = `mvlos.sync.${key}`, actual = accountStorage.getStrict(full)
+    if (actual !== null) {
+      try { return [key, JSON.parse(actual) as LegacyMeta] } catch { throw new Error('Widget storage is unreadable; original data retained') }
+    }
+    const fallback = widgetLegacyStage(full)
+    if (fallback !== null) staged.add(key)
+    try { return [key, fallback === null ? null : JSON.parse(fallback) as LegacyMeta] } catch { throw new Error('Widget migration snapshot invalid; original data retained') }
+  }))
   const local = (key: string) => localLegacy[key]?.value
   const remote = (key: string) => snapshot[key]?.value
   const localConfigs = normalizeConfigs(local('widgets'))
   const remoteConfigs = normalizeConfigs(remote('widgets'))
-  const configs = snapshot.widgets ? localLegacy.widgets?.dirty ? { ...remoteConfigs, ...localConfigs } : remoteConfigs : localConfigs
+  const configs = snapshot.widgets ? localLegacy.widgets?.dirty && !staged.has('widgets') ? { ...remoteConfigs, ...localConfigs } : remoteConfigs : localConfigs
   const localState = importLegacy(null, local('widgets:placed'), local('widgets:packages:v1'))
   const remoteState = importLegacy(null, remote('widgets:placed'), remote('widgets:packages:v1'))
   let result = {
     ...importLegacy(configs, null, null),
-    placements: mergeSets(localState.placements, remoteState.placements),
-    installations: mergeInstallationRecords(localState.installations, remoteState.installations),
+    placements: snapshot['widgets:placed'] && staged.has('widgets:placed') ? remoteState.placements : mergeSets(localState.placements, remoteState.placements),
+    installations: snapshot['widgets:packages:v1'] && staged.has('widgets:packages:v1') ? remoteState.installations : mergeInstallationRecords(localState.installations, remoteState.installations),
   }
   for (const screen of ['desktop', 'mobile']) {
     const key = `windows:${screen}`
-    for (const raw of [local(key), remote(key)]) result = { ...result, placements: importPlaces(result.placements, Object.values(layoutPlaces(raw, screen === 'mobile').places)) }
+    for (const raw of snapshot[key] && staged.has(key) ? [remote(key)] : [local(key), remote(key)]) result = { ...result, placements: importPlaces(result.placements, Object.values(layoutPlaces(raw, screen === 'mobile').places)) }
   }
   return result
 }
@@ -148,6 +163,7 @@ function hydrate(snapshot: SyncedHydration = {}) {
   const current = latestState()
   pending = unconsumed(mergePending(pending, readJournals()), durableState())
   const next = current ?? legacyState(snapshot)
+  if (!current) migrationSnapshot = snapshot
   // The serialized save merges other tabs' envelopes under the same IDB request scope before
   // writing data + receipts and cleaning this writer's journal.
   state.set(next)

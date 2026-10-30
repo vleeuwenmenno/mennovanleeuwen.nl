@@ -5,6 +5,7 @@ import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
+import { widgetMigrationUnresolved } from './accountSpace'
 import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
@@ -808,6 +809,7 @@ export function WindowManagerProvider({
   const savedEdits = useRef(0)
   const saveNow = useCallback(() => {
     if (stateRef.current.edits === savedEdits.current) return
+    if (widgetMigrationUnresolved()) return
     // Starting with the welcome windows or nothing: the layout saved before stays as it was, for
     // when Last windows is chosen again (and other devices keep theirs).
     if (startupPrefs().windows !== 'last') return

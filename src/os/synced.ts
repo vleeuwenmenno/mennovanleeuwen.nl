@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api, getAccount, subscribeAccount } from './account'
-import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } from './accountSpace'
+import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT, widgetLegacyStage } from './accountSpace'
 
 // State that follows the user between devices: notes, window layouts, desktop icons, launchers,
 // dock order. Every store keeps its value in localStorage, so visitors get it per browser.
@@ -83,16 +83,18 @@ const frozen = () => forgetting || accountFrozen()
 /** The store's key as written before account spaces (accountStorage puts it in this tab's space). */
 const storageKey = (key: string) => `mvlos.sync.${key}`
 
-function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (v: unknown) => T): Meta<T> {
+function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (v: unknown) => T, strict = false, onStage?: () => void): Meta<T> {
   try {
-    const raw = accountStorage.get(storageKey(key))
+    let raw = strict ? accountStorage.getStrict(storageKey(key)) : accountStorage.get(storageKey(key))
+    if (raw === null) { raw = widgetLegacyStage(storageKey(key)); if (raw !== null) onStage?.() }
     if (raw) {
       const m = JSON.parse(raw) as Meta<unknown>
       return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty }
     }
-    const legacy = legacyKey && accountStorage.get(legacyKey)
+    const legacy = legacyKey && (strict ? accountStorage.getStrict(legacyKey) : accountStorage.get(legacyKey))
     if (legacy) return { value: normalize ? normalize(JSON.parse(legacy)) : (JSON.parse(legacy) as T), base: 0, dirty: true }
-  } catch {
+  } catch (error) {
+    if (strict) throw error
     /* fall back */
   }
   return { value: fallback, base: 0, dirty: false }
@@ -121,7 +123,8 @@ export function synced<T>(
     onIncoming?: (remote: unknown) => void
   } = {},
 ): Synced<T> {
-  let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
+  let stageOnly = false
+  let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize, false, () => { stageOnly = true })
   /** The server's copy at a version, as last sent or received here (a save of the same is skipped). */
   let known: { base: number; json: string } | null = null
   /** A copy marked saved is the server's at its base. */
@@ -148,12 +151,23 @@ export function synced<T>(
   }
   const saveNow = () => {
     if (frozen() || !accountGuard()) return
+    if (stageOnly) {
+      // Sync bookkeeping must not materialize a staged input into an ordinary shared key.
+      // If another tab established that key, it is the account's authoritative value.
+      const actual = accountStorage.getStrict(storageKey(key))
+      if (actual === null) return
+      const stored = JSON.parse(actual) as Meta<unknown>
+      meta = { value: normalize(stored.value), base: stored.base ?? 0, dirty: !!stored.dirty }
+      stageOnly = false
+      learn(); emit(); remoteListeners.forEach(l => l(meta.value)); emitSynced()
+      return
+    }
     opts.beforeRead?.()
     let others = false
     // Preparation may produce receipts. Keep them speculative until the write succeeds.
     let candidate = meta
     // Another tab's save this tab hasn't heard of yet: merged in first.
-    const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
+    const raw = opts.mergeTabs && opts.merge ? (opts.serialize ? accountStorage.getStrict(storageKey(key)) : accountStorage.get(storageKey(key))) : null
     if (raw !== null)
       try {
         const stored = JSON.parse(raw) as Meta<unknown>
@@ -214,9 +228,10 @@ export function synced<T>(
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next
       // Nothing changed (the same value made again): nothing to save or send.
       if (value === meta.value || JSON.stringify(value) === JSON.stringify(meta.value)) return
-      const before = meta
+      const before = meta, wasStageOnly = stageOnly
       meta = { ...meta, value, dirty: true }
-      try { save() } catch (error) { meta = before; throw error }
+      stageOnly = false
+      try { save() } catch (error) { meta = before; stageOnly = wasStageOnly; throw error }
       emit()
       emitSynced()
       schedulePush(key)
@@ -286,12 +301,14 @@ export function synced<T>(
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
       const receive = () => {
         const before = meta.value
-        const incoming = readMeta(key, fallback, undefined, opts.normalize)
+        let incomingStage = false
+        const incoming = readMeta(key, fallback, undefined, opts.normalize, !!opts.serialize, () => { incomingStage = true })
         // A storage notification must not discard this tab's unpersisted optimistic edits.
         if (opts.serialize && meta.dirty && opts.merge) {
           const value = opts.merge(meta.value, incoming.value)
           meta = { value, base: Math.max(meta.base, incoming.base), dirty: JSON.stringify(value) !== JSON.stringify(incoming.value) || incoming.dirty }
         } else meta = incoming
+        stageOnly = incomingStage
         learn()
         if (e.newValue !== null) opts.onIncoming?.(meta.value)
         emit()

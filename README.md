@@ -4439,13 +4439,19 @@ durable claim under the storage gate before any legacy account data is imported;
 eligible account retains that claim across logout. Conflicting older receipts or an unavailable
 claim store stop the import, and an explicit `mvlos.account` marker takes precedence. Older
 account `moved` flags without an identity-bound intent are ambiguous and prevent automatic
-ownership assignment. All legacy keys are copied from a marker-checked source snapshot and left
-in place for older tabs; a changed marker or source, or a conflicting ordinary target, stops the
-copy and retains both versions. Separate account-scoped copy receipts (up to 256 entries and 1 MiB
-per source snapshot, retained across logout) let retries preserve subsequent local edits and server metadata without
-overwriting newer account state. An older partial copy without a receipt can also recover when
-its synced value matches, even if its envelope metadata changed; other unproven conflicts remain
-untouched. An unresolved widget transfer
+ownership assignment. Legacy keys come from a marker-checked snapshot and remain in place for
+older tabs. Widget config, placements, installations, desktop/mobile layouts and sticky-note
+content are staged in separate immutable account-scoped keys, never copied over ordinary account
+keys. These snapshots remain account-scoped across logout for recovery, like migration receipts.
+At canonical cutover the ordinary account value takes precedence over its staged input;
+the canonical write re-reads these inputs inside the storage gate. Conflicting snapshots or
+ambiguous prepared copies stay unresolved. Startup does not save a default window layout while
+migration is unresolved. Other legacy stores retain their existing copy behavior and provenance
+checks; their ordinary writes do not participate in this widget transaction protocol. Separate
+account-scoped copy receipts (up to 256 entries and 1 MiB per source snapshot, retained across
+logout) preserve later local edits and server metadata on retries for those other stores. An older
+partial copy without a receipt can recover when its synced value matches despite changed metadata.
+An unresolved widget transfer
 or startup migration blocks canonical cutover rather than replacing its source with an empty
 envelope, including failures before an intent could be written. Visitor transfers record their
 source and the account target observed at admission; a copied value or preexisting target is
@@ -4456,7 +4462,8 @@ older-marker import reloads the page once so every store reads the claimed accou
 cannot import a source marked as belonging to an account.
 Canonical and journal reads distinguish inaccessible storage from absent keys. Legacy inputs
 are read again at hydration, so a transient read failure cannot become an empty cutover. Failed
-hydration reads retry with bounded backoff while preserving the existing data and journals.
+hydration reads retry with bounded backoff while preserving the existing data and journals. The
+actual serialized merge read is strict as well; a failed read cannot be treated as an absent state.
 
 Writers store patches rather than stale whole views and never erase another writer's log.
 A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.

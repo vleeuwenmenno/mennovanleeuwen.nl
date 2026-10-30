@@ -97,13 +97,13 @@ try {
     ['explicit-copy','plain','setItem','mvlos.u.1.sync.widgets:state:v2'],
     ['explicit-receipt','plain','setItem','mvlos.u.1.widget-move:plain:done:v2'],
     ['explicit-intent-cleanup','plain','removeItem','mvlos.u.1.widget-move:plain:v2'],
-    ['explicit-ordinary','ordinary','setItem','mvlos.u.1.sync.widgets'],
+    ['explicit-ordinary','ordinary','setItem','mvlos.u.1.widget-stage:v1:mvlos.sync.widgets:*'],
     ['explicit-ordinary-read','ordinary','getItem','mvlos.sync.widgets'],
     ['explicit-moved','ordinary','setItem','mvlos.u.1.moved'],
   ] as const
   for(const [scenario,kind,method,failKey] of cases) {
     await control.eval(`localStorage.clear();${kind==='guest'?`localStorage.setItem('mvlos.visitor.sync.widgets:state:v2',${JSON.stringify(source)})`:kind==='plain'?`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(source)})`:`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets',JSON.stringify({value:{'private-note':{text:'SYNTHETIC-SAVED-NOTE'}},base:0,dirty:true}))`}`);
-    const p=await open(false,{},`const base=Storage.prototype[${JSON.stringify(method)}];Storage.prototype[${JSON.stringify(method)}]=function(k,...args){if(k===${JSON.stringify(failKey)}&&!sessionStorage.getItem('one-failure')){sessionStorage.setItem('one-failure','1');throw new DOMException('One synthetic storage failure','QuotaExceededError')}return base.call(this,k,...args)}`);
+    const p=await open(false,{},`const base=Storage.prototype[${JSON.stringify(method)}],expected=${JSON.stringify(failKey)};Storage.prototype[${JSON.stringify(method)}]=function(k,...args){if((expected.endsWith('*')?k.startsWith(expected.slice(0,-1)):k===expected)&&!sessionStorage.getItem('one-failure')){sessionStorage.setItem('one-failure','1');throw new DOMException('One synthetic storage failure','QuotaExceededError')}return base.call(this,k,...args)}`);
     try {
       await release(p);let evidence=await observe(p);console.log(scenario,'first',JSON.stringify(evidence));
       check(scenario+' blocks cutover until saved data is available',(!evidence.ready&&evidence.unresolved)||(evidence.ready&&!!evidence.configs['private-note']),evidence);
@@ -125,7 +125,7 @@ try {
   try {await release(foreign);let value=await observe(foreign);check('Foreign older-owner claim does not discard pending visitor transfer',!value.ready&&value.unresolved&&!!value.guestPlan,value);await restart(foreign);value=await observe(foreign);check('Visitor retry remains available alongside foreign older-owner claim',value.ready&&!!value.configs['private-note'],value)} finally {await foreign.close()}
   await control.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets',JSON.stringify({value:{old:{days:1}},base:0,dirty:true}));localStorage.setItem('mvlos.u.1.sync.widgets',JSON.stringify({value:{existing:{days:4}},base:0,dirty:true}))`)
   const ordinaryConflict=await open()
-  try {await release(ordinaryConflict);const value=await observe(ordinaryConflict);check('Conflicting ordinary source and target remain unresolved',!value.ready&&value.unresolved&&!!value.ordinary&&!value.target,value)} finally {await ordinaryConflict.close()}
+  try {await release(ordinaryConflict);const value=await observe(ordinaryConflict);check('Existing ordinary account target remains authoritative',value.ready&&value.configs.existing?.days===4&&!value.configs.old,value)} finally {await ordinaryConflict.close()}
   await control.close();
 } finally {await b.close();vite.kill('SIGTERM');rmSync(data,{recursive:true,force:true})}
 console.log(`${passed} passed, ${failed} failed`);if(failed)process.exitCode=1;

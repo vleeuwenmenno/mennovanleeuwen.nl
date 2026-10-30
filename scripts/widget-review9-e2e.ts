@@ -101,8 +101,9 @@ try {
       console.log(scenario,'reload',JSON.stringify(evidence));
       check(scenario+' reload completes migration',evidence.ready&&!evidence.unresolved,evidence);
       check(scenario+' preserves imported note',evidence.configs['private-note']?.text==='SYNTHETIC-SAVED-NOTE',evidence)
-      const layoutAfter=JSON.parse(evidence.layout)
-      check(scenario+' preserves newer account layout',scenario==='partial-local-layout'?layoutAfter.value.length===0:layoutAfter.base===99,layoutAfter)
+      const layoutAfter=evidence.layout === null ? null : JSON.parse(evidence.layout)
+      const liveLayout=await p.eval(`import('/src/os/wm.tsx').then(m=>m.layoutStore().get())`)
+      check(scenario+' preserves newer account layout',scenario==='partial-local-layout'?layoutAfter?.value.length===0:layoutAfter===null&&JSON.stringify(liveLayout)===JSON.stringify(layout),{layoutAfter,liveLayout})
     } finally {await p.close()}
   }
   await control.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets',JSON.stringify({value:{'private-note':{text:'SYNTHETIC-SAVED-NOTE'}},base:0,dirty:true}));localStorage.setItem('mvlos.sync.windows:desktop',JSON.stringify({value:${JSON.stringify(layout)},base:0,dirty:true}));localStorage.setItem('mvlos.u.1.sync.windows:desktop',JSON.stringify({value:${JSON.stringify(layout)},base:99,dirty:false}))`)
@@ -169,7 +170,7 @@ try {
   } finally {await existingJournal.close()}
   for(const method of ['getItem','setItem']) {
     await control.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets',JSON.stringify({value:{'private-note':{text:'SYNTHETIC-SAVED-NOTE'}},base:0,dirty:true}))`)
-    const page=await open(false,{},`const base=Storage.prototype[${JSON.stringify(method)}];Storage.prototype[${JSON.stringify(method)}]=function(k,...args){if(k==='mvlos.u.1.legacy-copy:v2:mvlos.sync.widgets'&&!sessionStorage.getItem('one-failure')){sessionStorage.setItem('one-failure','1');throw new DOMException('One synthetic provenance failure','SecurityError')}return base.call(this,k,...args)}`)
+    const page=await open(false,{},`const base=Storage.prototype[${JSON.stringify(method)}];Storage.prototype[${JSON.stringify(method)}]=function(k,...args){if((${JSON.stringify(method)}==='getItem'?k==='mvlos.u.1.legacy-copy:v2:mvlos.sync.widgets':k.startsWith('mvlos.u.1.widget-stage:v1:mvlos.sync.widgets:'))&&!sessionStorage.getItem('one-failure')){sessionStorage.setItem('one-failure','1');throw new DOMException('One synthetic provenance failure','SecurityError')}return base.call(this,k,...args)}`)
     try {
       await release(page);let value=await observe(page)
       check('Provenance '+method+' failure prevents empty cutover',!value.ready&&value.unresolved,value)

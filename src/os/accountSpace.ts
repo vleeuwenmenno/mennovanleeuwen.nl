@@ -43,6 +43,39 @@ export const SPACE = TAB_UID ? `mvlos.u.${TAB_UID}.` : 'mvlos.visitor.'
 
 /** The key in this tab's account space for an account-owned key, written as before spaces (`mvlos.history`). */
 export const accountKey = (key: string) => SPACE + key.replace(/^mvlos\./, '')
+const WIDGET_LEGACY = new Set(['mvlos.sync.widgets', 'mvlos.sync.widgets:placed', 'mvlos.sync.widgets:packages:v1', 'mvlos.sync.windows:desktop', 'mvlos.sync.windows:mobile', 'mvlos.sync.notes'])
+const widgetStagePrefix = (key: string) => `${SPACE}widget-stage:v1:${encodeURIComponent(key)}:`
+/** Immutable account-scoped snapshots are inputs only while the ordinary account key is absent. */
+export function widgetLegacyStage(key: string): string | null {
+  if (!WIDGET_LEGACY.has(key)) return null
+  try {
+    const prefix = widgetStagePrefix(key), values: string[] = []
+    for (const name of Object.keys(localStorage)) if (name.startsWith(prefix)) {
+      const raw = localStorage.getItem(name)
+      if (raw === null) throw new Error('Widget migration snapshot unavailable; original data retained')
+      const record = JSON.parse(raw)
+      if (!record || record.key !== key || typeof record.source !== 'string') throw new Error('Widget migration snapshot invalid; original data retained')
+      values.push(record.source)
+      if (values.length > 256) throw new Error('Widget migration snapshot limit reached; original data retained')
+    }
+    if (values.some(value => value !== values[0])) throw new Error('Conflicting widget migration snapshots; original data retained')
+    return values[0] ?? null
+  } catch (error) { legacyMigrationUnresolved = true; throw error }
+}
+function stageWidgetLegacy(key: string, source: string) {
+  if (new TextEncoder().encode(source).length > 1024 * 1024) throw new Error('Widget migration snapshot limit reached; original data retained')
+  // Older releases wrote this receipt before their target write. A different target could be
+  // either an intentional newer edit or an automatic default after that write failed.
+  const oldReceipt = localStorage.getItem(`${SPACE}legacy-copy:v2:${encodeURIComponent(key)}`)
+  if (oldReceipt !== null) {
+    const receipt = JSON.parse(oldReceipt), target = localStorage.getItem(accountKey(key))
+    if (!receipt || receipt.source !== source) throw new Error('Legacy widget copy provenance unavailable; original data retained')
+    if (target !== null && target !== source && !sameSyncedValue(key, source, target)) throw new Error('Legacy widget target is ambiguous; both versions retained')
+  }
+  const existing = widgetLegacyStage(key)
+  if (existing !== null && existing !== source) throw new Error('Conflicting widget migration snapshots; original data retained')
+  if (existing === null) localStorage.setItem(`${widgetStagePrefix(key)}${crypto.randomUUID()}`, JSON.stringify({ key, source }))
+}
 // A logout cleanup invalidates other still-open tabs even before their cookie-change event runs.
 const REVOCATION_KEY = `${SPACE}revocation:v1`
 const revocation = () => { try { return localStorage.getItem(REVOCATION_KEY) } catch { return null } }
@@ -149,7 +182,7 @@ export function clearAccountSpace(): Promise<void> {
   const migrationKeys = new Set([`${SPACE}moved`, `${SPACE}widget-move:plain:v2`, `${SPACE}widget-move:guest:v2`, `${SPACE}widget-move:plain:done:v2`, `${SPACE}legacy-copy:v1`])
   const widgetKey = (key: string) => key === canonical || key === journals || key.startsWith(journals + ':')
   try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !migrationKeys.has(k) && !k.startsWith(`${SPACE}legacy-copy:v2:`) && !widgetKey(k)) localStorage.removeItem(k)
+    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !migrationKeys.has(k) && !k.startsWith(`${SPACE}legacy-copy:v2:`) && !k.startsWith(`${SPACE}widget-stage:v1:`) && !widgetKey(k)) localStorage.removeItem(k)
   } catch { return Promise.reject(new Error('Account storage cleanup unavailable')) }
   // Logout is authorized cleanup after revocation, so it intentionally does not call accountGuard.
   // It follows any already-running writer, including a tab paused inside its native storage call.
@@ -318,6 +351,7 @@ function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
         if (entries.length > 256 || new TextEncoder().encode(JSON.stringify(entries)).length > 1024 * 1024) throw new Error('Legacy copy limit reached; original data retained')
         for (const [k, v] of entries) {
           if (!sameOwnership(snapshot) || localStorage.getItem(k) !== v) throw new Error('Legacy source changed; original data retained')
+          if (WIDGET_LEGACY.has(k)) { stageWidgetLegacy(k, v); ordinaryCopied = true; continue }
           const to = accountKey(k)
           const target = localStorage.getItem(to)
           // Each source has its own write-ahead receipt, so two starting tabs cannot erase
@@ -340,9 +374,16 @@ function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
       }
       if (TAB_UID) for (const k of keys) if (k.startsWith('mvlos.visitor.sync.') && k !== 'mvlos.visitor.sync.widgets:state:v2') {
         const to = SPACE + k.slice('mvlos.visitor.'.length)
-        if (localStorage.getItem(to) !== null) continue
         const v = localStorage.getItem(k)
-        if (v !== null) { const m = JSON.parse(v); localStorage.setItem(to, JSON.stringify({ value: m.value, base: 0, dirty: true })); ordinaryCopied = true }
+        if (v !== null) {
+          const m = JSON.parse(v), rebased = JSON.stringify({ value: m.value, base: 0, dirty: true })
+          const oldKey = `mvlos.${k.slice('mvlos.visitor.'.length)}`
+          if (WIDGET_LEGACY.has(oldKey)) {
+            // Account-owned plain data precedes the visitor copy, as it did before staging.
+            if (widgetLegacyStage(oldKey) === null) { stageWidgetLegacy(oldKey, rebased); ordinaryCopied = true }
+          }
+          else if (localStorage.getItem(to) === null) { localStorage.setItem(to, rebased); ordinaryCopied = true }
+        }
       }
       localStorage.setItem(flag, '1')
     }
