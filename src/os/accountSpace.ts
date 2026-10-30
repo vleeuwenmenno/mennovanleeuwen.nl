@@ -51,6 +51,7 @@ const TAB_REVOCATION = revocation()
 let frozen = false
 // Older-owner import must finish its origin-wide claim before account state can be used.
 let legacyClaimPending = false
+let legacyMigrationUnresolved = false
 let legacyClaimSettled: Promise<void> = Promise.resolve()
 /** Account discovery waits for the startup legacy claim rather than treating it as a sign-out. */
 export const waitAccountSpace = () => legacyClaimSettled
@@ -171,6 +172,24 @@ const LEGACY = [
 const OLD_MARKER = 'mvlos.account'
 const OLDER_MARKER = 'mvlos.owner'
 const OLDER_CLAIM = 'mvlos.legacy-owner-claim:v1'
+type LegacySnapshot = { marker: string | null; older: string | null; values: Record<string, string> }
+function snapshotLegacy(): LegacySnapshot {
+  const marker = localStorage.getItem(OLD_MARKER), older = localStorage.getItem(OLDER_MARKER)
+  const values: Record<string, string> = {}
+  for (const key of Object.keys(localStorage)) if (LEGACY.some(rule => rule.test(key))) {
+    const value = localStorage.getItem(key)
+    if (value !== null) values[key] = value
+  }
+  if (marker !== localStorage.getItem(OLD_MARKER) || older !== localStorage.getItem(OLDER_MARKER)) throw new Error('Legacy ownership changed; sources retained')
+  return { marker, older, values }
+}
+function sameOwnership(snapshot: LegacySnapshot): boolean {
+  return snapshot.marker === localStorage.getItem(OLD_MARKER) && snapshot.older === localStorage.getItem(OLDER_MARKER)
+}
+/** A retained plan means migration has not yet established canonical cutover. */
+export function widgetMigrationUnresolved(): boolean {
+  try { return legacyMigrationUnresolved || (localStorage.getItem(`${SPACE}widget-move:plain:v2`) !== null && localStorage.getItem(`${SPACE}widget-move:plain:done:v2`) === null) } catch { return true }
+}
 
 /** Called only under the origin-wide gate. Never reassign an older marker to another account. */
 function claimOlder(older: string): boolean {
@@ -184,6 +203,13 @@ function claimOlder(older: string): boolean {
   // conflicting or ambiguous prior owner must not be reassigned to the current account.
   const prior = new Set<string>()
   for (const key of Object.keys(localStorage)) {
+    const moved = /^mvlos\.u\.(\d+)\.moved$/.exec(key)
+    if (moved) {
+      const plan = localStorage.getItem(`mvlos.u.${moved[1]}.widget-move:plain:v2`)
+      try { const p = JSON.parse(plan ?? 'null'); if (!p || p.marker !== null || p.older !== older || typeof p.source !== 'string') return false }
+      catch { return false }
+      prior.add(moved[1])
+    }
     const match = /^mvlos\.u\.(\d+)\.widget-move:plain:(done:v2|v2)$/.exec(key)
     if (!match) continue
     if (match[2] === 'done:v2') prior.add(match[1])
@@ -198,39 +224,50 @@ function claimOlder(older: string): boolean {
   return localStorage.getItem(OLDER_CLAIM) === value
 }
 
-function moveIn(underGate = false) {
+function moveIn(authorized?: LegacySnapshot) {
   try {
     if (typeof localStorage === 'undefined') return
+    const underGate = !!authorized
     const older = localStorage.getItem(OLDER_MARKER)
     const needsMove = !localStorage.getItem(`${SPACE}moved`) || !!localStorage.getItem(`${SPACE}widget-move:plain:v2`) || !!localStorage.getItem(`${SPACE}widget-move:guest:v2`)
     if (!underGate && needsMove && TAB_UID && !localStorage.getItem(OLD_MARKER) && older) {
+      const snapshot = snapshotLegacy()
       legacyClaimPending = true
+      legacyMigrationUnresolved = Object.keys(snapshot.values).length > 0
       legacyClaimSettled = storageTransaction(() => {
-        if (frozen || cookieUid() !== TAB_UID || !claimOlder(older)) return false
-        moveIn(true)
+        if (frozen || cookieUid() !== TAB_UID || !sameOwnership(snapshot) || !claimOlder(older)) return false
+        moveIn(snapshot)
         return true
       }).then(ok => {
         legacyClaimPending = false
-        if (ok) try { location.reload() } catch { /* not in a page */ }
+        if (ok) {
+          legacyMigrationUnresolved = false
+          try { location.reload() } catch { /* not in a page */ }
+        } else {
+          // A claim already bound to another account is not this account's migration.
+          try { const claim = JSON.parse(localStorage.getItem(OLDER_CLAIM) ?? 'null'); if (claim?.marker === older && claim?.owner && claim.owner !== TAB_UID) legacyMigrationUnresolved = false } catch { /* ambiguous: stay blocked */ }
+        }
       }, () => { legacyClaimPending = false })
       return
     }
     const flag = `${SPACE}moved`, plainPlan = `${SPACE}widget-move:plain:v2`, guestPlan = `${SPACE}widget-move:guest:v2`, plainDone = `${SPACE}widget-move:plain:done:v2`
     if (!localStorage.getItem(flag)) {
       const keys = Object.keys(localStorage)
-      const marker = localStorage.getItem(OLD_MARKER)
-      const theirs = TAB_UID ? marker === TAB_UID || (underGate && !marker && !!older) : !marker && !older
+      const snapshot = authorized ?? snapshotLegacy()
+      if (!sameOwnership(snapshot)) throw new Error('Legacy ownership changed; sources retained')
+      const marker = snapshot.marker
+      const theirs = TAB_UID ? marker === TAB_UID || (underGate && !marker && !!snapshot.older) : !marker && !snapshot.older
       // Separate monotonic intent flags cannot overwrite another starter's positive claim.
       // Failed IDB must not reopen other stores' import or discard the original envelope.
       // Bind the intent to both the ownership markers and exact source, not merely the account
       // that happened to observe them. A later legacy writer may replace either before IDB opens.
-      if (theirs && !localStorage.getItem(plainDone) && localStorage.getItem(WIDGET_STORAGE_KEY) !== null) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: localStorage.getItem(OLDER_MARKER), source: localStorage.getItem(WIDGET_STORAGE_KEY) }))
+      if (theirs && !localStorage.getItem(plainDone) && Object.hasOwn(snapshot.values, WIDGET_STORAGE_KEY)) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: snapshot.older, source: snapshot.values[WIDGET_STORAGE_KEY] }))
       if (TAB_UID) localStorage.setItem(guestPlan, '1')
       if (theirs) {
-        for (const k of keys) if (LEGACY.some(r => r.test(k)) && k !== WIDGET_STORAGE_KEY) {
-          const to = accountKey(k), v = localStorage.getItem(k)
-          if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
-          localStorage.removeItem(k)
+        for (const [k, v] of Object.entries(snapshot.values)) if (k !== WIDGET_STORAGE_KEY) {
+          if (!sameOwnership(snapshot) || localStorage.getItem(k) !== v) throw new Error('Legacy source changed; original data retained')
+          const to = accountKey(k)
+          if (localStorage.getItem(to) === null) localStorage.setItem(to, v)
         }
         // Legacy writers can create or replace the widget envelope at any time. Never remove
         // ownership markers, even when no envelope was present during this startup.
@@ -253,8 +290,9 @@ function moveIn(underGate = false) {
           try { claim = JSON.parse(plan) } catch { /* older unbound intent is not proof of ownership */ }
           const marker = localStorage.getItem(OLD_MARKER), older = localStorage.getItem(OLDER_MARKER)
           const v = localStorage.getItem(WIDGET_STORAGE_KEY)
-          if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || !(TAB_UID ? marker === TAB_UID || (underGate && !marker && !!older && claimOlder(older)) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
+          if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || (authorized && !sameOwnership(authorized)) || !(TAB_UID ? marker === TAB_UID || (underGate && !marker && !!older && claimOlder(older)) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
+          if (localStorage.getItem(to) !== v) throw new Error('Widget migration copy not verified; original data retained')
           // Non-cooperating legacy tabs do not use this gate. Their source and ownership markers
           // can change at any point, so this migration never removes or rewrites either.
           localStorage.setItem(plainDone, '1')
@@ -269,7 +307,7 @@ function moveIn(underGate = false) {
       if (underGate) transfer()
       else void storageTransaction(transfer).catch(() => { /* fail closed; original envelope + scoped plan remain for retry */ })
     }
-  } catch (error) { if (underGate) throw error; /* storage unavailable: ordinary stores remain usable in memory */ }
+  } catch (error) { if (authorized) throw error; /* storage unavailable: ordinary stores remain usable in memory */ }
 }
 moveIn()
 

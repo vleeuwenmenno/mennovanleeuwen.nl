@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { storageTransaction } from '../../os/storageTransaction'
 import { getAccount, subscribeAccount } from '../../os/account'
-import { accountGuard, accountKey, accountStorage, TAB_UID } from '../../os/accountSpace'
+import { accountGuard, accountKey, accountStorage, TAB_UID, widgetMigrationUnresolved } from '../../os/accountSpace'
 import { getSyncedHydration, onSyncedHydration, reportSyncFailure, synced, type Synced, type SyncedHydration } from '../../os/synced'
 import { bindPlacementAliases, changeSet, importPlaces, mergeSets, type WidgetPlace, type WidgetSet } from './placementSet'
 import {
@@ -32,6 +32,7 @@ let journalTimer: ReturnType<typeof setTimeout> | undefined
 const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, {
   normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true, serialize: storageTransaction,
   beforeRead: () => {
+    if (widgetMigrationUnresolved()) throw new Error('Widget migration incomplete; original data retained')
     const raw = accountStorage.get(`mvlos.sync.${WIDGET_STATE_KEY}`)
     if (raw === null) return
     try { if (normalizeWidgetState(JSON.parse(raw)?.value)) return } catch { /* invalid envelope */ }
@@ -76,7 +77,7 @@ function legacyState(snapshot: SyncedHydration = {}): WidgetState {
   return result
 }
 
-let ready = !!state.get()
+let ready = !!state.get() && !widgetMigrationUnresolved()
 function initialView() {
   const current = state.get()
   if (current) return current
@@ -129,6 +130,7 @@ const emptyJournal = () => stableJSON(pending) === stableJSON(emptyPending())
  * while /api/me is loading, or for an offline account whose /api/state has not succeeded. */
 function hydrate(snapshot: SyncedHydration = {}) {
   if (!accountGuard()) return
+  if (widgetMigrationUnresolved()) { reportSyncFailure(new Error('Widget migration incomplete; original data retained')); return }
   const account = getAccount()
   if (account.status !== 'user' && account.status !== 'anon' && !(account.status==='off'&&account.resolved)) return
   if (account.status === 'user' && !getSyncedHydration()) return
@@ -187,7 +189,10 @@ function facade<T>(get: () => T, update: (next: T) => void): Synced<T> {
       return () => { remoteListeners.delete(forward) }
     },
     async flush() {
-      if (!ready) return
+      if (!ready) {
+        if (widgetMigrationUnresolved()) throw new Error('Widget migration incomplete; original data retained')
+        return
+      }
       await state.persist?.()
       if (!accountGuard()) throw new Error('Account changed')
       const durable = normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value)

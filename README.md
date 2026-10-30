@@ -4437,7 +4437,12 @@ The account-scoped cutover receipt survives logout and prevents that retained so
 imported again. An old `mvlos.owner` marker without an account ID requires an origin-wide,
 durable claim under the storage gate before any legacy account data is imported; the first
 eligible account retains that claim across logout. Conflicting older receipts or an unavailable
-claim store stop the import, and an explicit `mvlos.account` marker takes precedence. A successful
+claim store stop the import, and an explicit `mvlos.account` marker takes precedence. Older
+account `moved` flags without an identity-bound intent are ambiguous and prevent automatic
+ownership assignment. All legacy keys are copied from a marker-checked source snapshot and left
+in place for older tabs; a changed marker or source stops the copy. An unresolved widget transfer
+blocks canonical cutover rather than replacing its source with an empty envelope; after a transient
+storage failure, reloading retries the retained intent. A successful
 older-marker import reloads the page once so every store reads the claimed account space. A visitor
 cannot import a source marked as belonging to an account.
 

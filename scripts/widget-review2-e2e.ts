@@ -213,7 +213,7 @@ try {
 
   const D=await open(true,{},`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify({value:{schema:2,configs:{'move-seed':{at:7,value:{days:4}}},placements:{places:{},removed:''},installations:{}},base:4,dirty:true}));Object.defineProperty(window,'indexedDB',{value:{open(){throw new DOMException('Synthetic IDB denial','SecurityError')}},configurable:true});`)
   try {
-    await set(D,'denied',{days:1});await hydrate(D)
+    await set(D,'denied',{days:1});await D.eval('window.__releaseMe()');await D.waitFor(`import('/src/os/account.ts').then(m=>!!m.getAccount().user)`)
     const error=await D.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().then(()=>'',e=>e.message))`)
     check('Unavailable transactional persistence refuses canonical writes',!!error&&(await durable(D))===null,error)
     check('IDB denial retains journal and usable optimistic widget data',await journalCount(D)>0&&(await configs(D)).denied.days===1)
@@ -353,13 +353,14 @@ try {
     check('Refused localStorage write retains its journal',await journalCount(Q)>0&&(await durable(Q))===null)
     await Q.eval('window.__denyCanonical=false');await flush(Q)
     check('Transient storage denial retries without another edit',(await durable(Q)).value.configs.quota.value.days===1)
+    await Q.waitFor(`Object.keys(localStorage).filter(k=>k.startsWith('mvlos.u.1.widgets.pending:v2:')).length===0`,5000).catch(()=>{})
     const remaining=await journalCount(Q)
-    check('Receipt cleanup follows successful persistence',remaining===0,remaining)
+    check('Receipt cleanup follows successful persistence',remaining===0,remaining?await Q.eval(`Object.keys(localStorage).filter(k=>k.startsWith('mvlos.u.1.widgets.pending:v2:')).map(k=>JSON.parse(localStorage.getItem(k)))`):remaining)
   } finally {await Q.close()}
 
   const blocked=await open(true,{},`Object.defineProperty(window,'localStorage',{get(){throw new DOMException('Synthetic storage denial','SecurityError')}});`)
   try {
-    const admission=await blocked.eval(`import('/src/widgets/config.ts').then(m=>{try{m.setWidgetConfig('memory',{days:3});return ''}catch(e){return e.message}})`);await hydrate(blocked)
+    const admission=await blocked.eval(`import('/src/widgets/config.ts').then(m=>{try{m.setWidgetConfig('memory',{days:3});return ''}catch(e){return e.message}})`);await blocked.eval('window.__releaseMe()');await blocked.waitFor(`import('/src/os/account.ts').then(m=>!!m.getAccount().user)`)
     check('Fully blocked localStorage rejects an edit before acknowledgement',admission.includes('journal write refused')&&!(await configs(blocked)).memory,admission)
     const error=await blocked.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().then(()=>'',e=>e.message))`)
     check('Fully blocked localStorage reports refusal without a false durable success',!!error&&await blocked.eval('window.__writes.length===0'))

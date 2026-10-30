@@ -619,7 +619,7 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   signIn(1)
   const A = await openTab()
   check('moving in: account 1 takes its own', A.notes.get().join() === 'old-release-note' && A.space.accountStorage.get('mvlos.history') === '["ls"]')
-  check('moving in: ordinary plain keys move, ownership marker and browser preferences remain', !storage.has('mvlos.sync.notes') && !storage.has('mvlos.history') && storage.get('mvlos.account') === '1' && storage.has('mvlos.theme'))
+  check('moving in: ordinary plain keys and ownership marker remain for older tabs', storage.has('mvlos.sync.notes') && storage.has('mvlos.history') && storage.get('mvlos.account') === '1' && storage.has('mvlos.theme'))
   // An old tab writes the plain key again later: never read.
   storage.set('mvlos.sync.notes', JSON.stringify({ value: ['written-by-old-tab'], base: 0, dirty: true }))
   const A2 = await openTab()
@@ -667,7 +667,7 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   storage.set('mvlos.gladiator.v1', '{"careers":[]}')
   storage.set('mvlos.empires.mp.last', 'tok')
   await openTab()
-  check('games: old game saves, high scores, Gladiator careers and the Empires player move in', ['gamewin.s-old.empires.campaign', 'highscores.v1', 'gladiator.v1', 'empires.mp.last'].every((k) => storage.has(`mvlos.u.1.${k}`) && !storage.has(`mvlos.${k}`)))
+  check('games: old saves copy into the account while legacy sources remain', ['gamewin.s-old.empires.campaign', 'highscores.v1', 'gladiator.v1', 'empires.mp.last'].every((k) => storage.has(`mvlos.u.1.${k}`) && storage.has(`mvlos.${k}`)))
 }
 
 finish()
