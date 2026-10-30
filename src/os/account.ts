@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { cvMode } from './cvMode'
 import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
-import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID } from './accountSpace'
+import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID, waitAccountSpace } from './accountSpace'
 import type { OrgsResponse } from '../data/code'
 
 // Who is signed in (GitHub, see server/auth.ts) and which Gitea/Forgejo instances they linked.
@@ -99,6 +99,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown;
 
 export async function loadAccount() {
   try {
+    await waitAccountSpace()
     const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean }; seafile?: SeafileInfo | null }>('/api/me')
     const next: Account = { resolved: true, status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
     // This tab took its account from the browser's cookie as it loaded (src/os/accountSpace.ts).

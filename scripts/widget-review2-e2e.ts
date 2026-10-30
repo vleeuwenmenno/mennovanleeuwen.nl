@@ -12,6 +12,9 @@ const { launch, newPage, sleep } = await import(`${WT}/scripts/perf/cdp.ts`)
 const now = Date.now(), sid = randomBytes(24).toString('hex'), login = 'widget-review2'
 database().prepare('INSERT INTO users (id,github_id,login,github_token,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(1,1,login,encrypt('none'),now,now)
 database().prepare('INSERT INTO sessions (id,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(sha256(sid),1,now,now+86400_000)
+const sid2 = randomBytes(24).toString('hex')
+database().prepare('INSERT INTO users (id,github_id,login,github_token,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(2,2,'widget-review6-b',encrypt('none'),now,now)
+database().prepare('INSERT INTO sessions (id,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(sha256(sid2),2,now,now+86400_000)
 const vite = spawn(`${WT}/node_modules/.bin/vite`, ['--port',String(PORT),'--strictPort'], {
   cwd:WT, env:{...process.env,DATA_DIR:data,GITHUB_CLIENT_ID:'x',GITHUB_CLIENT_SECRET:'x',ADMIN_USERS:'nobody',MC_WATCH:'off'}, stdio:['ignore','pipe','pipe'],
 })
@@ -286,6 +289,63 @@ try {
   const guestMove=await open(true,{},`localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('visitor-owned'))`)
   try {await guestMove.waitFor(`JSON.parse(localStorage.getItem('mvlos.visitor.sync.widgets:state:v2'))==='visitor-owned'`);check('Unowned legacy source is retained after visitor import',await guestMove.eval(`JSON.parse(localStorage.getItem('mvlos.sync.widgets:state:v2'))==='visitor-owned'`))} finally {await guestMove.close()}
   const restoreUid=await newPage(b,1500,1000,'');await restoreUid.send('Network.setCookie',{name:'mvlos_uid',value:'1',url:origin});await restoreUid.close()
+
+  const auth=await newPage(b,1500,1000,'');await auth.send('Page.navigate',{url:origin+'/package.json'})
+  const loginAs=async(id:number|null)=>{for(const name of ['mvlos_sid','mvlos_login','mvlos_uid'])await auth.send('Network.deleteCookies',{name,url:origin});if(id)for(const [name,value] of [['mvlos_sid',id===1?sid:sid2],['mvlos_login',id===1?login:'widget-review6-b'],['mvlos_uid',String(id)]])await auth.send('Network.setCookie',{name,value,url:origin})}
+  const privateSource=JSON.stringify({value:{schema:2,configs:{private:{at:1,value:{days:9}}},placements:{places:{},removed:''},installations:{}},base:0,dirty:true})
+  await loginAs(1);await auth.eval(`localStorage.clear();localStorage.setItem('mvlos.owner','legacy-owner');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(privateSource)})`)
+  const owner=await open()
+  try {
+    await owner.waitFor(`localStorage.getItem('mvlos.u.1.widget-move:plain:done:v2')==='1'&&import('/src/os/accountSpace.ts').then(m=>m.accountGuard())`)
+    check('Older marker binds globally before account A copy',await owner.eval(`JSON.parse(localStorage.getItem('mvlos.legacy-owner-claim:v1')).owner==='1'&&JSON.parse(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')).value.configs.private.value.days===9`))
+    await hydrate(owner);await flush(owner);check('Account A sees its imported older-owner data',(await configs(owner)).private?.days===9)
+    await owner.eval(`(async()=>{const m=await import('/src/os/accountSpace.ts');m.freezeAccount(false);await m.clearAccountSpace()})()`)
+  } finally {await owner.close()}
+  await auth.eval(`localStorage.setItem('mvlos.sync.widgets',JSON.stringify({value:{private:{days:9}},base:0,dirty:true}))`)
+  await loginAs(null);const noOwner=await open()
+  try {await noOwner.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Visitor cannot adopt older-owner data',await noOwner.eval(`localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')===null`))} finally {await noOwner.close()}
+  await loginAs(2);const other=await open()
+  try {
+    await other.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`)
+    await hydrate(other);await flush(other)
+    check('Account B cannot import retained older-owner state',!(await configs(other)).private&&!await other.eval(`localStorage.getItem('mvlos.u.2.widget-move:plain:done:v2')||localStorage.getItem('mvlos.u.2.sync.widgets')`))
+    await reload(other)
+    check('Account B reload still cannot import older-owner state',!(await configs(other)).private)
+  } finally {await other.close()}
+  await loginAs(1)
+  await auth.eval(`localStorage.clear();localStorage.setItem('mvlos.owner','legacy-concurrent');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(privateSource)})`)
+  const concurrent=await Promise.all([1,2].map(id=>newPage(b,1500,1000,inject(false,{},`Object.defineProperty(Document.prototype,'cookie',{configurable:true,get(){return 'mvlos_uid=${id}'},set(){}})`))))
+  try {
+    await Promise.all(concurrent.map(p=>p.send('Page.navigate',{url:origin})))
+    await auth.waitFor(`!!localStorage.getItem('mvlos.legacy-owner-claim:v1')&&!!(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')||localStorage.getItem('mvlos.u.2.sync.widgets:state:v2'))`)
+    await sleep(250)
+    const result=await auth.eval(`({claim:JSON.parse(localStorage.getItem('mvlos.legacy-owner-claim:v1')),one:localStorage.getItem('mvlos.u.1.sync.widgets:state:v2'),two:localStorage.getItem('mvlos.u.2.sync.widgets:state:v2')})`)
+    check('Concurrent first claims admit exactly one account',!!result.one!==!!result.two&&!!result[result.claim.owner==='1'?'one':'two'],result)
+  } finally {for(const p of concurrent)await p.close()}
+  await auth.eval(`localStorage.clear();localStorage.setItem('mvlos.owner','legacy-write-failure');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(privateSource)})`)
+  const claimDenied=await open(false,{},`const base=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k==='mvlos.legacy-owner-claim:v1')throw new DOMException('Synthetic quota','QuotaExceededError');return base.call(this,k,v)}`)
+  try {
+    await claimDenied.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`)
+    check('Failed global claim refuses every legacy import',await claimDenied.eval(`!localStorage.getItem('mvlos.legacy-owner-claim:v1')&&!localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')&&localStorage.getItem('mvlos.sync.widgets:state:v2')!==null`))
+  } finally {await claimDenied.close()}
+  const claimRetry=await open()
+  try {await claimRetry.waitFor(`localStorage.getItem('mvlos.u.1.widget-move:plain:done:v2')==='1'`);check('Owner retries after failed global claim',await claimRetry.eval(`JSON.parse(localStorage.getItem('mvlos.legacy-owner-claim:v1')).owner==='1'`))} finally {await claimRetry.close()}
+  await auth.eval(`localStorage.setItem('mvlos.account','2');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(privateSource)})`)
+  await loginAs(2);const explicit=await open()
+  try {await explicit.waitFor(`localStorage.getItem('mvlos.u.2.widget-move:plain:done:v2')==='1'`);check('Explicit account marker takes precedence over older claim',await explicit.eval(`JSON.parse(localStorage.getItem('mvlos.u.2.sync.widgets:state:v2')).value.configs.private.value.days===9`))} finally {await explicit.close()}
+  await loginAs(1)
+  await auth.eval(`localStorage.clear();localStorage.setItem('mvlos.owner','legacy-copy-failure');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(privateSource)})`)
+  const copyDenied=await open(false,{},`const base=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k==='mvlos.u.1.sync.widgets:state:v2')throw new DOMException('Synthetic quota','QuotaExceededError');return base.call(this,k,v)}`)
+  try {await copyDenied.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Failed copy retains global claim and source',await copyDenied.eval(`JSON.parse(localStorage.getItem('mvlos.legacy-owner-claim:v1')).owner==='1'&&!localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')&&localStorage.getItem('mvlos.sync.widgets:state:v2')!==null`))} finally {await copyDenied.close()}
+  await loginAs(2);const blockedOther=await open()
+  try {await blockedOther.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Claim survives copy failure and excludes account B',await blockedOther.eval(`!localStorage.getItem('mvlos.u.2.sync.widgets:state:v2')`))} finally {await blockedOther.close()}
+  await loginAs(1);const copyRetry=await open()
+  try {await copyRetry.waitFor(`localStorage.getItem('mvlos.u.1.widget-move:plain:done:v2')==='1'`);check('Original owner recovers after copy failure',await copyRetry.eval(`JSON.parse(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')).value.configs.private.value.days===9`))} finally {await copyRetry.close()}
+  await auth.eval(`localStorage.clear();localStorage.setItem('mvlos.owner','legacy-prior-receipt');localStorage.setItem('mvlos.u.1.widget-move:plain:done:v2','1');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(privateSource)})`)
+  await loginAs(2);const prior=await open()
+  try {await prior.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Earlier account receipt blocks reassignment',await prior.eval(`!localStorage.getItem('mvlos.legacy-owner-claim:v1')&&!localStorage.getItem('mvlos.u.2.sync.widgets:state:v2')`))} finally {await prior.close()}
+  await loginAs(1)
+  await auth.close()
 
   const Q=await open(true)
   try {

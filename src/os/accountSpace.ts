@@ -49,6 +49,11 @@ const revocation = () => { try { return localStorage.getItem(REVOCATION_KEY) } c
 const TAB_REVOCATION = revocation()
 
 let frozen = false
+// Older-owner import must finish its origin-wide claim before account state can be used.
+let legacyClaimPending = false
+let legacyClaimSettled: Promise<void> = Promise.resolve()
+/** Account discovery waits for the startup legacy claim rather than treating it as a sign-out. */
+export const waitAccountSpace = () => legacyClaimSettled
 /** Whether this tab stopped: the browser is signed in as another account now (or this one is being cleared). */
 export const accountFrozen = () => frozen
 
@@ -72,6 +77,7 @@ export function freezeAccount(reload = true) {
 /** Whether this tab may still write its account's state and talk to the API: the cookie still says its account. */
 export function accountGuard(): boolean {
   if (frozen) return false
+  if (legacyClaimPending) return false
   if (cookieUid() === TAB_UID && revocation() === TAB_REVOCATION) return true
   freezeAccount()
   return false
@@ -164,15 +170,56 @@ const LEGACY = [
 /** The old marker of whose state the plain keys were, and the one from before sign-up was open. */
 const OLD_MARKER = 'mvlos.account'
 const OLDER_MARKER = 'mvlos.owner'
+const OLDER_CLAIM = 'mvlos.legacy-owner-claim:v1'
 
-function moveIn() {
+/** Called only under the origin-wide gate. Never reassign an older marker to another account. */
+function claimOlder(older: string): boolean {
+  if (!TAB_UID || !older || older.length > 512 || localStorage.getItem(OLD_MARKER) || localStorage.getItem(OLDER_MARKER) !== older) return false
+  const raw = localStorage.getItem(OLDER_CLAIM)
+  if (raw !== null) {
+    if (raw.length > 1024) return false
+    try { const claim = JSON.parse(raw); return claim?.owner === TAB_UID && claim?.marker === older } catch { return false }
+  }
+  // Earlier unreleased versions left account-scoped receipts/intents but no global claim. A
+  // conflicting or ambiguous prior owner must not be reassigned to the current account.
+  const prior = new Set<string>()
+  for (const key of Object.keys(localStorage)) {
+    const match = /^mvlos\.u\.(\d+)\.widget-move:plain:(done:v2|v2)$/.exec(key)
+    if (!match) continue
+    if (match[2] === 'done:v2') prior.add(match[1])
+    else {
+      try { const plan = JSON.parse(localStorage.getItem(key) ?? 'null'); if (!plan || typeof plan !== 'object') return false; if (plan.marker === null && plan.older === older) prior.add(match[1]) }
+      catch { return false }
+    }
+  }
+  if ([...prior].some(owner => owner !== TAB_UID)) return false
+  const value = JSON.stringify({ owner: TAB_UID, marker: older })
+  localStorage.setItem(OLDER_CLAIM, value)
+  return localStorage.getItem(OLDER_CLAIM) === value
+}
+
+function moveIn(underGate = false) {
   try {
     if (typeof localStorage === 'undefined') return
+    const older = localStorage.getItem(OLDER_MARKER)
+    const needsMove = !localStorage.getItem(`${SPACE}moved`) || !!localStorage.getItem(`${SPACE}widget-move:plain:v2`) || !!localStorage.getItem(`${SPACE}widget-move:guest:v2`)
+    if (!underGate && needsMove && TAB_UID && !localStorage.getItem(OLD_MARKER) && older) {
+      legacyClaimPending = true
+      legacyClaimSettled = storageTransaction(() => {
+        if (frozen || cookieUid() !== TAB_UID || !claimOlder(older)) return false
+        moveIn(true)
+        return true
+      }).then(ok => {
+        legacyClaimPending = false
+        if (ok) try { location.reload() } catch { /* not in a page */ }
+      }, () => { legacyClaimPending = false })
+      return
+    }
     const flag = `${SPACE}moved`, plainPlan = `${SPACE}widget-move:plain:v2`, guestPlan = `${SPACE}widget-move:guest:v2`, plainDone = `${SPACE}widget-move:plain:done:v2`
     if (!localStorage.getItem(flag)) {
       const keys = Object.keys(localStorage)
       const marker = localStorage.getItem(OLD_MARKER)
-      const theirs = TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)
+      const theirs = TAB_UID ? marker === TAB_UID || (underGate && !marker && !!older) : !marker && !older
       // Separate monotonic intent flags cannot overwrite another starter's positive claim.
       // Failed IDB must not reopen other stores' import or discard the original envelope.
       // Bind the intent to both the ownership markers and exact source, not merely the account
@@ -197,8 +244,8 @@ function moveIn() {
       localStorage.setItem(flag, '1')
     }
     if (localStorage.getItem(plainPlan) || localStorage.getItem(guestPlan)) {
-      void storageTransaction(() => {
-        if (!accountGuard()) return
+      const transfer = () => {
+        if (underGate ? frozen || cookieUid() !== TAB_UID : !accountGuard()) return
         const to = accountKey(WIDGET_STORAGE_KEY)
         const plan = localStorage.getItem(plainPlan)
         if (plan && !localStorage.getItem(plainDone)) {
@@ -206,7 +253,7 @@ function moveIn() {
           try { claim = JSON.parse(plan) } catch { /* older unbound intent is not proof of ownership */ }
           const marker = localStorage.getItem(OLD_MARKER), older = localStorage.getItem(OLDER_MARKER)
           const v = localStorage.getItem(WIDGET_STORAGE_KEY)
-          if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || !(TAB_UID ? marker === TAB_UID || (!marker && !!older) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
+          if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || !(TAB_UID ? marker === TAB_UID || (underGate && !marker && !!older && claimOlder(older)) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
           // Non-cooperating legacy tabs do not use this gate. Their source and ownership markers
           // can change at any point, so this migration never removes or rewrites either.
@@ -218,9 +265,11 @@ function moveIn() {
         }
         localStorage.removeItem(plainPlan)
         localStorage.removeItem(guestPlan)
-      }).catch(() => { /* fail closed; original envelope + scoped plan remain for retry */ })
+      }
+      if (underGate) transfer()
+      else void storageTransaction(transfer).catch(() => { /* fail closed; original envelope + scoped plan remain for retry */ })
     }
-  } catch { /* storage unavailable: ordinary stores remain usable in memory */ }
+  } catch (error) { if (underGate) throw error; /* storage unavailable: ordinary stores remain usable in memory */ }
 }
 moveIn()
 
