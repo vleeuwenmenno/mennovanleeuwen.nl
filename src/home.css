@@ -4524,16 +4524,94 @@ button.cal-day.is-picked:not(.is-today) {
   color: var(--fg-bright);
 }
 
-/* Sidebar: a month to get around, and the calendars to show. */
+/* Sidebar: a month to get around, and the calendars to show. It is always in the DOM: beside the
+   calendar it grows and shrinks (its content keeps its width, so nothing reflows while it moves);
+   in a narrow window (.ca-main.is-narrow, under 720px) it is a pane of its own that slides in over the
+   calendar, and the calendar, never unmounted, slides out. Hidden, it is inert (and so is the calendar
+   behind it). The slide is off until the first measure and while the window switches between the two. */
+.ca-main {
+  position: relative;
+}
 .ca-side {
-  display: flex;
+  box-sizing: border-box;
   flex: none;
+  width: 211px;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--panel-solid);
+}
+.ca-side-in {
+  display: flex;
   flex-direction: column;
   gap: 14px;
+  box-sizing: border-box;
   width: 210px;
+  height: 100%;
   padding: 10px;
   overflow: auto;
-  border-right: 1px solid var(--line);
+}
+.ca-side.is-hidden {
+  width: 0;
+  border-right-width: 0;
+  visibility: hidden;
+}
+.ca-main.is-animated .ca-side {
+  transition:
+    width 0.22s cubic-bezier(0.22, 0.8, 0.26, 1),
+    border-right-width 0.22s,
+    visibility 0s;
+}
+.ca-main.is-animated .ca-side.is-hidden {
+  transition-delay: 0s, 0s, 0.22s;
+}
+.ca-side-back {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+.ca-main.is-narrow {
+  overflow: hidden;
+}
+.ca-main.is-narrow .ca-side,
+.ca-main.is-narrow .ca-view {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  border-right: 0;
+}
+.ca-main.is-narrow .ca-side-in {
+  width: 100%;
+}
+.ca-main.is-narrow .ca-side {
+  transform: translateX(-100%);
+}
+.ca-main.is-narrow .ca-side:not(.is-hidden) {
+  transform: none;
+}
+.ca-main.is-narrow .ca-side.is-hidden {
+  width: auto;
+}
+.ca-main.is-narrow.has-side .ca-view {
+  transform: translateX(100%);
+}
+.ca-main.is-narrow.is-animated .ca-side,
+.ca-main.is-narrow.is-animated .ca-view {
+  transition:
+    transform 0.24s cubic-bezier(0.22, 0.8, 0.26, 1),
+    visibility 0s;
+}
+.ca-main.is-narrow.is-animated .ca-side.is-hidden {
+  transition-delay: 0s, 0.24s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ca-main.is-animated .ca-side,
+  .ca-main.is-animated .ca-view {
+    transition: none !important;
+  }
 }
 .ca-side-month-head {
   display: flex;

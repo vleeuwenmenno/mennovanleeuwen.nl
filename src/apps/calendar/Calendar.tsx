@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import {
   createEvent,
   dayKey,
@@ -85,6 +85,9 @@ type Previewing = { id: string; near: { x: number; y: number } | null; reveal: b
 const DOUBLE_MS = 450
 type Asking = { question: string; verb: string; resolve: (a: 'one' | 'all' | null) => void }
 
+/** Narrower than this and the window shows the calendar or the sidebar, one at a time (Mail's breakpoint). */
+const NARROW_PX = 720
+
 export function CalendarApp({ win }: { win: WinState }) {
   const account = useAccount()
   const wm = useWM()
@@ -95,7 +98,17 @@ export function CalendarApp({ win }: { win: WinState }) {
   const [view, setViewState] = useState<View>(() => (isView(win.props.view) ? win.props.view : savedView))
   const [anchor, setAnchor] = useState(() => (win.props.date ? parseDay(win.props.date) : startOfDay(new Date())))
   const [narrow, setNarrow] = useState(false)
+  // The sidebar: beside the calendar on a wide window (its open state is the preference, kept while the window is narrow),
+  // a pane of its own on a narrow one (open or not on its own, back on the calendar when the window widens).
   const [sidebar, setSidebar] = useState(true)
+  const [mobileSide, setMobileSide] = useState(false)
+  /** Transitions are off until the first measure, and while the window switches between wide and narrow. */
+  const [animate, setAnimate] = useState(false)
+  const paneId = useId()
+  const sideRef = useRef<HTMLElement>(null)
+  const sidebarRef = useRef(sidebar)
+  sidebarRef.current = sidebar
+  const toggleRef = useRef<HTMLButtonElement>(null)
   const [editing, setEditing] = useState<Editing | null>(null)
   const [preview, setPreview] = useState<Previewing | null>(null)
   const pointer = useRef<{ x: number; y: number } | null>(null)
@@ -119,13 +132,41 @@ export function CalendarApp({ win }: { win: WinState }) {
     if (!rootRef.current?.contains(active)) rootRef.current?.focus({ preventScroll: true })
   }, [wm.focusedPid, win.pid])
 
-  useEffect(() => {
+  // The window's own width, not the screen's (as in Mail): measured before the first paint, and again when the
+  // window shows its calendar rather than its sign-in or linking screen (a different root).
+  const showing = account.status === 'user' && connected
+  useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setNarrow(el.clientWidth < 680))
+    let was: boolean | null = null
+    let frame = 0
+    const enable = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => (frame = requestAnimationFrame(() => setAnimate(true))))
+    }
+    const measure = () => {
+      const now = el.clientWidth < NARROW_PX
+      setNarrow(now)
+      if (was !== now) {
+        // Focus in the sidebar that is about to be hidden (the narrow window starts on the calendar, a closed wide
+        // sidebar) or to lose its button (the narrow pane's "‹ Calendar"): it goes to the sidebar's own button.
+        const at = document.activeElement
+        if (was !== null && sideRef.current?.contains(at) && (now || !sidebarRef.current || at?.classList.contains('ca-side-back'))) toggleRef.current?.focus({ preventScroll: true })
+        // Wide to narrow or back is a change of layout, not something to slide through.
+        setAnimate(false)
+        if (!now) setMobileSide(false)
+        enable()
+      }
+      was = now
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+    return () => {
+      cancelAnimationFrame(frame)
+      ro.disconnect()
+    }
+  }, [showing])
 
   const setView = (v: View) => {
     setViewState(v)
@@ -534,9 +575,21 @@ export function CalendarApp({ win }: { win: WinState }) {
     connected,
   )
 
+  const sideOpen = narrow ? mobileSide : sidebar
+  /** Opens or closes the sidebar (the wide one, or the narrow window's pane). Focus goes into the pane when it opens, and back to its button when it closes with focus inside. */
+  const setSideOpen = (open: boolean) => {
+    const inside = !!sideRef.current?.contains(document.activeElement)
+    if (narrow) setMobileSide(open)
+    else setSidebar(open)
+    if (open && narrow) requestAnimationFrame(() => sideRef.current?.querySelector<HTMLElement>('.ca-side-back')?.focus({ preventScroll: true }))
+    else if (!open && inside) requestAnimationFrame(() => toggleRef.current?.focus({ preventScroll: true }))
+  }
+  /** On a narrow window the sidebar covers the calendar: going somewhere in the calendar goes back to it. */
+  const toCalendar = () => narrow && mobileSide && setMobileSide(false)
   const onKey = (e: KeyboardEvent) => {
     if (editing || asking || e.metaKey || e.ctrlKey || e.altKey) return
     if (preview) return void (e.key === 'Escape' && (e.preventDefault(), closePreview(true)))
+    if (e.key === 'Escape' && narrow && mobileSide) return void (e.preventDefault(), setSideOpen(false))
     if ((e.target as HTMLElement).closest('input, textarea, select')) return
     const v = VIEWS.find((x) => x.key === e.key.toLowerCase())
     if (v) setView(v.id)
@@ -594,19 +647,19 @@ export function CalendarApp({ win }: { win: WinState }) {
   return (
     <div ref={rootRef} className={`ca ${narrow ? 'is-narrow' : ''}`} tabIndex={-1} onKeyDown={onKey} onPointerDownCapture={(e) => (pointer.current = { x: e.clientX, y: e.clientY })}>
       <header className="ca-toolbar">
-        <button className={`ca-icon ${sidebar && !narrow ? 'is-on' : ''}`} onClick={() => setSidebar((s) => !s)} aria-label="Show the sidebar" title="Sidebar">
+        <button ref={toggleRef} className={`ca-icon ${sideOpen ? 'is-on' : ''}`} onClick={() => setSideOpen(!sideOpen)} aria-label={narrow ? 'Calendars and months' : 'Sidebar'} aria-expanded={sideOpen} aria-controls={paneId} title="Sidebar">
           ☰
         </button>
-        <button className="btn btn-small" onClick={() => setAnchor(startOfDay(new Date()))} title="Today (T)">
+        <button className="btn btn-small" onClick={() => (toCalendar(), setAnchor(startOfDay(new Date())))} title="Today (T)">
           Today
         </button>
         <button className="ca-icon" onClick={reloadCalendars} aria-label="Refresh" title="Refresh (R)">
           ↻
         </button>
-        <button className="ca-icon" onClick={() => setAnchor(step(shownView, anchor, -1))} aria-label="Previous" title="Previous (←)">
+        <button className="ca-icon" onClick={() => (toCalendar(), setAnchor(step(shownView, anchor, -1)))} aria-label="Previous" title="Previous (←)">
           ‹
         </button>
-        <button className="ca-icon" onClick={() => setAnchor(step(shownView, anchor, 1))} aria-label="Next" title="Next (→)">
+        <button className="ca-icon" onClick={() => (toCalendar(), setAnchor(step(shownView, anchor, 1)))} aria-label="Next" title="Next (→)">
           ›
         </button>
         <h2 className="ca-heading">{viewTitle(shownView, anchor, days)}</h2>
@@ -614,7 +667,7 @@ export function CalendarApp({ win }: { win: WinState }) {
         <span className="nb-spacer" />
         <div className="ca-views" role="tablist" aria-label="View">
           {VIEWS.filter((v) => !(narrow && v.id === 'week')).map((v) => (
-            <button key={v.id} role="tab" aria-selected={shownView === v.id} className={shownView === v.id ? 'is-on' : ''} onClick={() => setView(v.id)} title={`${v.label} (${v.key.toUpperCase()})`}>
+            <button key={v.id} role="tab" aria-selected={shownView === v.id} className={shownView === v.id ? 'is-on' : ''} onClick={() => (toCalendar(), setView(v.id))} title={`${v.label} (${v.key.toUpperCase()})`}>
               {v.label}
             </button>
           ))}
@@ -638,10 +691,15 @@ export function CalendarApp({ win }: { win: WinState }) {
           )}
         </p>
       )}
-      <div className="ca-main">
-        {sidebar && !narrow && (
-          <aside className="ca-side">
-            <SideMonth anchor={anchor} now={now} range={shownView === 'month' || shownView === 'year' ? null : [from, to]} events={events} onDay={(d) => (shownView === 'month' || shownView === 'year' ? showDay(d) : setAnchor(d))} />
+      <div className={`ca-main ${narrow ? 'is-narrow' : ''} ${animate ? 'is-animated' : ''} ${sideOpen ? 'has-side' : ''}`}>
+        <aside ref={sideRef} id={paneId} className={`ca-side ${sideOpen ? '' : 'is-hidden'}`} aria-label="Calendars and months" aria-hidden={!sideOpen || undefined} inert={!sideOpen}>
+          <div className="ca-side-in">
+            {narrow && (
+              <button className="ca-side-back" onClick={() => setSideOpen(false)}>
+                ‹ Calendar
+              </button>
+            )}
+            <SideMonth anchor={anchor} now={now} range={shownView === 'month' || shownView === 'year' ? null : [from, to]} events={events} onDay={(d) => (narrow && setSideOpen(false), shownView === 'month' || shownView === 'year' ? showDay(d) : setAnchor(d))} />
             {sources.map((source) => (
               <section key={source} className="ca-cals">
                 <h4>{source}</h4>
@@ -694,9 +752,9 @@ export function CalendarApp({ win }: { win: WinState }) {
             <button className="link-btn ca-settings" onClick={() => wm.open('settings', { section: 'calendar', t: String(Date.now()) })}>
               Calendar settings
             </button>
-          </aside>
-        )}
-        <div className="ca-view">
+          </div>
+        </aside>
+        <div className="ca-view" aria-hidden={(narrow && mobileSide) || undefined} inert={narrow && mobileSide}>
           <SwipePager
             pageKey={`${shownView}|${dayKey(anchor)}`}
             group={shownView}

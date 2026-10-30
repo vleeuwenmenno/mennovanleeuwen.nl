@@ -65,6 +65,7 @@ window.fetch=async(input,init)=>{
  if(u.pathname==='/api/contacts')return json({books:[],contacts:[],groups:[],errors:[]});
  return json([]);
 };
+localStorage.removeItem('mvlos.ui.scale');
 `
 
 async function browserChecks(fixture: string) {
@@ -208,6 +209,7 @@ async function browserChecks(fixture: string) {
     check('a swipe after a second finger still turns', JSON.stringify(await heads(0)) !== JSON.stringify(afterMulti) && (await pages()) === 1, `${afterMulti} → ${await heads(0)}`)
     check('no page errors', page.errors.length === 0, page.errors.join(' | '))
     await extraChecks(browser, fixture)
+    await sidebarChecks(browser, fixture)
   } finally {
     await browser.close()
   }
@@ -285,6 +287,170 @@ async function extraChecks(browser: Awaited<ReturnType<typeof launch>>, fixture:
     await page.eval(`[...document.querySelectorAll('.ca-icon')].find((b) => b.getAttribute('aria-label') === 'Next').click()`)
     await page.waitFor(`document.querySelector('.ca-heading').textContent === '2028'`, 4000)
     check('year: arrow keeps the scroll', Math.abs((await top()) - 600) < 2, String(await top()))
+    await page.close()
+  }
+}
+
+/** The sidebar: wide, it grows and shrinks beside the calendar; narrow (under 720px), it is a pane that slides over it. */
+async function sidebarChecks(browser: Awaited<ReturnType<typeof launch>>, fixture: string) {
+  const q = 'view=3day&date=2026-10-14'
+  const reduce = (on: boolean) => ({ features: [{ name: 'prefers-color-scheme', value: 'dark' }, { name: 'prefers-reduced-motion', value: on ? 'reduce' : 'no-preference' }] })
+  type P = Awaited<ReturnType<typeof phone>>['page']
+  const rect = (page: P, sel: string) => page.eval<{ left: number; width: number } | null>(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; const r = e.getBoundingClientRect(); return { left: Math.round(r.left), width: Math.round(r.width) } })()`)
+  const attr = (page: P, sel: string, a: string) => page.eval<string | null>(`document.querySelector(${JSON.stringify(sel)})?.getAttribute(${JSON.stringify(a)}) ?? null`)
+  const toggle = (page: P) => page.eval(`document.querySelector('.ca-toolbar .ca-icon[aria-controls]').click()`)
+  const expanded = (page: P) => attr(page, '.ca-toolbar .ca-icon[aria-controls]', 'aria-expanded')
+  const active = (page: P) => page.eval<string>(`(document.activeElement?.className || document.activeElement?.tagName) + ''`)
+  const wait = (ms: number) => sleep(ms)
+  const mark = `window.__first=null;(function f(){const m=document.querySelector('.ca-main');if(m&&!window.__first){const s=document.querySelector('.ca-side');window.__first={narrow:m.classList.contains('is-narrow'),animated:m.classList.contains('is-animated'),side:Math.round(s.getBoundingClientRect().width),left:Math.round(s.getBoundingClientRect().left)};return}requestAnimationFrame(f)})()`
+
+  // --- Wide: the sidebar grows and shrinks, and nothing under it is rebuilt or loses its place. ---
+  {
+    const page = await newPage(browser, 1000, 700, inject)
+    await page.send('Page.navigate', { url: `${fixture}?${q}` })
+    await page.waitFor(`!!document.querySelector('.ca-ev')`, 20_000)
+    await wait(200)
+    check('wide: sidebar open beside the calendar', (await rect(page, '.ca-side'))!.width >= 205 && (await expanded(page)) === 'true' && !(await page.eval<boolean>(`document.querySelector('.ca-main').classList.contains('is-narrow')`)))
+    await page.eval(`document.querySelector('.ca-tg-scroll').scrollTop = 321; window.__pager = document.querySelector('.ca-pager'); window.__pager.dataset.same = '1'`)
+    const full = (await rect(page, '.ca-view'))!.width
+    await toggle(page)
+    await wait(90)
+    const mid = (await rect(page, '.ca-side'))!.width
+    check('wide: it shrinks over a moment, not at once', mid > 2 && mid < 205, String(mid))
+    await wait(400)
+    check('wide: closed: no width, hidden, inert, not in the tab order', (await rect(page, '.ca-side'))!.width === 0 && (await attr(page, '.ca-side', 'aria-hidden')) === 'true' && (await page.eval<boolean>(`document.querySelector('.ca-side').inert`)) && (await expanded(page)) === 'false')
+    await page.eval(`document.querySelector('.ca-side input')?.focus()`)
+    check('wide: a closed sidebar cannot take focus', !(await active(page)).includes('INPUT') && !(await active(page)).includes('input'))
+    check('wide: the calendar took the room', (await rect(page, '.ca-view'))!.width > full + 150)
+    check('wide: same calendar, same scroll', (await page.eval<boolean>(`document.querySelector('.ca-pager') === window.__pager`)) && (await page.eval<number>(`document.querySelector('.ca-tg-scroll').scrollTop`)) === 321)
+    await toggle(page)
+    await wait(450)
+    check('wide: opens again', (await rect(page, '.ca-side'))!.width >= 205 && (await expanded(page)) === 'true' && !(await page.eval<boolean>(`document.querySelector('.ca-side').inert`)))
+    // Reduced motion: no slide.
+    await page.send('Emulation.setEmulatedMedia', reduce(true))
+    await toggle(page)
+    await wait(60)
+    check('wide, reduced motion: closes at once', (await rect(page, '.ca-side'))!.width === 0)
+    await toggle(page)
+    await wait(60)
+    check('wide, reduced motion: opens at once', (await rect(page, '.ca-side'))!.width >= 205)
+    await page.send('Emulation.setEmulatedMedia', reduce(false))
+
+    // --- Narrowing the window: the calendar alone; widening: the sidebar as it was left. ---
+    await toggle(page)
+    await wait(450)
+    check('wide: closed by choice', (await expanded(page)) === 'false')
+    // Focus in the sidebar when the window narrows: on its button, not lost in the hidden pane.
+    await toggle(page)
+    await wait(450)
+    await page.eval(`document.querySelector('.ca-side input').focus()`)
+    check('focus in the wide sidebar', (await active(page)).toLowerCase().includes('input'))
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 600, height: 700, deviceScaleFactor: 1, mobile: false })
+    await page.waitFor(`document.querySelector('.ca-main').classList.contains('is-narrow')`, 3000)
+    await wait(450)
+    check('narrowing with focus in the sidebar: focus on its button', (await active(page)).includes('ca-icon'), await active(page))
+    // The narrow pane's back button focused, widened with the wide sidebar open: its button unmounts.
+    await toggle(page)
+    await wait(450)
+    check('focus on the pane\'s back button', (await active(page)).includes('ca-side-back'), await active(page))
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 700, deviceScaleFactor: 1, mobile: false })
+    await page.waitFor(`!document.querySelector('.ca-main').classList.contains('is-narrow')`, 3000)
+    await wait(450)
+    check('widening from the back button, sidebar open: focus on the sidebar button', (await active(page)).includes('ca-icon') && (await expanded(page)) === 'true', await active(page))
+    await toggle(page)
+    await wait(450)
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 600, height: 700, deviceScaleFactor: 1, mobile: false })
+    await page.waitFor(`document.querySelector('.ca-main').classList.contains('is-narrow')`, 3000)
+    await wait(100)
+    check('narrow: switches to one pane, the calendar (no slide through the switch)', (await rect(page, '.ca-view'))!.width === 600 && (await rect(page, '.ca-side'))!.left <= -600 && (await expanded(page)) === 'false')
+    await toggle(page)
+    await wait(450)
+    check('narrow: the sidebar is the whole window', (await rect(page, '.ca-side'))!.left === 0 && (await rect(page, '.ca-side'))!.width === 600 && (await expanded(page)) === 'true' && (await page.eval<boolean>(`document.querySelector('.ca-view').inert`)))
+    await page.eval(`document.querySelector('.ca-side input').focus()`)
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 700, deviceScaleFactor: 1, mobile: false })
+    await page.waitFor(`!document.querySelector('.ca-main').classList.contains('is-narrow')`, 3000)
+    await wait(450)
+    check('widened: the desktop preference (closed) is back, not the narrow pane, focus on the button', (await active(page)).includes('ca-icon') && (await expanded(page)) === 'false' && (await rect(page, '.ca-side'))!.width === 0 && !(await page.eval<boolean>(`document.querySelector('.ca-view').inert`)))
+    await page.close()
+  }
+
+  // --- A phone: first paint is already narrow; the sidebar is a pane. ---
+  {
+    const { page, touch, drag } = await phone(browser, fixture, q, mark)
+    await page.waitFor(`!!document.querySelector('.ca-ev')`, 20_000)
+    await wait(300)
+    const first = await page.eval<{ narrow: boolean; animated: boolean; side: number; left: number }>('window.__first')
+    check('phone: no wide flash on the first frame, nothing animating', first.narrow && !first.animated && first.left <= -300, JSON.stringify(first))
+    check('phone: starts on the calendar', (await expanded(page)) === 'false' && (await attr(page, '.ca-side', 'aria-hidden')) === 'true' && (await rect(page, '.ca-view'))!.left === 0)
+    await page.eval(`document.querySelector('.ca-tg-scroll').scrollTop = 321; window.__pager = document.querySelector('.ca-pager'); 0`)
+    await toggle(page)
+    await wait(100)
+    const mid = (await rect(page, '.ca-side'))!.left
+    check('phone: the sidebar slides in', mid > -390 && mid < 0, String(mid))
+    await wait(400)
+    check('phone: sidebar fills the window, the calendar is inert and off to the side', (await rect(page, '.ca-side'))!.left === 0 && (await rect(page, '.ca-side'))!.width === 390 && (await rect(page, '.ca-view'))!.left >= 390 && (await page.eval<boolean>(`document.querySelector('.ca-view').inert`)) && (await expanded(page)) === 'true')
+    check('phone: focus went into the pane', (await active(page)).includes('ca-side-back'), await active(page))
+    // Filters stay editable without closing it.
+    const before = await page.eval<boolean>(`document.querySelector('.ca-cal input').checked`)
+    await page.eval(`document.querySelector('.ca-cal input').click()`)
+    await wait(200)
+    check('phone: a filter changes and the sidebar stays', (await page.eval<boolean>(`document.querySelector('.ca-cal input').checked`)) !== before && (await expanded(page)) === 'true')
+    await page.eval(`document.querySelector('.ca-cal input').click()`)
+    // A swipe over the sidebar is not the calendar's.
+    const h0 = await page.eval<string>(`document.querySelector('.ca-page[data-offset="0"] .ca-dayhead strong').textContent`)
+    await drag([300, 300], -200)
+    await touch('touchEnd')
+    await wait(500)
+    check('phone: swiping the sidebar does not page the calendar behind it', (await page.eval<string>(`document.querySelector('.ca-page[data-offset="0"] .ca-dayhead strong').textContent`)) === h0)
+    // Pick a day: back on the calendar, there.
+    await page.eval(`[...document.querySelectorAll('.ca-side .ca-mini-day:not(.is-other)')].find((b) => b.textContent.trim() === '21').click()`)
+    await wait(450)
+    check('phone: picking a day goes back to the calendar on that day', (await expanded(page)) === 'false' && (await page.eval<string>(`document.querySelector('.ca-page[data-offset="0"] .ca-dayhead strong').textContent`)) === '21')
+    check('phone: focus is on the sidebar button again', (await active(page)).includes('ca-icon'), await active(page))
+    check('phone: the calendar was not rebuilt, and kept its hours', (await page.eval<boolean>(`document.querySelector('.ca-pager') === window.__pager`)) && (await page.eval<number>(`document.querySelector('.ca-tg-scroll').scrollTop`)) === 321)
+    // Back button and Escape.
+    await toggle(page)
+    await wait(400)
+    await page.eval(`document.querySelector('.ca-side-back').click()`)
+    await wait(400)
+    check('phone: "‹ Calendar" goes back, focus on the button', (await expanded(page)) === 'false' && (await active(page)).includes('ca-icon'), await active(page))
+    await toggle(page)
+    await wait(400)
+    await page.eval(`document.querySelector('.ca-cal input').focus()`)
+    for (const type of ['rawKeyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await wait(400)
+    check('phone: Escape closes it from a checkbox, focus on the button', (await expanded(page)) === 'false' && (await active(page)).includes('ca-icon'), await active(page))
+    await page.eval(`document.querySelector('.ca-side input')?.focus()`)
+    check('phone: the hidden sidebar cannot take focus', !(await active(page)).toLowerCase().includes('input'))
+    // The calendar still pages by swipe afterwards.
+    const h1 = await page.eval<string>(`document.querySelector('.ca-page[data-offset="0"] .ca-dayhead strong').textContent`)
+    await drag([300, 400], -200)
+    await touch('touchEnd')
+    await wait(500)
+    check('phone: swipe paging still works after the sidebar', (await page.eval<string>(`document.querySelector('.ca-page[data-offset="0"] .ca-dayhead strong').textContent`)) !== h1)
+    // Reduced motion: no slide.
+    await page.send('Emulation.setEmulatedMedia', reduce(true))
+    await toggle(page)
+    await wait(60)
+    check('phone, reduced motion: the pane is in at once', (await rect(page, '.ca-side'))!.left === 0)
+    await toggle(page)
+    // The window widened in the middle of a slide.
+    await page.send('Emulation.setEmulatedMedia', reduce(false))
+    await wait(100)
+    await toggle(page)
+    await wait(80)
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 800, deviceScaleFactor: 1, mobile: true })
+    await page.waitFor(`!document.querySelector('.ca-main').classList.contains('is-narrow')`, 3000)
+    await wait(450)
+    check('resized mid-slide: wide layout, sidebar beside the calendar, nothing inert', (await rect(page, '.ca-side'))!.width >= 205 && !(await page.eval<boolean>(`document.querySelector('.ca-view').inert`)) && (await rect(page, '.ca-view'))!.left >= 205)
+    check('no page errors in the sidebar checks', page.errors.length === 0, page.errors.join(' | '))
+    await page.close()
+  }
+  // The page drawn at 150%: the window's width is what is measured, in page pixels.
+  {
+    const { page } = await phone(browser, fixture, q, `localStorage.setItem('mvlos.ui.scale','1.5')`, 390, 800, 1.5)
+    await page.waitFor(`!!document.querySelector('.ca-ev')`, 20_000)
+    check('scaled page: 390 page pixels is narrow', await page.eval<boolean>(`document.querySelector('.ca-main').classList.contains('is-narrow')`))
     await page.close()
   }
 }
