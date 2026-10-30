@@ -1,6 +1,8 @@
 // How the dock behaves: always shown, auto-hidden while a window covers it or is maximized (the
 // default), or always auto-hidden. Windows that snap or maximize leave room for the dock when it
-// can be there.
+// can be there. Snapped windows can also be told to ignore the dock and use the full height.
+
+import { flagPref } from './localPref'
 
 export type DockMode = 'show' | 'maximized' | 'hide'
 
@@ -34,8 +36,17 @@ export function setDockMode(mode: DockMode) {
   window.dispatchEvent(new Event('resize'))
 }
 
-/** Space snapped windows keep free at the bottom: none only when the dock always hides. */
-export const snapReserve = () => (getDockMode() === 'hide' ? 0 : DOCK_RESERVE)
+/** Whether snapped windows keep room for the dock (on by default); off, they use the height below it. This device only. */
+export const snapReservePref = flagPref('mvlos.dock.snapReserve', true)
+
+// A change re-fits the snapped windows the same way a dock mode change does.
+snapReservePref.subscribe(() => window.dispatchEvent(new Event('resize')))
+
+/** Space snapped windows keep free at the bottom: none when the dock always hides or the preference is off. */
+export const snapReserve = () => (getDockMode() === 'hide' || !snapReservePref.get() ? 0 : DOCK_RESERVE)
+
+/** Space a maximized window keeps free at the bottom: only when the dock always shows. Not affected by the snap preference. */
+export const maxReserve = () => (getDockMode() === 'show' ? DOCK_RESERVE : 0)
 
 /** Maximized windows only make room when the dock always shows. */
 export function applyDockReserve() {

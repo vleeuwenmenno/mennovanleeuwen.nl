@@ -165,6 +165,13 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+Settings → Dock → *Show the dock* picks when the dock shows (always, auto-hide when a window covers
+it, or always auto-hide). Windows snapped left, right or to a corner keep room for the dock unless
+it always auto-hides; turning off *Reserve dock space for snapped windows* (on this device only,
+[`src/os/dockPrefs.ts`](src/os/dockPrefs.ts)) lets them use the height under the dock too, with the
+top bar and the usual gaps kept. Snapped windows re-fit when it changes. Maximized windows are not
+affected: they only leave room when the dock is always shown.
+
 ## Moving windows with a key
 
 Like Hyprland, a window can be dragged by holding a key and dragging anywhere on it
