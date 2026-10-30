@@ -35,12 +35,17 @@ export function parseNoteMeta(raw: string): NoteMeta {
 }
 function project(state: State): State {
   const server = canonical(state.server), edits = canonical(state.edits)
-  // A server acknowledgement dominates only changes it actually contains. Missing notes do
-  // not erase legitimate offline edits. Unedited old rows never enter this set in the first place.
+  // Pending state carries the domain-merged revision, not the component that originally made
+  // it dirty. In particular, a terminal server purge must replace a pending live revision;
+  // removing that server baseline later must not uncover the old live component again.
+  // Only already-dirty IDs enter this set. Missing rows do not erase legitimate offline edits,
+  // and an acknowledgement discharges only revisions its own domain value already represents.
   const byId = new Map(server.map(n => [n.id, n]))
-  const unsaved = edits.filter(n => {
+  const unsaved = edits.flatMap(n => {
     const saved = byId.get(n.id)
-    return !saved || json(mergeNotes([n], [saved])) !== json([saved])
+    if (!saved) return [n]
+    const merged = mergeNotes([n], [saved])
+    return json(merged) === json([saved]) ? [] : merged
   })
   const pendingIds = new Set(unsaved.map(note => note.id))
   const migration = state.migration.filter(id => pendingIds.has(id))
@@ -72,7 +77,9 @@ function inputFence(raw: string | null, space: string): { pending: Note[] } | nu
 }
 const migrationPending = (state: State) => {
   const ids = new Set(state.migration)
-  return state.edits.filter(note => ids.has(note.id))
+  // A continuation must preserve everything already confirmed in the current note: server
+  // text plus local links, trash/restore clocks, and final purge semantics alike.
+  return state.value.filter(note => ids.has(note.id))
 }
 /** Called only under the shared gate, after a checkpoint was written and verified. Logout
  * repairs this fence before deleting that checkpoint. Neither source keys nor stages change. */

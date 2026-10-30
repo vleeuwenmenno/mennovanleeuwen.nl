@@ -4458,6 +4458,11 @@ receipt cleanup run under the same IndexedDB gate as widgets; there is no first-
 an ordinary key. A newer server baseline replaces clean old rows, while real dirty edits retain
 the existing per-field merge and final-purge rules. Server acknowledgements consume only revisions
 they actually contain, so an edit made while a request was in flight remains dirty.
+Pending revisions are themselves domain-merged notes for only the already-dirty IDs. Observing
+a terminal server purge converts any surviving pending revision of that note to a tombstone;
+later pruning of the server baseline cannot expose a hidden live component. Unrelated dirty
+notes remain intact. Once acknowledged, a pending tombstone is discharged, and a newer server
+snapshot can remove the clean baseline entry. No separate permanent tombstone ledger is kept.
 
 Every note read collects checkpoint, input fence and immutable journal records, then validates
 their checkpoint revision and key membership again before exposing a projection or applying an
@@ -4488,7 +4493,9 @@ write, and failed cleanup can retry without replay.
 A verified note checkpoint also writes an account-bound `notes:inputs-consumed:v1` fence. It
 closes the old input channel across logout, so an acknowledged, purged and server-pruned note
 cannot return from retained migration sources. The fence keeps a continuation of only the
-initial imported notes still awaiting acknowledgement, including their current deletion state.
+initial imported notes still awaiting acknowledgement, using their full merged current values:
+confirmed text, local links, trash/restore clocks and terminal deletion state. It never restores
+the raw component that originally made a note dirty.
 Those unfinished imports remain retryable across logout, even when other imported notes have
 already been acknowledged and pruned. Later ordinary edits are not migration continuations.
 The checkpoint records which notes still belong to this migration; for pre-field checkpoints,
