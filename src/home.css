@@ -5438,6 +5438,51 @@ button.cal-day.is-picked:not(.is-today) {
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* A web read that failed (src/apps/AgentsWebRecovery.tsx): the whole address, and the ways on. */
+.agt-recover {
+  padding: 6px 0 2px;
+}
+.agt-recover-title {
+  margin: 0 0 2px;
+  font-weight: 600;
+}
+.agt-recover-why {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.agt-recover-url {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 12px;
+}
+.agt-recover-url a {
+  color: var(--accent);
+}
+.agt-recover-actions {
+  flex-wrap: wrap;
+}
+.agt-recover-actions a.btn {
+  text-decoration: none;
+}
+.agt-recover-raw {
+  margin-top: 6px;
+}
+.agt-recover-raw summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.agt-paste-url {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+.agt-paste-box {
+  min-height: 140px;
+  resize: vertical;
+  box-sizing: border-box;
+}
 /* An email the agent wants to send or save (server/agentMail.ts): its text, whole, in the mail's own font size. */
 .agt-ask-mail {
   max-height: 360px;
