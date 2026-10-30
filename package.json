@@ -145,7 +145,8 @@
     "check:widget-review8-ui": "node scripts/widget-review8-e2e.ts",
     "check:widget-review9-ui": "node scripts/widget-review9-e2e.ts",
     "check:widget-review10-ui": "node scripts/widget-review10-e2e.ts",
-    "check:widget-review10-merge-ui": "node scripts/widget-review10-merge-e2e.ts"
+    "check:widget-review10-merge-ui": "node scripts/widget-review10-merge-e2e.ts",
+    "check:widget-review11-ui": "node scripts/widget-review11-e2e.ts"
   },
   "dependencies": {
     "figlet": "^1.12.0",

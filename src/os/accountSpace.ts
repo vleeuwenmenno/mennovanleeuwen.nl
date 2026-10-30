@@ -43,26 +43,49 @@ export const SPACE = TAB_UID ? `mvlos.u.${TAB_UID}.` : 'mvlos.visitor.'
 
 /** The key in this tab's account space for an account-owned key, written as before spaces (`mvlos.history`). */
 export const accountKey = (key: string) => SPACE + key.replace(/^mvlos\./, '')
+export const WIDGET_NOTE_CACHE_KEY = 'mvlos.widget-cache:v2:notes'
 const WIDGET_LEGACY = new Set(['mvlos.sync.widgets', 'mvlos.sync.widgets:placed', 'mvlos.sync.widgets:packages:v1', 'mvlos.sync.windows:desktop', 'mvlos.sync.windows:mobile', 'mvlos.sync.notes'])
-const widgetStagePrefix = (key: string) => `${SPACE}widget-stage:v1:${encodeURIComponent(key)}:`
+const widgetStagePrefix = (key: string, space = SPACE) => `${space}widget-stage:v1:${encodeURIComponent(key)}:`
+type StageOrigin = { owner: string | null; kind: 'plain' | 'visitor'; marker: string | null; older: string | null }
+function validStage(record: any, key: string, owner: string | null): record is { key: string; source: string; origin: StageOrigin } {
+  const origin = record?.origin
+  return record?.key === key && typeof record.source === 'string' && origin?.owner === owner &&
+    (origin.kind === 'plain' || origin.kind === 'visitor') &&
+    (origin.marker === null || typeof origin.marker === 'string') && (origin.older === null || typeof origin.older === 'string') &&
+    (origin.kind !== 'visitor' || (origin.marker === null && origin.older === null)) &&
+    (origin.kind !== 'plain' || (owner === null ? origin.marker === null && origin.older === null : origin.marker === owner || (origin.marker === null && !!origin.older)))
+}
+/** A pre-provenance stage can be recovered only by matching the still-explicit owner and source,
+ * or by a later bound plain snapshot of those same bytes. Its original record remains untouched. */
+function recoveredStage(record: any, key: string, owner: string | null, space: string, allowExplicit: boolean): boolean {
+  if (!owner || record?.origin !== undefined || record?.key !== key || typeof record.source !== 'string') return false
+  const prefix = widgetStagePrefix(key, space)
+  for (const name of Object.keys(localStorage)) if (name.startsWith(prefix)) {
+    const candidate = JSON.parse(localStorage.getItem(name) ?? 'null')
+    if (validStage(candidate, key, owner) && candidate.origin.kind === 'plain' && candidate.source === record.source) return true
+  }
+  return allowExplicit && space === SPACE && owner === TAB_UID && cookieUid() === owner &&
+    localStorage.getItem('mvlos.account') === owner && localStorage.getItem(key) === record.source
+}
 /** Immutable account-scoped snapshots are inputs only while the ordinary account key is absent. */
-export function widgetLegacyStage(key: string): string | null {
+function readWidgetLegacyStage(key: string, space: string, owner: string | null): string | null {
   if (!WIDGET_LEGACY.has(key)) return null
   try {
-    const prefix = widgetStagePrefix(key), values: string[] = []
+    const prefix = widgetStagePrefix(key, space), values: string[] = []
     for (const name of Object.keys(localStorage)) if (name.startsWith(prefix)) {
       const raw = localStorage.getItem(name)
       if (raw === null) throw new Error('Widget migration snapshot unavailable; original data retained')
       const record = JSON.parse(raw)
-      if (!record || record.key !== key || typeof record.source !== 'string') throw new Error('Widget migration snapshot invalid; original data retained')
+      if (!validStage(record, key, owner) && !recoveredStage(record, key, owner, space, true)) throw new Error('Widget migration snapshot provenance unavailable; original data retained')
       values.push(record.source)
       if (values.length > 256) throw new Error('Widget migration snapshot limit reached; original data retained')
     }
     if (values.some(value => value !== values[0])) throw new Error('Conflicting widget migration snapshots; original data retained')
     return values[0] ?? null
-  } catch (error) { legacyMigrationUnresolved = true; throw error }
+  } catch (error) { legacyMigrationUnresolved = true; throw new Error('Widget migration snapshot unavailable; original data retained', { cause: error }) }
 }
-function stageWidgetLegacy(key: string, source: string) {
+export const widgetLegacyStage = (key: string): string | null => readWidgetLegacyStage(key, SPACE, TAB_UID)
+function stageWidgetLegacy(key: string, source: string, origin: StageOrigin) {
   if (new TextEncoder().encode(source).length > 1024 * 1024) throw new Error('Widget migration snapshot limit reached; original data retained')
   // Older releases wrote this receipt before their target write. A different target could be
   // either an intentional newer edit or an automatic default after that write failed.
@@ -74,7 +97,16 @@ function stageWidgetLegacy(key: string, source: string) {
   }
   const existing = widgetLegacyStage(key)
   if (existing !== null && existing !== source) throw new Error('Conflicting widget migration snapshots; original data retained')
-  if (existing === null) localStorage.setItem(`${widgetStagePrefix(key)}${crypto.randomUUID()}`, JSON.stringify({ key, source }))
+  // An identical visitor snapshot does not prove ownership of a later plain account source.
+  const names = Object.keys(localStorage).filter(name => name.startsWith(widgetStagePrefix(key)))
+  const bound = names.some(name => {
+    const record = JSON.parse(localStorage.getItem(name) ?? 'null')
+    return validStage(record, key, TAB_UID) && JSON.stringify(record.origin) === JSON.stringify(origin)
+  })
+  if (!bound) {
+    if (names.length >= 256) throw new Error('Widget migration snapshot limit reached; original data retained')
+    localStorage.setItem(`${widgetStagePrefix(key)}${crypto.randomUUID()}`, JSON.stringify({ key, source, origin }))
+  }
 }
 // A logout cleanup invalidates other still-open tabs even before their cookie-change event runs.
 const REVOCATION_KEY = `${SPACE}revocation:v1`
@@ -180,7 +212,7 @@ export function clearAccountSpace(): Promise<void> {
   // Retain cutover and unfinished migration intents across logout: the plain legacy source is
   // intentionally retained and must not be imported again when this account signs back in.
   const migrationKeys = new Set([`${SPACE}moved`, `${SPACE}widget-move:plain:v2`, `${SPACE}widget-move:guest:v2`, `${SPACE}widget-move:plain:done:v2`, `${SPACE}legacy-copy:v1`])
-  const widgetKey = (key: string) => key === canonical || key === journals || key.startsWith(journals + ':')
+  const widgetKey = (key: string) => key === accountKey(WIDGET_NOTE_CACHE_KEY) || key === canonical || key === journals || key.startsWith(journals + ':')
   try {
     for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !migrationKeys.has(k) && !k.startsWith(`${SPACE}legacy-copy:v2:`) && !k.startsWith(`${SPACE}widget-stage:v1:`) && !widgetKey(k)) localStorage.removeItem(k)
   } catch { return Promise.reject(new Error('Account storage cleanup unavailable')) }
@@ -256,14 +288,38 @@ export function widgetMigrationUnresolved(): boolean {
 /** Called only under the origin-wide gate. Never reassign an older marker to another account. */
 function claimOlder(older: string): boolean {
   if (!TAB_UID || !older || older.length > 512 || localStorage.getItem(OLD_MARKER) || localStorage.getItem(OLDER_MARKER) !== older) return false
+  // Earlier unreleased versions left account-scoped receipts/intents but no global claim. A
+  // conflicting or ambiguous prior owner must not be reassigned to the current account.
+  const prior = new Set<string>()
+  for (const key of Object.keys(localStorage)) {
+    const visitorStage = /^mvlos\.visitor\.widget-stage:v1:([^:]+):/.exec(key)
+    if (visitorStage) {
+      try {
+        const sourceKey = decodeURIComponent(visitorStage[1]), record = JSON.parse(localStorage.getItem(key) ?? 'null')
+        if (!WIDGET_LEGACY.has(sourceKey) || !validStage(record, sourceKey, null)) return false
+      } catch { return false }
+    }
+    const stage = /^mvlos\.u\.(\d+)\.widget-stage:v1:([^:]+):/.exec(key)
+    if (stage) {
+      try {
+        const record = JSON.parse(localStorage.getItem(key) ?? 'null'), sourceKey = decodeURIComponent(stage[2])
+        if (!WIDGET_LEGACY.has(sourceKey)) return false
+        if (validStage(record, sourceKey, stage[1])) {
+          // Even a changed older marker cannot prove that a retained plain source changed owner.
+          if (record.origin.kind === 'plain') prior.add(stage[1])
+        } else if (recoveredStage(record, sourceKey, stage[1], `mvlos.u.${stage[1]}.`, false)) prior.add(stage[1])
+        else return false
+      } catch { return false }
+    }
+  }
+  // A global claim predates later explicit-owner migrations in another tab. It cannot bypass
+  // their durable identity evidence, even if the older marker has not changed.
+  if (prior.size > 1 || (prior.size === 1 && !prior.has(TAB_UID))) return false
   const raw = localStorage.getItem(OLDER_CLAIM)
   if (raw !== null) {
     if (raw.length > 1024) return false
     try { const claim = JSON.parse(raw); return claim?.owner === TAB_UID && claim?.marker === older } catch { return false }
   }
-  // Earlier unreleased versions left account-scoped receipts/intents but no global claim. A
-  // conflicting or ambiguous prior owner must not be reassigned to the current account.
-  const prior = new Set<string>()
   for (const key of Object.keys(localStorage)) {
     const copy = /^mvlos\.u\.(\d+)\.legacy-copy:(?:v1|v2:.+)$/.exec(key)
     if (copy) {
@@ -292,6 +348,27 @@ function claimOlder(older: string): boolean {
   return localStorage.getItem(OLDER_CLAIM) === value
 }
 
+/** Complete dependencies before clearing a visitor envelope intent, including retries of an
+ * earlier partial transfer whose general `moved` marker was already written. */
+function stageVisitorWidgets() {
+  let copied = false
+  // Earlier visitor migration may have staged inputs without creating ordinary visitor keys.
+  // An ordinary visitor value wins over that older snapshot, and account state wins over both.
+  if (TAB_UID) for (const key of WIDGET_LEGACY) {
+    if (widgetLegacyStage(key) !== null) continue
+    const ordinary = localStorage.getItem(`mvlos.visitor.${key.slice('mvlos.'.length)}`)
+    const cache = ordinary === null && key === 'mvlos.sync.notes' ? localStorage.getItem(`mvlos.visitor.${WIDGET_NOTE_CACHE_KEY.slice('mvlos.'.length)}`) : null
+    const source = ordinary ?? cache ?? readWidgetLegacyStage(key, 'mvlos.visitor.', null)
+    if (source !== null) {
+      const m = JSON.parse(source)
+      if (!m || !Object.hasOwn(m, 'value') || (key === 'mvlos.sync.notes' && !Array.isArray(m.value))) throw new Error('Visitor widget dependency unreadable; original data retained')
+      stageWidgetLegacy(key, JSON.stringify({ value: m.value, base: 0, dirty: true }), { owner: TAB_UID, kind: 'visitor', marker: null, older: null })
+      copied = true
+    }
+  }
+  return copied
+}
+
 function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
   // Fail closed even if the first read, snapshot, intent write, or ordinary copy fails.
   if (!authorized) legacyMigrationUnresolved = true
@@ -318,7 +395,7 @@ function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
             const claim = JSON.parse(localStorage.getItem(OLDER_CLAIM) ?? 'null')
             if (claim?.marker === older && claim?.owner && claim.owner !== TAB_UID) {
               legacyMigrationUnresolved = false
-              if (localStorage.getItem(`${SPACE}widget-move:guest:v2`) || (!localStorage.getItem(`${SPACE}moved`) && Object.keys(localStorage).some(k => k.startsWith('mvlos.visitor.sync.')))) {
+              if (localStorage.getItem(`${SPACE}widget-move:guest:v2`) || (!localStorage.getItem(`${SPACE}moved`) && Object.keys(localStorage).some(k => (k.startsWith('mvlos.visitor.sync.') || k.startsWith('mvlos.visitor.widget-stage:v1:'))))) {
                 const priorSettled = legacyClaimSettled
                 moveIn(undefined, true)
                 if (legacyClaimSettled !== priorSettled) await legacyClaimSettled
@@ -351,7 +428,7 @@ function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
         if (entries.length > 256 || new TextEncoder().encode(JSON.stringify(entries)).length > 1024 * 1024) throw new Error('Legacy copy limit reached; original data retained')
         for (const [k, v] of entries) {
           if (!sameOwnership(snapshot) || localStorage.getItem(k) !== v) throw new Error('Legacy source changed; original data retained')
-          if (WIDGET_LEGACY.has(k)) { stageWidgetLegacy(k, v); ordinaryCopied = true; continue }
+          if (WIDGET_LEGACY.has(k)) { stageWidgetLegacy(k, v, { owner: TAB_UID, kind: 'plain', marker, older: snapshot.older }); ordinaryCopied = true; continue }
           const to = accountKey(k)
           const target = localStorage.getItem(to)
           // Each source has its own write-ahead receipt, so two starting tabs cannot erase
@@ -378,15 +455,13 @@ function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
         if (v !== null) {
           const m = JSON.parse(v), rebased = JSON.stringify({ value: m.value, base: 0, dirty: true })
           const oldKey = `mvlos.${k.slice('mvlos.visitor.'.length)}`
-          if (WIDGET_LEGACY.has(oldKey)) {
-            // Account-owned plain data precedes the visitor copy, as it did before staging.
-            if (widgetLegacyStage(oldKey) === null) { stageWidgetLegacy(oldKey, rebased); ordinaryCopied = true }
-          }
-          else if (localStorage.getItem(to) === null) { localStorage.setItem(to, rebased); ordinaryCopied = true }
+          if (!WIDGET_LEGACY.has(oldKey) && localStorage.getItem(to) === null) { localStorage.setItem(to, rebased); ordinaryCopied = true }
         }
       }
+      ordinaryCopied = stageVisitorWidgets() || ordinaryCopied
       localStorage.setItem(flag, '1')
     }
+    if (localStorage.getItem(guestPlan)) ordinaryCopied = stageVisitorWidgets() || ordinaryCopied
     if (localStorage.getItem(plainPlan) || localStorage.getItem(guestPlan)) {
       let copied = false
       const transfer = () => {

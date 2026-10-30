@@ -4443,6 +4443,22 @@ ownership assignment. Legacy keys come from a marker-checked snapshot and remain
 older tabs. Widget config, placements, installations, desktop/mobile layouts and sticky-note
 content are staged in separate immutable account-scoped keys, never copied over ordinary account
 keys. These snapshots remain account-scoped across logout for recovery, like migration receipts.
+Each snapshot records its source account and ownership markers; an older unbound snapshot blocks
+automatic ownership claims. Its explicit original account can read it when the retained plain
+source still matches; a pending transfer also records a bound snapshot without changing the original.
+Visitor widget and sticky-note dependencies transfer before account cutover, subject to
+account-target precedence.
+Remote note reconciliation uses one account-scoped live cache checkpoint, leaving the immutable
+input and ordinary account key untouched. Its read/merge/write runs under the same IndexedDB gate;
+reloads do not accumulate cache slots. Dirty concurrent snapshots merge by note identity, while a
+newer server version replaces a clean older cache, including notes whose tombstones expired.
+A present ordinary account key takes precedence. An unreadable note source blocks hydration and
+writes until reload; a failed cache write can retry without losing its candidate. Explicit note
+edits retain the ordinary Notes store's persistence behavior and include the latest readable
+cache before the first ordinary write.
+Visitor transfer includes staged note dependencies (or their newer live cache), including retries
+while a canonical visitor transfer intent remains. Ownership checks inspect stage evidence even
+when an older global claim already exists; a claim cannot override a later explicit owner.
 At canonical cutover the ordinary account value takes precedence over its staged input;
 the canonical write re-reads these inputs inside the storage gate. Conflicting snapshots or
 ambiguous prepared copies stay unresolved. Startup does not save a default window layout while

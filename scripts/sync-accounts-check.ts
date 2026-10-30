@@ -604,6 +604,15 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   as(E.win, () => E.notes.set(['later']))
   await sleep(1200)
   check('storage blocked: after a switch nothing reaches account 2, the tab stops', !JSON.stringify([...stateOf(2)]).includes('later') && E.space.accountFrozen())
+  reset()
+  const retained = JSON.stringify({ value: ['unread-original'], base: 1, dirty: false })
+  storage.set('mvlos.u.1.sync.notes', retained)
+  blocked = true
+  const recovering = await openTab()
+  as(recovering.win, () => recovering.notes.set(['memory-only']))
+  blocked = false
+  as(recovering.win, () => recovering.notes.set(['after-unblock']))
+  check('storage recovers: unread account note is not overwritten by the in-memory fallback', storage.get('mvlos.u.1.sync.notes') === retained)
 }
 
 // --- 11. moving in the release's plain keys, once, and only the account's own ----------------------------
